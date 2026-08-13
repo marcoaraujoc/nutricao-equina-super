@@ -16,6 +16,18 @@ const RT_COOKIE = 's2vet_rt'; // refresh token (janela de inatividade)
 // /me e /refresh de uma sessão já morta — 401 no console, justo o que ela evita.
 const HINT_COOKIE = 's2vet_auth';
 
+// Contexto ativo (empresa/equipe) do último request AUTENTICADO que trouxe os headers
+// x-empresa-id/x-equipe-id (só o axios envia esses headers — ver CLAUDE.md armadilha
+// 36-g). Requisições de ASSET sem XHR (<img src>, <video>, <link>) NUNCA carregam
+// headers customizados, só cookies — então, sem isto, `authenticate` cai no fallback
+// de "própria empresa"/"equipe mais recente", que diverge do contexto realmente ativo
+// para qualquer usuário com mais de uma empresa/equipe. Sob RLS fail-closed, esse
+// desvio faz `verificarAcessoAnimal` (e a checagem de dono da mídia) recusar o acesso
+// — sintoma: foto do animal e logo da empresa não carregam para quem tem mais de um
+// vínculo, mesmo sendo o vínculo certo. HttpOnly: só o servidor precisa ler.
+const CTX_EMPRESA_COOKIE = 's2vet_ctx_empresa';
+const CTX_EQUIPE_COOKIE  = 's2vet_ctx_equipe';
+
 // secure em produção (HTTPS). Em dev pelo proxy do Vite/localhost, secure=false
 // permite o cookie via http. COOKIE_SECURE força o valor quando necessário.
 function isSecure() {
@@ -45,6 +57,33 @@ function clearAuthCookies(res) {
   res.clearCookie(AT_COOKIE, opts);
   res.clearCookie(RT_COOKIE, opts);
   res.clearCookie(HINT_COOKIE, { ...opts, httpOnly: false });
+  res.clearCookie(CTX_EMPRESA_COOKIE, opts);
+  res.clearCookie(CTX_EQUIPE_COOKIE, opts);
+}
+
+// Grava o contexto ativo (chamado por `authenticate` sempre que os headers de
+// contexto vierem presentes e validados) — vida igual ao refresh: o cookie precisa
+// sobreviver tempo o bastante para servir os <img>/<video> que a página carrega
+// bem depois do XHR que trouxe o header.
+function setContextCookies(res, empresaId, equipeId) {
+  const opts = { ...baseOpts(), maxAge: REFRESH_MAX_AGE_MS };
+  if (empresaId) res.cookie(CTX_EMPRESA_COOKIE, String(empresaId), opts);
+  else res.clearCookie(CTX_EMPRESA_COOKIE, baseOpts());
+  if (equipeId) res.cookie(CTX_EQUIPE_COOKIE, String(equipeId), opts);
+  else res.clearCookie(CTX_EQUIPE_COOKIE, baseOpts());
+}
+
+// Lê o contexto ativo gravado por `setContextCookies`. NÃO é fonte de verdade —
+// quem chama ainda precisa validar o vínculo (mesma regra dos headers), pois é
+// um cookie e pode estar desatualizado (ex.: removido da equipe depois de gravado).
+function getContextCookies(req) {
+  const c = parseCookies(req);
+  const empresaId = Number(c[CTX_EMPRESA_COOKIE]);
+  const equipeId  = Number(c[CTX_EQUIPE_COOKIE]);
+  return {
+    empresaId: Number.isInteger(empresaId) && empresaId > 0 ? empresaId : null,
+    equipeId:  Number.isInteger(equipeId)  && equipeId  > 0 ? equipeId  : null,
+  };
 }
 
 // Parser mínimo do header Cookie (evita dependência de cookie-parser)
@@ -69,4 +108,5 @@ module.exports = {
   AT_COOKIE, RT_COOKIE,
   setAuthCookies, clearAuthCookies,
   getAccessTokenFromCookie, getRefreshTokenFromCookie,
+  setContextCookies, getContextCookies,
 };

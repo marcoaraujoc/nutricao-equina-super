@@ -17,6 +17,10 @@
 
 const prisma = require('../lib/prisma').default;
 const { PERMISSOES_PADRAO } = require('../seeds/002_permissoes_padrao.seed');
+// "Tem cadastro de cliente nesta empresa?" — mesmo critério do tipo por empresa
+// (lib/tipoContexto.js), reusado aqui para a regra "mais de um papel na mesma
+// empresa soma permissões" (ver `ajusteperfil` na memória).
+const { resolverComoCliente } = require('../lib/tipoContexto');
 
 const NIVEL_ORDINAL = {
   NENHUM:  0,
@@ -185,6 +189,40 @@ async function getNivelPermissao(userId, equipeId, moduloSlug, cargo = null) {
 }
 
 /**
+ * Resolve a permissão de quem é PROPRIETARIO de verdade e NÃO tem nenhum cargo de
+ * equipe ativo nesta empresa (fim natural de `checkPermission`) — Matriz de Perfis
+ * do PROPRIETARIO nas equipes vinculadas via seus animais/cadastro. Quem TEM cargo
+ * de equipe e TAMBÉM é cliente aqui não passa por esta função — a soma dos dois
+ * papéis acontece dentro do ramo `if (membro)` de `checkPermission` (ver
+ * `ajusteperfil` na memória: mais de um papel na mesma empresa sempre SOMA).
+ */
+async function verificarComoProprietario(req, res, next, moduloSlug, nivelMinimo) {
+  const nivelAtual = await getNivelPermissaoProprietario(req.user.id, moduloSlug, req.empresaId);
+
+  if (nivelAtual === 'NEGADO') {
+    return res.status(403).json({
+      error:  'Acesso negado pelo administrador da equipe.',
+      modulo: moduloSlug,
+    });
+  }
+
+  const ordinalAtual  = NIVEL_ORDINAL[nivelAtual]  ?? 0;
+  const ordinalMinimo = NIVEL_ORDINAL[nivelMinimo] ?? 0;
+
+  if (ordinalAtual < ordinalMinimo) {
+    return res.status(403).json({
+      error:  `Permissão insuficiente. Requerido: ${nivelMinimo}. Atual: ${nivelAtual}.`,
+      modulo: moduloSlug,
+    });
+  }
+
+  req.permissaoNivel = nivelAtual;
+  req.equipeId       = null;
+  req.membroCargo    = 'PROPRIETARIO';
+  return next();
+}
+
+/**
  * Middleware factory — use nas rotas:
  * router.post('/evolucoes', auth, checkPermission('atendimento.evolucoes.criar', 'PROPRIO'), controller)
  *
@@ -232,10 +270,19 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
 
           const nivelEquipe = await getNivelPermissao(req.user.id, equipeId, moduloSlug, membro.cargo);
 
-          // Multicargo: PROPRIETARIO com cargo de equipe recebe o máximo entre os dois níveis.
-          // NEGADO de PROPRIETARIO não bloqueia quem tem cargo de equipe ativo.
+          // MAIS DE UM PAPEL NA MESMA EMPRESA: sempre SOMA (regra de produto — ver
+          // `ajusteperfil` na memória). Quem TAMBÉM tem cadastro de cliente aqui
+          // (ProprietarioPerfil ativo OU animal ativo) recebe o MÁXIMO entre o nível
+          // do cargo de equipe e o que a Matriz do PROPRIETARIO concede — nunca só o
+          // cargo sozinho. NEGADO de PROPRIETARIO não bloqueia quem tem cargo ativo.
+          //
+          // ⚠️ NÃO trocar por `req.user.userType === 'PROPRIETARIO'`: dentro deste
+          // bloco a pessoa TEM cargo de equipe, e `resolverTipoNoContexto` sempre
+          // resolve o CARGO antes do CLIENTE (armadilha 36-e) — o `userType` nunca
+          // seria PROPRIETARIO aqui. Era exatamente esse o bug: a soma "veterinária +
+          // proprietária" nunca disparava porque a condição nunca era verdadeira.
           let nivelAtual = nivelEquipe;
-          if (req.user.userType === 'PROPRIETARIO') {
+          if (req.empresaId && await resolverComoCliente(req.user.id, req.empresaId)) {
             const nivelProp = await getNivelPermissaoProprietario(req.user.id, moduloSlug, req.empresaId);
             if (nivelProp !== 'NEGADO') {
               const ordProp   = NIVEL_ORDINAL[nivelProp]   ?? 0;
@@ -309,29 +356,7 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
       // Chegou aqui: sem MembroEquipe válido (ou não era membro de nenhuma equipe).
       // Verifica MatrizPerfil do perfil PROPRIETARIO nas equipes vinculadas via animais.
       if (req.user.userType === 'PROPRIETARIO') {
-        const nivelAtual = await getNivelPermissaoProprietario(req.user.id, moduloSlug, req.empresaId);
-
-        if (nivelAtual === 'NEGADO') {
-          return res.status(403).json({
-            error:  'Acesso negado pelo administrador da equipe.',
-            modulo: moduloSlug,
-          });
-        }
-
-        const ordinalAtual  = NIVEL_ORDINAL[nivelAtual]  ?? 0;
-        const ordinalMinimo = NIVEL_ORDINAL[nivelMinimo] ?? 0;
-
-        if (ordinalAtual < ordinalMinimo) {
-          return res.status(403).json({
-            error:  `Permissão insuficiente. Requerido: ${nivelMinimo}. Atual: ${nivelAtual}.`,
-            modulo: moduloSlug,
-          });
-        }
-
-        req.permissaoNivel = nivelAtual;
-        req.equipeId       = null;
-        req.membroCargo    = 'PROPRIETARIO';
-        return next();
+        return verificarComoProprietario(req, res, next, moduloSlug, nivelMinimo);
       }
 
       return res.status(403).json({
@@ -445,7 +470,10 @@ async function getNivelEfetivo(req, moduloSlug) {
 
   if (req.equipeId && req.membroCargo) {
     let nivel = await getNivelPermissao(req.user.id, req.equipeId, moduloSlug, req.membroCargo);
-    if (req.user.userType === 'PROPRIETARIO' && nivel !== 'NEGADO') {
+    // Mesma soma de papéis do checkPermission (ver comentário lá): não usar
+    // `req.user.userType === 'PROPRIETARIO'` — dentro deste ramo a pessoa TEM cargo
+    // de equipe, então o tipo nunca seria PROPRIETARIO.
+    if (nivel !== 'NEGADO' && req.empresaId && await resolverComoCliente(req.user.id, req.empresaId)) {
       const nivelProp = await getNivelPermissaoProprietario(req.user.id, moduloSlug, req.empresaId);
       if (nivelProp !== 'NEGADO' && (NIVEL_ORDINAL[nivelProp] ?? 0) > (NIVEL_ORDINAL[nivel] ?? 0)) {
         nivel = nivelProp;

@@ -10,6 +10,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { useAuth } from './AuthContext';
 import api from '../services/api';
+import { registrarAcesso } from '../utils/contextoAcessos';
 
 export const EMPRESA_ATIVA_KEY = 's2vet_empresa_id';
 export const EQUIPE_ATIVA_KEY  = 's2vet_equipe_id';
@@ -25,11 +26,15 @@ export const ROTA_COM_ANIMAL =
 
 export interface ContextoOpcao {
   empresaId: number;
-  /** null = opção no nível da empresa (CNPJ); número = equipe ativa (CPF) */
+  /** null = opção no nível da empresa (CNPJ); número a equipe ativa (CPF) */
   equipeId: number | null;
+  /** Nome da empresa/equipe, sem o cargo — fonte das iniciais do avatar */
+  nome?: string;
   label: string;
   /** Cargo do usuário nesse contexto (GESTOR, VETERINARIO, FORNECEDOR...) */
   cargo?: string;
+  cidade?: string | null;
+  estado?: string | null;
 }
 
 /** Identidade visual da empresa do contexto ativo (logo + nome), de /equipes/logo */
@@ -106,6 +111,9 @@ export function EmpresaProvider({ children }: { children: ReactNode }) {
           localStorage.setItem(EMPRESA_ATIVA_KEY, String(ativa.empresaId));
           if (ativa.equipeId) localStorage.setItem(EQUIPE_ATIVA_KEY, String(ativa.equipeId));
           else localStorage.removeItem(EQUIPE_ATIVA_KEY);
+          // Contexto em uso conta como "acessado agora" — é o que faz o seletor
+          // sempre mostrar a opção ativa como a mais recente.
+          registrarAcesso(ativa);
         } else {
           localStorage.removeItem(EMPRESA_ATIVA_KEY);
           localStorage.removeItem(EQUIPE_ATIVA_KEY);
@@ -150,6 +158,7 @@ export function EmpresaProvider({ children }: { children: ReactNode }) {
 
   const trocarContexto = (opcao: ContextoOpcao) => {
     if (opcao.empresaId === contextoAtivo?.empresaId && opcao.equipeId === contextoAtivo?.equipeId) return;
+    registrarAcesso(opcao);
     localStorage.setItem(EMPRESA_ATIVA_KEY, String(opcao.empresaId));
     if (opcao.equipeId) localStorage.setItem(EQUIPE_ATIVA_KEY, String(opcao.equipeId));
     else localStorage.removeItem(EQUIPE_ATIVA_KEY);

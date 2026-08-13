@@ -85,9 +85,12 @@ interface FornecedorDisponivel {
 export const SENHA_PADRAO_INICIAL = 'Inicial_001';
 
 // Perfis que TÊM especialidade e tempo de consulta. Os demais (ESTAGIARIO, ENFERMEIRO,
-// SECRETARIA, FINANCEIRO, GESTOR) informam apenas local e horário de trabalho.
-// Espelha a regra do backend (EquipeController/UserController), que é a autoridade.
-export const PERFIS_COM_ESPECIALIDADE = ['VETERINARIO', 'FORNECEDOR'];
+// SECRETARIA, FINANCEIRO) informam apenas local e horário de trabalho.
+// Espelha a regra do backend (EquipeController/UserController), que é a autoridade:
+// GESTOR PODE informar especialidade, nunca é obrigado — ficar fora desta lista não só
+// esconde o campo dele aqui como faz `handleSubmit` (enviaEspec) APAGAR a especialidade
+// que ele já tinha salvo (ex.: via Cadastro Pessoal) ao editar o próprio cadastro nesta tela.
+export const PERFIS_COM_ESPECIALIDADE = ['VETERINARIO', 'FORNECEDOR', 'GESTOR'];
 
 export const PERFIS_ACESSO: Array<{ value: string; label: string }> = [
   { value: 'VETERINARIO', label: 'Veterinário' },
@@ -342,6 +345,10 @@ interface UsuarioFormModalProps {
   /** Exibe (e exige) remuneração + acesso ao sistema — cadastro de MEMBRO da equipe.
    *  Fora da equipe (Usuários/admin) não há acordo de pagamento a registrar. */
   comVinculoEmpresa?: boolean;
+  /** Com `comVinculoEmpresa`, oculta e desobriga só a seção "Forma de Pagamento"
+   *  (mantém "Terá acesso ao sistema"). Usado no Incluir Gestor — gestor é sócio/dono,
+   *  não folha de pagamento da clínica (o backend também não exige para cargo GESTOR). */
+  ocultarPagamento?: boolean;
   /** Equipe gerenciada pela tela — filtra as especialidades pelas espécies dessa empresa */
   equipeId?: number | null;
   /** Erro de senha vindo do backend (ex.: reuso das últimas 6 senhas) — exibido inline sob o campo. */
@@ -553,7 +560,7 @@ export function LocalTrabalhoFields({
                   }}
                   className="flex-1 min-w-0 border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 transition-colors"
                 >
-                  <option value="">Padrão da empresa ({tempoPadraoEmpresa} min)</option>
+                  <option value="">Sem tempo próprio ({tempoPadraoEmpresa} min)</option>
                   {TEMPOS_CONSULTA.map(m => (
                     <option key={m} value={m}>{m} min</option>
                   ))}
@@ -588,7 +595,7 @@ export function LocalTrabalhoFields({
 export default function UsuarioFormModal({
   titulo, infoNota, modoEdicao = false, permitirSenha = false, emailBloqueado = false,
   comFornecedor = false, permitirMultiCargos = false, ocultarPerfil = false, comExpediente = false,
-  comVinculoEmpresa = false,
+  comVinculoEmpresa = false, ocultarPagamento = false,
   equipeId = null, erroSenhaServidor, erroServidor, initial, salvando, textoBotao, onClose, onSubmit,
 }: UsuarioFormModalProps) {
   const initCargos = initial?.cargos ?? (initial?.perfil ? [initial.perfil] : ['VETERINARIO']);
@@ -619,15 +626,16 @@ export default function UsuarioFormModal({
 
   const mostrarSeletorFornecedor = comFornecedor && !modoEdicao && form.perfil === 'FORNECEDOR';
 
-  // Especialidades (catálogo por espécie) — SÓ VET e FORNECEDOR, na inclusão E na edição.
-  // Estagiário, enfermeiro, secretaria, financeiro e gestor informam APENAS local e
-  // horário de trabalho: nem especialidade nem tempo de consulta aparecem para eles.
+  // Especialidades (catálogo por espécie) — VET, FORNECEDOR e GESTOR (opcional para
+  // este último), na inclusão E na edição. Estagiário, enfermeiro, secretaria e
+  // financeiro informam APENAS local e horário de trabalho: nem especialidade nem
+  // tempo de consulta aparecem para eles.
   const mostrarEspecialidades = PERFIS_COM_ESPECIALIDADE.includes(form.perfil);
   // Especialidade é opcional: veterinário sem nenhuma assume Clínica Médica; fornecedor
-  // pode ficar sem especialidade nenhuma.
+  // e gestor podem ficar sem especialidade nenhuma.
   const textoPadraoEspecialidade = form.perfil === 'VETERINARIO'
     ? 'Opcional — sem especialidade selecionada, o veterinário assume Clínica Médica.'
-    : 'Opcional — o fornecedor pode ficar sem especialidade.';
+    : 'Opcional — pode ficar sem especialidade.';
   // Rascunho do local em preenchimento (padrão da prescrição: formulário fixo →
   // "Adicionar" empurra para a lista compacta e limpa o formulário).
   const [rascunhoLocal, setRascunhoLocal] = useState<LocalTrabalhoForm>(RASCUNHO_LOCAL_VAZIO);
@@ -777,6 +785,13 @@ export default function UsuarioFormModal({
     } finally { setBuscandoCEP(false); }
   };
 
+  // GESTOR é sócio/dono da empresa, não folha de pagamento da clínica — a Forma de
+  // Pagamento continua visível (ele pode ter um acordo de remuneração), mas deixa de
+  // ser obrigatória. `ocultarPagamento` (Incluir Gestor) já cobria o caso mais
+  // radical de nem mostrar a seção; aqui o cargo pode mudar dentro do MESMO
+  // formulário (multi-cargo / edição), então precisa ser reativo, não só um prop.
+  const cargoEhGestor = (form.cargos ?? [form.perfil]).includes('GESTOR');
+
   const handleSubmit = () => {
     setErroSenhaLocal('');
     setErroInline(null);
@@ -789,8 +804,13 @@ export default function UsuarioFormModal({
     if (permitirMultiCargos && cargosFinais.length === 0) {
       setErroInline('Selecione ao menos um perfil de acesso'); return;
     }
-    if (comVinculoEmpresa) {
-      // Mesmas regras do backend (lib/usuarioEmpresa.normalizarPagamento), que é a autoridade
+    // Mesmas regras do backend (lib/usuarioEmpresa.normalizarPagamento), que é a
+    // autoridade. Para GESTOR o campo é OPCIONAL: só exige preenchimento completo
+    // se ele começou a informar algo — deixar tudo em branco não pode travar o
+    // salvar. `pagamentoAplicavel` também decide o que vai no payload, mais abaixo.
+    const pagamentoIniciado  = !!form.tipoPagamento || valorPagamentoNumero(form.valorPagamento) > 0;
+    const pagamentoAplicavel = comVinculoEmpresa && !ocultarPagamento && (!cargoEhGestor || pagamentoIniciado);
+    if (pagamentoAplicavel) {
       if (!form.tipoPagamento) { setErroInline('Informe o tipo de pagamento (salário ou comissão)'); return; }
       const valorNum = valorPagamentoNumero(form.valorPagamento);
       if (!Number.isFinite(valorNum) || valorNum <= 0) {
@@ -858,11 +878,15 @@ export default function UsuarioFormModal({
       perfil:       perfilFinal,
       fornecedorId: mostrarSeletorFornecedor && fornecedorId !== '' ? fornecedorId : null,
       tipoServico:  undefined,
+      // GESTOR sem nada preenchido (`!pagamentoAplicavel`): não manda os três campos
+      // (undefined), para o backend não exigir/tocar num acordo que não existe.
+      tipoPagamento:  pagamentoAplicavel ? form.tipoPagamento  : undefined,
+      formaPagamento: pagamentoAplicavel ? form.formaPagamento : undefined,
       // O campo é MASCARADO (000.000,00 / 00,00): desfaz a formatação aqui para o
       // caller poder fazer Number() direto — o backend recebe número, não string
       // localizada. Todos os consumidores (Equipe, ControleAcesso) fazem
       // `Number(values.valorPagamento)`, que engasgaria com o separador de milhar.
-      valorPagamento: comVinculoEmpresa
+      valorPagamento: pagamentoAplicavel
         ? String(valorPagamentoNumero(form.valorPagamento))
         : undefined,
       // [] (e não undefined) para o perfil sem especialidade: limpa vínculo herdado
@@ -903,7 +927,10 @@ export default function UsuarioFormModal({
                   <label className={labelCls}>Nome completo *</label>
                   <input type="text" value={form.fullName}
                     onChange={e => set('fullName', e.target.value)}
-                    placeholder="Nome do usuário" className={inputCls} />
+                    disabled={mostrarSeletorFornecedor}
+                    title={mostrarSeletorFornecedor ? 'Vem do cadastro do fornecedor selecionado (ou do novo fornecedor incluído)' : undefined}
+                    placeholder="Nome do usuário"
+                    className={`${inputCls} ${mostrarSeletorFornecedor ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`} />
                 </div>
 
                 {!ocultarPerfil && <div>
@@ -932,9 +959,18 @@ export default function UsuarioFormModal({
                         if (modoEdicao) {
                           set('perfil', val); set('cargos', [val]);
                         } else {
-                          // Inclusão: trocar o perfil zera o formulário (evita dados do perfil
-                          // anterior — fornecedor selecionado, especialidades, etc.).
-                          setForm({ ...FORM_VAZIO, perfil: val, cargos: [val] });
+                          // Inclusão: trocar o perfil zera só os campos ESPECÍFICOS do
+                          // perfil anterior (fornecedor selecionado, especialidades,
+                          // locais de trabalho, pagamento) — nome/e-mail/telefone/
+                          // endereço já digitados pelo usuário são preservados.
+                          setForm(prev => ({
+                            ...FORM_VAZIO,
+                            fullName: prev.fullName, email: prev.email, phone: prev.phone,
+                            cep: prev.cep, endereco: prev.endereco, complemento: prev.complemento,
+                            bairro: prev.bairro, cidade: prev.cidade, estado: prev.estado,
+                            ativo: prev.ativo,
+                            perfil: val, cargos: [val],
+                          }));
                         }
                       }}
                       className={inputCls}>
@@ -1267,17 +1303,21 @@ export default function UsuarioFormModal({
             </section>
           )}
 
-          {/* ── Forma de Pagamento ── obrigatória: é o acordo desta clínica com a
-              pessoa. Última seção porque é o que se decide DEPOIS de saber o que ela
-              faz e onde atende. */}
-          {comVinculoEmpresa && (
+          {/* ── Forma de Pagamento ── obrigatória para quem tem folha de pagamento
+              nesta clínica; OPCIONAL para o GESTOR (é sócio/dono, o campo existe
+              caso haja algum acordo, mas não trava o salvar em branco). Última
+              seção porque é o que se decide DEPOIS de saber o que a pessoa faz e
+              onde atende. Ausente quando `ocultarPagamento` (Incluir Gestor —
+              tela que nem oferece a seção). */}
+          {comVinculoEmpresa && !ocultarPagamento && (
             <section>
               <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
                 <Wallet size={12} /> Forma de Pagamento
+                {cargoEhGestor && <span className="normal-case font-medium text-gray-400">(opcional)</span>}
               </h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className={labelCls}>Tipo de pagamento *</label>
+                  <label className={labelCls}>Tipo de pagamento{!cargoEhGestor && ' *'}</label>
                   <select value={form.tipoPagamento ?? ''}
                     onChange={e => {
                       const tipo = e.target.value as 'SALARIO' | 'COMISSAO' | '';
@@ -1303,7 +1343,7 @@ export default function UsuarioFormModal({
                   </select>
                 </div>
                 <div>
-                  <label className={labelCls}>Valor *</label>
+                  <label className={labelCls}>Valor{!cargoEhGestor && ' *'}</label>
                   <div className="flex items-stretch border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
                     <span className="px-3 flex items-center text-sm text-gray-400 bg-gray-50 border-r border-gray-200">
                       {form.formaPagamento === 'PERCENTUAL' ? '%' : 'R$'}

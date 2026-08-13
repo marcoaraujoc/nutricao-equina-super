@@ -8,7 +8,7 @@ const { obterResumo, atualizarResumo } = require('../services/resumoAtendimentoS
 
 async function autorizar(req, res, animalId) {
   const acesso = await verificarAcessoAnimal({
-    animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId,
+    animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType
   });
   if (acesso === null) { res.status(404).json({ error: 'Animal não encontrado' }); return false; }
   if (!acesso)         { res.status(403).json({ error: 'Acesso não autorizado a este animal' }); return false; }

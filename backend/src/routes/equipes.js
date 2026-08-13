@@ -7,8 +7,9 @@ const path                = require('path');
 const EquipeController    = require('../controllers/EquipeController');
 const PermissaoController = require('../controllers/PermissaoController');
 const { authenticate, authorize } = require('../middlewares/auth');
+const { tenantRls }       = require('../middlewares/tenantRls');
 const validate            = require('../middlewares/validate');
-const { criarEmpresaRules, convidarMembroRules } = require('../validators/equipe.validators');
+const { criarGestorRules, convidarMembroRules } = require('../validators/equipe.validators');
 
 const router = express.Router();
 
@@ -27,12 +28,14 @@ const uploadLogo = multer({
 // =============================================================================
 
 // ─── Empresas ─────────────────────────────────────────────────────────────────
-// Criação restrita ao ADMIN da plataforma (novo modelo 2026-08-06): ADMIN cria a
-// empresa, escolhe o plano e associa gestor(es). O gestor não cria mais empresa.
-router.post ('/empresas',             authenticate, authorize('ADMIN'), criarEmpresaRules, validate, EquipeController.criarEmpresa);
+// Criação restrita ao ADMIN da plataforma (modelo 2026-08-17): ADMIN cria só o
+// GESTOR (dados básicos + plano) — a empresa nasce com identidade em branco, e é o
+// próprio gestor quem a completa em Cadastro da Empresa (routes/empresas.js).
+router.post ('/gestores',             authenticate, authorize('ADMIN'), criarGestorRules, validate, EquipeController.criarGestor);
 router.get  ('/empresas',             authenticate, EquipeController.listarEmpresas);
-// ADMIN inativa/reativa a empresa (governa o acesso via Empresa.status).
-router.put  ('/empresas/:id',         authenticate, authorize('ADMIN'), EquipeController.atualizarEmpresa);
+// ADMIN inativa/reativa a empresa (governa o acesso via Empresa.status). Editar a
+// identidade da empresa (nome/documento/endereço/espécies) é ato do GESTOR — ver
+// EmpresaCadastroController.salvar (`PUT /empresas/cadastro`).
 router.patch('/empresas/:id/status',  authenticate, authorize('ADMIN'), EquipeController.alterarStatusEmpresa);
 
 // ─── Contextos ativos do usuário (seletor de perfil/empresa do Sidebar) ───────
@@ -40,7 +43,13 @@ router.get('/meus-contextos', authenticate, EquipeController.meusContextos);
 
 // ─── Configurações (logotipo + dia de fechamento de fatura) ──────────────────
 router.get('/configuracoes', authenticate, EquipeController.obterConfiguracao);
-router.put('/configuracoes', authenticate, uploadLogo.single('logo'), EquipeController.salvarConfiguracao);
+// ⚠️ `tenantRls` REENTRA no contexto do tenant logo APÓS o multer (mesmo padrão de
+// routes/animais.js) — o multer intercala parsing de stream (busboy) entre o
+// `authenticate` (que carimba o tenant) e o controller, e isso pode fazer o
+// `AsyncLocalStorage` do tenant não sobreviver até o controller. Sem isto, o upload do
+// logo (tb_midia_arquivos) cai em "new row violates row-level security policy" mesmo
+// com `req.empresaId` correto.
+router.put('/configuracoes', authenticate, uploadLogo.single('logo'), tenantRls, EquipeController.salvarConfiguracao);
 
 // WhatsApp da clínica (Evolution API) — GESTOR/dono do contexto ativo.
 // Antes de /:equipeId para o literal não virar parâmetro.

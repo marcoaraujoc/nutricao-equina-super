@@ -45,6 +45,7 @@ const PERMISSOES_PADRAO = {
     'animais.criar':       'FULL',
     'animais.editar':      'FULL',
     'animais.deletar':     'FULL',
+    'animais.ativar':      'FULL',
     'animais.imprimir':    'FULL',
     'animais.desvincular': 'FULL',
     'animais.resenha.editar': 'FULL',
@@ -215,6 +216,7 @@ const PERMISSOES_PADRAO = {
     'animais.criar':       'EQUIPE',
     'animais.editar':      'EQUIPE',
     'animais.deletar':     'PROPRIO',
+    'animais.ativar':      'PROPRIO',
     'animais.imprimir':    'EQUIPE',
     'animais.desvincular': 'PROPRIO',
     'animais.resenha.editar': 'EQUIPE',
@@ -442,6 +444,7 @@ const PERMISSOES_PADRAO = {
     'animais.criar':       'NENHUM',
     'animais.editar':      'NENHUM',
     'animais.deletar':     'NENHUM',
+    'animais.ativar':      'NENHUM',
     'animais.imprimir':    'NENHUM',
     'animais.desvincular': 'NENHUM',
 
@@ -603,6 +606,7 @@ const PERMISSOES_PADRAO = {
     'animais.criar':       'NENHUM',
     'animais.editar':      'NENHUM',
     'animais.deletar':     'NENHUM',
+    'animais.ativar':      'NENHUM',
     'animais.imprimir':    'NENHUM',
     'animais.desvincular': 'NENHUM',
 
@@ -784,6 +788,7 @@ const PERMISSOES_PADRAO = {
     'animais.criar':       'NENHUM',
     'animais.editar':      'NENHUM',
     'animais.deletar':     'NENHUM',
+    'animais.ativar':      'NENHUM',
     'animais.imprimir':    'EQUIPE',
     'animais.desvincular': 'NENHUM',
 
@@ -945,6 +950,7 @@ const PERMISSOES_PADRAO = {
     'animais.criar':       'NENHUM',
     'animais.editar':      'NENHUM',
     'animais.deletar':     'NENHUM',
+    'animais.ativar':      'NENHUM',
     'animais.imprimir':    'NENHUM',
     'animais.desvincular': 'NENHUM',
 
@@ -1100,6 +1106,7 @@ const PERMISSOES_PADRAO = {
     'animais.criar':       'NENHUM',
     'animais.editar':      'NENHUM',
     'animais.deletar':     'NENHUM',
+    'animais.ativar':      'NENHUM',
     'animais.imprimir':    'EQUIPE',
     'animais.desvincular': 'NENHUM',
 
@@ -1275,6 +1282,9 @@ const MODULOS_SISTEMA = [
   { slug: 'animais.criar',       modulo: 'animais', submodulo: 'animais', acao: 'criar',       label: 'Animais — Cadastrar',     ordemExib: 11 },
   { slug: 'animais.editar',      modulo: 'animais', submodulo: 'animais', acao: 'editar',      label: 'Animais — Editar',        ordemExib: 12 },
   { slug: 'animais.deletar',     modulo: 'animais', submodulo: 'animais', acao: 'deletar',     label: 'Animais — Excluir',       ordemExib: 13 },
+  // Inativar: qualquer nível ≥ o daqui. Reativar é SEMPRE gestor/admin, independente do
+  // nível concedido — regra fixa no controller (ver AnimalController.ativar).
+  { slug: 'animais.ativar',      modulo: 'animais', submodulo: 'animais', acao: 'ativar',      label: 'Animais — Inativar Paciente', ordemExib: 13.5 },
   { slug: 'animais.imprimir',    modulo: 'animais', submodulo: 'animais', acao: 'imprimir',    label: 'Animais — Imprimir',      ordemExib: 14 },
   { slug: 'animais.desvincular', modulo: 'animais', submodulo: 'animais', acao: 'desvincular', label: 'Animais — Desvincular Vet', ordemExib: 15 },
   { slug: 'animais.resenha.editar', modulo: 'animais', submodulo: 'resenha', acao: 'editar', label: 'Resenha — Editar', ordemExib: 15.5 },

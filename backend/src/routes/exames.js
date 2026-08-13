@@ -6,6 +6,7 @@ const path   = require('path');
 const crypto = require('crypto');
 const exameController = require('../controllers/ExameController');
 const { authenticate }    = require('../middlewares/auth');
+const { tenantRls }       = require('../middlewares/tenantRls');
 const { checkPermission } = require('../middlewares/permissao.middleware');
 const { exigirAcessoAnimal } = require('../middlewares/animalAcesso.middleware');
 
@@ -26,11 +27,15 @@ const uploadTemp = multer({
 });
 
 // Rotas existentes
+// ⚠️ `tenantRls` REENTRA no contexto do tenant logo APÓS cada multer (mesmo padrão de
+// routes/animais.js) — sem isto, tanto `exigirAcessoAnimal` (lê o animal sob RLS)
+// quanto a gravação do exame no controller podem cair em RLS mesmo com req.empresaId
+// correto, porque o parsing de stream do multer não preserva o AsyncLocalStorage.
 router.get('/animal/:animalId', authenticate, checkPermission('atendimento.exames.ler',     'LEITURA'), exigirAcessoAnimal(), exameController.getExamesByAnimal);
-router.post('/',                authenticate, checkPermission('atendimento.exames.criar',   'PROPRIO'), upload.single('arquivo'), exigirAcessoAnimal({ de: 'body' }), exameController.create);
-router.post('/analisar-llm',    authenticate, checkPermission('atendimento.exames.criar',   'PROPRIO'), uploadTemp.single('arquivo'), exigirAcessoAnimal({ de: 'body' }), exameController.analisarLLM);
+router.post('/',                authenticate, checkPermission('atendimento.exames.criar',   'PROPRIO'), upload.single('arquivo'), tenantRls, exigirAcessoAnimal({ de: 'body' }), exameController.create);
+router.post('/analisar-llm',    authenticate, checkPermission('atendimento.exames.criar',   'PROPRIO'), uploadTemp.single('arquivo'), tenantRls, exigirAcessoAnimal({ de: 'body' }), exameController.analisarLLM);
 // Página Resultado de Exame · Imagem — vários arquivos; LLM decide laudo × imagem
-router.post('/analisar-imagens', authenticate, checkPermission('atendimento.exames.criar',  'PROPRIO'), uploadTemp.array('arquivos', 10), exigirAcessoAnimal({ de: 'body' }), exameController.analisarImagens);
+router.post('/analisar-imagens', authenticate, checkPermission('atendimento.exames.criar',  'PROPRIO'), uploadTemp.array('arquivos', 10), tenantRls, exigirAcessoAnimal({ de: 'body' }), exameController.analisarImagens);
 router.get('/imagens/animal/:animalId', authenticate, checkPermission('atendimento.exames.ler', 'LEITURA'), exigirAcessoAnimal(), exameController.listarImagens);
 router.delete('/:id',           authenticate, checkPermission('atendimento.exames.deletar', 'PROPRIO'), exameController.delete);
 router.put('/:id',              authenticate, checkPermission('atendimento.exames.editar',  'PROPRIO'), exameController.update);

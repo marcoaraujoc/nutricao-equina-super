@@ -39,14 +39,22 @@ interface Props {
   textoBotao: string;
   textoBotaoSalvando?: string;
   salvando?: boolean;
-  /** Erro vindo do servidor (token expirado, senha reutilizada…). */
+  /** Erro vindo do servidor (token expirado, senha reutilizada, senha atual incorreta…). */
   erro?: string;
-  /** Chamado com a senha já validada contra REGRAS_SENHA e a confirmação. */
-  onSubmit: (novaSenha: string) => void;
+  /** true = pede também a SENHA ATUAL (troca voluntária, com sessão já aberta —
+   *  `PATCH /users/me/senha`). false = fluxo de token/1º acesso, que prova a
+   *  identidade de outra forma e não tem senha anterior para conferir. */
+  comSenhaAtual?: boolean;
+  /** Chamado com a senha já validada (e a senha atual, quando `comSenhaAtual`). */
+  onSubmit: (novaSenha: string, senhaAtual: string) => void;
   /** Limpa o erro do servidor quando o usuário volta a digitar. */
   onAlterar?: () => void;
   /** Conteúdo opcional abaixo do botão (ex.: link "Voltar para o Login"). */
   rodape?: React.ReactNode;
+  /** true = renderizado DENTRO de uma página que já tem seu próprio card (ex.:
+   *  Cadastro Pessoal) — sem o wrapper de página cheia (`min-h-screen` + moldura
+   *  própria), que violaria a regra de layout de páginas internas (CLAUDE.md §6). */
+  embedded?: boolean;
 }
 
 export default function FormularioNovaSenha({
@@ -57,19 +65,23 @@ export default function FormularioNovaSenha({
   textoBotaoSalvando = 'Salvando...',
   salvando = false,
   erro = '',
+  comSenhaAtual = false,
   onSubmit,
   onAlterar,
   rodape,
+  embedded = false,
 }: Props) {
+  const [senhaAtual, setSenhaAtual]             = useState('');
   const [novaSenha, setNovaSenha]               = useState('');
   const [confirmar, setConfirmar]               = useState('');
+  const [mostrarAtual, setMostrarAtual]         = useState(false);
   const [mostrarNova, setMostrarNova]           = useState(false);
   const [mostrarConfirmar, setMostrarConfirmar] = useState(false);
   const [erroLocal, setErroLocal]               = useState('');
 
   const todasOk      = REGRAS_SENHA.every(r => r.ok(novaSenha));
   const senhasIguais = novaSenha === confirmar && confirmar.length > 0;
-  const podeSubmeter = todasOk && senhasIguais;
+  const podeSubmeter = todasOk && senhasIguais && (!comSenhaAtual || senhaAtual.length > 0);
 
   const aoDigitar = (setter: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
     setter(e.target.value);
@@ -79,30 +91,54 @@ export default function FormularioNovaSenha({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (comSenhaAtual && !senhaAtual) return setErroLocal('Informe a senha atual');
     if (!todasOk)      return setErroLocal('A senha não atende aos requisitos');
     if (!senhasIguais) return setErroLocal('As senhas não coincidem');
-    onSubmit(novaSenha);
+    onSubmit(novaSenha, senhaAtual);
   };
 
-  return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-      <form onSubmit={handleSubmit} className="bg-white rounded-3xl shadow-sm border border-gray-100 p-8 w-full max-w-md">
-
-        <div className="flex items-center gap-3 mb-4">
-          <div className="p-2 bg-emerald-50 rounded-xl">
-            <KeyRound className="text-emerald-600" size={24} />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">{titulo}</h1>
-            <p className="text-sm text-gray-500">{subtitulo}</p>
-          </div>
+  const conteudo = (
+    <>
+      <div className="flex items-center gap-3 mb-4">
+        <div className="p-2 bg-emerald-50 rounded-xl">
+          <KeyRound className="text-emerald-600" size={24} />
         </div>
+        <div>
+          <h1 className={embedded ? 'text-base font-semibold text-gray-900' : 'text-xl font-bold text-gray-900'}>{titulo}</h1>
+          <p className="text-sm text-gray-500">{subtitulo}</p>
+        </div>
+      </div>
 
-        {descricao && <p className="text-sm text-gray-600 mb-6">{descricao}</p>}
+      {descricao && <p className="text-sm text-gray-600 mb-6">{descricao}</p>}
 
-        <div className="space-y-4">
+      <div className="space-y-4">
 
+        {comSenhaAtual && (
           <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Senha atual</label>
+            <div className="relative">
+              <input
+                type={mostrarAtual ? 'text' : 'password'}
+                value={senhaAtual}
+                onChange={aoDigitar(setSenhaAtual)}
+                placeholder="Digite sua senha atual"
+                autoComplete="current-password"
+                className="w-full border border-gray-300 rounded-xl px-4 py-2.5 pr-11 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+              <button
+                type="button"
+                onClick={() => setMostrarAtual(v => !v)}
+                tabIndex={-1}
+                aria-label={mostrarAtual ? 'Ocultar senha' : 'Mostrar senha'}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                {mostrarAtual ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Nova senha</label>
             <div className="relative">
               <input
@@ -176,18 +212,29 @@ export default function FormularioNovaSenha({
             </ul>
           </div>
 
-          <InlineError message={erroLocal || erro} />
+        <InlineError message={erroLocal || erro} />
 
-          <button
-            type="submit"
-            disabled={salvando || !podeSubmeter}
-            className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition-colors"
-          >
-            {salvando ? textoBotaoSalvando : textoBotao}
-          </button>
+        <button
+          type="submit"
+          disabled={salvando || !podeSubmeter}
+          className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition-colors"
+        >
+          {salvando ? textoBotaoSalvando : textoBotao}
+        </button>
 
-          {rodape}
-        </div>
+        {rodape}
+      </div>
+    </>
+  );
+
+  if (embedded) {
+    return <form onSubmit={handleSubmit}>{conteudo}</form>;
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+      <form onSubmit={handleSubmit} className="bg-white rounded-3xl shadow-sm border border-gray-100 p-8 w-full max-w-md">
+        {conteudo}
       </form>
     </div>
   );

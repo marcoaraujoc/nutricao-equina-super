@@ -526,7 +526,7 @@ function BuilderOrcamento({ podeCriar, orcamento, onSalvo, onCancelar }: {
 
   const [tipoAba, setTipoAba] = useState<'PROCEDIMENTO' | 'MEDICAMENTO' | 'VACINA' | 'OUTROS'>('PROCEDIMENTO');
   // Erro de ação exibido inline (substitui o toast de erro)
-  const [erroInline, setErroInline] = useState<string | null>(null);
+  const [erroInline] = useState<string | null>(null);
   // Erro do SALVAR — o botão fica no rodapé de um builder longo; no topo da
   // página a mensagem sai da área visível e o clique parece não ter efeito.
   const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);

@@ -1,5 +1,8 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-08-11 (grupo2corrigir FECHADO: bug real em ExameCompra.tsx (setSelectedAnimal
+#   não aceita forma funcional), duplicata inativa de fornecedor ganhou fluxo de "Ativar existente",
+#   relatorioNutricional.service.ts do FRONTEND removido — órfão MySQL, nunca importado)
 # Atualizado em: 2026-08-04 (Senha: FormularioNovaSenha compartilhado entre a tela da app e o link do e-mail; "esqueci minha senha" volta sozinho ao login com aviso genérico)
 # Atualizado em: 2026-08-04 (STORAGE: arquivo no BANCO (bytea) — /uploads e express.static REMOVIDOS; download por /api/midia/:chave autorizado; teto 150 MB; caminho de escala = S3StorageProvider trocando só STORAGE_DRIVER — ver §8)
 # Atualizado em: 2026-08-04 (PREMISSA DE AUTORIA: a ação vale sobre o que a pessoa criou ou assumiu, só o gestor opera o de outro; assumir/transferir ARRASTA o atendimento inteiro; auditoria de TRANSFERENCIA e ALTERACAO)
@@ -2368,11 +2371,80 @@ as MESMAS mudanças para a documentação funcional em `docs/`:
 - [x] **Expediente Ativo por linha** — tabela reformulada (profissional × local ×
       especialidade), função por extenso, dias+horário numa coluna só, coluna de
       local, e filtros de local/turno/faixa de horário. Ver seção 15.
-- [ ] ⚠️ `frontend/tsconfig.json` tem `"files": []` + project references: rodar
+- [x] ⚠️ `frontend/tsconfig.json` tem `"files": []` + project references: rodar
       `npx tsc --noEmit` na raiz do frontend **não checa nada** (sai 0 sempre).
       O typecheck real é `npx tsc -b --noEmit` (ou `npm run build`, que faz `tsc &&
-      vite build`). Há erros TS6133 (código morto) PRÉ-EXISTENTES em ~27 arquivos,
-      então `npm run build` já falha hoje — por isso o dev roda `vite build` direto.
+      vite build`) — é por isso que o dev roda `vite build` direto, sem o `tsc` na
+      frente. Os ~64 erros TS6133/TS6196 de código morto (import/variável/função/
+      componente nunca lidos) catalogados em `~27` arquivos foram **limpos em
+      2026-08-17/18** — imports órfãos removidos, `useState` sem leitor reduzido a
+      `const [, setX]`, e os componentes inteiros sem nenhum call site
+      (`ModalNovoAgendamento` em `AnimalDetail.tsx`, `ExamCheckList` e
+      `sugerirTipoAmostra` em `SubModuloExames.tsx`, `ViewPrescricaoModal` em
+      `SubModuloPrescricao.tsx`, `TabProprietarios` e `handleAlterarCargo`(x2) em
+      `ControleAcesso.tsx`, `navLinkBadge`/`isGeralActive` em `Sidebar.tsx`)
+      apagados por inteiro. `npx tsc -b --noEmit` ficou limpo NESSA categoria.
+      ⚠️ **EXCEÇÃO deliberada, não tocada:** `podeVerMedicamentos`/
+      `podeVerProcedimentos` em `Sidebar.tsx` — são "código morto" pelo tsc, mas o
+      item da Sessão 2026-07-31 ("`podeVerMedicamentos` / `podeVerProcedimentos`
+      são código morto na Sidebar e escondem um descompasso") já registra que
+      apagá-las é tomar partido numa decisão de produto ainda em aberto (trocar o
+      gate para a permissão OU assumir ADMIN-only). Não remover sem resolver
+      aquele item primeiro.
+- [x] 🏷️ **`grupo2corrigir` — FECHADO em 2026-08-11.** Eram erros de TIPO que sobraram
+      após a limpeza de código morto; a investigação, item a item, achou UM bug real
+      e cinco casos de dívida de tipo pura (comportamento já correto, tipo é que
+      mentia). `npx tsc -b --noEmit` limpo nesses 6 pontos (só sobra a exceção
+      deliberada de `Sidebar.tsx` já registrada acima).
+      - `components/ModalNovoFornecedor.tsx` — o `onClick={handleSalvar}` do botão
+        Salvar passava o `MouseEvent` no lugar de `force`, então TODO clique já ia
+        com `force: true` e o aviso de "cadastro inativo duplicado" nunca aparecia
+        (bypass silencioso). Corrigido para `onClick={() => handleSalvar()}` **e**
+        o modal de duplicata ganhou uma opção que não existia: **"Ativar cadastro
+        existente"** (`PATCH /cadastro/fornecedores/:id/toggle`, só reaparece se o
+        perfil tiver `cadastro.fornecedor.ativar` — padrão de nunca oferecer botão
+        que vai 403) ao lado do "Criar novo mesmo assim" que já havia.
+      - `pages/Atendimento.tsx` — `peso` era só o primeiro de CINCO campos opcionais
+        (`peso`, `baia`, `especie`, `raca`, além do `photoUrl` que já era tratado)
+        que o objeto passado a `SubModuloPrescricao` deixava `undefined` onde
+        `PrintAnimalPrescricao` exige `null` explícito. Normalizados todos com
+        `?? null` de uma vez. Comportamento não mudou — a impressão já tratava os
+        dois como "sem valor" — mas corrigir só `peso` teria revelado `baia` a
+        seguir, e depois `especie`/`raca`, um de cada vez.
+      - `pages/ExameCompra.tsx` — **bug real, não só de tipo.** `setSelectedAnimal`
+        (do `SelectedAnimalContext`) NÃO é o setter nativo do `useState`, é um
+        wrapper que também grava `lastSelectedAnimalId` no `localStorage`; só
+        aceita um valor direto, nunca uma função. O código chamava
+        `setSelectedAnimal(prev => ...)` copiando o padrão (correto) de
+        `Atendimento.tsx`/`Dieta.tsx`, que usam `setAnimal` — um `useState` de
+        verdade. Na prática, a função virava o argumento `animal` do wrapper;
+        `animal.id.toString()` estourava (`animal` era uma função, não um objeto)
+        toda vez que a tela buscava a logo da empresa para o laudo de compra —
+        engolido em silêncio pelo `.catch(() => {})` seguinte. Corrigido com uma
+        `selectedAnimalRef` (sincronizada por `useEffect`) que preserva a proteção
+        original contra corrida (usuário troca de animal com a busca em voo) sem
+        depender da forma funcional que o contexto não suporta.
+      - `pages/MapaAtendimento.tsx` — tipo desatualizado, não bug: `executadas` e
+        `pendentesOuAtrasadas` já existiam de verdade em
+        `MapaAtendimentoController.resumo` (só ficam de fora no ramo de "nenhum
+        animal no escopo do filtro", que zera tudo mesmo). A interface `ResumoData`
+        só não sabia disso. Os dois campos entraram como opcionais no tipo do front.
+      - `pages/SubModuloExames.tsx` — duas condições mortas (sempre `true`), sobra
+        da extração da aba Compra para `pages/ExameCompra.tsx` (sessão 2026-08-02):
+        `mainTab !== 'compra'` — `MainTab` nunca teve esse valor — e, dentro de
+        `mainTab === 'laboratorial'`, um `mainTab !== 'imagem'` redundante (o
+        TypeScript já sabia, ali dentro, que só podia ser `'laboratorial'`).
+        Wrappers removidos, conteúdo interno intacto.
+      - `services/relatorioNutricional.service.ts` (FRONTEND, não o do backend) —
+        **removido, não corrigido.** `git log --follow` mostrava um único commit
+        (`MYSQL_Relatorio`); usava `require('@prisma/client')` + `new
+        PrismaClient()` dentro do bundle do navegador (Prisma Client não roda em
+        browser) com SQL em sintaxe MySQL (`?`, `JSON_OBJECTAGG`) num projeto
+        Postgres. Busca no repositório inteiro não achou NENHUM import dele, no
+        front ou no back. A versão real, em uso, é
+        `backend/src/services/relatorioNutricional.service.js`, chamada por
+        `backend/src/controllers/relatorio.controller.js` — essa não mudou.
+        Anotar o tipo do `animalId` teria legitimado código morto do banco errado.
 - [ ] `HORARIOS` (24 slots de 1h) ainda é usado no heatmap do mês
       (`PARCIAL` quando `count < HORARIOS.length`) — a densidade do calendário
       não considera o passo real da grade. Revisar quando o mês virar por passo.
@@ -3374,7 +3446,21 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     pode ser atribuído como cargo de membro da equipe (bloqueado em alterarCargo).
 
 16. req.empresaId — injetado pelo próprio `authenticate` (auth.js) via MembroEquipe lookup.
-    NÃO é mais necessário adicionar `injectTenant` por rota (middleware tenant.js é redundante mas inofensivo).
+    NÃO é mais necessário adicionar `injectTenant` por rota.
+    🔴 (2026-08-17) `injectTenant` (middleware/tenant.js) DEIXOU DE SER INOFENSIVO e foi
+    REMOVIDO das rotas que ainda o usavam (`routes/animais.js` GET/POST `/`, `routes/evolucao.js`
+    6 rotas). Ele reatribuía `req.empresaId` pela equipe MAIS RECENTE do usuário (`orderBy:
+    createdAt desc`), ignorando o contexto ativo (headers x-empresa-id/x-equipe-id) que o
+    `authenticate` já resolveu. Isso era só "impreciso" enquanto o RLS não existia; com a
+    fase 7c (fail-closed — ver §12, "RLS geral"/"fim do escape"), o `app.empresa_id` já foi
+    CARIMBADO na sessão do Postgres com o valor original de `authenticate` no fim do próprio
+    middleware (`comEmpresa(req.empresaId ?? null, () => next())`) — reatribuir `req.empresaId`
+    DEPOIS disso não muda o que o RLS já carimbou. Toda escrita cujo `empresaId` viesse do
+    valor reatribuído (diferente do carimbado) morria com `new row violates row-level security
+    policy`. Sintoma típico: 500 ao cadastrar animal/proprietário para quem pertence a mais de
+    uma equipe/empresa. NUNCA reintroduzir `injectTenant`: `req.empresaId` já vem pronto do
+    `authenticate`, e é ELE que fixa o tenant carimbado no banco — qualquer reatribuição
+    posterior diverge da sessão do Postgres.
     Se req.empresaId for null, verificarAcessoAnimal cai no check de VetAnimalSolicitacao individual.
     Gestores de empresa com múltiplos gestores precisam de req.empresaId para acessar animais vinculados a
     qualquer vet da empresa — sem ele, apenas o vet diretamente vinculado consegue acesso.

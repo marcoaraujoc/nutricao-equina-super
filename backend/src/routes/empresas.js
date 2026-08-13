@@ -20,6 +20,10 @@ router.put('/cadastro', ctrl.salvar);
 // nome do plano dele. Não expõe nada sensível.
 router.get('/planos', ctrl.listarPlanos);
 
+// Proxy do auto-fill de CNPJ (BrasilAPI) — servidor→servidor não tem CORS. Ver o
+// comentário do controller para o motivo de existir.
+router.get('/cnpj/:cnpj', ctrl.buscarCnpj);
+
 // ⚠️ Atribuir plano, mudar situação comercial e SUSPENDER empresa são atos do ADMIN da
 // PLATAFORMA. Se o gestor pudesse, a empresa suspensa se reativaria sozinha.
 // ⚠️ FASE 7c — o ADMIN grava a assinatura de OUTRA empresa, e `tb_assinaturas_empresa`

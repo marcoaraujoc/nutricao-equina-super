@@ -162,7 +162,7 @@ function ItemRow({
   const [qty,           setQty]           = useState(String(item.quantidade));
   const [valorUnit,     setValorUnit]     = useState(item.valor);
   const [valorUnitStr,  setValorUnitStr]  = useState(fmtNum(item.valor));
-  const [valorFinal,    setValorFinal]    = useState(item.valor * item.quantidade);
+  const [, setValorFinal]                 = useState(item.valor * item.quantidade);
   const [valorFinalStr, setValorFinalStr] = useState(fmtNum(item.valor * item.quantidade));
   // Desconto — tipo + valor. descTipo '' = sem desconto (limpa o campo ao salvar).
   // Percentual é exibido inteiro (10 = 10%); valor em R$ usa o formato monetário.

@@ -531,7 +531,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
 
 // ─── SubModuloEncaminhamento ──────────────────────────────────────────────────
 
-export default function SubModuloEncaminhamento({ animalId, evolucaoId, atendimentoNumero, onSalvo }: Props) {
+export default function SubModuloEncaminhamento({ animalId, evolucaoId, onSalvo }: Props) {
   const { user } = useAuth();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 

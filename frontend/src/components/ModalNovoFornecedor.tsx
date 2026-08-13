@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { isValidEmail } from '../utils/validators';
+import { usePermissoes } from '../hooks/usePermissoes';
 import EspecialidadeSelector from './EspecialidadeSelector';
 import InlineError from './InlineError';
 
@@ -27,7 +28,6 @@ export const TIPOS_SERVICO = [
   'Radiologista',
 ] as const;
 
-type TipoServico = typeof TIPOS_SERVICO[number];
 type TipoDoc     = 'cpf' | 'cnpj';
 
 // Tipo de fornecedor — especialidades só se aplicam a Veterinário
@@ -124,12 +124,15 @@ interface Props {
 // ─── Componente ───────────────────────────────────────────────────────────────
 
 export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
+  const { podeExecutar } = usePermissoes();
+  const podeAtivarExistente = podeExecutar('cadastro.fornecedor.ativar');
   const [form,           setForm]           = useState<FormForn>(FORM_INICIAL);
   const [saving,         setSaving]         = useState(false);
+  const [ativando,       setAtivando]       = useState(false);
   const [buscandoCNPJ,   setBuscandoCNPJ]   = useState(false);
   const [buscandoCEP,    setBuscandoCEP]    = useState(false);
   const [docError,       setDocError]       = useState('');
-  const [dupInativoInfo, setDupInativoInfo] = useState<{ mensagem: string } | null>(null);
+  const [dupInativoInfo, setDupInativoInfo] = useState<{ mensagem: string; fornecedorId: number } | null>(null);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
   const cnpjTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -245,13 +248,36 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
         telefone: novo.telefone ?? (form.telefone.trim() ? form.telefone.trim() : null),
       });
     } catch (err: unknown) {
-      const errData = (err as { response?: { data?: { mensagem?: string; inativo?: boolean } } })?.response?.data;
-      if (errData?.inativo) {
-        setDupInativoInfo({ mensagem: errData.mensagem ?? '' });
+      const errData = (err as { response?: { data?: {
+        mensagem?: string; inativo?: boolean; fornecedor?: { id: number };
+      } } })?.response?.data;
+      if (errData?.inativo && errData.fornecedor?.id) {
+        setDupInativoInfo({ mensagem: errData.mensagem ?? '', fornecedorId: errData.fornecedor.id });
         return;
       }
       setErroInline(errData?.mensagem ?? 'Erro ao salvar fornecedor');
     } finally { setSaving(false); }
+  };
+
+  const handleAtivarExistente = async () => {
+    if (!dupInativoInfo) return;
+    setAtivando(true);
+    try {
+      const res = await api.patch(`/cadastro/fornecedores/${dupInativoInfo.fornecedorId}/toggle`);
+      const reativado = res.data?.dados ?? res.data;
+      toast.success('Cadastro existente reativado');
+      setDupInativoInfo(null);
+      onSalvo({
+        id:       reativado.id,
+        nome:     reativado.nome,
+        email:    reativado.email    ?? null,
+        telefone: reativado.telefone ?? null,
+      });
+    } catch (err: unknown) {
+      const errData = (err as { response?: { data?: { mensagem?: string } } })?.response?.data;
+      setErroInline(errData?.mensagem ?? 'Erro ao ativar cadastro existente');
+      setDupInativoInfo(null);
+    } finally { setAtivando(false); }
   };
 
   const inp = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 transition-colors';
@@ -419,7 +445,7 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
             className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 disabled:opacity-50 transition-colors">
             Cancelar
           </button>
-          <button onClick={handleSalvar} disabled={saving}
+          <button onClick={() => handleSalvar()} disabled={saving}
             className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2">
             {saving && <Loader2 size={13} className="animate-spin" />}
             {saving ? 'Salvando…' : 'Salvar'}
@@ -437,17 +463,28 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
             <div>
               <p className="font-semibold text-gray-900 text-sm mb-1">Cadastro já existente (inativo)</p>
               <p className="text-sm text-gray-600">{dupInativoInfo.mensagem}</p>
-              <p className="text-sm text-gray-500 mt-2">Deseja continuar e criar um novo cadastro mesmo assim?</p>
+              <p className="text-sm text-gray-500 mt-2">
+                {podeAtivarExistente
+                  ? 'Deseja reativar o cadastro existente ou criar um novo mesmo assim?'
+                  : 'Deseja continuar e criar um novo cadastro mesmo assim?'}
+              </p>
             </div>
           </div>
-          <div className="flex gap-3">
-            <button onClick={() => setDupInativoInfo(null)}
-              className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
-              Cancelar
+          <div className="flex flex-col gap-2">
+            {podeAtivarExistente && (
+              <button onClick={handleAtivarExistente} disabled={ativando || saving}
+                className="w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2">
+                {ativando && <Loader2 size={13} className="animate-spin" />}
+                {ativando ? 'Ativando…' : 'Ativar cadastro existente'}
+              </button>
+            )}
+            <button onClick={() => { setDupInativoInfo(null); handleSalvar(true); }} disabled={ativando || saving}
+              className="w-full py-2.5 border border-amber-300 text-amber-700 hover:bg-amber-50 disabled:opacity-50 rounded-xl text-sm font-semibold transition-colors">
+              Criar novo mesmo assim
             </button>
-            <button onClick={() => { setDupInativoInfo(null); handleSalvar(true); }}
-              className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold transition-colors">
-              Continuar mesmo assim
+            <button onClick={() => setDupInativoInfo(null)} disabled={ativando}
+              className="w-full py-2 text-sm text-gray-500 hover:text-gray-700 font-medium transition-colors disabled:opacity-50">
+              Cancelar
             </button>
           </div>
         </div>

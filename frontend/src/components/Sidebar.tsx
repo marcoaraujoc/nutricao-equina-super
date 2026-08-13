@@ -14,7 +14,7 @@ import {
   ClipboardCheck, Activity, Utensils, FileBarChart,
   FileText, Syringe, Microscope, Scan,
   FolderOpen, UserCog, Truck, MapPin, CalendarClock,
-  Sparkles, CalendarPlus, Package, Settings, ScrollText, Building2,
+  Package, UserPlus, ScrollText, Building2,
   Bell, Gauge, ListChecks, Receipt, Layers,
 } from 'lucide-react';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -76,7 +76,7 @@ export default function Sidebar() {
   const { isNewUser, selectedAnimal, cadastroCompleto, isGestorEmpresa, empresaConfigurada } = useSelectedAnimal();
   const location                      = useLocation();
   const navigate                      = useNavigate();
-  const { opcoes: opcoesContexto, contextoAtivo, trocarContexto, marca } = useEmpresa();
+  const { marca } = useEmpresa();
   // ⚠️ Os TRÊS hooks de polling de VÍNCULO saíram na fase 3 do multi-tenancy:
   // `useVetSolicitacaoMonitor`, `useProprietarioNotificacoes` e `useVetPendentes`
   // observavam solicitações de vínculo/desvínculo, que não existem mais. O acesso ao
@@ -149,21 +149,21 @@ export default function Sidebar() {
   const podVerCadastroPessoal = !isEstagiario && !isProprietario;
 
   // Bloqueio de módulos por cadastro incompleto — mensagem e destino variam conforme
-  // o que falta preencher. GESTOR de empresa precisa de Cadastro Pessoal E Configurações
-  // da empresa; demais perfis só de Cadastro Pessoal (proprietário tem sua própria regra).
+  // o que falta preencher. GESTOR de empresa precisa de Cadastro Pessoal E Cadastro da
+  // Empresa; demais perfis só de Cadastro Pessoal (proprietário tem sua própria regra).
   const faltaCadastroPessoal = !cadastroCompleto;
   const faltaConfigEmpresa   = isGestorEmpresa && !empresaConfigurada;
   const destinoBloqueio = faltaCadastroPessoal
     ? '/cadastro-pessoal'
     : faltaConfigEmpresa
-      ? '/configuracoes'
+      ? '/cadastro/empresa'
       : '/animais';
   const mensagemBloqueio = isProprietario
     ? 'Complete seu Cadastro e cadastre seu primeiro animal para liberar os módulos.'
     : faltaCadastroPessoal && faltaConfigEmpresa
-      ? 'Complete seu Cadastro Pessoal e a Configuração da Empresa para liberar os módulos.'
+      ? 'Complete seu Cadastro Pessoal e o Cadastro da Empresa para liberar os módulos.'
       : faltaConfigEmpresa
-        ? 'Complete a Configuração da Empresa para liberar os módulos.'
+        ? 'Complete o Cadastro da Empresa para liberar os módulos.'
         : 'Complete seu Cadastro Pessoal para liberar os módulos.';
 
   // Itens visíveis no accordion Cadastro e na seção Geral
@@ -186,11 +186,6 @@ export default function Sidebar() {
   const search        = location.search;
 
   // ── Helpers de active state ───────────────────────────────────────────────
-  const isGeralActive = (path: string) => {
-    if (activeSection !== 'geral') return false;
-    if (path === '/') return p === '/';
-    return p.startsWith(path);
-  };
   const isModuleActive         = (mod: ActiveSection) => activeSection === mod;
   const isNutricionalSubActive = (path: string) => activeSection === 'nutricional' && p.startsWith(path);
   const isEstoqueSubActive     = (path: string) => activeSection === 'estoque'     && p.startsWith(path);
@@ -236,21 +231,6 @@ export default function Sidebar() {
     <Link to={to} onClick={sairDosGrupos}
       className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${active ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE}`}>
       {icon} {label}
-    </Link>
-  );
-
-  const navLinkBadge = (
-    to: string, icon: React.ReactNode, label: string, active: boolean, badge: number,
-  ) => (
-    <Link to={to} onClick={sairDosGrupos}
-      className={`flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${active ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE}`}>
-      {icon}
-      <span className="flex-1">{label}</span>
-      {badge > 0 && (
-        <span className="bg-red-500 text-white text-[10px] font-bold min-w-[18px] h-[18px] rounded-full flex items-center justify-center px-1 leading-none flex-shrink-0">
-          {badge > 9 ? '9+' : badge}
-        </span>
-      )}
     </Link>
   );
 
@@ -310,32 +290,6 @@ export default function Sidebar() {
             <X size={24} />
           </button>
         </div>
-
-        {/* Seletor de contexto ativo — só para gestor com mais de uma empresa/equipe.
-            CNPJ = opção por empresa; CPF = opção por equipe da empresa pessoal.
-            Sem rótulo acima ("Equipe ativa"/"Empresa ativa"): o próprio valor
-            selecionado já diz em qual contexto o usuário está. */}
-        {opcoesContexto.length > 1 && (
-          <div className="px-4 py-3 border-b border-gray-200 flex-shrink-0">
-            <select
-              value={contextoAtivo ? `${contextoAtivo.empresaId}:${contextoAtivo.equipeId ?? ''}` : ''}
-              onChange={(e) => {
-                const [empresaId, equipeId] = e.target.value.split(':');
-                const opcao = opcoesContexto.find(
-                  (o) => o.empresaId === Number(empresaId) && o.equipeId === (equipeId ? Number(equipeId) : null),
-                );
-                if (opcao) trocarContexto(opcao);
-              }}
-              className="w-full text-sm font-semibold text-gray-700 bg-gray-50 border border-gray-200 rounded-2xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
-            >
-              {opcoesContexto.map((o) => (
-                <option key={`${o.empresaId}:${o.equipeId ?? ''}`} value={`${o.empresaId}:${o.equipeId ?? ''}`}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
 
         {/* Nav
             space-y-0.5 (e não space-y-4): Mapa, Cadastro, Agendamento, Atendimento…
@@ -626,27 +580,30 @@ export default function Sidebar() {
 
               {openAdministracao && (
                 <div className="mt-1 space-y-0.5 pl-4">
-                  {/* Configurações e Auditoria vieram da antiga seção "Geral": são
-                      administração da clínica, não do dia a dia clínico. */}
-                  {/* Cadastro do ASSINANTE (razão social, documento, endereço fiscal e o
-                      plano contratado). É outra coisa que "Configurações", que guarda as
-                      preferências operacionais da clínica — por isso são dois itens. */}
+                  {/* Auditoria veio da antiga seção "Geral": é administração da clínica,
+                      não do dia a dia clínico. */}
                   {/* ORDEM ALFABÉTICA CRESCENTE pelo RÓTULO, independente do perfil que
                       enxerga cada item — a seção mistura itens de gestor e de ADMIN, e
                       agrupá-los por perfil fazia a lista mudar de ordem conforme quem
                       entrava. Item novo entra na posição alfabética, não no fim. */}
                   {isAdmin && navLink('/configuracao-alertas', <Bell size={20} />, 'Alertas', isAdminActive('/configuracao-alertas'))}
                   {(isGestor || isAdmin) && navLink('/auditoria-geral', <ScrollText size={20} />, 'Auditoria', p.startsWith('/auditoria-geral'))}
-                  {isGestor && navLink('/configuracoes', <Settings size={20} />, 'Configurações', p.startsWith('/configuracoes'))}
+                  {/* Tela ÚNICA do Gestor (2026-08-17): identidade da empresa (nome,
+                      CNPJ/CPF, razão social, endereço, espécies) + preferências
+                      operacionais (logo, fechamento, expediente, WhatsApp) — antes eram
+                      dois itens de menu ("Empresa" e "Configurações"), viraram um só.
+                      O ADMIN não tem entrada própria aqui de propósito (2026-08-16): o
+                      backend aceita o ADMIN em `/cadastro/empresa`, mas quem cria o
+                      tenant é "Criação de Gestor", e quem acompanha a carteira é
+                      "Empresas" — sem duplicar rota no menu do ADMIN. */}
+                  {isGestor && navLink('/cadastro/empresa', <Building2 size={20} />, 'Cadastro da Empresa', p.startsWith('/cadastro/empresa'))}
                   {navLink('/controle-acesso', <ShieldCheck size={20} />, 'Controle de Acesso', isAdminActive('/controle-acesso'))}
-                  {/* "Empresa" (gestor, cadastro fiscal da ATIVA — hoje SOMENTE LEITURA) ×
-                      "Empresas" (ADMIN, lista/cria a carteira inteira de clientes e edita
-                      o cadastro de cada uma). O ADMIN não tem item de menu para "Empresa"
-                      de propósito (2026-08-16): quem administra a identidade fiscal de UMA
-                      empresa por vez é "Empresas" — o backend continua aceitando o ADMIN
-                      em `/cadastro/empresa` (útil ao trocar o contexto ativo e navegar
-                      direto), mas sem entrada própria no menu, para não duplicar rota. */}
-                  {isGestor && navLink('/cadastro/empresa', <Building2 size={20} />, 'Empresa', p.startsWith('/cadastro/empresa'))}
+                  {/* "Criação de Gestor" (ADMIN, cria só o gestor — dados básicos + plano;
+                      a empresa nasce em branco) × "Empresas" (ADMIN, acompanha a carteira:
+                      visualiza, inativa/reativa e troca o plano de qualquer empresa). A
+                      identidade de CADA empresa é o próprio gestor quem completa, em
+                      "Cadastro da Empresa" (acima). */}
+                  {isAdmin && navLink('/admin/criacao-gestor', <UserPlus size={20} />, 'Criação de Gestor', isAdminActive('/admin/criacao-gestor'))}
                   {isAdmin && navLink('/admin/empresas', <Building2 size={20} />, 'Empresas', isAdminActive('/admin/empresas'))}
                   {isAdmin && navLink('/medicamentos', <Pill size={20} />, 'Medicamentos', isAdminActive('/medicamentos'))}
                   {isAdmin && navLink('/monitoracao', <Gauge size={20} />, 'Monitoração', isAdminActive('/monitoracao'))}

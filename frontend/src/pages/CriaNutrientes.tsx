@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { ArrowLeft } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 

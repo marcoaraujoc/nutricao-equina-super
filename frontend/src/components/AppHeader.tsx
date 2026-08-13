@@ -11,12 +11,14 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Menu, ChevronDown, LogOut, User as UserIcon, Settings } from 'lucide-react';
+import { Menu, ChevronDown, LogOut, User, Building2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useEmpresa } from '../contexts/EmpresaContext';
 import { useMobileMenu } from '../contexts/MobileMenuContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import BrandS2Vet from './BrandS2Vet';
 import BuscaGlobal from './BuscaGlobal';
+import SeletorContexto from './SeletorContexto';
 
 /** Selo do perfil no contexto ativo — mesma escala de cores usada na Sidebar */
 function seloPerfil(role: string, userType: string, isAdmin: boolean, isGestor: boolean) {
@@ -33,6 +35,7 @@ export default function AppHeader() {
   const { user, logout } = useAuth();
   const { setOpen }      = useMobileMenu();
   const { isGestor }     = usePermissoes();
+  const { opcoes }       = useEmpresa();
 
   const [menuAberto, setMenuAberto] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -50,7 +53,11 @@ export default function AppHeader() {
   const userType = (user?.userType ?? '').toUpperCase();
   const isAdmin  = role === 'ADMIN';
   const selo     = user ? seloPerfil(role, userType, isAdmin, isGestor) : null;
-  const inicial  = user?.fullName?.trim()?.[0]?.toUpperCase() ?? 'U';
+  // Mesma regra do Sidebar (podVerCadastroPessoal): estagiário e proprietário não têm
+  // Cadastro Pessoal próprio de profissional.
+  const isEstagiario         = role === 'ESTAGIARIO' || userType === 'ESTAGIARIO';
+  const isProprietario       = userType === 'PROPRIETARIO';
+  const podeVerCadastroPessoal = !isEstagiario && !isProprietario;
   // Iniciais do primeiro e do último nome (ex.: "Maria Eduarda Costa" → "MC")
   const iniciais = (() => {
     const partes = user?.fullName?.trim().split(/\s+/).filter(Boolean) ?? [];
@@ -96,7 +103,13 @@ export default function AppHeader() {
         <BuscaGlobal />
       </div>
 
-      {/* Menu do usuário */}
+      {/* Menu do usuário — identidade + troca de empresa/equipe. "Cadastro Pessoal"
+          e "Cadastro da Empresa" saíram daqui em 2026-08-18 (já existiam no Sidebar
+          e duplicavam entrada) mas voltaram para QUEM SÓ TEM UMA EMPRESA: sem
+          mais de uma opção, SeletorContexto (`embedded`) renderiza null e o menu
+          abria vazio — sem nenhum atalho, o dropdown virava cromo morto para quem
+          não troca de contexto. Com >1 opção o seletor de contexto continua sendo
+          o conteúdo do menu, como antes. */}
       {user && (
         <div ref={menuRef} className="relative flex-shrink-0">
           <button
@@ -117,31 +130,52 @@ export default function AppHeader() {
           </button>
 
           {menuAberto && (
-            <div role="menu" className="absolute right-0 mt-2 w-64 bg-white border border-gray-200 rounded-2xl shadow-lg py-2 z-50">
-              <div className="px-4 py-2 border-b border-gray-100">
-                <p className="text-sm font-semibold text-gray-900 truncate">{user.fullName || inicial}</p>
-                <p className="text-xs text-gray-500 truncate">{user.email}</p>
-                {selo && (
-                  <span className={`inline-block mt-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full ${selo.cls}`}>
-                    {selo.texto}
-                  </span>
-                )}
-              </div>
-
-              <Link
-                to="/cadastro-pessoal" role="menuitem" onClick={() => setMenuAberto(false)}
-                className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
-              >
-                <UserIcon size={16} /> Cadastro Pessoal
-              </Link>
-
-              {isGestor && (
-                <Link
-                  to="/configuracoes" role="menuitem" onClick={() => setMenuAberto(false)}
-                  className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
-                >
-                  <Settings size={16} /> Configurações
-                </Link>
+            <div
+              role="menu"
+              className={`absolute right-0 mt-2 max-w-[calc(100vw-2rem)] bg-white border border-gray-200 rounded-2xl shadow-lg py-2 z-50 ${
+                opcoes.length > 1 ? 'w-80' : 'w-52'
+              }`}
+            >
+              {opcoes.length > 1 ? (
+                <SeletorContexto embedded onTrocar={() => setMenuAberto(false)} />
+              ) : (
+                <div role="group" aria-label="Configurações">
+                  <p className="px-4 pt-1 pb-2 text-[11px] font-bold text-gray-400 uppercase tracking-wide">
+                    Configurações
+                  </p>
+                  <div className="py-1">
+                    {podeVerCadastroPessoal && (
+                      <Link
+                        to="/cadastro-pessoal"
+                        role="menuitem"
+                        onClick={() => setMenuAberto(false)}
+                        className="flex items-center gap-2 px-2 py-1 hover:bg-emerald-500/15"
+                      >
+                        <span className="flex items-center gap-2.5 flex-1 min-w-0 text-left px-1 py-1">
+                          <span className="w-7 h-7 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center flex-shrink-0">
+                            <User size={15} />
+                          </span>
+                          <span className="text-sm text-gray-900 truncate">Pessoal</span>
+                        </span>
+                      </Link>
+                    )}
+                    {isGestor && (
+                      <Link
+                        to="/cadastro/empresa"
+                        role="menuitem"
+                        onClick={() => setMenuAberto(false)}
+                        className="flex items-center gap-2 px-2 py-1 hover:bg-emerald-500/15"
+                      >
+                        <span className="flex items-center gap-2.5 flex-1 min-w-0 text-left px-1 py-1">
+                          <span className="w-7 h-7 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center flex-shrink-0">
+                            <Building2 size={15} />
+                          </span>
+                          <span className="text-sm text-gray-900 truncate">Empresa</span>
+                        </span>
+                      </Link>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           )}

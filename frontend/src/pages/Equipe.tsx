@@ -240,17 +240,6 @@ function FichaMembro({ membro, linhas, especialidades, onFechar }: {
   );
 }
 
-// Perfis de acesso atribuíveis a membros da equipe
-const CARGO_OPTIONS: { value: string; label: string }[] = [
-  { value: 'VETERINARIO', label: 'Veterinário' },
-  { value: 'ESTAGIARIO',  label: 'Estagiário'  },
-  { value: 'ENFERMEIRO',  label: 'Enfermeiro'  },
-  { value: 'SECRETARIA',  label: 'Secretaria'  },
-  { value: 'FINANCEIRO',  label: 'Financeiro'  },
-  { value: 'FORNECEDOR',  label: 'Fornecedor'  },
-  { value: 'GESTOR',      label: 'Gestor'      },
-];
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const labelCargo = (cargo: string): string => ({
@@ -283,6 +272,11 @@ const badgeCargo = (cargo: string): string => ({
 
 export default function Equipe() {
   const { user }                                          = useAuth();
+  // Backend (EquipeController.atualizarMembro) bloqueia gestor editando OUTRO gestor —
+  // a própria linha é liberada, e ADMIN da plataforma passa por cima da regra toda.
+  // Mostrar o botão Editar num membro GESTOR alheio para quem não é ADMIN abriria o
+  // modal para um salvar que sempre volta 403.
+  const isAdminPlataforma = (user?.role ?? user?.userType ?? '').toUpperCase() === 'ADMIN';
   const [membros,       setMembros]                       = useState<Membro[]>([]);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
@@ -421,9 +415,16 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
         estado:      values.estado.trim()      || null,
         locaisTrabalho:     mapLocaisParaPayload(values.locaisTrabalho),
         ...(values.especialidadeIds !== undefined && { especialidadeIds: values.especialidadeIds }),
-        tipoPagamento:  values.tipoPagamento,
-        formaPagamento: values.formaPagamento ?? 'VALOR',
-        valorPagamento: Number(values.valorPagamento),
+        // GESTOR sem nada preenchido: UsuarioFormModal manda `tipoPagamento: undefined`
+        // (campo opcional para o cargo). Sem este guard, `formaPagamento ?? 'VALOR'` e
+        // `Number(undefined)` forçavam os outros dois campos no payload mesmo assim, e
+        // o backend (que só exige o trio quando ALGUM deles chega) voltava 400 pedindo
+        // o tipo de pagamento mesmo com a seção em branco.
+        ...(values.tipoPagamento !== undefined && {
+          tipoPagamento:  values.tipoPagamento,
+          formaPagamento: values.formaPagamento ?? 'VALOR',
+          valorPagamento: Number(values.valorPagamento),
+        }),
         acessoSistema:  values.acessoSistema !== false,
       });
       if (equipeId) {
@@ -648,7 +649,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                   </div>
                   {(isGestor || m.user.id !== user?.id) && (
                     <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-50">
-                      {isGestor && m.cargo !== 'GESTOR' && (
+                      {isGestor && (m.cargo !== 'GESTOR' || isAdminPlataforma || m.user.id === user?.id) && (
                         <button onClick={() => setMembroEditando(m)}
                           className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
                           <Pencil size={11} /> Editar
@@ -656,10 +657,10 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                       )}
                       {m.user.id !== user?.id && (
                         <button onClick={() => handleToggle(m)} disabled={togglingId === m.id}
-                          className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
+                          className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-blue-200 rounded-lg text-xs text-blue-600 hover:bg-blue-50 transition-colors">
                           {togglingId === m.id
                             ? <Loader2 size={11} className="animate-spin" />
-                            : ativo ? <ToggleRight size={11} className="text-emerald-600" /> : <ToggleLeft size={11} />
+                            : ativo ? <ToggleRight size={11} /> : <ToggleLeft size={11} />
                           }
                           {ativo ? 'Desativar' : 'Ativar'}
                         </button>
@@ -714,7 +715,6 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                                 {t}
                               </span>
                             ))}
-                            <span className="text-xs text-gray-300">Padrão da empresa</span>
                           </div>
                         ) : (
                           <div className="space-y-1">
@@ -757,7 +757,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                       {isGestor && (
                         <td className="px-4 py-3">
                           <div className="flex items-center justify-end gap-1">
-                            {m.cargo !== 'GESTOR' && (
+                            {(m.cargo !== 'GESTOR' || isAdminPlataforma || m.user.id === user?.id) && (
                               <button onClick={() => setMembroEditando(m)} title="Editar perfil"
                                 className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                                 <Pencil size={14} />
@@ -766,10 +766,10 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                             {m.user.id !== user?.id && (
                               <button onClick={() => handleToggle(m)} disabled={togglingId === m.id}
                                 title={ativo ? 'Desativar' : 'Ativar'}
-                                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
+                                className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
                                 {togglingId === m.id
                                   ? <Loader2 size={14} className="animate-spin" />
-                                  : ativo ? <ToggleRight size={14} className="text-emerald-600" /> : <ToggleLeft size={14} />
+                                  : ativo ? <ToggleRight size={14} /> : <ToggleLeft size={14} />
                                 }
                               </button>
                             )}

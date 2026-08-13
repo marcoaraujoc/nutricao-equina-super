@@ -203,7 +203,7 @@ const NeedPersonalScreen = ({ animalNome, onGo }: { animalNome: string; onGo: ()
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const WelcomeScreen = ({ user, onEnter }: { user: any; onEnter: () => void }) => {
-  const { text, Icon, color } = getSaudacao();
+  const { text, color } = getSaudacao();
   const features  = getRoleFeatures(user?.role);
   const firstName = user?.fullName?.split(' ')[0] ?? 'você';
   return (
@@ -294,7 +294,7 @@ const Dashboard = () => {
 
   useEffect(() => {
     if (isClinica || role === 'ADMIN') {
-      navigate('/mapa-atendimento', { replace: true });
+      navigate('/painel-principal', { replace: true });
       return;
     }
     loadAnimais();

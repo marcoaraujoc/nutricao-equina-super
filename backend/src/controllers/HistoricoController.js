@@ -39,7 +39,7 @@ const HistoricoController = {
       const limit    = buscando ? 500 : Math.min(Number(req.query.limit) || 100, 300);
       const like     = { contains: busca, mode: 'insensitive' };
 
-      const acesso = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
@@ -202,7 +202,7 @@ const HistoricoController = {
       const animalId = Number(req.params.animalId);
       const limit    = Math.min(Number(req.query.limit) || 10, 20);
 
-      const acesso = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 

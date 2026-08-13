@@ -33,18 +33,18 @@ export default function Login() {
   const [forgotError,     setForgotError]     = useState('');
 
   // Destino pós-login. Profissional (vet, gestor, estagiário, fornecedor...) vai
-  // DIRETO ao Mapa de Atendimento — antes passava por `/` (Dashboard), que só
-  // redirecionava para o mapa quando reconhecia o perfil como clínico, deixando os
+  // DIRETO ao Painel Principal — antes passava por `/` (Dashboard), que só
+  // redirecionava para lá quando reconhecia o perfil como clínico, deixando os
   // demais numa tela intermediária. O PROPRIETÁRIO mantém `/` (portal do cliente).
   // Cadastro pessoal pendente NAQUELA empresa continua sendo interceptado pelo
-  // ProtectedRoute; já confirmado, não aparece mais e o login cai no mapa.
+  // ProtectedRoute; já confirmado, não aparece mais e o login cai no painel.
   const redirecionarAposLogin = (u?: { userType?: string } | null) => {
     if (returnUrl) {
       navigate(decodeURIComponent(returnUrl), { replace: true });
       return;
     }
     const ehCliente = (u?.userType ?? '').toUpperCase() === 'PROPRIETARIO';
-    navigate(ehCliente ? '/' : '/mapa-atendimento', { replace: true });
+    navigate(ehCliente ? '/' : '/painel-principal', { replace: true });
   };
 
   const handleEmailLogin = async (e: React.FormEvent) => {

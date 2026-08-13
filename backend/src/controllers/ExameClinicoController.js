@@ -7,7 +7,8 @@ const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { lancarExameNaFatura, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
 const { registrarAuditoria, registrarAlteracao, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro, getNivelEfetivo, NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
-const { processarExame } = require('../services/exameParserService');
+const { animalEstaInativo } = require('../lib/animalInativo');
+const { processarExame, processarBuffer } = require('../services/exameParserService');
 const { storage }        = require('../storage');
 
 const TIPOS_VALIDOS = ['Laboratorial', 'Bioquímico', 'Imagem', 'Compra'];
@@ -55,37 +56,66 @@ function parseItensManuais(bruto) {
 }
 
 /**
- * Exame de COMPRA é ÚNICO por paciente e por dia.
- *
- * POR QUÊ: o laudo de compra é a fotografia do animal naquela data — dois laudos no
- * mesmo dia para o mesmo paciente são duplicidade (ou reenvio de formulário), não dois
- * exames. Vale SÓ para `tipo === 'Compra'`: os demais tipos são PEDIDOS e podem se
- * repetir no dia à vontade (dois hemogramas, dois raios-x…).
- *
- * A comparação é pela DATA (YYYY-MM-DD), não pelo instante: `dataSolicitacao` é
- * DateTime e o front manda "YYYY-MM-DD" (meia-noite UTC), mas registro criado por outro
- * caminho pode ter hora — igualdade exata deixaria a duplicata passar. São poucos
- * laudos de compra por animal, então carregar e comparar em JS evita depender de
- * `date_trunc` e de fuso do servidor.
- *
- * @returns o exame conflitante, ou null
+ * Extrai o laboratório gravado em `observacao` (JSON, campo `laboratorio` — ver
+ * `criar`/`criarNaoPedido`). Usado para expor o laboratório como campo de leitura
+ * pronto, sem o front precisar fazer `JSON.parse` do texto bruto.
  */
-async function compraNoMesmoDia(client, { animalId, dataSolicitacao, ignorarId = null }) {
-  const alvo = String(dataSolicitacao ?? '').slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(alvo)) return null;
+function laboratorioDoExame(ex) {
+  if (!ex?.observacao) return null;
+  try {
+    return JSON.parse(ex.observacao)?.laboratorio ?? null;
+  } catch {
+    return null;
+  }
+}
 
-  const existentes = await client.exameClinico.findMany({
-    where: {
-      animalId: Number(animalId),
-      tipo:     'Compra',
-      ativo:    true,
-      ...(ignorarId ? { id: { not: Number(ignorarId) } } : {}),
-    },
-    select: { id: true, numero: true, dataSolicitacao: true },
+/**
+ * Mapeia a extração da IA (prompt `parse_laudo`) para as linhas de
+ * ExameClinicoResultadoItem. Compartilhado por `salvarResultado` (upload de um
+ * exame já PEDIDO) e `analisarNaoPedido` (leitura prévia de um exame não pedido) —
+ * uma regra de mapeamento só, nunca duas.
+ */
+function mapExtracaoParaItens(extracao) {
+  return (extracao?.exames ?? [])
+    .map((e, idx) => {
+      const refMin = e.referencia_min ?? e.valorMinRef;
+      const refMax = e.referencia_max ?? e.valorMaxRef;
+      const referencia = [refMin, refMax]
+        .filter(v => v != null && v !== '')
+        .join(' – ') || null;
+      return {
+        parametro:  (e.nome ?? e.nomeNutriente ?? '').toString().trim(),
+        valor:      (e.resultado ?? e.valorEncontrado),
+        unidade:    e.unidade ? String(e.unidade).trim() : null,
+        referencia,
+        ordem:      idx,
+      };
+    })
+    .filter(i => i.parametro);
+}
+
+/**
+ * Acha um exame CLÍNICO já existente (ativo) do mesmo animal, mesmo tipo, mesma
+ * descrição (comparação insensível a maiúsculas/espaço) e mesma data — usado só
+ * pelo fluxo "não pedido" (`analisarNaoPedido` + `criarNaoPedido`) para nunca
+ * duplicar o resultado do mesmo exame quando o laudo é reenviado/reanalisado por
+ * engano. `dataISO` null (a IA não achou data) compara só por tipo+descrição.
+ */
+async function exameDuplicado(animalId, tipo, descricao, dataISO) {
+  const descricaoNorm = (descricao ?? '').toString().trim().toLowerCase();
+  if (!descricaoNorm) return null;
+
+  const candidatos = await prisma.exameClinico.findMany({
+    where: { animalId: Number(animalId), tipo, ativo: true },
+    select: { id: true, numero: true, descricao: true, dataSolicitacao: true },
   });
 
-  return existentes.find(e =>
-    e.dataSolicitacao && e.dataSolicitacao.toISOString().slice(0, 10) === alvo) ?? null;
+  return candidatos.find(c => {
+    if ((c.descricao ?? '').trim().toLowerCase() !== descricaoNorm) return false;
+    if (!dataISO) return true;
+    const dataC = c.dataSolicitacao ? new Date(c.dataSolicitacao).toISOString().slice(0, 10) : null;
+    return dataC === dataISO;
+  }) ?? null;
 }
 
 const ExameClinicoController = {
@@ -95,7 +125,7 @@ const ExameClinicoController = {
     try {
       const animalId = Number(req.params.animalId);
       const acesso = await verificarAcessoAnimal({
-        animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId,
+        animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType
       });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
@@ -110,7 +140,8 @@ const ExameClinicoController = {
         orderBy: { dataSolicitacao: 'desc' },
       });
 
-      res.json({ dados: itens, meta: { total: itens.length } });
+      const dados = itens.map(it => ({ ...it, laboratorio: laboratorioDoExame(it) }));
+      res.json({ dados, meta: { total: dados.length } });
     } catch (err) {
       console.error('Erro ao listar exames clínicos:', err);
       res.status(500).json({ error: 'Erro ao listar exames' });
@@ -135,10 +166,13 @@ const ExameClinicoController = {
       }
 
       const acesso = await verificarAcessoAnimal({
-        animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId,
+        animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType
       });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
+      if (await animalEstaInativo(animalId)) {
+        return res.status(400).json({ error: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
+      }
 
       // Valida evolução apenas quando fornecida
       if (evolucaoId) {
@@ -151,20 +185,6 @@ const ExameClinicoController = {
 
       // Campos extras armazenados em observacao como JSON
       const { dataHoraColeta, dataSolicitacao } = req.body;
-
-      // Um laudo de compra por paciente/dia — ver `compraNoMesmoDia`
-      if (tipo === 'Compra') {
-        const jaExiste = await compraNoMesmoDia(prisma, {
-          animalId, dataSolicitacao: dataSolicitacao ?? new Date().toISOString(),
-        });
-        if (jaExiste) {
-          return res.status(409).json({
-            error: 'Este paciente já tem um Exame de Compra nesta data — Altere o exame existente.',
-            code:  'COMPRA_DUPLICADA',
-            exameId: jaExiste.id,
-          });
-        }
-      }
 
       // Exame de Compra: ExameCompra.tsx manda o laudo completo em `observacao` como JSON string.
       // Preserva direto, sem encapsular na estrutura extra (que quebraria a leitura em handleEditar).
@@ -217,7 +237,7 @@ const ExameClinicoController = {
         // FINALIZAR a evolução ou ao concluir o exame — exame pedido depois da evolução
         // finalizada, ou que nunca foi concluído, nunca chegava ao financeiro.
         // `lancarExameNaFatura` é idempotente: os outros gatilhos não duplicam.
-        await lancarExameNaFatura(tx, criado, animalDoExame?.userId ?? null);
+        await lancarExameNaFatura(tx, criado, animalDoExame?.userId ?? null, req.empresaId ?? null);
         return criado;
       });
 
@@ -225,6 +245,192 @@ const ExameClinicoController = {
     } catch (err) {
       console.error('Erro ao criar exame clínico:', err);
       res.status(500).json({ error: 'Erro ao criar exame' });
+    }
+  },
+
+  // POST /clinica/exames/analisar (multipart: arquivo, animalId) — LEITURA da IA para
+  // pré-preencher o cadastro de um exame CLÍNICO "não pedido" (Laboratorial/Bioquímico).
+  // Não grava nada: devolve tipo/descrição/laboratório/data sugeridos + a tabela de
+  // resultado já extraída, que o front reenvia pronta ao criar (ver `criar` +
+  // `salvarResultado`) — evita rodar a IA duas vezes sobre o MESMO arquivo.
+  // Gate pelo slug de RESULTADO (não o de pedido): Laboratorial e Bioquímico
+  // compartilham `exames.laboratorial`, então dá para checar sem saber ainda qual
+  // dos dois a IA vai sugerir.
+  analisarNaoPedido: async (req, res) => {
+    try {
+      const { animalId } = req.body;
+      if (!animalId) return res.status(400).json({ error: 'animalId é obrigatório' });
+      if (!req.file)  return res.status(400).json({ error: 'Anexe o arquivo do laudo' });
+
+      const acesso = await verificarAcessoAnimal({
+        animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType
+      });
+      if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
+      if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
+
+      const nivel = await getNivelEfetivo(req, 'exames.laboratorial.editar');
+      if ((NIVEL_ORDINAL[nivel] ?? 0) < NIVEL_ORDINAL.PROPRIO) {
+        return res.status(403).json({ error: 'Sem permissão para carregar resultado de exame.' });
+      }
+
+      const extracao = await processarBuffer(req.file.buffer, req.user?.id ?? null, Number(animalId), req.empresaId ?? null);
+
+      // A IA classifica o documento ANTES de tentar extrair (prompt parse_laudo,
+      // PASSO 0) — pega nota fiscal, contrato, foto qualquer etc. anexados por
+      // engano, sem deixar o usuário revisar uma tabela inventada/vazia.
+      if (extracao?.ehLaudoExame === false) {
+        return res.status(422).json({
+          error: 'O arquivo não é compatível com um exame.',
+          code:  'ARQUIVO_NAO_E_EXAME',
+        });
+      }
+
+      const tipoSugerido = extracao?.tipoSugerido === 'Bioquímico' ? 'Bioquímico' : 'Laboratorial';
+      const descricao    = (extracao?.nomeExame ?? '').toString().trim() || null;
+      const laboratorio  = (extracao?.laboratorio ?? '').toString().trim() || null;
+      const dataExame    = extracao?.dataExame || null;
+
+      // Nunca repete o resultado do mesmo exame — avisa aqui, assim que a IA lê o
+      // laudo, para o usuário não preencher a tela inteira e só descobrir no salvar.
+      // A checagem definitiva (autoritativa) é feita de novo em `criarNaoPedido`.
+      const duplicado = await exameDuplicado(Number(animalId), tipoSugerido, descricao, dataExame);
+      if (duplicado) {
+        return res.status(409).json({
+          error: `Este exame já foi carregado (${duplicado.descricao}).`,
+          code:  'EXAME_JA_CARREGADO',
+        });
+      }
+
+      res.json({ dados: { tipoSugerido, descricao, laboratorio, dataExame, itens: mapExtracaoParaItens(extracao) } });
+    } catch (err) {
+      console.error('Erro ao analisar laudo (exame não pedido):', err);
+      res.status(500).json({ error: 'Erro ao analisar o laudo com a IA' });
+    }
+  },
+
+  // POST /clinica/exames/nao-pedido (multipart: animalId, tipo, descricao, laboratorio?,
+  // dataExame?, resultado?, itens? — a tabela já REVISADA pelo usuário na tela de
+  // confirmação —, arquivos[])
+  //
+  // Cria e já REALIZA num único passo um exame que nunca passou pelo Pedido de Exames
+  // (achado antigo, laudo externo, resultado entregue depois do atendimento). NÃO exige
+  // evolução: é um registro AVULSO (evolucaoId null), mesma categoria do exame de Compra
+  // — `escopoFilhoEvolucaoWhere` já sabe enxergar avulso pelo autor/empresa (ver
+  // lib/clinicalScope.js). Sem 2ª chamada de IA: a tabela já veio pronta da análise
+  // prévia (`analisarNaoPedido`) e da revisão do usuário.
+  // Gate pelo slug de RESULTADO — mesmo raciocínio de `analisarNaoPedido`.
+  criarNaoPedido: async (req, res) => {
+    try {
+      const { animalId, descricao, laboratorio, dataExame, resultado } = req.body;
+      const tipoFinal = req.body.tipo === 'Bioquímico' ? 'Bioquímico'
+        : req.body.tipo === 'Imagem' ? 'Imagem' : 'Laboratorial';
+
+      if (!animalId || !descricao?.trim()) {
+        return res.status(400).json({ error: 'animalId e descricao são obrigatórios' });
+      }
+
+      const acesso = await verificarAcessoAnimal({
+        animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType
+      });
+      if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
+      if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
+      if (await animalEstaInativo(animalId)) {
+        return res.status(400).json({ error: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
+      }
+
+      const nivel = await getNivelEfetivo(req, `${SLUG_RESULTADO[tipoFinal]}.editar`);
+      if ((NIVEL_ORDINAL[nivel] ?? 0) < NIVEL_ORDINAL.PROPRIO) {
+        return res.status(403).json({ error: `Sem permissão para carregar resultado de exame ${tipoFinal}.` });
+      }
+
+      // Nunca repete o resultado do mesmo exame — checagem AUTORITATIVA (a de
+      // `analisarNaoPedido` é só um aviso antecipado; cobre também quem preencheu a
+      // tabela na mão, sem passar pela análise). Usa a data que efetivamente será
+      // gravada (hoje, quando o usuário não informou uma).
+      const dataISOFinal = dataExame ? new Date(dataExame).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+      const duplicado = await exameDuplicado(Number(animalId), tipoFinal, descricao, dataISOFinal);
+      if (duplicado) {
+        return res.status(409).json({
+          error: `Este exame já foi carregado (${duplicado.descricao}).`,
+          code:  'EXAME_JA_CARREGADO',
+        });
+      }
+
+      const arquivos   = Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []);
+      const laudoTexto = (resultado ?? '').toString().trim();
+      const itens      = tipoFinal === 'Imagem' ? [] : parseItensManuais(req.body?.itens);
+
+      if (tipoFinal !== 'Imagem' && itens.length === 0) {
+        return res.status(400).json({ error: 'Informe ao menos um parâmetro do resultado' });
+      }
+      if (tipoFinal === 'Imagem' && arquivos.length === 0 && !laudoTexto) {
+        return res.status(400).json({ error: 'Anexe as imagens ou escreva o laudo' });
+      }
+
+      // Upload ANTES da transaction (I/O de storage fica fora da transação de banco —
+      // mesmo padrão de `salvarResultado`).
+      let arquivoUrl = null;
+      const imagensNovas = [];
+      if (tipoFinal === 'Imagem') {
+        for (const file of arquivos) {
+          const url = await storage.upload(file, 'exames-imagens', { empresaId: req.empresaId ?? null, animalId: Number(animalId), criadoPorId: req.user?.id ?? null });
+          imagensNovas.push({ nome: file.originalname ?? null, arquivoUrl: url });
+        }
+      } else if (arquivos[0]) {
+        arquivoUrl = await storage.upload(arquivos[0], 'exames', { empresaId: req.empresaId ?? null, animalId: Number(animalId), criadoPorId: req.user?.id ?? null });
+      }
+
+      const animalDoExame = await prisma.animal.findUnique({ where: { id: Number(animalId) }, select: { userId: true } });
+      const agora = new Date();
+      const observacaoFinal = tipoFinal === 'Imagem' ? null : JSON.stringify({
+        laboratorio: laboratorio?.trim() || null, dataHoraColeta: null, tipoAmostra: null,
+        indicacaoClinica: null, obs: laudoTexto || null, grupoNome: null, grupos: null,
+      });
+
+      const item = await prisma.$transaction(async (tx) => {
+        const maxResult = await tx.exameClinico.aggregate({
+          where: { animalId: Number(animalId) }, _max: { numero: true },
+        });
+        const proximoNumero = (maxResult._max.numero ?? 0) + 1;
+
+        const criado = await tx.exameClinico.create({
+          data: {
+            animalId:        Number(animalId),
+            veterinarioId:   req.user.id,
+            evolucaoId:      null,
+            tipo:            tipoFinal,
+            descricao:       descricao.trim(),
+            status:          'REALIZADO',
+            ativo:           true,
+            observacao:      observacaoFinal,
+            arquivoUrl,
+            resultado:       tipoFinal === 'Imagem' ? (laudoTexto || null) : null,
+            numero:          proximoNumero,
+            dataSolicitacao: dataExame ? new Date(dataExame) : agora,
+            dataResultado:   agora,
+          },
+        });
+
+        await lancarExameNaFatura(tx, criado, animalDoExame?.userId ?? null, req.empresaId ?? null);
+
+        for (const img of imagensNovas) {
+          await tx.exameImagemAnexo.create({
+            data: { animalId: Number(animalId), exameClinicoId: criado.id, nome: img.nome, arquivoUrl: img.arquivoUrl, criadoPorId: req.user?.id ?? null },
+          });
+        }
+        for (const it of itens) {
+          await tx.exameClinicoResultadoItem.create({
+            data: { exameClinicoId: criado.id, parametro: it.parametro, valor: it.valor, unidade: it.unidade, referencia: it.referencia, ordem: it.ordem },
+          });
+        }
+
+        return tx.exameClinico.findUnique({ where: { id: criado.id }, include: INCLUDE });
+      });
+
+      res.status(201).json({ dados: item });
+    } catch (err) {
+      console.error('Erro ao criar exame não pedido:', err);
+      res.status(500).json({ error: 'Erro ao criar o exame' });
     }
   },
 
@@ -250,7 +456,7 @@ const ExameClinicoController = {
       if (!item || !item.ativo) return res.status(404).json({ error: 'Exame não encontrado' });
 
       const acesso = await verificarAcessoAnimal({
-        animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId,
+        animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType
       });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
 
@@ -261,22 +467,6 @@ const ExameClinicoController = {
       }
 
       const { descricao, observacao, status, laboratorio, tipoAmostra, indicacaoClinica, dataSolicitacao, qtdAmostra } = req.body;
-
-      // Editar a DATA não pode colidir com outro laudo de compra do mesmo paciente.
-      // `ignorarId` é o próprio exame: sem ele, salvar sem mudar a data acusaria
-      // conflito consigo mesmo e travaria toda edição.
-      if (item.tipo === 'Compra' && dataSolicitacao) {
-        const jaExiste = await compraNoMesmoDia(prisma, {
-          animalId: item.animalId, dataSolicitacao, ignorarId: item.id,
-        });
-        if (jaExiste) {
-          return res.status(409).json({
-            error: 'Este paciente já tem outro Exame de Compra nesta data. Escolha outra data.',
-            code:  'COMPRA_DUPLICADA',
-            exameId: jaExiste.id,
-          });
-        }
-      }
 
       // Exame de Compra: ExameCompra.tsx manda o laudo completo em `observacao` como JSON string.
       // Preserva direto; para outros tipos, encapsula na estrutura extra padrão.
@@ -354,7 +544,7 @@ const ExameClinicoController = {
       if (!exame || !exame.ativo) return res.status(404).json({ error: 'Exame não encontrado' });
 
       const acesso = await verificarAcessoAnimal({
-        animalId: exame.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId,
+        animalId: exame.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType
       });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
@@ -414,22 +604,7 @@ const ExameClinicoController = {
         arquivoUrl = await storage.upload(file, 'exames', { empresaId: req.empresaId ?? null, animalId: exame.animalId, criadoPorId: req.user?.id ?? null });
         try {
           const extracao = await processarExame(file.path, req.user?.id ?? null, exame?.animalId ?? null, req.empresaId ?? null);
-          itens = (extracao?.exames ?? [])
-            .map((e, idx) => {
-              const refMin = e.referencia_min ?? e.valorMinRef;
-              const refMax = e.referencia_max ?? e.valorMaxRef;
-              const referencia = [refMin, refMax]
-                .filter(v => v != null && v !== '')
-                .join(' – ') || null;
-              return {
-                parametro:  (e.nome ?? e.nomeNutriente ?? '').toString().trim(),
-                valor:      (e.resultado ?? e.valorEncontrado),
-                unidade:    e.unidade ? String(e.unidade).trim() : null,
-                referencia,
-                ordem:      idx,
-              };
-            })
-            .filter(i => i.parametro);
+          itens = mapExtracaoParaItens(extracao);
         } catch (errLLM) {
           // LLM indisponível/falhou → guarda o arquivo mesmo assim (sem tabela)
           console.error('salvarResultado — extração LLM falhou, mantendo só o arquivo:', errLLM.message);
@@ -478,7 +653,7 @@ const ExameClinicoController = {
       if (!item || !item.ativo) return res.status(404).json({ error: 'Exame não encontrado' });
 
       const acesso = await verificarAcessoAnimal({
-        animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId,
+        animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType
       });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
 
@@ -508,7 +683,7 @@ const ExameClinicoController = {
             select: { userId: true },
           });
           await prisma.$transaction(async (tx) => {
-            await lancarExameNaFatura(tx, item, animal?.userId);
+            await lancarExameNaFatura(tx, item, animal?.userId, req.empresaId ?? null);
           });
         } catch { /* silencioso — fatura não bloqueia a finalização */ }
       });
@@ -530,7 +705,7 @@ const ExameClinicoController = {
       if (!item || !item.ativo) return res.status(404).json({ error: 'Exame não encontrado' });
 
       const acesso = await verificarAcessoAnimal({
-        animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId,
+        animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType
       });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
 

@@ -5,10 +5,10 @@ import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
-  Pencil, Trash2, Printer, Mic, MicOff, Square,
+  Pencil, Trash2, Printer, Mic, MicOff,
   Check, X, ChevronLeft, ChevronRight, AlertTriangle,
-  Share2, FileText, CheckCircle2, Loader2, WifiOff,
-  Calendar, User, Filter, Eye, Ban, Paperclip,
+  Share2, FileText, CheckCircle2, Loader2,
+  User, Filter, Eye, Ban, Paperclip,
   Image, Film, Volume2, Lock, CheckSquare, MessageCircle, Mail, UserCheck,
 } from 'lucide-react';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
@@ -170,13 +170,6 @@ export interface AnimalInfo {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const ESPECIALIDADES = [
-  'Acupuntura', 'Cardiologia', 'Cirurgia', 'Clínico',
-  'Dermatologia', 'Diagnóstico por Imagem', 'Ferrageamento', 'Fisioterapia',
-  'Neurologia', 'Nutrição', 'Odontologia', 'Oftalmologia', 'Patologia',
-  'Quiropraxia', 'Radiologia',
-] as const;
-
 const STATUS_OPTIONS: { value: EvolucaoStatus; label: string }[] = [
   { value: 'EM_ANDAMENTO', label: 'Em Andamento' },
   { value: 'FINALIZADA',   label: 'Finalizada'   },
@@ -262,7 +255,7 @@ function MidiaViewer({ midia, onRemover }: { midia: EvolucaoMidia; onRemover?: (
 
 // ─── ViewEvolucaoModal ────────────────────────────────────────────────────────
 
-function ViewEvolucaoModal({ ev, animal, onClose, onImprimir, podeImprimir }: {
+function ViewEvolucaoModal({ ev, onClose, onImprimir, podeImprimir }: {
   ev:         EvolucaoItem;
   animal:     AnimalInfo | null;
   onClose:    () => void;
@@ -571,8 +564,8 @@ function NovaEvolucaoModal({
 }) {
   const [gravacaoAtiva,        setGravacaoAtiva]        = useState(false);
   const [transcrevendo,        setTranscrevendo]        = useState(false);
-  const [modoOffline,          setModoOffline]          = useState(false);
-  const [progressModelo,       setProgressModelo]       = useState(0);
+  const [, setModoOffline]                               = useState(false);
+  const [, setProgressModelo]                            = useState(0);
   const [showRecordAgain,      setShowRecordAgain]      = useState(false);
   const [mobile,               setMobile]               = useState(false);
   const [arquivosSelecionados, setArquivosSelecionados] = useState<File[]>([]);
@@ -1057,7 +1050,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [savingExclusao, setSavingExclusao] = useState(false);
   const [savingCancelamento, setSavingCancelamento] = useState(false);
   const [confirmFinalizar, setConfirmFinalizar] = useState<EvolucaoItem | null>(null);
-  const [interpretando,  setInterpretando]  = useState(false);
+  const [interpretando]                     = useState(false);
   const [acoesLLM,       setAcoesLLM]       = useState<AcaoSelecionavel[]>([]);
   const [showLLM,        setShowLLM]        = useState(false);
   const [savingFatura,   setSavingFatura]   = useState(false);
@@ -1843,7 +1836,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                     <span className="text-[11px] text-gray-400">{ev.especialidade}</span>
                   </p>
                   <p className="text-[11px] text-gray-400 mt-0.5">
-                    {formatarDataHora(ev.dataInicio)}{ev.dataFim ? ` — ${formatarData(ev.dataFim)}` : ''}
+                    {formatarDataHora(ev.dataInicio)}{ev.dataFim ? ` — ${formatarDataHora(ev.dataFim)}` : ''}
                   </p>
                   {!ev.aprovado && (
                     <span className="inline-flex items-center gap-1 text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium mt-1">
@@ -1934,7 +1927,6 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
             <tbody className="divide-y divide-gray-50">
               {evolucoes.map(ev => {
                 const emAndamento = ev.status === 'EM_ANDAMENTO';
-                const bloqueado   = ev.status === 'FINALIZADA' || ev.status === 'CANCELADA';
                 const eProprioAutor = ev.veterinarioId === userId;
 
                 // Nível de permissão para editar/excluir/finalizar desta evolução
@@ -1970,7 +1962,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                       )}
                     </td>
                     <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                      {ev.dataFim ? formatarData(ev.dataFim) : <span className="text-gray-300">—</span>}
+                      {ev.dataFim ? formatarDataHora(ev.dataFim) : <span className="text-gray-300">—</span>}
                     </td>
                     <td className="px-4 py-3 text-gray-800 max-w-xs">
                       <div className="flex items-start gap-1.5">

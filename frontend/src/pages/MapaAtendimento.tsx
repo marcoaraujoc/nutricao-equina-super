@@ -32,7 +32,9 @@ interface ResumoData {
   isGestor:          boolean;
   distribuicaoHaras: Array<{ id: number; nome: string; total: number }>;
   consultasClinicas: { agendado: number; concluido: number; cancelado: number; total: number; progresso: number };
-  prescricoes:       { total: number; ativas: number };
+  // executadas/pendentesOuAtrasadas ficam de fora só quando o filtro não tem
+  // nenhum animal no escopo (MapaAtendimentoController, ramo de lista vazia).
+  prescricoes:       { total: number; ativas: number; executadas?: number; pendentesOuAtrasadas?: number };
   animaisSemAtendimento: { semAtendimento: number; comAtendimento: number; total: number };
   cronograma:        CronogramaItem[];
   filtros:           { localizacoes: Localizacao[]; veterinarios: Veterinario[] };
@@ -207,17 +209,6 @@ function StatusBadge({ status }: { status: string }) {
     </span>
   );
 }
-
-const STATUS_LABELS: Record<string, string> = {
-  AGENDADO:        'Agendado',
-  EM_ANDAMENTO:    'Em andamento',
-  CONCLUIDO:       'Concluído',
-  FINALIZADO:      'Finalizado',
-  EXECUTADO:       'Executado',
-  CANCELADO:       'Cancelado',
-  SEM_ATENDIMENTO: 'Sem atendimento',
-  ATRASADA:        'Atrasada',
-};
 
 // ── Tipo badge ────────────────────────────────────────────────────────────────
 const TIPO_LABELS: Record<string, string> = {

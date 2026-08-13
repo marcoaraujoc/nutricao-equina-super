@@ -188,24 +188,6 @@ const getTiposDisponiveis = (cat: string, dn: string, ia: string) => {
   return ['24 Meses','24 Meses Exercício Leve','24 Meses Exercício Moderado','24 Meses Exercício Pesado','24 Meses Exercício Muito Pesado'];
 };
 
-// ─── Dados estáticos de localização ──────────────────────────────────────────
-const TIPO_ESPECIES_MAP: Record<string, string[] | null> = {
-  HARAS:              ['Equino'],
-  CANIL:              ['Canino'],
-  GATIL:              ['Felino'],
-  FAZENDA:            null,
-  CLINICA:            null,
-  HOSPITAL:           null,
-  CENTRO_REPRODUCAO:  ['Equino', 'Canino', 'Felino', 'Bovino'],
-  CENTRO_TREINAMENTO: ['Equino', 'Canino', 'Felino', 'Bovino'],
-  PETSHOP:            ['Canino', 'Felino', 'Réptil'],
-  HOTEL_ANIMAL:       ['Canino', 'Felino', 'Réptil'],
-  ONG:                null,
-  CRIADOR:            null,
-  PROPRIETARIO:       null,
-  OUTRO:              null,
-};
-
 // ─── Componente principal ─────────────────────────────────────────────────────
 function mascaraTelefone(v: string): string {
   const n = v.replace(/\D/g, '').slice(0, 11);
@@ -253,6 +235,9 @@ const Animal = () => {
   const [submitting,     setSubmitting]     = useState(false);
   const [photoPreview,   setPhotoPreview]   = useState<string | null>(null);
   const [photoFile,      setPhotoFile]      = useState<File | null>(null);
+  // Marca que a foto JÁ SALVA deve ser removida no próximo salvar — "Remover foto"
+  // só troca o preview local; sem isso o backend nunca soube que devia apagar.
+  const [photoRemovida,  setPhotoRemovida]  = useState(false);
   const [especies,       setEspecies]       = useState<{ id: number; nome: string }[]>([]);
   const [todasRacas,     setTodasRacas]     = useState<{ id: number; nome: string; especieId: number }[]>([]);
   const [racasFiltradas, setRacasFiltradas] = useState<{ id: number; nome: string }[]>([]);
@@ -488,22 +473,22 @@ const Animal = () => {
 
         setTodasRacas(racasData);
 
-        // Filtrar espécies pelas atendidas na empresa/equipe
-        // (vet: suas espécies; gestor: união das espécies dos vets da equipe)
+        // Espécie é HERDADA da configuração da empresa (Configurações > Espécies
+        // atendidas), não das espécies de interesse do vet — duas empresas com o
+        // mesmo vet podem atender espécies diferentes. Só 1 espécie configurada →
+        // campo trava nela (readonly); mais de 1 → dropdown com as configuradas.
         let especiesVisiveis = todasEspecies;
-        if (isVet || isGestor) {
-          try {
-            const espEquipeRes = await api.get('/equipes/minhas-especies');
-            const nomes: string[] = espEquipeRes.data?.dados ?? [];
-            if (nomes.length > 0) {
-              const filtradas = todasEspecies.filter(e => nomes.includes(e.nome));
-              if (filtradas.length > 0) especiesVisiveis = filtradas;
-            }
-          } catch { /* mantém todas */ }
-        }
+        try {
+          const espEmpresaRes = await api.get('/equipes/especies-atendidas');
+          const idsEmpresa: number[] = espEmpresaRes.data?.dados?.especiesAtendidas ?? [];
+          if (idsEmpresa.length > 0) {
+            const filtradas = todasEspecies.filter(e => idsEmpresa.includes(e.id));
+            if (filtradas.length > 0) especiesVisiveis = filtradas;
+          }
+        } catch { /* mantém todas */ }
         setEspecies(especiesVisiveis);
 
-        // Empresa atende uma única espécie → mostra e seleciona somente ela
+        // Empresa atende uma única espécie → herda e trava o campo
         if (!isEditMode && especiesVisiveis.length === 1) {
           const unicaId = especiesVisiveis[0].id;
           setFormData(p => (p.especieId ? p : { ...p, especieId: unicaId }));
@@ -512,6 +497,23 @@ const Animal = () => {
         if (isEditMode && id) {
           const animalRes = await api.get(`/animais/${id}`);
           const a = animalRes.data?.dados ?? animalRes.data;
+
+          // Paciente INATIVO é somente leitura — nem o backend aceita o PUT.
+          // Manda direto para a tela de visualização em vez de deixar preencher
+          // um formulário que vai recusar ao salvar.
+          if (a.inativo) {
+            toast.error('Paciente inativo — reative com o gestor antes de editar o cadastro.');
+            navigate(`/animal/${id}`, { replace: true });
+            return;
+          }
+
+          // Animal com espécie fora da configuração atual da empresa (config
+          // mudou depois do cadastro) — mantém visível para não quebrar a tela
+          // nem apagar silenciosamente o dado já salvo.
+          if (a.especieId && !especiesVisiveis.some(sp => sp.id === a.especieId)) {
+            const extra = todasEspecies.find(sp => sp.id === a.especieId);
+            if (extra) setEspecies(prev => prev.some(sp => sp.id === extra.id) ? prev : [...prev, extra]);
+          }
 
           setFormData({
             nome:              a.nome            ?? '',
@@ -646,6 +648,7 @@ const Animal = () => {
     // Comprime em background
     const comprimido = await comprimirImagem(file);
     setPhotoFile(comprimido);
+    setPhotoRemovida(false);
 
     // Atualiza preview com versão comprimida
     const reader2 = new FileReader();
@@ -871,6 +874,10 @@ const Animal = () => {
             phone2: (formProp.telefone2 ?? '').trim() || null,
           },
         }),
+        // "Remover foto" some com o preview na hora, mas sem avisar o backend a foto
+        // já salva ficava intocada — o campo só é enviado quando não há arquivo novo
+        // (photoFile vence: trocar a foto já implica remover a antiga, no backend).
+        ...(isEditMode && photoRemovida && !photoFile && { removerFoto: true }),
       };
 
       let createdAnimalId: number | null = null;
@@ -981,7 +988,7 @@ const Animal = () => {
   return (
     <>
     <PageContainer maxWidth="2xl">
-      <BotaoVoltar para={isVet ? '/animais-vet' : '/meus-animais'} className="mb-4" />
+      <BotaoVoltar para={paginaPacientes} className="mb-4" />
 
       {isEditMode && animalBloqueado && (
         <div className={`mb-4 flex items-start gap-3 rounded-2xl px-4 py-3 border ${
@@ -1024,7 +1031,7 @@ const Animal = () => {
               <input type="file" accept="image/*" className="hidden" onChange={handlePhotoChange} />
             </label>
             {photoPreview && (
-              <button type="button" onClick={() => { setPhotoPreview(null); setPhotoFile(null); }}
+              <button type="button" onClick={() => { setPhotoPreview(null); setPhotoFile(null); setPhotoRemovida(true); }}
                 className="text-xs text-gray-400 hover:text-red-500 underline transition-colors">
                 Remover foto
               </button>
@@ -1217,7 +1224,8 @@ const Animal = () => {
                   onChange={e => { setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null }); setErros(p => { const { especieId: _e, ...r } = p; return r; }); }}
                   onBlur={() => validarCampo('especieId')}
                   data-campo="especieId"
-                  className={erros.especieId ? inputClassErro : inputClass}
+                  disabled={especies.length <= 1}
+                  className={`${erros.especieId ? inputClassErro : inputClass} ${especies.length <= 1 ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
                 >
                   <option value={0} disabled>Selecione a espécie</option>
                   {especies.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}

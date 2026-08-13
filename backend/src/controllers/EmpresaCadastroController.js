@@ -12,6 +12,7 @@ const prisma = require('../lib/prisma').default;
 const { usoDeAssentos } = require('../lib/planoEmpresa');
 // Documento da empresa: obrigatório e único entre empresas (ver lib/documentoEmpresa.js)
 const { resolverDocumento } = require('../lib/documentoEmpresa');
+const axios = require('axios');
 
 /** Só dígitos — documento é gravado sem máscara. */
 const soDigitos = (v) => String(v ?? '').replace(/\D/g, '');
@@ -47,7 +48,8 @@ async function empresaDoGestorNoContexto(req) {
 }
 
 module.exports = {
-  // GET /api/empresas/cadastro — dados do assinante + plano e uso de assentos
+  // GET /api/empresas/cadastro — dados do assinante + plano, uso de assentos, gestor
+  // responsável e demais gestores da empresa
   obter: async (req, res) => {
     try {
       const empresa = await empresaDoGestorNoContexto(req);
@@ -72,6 +74,29 @@ module.exports = {
         );
         plano = rows?.[0] ?? null;
       } catch { /* tabelas ainda não migradas */ }
+
+      // Gestor responsável — quem o Admin cadastrou em "Criação de Gestor" (owner da
+      // empresa). Somente leitura aqui: é o cadastro do ADMIN, não desta tela.
+      const dono = empresa.ownerId
+        ? await prisma.user.findUnique({
+            where:  { id: empresa.ownerId },
+            select: { fullName: true, email: true, phone: true },
+          })
+        : null;
+
+      // Demais gestores da empresa (qualquer MembroEquipe com cargo GESTOR, incluindo
+      // o dono) — alimenta a seção "Outros gestores" sem precisar de uma 2ª chamada.
+      // `createdAt` do vínculo é a Data de Inclusão NESTA empresa — não a data de
+      // criação da conta do usuário, que pode ser bem anterior (login reaproveitado).
+      const membrosGestores = await prisma.membroEquipe.findMany({
+        where:   { cargo: 'GESTOR', equipe: { empresaId: empresa.id } },
+        select:  { userId: true, createdAt: true, user: { select: { id: true, fullName: true, email: true, phone: true, ativo: true } } },
+        orderBy: { createdAt: 'asc' },
+        distinct: ['userId'],
+      });
+      const gestores = membrosGestores
+        .filter((m) => m.user)
+        .map((m) => ({ ...m.user, dataInclusao: m.createdAt }));
 
       res.json({
         sucesso: true,
@@ -99,6 +124,8 @@ module.exports = {
           status:            empresa.status            ?? 'ATIVA',
           plano,
           uso,
+          gestorResponsavel: dono,
+          gestores,
         },
       });
     } catch (err) {
@@ -109,30 +136,25 @@ module.exports = {
 
   // PUT /api/empresas/cadastro
   //
-  // ⚠️ SOMENTE ADMIN DA PLATAFORMA (2026-08-16). Esta tela deixou de ser editável pelo
-  // gestor: o cadastro fiscal (razão social, documento, endereço, contato) é a
-  // identidade do ASSINANTE perante a plataforma, e quem administra a assinatura é o
-  // ADMIN — o mesmo que cria a empresa e associa o plano/gestores em `/admin/empresas`.
-  // O gestor CONTINUA vendo os dados (GET `obter`, abaixo) — só não edita mais.
-  // A tela `/cadastro/empresa` (frontend) renderiza o formulário em modo leitura para
-  // quem não é ADMIN; isto aqui é a mesma regra aplicada no lado que manda: um POST
-  // forjado por um gestor tem de ser recusado, não só escondido na UI.
+  // 🔴 EDITADO PELO GESTOR (2026-08-17) — reverte a restrição de 2026-08-16. Com o
+  // Admin agora criando só o GESTOR (ver EquipeController.criarGestor), é o próprio
+  // gestor quem completa a identidade da empresa (nome, documento, razão social/
+  // fantasia/IE, endereço, espécies — espécies via `PUT /equipes/configuracoes`, ver
+  // EquipeController.salvarConfiguracao). O ADMIN continua podendo editar (mesma
+  // resolução de `empresaDoGestorNoContexto`), mas não é mais o único.
   salvar: async (req, res) => {
     try {
-      const ehAdminPlataforma = req.user?.role === 'ADMIN' || req.user?.userTypeGlobal === 'ADMIN';
-      if (!ehAdminPlataforma) {
-        return res.status(403).json({
-          sucesso:  false,
-          mensagem: 'O cadastro fiscal da empresa é gerenciado pelo administrador da plataforma. Fale com o suporte para alterá-lo.',
-        });
-      }
-
       const empresa = await empresaDoGestorNoContexto(req);
       if (!empresa) {
-        return res.status(404).json({ sucesso: false, mensagem: 'Selecione uma empresa no contexto ativo.' });
+        return res.status(403).json({ sucesso: false, mensagem: 'Apenas o gestor da empresa ativa pode editar este cadastro.' });
       }
 
       const b = req.body ?? {};
+
+      const nome = texto(b.nome, 255);
+      if (!nome) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Nome da empresa é obrigatório', code: 'NOME_OBRIGATORIO' });
+      }
 
       // Documento OBRIGATÓRIO e ÚNICO entre empresas — a mesma regra da criação.
       // Fechar só a criação não bastaria: daria para contornar em dois cliques,
@@ -155,12 +177,40 @@ module.exports = {
         return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório', code: 'TELEFONE_OBRIGATORIO' });
       }
 
+      // Endereço da empresa é OBRIGATÓRIO (exceto complemento) — faz parte do gate de
+      // onboarding do gestor (ver ProtectedRoute + UserController.getMe).
+      const cep         = soDigitos(b.cep).slice(0, 10) || null;
+      const endereco     = texto(b.endereco, 255);
+      const bairro       = texto(b.bairro, 100);
+      const cidade       = texto(b.cidade, 100);
+      const estadoUpper  = texto(b.estado, 2)?.toUpperCase() ?? null;
+      if (!cep || !endereco || !bairro || !cidade || !estadoUpper) {
+        return res.status(400).json({
+          sucesso: false, mensagem: 'Endereço é obrigatório (CEP, logradouro, bairro, cidade e UF).',
+          code: 'ENDERECO_OBRIGATORIO',
+        });
+      }
+
+      const razaoSocial       = texto(b.razaoSocial, 255);
+      const nomeFantasia      = texto(b.nomeFantasia, 255);
+      const inscricaoEstadual = texto(b.inscricaoEstadual, 20);
+      // Razão Social / Nome Fantasia / Inscrição Estadual só existem para pessoa
+      // jurídica — CPF (empresa pessoal) não tem nenhum dos três.
+      if (tipoDocumento === 'CNPJ' && !(razaoSocial && nomeFantasia && inscricaoEstadual)) {
+        return res.status(400).json({
+          sucesso: false,
+          mensagem: 'Razão Social, Nome Fantasia e Inscrição Estadual são obrigatórios para CNPJ.',
+          code: 'CNPJ_DADOS_OBRIGATORIOS',
+        });
+      }
+
       // ⚠️ `status` NÃO é editável aqui. Suspender/cancelar é ato do ADMIN da plataforma
       // (D3: suspensa bloqueia o login de todos) — se o gestor pudesse mexer, a empresa
       // inadimplente se reativaria sozinha.
       const dados = {
-        razaoSocial:       texto(b.razaoSocial, 255),
-        nomeFantasia:      texto(b.nomeFantasia, 255),
+        nome,
+        razaoSocial,
+        nomeFantasia,
         documento,
         tipoDocumento,
         // `cnpj` LEGADO acompanha o documento — senão a empresa ocuparia DOIS documentos
@@ -170,20 +220,51 @@ module.exports = {
         // null = config da equipe). Gravar um CPF ali trocaria o escopo e a clínica
         // pessoal abriria as Configurações sem o logo e o expediente que já tinha.
         cnpj:              tipoDocumento === 'CNPJ' ? documento : null,
-        inscricaoEstadual: texto(b.inscricaoEstadual, 20),
+        inscricaoEstadual,
         emailContato:      texto(b.emailContato, 255)?.toLowerCase() ?? null,
         telefone,
         whatsapp:          soDigitos(b.whatsapp).slice(0, 15) || null,
-        cep:               soDigitos(b.cep).slice(0, 10) || null,
-        endereco:          texto(b.endereco, 255),
+        cep,
+        endereco,
         numero:            texto(b.numero, 20),
         complemento:       texto(b.complemento, 100),
-        bairro:            texto(b.bairro, 100),
-        cidade:            texto(b.cidade, 100),
-        estado:            texto(b.estado, 2)?.toUpperCase() ?? null,
+        bairro,
+        cidade,
+        estado:            estadoUpper,
       };
 
-      await prisma.empresa.update({ where: { id: empresa.id }, data: dados });
+      // ⚠️ Trocar CPF ↔ CNPJ (ou definir o documento pela 1ª vez) pode MOVER o escopo
+      // da EmpresaConfiguracao (empresa × equipe — ver resolverEscopoConfiguracao).
+      // Sem mover a linha junto, o que já foi configurado (logo, expediente, espécies)
+      // ficaria órfão no escopo antigo e o gestor veria tudo em branco. Só migra
+      // quando o TIPO efetivamente muda — setar o mesmo tipo de novo é no-op.
+      const tipoAntigo = empresa.cnpj ? 'CNPJ' : (empresa.documento ? 'CPF' : null);
+      const precisaMigrarEscopo = tipoAntigo && tipoAntigo !== tipoDocumento;
+
+      await prisma.$transaction(async (tx) => {
+        await tx.empresa.update({ where: { id: empresa.id }, data: dados });
+
+        if (precisaMigrarEscopo) {
+          const primeiraEquipe = await tx.equipe.findFirst({
+            where: { empresaId: empresa.id }, orderBy: { id: 'asc' }, select: { id: true },
+          });
+          const equipeId    = primeiraEquipe?.id ?? null;
+          const escopoAntigo = { empresaId: empresa.id, equipeId: tipoAntigo === 'CNPJ' ? null : equipeId };
+          const escopoNovo   = { empresaId: empresa.id, equipeId: tipoDocumento === 'CNPJ' ? null : equipeId };
+
+          const config = await tx.empresaConfiguracao.findFirst({ where: escopoAntigo });
+          if (config) {
+            const jaHaNoNovo = await tx.empresaConfiguracao.findFirst({ where: escopoNovo });
+            if (jaHaNoNovo && jaHaNoNovo.id !== config.id) {
+              // Já existe uma linha no escopo de destino (raro) — mantém a de destino,
+              // descarta a antiga (evita violar o unique(empresaId, equipeId)).
+              await tx.empresaConfiguracao.delete({ where: { id: config.id } });
+            } else {
+              await tx.empresaConfiguracao.update({ where: { id: config.id }, data: { equipeId: escopoNovo.equipeId } });
+            }
+          }
+        }
+      });
 
       res.json({ sucesso: true, mensagem: 'Cadastro da empresa atualizado.' });
     } catch (err) {
@@ -261,6 +342,32 @@ module.exports = {
     } catch (err) {
       console.error('Erro ao salvar assinatura:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // GET /api/empresas/cnpj/:cnpj — proxy do auto-fill de CNPJ (BrasilAPI).
+  //
+  // POR QUÊ no backend: a chamada era feita direto do navegador
+  // (`fetch('https://brasilapi.com.br/...')`), e passou a estourar
+  // "blocked by CORS policy" no console. A BrasilAPI só garante o cabeçalho
+  // Access-Control-Allow-Origin na resposta de SUCESSO — numa instabilidade dela (erro
+  // 5xx, timeout, rate limit) o cabeçalho some, e o navegador reporta isso como bloqueio
+  // de CORS mesmo o problema real sendo outro. Chamada servidor→servidor não tem CORS,
+  // então o front nunca mais vê esse erro — só "não foi possível buscar os dados".
+  buscarCnpj: async (req, res) => {
+    const cnpj = String(req.params.cnpj ?? '').replace(/\D/g, '');
+    if (cnpj.length !== 14) {
+      return res.status(400).json({ sucesso: false, mensagem: 'CNPJ deve ter 14 dígitos.' });
+    }
+    try {
+      const resposta = await axios.get(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, { timeout: 8000 });
+      res.json({ sucesso: true, dados: resposta.data });
+    } catch (err) {
+      if (err.response?.status === 404) {
+        return res.status(404).json({ sucesso: false, mensagem: 'CNPJ não encontrado.' });
+      }
+      console.error('Erro ao consultar CNPJ na BrasilAPI:', err.message);
+      res.status(502).json({ sucesso: false, mensagem: 'Não foi possível consultar o CNPJ agora.' });
     }
   },
 };

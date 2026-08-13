@@ -35,6 +35,31 @@ const CAMPOS_CADASTRO = [
 const PERFIS_PROFISSIONAIS = ['GESTOR', 'VETERINARIO', 'ESTAGIARIO', 'ENFERMEIRO', 'SECRETARIA', 'FINANCEIRO', 'FORNECEDOR', 'PRESTADOR'];
 const ehPerfilProfissional = (p) => PERFIS_PROFISSIONAIS.includes(p);
 
+/**
+ * A pessoa já é PROFISSIONAL nesta empresa? — perfil não-PROPRIETARIO em
+ * tb_usuario_empresa OU dona da empresa (`Empresa.ownerId`).
+ *
+ * Existe porque o DONO nem sempre tem uma linha em tb_usuario_empresa (empresa
+ * criada por caminho antigo, ou dono sem MembroEquipe ainda) — sem o segundo termo,
+ * cadastrar o próprio dono como CLIENTE (ProprietarioController) não achava nenhum
+ * vínculo profissional e sobrescrevia `perfil` para PROPRIETARIO, rebaixando-o na
+ * própria empresa (caso real: dona da Patyvet perdeu o `perfil` GESTOR ao se
+ * cadastrar como cliente dela mesma). SEMPRE checar isto antes de gravar
+ * `perfil: 'PROPRIETARIO'` num vínculo existente.
+ */
+async function ehProfissionalNaEmpresa(userId, empresaId, client = prisma) {
+  if (!userId || !empresaId) return false;
+  const [vinculo, empresa] = await Promise.all([
+    client.usuarioEmpresa.findUnique({
+      where:  { userId_empresaId: { userId: Number(userId), empresaId: Number(empresaId) } },
+      select: { perfil: true },
+    }),
+    client.empresa.findFirst({ where: { id: Number(empresaId), ownerId: Number(userId) }, select: { id: true } }),
+  ]);
+  if (empresa) return true;
+  return !!(vinculo && vinculo.perfil !== 'PROPRIETARIO');
+}
+
 /** Vínculo do usuário na empresa (null quando ele não pertence a ela). */
 async function perfilDaEmpresa(userId, empresaId, client = prisma) {
   if (!userId || !empresaId) return null;
@@ -422,6 +447,7 @@ module.exports = {
   salvarFoto,
   anexarFotoEmRelacao,
   ehPerfilProfissional,
+  ehProfissionalNaEmpresa,
   perfilDaEmpresa,
   empresasDoUsuario,
   aplicarVinculo,

@@ -3,8 +3,12 @@
 // Fontes: Paddock (SP), Genesi (RJ), LACVET/Jockey Club (RJ)
 
 const { PrismaClient } = require('@prisma/client');
+const { comTenantAutomatico } = require('../lib/prismaTenant');
 const _prisma = new PrismaClient();
-const prisma  = _prisma;
+// Catálogo global (sem empresaId) — precisa do client estendido para que a escrita
+// em tabelas com RLS carimbe `app.plataforma` (ver seed.js, que chama esta função
+// dentro de `comEscopoPlataforma`).
+const prisma  = comTenantAutomatico(_prisma);
 
 // ─── Tipos de amostra canônicos ──────────────────────────────────────────────
 const S  = 'Sangue Total com EDTA';   // tubo roxo — hemograma, PCR, hemoparasitas

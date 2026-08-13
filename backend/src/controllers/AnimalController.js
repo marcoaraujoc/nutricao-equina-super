@@ -11,6 +11,12 @@ const { animalVisivelNaEmpresa } = require('../lib/visibilidade');
 const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
 const { garantirFaturaAberta } = require('../services/FaturaService');
 const { registrarAuditoria } = require('../lib/auditoria');
+const { registrarHistoricoAnimal } = require('../lib/animalHistorico');
+const { ehGestorNoContexto } = require('../middlewares/permissao.middleware');
+const {
+  marcarInativo, marcarAtivo, animalEstaInativo,
+  anexarInativo, anexarInativoEmLista,
+} = require('../lib/animalInativo');
 
 const prisma = require('../lib/prisma').default;
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
@@ -288,6 +294,7 @@ class AnimalController {
       });
 
       // Nome/telefone do proprietário conforme o cadastro DESTA empresa
+      await anexarInativoEmLista(animais);
       res.json({
         sucesso: true,
         dados:   await aplicarPerfilProprietarioEmRelacao(animais, 'user', req.empresaId),
@@ -314,11 +321,12 @@ class AnimalController {
 
       // Controle de acesso centralizado — cobre PROPRIETARIO, empresa (gestores), e vínculo direto
       if (req.user?.id) {
-        const acesso = await verificarAcessoAnimal({ animalId: id, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+        const acesso = await verificarAcessoAnimal({ animalId: id, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
         if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
         if (!acesso)        return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
       }
 
+      await anexarInativo(animal);
       res.json({
         sucesso: true,
         dados:   animal?.user
@@ -342,7 +350,7 @@ class AnimalController {
       return res.status(400).json({ sucesso: false, mensagem: 'ID inválido' });
     }
     try {
-      const acesso = await verificarAcessoAnimal({ animalId: id, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: id, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)        return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
@@ -575,6 +583,14 @@ class AnimalController {
         },
       });
 
+      // Ponto de partida do histórico de peso/local/baia (gráfico em AnimalDetail).
+      await registrarHistoricoAnimal(prisma, {
+        animalId: animal.id,
+        antes:    null,
+        depois:   { peso: animal.peso, localizacaoId: animal.localizacaoId, local: animal.local, baia: animal.baia },
+        criadoPorId: req.user?.id ?? null,
+      });
+
       if (isVet) {
         // ⚠️ FASE 3 DO MULTI-TENANCY — o `VetAnimalSolicitacao` que nascia aqui (VINCULO
         // ACEITO, nos dois ramos) foi REMOVIDO. Ele não autorizava nada: o animal já é
@@ -652,6 +668,7 @@ class AnimalController {
       categoriaAnimal, tipoExercicio, veterinarioNome, veterinarioClinica,
       veterinarioUserId, local, baia, localizacaoId, tratadorId,
       pelagem, altura, registroPassaporte, finalidade, seguradora,
+      removerFoto,
     } = req.body;
 
     if (!nome?.trim())                    return res.status(400).json({ sucesso: false, mensagem: 'Nome do animal é obrigatório' });
@@ -660,9 +677,17 @@ class AnimalController {
     if (!dataNascimento && !idadeAnos)    return res.status(400).json({ sucesso: false, mensagem: 'Informe a data de nascimento ou a idade' });
 
     try {
-      const acessoAtu = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acessoAtu = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acessoAtu === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acessoAtu)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+
+      // Paciente INATIVO é somente leitura — nem o próprio cadastro pode ser editado.
+      if (await animalEstaInativo(animalId)) {
+        return res.status(400).json({
+          sucesso: false, mensagem: 'Paciente inativo — reative com o gestor antes de editar o cadastro.',
+          code: 'PACIENTE_INATIVO',
+        });
+      }
 
       const especie  = await prisma.especie.findUnique({ where: { id: Number(especieId) } });
       const isEquino = especie && (
@@ -684,7 +709,11 @@ class AnimalController {
       // individual para conceder nem para retirar, logo não há o que aprovar.
       const animalAtual = await prisma.animal.findUnique({
         where:  { id: animalId },
-        select: { userId: true, empresaId: true, user: { select: { fullName: true, email: true, phone: true } } },
+        select: {
+          userId: true, empresaId: true, photoUrl: true,
+          peso: true, localizacaoId: true, local: true, baia: true,
+          user: { select: { fullName: true, email: true, phone: true } },
+        },
       });
 
       // Validação de baia: única por LOCAL dentro do escopo visível — ver acharOcupanteDaBaia.
@@ -727,13 +756,23 @@ class AnimalController {
         }
       }
 
-      const photoUrl = req.file
-        ? await storage.upload(req.file, 'animais', {
-            empresaId:   req.empresaId ?? null,
-            animalId,
-            criadoPorId: req.user?.id ?? null,
-          })
-        : undefined;
+      // `undefined` = não mexe no que já está gravado (padrão do spread condicional
+      // abaixo). Só os dois casos explícitos abaixo tocam a coluna: arquivo novo
+      // (troca, apagando o antigo do storage) ou remoção pedida pela tela (botão
+      // "Remover foto" em Animal.tsx) — mesmo padrão do logo da empresa em
+      // EquipeController.salvarConfiguracao.
+      let photoUrl;
+      if (req.file) {
+        photoUrl = await storage.upload(req.file, 'animais', {
+          empresaId:   req.empresaId ?? null,
+          animalId,
+          criadoPorId: req.user?.id ?? null,
+        });
+        if (animalAtual?.photoUrl) await storage.delete(animalAtual.photoUrl);
+      } else if (removerFoto === 'true' || removerFoto === true) {
+        if (animalAtual?.photoUrl) await storage.delete(animalAtual.photoUrl);
+        photoUrl = null;
+      }
 
       const animal = await prisma.animal.update({
         where: { id: animalId },
@@ -758,8 +797,17 @@ class AnimalController {
           seguradora:         seguradora?.trim()         ?? null,
           especieId: Number(especieId),
           racaId:    Number(racaId),
-          ...(photoUrl && { photoUrl }),
+          ...(photoUrl !== undefined && { photoUrl }),
         },
+      });
+
+      // Histórico de peso/local/baia (gráfico em AnimalDetail) — só grava quando algo
+      // dos três realmente mudou (ver registrarHistoricoAnimal).
+      await registrarHistoricoAnimal(prisma, {
+        animalId,
+        antes:  { peso: animalAtual.peso, localizacaoId: animalAtual.localizacaoId, local: animalAtual.local, baia: animalAtual.baia },
+        depois: { peso: animal.peso, localizacaoId: animal.localizacaoId, local: animal.local, baia: animal.baia },
+        criadoPorId: req.user?.id ?? null,
       });
 
       const animalAtualizado = await prisma.animal.findUnique({
@@ -783,7 +831,7 @@ class AnimalController {
         return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da exclusão' });
       }
 
-      const acessoExc = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acessoExc = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acessoExc === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acessoExc)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
@@ -808,6 +856,94 @@ class AnimalController {
     } catch (error) {
       console.error('[AnimalController.excluir]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao excluir animal' });
+    }
+  }
+
+  // ── PATCH /api/animais/:id/inativar — paciente vira SOMENTE LEITURA ─────────
+  // ⚠️ NÃO É soft delete (isso é `excluir`, `Animal.ativo`): o paciente CONTINUA
+  // aparecendo em /animais-vet. O que trava é a criação/edição de qualquer registro
+  // ligado a ele — ver `animalEstaInativo` nos demais controllers do atendimento.
+
+  async inativar(req, res) {
+    const animalId = Number(req.params.id);
+    const { motivo } = req.body ?? {};
+    try {
+      if (!motivo?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da inativação' });
+      }
+
+      const acesso = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
+      if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+
+      const animal = await prisma.animal.findUnique({
+        where:  { id: animalId },
+        select: { nome: true, ativo: true },
+      });
+      if (!animal?.ativo) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      if (await animalEstaInativo(animalId)) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Este paciente já está inativo.' });
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await marcarInativo(tx, animalId, { motivo, porId: req.user.id });
+        await registrarAuditoria(tx, req, {
+          categoria:  'CANCELAMENTO',
+          entidade:   'ANIMAL',
+          entidadeId: animalId,
+          animalId,
+          motivo,
+          detalhes:   `Paciente inativado — ${animal.nome}`,
+        });
+      });
+
+      res.json({ sucesso: true, mensagem: 'Paciente inativado com sucesso' });
+    } catch (error) {
+      console.error('[AnimalController.inativar]', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao inativar paciente' });
+    }
+  }
+
+  // ── PATCH /api/animais/:id/ativar — reverte a inativação ────────────────────
+  // ⚠️ SEMPRE gestor/admin, mesmo que a matriz conceda `animais.ativar` a outro
+  // perfil (esse slug só governa quem pode INATIVAR — reativar é regra fixa).
+
+  async ativar(req, res) {
+    const animalId = Number(req.params.id);
+    const { motivo } = req.body ?? {};
+    try {
+      if (!motivo?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da reativação' });
+      }
+      if (!ehGestorNoContexto(req)) {
+        return res.status(403).json({ sucesso: false, mensagem: 'Apenas o gestor pode reativar um paciente.' });
+      }
+
+      const acesso = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
+      if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+
+      const animal = await prisma.animal.findUnique({ where: { id: animalId }, select: { nome: true } });
+      if (!(await animalEstaInativo(animalId))) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Este paciente já está ativo.' });
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await marcarAtivo(tx, animalId);
+        await registrarAuditoria(tx, req, {
+          categoria:  'CANCELAMENTO',
+          entidade:   'ANIMAL',
+          entidadeId: animalId,
+          animalId,
+          motivo,
+          detalhes:   `Paciente reativado — ${animal?.nome ?? ''}`,
+        });
+      });
+
+      res.json({ sucesso: true, mensagem: 'Paciente reativado com sucesso' });
+    } catch (error) {
+      console.error('[AnimalController.ativar]', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao reativar paciente' });
     }
   }
 

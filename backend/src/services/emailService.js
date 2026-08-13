@@ -527,6 +527,46 @@ const emailService = {
     });
   },
 
+  // ── Envio GENÉRICO de documento com PDF anexado ───────────────────────────
+  // Componente reutilizável: qualquer módulo que precise mandar um PDF por e-mail
+  // (laudo, orçamento, fatura…) usa daqui — mesmo espírito do
+  // documentoWhatsappService.js do lado do WhatsApp. Falha "não configurado" é
+  // PROPAGADA com `.code` para o controller decidir o fallback manual (o e-mail
+  // de dieta engolia isso em silêncio, o que não dá para fazer aqui: o chamador
+  // precisa saber que nada foi enviado).
+  async enviarDocumento({ emailDestinatario, assunto, corpo, nomeArquivo, pdfBase64 }) {
+    if (!podeEnviar()) {
+      const err = new Error('Envio de e-mail não configurado (EMAIL_USER/EMAIL_PASS ausentes).');
+      err.code = 'EMAIL_NAO_CONFIGURADO';
+      throw err;
+    }
+
+    const pdfBuffer = Buffer.from(pdfBase64, 'base64');
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      emailDestinatario,
+      subject: assunto,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#059669;padding:24px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:22px;font-weight:700;">🐴 S2Vet</h1>
+            <p style="color:#d1fae5;margin:4px 0 0;font-size:13px;">Sistema Hospitalar Veterinário</p>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <p style="color:#374151;line-height:1.6;white-space:pre-line;">${corpo}</p>
+            <p style="color:#374151;line-height:1.6;">O documento em PDF está em anexo neste e-mail.</p>
+            <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;" />
+            <p style="color:#9ca3af;font-size:12px;margin:0;">Gerado pelo S2Vet — Sistema Hospitalar Veterinário</p>
+          </div>
+        </div>
+      `,
+      attachments: [
+        { filename: nomeArquivo, content: pdfBuffer, contentType: 'application/pdf' },
+      ],
+    });
+  },
+
   // ── Inclusão direta de membro na equipe (sem fluxo de aceite) ────────────────
   async enviarInclusaoEquipe({ email, cargo, vetNome, equipeNome, usuarioCriado = false, senhaInicial = null, especiesNomes = [] }) {
     if (!podeEnviar()) return;

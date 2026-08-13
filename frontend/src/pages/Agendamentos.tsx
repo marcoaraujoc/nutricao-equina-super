@@ -377,7 +377,7 @@ function CalendarioInterativo({ selectedDate, onChange, statusPorDia, minDate, s
   // Comparação lexicográfica funciona no formato YYYY-MM-DD
   const bloqueado = (dStr: string) => !!minDate && dStr < minDate;
 
-  function dayBtn(dStr: string, label: React.ReactNode, isFaded = false) {
+  function dayBtn(dStr: string, isFaded = false) {
     const isSelected = dStr === selectedDate;
     const isToday    = dStr === dataHoje;
     const status     = statusPorDia.get(dStr) ?? null;
@@ -424,7 +424,7 @@ function CalendarioInterativo({ selectedDate, onChange, statusPorDia, minDate, s
             {dias.map((dia, idx) => {
               const dStr     = `${dia.getFullYear()}-${pad(dia.getMonth()+1)}-${pad(dia.getDate())}`;
               const isCur    = dia.getMonth() === viewMes;
-              const { isSelected, isToday, status, isBloqueado } = dayBtn(dStr, dia.getDate(), !isCur);
+              const { isSelected, isToday, status, isBloqueado } = dayBtn(dStr, !isCur);
               const clicavel = isCur && !isBloqueado;
               return (
                 <button
@@ -457,7 +457,7 @@ function CalendarioInterativo({ selectedDate, onChange, statusPorDia, minDate, s
           <div className="grid grid-cols-7 gap-0.5">
             {weekDays.map((dia, idx) => {
               const dStr = `${dia.getFullYear()}-${pad(dia.getMonth()+1)}-${pad(dia.getDate())}`;
-              const { isSelected, isToday, status, isBloqueado } = dayBtn(dStr, dia.getDate());
+              const { isSelected, isToday, status, isBloqueado } = dayBtn(dStr);
               return (
                 <button
                   key={idx}
@@ -531,7 +531,7 @@ interface AgendamentosProps {
 }
 
 export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnimal }: AgendamentosProps = {}) {
-  const { podeExecutar, isGestor, permissoes, loading: loadingPerms } = usePermissoes();
+  const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const { user }                                    = useAuth();
   const { contextoAtivo }                           = useEmpresa();
   const meuUserId                                   = user?.id ?? null;
@@ -747,7 +747,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   const [transParaVetId,  setTransParaVetId]  = useState('');
   const [savingTransf,    setSavingTransf]    = useState(false);
 
-  const [escolhaTipo, setEscolhaTipo]         = useState<BookingInfo | null>(null);
+  const [, setEscolhaTipo]                    = useState<BookingInfo | null>(null);
   const [vozAberto, setVozAberto]             = useState(false);
   const [vozContexto, setVozContexto]         = useState<BookingInfo | null>(null);
   const [vozEtapa, setVozEtapa]               = useState<VozEtapa>('IDLE');
@@ -895,6 +895,20 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
             const esp = doCatalogo.length > 0 ? doCatalogo : legado;
             especialidades = esp.length > 0 ? esp : ['Clínica Geral'];
           }
+          // Nome do catálogo — vem do vínculo UsuarioEspecialidade do próprio membro
+          const nomePorEsp = new Map<number, string>();
+          for (const e of m.user.especialidades ?? []) {
+            const id   = e.especialidade?.id ?? e.especialidadeId;
+            const nome = e.especialidade?.nome?.trim();
+            if (Number.isInteger(id) && nome) nomePorEsp.set(Number(id), nome);
+          }
+          // Especialidades CADASTRADAS do profissional (UsuarioEspecialidade) — o padrão
+          // "sem nenhuma, assume Clínica Médica" (e a especialidade que o gestor informa
+          // no Cadastro Pessoal) só é gravado AQUI, não dentro de cada MembroLocalTrabalho.
+          // Serve de PADRÃO para quem não tem local nenhum, ou tem local sem especialidade
+          // própria configurada — sem isto a Agenda mostrava "Sem especialidade" para quem
+          // de fato tem uma.
+          const idsIdentidade = [...nomePorEsp.keys()];
           // Tempo por especialidade vem dos LOCAIS. Profissional que atende a mesma
           // especialidade em mais de um local usa o MENOR tempo (cabe em qualquer um).
           // Especialidade do local SEM tempo próprio entra com 0 e é resolvida na hora
@@ -912,12 +926,10 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
               if (atual === undefined || atual === 0 || t < atual) tempoPorEsp.set(id, t);
             }
           }
-          // Nome do catálogo — vem do vínculo UsuarioEspecialidade do próprio membro
-          const nomePorEsp = new Map<number, string>();
-          for (const e of m.user.especialidades ?? []) {
-            const id   = e.especialidade?.id ?? e.especialidadeId;
-            const nome = e.especialidade?.nome?.trim();
-            if (Number.isInteger(id) && nome) nomePorEsp.set(Number(id), nome);
+          // Sem NENHUM local com especialidade própria (inclusive quem não tem local
+          // nenhum): cai no padrão do profissional.
+          if (tempoPorEsp.size === 0) {
+            for (const id of idsIdentidade) tempoPorEsp.set(id, 0);
           }
           const especialidadesCat: EspecialidadeVet[] = [...tempoPorEsp.entries()]
             .map(([id, tempoMin]) => ({
@@ -938,29 +950,35 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
               : null,
             horaIni: m.horaInicioTrabalho ?? null,
             horaFim: m.horaFimTrabalho ?? null,
-            locais: (m.locaisTrabalho ?? []).map(l => ({
-              localizacaoId:   l.localizacaoId,
-              localizacaoNome: l.localizacaoNome ?? 'Local não informado',
-              dias: l.diasTrabalho
-                ? String(l.diasTrabalho).split(',').map(Number).filter(n => n >= 0 && n <= 6)
-                : null,
-              horaIni: l.horaInicioTrabalho ?? null,
-              horaFim: l.horaFimTrabalho    ?? null,
-              // Especialidades DESTE local, com o tempo praticado aqui. Sem tempo
-              // próprio → 0 = herda o padrão da empresa na montagem da grade.
-              especialidades: [...new Set([
+            locais: (m.locaisTrabalho ?? []).map(l => {
+              const idsLocal = [...new Set([
                 ...(l.especialidadeIds ?? []).map(Number),
                 ...Object.keys(l.temposConsulta ?? {}).map(Number),
-              ])]
-                .filter(Number.isInteger)
-                .map(id => ({
-                  id,
-                  nome: nomePorEsp.get(id) ?? catalogo[id] ?? `Especialidade #${id}`,
-                  tempoMin: Number(l.temposConsulta?.[String(id)]) > 0
-                    ? Number(l.temposConsulta?.[String(id)]) : 0,
-                }))
-                .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
-            })),
+              ])].filter(Number.isInteger);
+              // Local sem especialidade própria herda o padrão do profissional (mesmo
+              // fallback de `especialidadesCat` acima) — nunca fica sem especialidade
+              // só porque este local específico não teve nenhuma marcada.
+              const idsEfetivos = idsLocal.length > 0 ? idsLocal : idsIdentidade;
+              return {
+                localizacaoId:   l.localizacaoId,
+                localizacaoNome: l.localizacaoNome ?? 'Local não informado',
+                dias: l.diasTrabalho
+                  ? String(l.diasTrabalho).split(',').map(Number).filter(n => n >= 0 && n <= 6)
+                  : null,
+                horaIni: l.horaInicioTrabalho ?? null,
+                horaFim: l.horaFimTrabalho    ?? null,
+                // Especialidades DESTE local, com o tempo praticado aqui. Sem tempo
+                // próprio → 0 = herda o padrão da empresa na montagem da grade.
+                especialidades: idsEfetivos
+                  .map(id => ({
+                    id,
+                    nome: nomePorEsp.get(id) ?? catalogo[id] ?? `Especialidade #${id}`,
+                    tempoMin: Number(l.temposConsulta?.[String(id)]) > 0
+                      ? Number(l.temposConsulta?.[String(id)]) : 0,
+                  }))
+                  .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
+              };
+            }),
           };
         })
       );
@@ -1359,14 +1377,6 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     ) ?? null;
   }
 
-  function findConflict(animalId: number, vetId: number): AgendamentoGlobal | null {
-    return agendamentos.find(ag =>
-      ag.animal?.id === animalId &&
-      ag.veterinario?.id === vetId &&
-      !STATUS_LIVRES.includes(ag.status)
-    ) ?? null;
-  }
-
   // ── Handlers ─────────────────────────────────────────────────────────────────
   // Extrai a mensagem de erro do backend (campo `error`) para exibir ao usuário.
   const msgErroAgenda = (err: unknown, fallback: string): string =>
@@ -1417,22 +1427,6 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
       setBookingForm({ animalId: '', proprietarioNome: '', telefone: '', cpf: '' });
       setComboQuery(''); setComboOpen(false);
     }
-  }
-
-  function handleEscolhaManual() {
-    if (!escolhaTipo) return;
-    setEscolhaTipo(null);
-    setBooking({ ...escolhaTipo });
-    setBookingForm({ animalId: '', proprietarioNome: '', telefone: '', cpf: '' });
-    setComboQuery(''); setComboOpen(false);
-  }
-
-  function handleEscolhaVoz() {
-    if (!escolhaTipo) return;
-    setVozContexto({ ...escolhaTipo });
-    setEscolhaTipo(null);
-    setVozAberto(true); setVozEtapa('IDLE');
-    setVozTranscricao(''); setVozTextoManual(''); setVozResultado(null);
   }
 
   function resetVoz() {
@@ -2309,7 +2303,6 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
               {listaFiltrada.map(ag => {
                 // ATRASADA é uma variante de AGENDADO (ainda não ocorreu) — mesmas ações disponíveis.
                 const isAgendado    = ag.status === 'AGENDADO' || ag.status === 'ATRASADA';
-                const isConcluido   = ag.status === 'CONCLUIDO';
                 const isCancelado   = STATUS_LIVRES.includes(ag.status);
                 const isEmAndamento = ag.status === 'EM_ANDAMENTO';
                 const podeContinuar = isEmAndamento && podeGerenciar;
@@ -2436,7 +2429,6 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                   {listaFiltrada.map(ag => {
                     // ATRASADA é uma variante de AGENDADO (ainda não ocorreu) — mesmas ações disponíveis.
                 const isAgendado    = ag.status === 'AGENDADO' || ag.status === 'ATRASADA';
-                    const isConcluido   = ag.status === 'CONCLUIDO';
                     const isCancelado   = STATUS_LIVRES.includes(ag.status);
                     const isEmAndamento = ag.status === 'EM_ANDAMENTO';
                     const podeContinuar = isEmAndamento && podeGerenciar;

@@ -9,6 +9,9 @@ const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFat
 const { garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
 const { registrarAuditoria, registrarAlteracao, registrarTransferencia, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
+const { animalEstaInativo } = require('../lib/animalInativo');
+
+const MSG_PACIENTE_INATIVO = 'Paciente inativo — reative com o gestor antes de registrar algo novo.';
 
 // ─── Include padrão ───────────────────────────────────────────────────────────
 
@@ -699,6 +702,9 @@ const criar = async (req, res) => {
     const veterinarioId = req.user.id;
 
     if (!animalId) return res.status(400).json({ error: 'animalId é obrigatório.' });
+    if (await animalEstaInativo(animalId)) {
+      return res.status(400).json({ error: MSG_PACIENTE_INATIVO, code: 'PACIENTE_INATIVO' });
+    }
     if (!evolucaoId) return res.status(400).json({ error: 'evolucaoId é obrigatório.', code: 'EVOLUCAO_REQUIRED' });
     if (!Array.isArray(itens) || itens.length === 0)
       return res.status(400).json({ error: 'Inclua ao menos um item na prescrição.' });
@@ -909,6 +915,9 @@ const adicionarItem = async (req, res) => {
     // Autoria: incluir item na prescrição de outro é alterar o documento clínico dele.
     if (!podeOperarRegistro(req, grupo.veterinarioId)) {
       return res.status(403).json({ error: 'Seu nível de permissão só permite alterar prescrições criadas por você.' });
+    }
+    if (await animalEstaInativo(grupo.animalId)) {
+      return res.status(400).json({ error: MSG_PACIENTE_INATIVO, code: 'PACIENTE_INATIVO' });
     }
 
     const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente, aplicadaPeloProprietario } = req.body;

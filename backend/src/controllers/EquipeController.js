@@ -6,6 +6,10 @@ const emailService     = require('../services/emailService');
 const PermissaoService = require('../services/PermissaoService');
 const { PERMISSOES_PADRAO } = require('../seeds/002_permissoes_padrao.seed');
 const { getEquipeIdsDoProprietario } = require('../middlewares/permissao.middleware');
+// "Tem cadastro de cliente nesta empresa?" — mesmo critério do tipo por empresa,
+// reusado pela regra "mais de um papel na mesma empresa soma" (ver `ajusteperfil`
+// na memória e `minhasPermissoes` abaixo).
+const { resolverComoCliente } = require('../lib/tipoContexto');
 const { storage }      = require('../storage');
 const { TIPOS_FECHAMENTO_VALIDOS } = require('../lib/faturaUtils');
 const { normalizarValidade, lerValidade, salvarValidade } = require('../lib/validadeOrcamento');
@@ -26,8 +30,6 @@ const { salvarVinculo, vincularMembro, normalizarPagamento, salvarPagamentoEAces
         anexarPagamentoEmRelacao, anexarFotoEmRelacao, empresasSemAcesso } = require('../lib/usuarioEmpresa');
 // Limite de usuários do plano — fonte única da conta de assentos (fase 2 do multi-tenancy)
 const { garantirVagaDeUsuario, consomeAssento } = require('../lib/planoEmpresa');
-// Documento da empresa (CPF/CNPJ): obrigatório e único entre empresas
-const { resolverDocumento } = require('../lib/documentoEmpresa');
 
 // ─── Helper: encontra a empresa do usuário (owner OU gestor convidado) ─────────
 // empresaIdPreferida (req.empresaId, vindo do seletor de empresa no frontend):
@@ -175,25 +177,45 @@ async function buscarConfiguracao(escopo) {
   });
 }
 
-// "Configuração completa" NÃO é "a linha existe" — é dias + horário + espécies
-// preenchidos, exatamente o que `salvarConfiguracao` exige do gestor na tela.
+// "Cadastro da Empresa completo" NÃO é "a linha existe" — é TODOS os campos do
+// onboarding do gestor preenchidos (identidade da empresa + operacional), exceto
+// LOGO e WHATSAPP (opcionais por natureza).
 //
-// ⚠️ Existe porque `criarEmpresa` (2026-08-16) passou a pré-criar a linha de
-// `EmpresaConfiguracao` já na criação da empresa, com SÓ `especiesAtendidas` (o
-// ADMIN escolhe as espécies no formulário de criação — expediente não). Se o gate de
-// primeiro acesso do gestor (`empresaConfigurada` em UserController.getMe) checasse
-// só "existe linha?", ele passaria a responder `true` no instante em que a empresa
-// nasce — antes de o gestor abrir Configurações e definir o expediente — e o sidebar
-// nunca mais pediria isso dele. Este helper é o que faz o gate continuar exigindo o
-// preenchimento de verdade, e não apenas a existência da linha.
-function configuracaoCompleta(config) {
-  return !!(
+// ⚠️ Existe porque `criarGestor` (2026-08-17) pré-cria a linha de `EmpresaConfiguracao`
+// já na criação do gestor, totalmente vazia (nem espécies: o Admin não escolhe mais
+// nada da empresa). Se o gate de primeiro acesso do gestor (`empresaConfigurada` em
+// UserController.getMe) checasse só "existe linha?"/"empresa existe?", ele responderia
+// `true` no instante em que o gestor é criado — antes de ele preencher qualquer coisa
+// — e o Sidebar nunca mais pediria isso dele. Este helper é o que faz o gate exigir o
+// preenchimento de verdade.
+//
+// ⚠️ `validadeOrcamentoDias` fica DE FORA de propósito: `null` é um valor de negócio
+// legítimo ("orçamento sem validade", consumido pelo cron `cancelar_orcamentos_vencidos`)
+// e hoje não há como distinguir "nunca preenchido" de "o gestor escolheu não ter
+// validade" sem uma UI própria para isso — incluí-lo aqui removeria essa opção de toda
+// empresa nova.
+function configuracaoCompleta(config, empresa) {
+  const operacionalOk = !!(
     config
     && config.diasAtendimento
     && config.horaInicioAtendimento
     && config.horaFimAtendimento
     && config.especiesAtendidas
+    && config.tempoConsultaPadraoMin
+    && config.tipoFechamento
+    && (config.tipoFechamento === 'ULTIMO_DIA_MES' || config.diaFechamentoFatura)
   );
+  if (!operacionalOk) return false;
+
+  if (!empresa) return false;
+  if (!empresa.nome?.trim()) return false;
+  if (!empresa.documento) return false;
+  if (!(empresa.cep && empresa.endereco && empresa.bairro && empresa.cidade && empresa.estado)) return false;
+  if (empresa.tipoDocumento === 'CNPJ'
+      && !(empresa.razaoSocial?.trim() && empresa.nomeFantasia?.trim() && empresa.inscricaoEstadual?.trim())) {
+    return false;
+  }
+  return true;
 }
 
 // Espécies atendidas no escopo (Configurações da empresa; sem elas, as espécies do
@@ -711,108 +733,79 @@ const EquipeController = {
 
   // ── Empresas ────────────────────────────────────────────────────────────────
 
-  // 🔴 NOVO MODELO (2026-08-06): só o ADMIN da plataforma cria empresa. Ela nasce
-  // associada a um PLANO e a UM OU MAIS GESTORES. O gestor NÃO cria mais a própria
-  // empresa — ele só administra a equipe da(s) que recebeu. A rota é gateada por
-  // `authorize('ADMIN')`; aqui a checagem é redundante mas explícita.
-  criarEmpresa: async (req, res) => {
+  // 🔴 MODELO 2026-08-17: o ADMIN da plataforma cria só o GESTOR (dados básicos +
+  // plano). A empresa nasce JUNTO — é o tenant que o vínculo GESTOR precisa —, mas com
+  // identidade em branco (nome placeholder, sem documento, sem espécies): é o GESTOR
+  // quem completa isso depois em Cadastro da Empresa (EmpresaCadastroController.salvar),
+  // sob obrigatoriedade própria (gate de onboarding). Reverte o modelo de 2026-08-06, em
+  // que o Admin também escolhia nome/CNPJ/espécies/telefone da empresa aqui.
+  // A rota é gateada por `authorize('ADMIN')`; aqui a checagem é redundante mas explícita.
+  criarGestor: async (req, res) => {
     try {
       if (req.user?.role !== 'ADMIN' && req.user?.userTypeGlobal !== 'ADMIN' && req.user?.userType !== 'ADMIN') {
-        return res.status(403).json({ sucesso: false, mensagem: 'Apenas o administrador da plataforma cria empresas.' });
+        return res.status(403).json({ sucesso: false, mensagem: 'Apenas o administrador da plataforma cria gestores.' });
       }
-      const { nome, cnpj, telefone, endereco, equipeNome, planoId, gestores, especiesAtendidas } = req.body;
-      if (!nome?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
+      const { fullName, email, telefone, cep, endereco, complemento, bairro, cidade, estado, planoId } = req.body;
 
-      // DOCUMENTO obrigatório e ÚNICO entre empresas: é o que identifica o assinante.
-      // Resolvido ANTES de criar/resolver os usuários gestores — senão um documento
-      // repetido já teria deixado para trás um usuário criado por engano.
-      const doc = await resolverDocumento(cnpj);
-      if (doc.erro) return res.status(doc.status).json({ sucesso: false, mensagem: doc.erro, code: doc.code });
+      const fullNameTrim = String(fullName ?? '').trim();
+      if (!fullNameTrim) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
 
-      // TELEFONE obrigatório: é o contato da clínica na plataforma.
+      const emailTrim = String(email ?? '').trim();
+      if (!emailTrim) return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório' });
+
+      // TELEFONE e ENDEREÇO são o contato pessoal do gestor na plataforma — não da
+      // empresa (que ainda não existe de verdade; é ele quem vai preenchê-la depois).
       const telefoneTrim = String(telefone ?? '').trim();
       if (!telefoneTrim) {
         return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório', code: 'TELEFONE_OBRIGATORIO' });
+      }
+      const enderecoTrim = { cep: String(cep ?? '').trim(), endereco: String(endereco ?? '').trim(), bairro: String(bairro ?? '').trim(), cidade: String(cidade ?? '').trim(), estado: String(estado ?? '').trim() };
+      if (!enderecoTrim.cep || !enderecoTrim.endereco || !enderecoTrim.bairro || !enderecoTrim.cidade || !enderecoTrim.estado) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Endereço é obrigatório (CEP, logradouro, bairro, cidade e UF).', code: 'ENDERECO_OBRIGATORIO' });
       }
 
       // PLANO obrigatório e ativo — a empresa nasce com uma assinatura.
       const planoIdNum = Number(planoId);
       if (!Number.isInteger(planoIdNum)) {
-        return res.status(400).json({ sucesso: false, mensagem: 'Selecione um plano para a empresa.', code: 'PLANO_OBRIGATORIO' });
+        return res.status(400).json({ sucesso: false, mensagem: 'Selecione um plano para o gestor.', code: 'PLANO_OBRIGATORIO' });
       }
       const plano = await prisma.plano.findUnique({ where: { id: planoIdNum }, select: { id: true, ativo: true, validadeDias: true } });
       if (!plano || !plano.ativo) return res.status(400).json({ sucesso: false, mensagem: 'Plano inválido ou inativo.' });
 
-      // GESTORES: ao menos um. Cada item = { email, fullName?, phone? }.
-      const lista = Array.isArray(gestores) ? gestores.filter((g) => g && String(g.email || '').trim()) : [];
-      if (lista.length === 0) {
-        return res.status(400).json({ sucesso: false, mensagem: 'Associe ao menos um gestor à empresa.', code: 'GESTOR_OBRIGATORIO' });
-      }
-
-      // ESPÉCIES ATENDIDAS: obrigatórias já na criação. Sem elas a clínica nasce sem
-      // catálogo de especialidades (é `especiesAtendidas` que filtra o catálogo por
-      // espécie — ver §15), e o gestor só descobriria isso ao abrir a agenda vazia.
-      // Ficam na `EmpresaConfiguracao`, o MESMO lugar que a tela de Configurações
-      // edita — nada de campo novo, senão haveria dois donos do dado.
-      const especiesIds = [...new Set(
-        (Array.isArray(especiesAtendidas) ? especiesAtendidas : String(especiesAtendidas ?? '').split(','))
-          .map((v) => Number(String(v).trim()))
-          // `n > 0`: `''.split(',')` devolve `['']` e `Number('')` é 0, que passa por
-          // `Number.isInteger`. Sem o corte, body sem espécie viraria `[0]` e o erro
-          // seria "Espécie inválida" no lugar de "informe ao menos uma espécie".
-          .filter((n) => Number.isInteger(n) && n > 0),
-      )];
-      if (especiesIds.length === 0) {
-        return res.status(400).json({ sucesso: false, mensagem: 'Informe ao menos uma espécie atendida.', code: 'ESPECIE_OBRIGATORIA' });
-      }
-      const especiesExistentes = await prisma.especie.findMany({
-        where: { id: { in: especiesIds } }, select: { id: true },
-      });
-      if (especiesExistentes.length !== especiesIds.length) {
-        return res.status(400).json({ sucesso: false, mensagem: 'Espécie inválida.', code: 'ESPECIE_INVALIDA' });
-      }
-
-      const nomeTrim = nome.trim();
-      // Equipe sem nome informado HERDA o nome da empresa (regra 36-d: onde não há
-      // ninguém para nomear, usa-se o nome da própria empresa — nunca o genérico
-      // "Equipe Principal", que em empresa pessoal apareceria no seletor de contexto
-      // no lugar da clínica).
-      const equipeNomeFinal = equipeNome?.trim() || nomeTrim;
-      const cnpjNorm = doc.digitos;
-
-      // Resolve/cria os usuários gestores (find-or-create por e-mail, como o membro
-      // direto). Usuário novo nasce VETERINARIO com senha padrão + troca obrigatória.
+      // Resolve/cria o usuário gestor (find-or-create por e-mail, como o membro direto).
+      // Usuário novo nasce VETERINARIO com senha padrão + troca obrigatória. Usuário que
+      // JÁ existia mantém os próprios dados — o telefone/endereço digitados aqui só valem
+      // para conta nova; quem já tem login administra o próprio cadastro.
       const SENHA_INICIAL = 'Inicial_001';
-      const gestoresResolvidos = [];
-      // Quem foi CRIADO agora — só a esses o e-mail leva a senha inicial. Quem já tinha
-      // login entra com a senha dele; mandar "Inicial_001" para essa pessoa seria uma
-      // credencial errada, e ela perderia o acesso tentando usá-la.
-      const idsNovos = new Set();
-      for (const g of lista) {
-        const emailNorm = normalizeEmail(g.email);
-        let usuario = await findUserByEmail(prisma, emailNorm);
-        if (!usuario) {
-          usuario = await prisma.user.create({
-            data: {
-              fullName: String(g.fullName || '').trim() || emailNorm,
-              email:    emailNorm,
-              phone:    g.phone || null,
-              passwordHash: await bcrypt.hash(SENHA_INICIAL, 10),
-              role:     'USER',
-              userType: 'VETERINARIO',
-              mustChangePassword: true,
-            },
-          });
-          idsNovos.add(usuario.id);
-        }
-        if (!gestoresResolvidos.some((x) => x.id === usuario.id)) gestoresResolvidos.push(usuario);
+      const emailNorm = normalizeEmail(emailTrim);
+      let usuario = await findUserByEmail(prisma, emailNorm);
+      let usuarioNovo = false;
+      if (!usuario) {
+        usuario = await prisma.user.create({
+          data: {
+            fullName: fullNameTrim,
+            email:    emailNorm,
+            phone:    telefoneTrim,
+            cep:               enderecoTrim.cep,
+            endereco:          enderecoTrim.endereco,
+            complemento:       String(complemento ?? '').trim() || null,
+            bairro:            enderecoTrim.bairro,
+            cidade:            enderecoTrim.cidade,
+            estado:            enderecoTrim.estado.toUpperCase(),
+            passwordHash: await bcrypt.hash(SENHA_INICIAL, 10),
+            role:     'USER',
+            userType: 'VETERINARIO',
+            mustChangePassword: true,
+          },
+        });
+        usuarioNovo = true;
       }
-      const donoId = gestoresResolvidos[0].id; // o 1º gestor é o dono (ownerId)
+      const donoId = usuario.id;
 
-      // A checagem antiga (mesmo dono + mesmo nome + mesmo CPF/CNPJ) saiu daqui: com o
-      // documento ÚNICO ENTRE EMPRESAS, ela virou inalcançável — qualquer repetição já
-      // foi barrada acima, com mensagem que diz de QUAL empresa o documento é. O
-      // unique(ownerId, nome, cnpj) do banco continua como rede de segurança.
+      // Nome da empresa nasce PLACEHOLDER — o gestor troca isso na primeira visita a
+      // Cadastro da Empresa (obrigatório pelo gate de onboarding, ver ProtectedRoute).
+      // Equipe herda o mesmo nome por ora (regra 36-d).
+      const nomePlaceholder = `Empresa de ${usuario.fullName}`;
 
       const fimEm = plano.validadeDias ? new Date(Date.now() + plano.validadeDias * 86400000) : null;
 
@@ -823,42 +816,23 @@ const EquipeController = {
       const empresa = await comEscopoPlataforma(() => prisma.$transaction(async (tx) => {
         const emp = await tx.empresa.create({
           data: {
-            nome: nomeTrim,
-            // `documento` é a AUTORIDADE; `cnpj` é o legado que ~60 pontos leem e só
-            // recebe o valor quando ele É um CNPJ.
-            // ⚠️ NÃO gravar CPF em `cnpj`: aquela coluna não guarda só o documento, ela
-            // SINALIZA "empresa pessoal" — `resolverEscopoConfiguracao` decide por ela
-            // se a EmpresaConfiguracao é da empresa (cnpj presente) ou da equipe (null).
-            // Preenchê-la com um CPF mudaria o escopo e a clínica perderia de vista o
-            // logo e o expediente já configurados. A unicidade não depende disso: ela
-            // varre as duas colunas.
-            cnpj:          doc.tipo === 'CNPJ' ? cnpjNorm : null,
-            documento:     cnpjNorm,
-            tipoDocumento: doc.tipo,
-            telefone:      telefoneTrim,
-            endereco:      endereco || null,
-            ownerId:       donoId,
+            nome:    nomePlaceholder,
+            ownerId: donoId,
+            // cnpj/documento/telefone/endereco ficam null — o Gestor preenche depois.
           },
         });
-        const equipe = await tx.equipe.create({ data: { nome: equipeNomeFinal, empresaId: emp.id } });
-        for (const u of gestoresResolvidos) {
-          await tx.membroEquipe.create({ data: { equipeId: equipe.id, userId: u.id, cargo: 'GESTOR' } });
-          await salvarVinculo(tx, u.id, emp.id, { perfil: 'GESTOR' });
-        }
+        const equipe = await tx.equipe.create({ data: { nome: nomePlaceholder, empresaId: emp.id } });
+        await tx.membroEquipe.create({ data: { equipeId: equipe.id, userId: donoId, cargo: 'GESTOR' } });
+        await salvarVinculo(tx, donoId, emp.id, { perfil: 'GESTOR' });
         // Assinatura: liga a empresa ao plano, com o vencimento derivado da validade.
         await tx.assinaturaEmpresa.create({
           data: { empresaId: emp.id, planoId: plano.id, status: 'ATIVA', fimEm },
         });
-        // Espécies atendidas na `EmpresaConfiguracao`, no MESMO escopo que
-        // `resolverEscopoConfiguracao` vai procurar depois: empresa com CNPJ guarda a
-        // config no nível da EMPRESA (equipeId null); empresa pessoal (CPF), no nível
-        // da EQUIPE. Escopo errado aqui = tela de Configurações abrindo em branco.
+        // Configuração nasce VAZIA (sem espécies) — documento ainda não existe, então o
+        // escopo é o da "empresa pessoal" (equipe) por ora; o Gestor migra isso ao
+        // informar o CNPJ, se for o caso (ver EmpresaCadastroController.salvar).
         await tx.empresaConfiguracao.create({
-          data: {
-            empresaId:         emp.id,
-            equipeId:          emp.cnpj ? null : equipe.id,
-            especiesAtendidas: especiesIds.join(','),
-          },
+          data: { empresaId: emp.id, equipeId: equipe.id },
         });
         return emp;
       }));
@@ -866,171 +840,26 @@ const EquipeController = {
       require('../services/whatsappService').provisionarPorEmpresa(empresa.id).catch(() => {});
 
       // O gestor precisa SABER que tem acesso — e, se a conta nasceu agora, com qual
-      // senha. Sem isto a empresa era criada e ninguém era avisado: era preciso incluí-lo
-      // de novo pela tela de Controle de Acesso só para disparar o e-mail.
-      // Fire-and-forget: falha de e-mail não desfaz a empresa já criada.
-      for (const u of gestoresResolvidos) {
-        const novo = idsNovos.has(u.id);
-        emailService.enviarAcessoGestor({
-          email:        u.email,
-          nomeGestor:   u.fullName || u.email,
-          empresaNome:  empresa.nome,
-          equipeName:   equipeNomeFinal,
-          usuarioCriado: novo,
-          senhaInicial:  novo ? SENHA_INICIAL : null,
-        }).catch(err => console.error('[emailService] Falha ao enviar acesso de gestor:', err?.message));
-      }
+      // senha. Fire-and-forget: falha de e-mail não desfaz o gestor já criado.
+      emailService.enviarAcessoGestor({
+        email:        usuario.email,
+        nomeGestor:   usuario.fullName || usuario.email,
+        empresaNome:  empresa.nome,
+        equipeName:   nomePlaceholder,
+        usuarioCriado: usuarioNovo,
+        senhaInicial:  usuarioNovo ? SENHA_INICIAL : null,
+      }).catch(err => console.error('[emailService] Falha ao enviar acesso de gestor:', err?.message));
 
       res.status(201).json({ sucesso: true, dados: empresa });
     } catch (err) {
-      console.error('Erro ao criar empresa:', err);
-      // Rede de segurança do banco (unique de `documento` e unique(ownerId, nome, cnpj)):
-      // a checagem em `resolverDocumento` já responde antes, com o nome da empresa que
-      // tem o documento — isto aqui só cobre a corrida entre dois cadastros simultâneos.
+      console.error('Erro ao criar gestor:', err);
       if (err.code === 'P2002') {
         return res.status(409).json({
           sucesso:  false,
-          mensagem: 'Este CPF/CNPJ já está cadastrado para outra empresa.',
-          code:     'DOCUMENTO_DUPLICADO',
+          mensagem: 'Já existe uma empresa com este nome para este gestor.',
+          code:     'EMPRESA_DUPLICADA',
         });
       }
-      res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
-    }
-  },
-
-  // PUT /equipes/empresas/:id — ADMIN edita os dados da empresa.
-  //
-  // Edita o que é da EMPRESA: nome, documento, telefone, endereço e espécies atendidas.
-  // ⚠️ NÃO mexe em PLANO nem em GESTORES: são associações com ciclo próprio (assinatura
-  // e vínculo de equipe), e trocá-las num formulário de cadastro faria uma edição de
-  // nome cancelar assinatura ou remover o acesso de alguém sem que ninguém pedisse.
-  atualizarEmpresa: async (req, res) => {
-    try {
-      const id = Number(req.params.id);
-      if (!Number.isInteger(id)) return res.status(400).json({ sucesso: false, mensagem: 'ID inválido' });
-
-      const empresa = await prisma.empresa.findUnique({
-        where:  { id },
-        select: { id: true, cnpj: true, nome: true },
-      });
-      if (!empresa) return res.status(404).json({ sucesso: false, mensagem: 'Empresa não encontrada' });
-
-      const { nome, cnpj, telefone, endereco, especiesAtendidas, planoId } = req.body;
-      if (!nome?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
-
-      // PLANO — mesmo formulário da criação, editável: o ADMIN pode trocar o plano da
-      // empresa aqui, sem precisar de uma tela à parte. Obrigatório como na criação.
-      const planoIdNum = Number(planoId);
-      if (!Number.isInteger(planoIdNum)) {
-        return res.status(400).json({ sucesso: false, mensagem: 'Selecione um plano para a empresa.', code: 'PLANO_OBRIGATORIO' });
-      }
-      const plano = await prisma.plano.findUnique({ where: { id: planoIdNum }, select: { id: true, ativo: true, validadeDias: true } });
-      if (!plano || !plano.ativo) return res.status(400).json({ sucesso: false, mensagem: 'Plano inválido ou inativo.' });
-
-      // Mesmas regras da criação — inclusive a unicidade, ignorando a PRÓPRIA empresa
-      // (sem isso, salvar sem trocar o documento acusaria conflito com ela mesma).
-      const doc = await resolverDocumento(cnpj, { ignorarEmpresaId: id });
-      if (doc.erro) return res.status(doc.status).json({ sucesso: false, mensagem: doc.erro, code: doc.code });
-
-      const telefoneTrim = String(telefone ?? '').trim();
-      if (!telefoneTrim) {
-        return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório', code: 'TELEFONE_OBRIGATORIO' });
-      }
-
-      const especiesIds = [...new Set(
-        (Array.isArray(especiesAtendidas) ? especiesAtendidas : String(especiesAtendidas ?? '').split(','))
-          .map((v) => Number(String(v).trim()))
-          // `n > 0`: `''.split(',')` devolve `['']` e `Number('')` é 0, que passa por
-          // `Number.isInteger`. Sem o corte, body sem espécie viraria `[0]` e o erro
-          // seria "Espécie inválida" no lugar de "informe ao menos uma espécie".
-          .filter((n) => Number.isInteger(n) && n > 0),
-      )];
-      if (especiesIds.length === 0) {
-        return res.status(400).json({ sucesso: false, mensagem: 'Informe ao menos uma espécie atendida.', code: 'ESPECIE_OBRIGATORIA' });
-      }
-      const especiesExistentes = await prisma.especie.findMany({
-        where: { id: { in: especiesIds } }, select: { id: true },
-      });
-      if (especiesExistentes.length !== especiesIds.length) {
-        return res.status(400).json({ sucesso: false, mensagem: 'Espécie inválida.', code: 'ESPECIE_INVALIDA' });
-      }
-
-      const cnpjNovo = doc.tipo === 'CNPJ' ? doc.digitos : null;
-
-      // ⚠️ Trocar CNPJ ↔ CPF MOVE o escopo da EmpresaConfiguracao (empresa × equipe —
-      // ver resolverEscopoConfiguracao). Sem mover a linha junto, o gestor abriria as
-      // Configurações em branco: logo, expediente e fechamento de fatura continuariam
-      // no banco, no escopo antigo, invisíveis. Aqui a linha é MOVIDA, não recriada.
-      const primeiraEquipe = await prisma.equipe.findFirst({
-        where: { empresaId: id }, orderBy: { id: 'asc' }, select: { id: true },
-      });
-      const escopoAntigo = { empresaId: id, equipeId: empresa.cnpj ? null : (primeiraEquipe?.id ?? null) };
-      const escopoNovo   = { empresaId: id, equipeId: cnpjNovo    ? null : (primeiraEquipe?.id ?? null) };
-
-      const atualizada = await comEscopoPlataforma(() => prisma.$transaction(async (tx) => {
-        const emp = await tx.empresa.update({
-          where: { id },
-          data: {
-            nome:          nome.trim(),
-            cnpj:          cnpjNovo,          // só CNPJ mora aqui — ver criarEmpresa
-            documento:     doc.digitos,
-            tipoDocumento: doc.tipo,
-            telefone:      telefoneTrim,
-            ...(endereco !== undefined ? { endereco: endereco || null } : {}),
-          },
-        });
-
-        const config = await tx.empresaConfiguracao.findFirst({ where: escopoAntigo });
-        if (config) {
-          await tx.empresaConfiguracao.update({
-            where: { id: config.id },
-            data:  { equipeId: escopoNovo.equipeId, especiesAtendidas: especiesIds.join(',') },
-          });
-        } else {
-          const noNovo = await tx.empresaConfiguracao.findFirst({ where: escopoNovo });
-          if (noNovo) {
-            await tx.empresaConfiguracao.update({
-              where: { id: noNovo.id }, data: { especiesAtendidas: especiesIds.join(',') },
-            });
-          } else {
-            await tx.empresaConfiguracao.create({
-              data: { ...escopoNovo, especiesAtendidas: especiesIds.join(',') },
-            });
-          }
-        }
-
-        // Assinatura: só recalcula o vencimento (`fimEm`) quando o PLANO muda de
-        // verdade. Se recalculássemos toda vez (o formulário sempre manda um
-        // `planoId`), salvar uma correção de telefone estenderia a assinatura sem
-        // ninguém ter pedido isso — o vencimento é uma decisão comercial, não um
-        // efeito colateral de editar o cadastro.
-        const assinaturaAtual = await tx.assinaturaEmpresa.findUnique({ where: { empresaId: id } });
-        if (!assinaturaAtual) {
-          const fimEm = plano.validadeDias ? new Date(Date.now() + plano.validadeDias * 86400000) : null;
-          await tx.assinaturaEmpresa.create({
-            data: { empresaId: id, planoId: plano.id, status: 'ATIVA', fimEm },
-          });
-        } else if (assinaturaAtual.planoId !== plano.id) {
-          const fimEm = plano.validadeDias ? new Date(Date.now() + plano.validadeDias * 86400000) : null;
-          await tx.assinaturaEmpresa.update({
-            where: { empresaId: id },
-            data:  { planoId: plano.id, fimEm },
-          });
-        }
-
-        return emp;
-      }));
-
-      res.json({ sucesso: true, dados: atualizada, mensagem: 'Empresa atualizada.' });
-    } catch (err) {
-      if (err.code === 'P2002') {
-        return res.status(409).json({
-          sucesso:  false,
-          mensagem: 'Este CPF/CNPJ já está cadastrado para outra empresa.',
-          code:     'DOCUMENTO_DUPLICADO',
-        });
-      }
-      console.error('Erro ao atualizar empresa:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   },
@@ -1146,12 +975,12 @@ const EquipeController = {
       const [empresasOwned, membros] = await comEscopoPlataforma(() => Promise.all([
         prisma.empresa.findMany({
           where:   { ownerId: userId },
-          select:  { id: true, nome: true, cnpj: true, equipes: { select: { id: true, nome: true }, orderBy: { id: 'asc' } } },
+          select:  { id: true, nome: true, cnpj: true, cidade: true, estado: true, equipes: { select: { id: true, nome: true }, orderBy: { id: 'asc' } } },
           orderBy: { createdAt: 'asc' },
         }),
         prisma.membroEquipe.findMany({
           where:   { userId },
-          select:  { cargo: true, equipe: { select: { id: true, nome: true, empresa: { select: { id: true, nome: true, cnpj: true, ownerId: true } } } } },
+          select:  { cargo: true, equipe: { select: { id: true, nome: true, empresa: { select: { id: true, nome: true, cnpj: true, ownerId: true, cidade: true, estado: true } } } } },
           orderBy: { createdAt: 'asc' },
         }),
       ]));
@@ -1166,8 +995,26 @@ const EquipeController = {
 
       const opcoes = [];
       const visto  = new Set();
+      // Empresas que já ganharam uma opção Gestor/cargo (dono OU membro de equipe),
+      // independente de QUAL equipe — usado só para barrar o bloco PROPRIETÁRIO
+      // abaixo (ver ali). Precisa ser por EMPRESA, não por (empresa,equipe): o
+      // cadastro de cliente não tem granularidade de equipe (ProprietarioPerfil/
+      // Animal são por empresa), então "equipeId: null" do bloco cliente não bate
+      // com o equipeId ESPECÍFICO de uma opção Gestor/cargo — dedupe só por chave
+      // (empresaId:equipeId) deixava a opção "· Proprietário" vazar sempre que o
+      // vínculo profissional daquela empresa tinha equipeId != null (qualquer
+      // cargo não-GESTOR, e GESTOR de empresa ainda sem documento/CNPJ — ver
+      // `criarGestor`, que hoje nasce tratada como "empresa pessoal" até o Cadastro
+      // da Empresa ser preenchido).
+      const empresasComPapelProfissional = new Set();
       const add = (o) => {
         if (semAcesso.has(o.empresaId) && !idsProprios.has(o.empresaId)) return;
+        // Chave por (empresaId, equipeId) — DE PROPÓSITO sem o cargo. Mais de um
+        // papel na mesma empresa (ex.: dona que TAMBÉM é cliente dela) não vira duas
+        // opções no seletor: as permissões já somam automaticamente por trás
+        // (`EquipeController.minhasPermissoes`/`checkPermission` — ver `ajusteperfil`
+        // na memória). O seletor é para trocar de EMPRESA (multi-tenant), não de
+        // papel dentro da mesma empresa.
         const k = `${o.empresaId}:${o.equipeId ?? ''}`;
         if (visto.has(k)) return;
         visto.add(k);
@@ -1176,10 +1023,13 @@ const EquipeController = {
 
       // Empresas próprias: dono = gestor delas
       for (const emp of empresasOwned) {
+        empresasComPapelProfissional.add(emp.id);
         if (!emp.cnpj && emp.equipes.length > 0) {
-          for (const eq of emp.equipes) add({ empresaId: emp.id, equipeId: eq.id, label: `${eq.nome} · Gestor`, cargo: 'GESTOR' });
+          for (const eq of emp.equipes) {
+            add({ empresaId: emp.id, equipeId: eq.id, nome: eq.nome, label: `${eq.nome} · Gestor`, cargo: 'GESTOR', cidade: emp.cidade, estado: emp.estado });
+          }
         } else {
-          add({ empresaId: emp.id, equipeId: null, label: `${emp.nome} · Gestor`, cargo: 'GESTOR' });
+          add({ empresaId: emp.id, equipeId: null, nome: emp.nome, label: `${emp.nome} · Gestor`, cargo: 'GESTOR', cidade: emp.cidade, estado: emp.estado });
         }
       }
 
@@ -1188,19 +1038,33 @@ const EquipeController = {
         const emp = m.equipe?.empresa;
         if (!emp) continue;
         if (emp.ownerId === userId) continue; // já coberto acima
+        empresasComPapelProfissional.add(emp.id);
         if (m.cargo === 'GESTOR' && emp.cnpj) {
-          add({ empresaId: emp.id, equipeId: null, label: `${emp.nome} · Gestor`, cargo: 'GESTOR' });
+          add({ empresaId: emp.id, equipeId: null, nome: emp.nome, label: `${emp.nome} · Gestor`, cargo: 'GESTOR', cidade: emp.cidade, estado: emp.estado });
         } else {
-          add({ empresaId: emp.id, equipeId: m.equipe.id, label: `${m.equipe.nome} · ${labelCargo(m.cargo)}`, cargo: m.cargo });
+          add({ empresaId: emp.id, equipeId: m.equipe.id, nome: m.equipe.nome, label: `${m.equipe.nome} · ${labelCargo(m.cargo)}`, cargo: m.cargo, cidade: emp.cidade, estado: emp.estado });
         }
       }
 
-      // ── PROPRIETÁRIO: uma opção por EMPRESA que o atende ─────────────────────
+      // ── PROPRIETÁRIO: uma opção por EMPRESA em que a pessoa é SÓ cliente ──────
       // Mesmo modelo do vet que é gestor numa empresa e prestador em outra: ele
-      // escolhe a clínica e vê APENAS o que aquela clínica liberou no controle de
-      // acesso (as permissões são resolvidas pela empresa ativa) e o cadastro que
-      // aquela clínica mantém dele (lib/proprietarioPerfil).
-      if (req.user.userType === 'PROPRIETARIO') {
+      // escolhe a clínica e vê o que aquela clínica liberou (permissões resolvidas
+      // pela empresa ativa) e o cadastro que aquela clínica mantém dele
+      // (lib/proprietarioPerfil). Isolamento multi-tenant entre empresas diferentes
+      // continua valendo à risca — isto NUNCA soma nada entre empresas distintas.
+      //
+      // ⚠️ Gate por `userType !== 'ADMIN'` (não `userType === 'PROPRIETARIO'`) e
+      // busca por USUÁRIO, não pelo contexto ativo — acha cliente em QUALQUER
+      // empresa da pessoa, inclusive as que ela também gerencia/atende como
+      // profissional. Nessas, `empresasComPapelProfissional` já marcou a empresa e
+      // o `add()` abaixo nem chega a ser chamado — é o `minhasPermissoes`/
+      // `checkPermission` que soma a Matriz do PROPRIETARIO por trás (ver
+      // `ajusteperfil`), não uma segunda entrada no seletor. Checar o Set aqui (e
+      // não confiar só no dedupe por chave dentro de `add()`) é o que cobre a
+      // empresa pessoal/sem documento ainda (Gestor com `equipeId` específico) e o
+      // cargo não-GESTOR (equipeId da equipe) — nenhum dos dois bate com o
+      // `equipeId: null` fixo que o cadastro de cliente usa.
+      if (req.user.userType !== 'ADMIN') {
         // Mesmo caso: o cliente atendido por várias clínicas precisa ver todas no
         // seletor. `animal`/`proprietarioPerfil` têm RLS por empresa → escopo de
         // plataforma + `where: { userId }` (só os vínculos deste cliente).
@@ -1209,19 +1073,20 @@ const EquipeController = {
             // `empresaId: { not: null }` REMOVIDO — coluna NOT NULL desde a fase 5
             // torna o filtro inválido no Prisma (ver auth.js/permissao.middleware).
             where:  { userId, ativo: true },
-            select: { empresa: { select: { id: true, nome: true } } },
+            select: { empresa: { select: { id: true, nome: true, cidade: true, estado: true } } },
           }),
           prisma.proprietarioPerfil.findMany({
             where:  { userId, ativo: true },
-            select: { empresa: { select: { id: true, nome: true } } },
+            select: { empresa: { select: { id: true, nome: true, cidade: true, estado: true } } },
           }),
         ]));
         const empresasDoCliente = new Map();
         for (const r of [...animais, ...perfis]) {
-          if (r.empresa) empresasDoCliente.set(r.empresa.id, r.empresa.nome);
+          if (r.empresa) empresasDoCliente.set(r.empresa.id, r.empresa);
         }
-        for (const [empresaId, nome] of empresasDoCliente) {
-          add({ empresaId, equipeId: null, label: `${nome} · Proprietário`, cargo: 'PROPRIETARIO' });
+        for (const emp of empresasDoCliente.values()) {
+          if (empresasComPapelProfissional.has(emp.id)) continue;
+          add({ empresaId: emp.id, equipeId: null, nome: emp.nome, label: `${emp.nome} · Proprietário`, cargo: 'PROPRIETARIO', cidade: emp.cidade, estado: emp.estado });
         }
       }
 
@@ -2187,10 +2052,9 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'fullName, email e cargo são obrigatórios' });
       }
 
-      if (cargo === 'GESTOR' && (req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
-        return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Gestor.' });
-      }
-
+      // Conceder GESTOR não é exclusivo de ADMIN — mesma regra de incluirMembroDireto
+      // ("Cadastro da Empresa > Incluir gestor"): quem já é gestor da equipe pode
+      // incluir outro. `garantirEquipePadrao` abaixo já exige isso.
       const { equipe } = await garantirEquipePadrao(vetUserId, req.empresaId, req.equipeId);
       if (!equipe) return res.status(403).json({ sucesso: false, mensagem: 'Você não é gestor da empresa ativa.' });
 
@@ -2246,14 +2110,15 @@ const EquipeController = {
         if (!empresa || membro.equipe?.empresaId !== empresa.id) {
           return res.status(403).json({ sucesso: false, mensagem: 'Apenas gestores da equipe podem editar membros.' });
         }
-        // Gestor não edita outro gestor (inclui troca de senha)
-        if (membro.cargo === 'GESTOR') {
+        // Gestor não edita OUTRO gestor (inclui troca de senha) — a própria linha
+        // segue liberada, é o caminho de "editar a mim mesmo" pela lista da equipe.
+        // Conceder o cargo GESTOR a um membro NÃO-gestor não entra nessa trava: é o
+        // mesmo gestor incluindo um novo gestor, que "Cadastro da Empresa > Incluir
+        // gestor" (incluirMembroDireto) já permite sem exigir ADMIN — a exigência de
+        // ADMIN aqui era inconsistente com aquele fluxo.
+        if (membro.cargo === 'GESTOR' && Number(req.user.id) !== Number(membro.userId)) {
           return res.status(403).json({ sucesso: false, mensagem: 'Gestores não podem ser editados por outros gestores.' });
         }
-      }
-
-      if (cargo === 'GESTOR' && (req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
-        return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Gestor.' });
       }
 
       if (email !== undefined) {
@@ -2784,9 +2649,12 @@ const EquipeController = {
       // ── Validações que podem falhar ANTES de qualquer gravação ─────────────
       // (evita usuário/membro órfão quando a requisição é rejeitada no meio)
 
-      // Remuneração — OBRIGATÓRIA na inclusão. Validada aqui, antes de existir
-      // usuário/membro, para não deixar cadastro pela metade quando o gestor erra o campo.
-      const pagamento = normalizarPagamento({ tipoPagamento, formaPagamento, valorPagamento });
+      // Remuneração — OBRIGATÓRIA na inclusão, EXCETO para GESTOR: é sócio/dono da
+      // empresa, não folha de pagamento da clínica (tela "Cadastro da Empresa" >
+      // Outros gestores não coleta forma de pagamento).
+      const pagamento = cargo === 'GESTOR'
+        ? { erro: null, dados: null }
+        : normalizarPagamento({ tipoPagamento, formaPagamento, valorPagamento });
       if (pagamento.erro) return res.status(400).json({ sucesso: false, mensagem: pagamento.erro });
 
       // Acesso ao sistema — decisão explícita do gestor, sem padrão implícito.
@@ -3701,7 +3569,10 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'O perfil PROPRIETARIO é atribuído automaticamente.' });
       }
 
-      // ADMIN bypass; Gestor pode alterar mas não pode promover a GESTOR
+      // ADMIN bypass. Gestor pode conceder QUALQUER cargo, GESTOR incluído — mesma
+      // regra de incluirMembroDireto ("Cadastro da Empresa > Incluir gestor"). O
+      // único limite é não alterar cargos de OUTRO gestor (a própria linha segue
+      // liberada — "editar a mim mesmo" pela lista da equipe).
       if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         const membroSolicitante = await prisma.membroEquipe.findUnique({
           where: { equipeId_userId: { equipeId, userId: req.user.id } },
@@ -3710,8 +3581,14 @@ const EquipeController = {
         if (!membroSolicitante || membroSolicitante.cargo !== 'GESTOR') {
           return res.status(403).json({ sucesso: false, mensagem: 'Apenas gestores podem alterar cargos.' });
         }
-        if (cargos.includes('GESTOR')) {
-          return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Gestor.' });
+        if (alvoUserId !== req.user.id) {
+          const alvoMembro = await prisma.membroEquipe.findUnique({
+            where: { equipeId_userId: { equipeId, userId: alvoUserId } },
+            select: { cargo: true },
+          });
+          if (alvoMembro?.cargo === 'GESTOR') {
+            return res.status(403).json({ sucesso: false, mensagem: 'Gestores não podem ter os cargos alterados por outros gestores.' });
+          }
         }
       }
 
@@ -3816,7 +3693,9 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'O perfil PROPRIETARIO é atribuído automaticamente — não pode ser concedido como cargo de equipe.' });
       }
 
-      // ADMIN tem bypass total; GESTOR pode alterar cargos mas não pode promover a GESTOR
+      // ADMIN tem bypass total. Gestor pode conceder QUALQUER cargo, GESTOR incluído
+      // (mesma regra de incluirMembroDireto); só não altera cargo de OUTRO gestor —
+      // a própria linha segue liberada.
       if ((req.user.role !== 'ADMIN' && req.user.userType !== 'ADMIN')) {
         const membroSolicitante = await prisma.membroEquipe.findUnique({
           where: { equipeId_userId: { equipeId, userId: req.user.id } },
@@ -3825,8 +3704,14 @@ const EquipeController = {
         if (!membroSolicitante || membroSolicitante.cargo !== 'GESTOR') {
           return res.status(403).json({ sucesso: false, mensagem: 'Apenas gestores podem alterar cargos.' });
         }
-        if (cargo === 'GESTOR') {
-          return res.status(403).json({ sucesso: false, mensagem: 'Apenas administradores podem conceder o cargo de Gestor.' });
+        if (alvoUserId !== req.user.id) {
+          const alvoMembro = await prisma.membroEquipe.findUnique({
+            where: { equipeId_userId: { equipeId, userId: alvoUserId } },
+            select: { cargo: true },
+          });
+          if (alvoMembro?.cargo === 'GESTOR') {
+            return res.status(403).json({ sucesso: false, mensagem: 'Gestores não podem ter os cargos alterados por outros gestores.' });
+          }
         }
       }
 
@@ -3888,10 +3773,23 @@ const EquipeController = {
   // ── Permissões do usuário logado ─────────────────────────────────────────────
   // Retorna mapa plano { slug: nivel } para o frontend aplicar controle de acesso.
   // Gestor recebe FULL em tudo automaticamente (bypass via flag isGestor).
-  // PROPRIETARIO: lê MatrizPerfil do perfil PROPRIETARIO nas equipes vinculadas aos seus animais.
+  //
+  // MAIS DE UM PAPEL NA MESMA EMPRESA sempre SOMA (regra de produto — ver
+  // `ajusteperfil` na memória): quem tem cargo de equipe (GESTOR/VET/ESTAGIARIO/
+  // FORNECEDOR/...) e TAMBÉM tem cadastro de cliente na empresa ATIVA
+  // (ProprietarioPerfil ativo ou animal ativo) recebe o MÁXIMO entre o que o cargo
+  // dá e o que a Matriz do PROPRIETARIO dá, módulo a módulo. GESTOR já é FULL, então
+  // somar não muda nada (não precisa nem consultar a Matriz do PROPRIETARIO). Quem
+  // não tem cargo nenhum recebe só a Matriz do PROPRIETARIO — como sempre foi.
+  // NEGADO do cargo bloqueia; NEGADO de PROPRIETARIO não bloqueia quem tem cargo.
+  //
+  // ⚠️ Este é o ÚNICO lugar que decide "isGestor" para o frontend (Sidebar,
+  // `podeExecutar`) — qualquer bypass novo precisa entrar AQUI, não só em
+  // `checkPermission` (rota por rota), senão o menu não reflete a permissão real.
   minhasPermissoes: async (req, res) => {
     try {
       const userId = req.user.id;
+      const NIVEL_POSITIVO = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
 
       // ── ADMIN: acesso irrestrito — retorna FULL em todos os módulos ───────────
       if ((req.user.role === 'ADMIN' || req.user.userType === 'ADMIN')) {
@@ -3900,44 +3798,22 @@ const EquipeController = {
         return res.json({ sucesso: true, dados: { permissoes, isGestor: true, isAdmin: true, temEquipe: true } });
       }
 
-      // ── PROPRIETARIO: lê MatrizPerfil das equipes vinculadas aos seus animais ──
-      // Multicargo: se também tiver cargo VETERINARIO/ESTAGIARIO/GESTOR numa equipe,
-      // faz merge das permissões (MAX entre cargo de equipe e PROPRIETARIO).
-      // NEGADO do cargo de equipe bloqueia; NEGADO de PROPRIETARIO não bloqueia cargo de equipe.
-      if (req.user.userType === 'PROPRIETARIO') {
-        // Verifica se também tem cargo de equipe (VETERINARIO/ESTAGIARIO/GESTOR)
-        let membroEquipe = null;
-        if (req.equipeId) {
-          membroEquipe = await prisma.membroEquipe.findUnique({
-            where:  { equipeId_userId: { equipeId: req.equipeId, userId } },
-            select: { equipeId: true, cargo: true, cargos: true },
-          });
-        }
-        if (!membroEquipe && req.empresaId) {
-          membroEquipe = await prisma.membroEquipe.findFirst({
-            where:   { userId, equipe: { empresaId: req.empresaId } },
-            select:  { equipeId: true, cargo: true, cargos: true },
-            orderBy: { createdAt: 'desc' },
-          });
-        }
+      // "É cliente NESTA empresa?" — mesmo critério de `resolverTipoNoContexto`
+      // (lib/tipoContexto.js), computado uma vez e usado tanto pelo merge abaixo
+      // quanto pelo caso "só cliente, sem cargo nenhum".
+      const souCliente = req.empresaId ? await resolverComoCliente(userId, req.empresaId) : false;
 
-        // GESTOR bypass — mesmo sendo PROPRIETARIO, tem acesso total
-        if (membroEquipe?.cargo === 'GESTOR') {
-          const modulos = await prisma.moduloSistema.findMany({ select: { slug: true } });
-          const permissoes = Object.fromEntries(modulos.map(m => [m.slug, 'FULL']));
-          return res.json({ sucesso: true, dados: { permissoes, isGestor: true, temEquipe: true } });
-        }
-
-        // Escopo da EMPRESA ATIVA (seletor do portal do proprietário): o que a
-        // empresa A liberou não vale enquanto ele estiver olhando a empresa B.
-        const equipeIds = await getEquipeIdsDoProprietario(Number(userId), req.empresaId);
-        const NIVEL_POSITIVO = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
-
-        // Permissões de PROPRIETARIO (das equipes vinculadas via animais)
-        const mapaMaximoProp = {};
-        if (equipeIds.length > 0) {
+      // Matriz do PROPRIETARIO (das equipes vinculadas via animal/cadastro na
+      // empresa ATIVA) — escopo por empresa: o que a empresa A liberou não vale
+      // enquanto o contexto ativo for a empresa B.
+      let mapaMaximoProp   = null;
+      let equipeIdsCliente = [];
+      if (souCliente) {
+        equipeIdsCliente = await getEquipeIdsDoProprietario(Number(userId), req.empresaId);
+        mapaMaximoProp = {};
+        if (equipeIdsCliente.length > 0) {
           const matrizesProp = await prisma.matrizPerfil.findMany({
-            where: { equipeId: { in: equipeIds }, perfilSlug: 'PROPRIETARIO' },
+            where: { equipeId: { in: equipeIdsCliente }, perfilSlug: 'PROPRIETARIO' },
           });
           const negadosProp = new Set();
           for (const m of matrizesProp) {
@@ -3950,77 +3826,6 @@ const EquipeController = {
           }
         }
         mapaMaximoProp['dashboard.geral.ler'] = mapaMaximoProp['dashboard.geral.ler'] ?? 'LEITURA';
-
-        // Sem cargo de equipe: retorna apenas permissões de PROPRIETARIO (comportamento original)
-        if (!membroEquipe || !['VETERINARIO', 'ESTAGIARIO'].includes(membroEquipe.cargo)) {
-          if (equipeIds.length === 0) {
-            return res.json({ sucesso: true, dados: {
-              permissoes:    { 'dashboard.geral.ler': 'LEITURA' },
-              isGestor:       false,
-              temEquipe:     false,
-              isProprietario: true,
-            }});
-          }
-
-          const permissoes = Object.fromEntries(
-            Object.entries(mapaMaximoProp).filter(([, v]) => v !== 'NENHUM')
-          );
-          return res.json({ sucesso: true, dados: {
-            permissoes,
-            isGestor:       false,
-            temEquipe:      equipeIds.length > 0,
-            isProprietario: true,
-          }});
-        }
-
-        // COM cargo de equipe VET/ESTAGIARIO: merge de permissões
-        // Lê MatrizPerfil do cargo da equipe (pode ter cargos múltiplos via campo cargos)
-        const todosCargos = (membroEquipe.cargos && membroEquipe.cargos.length > 0)
-          ? membroEquipe.cargos
-          : [membroEquipe.cargo];
-
-        const matrizesCargo = await prisma.matrizPerfil.findMany({
-          where:  { equipeId: membroEquipe.equipeId, perfilSlug: { in: todosCargos } },
-          select: { moduloSlug: true, nivel: true },
-        });
-
-        const mapaCargo = {};
-        const negadosCargo = new Set();
-        for (const m of matrizesCargo) {
-          if (m.nivel === 'NEGADO') { negadosCargo.add(m.moduloSlug); mapaCargo[m.moduloSlug] = 'NEGADO'; continue; }
-          if (negadosCargo.has(m.moduloSlug)) continue;
-          const atual = mapaCargo[m.moduloSlug];
-          if (!atual || (NIVEL_POSITIVO[m.nivel] ?? 0) > (NIVEL_POSITIVO[atual] ?? 0)) {
-            mapaCargo[m.moduloSlug] = m.nivel;
-          }
-        }
-
-        // Merge final: MAX entre cargo de equipe e PROPRIETARIO por módulo.
-        // NEGADO do cargo bloqueia; NEGADO de PROPRIETARIO não bloqueia quem tem cargo de equipe.
-        const todasSlugs = new Set([...Object.keys(mapaMaximoProp), ...Object.keys(mapaCargo)]);
-        const permissoesMerge = {};
-        for (const slug of todasSlugs) {
-          const nivelCargo = mapaCargo[slug] ?? PERMISSOES_PADRAO[membroEquipe.cargo]?.[slug] ?? 'NENHUM';
-          if (nivelCargo === 'NEGADO') continue;
-
-          const nivelPropBruto = mapaMaximoProp[slug] ?? 'NENHUM';
-          const nivelProp      = nivelPropBruto === 'NEGADO' ? 'NENHUM' : nivelPropBruto;
-
-          const ordCargo = NIVEL_POSITIVO[nivelCargo] ?? 0;
-          const ordProp  = NIVEL_POSITIVO[nivelProp]  ?? 0;
-          const nivelMax = ordCargo >= ordProp ? nivelCargo : nivelProp;
-
-          if (nivelMax !== 'NENHUM') permissoesMerge[slug] = nivelMax;
-        }
-        permissoesMerge['dashboard.geral.ler'] = permissoesMerge['dashboard.geral.ler'] ?? 'LEITURA';
-
-        return res.json({ sucesso: true, dados: {
-          permissoes:     permissoesMerge,
-          isGestor:       false,
-          temEquipe:      true,
-          isProprietario: true,
-          isMulticargo:   true,
-        }});
       }
 
       // Resolve o vínculo do CONTEXTO ATIVO — cargo e permissões podem diferir entre
@@ -4041,7 +3846,8 @@ const EquipeController = {
         });
       }
 
-      // Dono da empresa ativa sem MembroEquipe nela → bypass de gestor
+      // Dono da empresa ativa sem MembroEquipe nela → bypass de gestor (FULL já
+      // inclui qualquer coisa que a Matriz do PROPRIETARIO daria — soma é moot).
       if (!membro && req.empresaId) {
         const dono = await prisma.empresa.findFirst({
           where:  { id: req.empresaId, ownerId: userId },
@@ -4054,6 +3860,7 @@ const EquipeController = {
         }
       }
 
+      // Sem vínculo na empresa ativa: cai no vínculo mais recente (legado/autônomo).
       if (!membro) {
         membro = await prisma.membroEquipe.findFirst({
           where:   { userId },
@@ -4062,12 +3869,28 @@ const EquipeController = {
         });
       }
 
+      // Nenhum cargo de equipe em lugar nenhum: só cliente (ou nada).
       if (!membro) {
+        if (souCliente) {
+          if (equipeIdsCliente.length === 0) {
+            return res.json({ sucesso: true, dados: {
+              permissoes:    { 'dashboard.geral.ler': 'LEITURA' },
+              isGestor:       false,
+              temEquipe:      false,
+              isProprietario: true,
+            }});
+          }
+          const permissoes = Object.fromEntries(
+            Object.entries(mapaMaximoProp).filter(([, v]) => v !== 'NENHUM')
+          );
+          return res.json({ sucesso: true, dados: { permissoes, isGestor: false, temEquipe: true, isProprietario: true } });
+        }
         return res.json({ sucesso: true, dados: { permissoes: {}, isGestor: false, temEquipe: false } });
       }
 
       if (membro.cargo === 'GESTOR') {
-        // Gestor tem bypass — retorna FULL em todos os módulos
+        // Gestor tem bypass — retorna FULL em todos os módulos (soma com
+        // PROPRIETARIO seria moot: FULL já é o teto)
         const modulos = await prisma.moduloSistema.findMany({ select: { slug: true } });
         const permissoes = Object.fromEntries(modulos.map(m => [m.slug, 'FULL']));
         return res.json({ sucesso: true, dados: { permissoes, isGestor: true, temEquipe: true } });
@@ -4099,7 +3922,6 @@ const EquipeController = {
           select: { moduloSlug: true, nivel: true },
         });
 
-        const NIVEL_ORD_LOCAL = { NENHUM: 0, LEITURA: 1, PROPRIO: 2, EQUIPE: 3, FULL: 4 };
         const negados = new Set();
         for (const m of matrizRegistros) {
           if (m.nivel === 'NEGADO') {
@@ -4109,17 +3931,45 @@ const EquipeController = {
           }
           if (negados.has(m.moduloSlug)) continue;
           const atual = permissoesMap[m.moduloSlug];
-          if (!atual || (NIVEL_ORD_LOCAL[m.nivel] ?? 0) > (NIVEL_ORD_LOCAL[atual] ?? 0)) {
+          if (!atual || (NIVEL_POSITIVO[m.nivel] ?? 0) > (NIVEL_POSITIVO[atual] ?? 0)) {
             permissoesMap[m.moduloSlug] = m.nivel;
           }
         }
+      }
+
+      // MAIS DE UM PAPEL NA MESMA EMPRESA: soma o cargo com a Matriz do PROPRIETARIO
+      // (`souCliente`, calculado no topo). NEGADO do cargo bloqueia (não some com
+      // proprietário); NEGADO de PROPRIETARIO não bloqueia quem tem cargo ativo.
+      //
+      // ⚠️ NÃO gatear isto por `req.user.userType === 'PROPRIETARIO'` — chegando
+      // aqui a pessoa TEM cargo de equipe, e `resolverTipoNoContexto` sempre
+      // resolve o CARGO antes do CLIENTE (armadilha 36-e), então o `userType`
+      // nunca seria PROPRIETARIO neste ponto. Era exatamente esse o bug histórico:
+      // a soma "veterinária + proprietária" nunca disparava.
+      if (souCliente) {
+        const todasSlugs = new Set([...Object.keys(permissoesMap), ...Object.keys(mapaMaximoProp)]);
+        for (const slug of todasSlugs) {
+          if (permissoesMap[slug] === 'NEGADO') continue;
+
+          const nivelCargo     = permissoesMap[slug] ?? PERMISSOES_PADRAO[membro.cargo]?.[slug] ?? 'NENHUM';
+          const nivelPropBruto = mapaMaximoProp[slug] ?? 'NENHUM';
+          const nivelProp      = nivelPropBruto === 'NEGADO' ? 'NENHUM' : nivelPropBruto;
+
+          const ordCargo = NIVEL_POSITIVO[nivelCargo] ?? 0;
+          const ordProp  = NIVEL_POSITIVO[nivelProp]  ?? 0;
+          permissoesMap[slug] = ordCargo >= ordProp ? nivelCargo : nivelProp;
+        }
+        permissoesMap['dashboard.geral.ler'] = permissoesMap['dashboard.geral.ler'] ?? 'LEITURA';
       }
 
       // Remove NENHUM do mapa para que podeExecutar retorne false para slugs ausentes
       const permissoes = Object.fromEntries(
         Object.entries(permissoesMap).filter(([, v]) => v !== 'NENHUM'),
       );
-      return res.json({ sucesso: true, dados: { permissoes, isGestor: false, temEquipe: true } });
+      return res.json({ sucesso: true, dados: {
+        permissoes, isGestor: false, temEquipe: true,
+        ...(souCliente ? { isProprietario: true, isMulticargo: true } : {}),
+      }});
     } catch (err) {
       console.error('Erro ao buscar permissões:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });

@@ -5,7 +5,9 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 const PATH_CONVITE = '/aceitar-convite-equipe';
 const PATH_SENHA   = '/alterar-senha-obrigatoria';
 const PATH_PERFIL  = '/cadastro-pessoal';
-const PATH_CONFIG  = '/configuracoes';
+// Tela ÚNICA do Gestor (2026-08-17): identidade da empresa + preferências
+// operacionais — antes eram duas rotas (`/cadastro/empresa` + `/configuracoes`).
+const PATH_CONFIG  = '/cadastro/empresa';
 
 export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -49,8 +51,9 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
       : <Navigate to={PATH_PERFIL} replace />;
   }
 
-  // ── Passo 4: GESTOR no primeiro acesso — cadastro pessoal ok, mas a empresa
-  // ainda não tem Configurações preenchidas (logo, fechamento, expediente...).
+  // ── Passo 4: GESTOR no primeiro acesso — cadastro pessoal ok, mas o Cadastro
+  // da Empresa ainda não está completo (identidade + operacional, exceto
+  // logo/whatsapp — ver EquipeController.configuracaoCompleta).
   if (perfilCarregado && isGestorEmpresa && !empresaConfigurada) {
     return path === PATH_CONFIG
       ? <>{children}</>

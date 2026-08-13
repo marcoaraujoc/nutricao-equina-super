@@ -18,7 +18,7 @@ interface Animal {
   veterinarioClinica?: string;
   raca?: { nome: string };
   especie?: { nome: string };
-  user?: { fullName: string; email: string };
+  user?: { fullName: string; email: string; phone?: string | null };
   logoUrl?: string | null;
 }
 

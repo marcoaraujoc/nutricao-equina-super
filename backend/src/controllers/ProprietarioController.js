@@ -11,7 +11,7 @@ const perfilProp = require('../lib/proprietarioPerfil');
 // Localidades atendidas do cliente, com a frequência de visitas de CADA uma
 const localidadesProp = require('../lib/proprietarioLocalidades');
 // Tabela de ligação usuário × empresa — perfil PROPRIETARIO + cadastro da empresa
-const { salvarVinculo, perfilDaEmpresa } = require('../lib/usuarioEmpresa');
+const { salvarVinculo, ehProfissionalNaEmpresa } = require('../lib/usuarioEmpresa');
 
 // Dia de vencimento da fatura: obrigatório, inteiro entre 1 e 25
 // (rejeita vazio, 0, negativo e > 25 — espelha a validação inline do frontend).
@@ -172,7 +172,14 @@ const ProprietarioController = {
       }
 
       const comPerfil = await perfilProp.aplicarPerfil(proprietario, req.empresaId);
-      res.json({ sucesso: true, dados: await localidadesProp.anexar(comPerfil, req.empresaId) });
+      const comLocalidades = await localidadesProp.anexar(comPerfil, req.empresaId);
+      // Sugestão para a tela de edição: localização já usada por algum animal ATIVO
+      // do cliente que ainda não virou "localidade atendida" confirmada — evita o
+      // gestor ter que buscar de novo um local que o cadastro do animal já sabe.
+      const localidadesSugeridas = await localidadesProp.localidadesSugeridasDeAnimais(
+        proprietario.id, req.empresaId,
+      );
+      res.json({ sucesso: true, dados: { ...comLocalidades, localidadesSugeridas } });
     } catch (err) {
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar proprietário' });
     }
@@ -250,8 +257,10 @@ const ProprietarioController = {
         // que registra o cliente é o `ProprietarioPerfil`, que é tabela à parte.
         // (Antes este caminho respondia 409 "E-mail já cadastrado" e a pessoa
         // simplesmente não podia ser cadastrada como cliente da empresa onde trabalha.)
-        const vinculoAtual = await perfilDaEmpresa(existente.id, req.empresaId);
-        const perfilProfissional = vinculoAtual && vinculoAtual.perfil !== 'PROPRIETARIO';
+        // `ehProfissionalNaEmpresa` cobre TAMBÉM o dono sem linha em tb_usuario_empresa
+        // — sem isso, o dono que se cadastra como cliente da própria empresa perde o
+        // `perfil` GESTOR (caso real corrigido em 2026-08-11: dona da Patyvet).
+        const perfilProfissional = await ehProfissionalNaEmpresa(existente.id, req.empresaId, prisma);
 
         await salvarVinculo(prisma, existente.id, req.empresaId, {
           ...(perfilProfissional ? {} : { perfil: 'PROPRIETARIO' }),
@@ -424,7 +433,17 @@ const ProprietarioController = {
           data:   dataUser,
           select: SELECT_PROPRIETARIO,
         });
-        await salvarVinculo(tx, Number(id), req.empresaId, { perfil: 'PROPRIETARIO', ...dadosDaEmpresa });
+        // PROFISSIONAL que também é cliente: o vínculo é UM por (usuário, empresa) e
+        // guarda um só `perfil` — sobrescrevê-lo com PROPRIETARIO REBAIXARIA a gestora
+        // ou o veterinário a cliente na própria clínica (mesma proteção de `criar`,
+        // que já tinha isto; faltava aqui). O papel profissional vence; o que registra
+        // o cliente é o `ProprietarioPerfil`, tabela à parte. Também cobre o DONO sem
+        // linha em tb_usuario_empresa — ver `ehProfissionalNaEmpresa`.
+        const perfilProfissional = await ehProfissionalNaEmpresa(Number(id), req.empresaId, tx);
+        await salvarVinculo(tx, Number(id), req.empresaId, {
+          ...(perfilProfissional ? {} : { perfil: 'PROPRIETARIO' }),
+          ...dadosDaEmpresa,
+        });
         const perfil = await perfilProp.salvarPerfil(tx, Number(id), req.empresaId, dadosDaEmpresa);
         await localidadesProp.salvarLocalidades(tx, Number(id), req.empresaId, locParsed.localidades);
         return perfilProp.mesclar(base, perfil);

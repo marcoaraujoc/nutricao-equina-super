@@ -1,11 +1,50 @@
 const jwt   = require('jsonwebtoken');
 const prisma = require('../lib/prisma').default;
-const { getAccessTokenFromCookie } = require('../lib/authCookies');
+const { getAccessTokenFromCookie, getContextCookies, setContextCookies } = require('../lib/authCookies');
 const { resolverTipoNoContexto }   = require('../lib/tipoContexto');
 // Contexto de tenant da requisição (fase 7b do multi-tenancy) — ver lib/prismaTenant.js
 const { comEmpresa, comEscopoPlataforma } = require('../lib/prismaTenant');
 
 const SECRET = process.env.JWT_SECRET;
+
+// Validam um id de equipe/empresa contra o vínculo do usuário — mesma regra usada
+// tanto para o header explícito (x-equipe-id/x-empresa-id, só o axios envia) quanto
+// para o cookie de contexto (fallback para requisições sem XHR, como <img src>).
+async function validarEquipeContexto(equipeId, decoded) {
+  if (!Number.isInteger(equipeId) || equipeId <= 0) return null;
+  return prisma.equipe.findFirst({
+    where: (decoded.role === 'ADMIN' || decoded.userType === 'ADMIN')
+      ? { id: equipeId }
+      : {
+          id: equipeId,
+          OR: [
+            { membros: { some: { userId: decoded.id } } },
+            { empresa: { ownerId: decoded.id } },
+          ],
+        },
+    select: { id: true, empresaId: true },
+  });
+}
+
+async function validarEmpresaContexto(empresaId, decoded) {
+  if (!Number.isInteger(empresaId) || empresaId <= 0) return null;
+  if (decoded.role === 'ADMIN' || decoded.userType === 'ADMIN') return { id: empresaId };
+  return prisma.empresa.findFirst({
+    where: {
+      id: empresaId,
+      OR: [
+        { ownerId: decoded.id },
+        { equipes: { some: { membros: { some: { userId: decoded.id } } } } },
+        // PROPRIETÁRIO: o vínculo com a clínica é ter animal nela ou possuir
+        // cadastro (perfil) nela — é o que habilita o seletor de empresa no
+        // portal do cliente, com permissões resolvidas por empresa ativa.
+        { animais: { some: { userId: decoded.id, ativo: true } } },
+        { proprietarioPerfis: { some: { userId: decoded.id, ativo: true } } },
+      ],
+    },
+    select: { id: true },
+  });
+}
 
 const authenticate = async (req, res, next) => {
   // Cookie HttpOnly tem prioridade (navegador); header Authorization é o fallback
@@ -46,50 +85,49 @@ const authenticate = async (req, res, next) => {
       await comEscopoPlataforma(async () => {
       req.empresaId = null;
       req.equipeId  = null;
+      let contextoVeioDeHeader = false;
 
       const headerEquipeId = Number(req.headers['x-equipe-id']);
       if (Number.isInteger(headerEquipeId) && headerEquipeId > 0) {
-        const equipe = await prisma.equipe.findFirst({
-          where: (decoded.role === 'ADMIN' || decoded.userType === 'ADMIN')
-            ? { id: headerEquipeId }
-            : {
-                id: headerEquipeId,
-                OR: [
-                  { membros: { some: { userId: decoded.id } } },
-                  { empresa: { ownerId: decoded.id } },
-                ],
-              },
-          select: { id: true, empresaId: true },
-        });
+        const equipe = await validarEquipeContexto(headerEquipeId, decoded);
         if (equipe) {
           req.equipeId  = equipe.id;
           req.empresaId = equipe.empresaId;
+          contextoVeioDeHeader = true;
         }
       }
 
       const headerEmpresaId = Number(req.headers['x-empresa-id']);
       if (!req.empresaId && Number.isInteger(headerEmpresaId) && headerEmpresaId > 0) {
-        if (decoded.role === 'ADMIN' || decoded.userType === 'ADMIN') {
-          req.empresaId = headerEmpresaId;
-        } else {
-          const vinculo = await prisma.empresa.findFirst({
-            where: {
-              id: headerEmpresaId,
-              OR: [
-                { ownerId: decoded.id },
-                { equipes: { some: { membros: { some: { userId: decoded.id } } } } },
-                // PROPRIETÁRIO: o vínculo com a clínica é ter animal nela ou possuir
-                // cadastro (perfil) nela — é o que habilita o seletor de empresa no
-                // portal do cliente, com permissões resolvidas por empresa ativa.
-                { animais: { some: { userId: decoded.id, ativo: true } } },
-                { proprietarioPerfis: { some: { userId: decoded.id, ativo: true } } },
-              ],
-            },
-            select: { id: true },
-          });
+        const vinculo = await validarEmpresaContexto(headerEmpresaId, decoded);
+        if (vinculo) {
+          req.empresaId = vinculo.id;
+          contextoVeioDeHeader = true;
+        }
+      }
+
+      // Requisição de ASSET sem XHR (<img src>, <video>, <link>) nunca carrega os
+      // headers acima — só o axios os envia. Sem este passo, ela cairia direto no
+      // fallback de "própria empresa"/"equipe mais recente" abaixo, que diverge do
+      // contexto realmente ativo para qualquer usuário com mais de um vínculo. O
+      // cookie é só um ATALHO para o ÚLTIMO contexto validado por header; por isso
+      // é revalidado aqui do mesmo jeito (pode estar desatualizado).
+      if (!req.empresaId) {
+        const cookieCtx = getContextCookies(req);
+        if (cookieCtx.equipeId) {
+          const equipe = await validarEquipeContexto(cookieCtx.equipeId, decoded);
+          if (equipe) { req.equipeId = equipe.id; req.empresaId = equipe.empresaId; }
+        }
+        if (!req.empresaId && cookieCtx.empresaId) {
+          const vinculo = await validarEmpresaContexto(cookieCtx.empresaId, decoded);
           if (vinculo) req.empresaId = vinculo.id;
         }
       }
+
+      // Contexto validado por header nesta requisição → grava/atualiza o cookie
+      // para que os <img>/<video> que a página carregar em seguida acertem de
+      // primeira, sem depender do fallback abaixo.
+      if (contextoVeioDeHeader) setContextCookies(res, req.empresaId, req.equipeId);
 
       if (!req.empresaId) {
         // Sem contexto escolhido (ex.: logo após o login, que limpa a seleção): a

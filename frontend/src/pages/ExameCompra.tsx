@@ -2,14 +2,15 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Activity, Loader2, CheckCircle2, PlusCircle, Paperclip, X, Printer, MessageCircle, Mail, Pencil, Eye } from 'lucide-react';
+import { ArrowLeft, Activity, Loader2, CheckCircle2, PlusCircle, Paperclip, X, Printer, Pencil, Eye } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import PageContainer from '../components/PageContainer';
 import AnimalCard from '../components/AnimalCard';
-import { imprimirExameCompra, abrirLaudoExameCompra } from '../utils/ExameCompraPrint';
+import CompartilharPdfBotoes from '../components/CompartilharPdfBotoes';
+import { imprimirExameCompra, gerarHtmlExameCompra } from '../utils/ExameCompraPrint';
 import InlineError from '../components/InlineError';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -290,6 +291,10 @@ export default function ExameCompra() {
   const { animalId } = useParams<{ animalId?: string }>();
   const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
+  // setSelectedAnimal (contexto) não aceita forma funcional como o setState do React —
+  // esta ref evita closure velha ao checar o animal mais atual dentro do .then() abaixo.
+  const selectedAnimalRef = useRef(selectedAnimal);
+  useEffect(() => { selectedAnimalRef.current = selectedAnimal; }, [selectedAnimal]);
 
   const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
 
@@ -426,7 +431,8 @@ export default function ExameCompra() {
     api.get(`/animais/${id}/logo-empresa`)
       .then(res => {
         const logoUrl = res.data?.dados?.logoUrl ?? null;
-        setSelectedAnimal(prev => prev && prev.id === id ? { ...prev, logoUrl } : prev);
+        const atual = selectedAnimalRef.current;
+        if (atual && atual.id === id) setSelectedAnimal({ ...atual, logoUrl });
       })
       .catch(() => {});
   }, [selectedAnimal?.id, selectedAnimal?.logoUrl, setSelectedAnimal]);
@@ -585,16 +591,14 @@ export default function ExameCompra() {
     imprimirExameCompra(ex, selectedAnimal ?? undefined);
   };
 
-  // ── Compartilhar ──────────────────────────────────────────────────────────
-  const compartilharWhatsApp = (ex: ExameCompraItem) => {
-    // Abre o laudo formatado em nova aba para o usuário salvar como PDF e compartilhar
-    abrirLaudoExameCompra(ex, selectedAnimal ?? undefined);
-  };
-
-  const compartilharEmail = (ex: ExameCompraItem) => {
-    // Abre o laudo formatado em nova aba para o usuário salvar como PDF e enviar por e-mail
-    abrirLaudoExameCompra(ex, selectedAnimal ?? undefined);
-  };
+  // ── Compartilhar (WhatsApp/E-mail) ────────────────────────────────────────
+  // Gera o PDF do laudo e abre o app escolhido — ver CompartilharPdfBotoes.
+  const nomeArquivoLaudo = (ex: ExameCompraItem) =>
+    `exame-compra${ex.numero != null ? `-${String(ex.numero).padStart(3, '0')}` : ''}`
+    + `${selectedAnimal ? `-${selectedAnimal.nome.replace(/\s+/g, '-').toLowerCase()}` : ''}.pdf`;
+  const textoCompartilhar = (ex: ExameCompraItem) =>
+    `Segue o Laudo de Exame de Compra${selectedAnimal ? ` do ${selectedAnimal.nome}` : ''}`
+    + `${ex.numero != null ? ` (nº ${String(ex.numero).padStart(3, '0')})` : ''}.`;
 
   if (!loadingPerms && !isGestor && !podeExecutar('atendimento.exames.ler')) {
     return (
@@ -614,17 +618,6 @@ export default function ExameCompra() {
     if (!dataSolicitacao) { setErroSalvar('Informe a data do exame.'); return; }
     const isEditing = editingId !== null;
 
-    // Um Exame de Compra por paciente/dia. O backend é a autoridade (409
-    // COMPRA_DUPLICADA); aqui a checagem é só para avisar ANTES de o usuário perder o
-    // preenchimento de um formulário longo — o histórico já está carregado em memória.
-    const duplicado = historicoCompra.find(ex =>
-      ex.id !== editingId && (ex.dataSolicitacao ?? '').slice(0, 10) === dataSolicitacao);
-    if (duplicado) {
-      setErroSalvar(
-        `Este paciente já tem um Exame de Compra em ${dataSolicitacao.split('-').reverse().join('/')}`
-        + ' — Altere o exame existente.');
-      return;
-    }
     if (isEditing && !justificativa.trim()) {
       setErroSalvar('Preencha a justificativa da alteração antes de salvar.');
       return;
@@ -1300,14 +1293,14 @@ export default function ExameCompra() {
                           className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
                           <Printer size={14} />
                         </button>
-                        <button onClick={() => compartilharWhatsApp(ex)} title="WhatsApp"
-                          className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors">
-                          <MessageCircle size={14} />
-                        </button>
-                        <button onClick={() => compartilharEmail(ex)} title="E-mail"
-                          className="p-1.5 text-blue-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                          <Mail size={14} />
-                        </button>
+                        <CompartilharPdfBotoes
+                          gerarHtml={() => gerarHtmlExameCompra(ex, selectedAnimal ?? undefined)}
+                          nomeArquivo={nomeArquivoLaudo(ex)}
+                          texto={textoCompartilhar(ex)}
+                          titulo={`Laudo de Exame de Compra${selectedAnimal ? ` — ${selectedAnimal.nome}` : ''}`}
+                          telefone={selectedAnimal?.user?.phone}
+                          emailPara={selectedAnimal?.user?.email}
+                        />
                       </div>
                     </div>
                   );

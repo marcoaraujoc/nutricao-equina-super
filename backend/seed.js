@@ -1,11 +1,17 @@
 const { PrismaClient } = require('@prisma/client');
+const { comTenantAutomatico, comEscopoPlataforma } = require('./src/lib/prismaTenant');
 const { MODULOS_SISTEMA, PERMISSOES_PADRAO } = require('./src/seeds/002_permissoes_padrao.seed');
 const seedMedicamentos = require('./src/seeds/003_medicamentos.seed');
 const seedProcedimentos = require('./src/seeds/004_procedimentos.seed');
 const { seedLaboratorios }   = require('./src/seeds/003_laboratorios.seed');
 const { seedImagemExames }  = require('./src/seeds/004_imagem_exames.seed');
 
-const prisma = new PrismaClient();
+// Catálogos globais (medicamentos, procedimentos, laboratórios, módulos do sistema)
+// não pertencem a nenhuma empresa — precisam do client ESTENDIDO de tenant para que
+// as escritas em tabelas com RLS (ex.: tb_medicamentos) carimbem `app.plataforma` em
+// vez de `app.empresa_id`. Um PrismaClient puro nunca passa pela policy dessas
+// tabelas: FORCE ROW LEVEL SECURITY vale até para o dono do schema.
+const prisma = comTenantAutomatico(new PrismaClient());
 
 async function main() {
   console.log('🌱 Iniciando seed...');
@@ -137,6 +143,6 @@ async function main() {
   console.log('✅ Seed concluído com sucesso!');
 }
 
-main()
+comEscopoPlataforma(main)
   .catch(e => console.error(e))
   .finally(async () => await prisma.$disconnect());

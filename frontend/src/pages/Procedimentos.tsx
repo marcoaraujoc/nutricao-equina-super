@@ -295,7 +295,7 @@ function ProcedimentoModal({
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Procedimentos() {
-  const { podeExecutar, loading: loadingPerm } = usePermissoes();
+  const { loading: loadingPerm } = usePermissoes();
   const { user } = useAuth();
 
   const [procedimentos, setProcedimentos] = useState<Procedimento[]>([]);

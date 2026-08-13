@@ -58,6 +58,11 @@ async function verificarAcessoAnimal({ animalId, userId, empresaId = null, equip
     select: { userId: true, empresaId: true, equipeId: true },
   });
 
+  console.error('[DEBUG-RLS] verificarAcessoAnimal', {
+    animalId, userId, empresaIdParam: empresaId, equipeIdParam: equipeId,
+    userType, animalEncontrado: animal,
+  });
+
   if (!animal) return null;
 
   if (userType === 'PROPRIETARIO') {

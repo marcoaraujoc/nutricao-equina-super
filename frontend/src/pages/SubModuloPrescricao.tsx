@@ -1894,93 +1894,10 @@ function CancelarModal({
   );
 }
 
-// ─── ViewPrescricaoModal ──────────────────────────────────────────────────────
-// Janela de visualização somente leitura — usada pelo clique no Histórico do
-// Paciente. Abre sempre, independente do status da prescrição (SALVO,
-// FINALIZADO, EXECUTADO, CANCELADO_PARCIALMENTE); nenhum botão de editar/excluir.
-
-function ViewPrescricaoModal({ grupo, onClose, onImprimir }: {
-  grupo:      PrescricaoGrupo;
-  onClose:    () => void;
-  onImprimir: () => void;
-}) {
-  const st = STATUS_GRUPO[grupo.status as StatusGrupo] ?? { label: grupo.status, cls: 'bg-gray-100 text-gray-600' };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-xl max-h-[88vh] flex flex-col border border-gray-100">
-
-        <div className="flex items-start justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
-          <div className="flex-1 min-w-0 pr-3">
-            <p className="text-sm font-semibold text-gray-900 mb-1.5 font-mono">Prescrição #{grupo.numeroFormatado}</p>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${st.cls}`}>
-                {st.label}
-              </span>
-            </div>
-            <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1.5">
-              <span className="text-[11px] text-gray-400">
-                <span className="font-medium text-gray-600">{grupo.veterinario.fullName}</span>
-              </span>
-              <span className="text-[11px] text-gray-400">
-                Criada em: <span className="text-gray-600">{formatarData(grupo.createdAt)}</span>
-              </span>
-            </div>
-          </div>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 flex-shrink-0">
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
-          {grupo.itens.length === 0 ? (
-            <p className="text-sm text-gray-400 text-center py-6">Nenhum item ativo nesta prescrição.</p>
-          ) : grupo.itens.map(item => {
-            const completo = itemTotalmenteExecutado(item);
-            return (
-            <ItemRow
-              key={item.id}
-              label={item.medicamento}
-              tipo={item.tipo}
-              dosagem={item.dosagem}
-              unidade={item.unidade}
-              via={item.via}
-              frequencia={item.frequencia}
-              horaInicio={item.horaInicio}
-              duracaoDias={item.duracaoDias}
-              dataInicio={item.dataInicio}
-              observacao={item.observacao}
-              medicamentoCliente={item.medicamentoCliente}
-              aplicadaPeloProprietario={item.aplicadaPeloProprietario}
-              executado={completo}
-              emAndamento={!!item.executadoEm && !completo ? { diaAtual: diaAtualDoItem(item.dataInicio), totalDias: item.duracaoDias } : null}
-              isEditing={false}
-              canEdit={false}
-              onEdit={() => {}}
-              onRemove={() => {}}
-            />
-            );
-          })}
-        </div>
-
-        <div className="flex gap-2 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
-          <button onClick={onClose}
-            className="px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors">
-            Fechar
-          </button>
-          <button onClick={onImprimir}
-            className="flex items-center gap-1.5 px-4 py-2.5 border border-blue-200 rounded-xl text-sm text-blue-600 font-medium hover:bg-blue-50 transition-colors">
-            <Printer size={14} /> Imprimir
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── SubModuloPrescricao ──────────────────────────────────────────────────────
 
-export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualizada, evolucaoId, atendimentoNumero, onSalvo, openItemId, onViewConsumed, editItemId, onEditConsumed }: Props) {
+export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualizada, evolucaoId, onSalvo, openItemId, onViewConsumed, editItemId, onEditConsumed }: Props) {
   const { user } = useAuth();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 

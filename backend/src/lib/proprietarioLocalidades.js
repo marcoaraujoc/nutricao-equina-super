@@ -124,6 +124,35 @@ async function anexar(proprietario, empresaId, client = prismaPadrao) {
 }
 
 /**
+ * Localidades usadas pelos ANIMAIS ATIVOS do proprietário nesta empresa que ainda NÃO
+ * têm uma `ProprietarioLocalidade` confirmada — sugestão para a tela de cadastro do
+ * cliente: o animal já sabe onde fica (o vet escolheu a localização dele em
+ * `/animais`), mas isso nunca virou "localidade atendida" do cliente porque ninguém
+ * passou pelo repetidor desta tela. NÃO é persistida aqui — só o ponto de partida
+ * que a tela oferece já pronto para o gestor confirmar a frequência e editar.
+ * `Animal.localizacaoId` mapeia para a coluna `localizacao_id` (snake_case); as
+ * demais colunas de `tb_animais` usadas aqui NÃO têm `@map` — permanecem camelCase.
+ */
+async function localidadesSugeridasDeAnimais(userId, empresaId, client = prismaPadrao) {
+  if (!userId || !empresaId) return [];
+  const jaConfirmadas = new Set(
+    (await listarLocalidades(userId, empresaId, client)).map(l => l.localizacaoId),
+  );
+  const rows = await client.$queryRawUnsafe(
+    `SELECT DISTINCT a."localizacao_id" AS "localizacaoId", loc."nome" AS "localizacaoNome"
+       FROM schs2vet.tb_animais a
+       JOIN schs2vet.tb_localizacoes_animal loc ON loc."id" = a."localizacao_id"
+      WHERE a."userId" = $1 AND a."empresaId" = $2
+        AND a."ativo" = true AND a."localizacao_id" IS NOT NULL
+      ORDER BY loc."nome" ASC`,
+    Number(userId), Number(empresaId),
+  );
+  return rows
+    .map(r => ({ localizacaoId: Number(r.localizacaoId), localizacaoNome: r.localizacaoNome ?? null }))
+    .filter(l => !jaConfirmadas.has(l.localizacaoId));
+}
+
+/**
  * Substitui TODAS as localidades do proprietário NA EMPRESA (delete + insert).
  * `localidades === undefined` → não altera nada; `[]` → limpa.
  * Passar `tx` quando já houver transação em andamento.
@@ -158,5 +187,6 @@ module.exports = {
   buscarPorProprietarios,
   anexarEmLista,
   anexar,
+  localidadesSugeridasDeAnimais,
   salvarLocalidades,
 };

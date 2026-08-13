@@ -135,69 +135,6 @@ function parseExtra(obs: string | null): ExtraInfo {
   catch { return { laboratorio: null, dataHoraColeta: null, tipoAmostra: null, indicacaoClinica: null, obs }; }
 }
 
-function sugerirTipoAmostra(exams: string[]): string {
-  const lower = exams.map(e => e.toLowerCase());
-  const tipos: string[] = [];
-
-  const hasHema  = lower.some(e => e.includes('hemograma') || e.includes('hematócrito') || e.includes('hematozo') || e.includes('vhs'));
-  const hasGlic  = lower.some(e => e.includes('glicose') || e.includes('lactato'));
-  const hasFibri = lower.some(e => e.includes('fibrinogênio'));
-  const hasUrina = lower.some(e => e.includes('eas') || e.includes('urina'));
-  const hasFezes = lower.some(e => e.includes('fezes') || e.includes('parasitol'));
-  const hasSoro  = lower.some(e =>
-    !e.includes('hemograma') && !e.includes('hematócrito') &&
-    !e.includes('glicose') && !e.includes('lactato') &&
-    !e.includes('eas') && !e.includes('urina') &&
-    !e.includes('fezes') && !e.includes('fibrinogênio')
-  );
-
-  if (hasFibri) tipos.push('Sangue com Citrato (Tubo Azul)');
-  if (hasHema)  tipos.push('Sangue Total com EDTA (Tubo Roxo)');
-  if (hasGlic)  tipos.push('Plasma Fluoreto (Tubo Cinza)');
-  if (hasSoro)  tipos.push('Soro Sanguíneo (Tubo Amarelo/Vermelho)');
-  if (hasUrina) tipos.push('Urina');
-  if (hasFezes) tipos.push('Fezes Frescas');
-
-  return [...new Set(tipos)].join(' + ') || '';
-}
-
-// ─── ExamCheckList ────────────────────────────────────────────────────────────
-
-function ExamCheckList({
-  items, selected, onToggle,
-}: {
-  items:    string[];
-  selected: string[];
-  onToggle: (name: string) => void;
-}) {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
-      {items.map(item => {
-        const checked = selected.includes(item);
-        return (
-          <button
-            key={item}
-            type="button"
-            onClick={() => onToggle(item)}
-            className={`flex items-center gap-2.5 px-3 py-2 rounded-xl border text-sm text-left transition-colors ${
-              checked
-                ? 'bg-blue-50 border-blue-300 text-blue-800'
-                : 'bg-white border-gray-200 text-gray-700 hover:border-gray-400 hover:bg-gray-50'
-            }`}
-          >
-            <span className={`w-4 h-4 flex-shrink-0 rounded border flex items-center justify-center transition-colors ${
-              checked ? 'bg-blue-600 border-blue-600' : 'border-gray-300'
-            }`}>
-              {checked && <Check size={10} className="text-white" strokeWidth={3} />}
-            </span>
-            <span className="leading-snug">{item}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 // ─── ViewModal ────────────────────────────────────────────────────────────────
 
 const TIPOS_META: Record<TipoExame, { badge: string }> = {
@@ -1426,8 +1363,9 @@ export default function SubModuloExames({
                 </div>
 
                 {/* ── Laboratorial / Imagem ───────────────────────────── */}
-                {mainTab !== 'compra' && (
-                  <div className="space-y-4">
+                {/* A antiga aba "compra" foi extraída para pages/ExameCompra.tsx (2026-08-04);
+                    este bloco é o que resta e sempre se aplica a laboratorial/imagem. */}
+                <div className="space-y-4">
 
                     {/* Laboratório de Análises */}
                     <div className="space-y-2">
@@ -1559,9 +1497,8 @@ export default function SubModuloExames({
                     {/* Área de Exame + Tipo de Amostra + Qtd — só laboratorial */}
                     {mainTab === 'laboratorial' && (
                       <div className="flex flex-wrap gap-3 items-end">
-                        {/* Área de Exame — só para laboratorial */}
-                        {mainTab !== 'imagem' && (
-                          <div className="flex-[2] min-w-[160px]">
+                        {/* Área de Exame — só para laboratorial (já garantido pelo `mainTab === 'laboratorial'` acima) */}
+                        <div className="flex-[2] min-w-[160px]">
                             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
                               Área de Exame *
                             </label>
@@ -1598,7 +1535,6 @@ export default function SubModuloExames({
                               </div>
                             )}
                           </div>
-                        )}
                         {/* Tipo de Amostra */}
                         <div className="flex-[2] min-w-[160px]">
                           <div className="h-5 flex items-center gap-2 mb-1">
@@ -2046,7 +1982,6 @@ export default function SubModuloExames({
                       </button>
                     </div>
                   </div>
-                )}
 
             </fieldset>
           )}
@@ -2118,7 +2053,6 @@ export default function SubModuloExames({
       {historico.length > 0 && (
         <div className="flex flex-wrap gap-1.5 px-4 py-3 border-b border-gray-50">
           {FILTROS_EXAME.map(f => {
-            const count = f.key === 'todos' ? historico.length : counts[f.key as StatusExameUI];
             const isActive = filtroStatus === f.key;
             let activeClass = 'bg-blue-600 text-white border-blue-600';
             if (f.key === 'SALVA'     && isActive) activeClass = 'bg-amber-500 text-white border-amber-500';

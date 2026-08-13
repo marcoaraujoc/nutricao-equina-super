@@ -4,7 +4,6 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
@@ -19,6 +18,7 @@ import ModalJustificativa from '../components/ModalJustificativa';
 import InlineError from '../components/InlineError';
 import MemoriaClinicaPanel from '../components/MemoriaClinicaPanel';
 import type { MemoriaClinica } from '../components/MemoriaClinicaPanel';
+import GraficosAnimalPanel from '../components/GraficosAnimalPanel';
 import FotoAnimal from '../components/FotoAnimal';
 import { formatNumeroClinico } from '../utils/numeroClinico';
 
@@ -59,6 +59,12 @@ interface AnimalData {
   especie?:          { nome: string } | null;
   user?:             { fullName: string; email: string } | null;
   solicitacoes?:     Solicitacao[];
+  // Paciente INATIVO — somente leitura (diferente de exclusão lógica: continua
+  // aparecendo, só não aceita registro novo nem edição do cadastro).
+  inativo?:          boolean;
+  inativoEm?:        string | null;
+  inativoMotivo?:    string | null;
+  inativoPor?:       { fullName: string } | null;
 }
 
 type OrigemEvento = 'EVOLUCAO' | 'VACINA' | 'EXAME' | 'EXAME_LAB' | 'EXAME_IMG' | 'EXAME_BIO' | 'EXAME_COMPRA' | 'ENCAMINHAMENTO' | 'PRESCRICAO';
@@ -183,8 +189,6 @@ const BADGE_TIPO_AG: Record<TipoAgendamento, string> = {
   EXAME:        'bg-purple-100 text-purple-700',
   PROCEDIMENTO: 'bg-emerald-100 text-emerald-700',
 };
-
-const TIPOS_AGENDAMENTO: TipoAgendamento[] = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'];
 
 const POSOLOGIAS: Record<string, string> = {
   '1xDia': '1x/dia', '12em12h': '12 em 12h', '8em8h': '8 em 8h',
@@ -869,95 +873,6 @@ function CardAgendamento({ ag, podeGerenciar, onConcluir, onExcluir }: {
   );
 }
 
-function ModalNovoAgendamento({ animalId, onCriado, onFechar }: {
-  animalId: number;
-  onCriado: () => void;
-  onFechar: () => void;
-}) {
-  const [tipo,       setTipo]       = useState<TipoAgendamento>('CONSULTA');
-  const [titulo,     setTitulo]     = useState('');
-  const [data,       setData]       = useState('');
-  const [hora,       setHora]       = useState('09:00');
-  const [observacao, setObservacao] = useState('');
-  // Erro de ação exibido inline (substitui o toast de erro)
-  const [erroInline, setErroInline] = useState<string | null>(null);
-  const [salvando,   setSalvando]   = useState(false);
-
-  const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500';
-
-  const handleSalvar = async () => {
-    if (!titulo.trim()) { setErroInline('Informe a descrição do agendamento'); return; }
-    if (!data)          { setErroInline('Informe a data'); return; }
-    setSalvando(true);
-    try {
-      await api.post('/clinica/agendamentos', {
-        animalId, tipo,
-        titulo:     titulo.trim(),
-        dataHora:   `${data}T${hora || '09:00'}:00`,
-        observacao: observacao.trim() || undefined,
-      });
-      toast.success('Agendamento criado');
-      onCriado();
-    } catch (err) {
-      const e = err as { isPermissionError?: boolean };
-      if (!e.isPermissionError) setErroInline('Erro ao criar agendamento');
-    } finally { setSalvando(false); }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-md max-h-[92vh] flex flex-col border border-gray-100">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
-          <h3 className="font-bold text-gray-900">Novo Agendamento</h3>
-          <button onClick={onFechar} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Tipo *</label>
-            <select value={tipo} onChange={e => setTipo(e.target.value as TipoAgendamento)} className={inputCls}>
-              {TIPOS_AGENDAMENTO.map(t => <option key={t} value={t}>{t.charAt(0) + t.slice(1).toLowerCase()}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Descrição *</label>
-            <textarea value={titulo} onChange={e => setTitulo(e.target.value)} rows={3}
-              placeholder="Ex: Aplicação da dose anual da vacina..."
-              className={`${inputCls} resize-none`} />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Data *</label>
-              <input type="date" value={data} onChange={e => setData(e.target.value)} className={inputCls} />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Hora</label>
-              <input type="time" value={hora} onChange={e => setHora(e.target.value)} className={inputCls} />
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Observação</label>
-            <input type="text" value={observacao} onChange={e => setObservacao(e.target.value)}
-              placeholder="Opcional" className={inputCls} />
-          </div>
-        </div>
-        <InlineError message={erroInline} className="mx-5 mt-3 flex-shrink-0" />
-
-        <div className="flex gap-3 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
-          <button onClick={onFechar} disabled={salvando}
-            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 disabled:opacity-50">
-            Cancelar
-          </button>
-          <button onClick={handleSalvar} disabled={salvando}
-            className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2">
-            {salvando && <Loader2 size={13} className="animate-spin" />}
-            Agendar
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Página ───────────────────────────────────────────────────────────────────
 
 const ENDPOINT: Record<OrigemEvento, (id: number) => string> = {
@@ -974,12 +889,6 @@ const ENDPOINT: Record<OrigemEvento, (id: number) => string> = {
 
 const AnimalDetail = () => {
   const { id }   = useParams<{ id: string }>();
-  const { user } = useAuth();
-
-  const podeGerenciarAgenda =
-    (user?.role ?? '').toUpperCase() === 'ADMIN' ||
-    ['VETERINARIO', 'ESTAGIARIO'].includes((user?.userType ?? '').toUpperCase());
-
   const navigate = useNavigate();
   const [animal,       setAnimal]       = useState<AnimalData | null>(null);
   // Paciente existe, mas é de OUTRA empresa/equipe que não a do contexto ativo
@@ -1215,6 +1124,21 @@ const AnimalDetail = () => {
         {/* Tela somente de visualização — criação de agendamento fica na Agenda */}
       </div>
 
+      {animal.inativo && (
+        <div className="flex items-start gap-3 rounded-2xl px-4 py-3 border bg-amber-50 border-amber-300 text-amber-800">
+          <span className="text-lg mt-0.5">🔒</span>
+          <div className="flex-1">
+            <p className="font-semibold text-sm">Paciente inativo — somente leitura</p>
+            <p className="text-xs mt-0.5">
+              Nenhum registro novo pode ser criado nem o cadastro editado enquanto durar.
+              {animal.inativoMotivo && <> Motivo: “{animal.inativoMotivo}”.</>}
+              {animal.inativoPor?.fullName && <> Inativado por {animal.inativoPor.fullName}.</>}
+              {' '}Só o gestor pode reativar.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Header — dados do animal */}
       <HeaderAnimal animal={animal} />
 
@@ -1284,6 +1208,9 @@ const AnimalDetail = () => {
           </div>
         </div>
       </div>
+
+      {/* Gráficos — peso ao longo do tempo + evolução de um parâmetro de exame */}
+      <GraficosAnimalPanel animalId={String(animal.id)} />
 
       {/* Modais */}
       {detalheEv && (

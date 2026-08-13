@@ -90,16 +90,17 @@ async function adicionarFaturaItem(tx, {
  * @param {object} tx
  * @param {object} exame               - { id, animalId, veterinarioId, tipo, descricao, numero }
  * @param {number|null} proprietarioUserId - Animal.userId (dono do animal)
+ * @param {number|null} empresaId          - empresa do contexto (`req.empresaId`) — Fatura é POR EMPRESA
  * @returns {Promise<boolean>} true se lançou; false se já estava faturado ou sem proprietário
  */
-async function lancarExameNaFatura(tx, exame, proprietarioUserId) {
+async function lancarExameNaFatura(tx, exame, proprietarioUserId, empresaId = null) {
   if (!proprietarioUserId) return false;
   const jaFaturado = await tx.faturaItem.findFirst({ where: { exameClinicoId: exame.id } });
   if (jaFaturado) return false;
 
   const exNum     = `EX-${String(exame.numero).padStart(4, '0')}`;
   const descricao = `[${exNum}] ${exame.tipo}: ${exame.descricao}`;
-  const fatura    = await getOrCreateFatura(tx, proprietarioUserId);
+  const fatura    = await getOrCreateFatura(tx, proprietarioUserId, empresaId);
   await adicionarFaturaItem(tx, {
     faturaId:       fatura.id,
     animalId:       exame.animalId,

@@ -1096,7 +1096,7 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
   const [filtroCargo, setFiltroCargo] = useState('');
   const [confirmDel, setConfirmDel]   = useState<Membro | null>(null);
   const [removendo,  setRemovendo]    = useState<number | null>(null);
-  const [alterandoCargo, setAlterandoCargo] = useState<number | null>(null);
+  const [, setAlterandoCargo] = useState<number | null>(null);
   const [editandoCargos, setEditandoCargos] = useState<{ membroId: number; userId: number; atual: string[] } | null>(null);
   const [togglingId,     setTogglingId]     = useState<number | null>(null);
   const [proprietarios,  setProprietarios]  = useState<ProprietarioEquipe[]>([]);
@@ -1375,16 +1375,6 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao enviar convite';
       setErroInline(msg);
     } finally { setEnviandoConvite(false); }
-  };
-
-  const handleAlterarCargo = async (membro: Membro, novoCargo: string) => {
-    setAlterandoCargo(membro.id);
-    try {
-      await api.patch(`/equipes/${equipeId}/membros/${membro.user.id}/cargo`, { cargo: novoCargo });
-      toast.success('Cargo atualizado');
-      carregar();
-    } catch { setErroInline('Erro ao alterar cargo'); }
-    finally  { setAlterandoCargo(null); }
   };
 
   const handleSalvarCargos = async (cargosNovos: string[]) => {
@@ -2499,16 +2489,6 @@ function normalizarBusca(s: string): string {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 }
 
-interface AcaoMatrizItem {
-  slug:   string;
-  acao:   string;
-  label:  string;
-  nivel:  string;
-  locked?: boolean;
-}
-
-const NIVEL_CICLO = ['NENHUM', 'LEITURA', 'PROPRIO', 'EQUIPE', 'FULL'] as const;
-
 function GerenciarAcessoPrestadorModal({
   equipeId, prestadorUserId, prestadorNome, onClose,
 }: {
@@ -2928,7 +2908,7 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
   const [filtroCargo,  setFiltroCargo]  = useState('');
   const [confirmDel,   setConfirmDel]   = useState<Membro | null>(null);
   const [removendo,    setRemovendo]    = useState<number | null>(null);
-  const [alterandoCargo, setAlterandoCargo] = useState<number | null>(null);
+  const [, setAlterandoCargo] = useState<number | null>(null);
   const [editandoCargos, setEditandoCargos] = useState<{ membroId: number; userId: number; atual: string[] } | null>(null);
   const [togglingId,     setTogglingId]     = useState<number | null>(null);
   const [perfisDisponiveis, setPerfisDisponiveis] = useState<Array<{ slug: string; label: string }>>([]);
@@ -3017,16 +2997,6 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao incluir membro';
       setErroModal(msg);
     } finally { setEnviando(false); }
-  };
-
-  const handleAlterarCargo = async (membro: Membro, novoCargo: string) => {
-    setAlterandoCargo(membro.id);
-    try {
-      await api.patch(`/equipes/${equipeId}/membros/${membro.user.id}/cargo`, { cargo: novoCargo });
-      toast.success('Cargo atualizado');
-      carregar();
-    } catch { setErroInline('Erro ao alterar cargo'); }
-    finally  { setAlterandoCargo(null); }
   };
 
   const handleSalvarCargos = async (cargosNovos: string[]) => {
@@ -3326,85 +3296,6 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ABA — Proprietários (clientes vinculados à equipe)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function TabProprietarios({ equipeId }: { equipeId: number }) {
-  const [proprietarios, setProprietarios] = useState<ProprietarioEquipe[]>([]);
-  const [loading,       setLoading]       = useState(true);
-  const [busca,         setBusca]         = useState('');
-  // Erro de ação exibido inline (substitui o toast de erro)
-  const [erroInline, setErroInline] = useState<string | null>(null);
-
-  const carregar = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await api.get(`/equipes/${equipeId}/proprietarios`);
-      setProprietarios(res.data?.dados ?? []);
-    } catch { setErroInline('Erro ao carregar proprietários'); }
-    finally  { setLoading(false); }
-  }, [equipeId]);
-
-  useEffect(() => { carregar(); }, [carregar]);
-
-  const filtrados = proprietarios.filter(p =>
-    !busca || p.fullName.toLowerCase().includes(busca.toLowerCase()) || p.email.toLowerCase().includes(busca.toLowerCase())
-  );
-
-  return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-      <InlineError message={erroInline} className="m-3" />
-
-      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
-        <div>
-          <p className="font-bold text-gray-900">Proprietários ({proprietarios.length})</p>
-          <p className="text-xs text-gray-400 mt-0.5">Clientes com animais vinculados à equipe</p>
-        </div>
-        <button onClick={carregar} className="p-1.5 text-gray-400 hover:text-emerald-600 rounded-lg transition-colors">
-          <RefreshCw size={14} />
-        </button>
-      </div>
-
-      <div className="px-5 py-3 border-b border-gray-50">
-        <div className="relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input value={busca} onChange={e => setBusca(e.target.value)}
-            placeholder="Buscar proprietário..."
-            className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-emerald-400" />
-        </div>
-      </div>
-
-      {loading ? (
-        <div className="flex justify-center py-12"><Loader2 size={20} className="animate-spin text-emerald-500" /></div>
-      ) : filtrados.length === 0 ? (
-        <div className="py-12 text-center">
-          <UserCheck size={32} className="mx-auto mb-3 text-gray-200" />
-          <p className="text-sm text-gray-400">Nenhum proprietário encontrado.</p>
-          <p className="text-xs text-gray-400 mt-1">Proprietários aparecem aqui quando vinculam animais à equipe.</p>
-        </div>
-      ) : (
-        <div className="divide-y divide-gray-50">
-          {filtrados.map(p => (
-            <div key={p.userId} className="px-5 py-3.5 flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold text-sm flex-shrink-0">
-                {p.fullName?.[0]?.toUpperCase()}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900">{p.fullName}</p>
-                <p className="text-xs text-gray-400">{p.email}</p>
-              </div>
-              <span className={`inline-flex px-2.5 py-1 rounded-full text-[10px] font-bold ${badgeCargo('PROPRIETARIO')}`}>
-                PROPRIETÁRIO
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // ABA — Convites
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -3540,7 +3431,7 @@ export default function ControleAcesso() {
 
   const [aba,          setAba]          = useState<Aba>(isAdmin ? 'globais' : 'matriz');
   const [equipeId,     setEquipeId]     = useState<number | null>(null);
-  const [empresaId,    setEmpresaId]    = useState<number | null>(null);
+  const [, setEmpresaId]    = useState<number | null>(null);
   const [isGestor,      setIsGestor]      = useState(false);
   const [loading,      setLoading]      = useState(true);
   const [auditTotal,   setAuditTotal]   = useState(0);

@@ -9,9 +9,9 @@ const router  = express.Router();
 
 const EvolucaoController              = require('../controllers/EvolucaoController');
 const { authenticate }                = require('../middlewares/auth');
+const { tenantRls }                   = require('../middlewares/tenantRls');
 // Teto de tamanho do sistema (150 MB) — fonte única em src/storage.
 const { TETO_ARQUIVO_BYTES }          = require('../storage');
-const { injectTenant }                = require('../middlewares/tenant');
 const { checkPermission }             = require('../middlewares/permissao.middleware');
 const { interpretarEvolucao }         = require('../services/clinicaLLMService');
 const validate                        = require('../middlewares/validate');
@@ -70,18 +70,27 @@ router.post('/interpretar', authenticate, async (req, res) => {
 });
 
 // Transcrever áudio com Gemini (utilitário — não altera dados diretamente)
-router.post('/transcrever', authenticate, checkPermission('atendimento.evolucoes.criar', 'PROPRIO'), uploadAudio.single('audio'), EvolucaoController.transcrever);
+// ⚠️ `tenantRls` REENTRA no contexto do tenant logo APÓS o multer (mesmo padrão de
+// routes/animais.js) — o parsing de stream do multer pode fazer o `AsyncLocalStorage`
+// do tenant não sobreviver até o controller (o log de uso de IA grava `empresaId`).
+router.post('/transcrever', authenticate, checkPermission('atendimento.evolucoes.criar', 'PROPRIO'), uploadAudio.single('audio'), tenantRls, EvolucaoController.transcrever);
 
 // Listas
 router.get('/responsaveis/:animalId', authenticate, checkPermission('atendimento.evolucoes.ler', 'LEITURA'), EvolucaoController.listarResponsaveis);
-router.get('/animal/:animalId',       authenticate, checkPermission('atendimento.evolucoes.ler', 'LEITURA'), injectTenant, EvolucaoController.listarPorAnimal);
+// ⚠️ `injectTenant` foi REMOVIDO desta rota e das demais abaixo (2026-08-17) — ele
+// reatribuía `req.empresaId` pela equipe mais RECENTE do usuário, ignorando o
+// contexto ativo (x-empresa-id/x-equipe-id) que o `authenticate` já resolveu. Sob RLS
+// fail-closed (fase 7c) esse valor tardio diverge do `app.empresa_id` já carimbado na
+// sessão do Postgres pelo `authenticate` — a escrita cai em "new row violates row-level
+// security policy". Ver CLAUDE.md §12/multi-tenancy.
+router.get('/animal/:animalId',       authenticate, checkPermission('atendimento.evolucoes.ler', 'LEITURA'), EvolucaoController.listarPorAnimal);
 
 // ─── Rotas parametrizadas ─────────────────────────────────────────────────────
 
-router.get('/:id',      authenticate, checkPermission('atendimento.evolucoes.ler',     'LEITURA'), injectTenant, evolucaoIdParam, validate, EvolucaoController.obterPorId);
-router.get('/:id/relatorio-atendimento', authenticate, checkPermission('atendimento.evolucoes.ler', 'LEITURA'), injectTenant, evolucaoIdParam, validate, EvolucaoController.relatorioAtendimento);
-router.put('/:id/resumo-ia', authenticate, checkPermission('atendimento.evolucoes.editar', 'PROPRIO'), injectTenant, evolucaoIdParam, validate, EvolucaoController.salvarResumoIa);
-router.post('/',        authenticate, checkPermission('atendimento.evolucoes.criar',   'PROPRIO'), injectTenant, criarEvolucaoRules, validate, EvolucaoController.criar);
+router.get('/:id',      authenticate, checkPermission('atendimento.evolucoes.ler',     'LEITURA'), evolucaoIdParam, validate, EvolucaoController.obterPorId);
+router.get('/:id/relatorio-atendimento', authenticate, checkPermission('atendimento.evolucoes.ler', 'LEITURA'), evolucaoIdParam, validate, EvolucaoController.relatorioAtendimento);
+router.put('/:id/resumo-ia', authenticate, checkPermission('atendimento.evolucoes.editar', 'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.salvarResumoIa);
+router.post('/',        authenticate, checkPermission('atendimento.evolucoes.criar',   'PROPRIO'), criarEvolucaoRules, validate, EvolucaoController.criar);
 router.put('/:id',      authenticate, checkPermission('atendimento.evolucoes.editar',  'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.atualizar);
 router.delete('/:id',   authenticate, checkPermission('atendimento.evolucoes.deletar', 'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.excluir);
 
@@ -91,11 +100,14 @@ router.patch('/:id/aprovar',  authenticate, checkPermission('atendimento.evoluco
 // Assumir a evolução em andamento de outro profissional. Nível PROPRIO basta: é um
 // "puxar para si" (o assumidor passa a ser o autor), não a edição do registro alheio
 // — a regra é validada no controller, igual ao assumir da agenda.
-router.patch('/:id/assumir',  authenticate, checkPermission('atendimento.evolucoes.editar', 'PROPRIO'), injectTenant, evolucaoIdParam, validate, EvolucaoController.assumir);
+router.patch('/:id/assumir',  authenticate, checkPermission('atendimento.evolucoes.editar', 'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.assumir);
 router.patch('/:id/titulo',   authenticate, checkPermission('atendimento.evolucoes.editar',  'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.salvarTitulo);
 
 // Mídias
-router.post('/:id/midias',              authenticate, checkPermission('atendimento.evolucoes.criar',   'PROPRIO'), evolucaoIdParam, validate, uploadMidia.single('midia'), EvolucaoController.adicionarMidia);
+// ⚠️ `tenantRls` REENTRA no contexto do tenant logo APÓS o multer — ver comentário em
+// routes/animais.js. Sem isto, gravar a mídia cai em "new row violates row-level
+// security policy" mesmo com `req.empresaId` correto.
+router.post('/:id/midias',              authenticate, checkPermission('atendimento.evolucoes.criar',   'PROPRIO'), evolucaoIdParam, validate, uploadMidia.single('midia'), tenantRls, EvolucaoController.adicionarMidia);
 router.delete('/:id/midias/:midiaId',   authenticate, checkPermission('atendimento.evolucoes.deletar', 'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.removerMidia);
 
 module.exports = router;

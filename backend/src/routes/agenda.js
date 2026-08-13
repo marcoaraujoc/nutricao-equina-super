@@ -7,6 +7,7 @@ const router                  = express.Router();
 const HistoricoController         = require('../controllers/HistoricoController');
 const AgendamentoController       = require('../controllers/AgendamentoController');
 const ResumoAtendimentoController = require('../controllers/ResumoAtendimentoController');
+const AnimalGraficosController    = require('../controllers/AnimalGraficosController');
 const { authenticate }        = require('../middlewares/auth');
 const { checkPermission }     = require('../middlewares/permissao.middleware');
 
@@ -15,6 +16,14 @@ const { checkPermission }     = require('../middlewares/permissao.middleware');
 // /resumo deve vir ANTES de /:animalId para não ser capturado como parâmetro
 router.get('/historico/animal/:animalId/resumo', authenticate, HistoricoController.resumirPorAnimal);
 router.get('/historico/animal/:animalId',        authenticate, HistoricoController.listarPorAnimal);
+
+// Gráficos do animal (peso, local/baia, evolução de parâmetro de exame) — tela
+// AnimalDetail. Peso/local/baia usam o slug de ANIMAIS; parâmetro de exame usa o
+// slug de EXAMES (é dado de resultado clínico, não do cadastro do animal).
+router.get('/animais/:animalId/grafico-peso',        authenticate, checkPermission('animais.ler',            'LEITURA'), AnimalGraficosController.graficoPeso);
+router.get('/animais/:animalId/historico-local',     authenticate, checkPermission('animais.ler',            'LEITURA'), AnimalGraficosController.historicoLocal);
+router.get('/animais/:animalId/exames-parametros',   authenticate, checkPermission('atendimento.exames.ler', 'LEITURA'), AnimalGraficosController.parametrosDisponiveis);
+router.get('/animais/:animalId/grafico-exame',       authenticate, checkPermission('atendimento.exames.ler', 'LEITURA'), AnimalGraficosController.graficoExame);
 
 // Resumo consolidado de atendimentos por IA (persistido; append só com evento novo)
 router.get('/resumo-atendimento/animal/:animalId',             authenticate, ResumoAtendimentoController.obter);

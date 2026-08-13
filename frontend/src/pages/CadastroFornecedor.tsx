@@ -1,7 +1,7 @@
 // frontend/src/pages/CadastroFornecedor.tsx
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import api from '../services/api';
 import EspecialidadeSelector from '../components/EspecialidadeSelector';
 import toast from 'react-hot-toast';
@@ -451,7 +451,6 @@ function ModalFornecedor({
 // ─── Página ───────────────────────────────────────────────────────────────────
 
 export default function CadastroFornecedor() {
-  const navigate                                = useNavigate();
   const location                                = useLocation();
   const { podeExecutar, loading: loadingPerms } = usePermissoes();
   const { user } = useAuth();

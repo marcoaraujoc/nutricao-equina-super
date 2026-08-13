@@ -78,16 +78,19 @@ export default function ModalJustificativa({
             erro={typeof erro === 'string' ? { mensagem: erro } : (erro ?? null)}
             className="mb-3"
           />
-          <div className="flex gap-2">
+          {/* Rodapé no padrão da aplicação: ações à DIREITA, tamanho padrão, Cancelar
+              ao lado da ação. Eram dois botões de largura desigual (o de ação em
+              `flex-1`) — o Cancelar com o mesmo peso visual da ação. */}
+          <div className="flex items-center justify-end gap-3">
+          <button onClick={onFechar} disabled={processando}
+            className="px-4 py-2.5 border border-gray-300 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-50 disabled:opacity-50">
+            Cancelar
+          </button>
           <button
             onClick={() => onConfirmar(motivo.trim())}
             disabled={processando || !motivoValido}
-            className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-xl text-sm font-semibold disabled:opacity-50">
+            className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold disabled:opacity-50">
             {processando ? 'Processando...' : acaoLabel}
-          </button>
-          <button onClick={onFechar}
-            className="px-4 border border-gray-300 text-gray-600 rounded-xl text-sm hover:bg-gray-50">
-            Cancelar
           </button>
           </div>
         </div>

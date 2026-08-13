@@ -364,7 +364,7 @@ function MedicamentoModal({
 // ─── Medicamentos page ────────────────────────────────────────────────────────
 
 export default function Medicamentos() {
-  const { podeExecutar, loading: loadingPerm } = usePermissoes();
+  const { loading: loadingPerm } = usePermissoes();
   const { user } = useAuth();
 
   const [medicamentos,   setMedicamentos]   = useState<Medicamento[]>([]);

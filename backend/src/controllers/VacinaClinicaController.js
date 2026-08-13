@@ -5,6 +5,7 @@ const { ANIMAL_VISIVEL } = require('../lib/visibilidade');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem } = require('../lib/faturaUtils');
 const { registrarAuditoria } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
+const { animalEstaInativo } = require('../lib/animalInativo');
 
 const INCLUDE_VACINA = {
   veterinario: { select: { id: true, fullName: true } },
@@ -110,6 +111,9 @@ async function registrar(req, res) {
     const isAplicadaProp = aplicadaPropRaw === true || aplicadaPropRaw === 'true';
 
     if (!animalId)    return res.status(400).json({ error: 'animalId é obrigatório' });
+    if (await animalEstaInativo(animalId)) {
+      return res.status(400).json({ error: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
+    }
 
     // Evolução é opcional — busca apenas para montar a descrição na fatura
     const evolucao = evolucaoId
@@ -671,7 +675,7 @@ async function darBaixaEFaturar(tx, { vacina, info, qtd, veterinarioId, empresaI
     const descricao = `[${vcNum}] ${evNum}${vacina.nome}${vacina.dose ? ` — ${vacina.dose}` : ''}`;
     // Sem lote debitado (sem estoque) → valor 0, financeiro ajusta depois.
     const valorItem = info.valor != null ? info.valor : (loteIdFinal ? Number(loteValor) : 0);
-    const fatura = await getOrCreateFatura(tx, animal.userId);
+    const fatura = await getOrCreateFatura(tx, animal.userId, empresaIdEfetivo);
     await adicionarFaturaItem(tx, {
       faturaId:        fatura.id,
       animalId:        vacina.animalId,

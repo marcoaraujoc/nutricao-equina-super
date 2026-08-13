@@ -5,6 +5,7 @@ const { registrarAuditoria } = require('../lib/auditoria');
 // rotas por :id do plano/item, o animal só aparece depois de carregar o registro —
 // por isso a checagem vem logo após o findUnique e ANTES de responder qualquer dado.
 const { garantirAcessoAnimal } = require('../middlewares/animalAcesso.middleware');
+const { animalEstaInativo }    = require('../lib/animalInativo');
 
 // =============================================================================
 // PLANOS DE DIETA
@@ -65,6 +66,9 @@ const PlanoDietaController = {
     if (!nome || !nome.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome do plano é obrigatório' });
 
     try {
+      if (await animalEstaInativo(animalId)) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
+      }
       const plano = await prisma.planoDieta.create({
         data: {
           animalId: Number(animalId),
@@ -259,6 +263,9 @@ const DietaItemController = {
     const userId = Number(criadopor || modificadopor || req.user?.id || 1);
 
     try {
+      if (await animalEstaInativo(animalId)) {
+        return res.status(400).json({ error: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
+      }
       const dieta = await prisma.dieta.create({
         data: {
           animalId:     Number(animalId),

@@ -5,7 +5,7 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import InlineError from '../components/InlineError';
-import { Eye, Download, Calendar, Edit, Trash2, Microscope, ClipboardList, Scan } from 'lucide-react';
+import { Eye, Calendar, Edit, Trash2, Microscope, ClipboardList, Scan } from 'lucide-react';
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
@@ -13,7 +13,8 @@ import PageContainer from '../components/PageContainer';
 import { formatDate } from '../utils/dateUtils';
 import DateInputBR from '../components/DateInputBR';
 import ModalJustificativa from '../components/ModalJustificativa';
-import ExamesSolicitadosPanel from '../components/ExamesSolicitadosPanel';
+import ExamesSolicitadosPanel, { type ExameSolicitado } from '../components/ExamesSolicitadosPanel';
+import { temResultadoExame } from '../utils/exameClinico';
 
 const Exames = () => {
   const { user } = useAuth();
@@ -41,6 +42,11 @@ const Exames = () => {
   const [filtroData,      setFiltroData]      = useState('');
   const [filtroExame,     setFiltroExame]     = useState('');
   const [filtroStatus,    setFiltroStatus]    = useState('');
+  // Exames CLÍNICOS (Laboratorial/Bioquímico/Imagem) já REALIZADOS/CONCLUIDOS desta
+  // aba — vêm do ExamesSolicitadosPanel (sistema separado do exame nutricional
+  // abaixo) e são exibidos dentro do MESMO card "Resultados do Exame": é onde o
+  // usuário espera ver o que acabou de salvar, não numa seção à parte.
+  const [resultadosClinicos, setResultadosClinicos] = useState<ExameSolicitado[]>([]);
 
   const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
 
@@ -240,6 +246,7 @@ const Exames = () => {
             animalId={effectiveAnimalId}
             tipo={tipoExame}
             onSalvo={() => { loadExamesAndAnimal(); }}
+            onRealizadosChange={setResultadosClinicos}
           />
         )}
 
@@ -319,6 +326,80 @@ const Exames = () => {
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Resultados do Exame</p>
             <span className="text-xs text-gray-400">{examesFiltrados.length} registro{examesFiltrados.length !== 1 ? 's' : ''}</span>
           </div>
+
+          {/* Exames CLÍNICOS (Laboratorial/Bioquímico/Imagem) já com resultado — vêm
+              do ExamesSolicitadosPanel acima. Ficam DENTRO deste card porque é aqui
+              que o usuário olha depois de salvar; o exame nutricional (tabela logo
+              abaixo) é outro sistema, com seus próprios filtros/edição/exclusão. */}
+          {resultadosClinicos.length > 0 && (
+            <div className="divide-y divide-gray-50 border-b border-gray-100">
+              {resultadosClinicos.map(ex => (
+                <div key={ex.id} className="px-4 py-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-gray-900">{ex.descricao}</span>
+                    {temResultadoExame(ex) ? (
+                      <span className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">
+                        {ex.status === 'REALIZADO' ? 'Realizado' : 'Finalizado'}
+                      </span>
+                    ) : (
+                      <span className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-600">
+                        Finalizado sem Resultado
+                      </span>
+                    )}
+                    {ex.arquivoUrl && (
+                      <a href={ex.arquivoUrl} target="_blank" rel="noreferrer"
+                        className="text-[11px] font-semibold text-emerald-700 hover:underline">
+                        ver laudo
+                      </a>
+                    )}
+                    {ex.laboratorio && (
+                      <span className="text-[11px] text-gray-500">{ex.laboratorio}</span>
+                    )}
+                  </div>
+                  {ex.dataResultado && (
+                    <p className="text-[11px] text-gray-400 mt-0.5">resultado em {formatDate(ex.dataResultado)}</p>
+                  )}
+                  {ex.resultado && (
+                    <p className="text-xs text-gray-600 mt-1.5 whitespace-pre-wrap">{ex.resultado}</p>
+                  )}
+                  {ex.resultadoItens?.length > 0 && (
+                    <div className="mt-2 overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left text-gray-400">
+                            <th className="py-1 pr-3 font-semibold">Parâmetro</th>
+                            <th className="py-1 pr-3 font-semibold">Valor</th>
+                            <th className="py-1 pr-3 font-semibold">Unidade</th>
+                            <th className="py-1 font-semibold">Referência</th>
+                          </tr>
+                        </thead>
+                        <tbody className="text-gray-700">
+                          {ex.resultadoItens.map(it => (
+                            <tr key={it.id} className="border-t border-gray-50">
+                              <td className="py-1 pr-3">{it.parametro}</td>
+                              <td className="py-1 pr-3 font-medium">{it.valor ?? '—'}</td>
+                              <td className="py-1 pr-3 text-gray-500">{it.unidade ?? '—'}</td>
+                              <td className="py-1 text-gray-500">{it.referencia ?? '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {ex.imagens?.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {ex.imagens.map(img => (
+                        <a key={img.id} href={img.arquivoUrl} target="_blank" rel="noreferrer"
+                          className="text-[11px] px-2 py-1 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition-colors">
+                          {img.nome ?? `imagem ${img.id}`}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
 
           <datalist id="exames-list">
             {nutrientes.map(n => <option key={n.id} value={n.nome} />)}

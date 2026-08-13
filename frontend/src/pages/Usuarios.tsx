@@ -45,19 +45,6 @@ interface Usuario {
   estado: string | null;
 }
 
-const ROLES = [
-  { value: 'USER',  label: 'Usuário'         },
-  { value: 'ADMIN', label: 'Administrador'   },
-];
-
-const USER_TYPES = [
-  { value: 'PROPRIETARIO', label: 'Proprietário'  },
-  { value: 'VETERINARIO',  label: 'Veterinário'   },
-  { value: 'ESTAGIARIO',   label: 'Estagiário'    },
-  { value: 'FORNECEDOR',   label: 'Fornecedor'    },
-  { value: 'ADMIN',        label: 'Administrador' },
-];
-
 // Perfil de acesso (select do formulário) → userType persistido
 const PERFIL_TO_USERTYPE: Record<string, string> = {
   VETERINARIO:  'VETERINARIO',
@@ -69,8 +56,6 @@ const PERFIL_TO_USERTYPE: Record<string, string> = {
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const labelUserType = (t: string) => USER_TYPES.find(x => x.value === t)?.label ?? t;
 
 // Mesmos badges/labels do Controle de Acesso
 const badgeCargo = (cargo: string) =>

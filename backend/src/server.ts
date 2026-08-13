@@ -175,6 +175,8 @@ const alimentosRoutes          = require('./routes/alimentos');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const dietasRoutes             = require('./routes/dietas');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+const documentosRoutes         = require('./routes/documentos');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const examesRoutes             = require('./routes/exames');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const analiseRoutes            = require('./routes/analise');
@@ -265,6 +267,7 @@ app.use('/api/auth',                  authLimiterSeletivo, authRoutes);
 app.use('/api/animais',               animaisRoutes);
 app.use('/api/alimentos',             alimentosRoutes);
 app.use('/api/dietas',                dietasRoutes);
+app.use('/api/documentos',            documentosRoutes); // envio genérico de PDF por WhatsApp/e-mail
 app.use('/api/exames',                examesRoutes);
 app.use('/api/analise',               analiseRoutes);
 app.use('/api/audit',                 auditRoutes);

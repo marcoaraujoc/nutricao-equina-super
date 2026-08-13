@@ -28,8 +28,13 @@ const PROMPTS = {
   // v1..v3: evolução das regras de ancoragem (ver histórico no git)
   // v4: extração de data + nota GENESIMATRIX (números concatenados, 1 casa decimal)
   // v5: reescrito em voz imperativa; removidas as justificativas das regras
+  // v6: + laboratorio, nomeExame e tipoSugerido — para o cadastro de exame CLÍNICO
+  //     "não pedido" (upload direto do laudo, sem passar pelo Pedido de Exames)
+  // v7: + ehLaudoExame — classifica se o documento É um laudo de exame antes de
+  //     tentar extrair qualquer coisa dele (rejeita nota fiscal, contrato, foto
+  //     qualquer etc. anexados por engano no fluxo de exame não pedido)
   'parse_laudo': {
-    version: 'v5',
+    version: 'v7',
     build: (texto) => `Extraia os dados do laudo laboratorial veterinário abaixo.
 
 O texto vem de PDF e pode estar fora da ordem visual, com colunas separadas.
@@ -43,16 +48,44 @@ Ancore cada valor no NOME do exame. Não reconstrua a tabela pela ordem dos núm
 - Não crie linhas.
 - Não associe valores por posição.
 
+# PASSO 0 — É UM LAUDO DE EXAME?
+Classifique "ehLaudoExame" como false quando o texto claramente NÃO é um laudo/
+resultado de exame laboratorial (ex.: nota fiscal, contrato, receita de
+medicamento, ficha de cadastro, mensagem, imagem sem texto reconhecível, página em
+branco). Classifique true quando houver nomes de exames/parâmetros com resultados,
+unidades ou valores de referência, mesmo que incompletos ou malformatados. Na
+dúvida, prefira true — só rejeite quando não houver NENHUM indício de exame.
+Sendo false, pare aqui: devolva a SAÍDA com "ehLaudoExame": false e os demais
+campos vazios ("exames": []).
+
 # PASSO 1 — DATA
 Localize a data de realização em: "Realizado", "Realizado em", "Data do Exame",
 "Data da Coleta", "Coletado". Ignore datas próximas a "Nascimento" ou "Nasc".
 Converta para YYYY-MM-DD. Não encontrou: null.
 
-# PASSO 2 — EXAMES
+# PASSO 2 — LABORATÓRIO
+Extraia o nome do laboratório emissor do cabeçalho, rodapé ou marca d'água do
+documento (razão social ou nome fantasia). Não encontrou: null.
+
+# PASSO 3 — NOME DO EXAME
+Extraia o nome do painel/perfil impresso no cabeçalho do laudo (ex.: "Hemograma
+Completo", "Perfil Bioquímico Renal", "Eletrólitos"). Sem um nome de painel
+explícito, componha um nome curto (máx. 60 caracteres) a partir dos parâmetros
+mais relevantes do PASSO 5, separados por vírgula. Nunca devolva vazio.
+
+# PASSO 4 — TIPO SUGERIDO
+Classifique "Bioquímico" quando a maioria dos parâmetros for bioquímica sérica
+(ex.: glicose, ureia, creatinina, proteínas totais, albumina, globulina, AST/TGO,
+ALT/TGP, GGT, fosfatase alcalina, bilirrubina, colesterol, triglicerídeos, CK/CPK,
+cálcio, fósforo, magnésio, sódio, potássio, cloro, ácido úrico). Classifique
+"Laboratorial" em qualquer outro caso (hemograma, coagulograma, urinálise,
+parasitológico, sorologia, hormônios etc.).
+
+# PASSO 5 — EXAMES
 Liste todos os exames. Formatos típicos: "Cálcio - mg/dL", "Ferro (ug/dL)", "Sódio - mEq/L".
 Capture nome e unidade exatamente como aparecem.
 
-# PASSO 3 — VALORES (por exame)
+# PASSO 6 — VALORES (por exame)
 
 ## Resultado
 FORMATO GENESIMATRIX: os três números vêm colados ANTES do nome do exame, cada um
@@ -68,7 +101,7 @@ resultado no bloco concatenado.
 ## Método
 Extraia o método associado ao exame (ex.: Ferrozine, Azul de Xilidil).
 
-# PASSO 4 — VERIFICAÇÃO
+# PASSO 7 — VERIFICAÇÃO
 Nº de exames = nº de resultados. Um resultado por exame. Não reutilize resultado,
 intervalo nem método. Havendo ambiguidade, devolva o campo vazio.
 
@@ -78,20 +111,34 @@ Não normalize texto.
 
 # SAÍDA
 {
+  "ehLaudoExame": true ou false,
   "dataExame": "YYYY-MM-DD ou null",
+  "laboratorio": "nome do laboratório ou null",
+  "nomeExame": "nome do painel/perfil",
+  "tipoSugerido": "Laboratorial ou Bioquímico",
   "exames": [
     { "nome": "", "resultado": "", "flag": "", "unidade": "",
       "referencia_min": "", "referencia_max": "", "metodo": "" }
   ]
 }
 
-Exemplo de entrada:
+Exemplo de entrada (laudo):
+Laboratório Paddock
+Perfil Bioquímico
 12,79,013,0
 Colorimétrico Arsenazo III
 Cálcio - mg/dL
 
 Saída correspondente:
-{"dataExame":null,"exames":[{"nome":"Cálcio","resultado":"12,7","flag":"","unidade":"mg/dL","referencia_min":"9,0","referencia_max":"13,0","metodo":"Colorimétrico Arsenazo III"}]}
+{"ehLaudoExame":true,"dataExame":null,"laboratorio":"Laboratório Paddock","nomeExame":"Perfil Bioquímico","tipoSugerido":"Bioquímico","exames":[{"nome":"Cálcio","resultado":"12,7","flag":"","unidade":"mg/dL","referencia_min":"9,0","referencia_max":"13,0","metodo":"Colorimétrico Arsenazo III"}]}
+
+Exemplo de entrada (NÃO é laudo — nota fiscal):
+NOTA FISCAL ELETRÔNICA Nº 00123
+Cliente: Haras Boa Vista
+Valor total: R$ 350,00
+
+Saída correspondente:
+{"ehLaudoExame":false,"dataExame":null,"laboratorio":null,"nomeExame":"","tipoSugerido":"Laboratorial","exames":[]}
 
 ${SO_JSON}
 

@@ -17,6 +17,7 @@ const { interpretarAgendamento, HORARIOS_PADRAO } = require('../services/agendam
 const { tempoConsultaPadraoDaEmpresa }            = require('./EquipeController');
 // AUTORIA (2026-08-04): a ação vale sobre a PRÓPRIA agenda; só o GESTOR opera a de outro
 const { ehGestorNoContexto }                      = require('../middlewares/permissao.middleware');
+const { animalEstaInativo }                       = require('../lib/animalInativo');
 // Rastro de "assumido de quem" (colunas novas lidas por SQL cru)
 const { marcarAssumido, anexarAssumido, anexarAssumidoEmLista } = require('../lib/agendamentoAssumido');
 
@@ -399,7 +400,7 @@ const AgendamentoController = {
     try {
       const animalId = Number(req.params.animalId);
 
-      const acesso = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
@@ -460,9 +461,12 @@ const AgendamentoController = {
         return res.status(403).json({ error: 'Só o gestor agenda para outro profissional. Você pode agendar na sua própria agenda.' });
       }
 
-      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+      if (await animalEstaInativo(animalId)) {
+        return res.status(400).json({ error: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
+      }
 
       // Um animal pode ter vários agendamentos, mas NUNCA dois no mesmo horário
       // (independe de vet/equipe). Bloqueia duplicidade no mesmo dataHora.
@@ -532,6 +536,8 @@ const AgendamentoController = {
             especialidadeId: Number.isInteger(espIdNum) && espIdNum > 0 ? espIdNum : null,
             duracaoMin,
             criadoPorId:   req.user.id,
+            empresaId:     Number(req.empresaId),
+            equipeId:      req.equipeId ? Number(req.equipeId) : null,
           },
           include: INCLUDE,
         });
@@ -650,7 +656,7 @@ const AgendamentoController = {
       const item = await prisma.agendamentoClinico.findUnique({ where: { id: Number(req.params.id) } });
       if (!item || !item.ativo) return res.status(404).json({ error: 'Agendamento não encontrado' });
 
-      const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
       // Autoria via RBAC: PROPRIO → só agendamentos próprios (responsável ou criador)
@@ -716,7 +722,7 @@ const AgendamentoController = {
       const item = await prisma.agendamentoClinico.findUnique({ where: { id: Number(req.params.id) } });
       if (!item || !item.ativo) return res.status(404).json({ error: 'Agendamento não encontrado' });
 
-      const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
       // Autoria via RBAC: PROPRIO → só agendamentos próprios (responsável ou criador)
@@ -1059,7 +1065,7 @@ const AgendamentoController = {
       const item = await prisma.agendamentoClinico.findUnique({ where: { id: Number(req.params.id) } });
       if (!item || !item.ativo) return res.status(404).json({ error: 'Agendamento não encontrado' });
 
-      const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
       // Autoria via RBAC: PROPRIO → só agendamentos próprios (responsável ou criador)
@@ -1114,7 +1120,7 @@ const AgendamentoController = {
       }
 
       // Acesso ao animal e disponibilidade de quem está assumindo
-      const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 

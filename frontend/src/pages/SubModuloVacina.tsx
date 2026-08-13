@@ -490,7 +490,7 @@ interface Props {
   onViewConsumed?:    () => void;
 }
 
-export default function SubModuloVacina({ animalId, animal, evolucaoId, atendimentoNumero, onSalvo, openItemId, onViewConsumed }: Props) {
+export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo, openItemId, onViewConsumed }: Props) {
   const { contextoAtivo } = useEmpresa();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const { user } = useAuth();

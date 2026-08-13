@@ -159,11 +159,36 @@ async function conectar(empresaId, equipeId = null) {
   return { status: s.status, qrcodeBase64: null, pairingCode: null };
 }
 
+/**
+ * A Evolution derruba a sessão do WhatsApp como PARTE do próprio logout — em alguns
+ * casos isso fecha a conexão antes da resposta HTTP do `/instance/logout` chegar
+ * inteira, e a chamada estoura erro de rede/5xx mesmo o logout tendo acontecido de
+ * verdade do outro lado (visto no log da Evolution: "Instance ... - LOGOUT"). Por
+ * isso, antes de desistir, confere o estado AO VIVO em vez de confiar só no erro
+ * HTTP da chamada de logout.
+ */
+async function confirmarDesconectado(instanceName) {
+  try {
+    const live   = await EvolutionService.getStatus(instanceName);
+    const estado = live?.instance?.state ?? live?.state;
+    return mapearEstado(estado) !== 'CONECTADO';
+  } catch {
+    return false; // não deu nem para confirmar → trata como falha real
+  }
+}
+
 async function desconectar(empresaId, equipeId = null) {
   const config = await buscarConfigDoEscopo(empresaId, equipeId);
   if (!config?.waInstance) return { status: 'NAO_PROVISIONADO' };
-  try { await EvolutionService.logout(config.waInstance); }
-  catch (err) { if (err.code !== 'INSTANCIA_NAO_ENCONTRADA') throw err; }
+  try {
+    await EvolutionService.logout(config.waInstance);
+  } catch (err) {
+    if (err.code !== 'INSTANCIA_NAO_ENCONTRADA') {
+      const jaDesconectou = await confirmarDesconectado(config.waInstance);
+      if (!jaDesconectou) throw err;
+      logger.warn(`[WhatsappService] Logout de ${config.waInstance} respondeu erro (${err.message}), mas o estado ao vivo confirma desconectado — seguindo como sucesso.`);
+    }
+  }
   await salvarStatus(config.id, 'DESCONECTADO');
   logger.info(`[WhatsappService] Instância desconectada: ${config.waInstance}`);
   return { status: 'DESCONECTADO' };

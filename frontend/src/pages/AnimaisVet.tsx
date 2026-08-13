@@ -5,11 +5,14 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
-import { Pencil, Search, ShieldOff, ClipboardList, Zap } from 'lucide-react';
+import { Pencil, Search, ShieldOff, ClipboardList, Zap, ToggleRight, ToggleLeft } from 'lucide-react';
+import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import FotoAnimal from '../components/FotoAnimal';
+import ModalJustificativa from '../components/ModalJustificativa';
+import { type ErroAcaoDados } from '../components/ErroAcao';
 
 
 interface Animal {
@@ -29,6 +32,11 @@ interface Animal {
   raca?:            { nome: string } | null;
   especie?:         { nome: string } | null;
   user?:            { fullName: string; email: string } | null;
+  // Paciente INATIVO — somente leitura, sem sumir da lista (diferente de exclusão
+  // lógica). Só o gestor reativa.
+  inativo?:         boolean;
+  inativoMotivo?:   string | null;
+  inativoPor?:      { fullName: string } | null;
 }
 
 type FiltroCampo = 'animal' | 'proprietario';
@@ -54,20 +62,29 @@ const idadeDisplay = (animal: Animal): string => {
 };
 
 // ─── Card mobile ──────────────────────────────────────────────────────────────
-function AnimalCardMobile({ animal, onDashboard, onEditar, podeEditar }: {
+function AnimalCardMobile({ animal, onDashboard, onEditar, podeEditar, podeInativar, isGestor, onInativar, onAtivar }: {
   animal:        Animal;
   onDashboard:   () => void;
   onEditar:      () => void;
   podeEditar:    boolean;
+  podeInativar:  boolean;
+  isGestor:      boolean;
+  onInativar:    () => void;
+  onAtivar:      () => void;
 }) {
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
+    <div className={`bg-white rounded-2xl border shadow-sm p-4 flex items-center gap-3 ${animal.inativo ? 'border-amber-200 bg-amber-50/40' : 'border-gray-100'}`}>
       <div className="w-14 h-14 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
         <FotoAnimal url={animal.photoUrl} nome={animal.nome} />
       </div>
 
       <div className="flex-1 min-w-0" onClick={onDashboard}>
-        <p className="font-semibold text-gray-900 truncate">{animal.nome}</p>
+        <div className="flex items-center gap-1.5">
+          <p className="font-semibold text-gray-900 truncate">{animal.nome}</p>
+          {animal.inativo && (
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 flex-shrink-0">Inativo</span>
+          )}
+        </div>
         <p className="text-xs text-gray-500 truncate">
           {animal.raca?.nome || animal.especie?.nome || '—'}
         </p>
@@ -98,11 +115,25 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, podeEditar }: {
       </div>
 
       <div className="flex flex-col gap-1 flex-shrink-0">
-        {podeEditar && (
+        {podeEditar && !animal.inativo && (
           <button onClick={onEditar}
-            className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+            className="p-2 text-orange-600 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors"
             title="Editar">
             <Pencil size={15} />
+          </button>
+        )}
+        {!animal.inativo && podeInativar && (
+          <button onClick={onInativar}
+            className="p-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
+            title="Inativar paciente">
+            <ToggleRight size={15} />
+          </button>
+        )}
+        {animal.inativo && isGestor && (
+          <button onClick={onAtivar}
+            className="p-2 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors"
+            title="Reativar paciente">
+            <ToggleLeft size={15} />
           </button>
         )}
       </div>
@@ -121,9 +152,12 @@ const AnimaisVet = () => {
   const { user }                                     = useAuth();
   const isVet                                        = (user?.userType ?? '').toUpperCase() === 'VETERINARIO';
   const { setSelectedAnimal } = useSelectedAnimal();
-  const { podeExecutar, temEquipe, loading: loadingPerms } = usePermissoes();
+  const { podeExecutar, isGestor, temEquipe, loading: loadingPerms } = usePermissoes();
   const podeCriarAnimal                              = podeExecutar('animais.criar');
   const podeEditarAnimal                             = podeExecutar('animais.editar');
+  // Inativar: qualquer perfil com o slug concedido. Reativar é SEMPRE gestor — regra
+  // fixa no backend (AnimalController.ativar), independente da matriz.
+  const podeInativarAnimal                           = podeExecutar('animais.ativar');
   const navigate                                     = useNavigate();
 
   const [animais,        setAnimais]        = useState<Animal[]>([]);
@@ -135,6 +169,44 @@ const AnimaisVet = () => {
   // ⚠️ O botão "Desvincular" saiu na fase 3 do multi-tenancy: não há mais vínculo entre
   // veterinário e animal para desfazer. O paciente pertence à EMPRESA, e quem deixa de
   // atendê-lo é quem sai da equipe.
+
+  // ── Inativar / Reativar paciente (ModalJustificativa — motivo obrigatório) ──
+  const [modalInativar, setModalInativar] = useState<Animal | null>(null);
+  const [modalAtivar,   setModalAtivar]   = useState<Animal | null>(null);
+  const [processandoStatus, setProcessandoStatus] = useState(false);
+  const [erroModalStatus,   setErroModalStatus]   = useState<ErroAcaoDados | null>(null);
+
+  const fecharModaisStatus = () => {
+    setModalInativar(null); setModalAtivar(null); setErroModalStatus(null);
+  };
+
+  const confirmarInativar = async (motivo: string) => {
+    if (!modalInativar) return;
+    setProcessandoStatus(true); setErroModalStatus(null);
+    try {
+      await api.patch(`/animais/${modalInativar.id}/inativar`, { motivo });
+      toast.success('Paciente inativado com sucesso');
+      fecharModaisStatus();
+      await loadAnimais();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
+      setErroModalStatus({ mensagem: msg ?? 'Erro ao inativar paciente' });
+    } finally { setProcessandoStatus(false); }
+  };
+
+  const confirmarAtivar = async (motivo: string) => {
+    if (!modalAtivar) return;
+    setProcessandoStatus(true); setErroModalStatus(null);
+    try {
+      await api.patch(`/animais/${modalAtivar.id}/ativar`, { motivo });
+      toast.success('Paciente reativado com sucesso');
+      fecharModaisStatus();
+      await loadAnimais();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
+      setErroModalStatus({ mensagem: msg ?? 'Erro ao reativar paciente' });
+    } finally { setProcessandoStatus(false); }
+  };
 
   const loadAnimais = async () => {
     try {
@@ -304,6 +376,10 @@ const AnimaisVet = () => {
                   onDashboard={() => irParaAnimal(animal)}
                   onEditar={() => irParaEditar(animal)}
                   podeEditar={podeEditarAnimal}
+                  podeInativar={podeInativarAnimal}
+                  isGestor={isGestor}
+                  onInativar={() => setModalInativar(animal)}
+                  onAtivar={() => setModalAtivar(animal)}
                 />
               ))}
             </div>
@@ -331,7 +407,7 @@ const AnimaisVet = () => {
                       <tr
                         key={animal.id}
                         onClick={() => irParaAnimal(animal)}
-                        className="hover:bg-gray-50 cursor-pointer transition-colors group"
+                        className={`hover:bg-gray-50 cursor-pointer transition-colors group ${animal.inativo ? 'bg-amber-50/40' : ''}`}
                       >
                         <td className="pl-5 py-3.5">
                           <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
@@ -339,9 +415,14 @@ const AnimaisVet = () => {
                           </div>
                         </td>
                         <td className="px-3 py-3.5 max-w-0">
-                          <p className="font-semibold text-gray-900 truncate group-hover:text-emerald-700 transition-colors">
-                            {animal.nome}
-                          </p>
+                          <div className="flex items-center gap-1.5">
+                            <p className="font-semibold text-gray-900 truncate group-hover:text-emerald-700 transition-colors">
+                              {animal.nome}
+                            </p>
+                            {animal.inativo && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 flex-shrink-0">Inativo</span>
+                            )}
+                          </div>
                           {animal.user?.fullName && (
                             <p className="text-xs text-gray-400 truncate">{animal.user.fullName}</p>
                           )}
@@ -374,11 +455,25 @@ const AnimaisVet = () => {
                         </td>
                         <td className="pr-5 py-3.5" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1">
-                            {podeEditarAnimal && (
+                            {podeEditarAnimal && !animal.inativo && (
                               <button onClick={() => irParaEditar(animal)}
-                                className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                className="p-1.5 text-orange-600 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors"
                                 title="Editar">
                                 <Pencil size={15} />
+                              </button>
+                            )}
+                            {!animal.inativo && podeInativarAnimal && (
+                              <button onClick={() => setModalInativar(animal)}
+                                className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="Inativar paciente">
+                                <ToggleRight size={15} />
+                              </button>
+                            )}
+                            {animal.inativo && isGestor && (
+                              <button onClick={() => setModalAtivar(animal)}
+                                className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors"
+                                title="Reativar paciente">
+                                <ToggleLeft size={15} />
                               </button>
                             )}
                           </div>
@@ -405,6 +500,34 @@ const AnimaisVet = () => {
 
 
       </PageContainer>
+
+      <ModalJustificativa
+        aberto={!!modalInativar}
+        titulo="Inativar paciente?"
+        descricao={modalInativar
+          ? `${modalInativar.nome} vira somente leitura: nenhum registro novo (evolução, prescrição, vacina, exame, encaminhamento, agendamento, dieta) poderá ser criado, e o cadastro do animal não poderá ser editado. Só o gestor consegue reverter.`
+          : undefined}
+        acaoLabel="Inativar"
+        placeholder="Descreva o motivo da inativação (obrigatório)..."
+        processando={processandoStatus}
+        erro={erroModalStatus}
+        onConfirmar={confirmarInativar}
+        onFechar={fecharModaisStatus}
+      />
+
+      <ModalJustificativa
+        aberto={!!modalAtivar}
+        titulo="Reativar paciente?"
+        descricao={modalAtivar
+          ? `${modalAtivar.nome} volta a poder receber novos registros clínicos.`
+          : undefined}
+        acaoLabel="Reativar"
+        placeholder="Descreva o motivo da reativação (obrigatório)..."
+        processando={processandoStatus}
+        erro={erroModalStatus}
+        onConfirmar={confirmarAtivar}
+        onFechar={fecharModaisStatus}
+      />
     </>
   );
 };

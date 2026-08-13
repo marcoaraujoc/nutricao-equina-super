@@ -9,6 +9,7 @@ const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
 const { registrarAuditoria, registrarAlteracao, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
+const { animalEstaInativo } = require('../lib/animalInativo');
 
 const INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -58,7 +59,7 @@ const EncaminhamentoController = {
       const { animalId } = req.params;
       const { status } = req.query;
 
-      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
@@ -93,7 +94,7 @@ const EncaminhamentoController = {
     try {
       const { animalId } = req.params;
 
-      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
@@ -266,6 +267,9 @@ const EncaminhamentoController = {
       if (!evolucaoId) {
         return res.status(400).json({ error: 'evolucaoId é obrigatório', code: 'EVOLUCAO_REQUIRED' });
       }
+      if (await animalEstaInativo(animalId)) {
+        return res.status(400).json({ error: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
+      }
 
       // Valida que a evolução existe e pertence ao animal
       const evolucao = await prisma.evolucaoClinica.findFirst({
@@ -274,7 +278,7 @@ const EncaminhamentoController = {
       });
       if (!evolucao) return res.status(400).json({ error: 'Evolução não encontrada para este animal', code: 'EVOLUCAO_NOT_FOUND' });
 
-      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
@@ -415,7 +419,7 @@ const EncaminhamentoController = {
       const enc = await prisma.encaminhamentoClinico.findUnique({ where: { id: Number(id) } });
       if (!enc || !enc.ativo) return res.status(404).json({ error: 'Encaminhamento não encontrado' });
 
-      const acesso = await verificarAcessoAnimal({ animalId: enc.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: enc.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
       const atualizado = await prisma.$transaction(async (tx) => {
@@ -475,7 +479,7 @@ const EncaminhamentoController = {
         return res.status(400).json({ error: 'Apenas encaminhamentos pendentes podem ser editados' });
       }
 
-      const acesso = await verificarAcessoAnimal({ animalId: enc.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: enc.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
       // Autoria via RBAC (nível efetivo em atendimento.encaminhamentos.editar):
@@ -551,7 +555,7 @@ const EncaminhamentoController = {
       const enc = await prisma.encaminhamentoClinico.findUnique({ where: { id: Number(id) } });
       if (!enc || !enc.ativo) return res.status(404).json({ error: 'Encaminhamento não encontrado' });
 
-      const acesso = await verificarAcessoAnimal({ animalId: enc.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: enc.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
       // Autoria via RBAC (nível efetivo em atendimento.encaminhamentos.finalizar)
@@ -598,7 +602,7 @@ const EncaminhamentoController = {
       const enc = await prisma.encaminhamentoClinico.findUnique({ where: { id: Number(id) } });
       if (!enc || !enc.ativo) return res.status(404).json({ error: 'Encaminhamento não encontrado' });
 
-      const acesso = await verificarAcessoAnimal({ animalId: enc.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: enc.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
       // Autoria via RBAC (nível efetivo em atendimento.encaminhamentos.deletar)

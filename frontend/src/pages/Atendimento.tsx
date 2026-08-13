@@ -825,7 +825,7 @@ const Atendimento = () => {
             onFaturaAtualizada={() => {}}
             onEvolucaoChange={setEvolucaoAtiva}
             onSalvo={refreshHistorico}
-            openItemId={openItemId}
+            openItemId={openItemId ?? undefined}
             onViewConsumed={() => setOpenItemId(null)}
             editItemId={editEvolucaoId}
             onEditConsumed={() => setEditEvolucaoId(null)}
@@ -837,7 +837,14 @@ const Atendimento = () => {
         return (
           <SubModuloPrescricao
             animalId={animalIdNum}
-            animal={animal ? { ...animal, photoUrl: animal.photoUrl ?? null } : null}
+            animal={animal ? {
+              ...animal,
+              photoUrl: animal.photoUrl ?? null,
+              peso:     animal.peso ?? null,
+              baia:     animal.baia ?? null,
+              especie:  animal.especie ?? null,
+              raca:     animal.raca ?? null,
+            } : null}
             onFaturaAtualizada={() => {}}
             evolucaoId={evolucaoAtiva?.id}
             atendimentoNumero={evolucaoAtiva?.atendimentoNumero ?? undefined}

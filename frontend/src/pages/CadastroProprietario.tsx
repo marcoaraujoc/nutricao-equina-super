@@ -12,7 +12,6 @@ import PageContainer from '../components/PageContainer';
 // Mesmo seletor de localidade usado no card "Locais de trabalho" do profissional
 import { LocalizacaoCombobox } from '../components/UsuarioFormModal';
 import { usePermissoes } from '../hooks/usePermissoes';
-import { useAuth } from '../contexts/AuthContext';
 import ModalJustificativa from '../components/ModalJustificativa';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
@@ -628,16 +627,18 @@ function ModalProprietario({
         <div className="px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
           {/* Erro pertence à superfície da ação: aqui, colado no botão que foi clicado */}
           <ErroAcao erro={erroAcao} className="mb-3" />
-          <div className="flex gap-3">
-          <button onClick={onClose} disabled={saving}
-            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50">
-            Cancelar
-          </button>
-          <button onClick={onSalvar} disabled={saving}
-            className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2">
-            {saving && <Loader2 size={13} className="animate-spin" />}
-            {saving ? 'Salvando…' : 'Salvar'}
-          </button>
+          {/* Rodapé no padrão da aplicação: ações à direita, tamanho padrão — mesmas
+              classes de Animal.tsx/Configurações, não mais os botões de largura total. */}
+          <div className="flex items-center justify-end gap-3">
+            <button onClick={onClose} disabled={saving}
+              className="px-4 py-2.5 border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 rounded-xl text-sm font-semibold transition-colors">
+              Cancelar
+            </button>
+            <button onClick={onSalvar} disabled={saving}
+              className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-2">
+              {saving && <Loader2 size={13} className="animate-spin" />}
+              {saving ? 'Salvando…' : 'Salvar'}
+            </button>
           </div>
         </div>
       </div>
@@ -648,8 +649,6 @@ function ModalProprietario({
 // ─── Página ───────────────────────────────────────────────────────────────────
 
 export default function CadastroProprietario() {
-  const { user }    = useAuth();
-  const isAdmin     = user?.role === 'ADMIN';
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
   const podeCriar   = isGestor || podeExecutar('cadastro.proprietario.criar');
@@ -698,7 +697,26 @@ export default function CadastroProprietario() {
     setShowModal(true);
   };
 
-  const abrirEdicao = (p: Proprietario) => {
+  const abrirEdicao = async (p: Proprietario) => {
+    // Busca fresca (não a linha da lista, que não traz sugestões): a localização já
+    // usada por algum animal ATIVO do cliente que ainda não virou "localidade
+    // atendida" confirmada entra pronta no repetidor, com frequência padrão 1x —
+    // o gestor só ajusta ou remove, em vez de buscar de novo um local que o
+    // cadastro do animal já sabe. Falha na busca cai para os dados da lista mesmo.
+    let localidadesIniciais = p.localidades ?? [];
+    try {
+      const res = await api.get(`/cadastro/proprietarios/${p.id}`);
+      const fresco: (Proprietario & { localidadesSugeridas?: LocalidadeProp[] }) | null = res.data?.dados ?? null;
+      if (fresco) {
+        p = fresco;
+        const jaTem = new Set((fresco.localidades ?? []).map(l => l.localizacaoId));
+        const sugeridas = (fresco.localidadesSugeridas ?? [])
+          .filter(s => !jaTem.has(s.localizacaoId))
+          .map(s => ({ ...s, frequenciaVisitas: 1 }));
+        localidadesIniciais = [...(fresco.localidades ?? []), ...sugeridas];
+      }
+    } catch { /* mantém os dados da lista */ }
+
     setEditando(p);
     setForm({
       fullName:          p.fullName,
@@ -711,7 +729,7 @@ export default function CadastroProprietario() {
       valorAssistencia:  p.valorAssistencia
         ? formatarMoeda(String(Math.round(p.valorAssistencia * 100)))
         : '',
-      localidades:       p.localidades ?? [],
+      localidades:       localidadesIniciais,
       diaVencimentoFatura: p.diaVencimentoFatura ? String(p.diaVencimentoFatura) : '5',
       cep:               p.cep         ? mascaraCEP(p.cep.replace(/\D/g, ''))  : '',
       endereco:          p.endereco    ?? '',

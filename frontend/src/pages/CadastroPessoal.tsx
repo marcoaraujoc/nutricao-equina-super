@@ -11,13 +11,14 @@ import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import EspecialidadeSelector from '../components/EspecialidadeSelector';
 import FotoEditorModal from '../components/FotoEditorModal';
+import FormularioNovaSenha from '../components/FormularioNovaSenha';
 import {
   conflitoEntreLocais, resumoLocal,
   RASCUNHO_LOCAL_VAZIO, uniaoEspecialidadesLocais, PERFIS_COM_ESPECIALIDADE,
   TEMPO_CONSULTA_PADRAO_SISTEMA, LocalTrabalhoFields, rotuloPagamento,
   type LocalTrabalhoForm,
 } from '../components/UsuarioFormModal';
-import { CheckCircle2, XCircle, Loader2, Info, User, Plus, MapPin, Pencil, Trash2, Camera } from 'lucide-react';
+import { CheckCircle2, XCircle, Loader2, Info, User, Plus, MapPin, Pencil, Trash2, Camera, KeyRound, ChevronDown } from 'lucide-react';
 import InlineError from '../components/InlineError';
 import FieldError from '../components/FieldError';
 
@@ -146,6 +147,11 @@ export default function CadastroPessoal() {
   const [editandoFoto, setEditandoFoto] = useState<File | string | null>(null);
   // Erro de ação (salvar/conexão) exibido inline junto ao botão Salvar
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Trocar senha — seção própria, com submit e endpoint independentes do resto do
+  // cadastro (PATCH /users/me/senha, não PUT /users/me). Fechada por padrão.
+  const [mostrarTrocarSenha, setMostrarTrocarSenha] = useState(false);
+  const [salvandoSenha,      setSalvandoSenha]      = useState(false);
+  const [erroSenha,          setErroSenha]          = useState('');
   // Erros por campo — validados conforme o usuário passa pelos campos (onBlur) e no submit
   const [errors, setErrors] = useState<Record<string, string>>({});
   // Locais de trabalho — mesmo fluxo de "Incluir Membro": um rascunho é preenchido e
@@ -166,12 +172,6 @@ export default function CadastroPessoal() {
   } | null>(null);
   // Membro de alguma equipe → habilita o expediente de atendimento
   const [temEquipe,       setTemEquipe]       = useState(false);
-
-  // GESTOR não tem "local de trabalho": essa seção é para quem BATE PONTO na clínica
-  // (dias, horário, turno). O gestor é dono/administrador, não escala — por isso a
-  // seção "Locais de trabalho" fica oculta para ele (ver o JSX mais abaixo), e a
-  // Especialidade dele volta a ser o seletor STANDALONE, mesmo tendo equipe.
-  const isGestorEquipe = cargoEquipe === 'GESTOR';
 
   // Membro de equipe NESTE contexto → o tipo de usuário é o cargo que o gestor
   // atribuiu, exibido em somente leitura. Sem vínculo (cadastro direto) é que ele
@@ -291,10 +291,10 @@ export default function CadastroPessoal() {
     ? cargoEquipe === 'VETERINARIO'
     : form.tipoUsuario === 'VETERINARIO';
 
-  // Especialidade vem dos LOCAIS de trabalho para quem tem essa seção (membro comum
-  // com equipe); o GESTOR não bate ponto em local nenhum, então a dele é sempre o
-  // seletor STANDALONE, mesmo tendo equipe (empresa própria).
-  const especialidadeViaLocal = temEquipe && !isGestorEquipe;
+  // Especialidade vem dos LOCAIS de trabalho para quem tem essa seção (qualquer
+  // membro com equipe, GESTOR incluído — mesmo tratamento de /equipe, onde
+  // `comExpediente` do UsuarioFormModal não faz exceção de cargo).
+  const especialidadeViaLocal = temEquipe;
 
   // Especialidade EFETIVA que será enviada. Ler só `form.especialidadeIds` para quem
   // tem locais deixaria a pessoa escolher especialidade no local e nunca ver o CRMV.
@@ -444,6 +444,25 @@ export default function CadastroPessoal() {
     }
   };
 
+  // Troca de senha voluntária, com a SESSÃO já aberta — endpoint próprio
+  // (PATCH /users/me/senha), diferente do PUT /users/me do resto do cadastro.
+  // Exige a senha atual (ver UserController.alterarSenha) — diferente do fluxo de
+  // 1º acesso/token, que não tem senha anterior para conferir.
+  const handleTrocarSenha = async (novaSenha: string, senhaAtual: string) => {
+    setErroSenha('');
+    setSalvandoSenha(true);
+    try {
+      await api.patch('/users/me/senha', { senhaAtual, novaSenha });
+      toast.success('Senha alterada com sucesso!');
+      setMostrarTrocarSenha(false);
+    } catch (err) {
+      const resposta = (err as { response?: { data?: { mensagem?: string } } })?.response;
+      setErroSenha(resposta?.data?.mensagem ?? 'Não foi possível alterar a senha. Tente novamente.');
+    } finally {
+      setSalvandoSenha(false);
+    }
+  };
+
   const buscarCep = async (cep: string) => {
     const cepLimpo = cep.replace(/\D/g, '');
     if (cepLimpo.length !== 8) return;
@@ -555,8 +574,7 @@ export default function CadastroPessoal() {
         // Clínica Médica (aplicado no backend) e o fornecedor pode ficar sem.
         return '';
       case 'locaisTrabalho':
-        // GESTOR não tem a seção (não bate ponto em local nenhum) — nada a validar.
-        if (temEquipe && !isGestorEquipe) {
+        if (temEquipe) {
           if (form.locaisTrabalho.some(l => !l.localizacaoId)) {
             return 'Selecione o local de cada linha de trabalho (ou remova a linha vazia).';
           }
@@ -653,9 +671,9 @@ export default function CadastroPessoal() {
         especiesAtendidas: form.especiesAtendidas,
         subespecialidades: form.subespecialidades,
       }),
-      // Especialidades do profissional: quem tem "Locais de trabalho" (VET/FORNECEDOR
-      // com equipe) manda a união das especialidades dos locais; GESTOR e quem não tem
-      // equipe mandam o seletor standalone — GESTOR não bate ponto em local nenhum.
+      // Especialidades do profissional: quem tem "Locais de trabalho" (qualquer cargo
+      // com equipe, GESTOR incluído) manda a união das especialidades dos locais; só
+      // quem não tem equipe manda o seletor standalone.
       ...(perfilComEspecialidade && {
         // Com locais: união deles. Vazia (legado sem especialidade por local) →
         // undefined para não apagar as especialidades já cadastradas.
@@ -1090,11 +1108,10 @@ export default function CadastroPessoal() {
             </div>
           )}
 
-          {/* ── Especialidade STANDALONE — para quem NÃO tem "Locais de trabalho":
-              profissional solo (sem equipe) OU o GESTOR, que tem equipe mas não bate
-              ponto em local nenhum. Com locais (VET/FORNECEDOR membros de equipe), a
-              especialidade é definida POR LOCAL (seção abaixo). Sempre OPCIONAL —
-              escolher aqui passa a exigir o CRMV acima. ── */}
+          {/* ── Especialidade STANDALONE — só para quem NÃO tem "Locais de trabalho"
+              (profissional sem equipe, cadastro direto). Com equipe — qualquer cargo,
+              GESTOR incluído — a especialidade é definida POR LOCAL (seção abaixo).
+              Sempre OPCIONAL — escolher aqui passa a exigir o CRMV acima. ── */}
           {perfilComEspecialidade && !especialidadeViaLocal && (
             <div className="pt-2 border-t border-gray-100" id="campo-especialidadeIds">
               <Label text="Especialidade" optional />
@@ -1119,10 +1136,9 @@ export default function CadastroPessoal() {
           {/* ── Locais de trabalho (local + dias + horário) ──────────────────
               Mesmo fluxo do "Incluir Membro": um rascunho é preenchido e só entra na
               lista via "Adicionar", que bloqueia local repetido e conflito de horário.
-              ⚠️ GESTOR não vê esta seção: ela é "onde/quando eu atendo" (escala), e o
-              gestor não bate ponto em local nenhum — a especialidade dele é a
-              STANDALONE acima. */}
-          {temEquipe && !isGestorEquipe && form.tipoUsuario !== 'PROPRIETARIO' && (
+              Vale para QUALQUER cargo com equipe, GESTOR incluído — mesma paridade de
+              /equipe (UsuarioFormModal mostra `comExpediente` sem exceção de cargo). */}
+          {temEquipe && form.tipoUsuario !== 'PROPRIETARIO' && (
             <div id="campo-locaisTrabalho">
               <Label text="Locais de trabalho" optional />
 
@@ -1290,6 +1306,43 @@ export default function CadastroPessoal() {
           </div>
 
         </form>
+
+        {/* ── Senha de acesso — seção própria, FORA do <form> do cadastro: submit e
+            endpoint independentes (PATCH /users/me/senha), não misturam com o Salvar
+            de cima. Mesma coleta/validação do 1º acesso (FormularioNovaSenha,
+            `embedded`), só que aqui pede a SENHA ATUAL — ver comentário do handler. */}
+        <div className="pt-6 mt-6 border-t border-gray-100">
+          {!mostrarTrocarSenha ? (
+            <button
+              type="button"
+              onClick={() => setMostrarTrocarSenha(true)}
+              className="flex items-center gap-2 text-sm font-semibold text-emerald-700 hover:text-emerald-800 transition-colors"
+            >
+              <KeyRound size={16} /> Alterar senha
+            </button>
+          ) : (
+            <div>
+              <button
+                type="button"
+                onClick={() => setMostrarTrocarSenha(false)}
+                className="flex items-center gap-1 text-sm font-semibold text-gray-500 hover:text-gray-700 mb-4 transition-colors"
+              >
+                <ChevronDown size={16} className="rotate-180" /> Fechar
+              </button>
+              <FormularioNovaSenha
+                embedded
+                comSenhaAtual
+                titulo="Alterar senha"
+                subtitulo="Defina uma nova senha de acesso"
+                textoBotao="Salvar nova senha"
+                salvando={salvandoSenha}
+                erro={erroSenha}
+                onSubmit={handleTrocarSenha}
+                onAlterar={() => setErroSenha('')}
+              />
+            </div>
+          )}
+        </div>
       </div>
     </PageContainer>
   );

@@ -4,7 +4,13 @@
       "Bash(python -c ' *)",
       "Bash(node --check MidiaController.js)",
       "Bash(node --check routes/midia.js)",
-      "Bash(node --check src/controllers/UserController.js)"
+      "Bash(node --check src/controllers/UserController.js)",
+      "Bash(mv _repro_endereco.js _repro_endereco.cjs)",
+      "Bash(node _repro_endereco.cjs)",
+      "Bash(npx ts-node *)",
+      "Bash(awk 'NR==872,NR==1200' \"D:\\\\Projetos\\\\nutricao-equina-super\\\\nutricao-equina-super\\\\frontend\\\\src\\\\pages\\\\AnimalDetail.tsx\")",
+      "Bash(awk 'NR==529,NR==946' \"D:\\\\Projetos\\\\nutricao-equina-super\\\\nutricao-equina-super\\\\frontend\\\\src\\\\pages\\\\Orcamento.tsx\")",
+      "Bash(awk 'NR==258,NR==400' \"D:\\\\Projetos\\\\nutricao-equina-super\\\\nutricao-equina-super\\\\frontend\\\\src\\\\pages\\\\SubModuloEvolucao.tsx\")"
     ]
   }
 }

@@ -60,6 +60,7 @@ model User {
   empresa              Empresa?               @relation("ProprietarioEmpresa", fields: [empresaId], references: [id], onDelete: SetNull)
   equipe               Equipe?                @relation("ProprietarioEquipe", fields: [equipeId], references: [id], onDelete: SetNull)
   animais              Animal[]
+  animaisInativados    Animal[]               @relation("AnimalInativadoPor")
   auditLogs            AuditLog[]
   dietasCriadas        Dieta[]                @relation("CriadorDieta")
   dietasModificadas    Dieta[]                @relation("ModificadorDieta")
@@ -97,6 +98,7 @@ model User {
   passwordHistory          PasswordHistory[]
   orcamentos               Orcamento[]             @relation("OrcamentoProprietario")
   orcamentosCriados        Orcamento[]             @relation("OrcamentoCriadoPor")
+  animalHistoricoRegistrado AnimalHistorico[]      @relation("AnimalHistoricoCriadoPor")
   @@index([equipeId])
   @@map("users")
   @@schema("schs2vet")
@@ -155,9 +157,21 @@ model Animal {
   finalidade         String?   @db.VarChar(100)
   seguradora         String?   @db.VarChar(150)
 
+  // Paciente INATIVO — somente leitura: bloqueia criação/edição de qualquer registro
+  // clínico ligado a ele (evolução, prescrição, vacina, exame, encaminhamento,
+  // agendamento, dieta) e a edição do próprio cadastro. DIFERENTE de `ativo` (exclusão
+  // lógica — o animal SOME de tudo): aqui o animal continua visível, só travado.
+  // Qualquer perfil com `animais.ativar` pode inativar (com motivo); reativar é
+  // SEMPRE gestor/admin (regra fixa no controller, não configurável na matriz).
+  inativo            Boolean   @default(false)
+  inativoEm          DateTime? @map("inativo_em")
+  inativoMotivo      String?   @db.Text @map("inativo_motivo")
+  inativoPorId       Int?      @map("inativo_por_id")
+
   especie         Especie              @relation(fields: [especieId],    references: [id])
   raca            Raca?                @relation(fields: [racaId],       references: [id])
   user            User                 @relation(fields: [userId],       references: [id], onDelete: Cascade)
+  inativoPor      User?                @relation("AnimalInativadoPor", fields: [inativoPorId], references: [id], onDelete: SetNull)
   empresa         Empresa              @relation("EmpresaAnimais", fields: [empresaId], references: [id], onDelete: Restrict)
   equipe          Equipe?              @relation("EquipeAnimais", fields: [equipeId], references: [id], onDelete: SetNull)
   localizacao     LocalizacaoAnimal?   @relation(fields: [localizacaoId], references: [id], onDelete: SetNull)
@@ -183,6 +197,7 @@ model Animal {
   resenhasGraficas ResenhaGrafica[]      @relation("ResenhaGraficaAnimal")
   exameImagens    ExameImagemAnexo[]     @relation("AnimalExameImagens")
   orcamentoItens  OrcamentoItem[]        @relation("OrcamentoItemAnimal")
+  historico       AnimalHistorico[]      @relation("AnimalHistoricoAnimal")
 
   @@index([especieId])
   @@index([racaId])
@@ -462,6 +477,32 @@ model OcorrenciaSaude {
 
   @@index([animalId])
   @@map("tb_ocorrencias_saude")
+  @@schema("schs2vet")
+}
+
+// Histórico de PESO, LOCALIZAÇÃO e BAIA do animal — um snapshot por alteração,
+// gravado por `AnimalController.criar`/`atualizar` sempre que qualquer um dos três
+// campos muda. Alimenta o gráfico de peso e a linha do tempo de local/baia em
+// AnimalDetail (ver GraficosAnimalController). Resultado de exame já tem histórico
+// próprio (ExameClinico + ExameClinicoResultadoItem) — não duplicado aqui.
+// Migration 20260819000000.
+model AnimalHistorico {
+  id            Int      @id @default(autoincrement())
+  animalId      Int      @map("animal_id")
+  peso          Float?
+  localizacaoId Int?     @map("localizacao_id")
+  local         String?  @db.VarChar(255)
+  baia          String?  @db.VarChar(100)
+  registradoEm  DateTime @default(now()) @map("registrado_em")
+  criadoPorId   Int?     @map("criado_por_id")
+
+  animal      Animal             @relation("AnimalHistoricoAnimal", fields: [animalId], references: [id], onDelete: Cascade)
+  localizacao LocalizacaoAnimal? @relation(fields: [localizacaoId], references: [id], onDelete: SetNull)
+  criadoPor   User?              @relation("AnimalHistoricoCriadoPor", fields: [criadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([animalId, registradoEm])
+  @@index([localizacaoId])
+  @@map("tb_animal_historico")
   @@schema("schs2vet")
 }
 
@@ -2282,6 +2323,7 @@ model LocalizacaoAnimal {
   tratadores      Tratador[]
   locaisTrabalho  MembroLocalTrabalho[]
   proprietarios   ProprietarioLocalidade[] @relation("ProprietarioLocalidadeLocal")
+  historico       AnimalHistorico[]
   equipe          Equipe?    @relation("EquipeLocalizacoes", fields: [equipeId], references: [id], onDelete: SetNull)
 
   @@index([tipoLocalizacao])

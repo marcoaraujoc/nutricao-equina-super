@@ -333,17 +333,6 @@ export default function Farmacia() {
     return 'ok';
   };
 
-  const barColor = (i: EstoqueItem) => {
-    const n = nivelEstoque(i);
-    if (n === 'critico')   return 'bg-red-500';
-    if (n === 'alarmante') return 'bg-amber-500';
-    return 'bg-emerald-500';
-  };
-
-  const barWidth = (i: EstoqueItem) => {
-    const ref = Math.max(i.estoqueAlarmante, i.estoqueMinimo) * 2 || 10;
-    return `${Math.min((i.qtdEstoque / ref) * 100, 100)}%`;
-  };
 
   // Remove zeros à direita de floats: 3.60 → 3.6, 3.00 → 3, 0.50 → 0.5
   const fmtQtd = (n: number) =>

@@ -7,6 +7,7 @@ const fs             = require('fs');
 const router         = express.Router();
 const AudioController = require('../controllers/AudioController');
 const { authenticate } = require('../middlewares/auth');
+const { tenantRls }    = require('../middlewares/tenantRls');
 
 // ─── Diretório temporário para uploads de áudio ───────────────────────────────
 
@@ -45,10 +46,13 @@ const upload = multer({
 
 // ─── Rota ─────────────────────────────────────────────────────────────────────
 
+// ⚠️ `tenantRls` REENTRA no contexto do tenant logo APÓS o multer — ver comentário em
+// routes/animais.js.
 router.post(
   '/processar',
   authenticate,
   upload.single('audio'),
+  tenantRls,
   AudioController.processar,
 );
 

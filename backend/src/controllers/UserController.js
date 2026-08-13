@@ -273,18 +273,31 @@ const UserController = {
       // de primeiro acesso do gestor. Para quem não é gestor vale `true`: esse gate
       // nunca se aplica a ele.
       //
-      // ⚠️ "Configurada" é `configuracaoCompleta()` — dias + horário + espécies
-      // preenchidos —, NUNCA "a linha existe". A empresa nasce (2026-08-16) já com uma
-      // linha de `EmpresaConfiguracao` (o ADMIN escolhe as espécies na criação), então
-      // "a linha existe" ficaria sempre `true` e o gestor nunca mais seria cobrado a
-      // completar o expediente — o sidebar liberaria antes de qualquer sessão real de
-      // configuração. Mesma exigência que `salvarConfiguracao` já faz no PUT.
+      // ⚠️ "Configurada" é `configuracaoCompleta()` — TODO o Cadastro da Empresa
+      // (identidade + operacional, exceto logo/whatsapp) preenchido —, NUNCA "a linha
+      // existe". A empresa nasce (2026-08-17) com identidade em branco e uma linha de
+      // `EmpresaConfiguracao` vazia (o Admin não escolhe mais nada dela), então "a
+      // linha existe" ficaria sempre `true` e o gestor nunca mais seria cobrado a
+      // completar o cadastro — o sidebar liberaria antes de qualquer preenchimento
+      // real. Mesma exigência que `salvarConfiguracao`/`EmpresaCadastroController.salvar`
+      // já fazem no PUT.
       let isGestorEmpresa   = false;
       let empresaConfigurada = true;
       try {
         const escopoCfg = await resolverEscopoConfiguracao(req);
         isGestorEmpresa = !!escopoCfg;
-        if (escopoCfg) empresaConfigurada = configuracaoCompleta(await buscarConfiguracao(escopoCfg));
+        if (escopoCfg) {
+          const [config, empresaCfg] = await Promise.all([
+            buscarConfiguracao(escopoCfg),
+            prisma.empresa.findUnique({
+              where:  { id: escopoCfg.empresaId },
+              select: { nome: true, documento: true, tipoDocumento: true, razaoSocial: true,
+                        nomeFantasia: true, inscricaoEstadual: true, cep: true, endereco: true,
+                        bairro: true, cidade: true, estado: true },
+            }),
+          ]);
+          empresaConfigurada = configuracaoCompleta(config, empresaCfg);
+        }
       } catch { isGestorEmpresa = false; empresaConfigurada = true; }
 
       // Remuneração e acesso ao sistema desta empresa. Vão para o Cadastro Pessoal

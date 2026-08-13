@@ -5,6 +5,7 @@ const { Prisma } = require('@prisma/client');
 const fs     = require('fs');
 const path   = require('path');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { animalEstaInativo } = require('../lib/animalInativo');
 const { storage } = require('../storage');
 const { escopoEvolucaoWhere }   = require('../lib/clinicalScope');
 // Rastro de "assumido de quem" no agendamento arrastado junto (SQL cru)
@@ -169,7 +170,7 @@ const EvolucaoController = {
     }
 
     try {
-      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
@@ -206,7 +207,7 @@ const EvolucaoController = {
     const { animalId } = req.params;
 
     try {
-      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
@@ -244,7 +245,7 @@ const EvolucaoController = {
         return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
       }
 
-      const acesso = await verificarAcessoAnimal({ animalId: evolucao.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: evolucao.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
@@ -286,7 +287,7 @@ const EvolucaoController = {
     if (!texto?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Texto da evolução é obrigatório' });
 
     try {
-      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
@@ -297,6 +298,13 @@ const EvolucaoController = {
 
       if (!animal) {
         return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      }
+
+      if (await animalEstaInativo(animalId)) {
+        return res.status(400).json({
+          sucesso: false, mensagem: 'Paciente inativo — reative com o gestor antes de registrar algo novo.',
+          code: 'PACIENTE_INATIVO',
+        });
       }
 
       // Evoluções em andamento deste animal (pode haver mais de uma quando
@@ -487,7 +495,7 @@ const EvolucaoController = {
         return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
       }
 
-      const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
@@ -651,7 +659,7 @@ const EvolucaoController = {
               where: { id: existente.animalId }, select: { userId: true },
             });
             await prisma.$transaction(async (tx) => {
-              for (const ex of exames) await lancarExameNaFatura(tx, ex, animal?.userId);
+              for (const ex of exames) await lancarExameNaFatura(tx, ex, animal?.userId, req.empresaId ?? null);
             });
           } catch { /* silencioso — fatura não bloqueia a finalização da evolução */ }
         });
@@ -684,7 +692,7 @@ const EvolucaoController = {
         return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
       }
 
-      const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
@@ -759,7 +767,7 @@ const EvolucaoController = {
         return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
       }
 
-      const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
@@ -836,7 +844,7 @@ const EvolucaoController = {
         return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
       }
 
-      const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
@@ -953,7 +961,7 @@ const EvolucaoController = {
         return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
       }
 
-      const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
@@ -1012,7 +1020,7 @@ const EvolucaoController = {
         return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
       }
 
-      const acesso = await verificarAcessoAnimal({ animalId: evolucaoParaTitulo.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: evolucaoParaTitulo.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
@@ -1056,7 +1064,7 @@ const EvolucaoController = {
         return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
       }
 
-      const acesso = await verificarAcessoAnimal({ animalId: evolucao.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: evolucao.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso) {
         fs.unlink(file.path, () => {});
@@ -1143,7 +1151,7 @@ const EvolucaoController = {
         select: { animalId: true },
       });
       if (evolucaoParaMidia) {
-        const acesso = await verificarAcessoAnimal({ animalId: evolucaoParaMidia.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId });
+        const acesso = await verificarAcessoAnimal({ animalId: evolucaoParaMidia.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
         if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
         if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
       }
@@ -1267,7 +1275,7 @@ const EvolucaoController = {
         return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
       }
 
-      const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
@@ -1330,7 +1338,7 @@ const EvolucaoController = {
         return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
       }
 
-      const acesso = await verificarAcessoAnimal({ animalId: atual.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId });
+      const acesso = await verificarAcessoAnimal({ animalId: atual.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 

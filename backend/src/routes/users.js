@@ -6,6 +6,7 @@ const path    = require('path');
 const UserController      = require('../controllers/UserController');
 const UserAdminController = require('../controllers/UserAdminController');
 const { authenticate, authorize } = require('../middlewares/auth');
+const { tenantRls }       = require('../middlewares/tenantRls');
 
 const router = express.Router();
 
@@ -25,7 +26,9 @@ router.get   ('/me',                authenticate, UserController.getMe);
 router.get   ('/buscar-proprietario', authenticate, UserController.buscarProprietarioPorEmail);
 router.put   ('/me',        authenticate, UserController.updateMe);
 // Rotas literais mais específicas ANTES das genéricas (/me/foto antes de /:id)
-router.put   ('/me/foto',   authenticate, uploadFoto.single('foto'), UserController.salvarFotoMe);
+// ⚠️ `tenantRls` REENTRA no contexto do tenant logo APÓS o multer — ver comentário em
+// routes/animais.js. Sem isto, salvar a foto cai em RLS mesmo com req.empresaId correto.
+router.put   ('/me/foto',   authenticate, uploadFoto.single('foto'), tenantRls, UserController.salvarFotoMe);
 router.delete('/me/foto',   authenticate, UserController.salvarFotoMe);
 router.patch ('/me/senha',  authenticate, UserController.alterarSenha);
 

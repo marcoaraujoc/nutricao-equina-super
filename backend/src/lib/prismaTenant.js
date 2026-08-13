@@ -109,6 +109,7 @@ const sqlSetPlataforma = `SELECT set_config('${VAR_PLATAFORMA}', 'on', true)`;
 /** Carimba na transação o sinal do contexto: a empresa OU o escopo de plataforma. */
 async function carimbar(tx, store) {
   if (store.plataforma) return tx.$executeRawUnsafe(sqlSetPlataforma);
+  if (process.env.DEBUG_RLS) console.error('[DEBUG-RLS] carimbar', { empresaId: store.empresaId });
   return tx.$executeRawUnsafe(sqlSetConfig, String(store.empresaId));
 }
 
@@ -159,6 +160,12 @@ function comTenantAutomatico(base) {
       async $allOperations({ model, args, query, operation }) {
         const store = contexto.getStore();
         const empresaId = store?.empresaId ?? null;
+
+        if (model === 'Animal') {
+          console.error('[DEBUG-RLS] $allOperations Animal', {
+            operation, temStore: !!store, empresaId, plataforma: store?.plataforma, emTransacao: store?.emTransacao,
+          });
+        }
 
         // (a) sem tenant  ·  (b) já numa transação com o tenant carimbado
         if ((empresaId == null && !store?.plataforma) || store?.emTransacao) return query(args);

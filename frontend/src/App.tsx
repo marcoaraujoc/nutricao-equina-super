@@ -1,6 +1,6 @@
 ﻿// src/App.tsx
 
-import { HashRouter as Router, Routes, Route } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -52,8 +52,8 @@ import CriaExameNutricional from './pages/CriaExameNutricional';
 
 import Equipe         from './pages/Equipe';
 import ControleAcesso from './pages/ControleAcesso';
-import Configuracoes  from './pages/Configuracoes';
 import CadastroEmpresa from './pages/CadastroEmpresa';
+import CriacaoGestor  from './pages/CriacaoGestor';
 import EquipeManager  from './pages/EquipeManager';
 import AuditoriaGeral from './pages/AuditoriaGeral';
 
@@ -279,15 +279,19 @@ function App() {
                           {/* Equipe */}
                           <Route path="/equipe"           element={<Equipe />} />
                           <Route path="/controle-acesso"  element={<ControleAcesso />} />
-                          <Route path="/configuracoes"    element={<Configuracoes />} />
-                          {/* Cadastro do ASSINANTE (razão social, documento, plano) — não confundir
-                              com /configuracoes, que são as preferências operacionais da clínica */}
+                          {/* Tela ÚNICA do Gestor (2026-08-17): identidade da empresa (razão
+                              social, documento, endereço, espécies) + preferências operacionais
+                              (logo, fechamento, expediente, WhatsApp). Antes eram duas rotas —
+                              /configuracoes redireciona para cá por compatibilidade com links
+                              antigos. */}
                           <Route path="/cadastro/empresa"  element={<CadastroEmpresa />} />
-                          {/* CRIAÇÃO de empresas pelo ADMIN da plataforma (empresa + equipe +
-                              plano + gestor(es)). Não confundir com /cadastro/empresa, que é o
-                              gestor editando o cadastro da PRÓPRIA empresa.
-                              ⚠️ A tela existia desde sempre mas nunca foi montada — as instruções
-                              de montagem ficaram num comentário morto em AceitarConvite.tsx. */}
+                          <Route path="/configuracoes"     element={<Navigate to="/cadastro/empresa" replace />} />
+                          {/* CRIAÇÃO de GESTOR pelo ADMIN da plataforma (dados básicos + plano —
+                              a empresa nasce em branco, o próprio gestor completa o cadastro dela
+                              em /cadastro/empresa). Não confundir com /cadastro/empresa. */}
+                          <Route path="/admin/criacao-gestor" element={<CriacaoGestor />} />
+                          {/* /admin/empresas: ADMIN só visualiza, inativa/reativa e troca o
+                              plano — criar/editar identidade da empresa saiu daqui. */}
                           <Route path="/admin/empresas"    element={<EquipeManager />} />
                           <Route path="/configuracao-alertas" element={<ConfiguracaoAlerta />} />
                           <Route path="/monitoracao"          element={<Monitoracao />} />
