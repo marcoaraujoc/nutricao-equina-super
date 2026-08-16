@@ -69,7 +69,8 @@ export interface LocalTrabalhoForm {
 
 interface LocalizacaoOpcao { id: number; nome: string }
 
-const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 transition-colors';
+// Mesmo padrão da tela de Tratador/Localização: rounded-2xl + anel emerald no foco.
+const inputCls = 'w-full border border-gray-200 rounded-2xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-400 transition-colors';
 const labelCls = 'block text-xs text-gray-500 mb-1';
 
 interface FornecedorDisponivel {
@@ -140,22 +141,23 @@ const mascaraCEP = (v: string): string => {
 // as duas máscaras dividem o MESMO input (ele troca de formato conforme R$/%): com
 // separadores diferentes, o mesmo campo mudaria de idioma ao trocar o seletor ao lado.
 
-/** Salário / valor fixo → 000.000,00 (milhar com ponto, 2 casas). Teto: 999.999.999,99 */
-const mascaraMoeda = (v: string): string => {
+/** Salário / valor fixo → 000.000,00 (milhar com ponto, 2 casas). Teto: 999.999.999,99
+ *  Exportada: reusada por CadastroPrestador.tsx — mesma máscara do Incluir Membro. */
+export const mascaraMoeda = (v: string): string => {
   const d = v.replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, 11);
   if (!d) return '';
   return (Number(d) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 /** Percentual → 00,00, limitado a 100 (o backend recusa acima disso). */
-const mascaraPercentual = (v: string): string => {
+export const mascaraPercentual = (v: string): string => {
   const d = v.replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, 5);
   if (!d) return '';
   const n = Math.min(Number(d) / 100, 100);
   return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-const mascaraValorPagamento = (v: string, forma?: 'VALOR' | 'PERCENTUAL'): string =>
+export const mascaraValorPagamento = (v: string, forma?: 'VALOR' | 'PERCENTUAL'): string =>
   forma === 'PERCENTUAL' ? mascaraPercentual(v) : mascaraMoeda(v);
 
 /**
@@ -163,7 +165,7 @@ const mascaraValorPagamento = (v: string, forma?: 'VALOR' | 'PERCENTUAL'): strin
  * ponto: `Number('3.500,00'.replace(',', '.'))` (o que havia aqui) dá NaN, e o
  * salário do membro ia para o backend como nulo.
  */
-const valorPagamentoNumero = (v?: string): number => {
+export const valorPagamentoNumero = (v?: string): number => {
   const s = String(v ?? '').replace(/\./g, '').replace(',', '.').trim();
   return s === '' ? NaN : Number(s);
 };
@@ -173,7 +175,7 @@ const valorPagamentoNumero = (v?: string): number => {
  * consome. Sem esta ponte, abrir a edição alimentaria a máscara com "3500", que ela
  * leria como 35,00.
  */
-const formatarValorSalvo = (v?: string | number | null): string => {
+export const formatarValorSalvo = (v?: string | number | null): string => {
   if (v == null || v === '') return '';
   const n = Number(String(v).replace(',', '.'));
   return Number.isFinite(n) ? String(Math.round(n * 100)) : '';
@@ -896,8 +898,10 @@ export default function UsuarioFormModal({
   };
 
   return (<>
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-2xl max-h-[92vh] flex flex-col border border-gray-100">
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
+      {/* `dvh`, não `vh` (mobile: `92vh` fica preso à altura antes do teclado abrir) e
+          `rounded-3xl` em toda largura — mesmo padrão de Tratador/Localização/Proprietário. */}
+      <div className="bg-white rounded-3xl shadow-xl w-full sm:max-w-2xl max-h-[90dvh] flex flex-col border border-gray-100">
 
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">

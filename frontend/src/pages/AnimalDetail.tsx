@@ -20,6 +20,7 @@ import MemoriaClinicaPanel from '../components/MemoriaClinicaPanel';
 import type { MemoriaClinica } from '../components/MemoriaClinicaPanel';
 import GraficosAnimalPanel from '../components/GraficosAnimalPanel';
 import FotoAnimal from '../components/FotoAnimal';
+import LaudoTexto from '../components/LaudoTexto';
 import { formatNumeroClinico } from '../utils/numeroClinico';
 
 // Ícone do título acompanha a espécie do animal (a espécie atendida pela empresa/equipe)
@@ -316,7 +317,7 @@ function CampoHeader({ label, valor, className = '' }: { label: string; valor: s
 
 function HeaderAnimal({ animal }: { animal: AnimalData }) {
   const solAceita = animal.solicitacoes?.find(s => s.status === 'ACEITO');
-  const vetNome   = solAceita?.veterinario?.fullName ?? animal.veterinarioNome ?? '—';
+  const vetNome   = solAceita?.veterinario?.fullName ?? animal.veterinarioNome ?? null;
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 sm:p-5">
@@ -349,7 +350,7 @@ function HeaderAnimal({ animal }: { animal: AnimalData }) {
               <CampoHeader label="Local"            valor={animal.local ?? '—'} />
               <CampoHeader label="Tipo de Trabalho" valor={animal.tipoExercicio ?? '—'} />
               <CampoHeader label="Proprietário"     valor={animal.user?.fullName ?? '—'} />
-              <CampoHeader label="Vet. Responsável" valor={vetNome} />
+              {vetNome && <CampoHeader label="Vet. Responsável" valor={vetNome} />}
             </div>
           </div>
         </div>
@@ -506,7 +507,7 @@ function DetalheModalExame({ dados }: { dados: DetalheExame }) {
       {dados.resultado && (
         <div className="py-2.5 pt-3">
           <span className="text-xs text-gray-400 font-medium block mb-1.5">Resultado</span>
-          <p className="text-sm text-gray-800 whitespace-pre-wrap">{dados.resultado}</p>
+          <LaudoTexto texto={dados.resultado} className="text-sm text-gray-800 whitespace-pre-wrap" />
         </div>
       )}
     </div>

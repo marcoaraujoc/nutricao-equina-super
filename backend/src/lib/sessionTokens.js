@@ -37,7 +37,15 @@ const ACCESS_MINUTES = Math.min(minutosDoEnv('SESSION_ACCESS_MINUTES', 30), IDLE
 const ACCESS_MAX_AGE_MS  = ACCESS_MINUTES * 60 * 1000;
 const REFRESH_MAX_AGE_MS = IDLE_MINUTES   * 60 * 1000;
 
-/** Assina o access token com o payload padrão da sessão. */
+/**
+ * Assina o access token com o payload padrão da sessão.
+ * `sessionVersion` carimba de QUAL geração de login este token nasceu — é o que
+ * permite `authenticate` derrubar na hora um dispositivo antigo quando a pessoa
+ * loga de novo em outro (ver `User.sessionVersion`). Passar `user` sem o campo
+ * (ex.: objeto montado à mão) assina `undefined`, que NUNCA bate com o valor do
+ * banco (sempre um inteiro) — o token nasceria já inválido, então todo caller
+ * precisa vir de uma leitura real do usuário.
+ */
 function assinarAccessToken(user) {
   return jwt.sign(
     {
@@ -47,6 +55,7 @@ function assinarAccessToken(user) {
       fullName:           user.fullName,
       userType:           user.userType,
       mustChangePassword: user.mustChangePassword,
+      sessionVersion:     user.sessionVersion,
     },
     SECRET,
     { expiresIn: `${ACCESS_MINUTES}m` }

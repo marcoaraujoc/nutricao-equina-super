@@ -8,7 +8,7 @@ const { lancarExameNaFatura, removerFaturaItensDaOrigem, atualizarFaturaItensDaO
 const { registrarAuditoria, registrarAlteracao, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro, getNivelEfetivo, NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
 const { animalEstaInativo } = require('../lib/animalInativo');
-const { processarExame, processarBuffer } = require('../services/exameParserService');
+const { processarExame, processarBuffer, processarLaudoImagem, processarLaudoImagemBuffer, ArquivoSemTranscricaoError } = require('../services/exameParserService');
 const { storage }        = require('../storage');
 
 const TIPOS_VALIDOS = ['Laboratorial', 'Bioquímico', 'Imagem', 'Compra'];
@@ -56,6 +56,27 @@ function parseItensManuais(bruto) {
 }
 
 /**
+ * Concatena os laudos de exame de IMAGEM já transcritos (um por arquivo
+ * anexado). Com mais de um arquivo no MESMO registro — ex.: Ultrassom +
+ * Raio-X carregados juntos — cada um vira uma seção com o próprio título
+ * (`tipoExame` que a IA leu do documento, ver `parse_laudo_imagem_texto`/
+ * `_visao`; nome do arquivo como reserva quando a IA não achou a modalidade
+ * escrita nele). Um único laudo não ganha título — não há o que diferenciar.
+ * Compartilhado por `analisarNaoPedido` e `salvarResultado`.
+ */
+function capitalizarPrimeiraLetra(s) {
+  const t = (s ?? '').toString().trim();
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : t;
+}
+
+function montarLaudoImagemFinal(laudos) {
+  const validos = laudos.filter(l => l.texto);
+  if (validos.length === 0) return '';
+  if (validos.length === 1) return validos[0].texto;
+  return validos.map(l => `# ${capitalizarPrimeiraLetra(l.titulo)}\n\n${l.texto}`).join('\n\n---\n\n');
+}
+
+/**
  * Extrai o laboratório gravado em `observacao` (JSON, campo `laboratorio` — ver
  * `criar`/`criarNaoPedido`). Usado para expor o laboratório como campo de leitura
  * pronto, sem o front precisar fazer `JSON.parse` do texto bruto.
@@ -96,17 +117,25 @@ function mapExtracaoParaItens(extracao) {
 
 /**
  * Acha um exame CLÍNICO já existente (ativo) do mesmo animal, mesmo tipo, mesma
- * descrição (comparação insensível a maiúsculas/espaço) e mesma data — usado só
- * pelo fluxo "não pedido" (`analisarNaoPedido` + `criarNaoPedido`) para nunca
- * duplicar o resultado do mesmo exame quando o laudo é reenviado/reanalisado por
- * engano. `dataISO` null (a IA não achou data) compara só por tipo+descrição.
+ * descrição (comparação insensível a maiúsculas/espaço) e mesma data — usado pelo
+ * fluxo "não pedido" (`analisarNaoPedido` + `criarNaoPedido`) para nunca duplicar o
+ * resultado do mesmo exame quando o laudo é reenviado/reanalisado por engano.
+ * `dataISO` null (a IA não achou data) compara só por tipo+descrição.
+ *
+ * `ignorarId`: o PRÓPRIO exame, quando `analisarNaoPedido` é chamado para pré-
+ * preencher o resultado de um exame PEDIDO existente (tela "Carregar Resultados" —
+ * ver `salvarResultado`) — sem isto, o pedido bateria com ele mesmo (mesmo tipo,
+ * mesma descrição, mesma data) e todo upload devolveria "exame já carregado".
  */
-async function exameDuplicado(animalId, tipo, descricao, dataISO) {
+async function exameDuplicado(animalId, tipo, descricao, dataISO, ignorarId = null) {
   const descricaoNorm = (descricao ?? '').toString().trim().toLowerCase();
   if (!descricaoNorm) return null;
 
   const candidatos = await prisma.exameClinico.findMany({
-    where: { animalId: Number(animalId), tipo, ativo: true },
+    where: {
+      animalId: Number(animalId), tipo, ativo: true,
+      ...(ignorarId ? { id: { not: Number(ignorarId) } } : {}),
+    },
     select: { id: true, numero: true, descricao: true, dataSolicitacao: true },
   });
 
@@ -248,19 +277,29 @@ const ExameClinicoController = {
     }
   },
 
-  // POST /clinica/exames/analisar (multipart: arquivo, animalId) — LEITURA da IA para
-  // pré-preencher o cadastro de um exame CLÍNICO "não pedido" (Laboratorial/Bioquímico).
-  // Não grava nada: devolve tipo/descrição/laboratório/data sugeridos + a tabela de
-  // resultado já extraída, que o front reenvia pronta ao criar (ver `criar` +
-  // `salvarResultado`) — evita rodar a IA duas vezes sobre o MESMO arquivo.
-  // Gate pelo slug de RESULTADO (não o de pedido): Laboratorial e Bioquímico
-  // compartilham `exames.laboratorial`, então dá para checar sem saber ainda qual
-  // dos dois a IA vai sugerir.
+  // POST /clinica/exames/analisar (multipart: arquivos[], animalId, tipo?) — LEITURA
+  // da IA para pré-preencher o cadastro de um exame CLÍNICO "não pedido", com QUANTOS
+  // arquivos o usuário anexar de uma vez — cada um passa pela MESMA regra de extração
+  // do tipo, e o resultado é FUNDIDO num só (ver `fundirExtracoesLab`/junção de laudo
+  // abaixo). Um arquivo que falhe a classificação (não é laudo) é descartado sem
+  // derrubar os demais; só falha a 422 quando NENHUM arquivo é aproveitável.
+  // Laboratorial/Bioquímico (tipo omitido): devolve tipo/descrição/laboratório/data
+  // sugeridos (do primeiro arquivo válido) + a tabela de resultado com as linhas de
+  // TODOS os arquivos — o front reenvia pronta ao criar (ver `criar` +
+  // `salvarResultado`), evitando rodar a IA de novo sobre os MESMOS arquivos.
+  // Gate pelo slug de RESULTADO (não o de pedido).
+  // Imagem (tipo='Imagem'): devolve laudo/data — TRANSCRIÇÃO literal de cada arquivo,
+  // concatenada em ordem, nunca tabela nem interpretação (CLAUDE.md §12/28-d).
+  // `exameId` (opcional): reusada TAMBÉM pela tela "Carregar Resultados" de um exame
+  // PEDIDO existente (`salvarResultado`), para pré-preencher laboratório + tabela
+  // antes de salvar — o id exclui o PRÓPRIO pedido da checagem de duplicidade abaixo.
   analisarNaoPedido: async (req, res) => {
     try {
-      const { animalId } = req.body;
+      const { animalId, exameId } = req.body;
+      const modoImagem = req.body?.tipo === 'Imagem';
+      const arquivos = Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []);
       if (!animalId) return res.status(400).json({ error: 'animalId é obrigatório' });
-      if (!req.file)  return res.status(400).json({ error: 'Anexe o arquivo do laudo' });
+      if (arquivos.length === 0) return res.status(400).json({ error: 'Anexe ao menos um arquivo do laudo' });
 
       const acesso = await verificarAcessoAnimal({
         animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType
@@ -268,32 +307,81 @@ const ExameClinicoController = {
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
 
-      const nivel = await getNivelEfetivo(req, 'exames.laboratorial.editar');
+      const slugResultado = modoImagem ? SLUG_RESULTADO.Imagem : SLUG_RESULTADO.Laboratorial;
+      const nivel = await getNivelEfetivo(req, `${slugResultado}.editar`);
       if ((NIVEL_ORDINAL[nivel] ?? 0) < NIVEL_ORDINAL.PROPRIO) {
         return res.status(403).json({ error: 'Sem permissão para carregar resultado de exame.' });
       }
 
-      const extracao = await processarBuffer(req.file.buffer, req.user?.id ?? null, Number(animalId), req.empresaId ?? null);
+      // ── IMAGEM: transcrição literal de CADA arquivo, concatenada ──────────────
+      if (modoImagem) {
+        const laudos = [];
+        const naoTranscritos = [];
+        let dataExame = null;
+        for (const file of arquivos) {
+          try {
+            const extracao = await processarLaudoImagemBuffer(file.buffer, file.mimetype, req.user?.id ?? null, Number(animalId), req.empresaId ?? null, file.originalname);
+            if (extracao?.ehLaudoImagem === false) continue;
+            if (extracao?.laudo) {
+              laudos.push({ titulo: extracao.tipoExame || file.originalname || 'Laudo', texto: String(extracao.laudo).trim() });
+            }
+            if (!dataExame && extracao?.dataExame) dataExame = extracao.dataExame;
+          } catch (errLLM) {
+            // .doc: aceito no upload, mas sem NENHUM caminho de leitura (nem texto,
+            // nem visão) — não é falha de IA, é aviso: o arquivo ainda vai anexado
+            // normalmente ao salvar, só sem prévia automática.
+            if (errLLM instanceof ArquivoSemTranscricaoError) { naoTranscritos.push(file.originalname || 'arquivo'); continue; }
+            console.error(`Transcrição LLM falhou para "${file.originalname}":`, errLLM.message);
+          }
+        }
+        if (laudos.length === 0 && naoTranscritos.length === 0) {
+          return res.status(422).json({
+            error: 'Nenhum dos arquivos é compatível com um laudo de exame de imagem.',
+            code:  'ARQUIVO_NAO_E_EXAME',
+          });
+        }
+        return res.json({ dados: { laudo: montarLaudoImagemFinal(laudos), dataExame, naoTranscritos } });
+      }
 
-      // A IA classifica o documento ANTES de tentar extrair (prompt parse_laudo,
-      // PASSO 0) — pega nota fiscal, contrato, foto qualquer etc. anexados por
-      // engano, sem deixar o usuário revisar uma tabela inventada/vazia.
-      if (extracao?.ehLaudoExame === false) {
+      // ── LABORATORIAL/BIOQUÍMICO: extração estruturada de CADA arquivo, combinada ──
+      const extracoesValidas = [];
+      const naoTranscritos = [];
+      for (const file of arquivos) {
+        try {
+          const extracao = await processarBuffer(file.buffer, req.user?.id ?? null, Number(animalId), req.empresaId ?? null, file.mimetype, file.originalname);
+          // A IA classifica o documento ANTES de tentar extrair (prompt parse_laudo,
+          // PASSO 0) — pega nota fiscal, contrato, foto qualquer etc. anexados por
+          // engano, sem deixar o usuário revisar uma tabela inventada/vazia.
+          if (extracao?.ehLaudoExame === false) continue;
+          extracoesValidas.push(extracao);
+        } catch (errLLM) {
+          if (errLLM instanceof ArquivoSemTranscricaoError) { naoTranscritos.push(file.originalname || 'arquivo'); continue; }
+          console.error(`Extração LLM falhou para "${file.originalname}":`, errLLM.message);
+        }
+      }
+      if (extracoesValidas.length === 0 && naoTranscritos.length === 0) {
         return res.status(422).json({
-          error: 'O arquivo não é compatível com um exame.',
+          error: 'Nenhum dos arquivos é compatível com um exame.',
           code:  'ARQUIVO_NAO_E_EXAME',
         });
       }
 
-      const tipoSugerido = extracao?.tipoSugerido === 'Bioquímico' ? 'Bioquímico' : 'Laboratorial';
-      const descricao    = (extracao?.nomeExame ?? '').toString().trim() || null;
-      const laboratorio  = (extracao?.laboratorio ?? '').toString().trim() || null;
-      const dataExame    = extracao?.dataExame || null;
+      const primeira      = extracoesValidas[0];
+      const tipoSugerido   = primeira?.tipoSugerido === 'Bioquímico' ? 'Bioquímico' : 'Laboratorial';
+      const descricao      = (primeira?.nomeExame ?? '').toString().trim() || null;
+      const comLaboratorio = extracoesValidas.find(e => (e?.laboratorio ?? '').toString().trim());
+      const laboratorio    = comLaboratorio ? String(comLaboratorio.laboratorio).trim() : null;
+      const dataExame      = extracoesValidas.find(e => e?.dataExame)?.dataExame || null;
+      // Linhas de TODOS os arquivos, uma tabela só — `ordem` é reindexada no conjunto
+      // fundido (cada extração reinicia a própria contagem em 0).
+      const itens = extracoesValidas
+        .flatMap(e => mapExtracaoParaItens(e))
+        .map((it, idx) => ({ ...it, ordem: idx }));
 
-      // Nunca repete o resultado do mesmo exame — avisa aqui, assim que a IA lê o
-      // laudo, para o usuário não preencher a tela inteira e só descobrir no salvar.
+      // Nunca repete o resultado do mesmo exame — avisa aqui, assim que a IA lê o(s)
+      // laudo(s), para o usuário não preencher a tela inteira e só descobrir no salvar.
       // A checagem definitiva (autoritativa) é feita de novo em `criarNaoPedido`.
-      const duplicado = await exameDuplicado(Number(animalId), tipoSugerido, descricao, dataExame);
+      const duplicado = await exameDuplicado(Number(animalId), tipoSugerido, descricao, dataExame, exameId ? Number(exameId) : null);
       if (duplicado) {
         return res.status(409).json({
           error: `Este exame já foi carregado (${duplicado.descricao}).`,
@@ -301,7 +389,7 @@ const ExameClinicoController = {
         });
       }
 
-      res.json({ dados: { tipoSugerido, descricao, laboratorio, dataExame, itens: mapExtracaoParaItens(extracao) } });
+      res.json({ dados: { tipoSugerido, descricao, laboratorio, dataExame, itens, naoTranscritos } });
     } catch (err) {
       console.error('Erro ao analisar laudo (exame não pedido):', err);
       res.status(500).json({ error: 'Erro ao analisar o laudo com a IA' });
@@ -368,7 +456,9 @@ const ExameClinicoController = {
       }
 
       // Upload ANTES da transaction (I/O de storage fica fora da transação de banco —
-      // mesmo padrão de `salvarResultado`).
+      // mesmo padrão de `salvarResultado`). TODOS os arquivos viram anexo, em
+      // qualquer tipo — Laboratorial/Bioquímico ganha `arquivoUrl` (campo legado,
+      // aponta para o primeiro) além do anexo completo.
       let arquivoUrl = null;
       const imagensNovas = [];
       if (tipoFinal === 'Imagem') {
@@ -376,8 +466,12 @@ const ExameClinicoController = {
           const url = await storage.upload(file, 'exames-imagens', { empresaId: req.empresaId ?? null, animalId: Number(animalId), criadoPorId: req.user?.id ?? null });
           imagensNovas.push({ nome: file.originalname ?? null, arquivoUrl: url });
         }
-      } else if (arquivos[0]) {
-        arquivoUrl = await storage.upload(arquivos[0], 'exames', { empresaId: req.empresaId ?? null, animalId: Number(animalId), criadoPorId: req.user?.id ?? null });
+      } else {
+        for (const file of arquivos) {
+          const url = await storage.upload(file, 'exames', { empresaId: req.empresaId ?? null, animalId: Number(animalId), criadoPorId: req.user?.id ?? null });
+          if (!arquivoUrl) arquivoUrl = url;
+          imagensNovas.push({ nome: file.originalname ?? null, arquivoUrl: url });
+        }
       }
 
       const animalDoExame = await prisma.animal.findUnique({ where: { id: Number(animalId) }, select: { userId: true } });
@@ -535,8 +629,10 @@ const ExameClinicoController = {
 
   // PATCH /clinica/exames/:id/resultado — CARREGAR RESULTADO (multipart)
   // Laboratorial/Bioquímico: extrai o laudo (LLM) em forma de TABELA + guarda o arquivo.
-  // Imagem: laudo VERBATIM (sem interpretação) + imagens anexadas. Ao salvar → REALIZADO.
-  // RBAC do RESULTADO (distinto do pedido): exames.laboratorial.* / exames.imagem.* por tipo.
+  // Imagem: extrai o laudo (LLM) em forma de TEXTO TRANSCRITO (nunca interpretado) +
+  // guarda as imagens anexadas. Texto digitado à mão sempre vence a IA, nos dois casos.
+  // Ao salvar → REALIZADO. RBAC do RESULTADO (distinto do pedido): exames.laboratorial.*
+  // / exames.imagem.* por tipo.
   salvarResultado: async (req, res) => {
     try {
       const { id } = req.params;
@@ -563,7 +659,7 @@ const ExameClinicoController = {
       const arquivos   = Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []);
       const agora      = new Date();
 
-      // ── IMAGEM: laudo VERBATIM + imagens (sem interpretação da IA) ───────────
+      // ── IMAGEM: imagens anexadas + laudo TRANSCRITO pela IA (sem interpretação) ──
       if (exame.tipo === 'Imagem') {
         const imagens = [];
         for (const file of arquivos) {
@@ -579,36 +675,101 @@ const ExameClinicoController = {
           });
           imagens.push({ id: anexo.id, nome: anexo.nome, arquivoUrl: anexo.arquivoUrl });
         }
+
+        // TRANSCRIÇÃO POR IA de CADA arquivo, concatenada — só quando ninguém digitou
+        // o laudo à mão (mesma regra "manual vence IA" do ramo Laboratorial abaixo).
+        // A IA só transcreve o que está escrito em cada arquivo, nunca interpreta.
+        let laudoFinal = laudoTexto;
+        if (!laudoFinal && arquivos.length > 0) {
+          const laudos = [];
+          for (const file of arquivos) {
+            try {
+              const extracao = await processarLaudoImagem(file.path, file.mimetype, req.user?.id ?? null, exame.animalId, req.empresaId ?? null, file.originalname);
+              if (extracao?.ehLaudoImagem !== false && extracao?.laudo) {
+                laudos.push({ titulo: extracao.tipoExame || file.originalname || 'Laudo', texto: String(extracao.laudo).trim() });
+              }
+            } catch (errLLM) {
+              // .doc: sem caminho de leitura nenhum — não é falha de IA (ver
+              // ArquivoSemTranscricaoError); o arquivo já foi anexado acima do
+              // mesmo jeito, só não contribui com texto transcrito.
+              if (errLLM instanceof ArquivoSemTranscricaoError) continue;
+              // LLM indisponível/falhou para ESTE arquivo → segue para os demais;
+              // guarda ao menos o(s) anexo(s) mesmo que nenhum seja transcrito.
+              console.error(`salvarResultado — transcrição LLM falhou para "${file.originalname}":`, errLLM.message);
+            }
+          }
+          const laudoTranscrito = montarLaudoImagemFinal(laudos);
+          if (laudoTranscrito) laudoFinal = laudoTranscrito;
+        }
+
         await prisma.exameClinico.update({
           where: { id: exame.id },
-          data:  { resultado: laudoTexto || exame.resultado, status: 'REALIZADO', dataResultado: agora },
+          data:  { resultado: laudoFinal || exame.resultado, status: 'REALIZADO', dataResultado: agora },
         });
         return res.json({ dados: { id: exame.id, status: 'REALIZADO', imagens } });
       }
 
-      // ── LABORATORIAL/BIOQUÍMICO: extrai a TABELA do laudo (LLM) + guarda arquivo ──
+      // ── LABORATORIAL/BIOQUÍMICO: extrai a TABELA de CADA arquivo (LLM) + guarda ───
+      // TODOS os arquivos desta chamada — o primeiro alimenta `arquivoUrl` (campo
+      // legado, mantido por compatibilidade); cada um também vira um anexo em
+      // ExameImagemAnexo, para o usuário abrir/baixar qualquer um deles depois, não
+      // só o primeiro (mesma tabela que a Imagem já usa — aqui é só mais um tipo de
+      // anexo, não uma tabela nova).
       let arquivoUrl = exame.arquivoUrl;
       let itens = [];
-      const file = arquivos[0];
+
+      let primeiroUploadNovo = null;
+      for (const file of arquivos) {
+        const url = await storage.upload(file, 'exames', { empresaId: req.empresaId ?? null, animalId: exame.animalId, criadoPorId: req.user?.id ?? null });
+        if (!primeiroUploadNovo) primeiroUploadNovo = url;
+        await prisma.exameImagemAnexo.create({
+          data: { animalId: exame.animalId, exameClinicoId: exame.id, nome: file.originalname ?? null, arquivoUrl: url, criadoPorId: req.user?.id ?? null },
+        });
+      }
+      if (primeiroUploadNovo) arquivoUrl = primeiroUploadNovo;
 
       // PREENCHIMENTO MANUAL: a tela de Resultado de Exame também deixa DIGITAR a
       // tabela, sem laudo nenhum (nem todo laboratório entrega arquivo). Vindo por
       // multipart, `itens` chega como string JSON. Havendo itens digitados, eles
-      // MANDAM — não faz sentido pedir a leitura do arquivo à IA e depois descartar
+      // MANDAM — não faz sentido pedir a leitura dos arquivos à IA e depois descartar
       // o que a pessoa digitou.
       const itensManuais = parseItensManuais(req.body?.itens);
       if (itensManuais.length > 0) {
         itens = itensManuais;
-        if (file) arquivoUrl = await storage.upload(file, 'exames', { empresaId: req.empresaId ?? null, animalId: exame.animalId, criadoPorId: req.user?.id ?? null });
-      } else if (file) {
-        arquivoUrl = await storage.upload(file, 'exames', { empresaId: req.empresaId ?? null, animalId: exame.animalId, criadoPorId: req.user?.id ?? null });
-        try {
-          const extracao = await processarExame(file.path, req.user?.id ?? null, exame?.animalId ?? null, req.empresaId ?? null);
-          itens = mapExtracaoParaItens(extracao);
-        } catch (errLLM) {
-          // LLM indisponível/falhou → guarda o arquivo mesmo assim (sem tabela)
-          console.error('salvarResultado — extração LLM falhou, mantendo só o arquivo:', errLLM.message);
+      } else if (arquivos.length > 0) {
+        const extracoesValidas = [];
+        for (const file of arquivos) {
+          try {
+            const extracao = await processarExame(file.path, req.user?.id ?? null, exame?.animalId ?? null, req.empresaId ?? null, file.mimetype, file.originalname);
+            if (extracao?.ehLaudoExame === false) continue;
+            extracoesValidas.push(extracao);
+          } catch (errLLM) {
+            // .doc: sem caminho de leitura nenhum — não é falha de IA (o arquivo já
+            // foi anexado acima do mesmo jeito, só não contribui com a tabela).
+            if (errLLM instanceof ArquivoSemTranscricaoError) continue;
+            // LLM indisponível/falhou para ESTE arquivo → segue para os demais;
+            // guarda os arquivos mesmo assim (tabela fica com o que os outros deram).
+            console.error(`salvarResultado — extração LLM falhou para "${file.originalname}":`, errLLM.message);
+          }
         }
+        // Linhas de TODOS os arquivos, uma tabela só — `ordem` reindexada no conjunto.
+        itens = extracoesValidas.flatMap(e => mapExtracaoParaItens(e)).map((it, idx) => ({ ...it, ordem: idx }));
+      }
+
+      // LABORATÓRIO: o campo do modal "Carregar Resultados" (pré-preenchido pela IA
+      // via `/clinica/exames/analisar`, editável) é a fonte da vez — grava MERGEADO
+      // dentro de `observacao` (mesma estrutura JSON de `criar`/`atualizar`), sem
+      // tocar nos demais campos que só existem desde o pedido (tipoAmostra,
+      // indicacaoClinica, dataHoraColeta, grupoNome, grupos). Ausente no body (ex.:
+      // "Preencher manualmente", que não tem esse campo) → preserva o que já havia.
+      let observacaoAtualizada = exame.observacao;
+      if (exame.tipo !== 'Compra' && req.body?.laboratorio !== undefined) {
+        let extra = {};
+        if (exame.observacao) {
+          try { extra = JSON.parse(exame.observacao) ?? {}; } catch { extra = {}; }
+        }
+        extra.laboratorio = req.body.laboratorio.toString().trim() || null;
+        observacaoAtualizada = JSON.stringify(extra);
       }
 
       await prisma.$transaction(async (tx) => {
@@ -633,7 +794,7 @@ const ExameClinicoController = {
         }
         await tx.exameClinico.update({
           where: { id: exame.id },
-          data:  { resultado: laudoTexto || exame.resultado, arquivoUrl, status: 'REALIZADO', dataResultado: agora },
+          data:  { resultado: laudoTexto || exame.resultado, arquivoUrl, observacao: observacaoAtualizada, status: 'REALIZADO', dataResultado: agora },
         });
       });
 
@@ -739,6 +900,59 @@ const ExameClinicoController = {
       }
       console.error('Erro ao excluir exame clínico:', err);
       res.status(500).json({ error: 'Erro ao excluir exame' });
+    }
+  },
+
+  // DELETE /clinica/exames/:id/imagens/:imagemId — remove UM anexo do resultado
+  // (soft delete, ativo:false). Não mexe no exame nem nos demais anexos.
+  // Gate: mesmo slug DINÂMICO do resultado por tipo que `salvarResultado` usa para
+  // `.editar`, aqui na variante `.deletar` (exames.laboratorial.deletar /
+  // exames.imagem.deletar) — slugs que já existiam no seed sem proteger rota nenhuma
+  // (armadilha 27 do CLAUDE.md); esta é a primeira a usá-los.
+  // ⚠️ SEM justificativa obrigatória, de propósito (decisão de produto 2026-08-15):
+  // é uma imagem a mais dentro de um resultado que continua existindo, não a exclusão
+  // do exame/registro em si — o motivo continua sendo exigido para ESSE, aqui não.
+  excluirImagem: async (req, res) => {
+    try {
+      const { motivo } = req.body ?? {};
+
+      const exame = await prisma.exameClinico.findUnique({ where: { id: Number(req.params.id) } });
+      if (!exame || !exame.ativo) return res.status(404).json({ error: 'Exame não encontrado' });
+
+      const acesso = await verificarAcessoAnimal({
+        animalId: exame.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType
+      });
+      if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
+
+      const base = SLUG_RESULTADO[exame.tipo];
+      if (base) {
+        const nivel = await getNivelEfetivo(req, `${base}.deletar`);
+        if ((NIVEL_ORDINAL[nivel] ?? 0) < NIVEL_ORDINAL.PROPRIO) {
+          return res.status(403).json({ error: `Sem permissão para excluir imagem de exame ${exame.tipo}.` });
+        }
+      }
+
+      const imagem = await prisma.exameImagemAnexo.findUnique({ where: { id: Number(req.params.imagemId) } });
+      if (!imagem || !imagem.ativo || imagem.exameClinicoId !== exame.id) {
+        return res.status(404).json({ error: 'Imagem não encontrada' });
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.exameImagemAnexo.update({ where: { id: imagem.id }, data: { ativo: false } });
+        await registrarAuditoria(tx, req, {
+          categoria:  'EXCLUSAO',
+          entidade:   'EXAME_CLINICO',
+          entidadeId: exame.id,
+          animalId:   exame.animalId,
+          motivo,
+          detalhes:   `imagem removida: ${imagem.nome ?? imagem.id}`,
+        });
+      });
+
+      res.json({ dados: { id: imagem.id, excluido: true } });
+    } catch (err) {
+      console.error('Erro ao excluir imagem do exame:', err);
+      res.status(500).json({ error: 'Erro ao excluir imagem' });
     }
   },
 };

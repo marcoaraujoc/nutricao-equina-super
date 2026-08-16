@@ -87,13 +87,16 @@ const GoogleController = {
 
       console.log(`✅ Usuário Google processado: ${user.email} (ID: ${user.id})`);
 
-      const token = assinarAccessToken(user);
-
       const refreshToken = generateRefreshToken(user.id);
-      await prisma.user.update({
-        where: { id: user.id },
-        data:  { refreshToken },
+
+      // Mesmo mecanismo do login por senha/2FA (`emitirSessao`): incrementa a
+      // versão de sessão para derrubar na hora o access token de outro dispositivo.
+      const { sessionVersion } = await prisma.user.update({
+        where:  { id: user.id },
+        data:   { refreshToken, sessionVersion: { increment: 1 } },
+        select: { sessionVersion: true },
       });
+      const token = assinarAccessToken({ ...user, sessionVersion });
 
       // Cookies HttpOnly (consistente com o login por e-mail/senha)
       setAuthCookies(res, { accessToken: token, refreshToken });

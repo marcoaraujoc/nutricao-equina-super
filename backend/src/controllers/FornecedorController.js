@@ -4,21 +4,13 @@
 const prisma = require('../lib/prisma').default;
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
+const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
+const { registrarAuditoria } = require('../lib/auditoria');
 
-const TIPOS_SERVICO_VALIDOS = [
-  'Cardiologista',
-  'Dermatologista',
-  'Estagiário',
-  'Farmácia',
-  'Ferrador',
-  'Fisioterapeuta',
-  'Laboratório',
-  'Loja',
-  'Quiroprata',
-  'Radiologista',
-  'Secretária',
-  'Veterinário',
-];
+// Whitelist fixa SAIU (2026-08-25) — o tipo de fornecedor agora vem do catálogo
+// tenant-scoped (tb_catalogo_tipo_servico, CatalogoTipoServicoController), que
+// cresce por uso. Validação aqui é só "não vazio, tamanho razoável" — quem
+// decide QUAIS tipos aparecem no formulário é o catálogo, não este arquivo.
 
 const normalizarDigitos = v => (v ?? '').replace(/\D/g, '');
 const normalizarTexto   = v => (v ?? '').trim().toLowerCase();
@@ -135,16 +127,18 @@ const FornecedorController = {
         orderBy: [{ ativo: 'desc' }, { nome: 'asc' }],
       });
 
-      res.json({ sucesso: true, dados: fornecedores });
+      res.json({ sucesso: true, dados: await anexarTrilha(fornecedores, 'fornecedor') });
     } catch (err) {
       console.error('Erro ao listar fornecedores:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar fornecedores' });
     }
   },
 
-  // GET /api/cadastro/fornecedores/tipos
+  // GET /api/cadastro/fornecedores/tipos — LEGADO: os tipos hoje vêm do catálogo
+  // tenant-scoped (GET /api/cadastro/tipos-servico?categoria=FORNECEDOR).
+  // Mantido só para não quebrar chamador antigo; devolve lista vazia.
   listarTipos: async (req, res) => {
-    res.json({ sucesso: true, dados: TIPOS_SERVICO_VALIDOS });
+    res.json({ sucesso: true, dados: [] });
   },
 
   // GET /api/cadastro/fornecedores/:id
@@ -175,19 +169,18 @@ const FornecedorController = {
     if (!telefone?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
 
-    // Especialidades do catálogo (novo) têm precedência; tipoServico (legado) é derivado.
+    // Especialidades do catálogo (legado, só quem ainda envia especialidadeIds) têm
+    // precedência; tipoServico (do catálogo tenant-scoped de tipos, ou digitado como
+    // novo) é o caminho padrão desde que "Veterinário" saiu do tipo de fornecedor.
     const espec = await resolverEspecialidades(especialidadeIds);
     let tipoServicoFinal;
     if (espec && espec.ids.length > 0) {
       tipoServicoFinal = espec.tipoServico;
     } else {
       if (!tipoServico?.trim())
-        return res.status(400).json({ sucesso: false, mensagem: 'Selecione ao menos uma especialidade' });
-      const tiposEnviados = tipoServico.split(',').map(t => t.trim()).filter(Boolean);
-      if (tiposEnviados.length === 0)
-        return res.status(400).json({ sucesso: false, mensagem: 'Selecione ao menos uma especialidade' });
-      if (!tiposEnviados.every(t => TIPOS_SERVICO_VALIDOS.includes(t)))
-        return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço inválido' });
+        return res.status(400).json({ sucesso: false, mensagem: 'Selecione o tipo de fornecedor' });
+      if (tipoServico.trim().length > 50)
+        return res.status(400).json({ sucesso: false, mensagem: 'Tipo de fornecedor muito longo (máx. 50 caracteres)' });
       tipoServicoFinal = tipoServico.trim();
     }
 
@@ -254,12 +247,10 @@ const FornecedorController = {
     if (!telefone?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
 
-    // Especialidades do catálogo (novo) têm precedência; tipoServico (legado) é derivado.
+    // Especialidades do catálogo (legado) têm precedência; tipoServico é o caminho padrão.
     const espec = await resolverEspecialidades(especialidadeIds);
-    if (!espec && tipoServico) {
-      const tiposEnviados = tipoServico.split(',').map(t => t.trim()).filter(Boolean);
-      if (!tiposEnviados.every(t => TIPOS_SERVICO_VALIDOS.includes(t)))
-        return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço inválido' });
+    if (!espec && tipoServico && tipoServico.trim().length > 50) {
+      return res.status(400).json({ sucesso: false, mensagem: 'Tipo de fornecedor muito longo (máx. 50 caracteres)' });
     }
 
     try {
@@ -337,14 +328,28 @@ const FornecedorController = {
       if (!podeAlterarRegistroEscopado(existe, req))
         return res.status(403).json({ sucesso: false, mensagem: 'Você não tem acesso para alterar este fornecedor.' });
 
-      const fornecedor = await prisma.fornecedor.update({
-        where: { id: Number(req.params.id) },
-        data:  { ativo: !existe.ativo },
+      const vaiInativar = existe.ativo;
+      if (vaiInativar) {
+        await registrarInativacao(prisma, 'fornecedor', existe.id, req.user.id);
+      } else {
+        await registrarAtivacao(prisma, 'fornecedor', existe.id, req.user.id);
+      }
+
+      // Mesma auditoria de Equipe (lib/auditoria.js) — quem foi (in)ativado, quando
+      // (timestamp da própria linha) e quem fez (userId/userName/email da linha).
+      await registrarAuditoria(prisma, req, {
+        categoria: 'ALTERACAO',
+        entidade:  'FORNECEDOR',
+        entidadeId: existe.id,
+        detalhes:  `${req.user.fullName ?? req.user.email} ${vaiInativar ? 'inativou' : 'ativou'} o fornecedor ${existe.nome}`,
       });
+
+      const fornecedorAtualizado = await prisma.fornecedor.findUnique({ where: { id: existe.id } });
+      const [comTrilha] = await anexarTrilha([fornecedorAtualizado], 'fornecedor');
       res.json({
         sucesso:  true,
-        dados:    fornecedor,
-        mensagem: `Fornecedor ${fornecedor.ativo ? 'ativado' : 'inativado'} com sucesso`,
+        dados:    comTrilha,
+        mensagem: vaiInativar ? 'Fornecedor inativado' : 'Fornecedor ativado',
       });
     } catch (err) {
       console.error('Erro ao alternar status do fornecedor:', err);
@@ -354,4 +359,3 @@ const FornecedorController = {
 };
 
 module.exports = FornecedorController;
-module.exports.TIPOS_SERVICO_VALIDOS = TIPOS_SERVICO_VALIDOS;

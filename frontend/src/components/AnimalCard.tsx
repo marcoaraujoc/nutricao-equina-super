@@ -166,15 +166,13 @@ export default function AnimalCard({ animal }: AnimalCardProps) {
             <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Proprietário</span>
             <span className="text-sm text-gray-900 truncate block">{proprietarioNome}</span>
           </div>
-          {/* Veterinário Responsável */}
-          <div>
-            <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Vet. Responsável</span>
-            {vetNome ? (
+          {/* Veterinário Responsável — só aparece quando há um associado */}
+          {vetNome && (
+            <div>
+              <span className="block text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Vet. Responsável</span>
               <span className="text-sm text-gray-900 truncate block">{vetNome}</span>
-            ) : (
-              <span className="text-sm text-gray-400 italic block">Não atribuído</span>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
       </div>

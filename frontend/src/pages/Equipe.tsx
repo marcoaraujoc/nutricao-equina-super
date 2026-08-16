@@ -501,7 +501,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
               {isGestor && (
                 <button onClick={() => setEditandoNome(true)}
                   title="Renomear equipe"
-                  className="p-1 text-gray-300 hover:text-emerald-600 transition-colors">
+                  className="p-1 text-emerald-500 hover:text-emerald-700 transition-colors">
                   <Pencil size={14} />
                 </button>
               )}
@@ -651,7 +651,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                     <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-50">
                       {isGestor && (m.cargo !== 'GESTOR' || isAdminPlataforma || m.user.id === user?.id) && (
                         <button onClick={() => setMembroEditando(m)}
-                          className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
+                          className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-emerald-200 rounded-lg text-xs text-emerald-600 hover:bg-emerald-50 transition-colors">
                           <Pencil size={11} /> Editar
                         </button>
                       )}

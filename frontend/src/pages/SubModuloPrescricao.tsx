@@ -452,6 +452,13 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   // IDs ainda pendentes de finalização (retry após alerta de estoque) — evita
   // re-finalizar grupos já finalizados (que retornariam 400 "não está SALVO").
   const pendingFinalizeRef = useRef<number[] | null>(null);
+  // Grupos-DESTINO criados por um split de categoria (`grupoDestino` do add/editar
+  // item) durante ESTA sessão de edição. `executarFinalizacao` só conhecia
+  // `grupo.id` (o documento que estava na tela) — o item que migrou de categoria
+  // (ex: virou CONTROLADO) ficava numa prescrição irmã nova, SALVA, que ninguém
+  // mandava finalizar: o "Finalizar" da tela reportava sucesso, mas aquele item
+  // nunca chegava à Execução de Prescrição. Ver armadilha registrada no CLAUDE.md.
+  const extraGrupoIdsRef = useRef<Set<number>>(new Set());
   const [showAddForm,      setShowAddForm]      = useState(openWithForm);
   const [showMedDropdown,  setShowMedDropdown]  = useState(false);
   const [procedimentos,    setProcedimentos]    = useState<{ id: number; nome: string; especialidade: string | null; valor: number | null; combo?: boolean }[]>([]);
@@ -764,9 +771,11 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     try {
       if (editingServerId !== null) {
         const res = await api.put(`/clinica/prescricoes/grupos/${grupo!.id}/itens/${editingServerId}`, itemParaEnvio(form));
-        const destino = res.data.grupoDestino as { numeroFormatado: string; novo: boolean } | null;
+        const destino = res.data.grupoDestino as { id: number; numeroFormatado: string; novo: boolean } | null;
         if (destino) {
-          // Categoria mudou → o item foi movido para outra prescrição
+          // Categoria mudou → o item foi movido para outra prescrição. Guarda o
+          // destino para o Finalizar desta sessão alcançar esse grupo também.
+          extraGrupoIdsRef.current.add(destino.id);
           setServerItens(prev => prev.filter(it => it.id !== editingServerId));
           toast.success(destino.novo
             ? `Item movido para a nova prescrição #${destino.numeroFormatado} (categoria diferente)`
@@ -779,9 +788,11 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         setEditingServerId(null);
       } else {
         const res = await api.post(`/clinica/prescricoes/grupos/${grupo!.id}/itens`, itemParaEnvio(form));
-        const destino = res.data.grupoDestino as { numeroFormatado: string; novo: boolean } | null;
+        const destino = res.data.grupoDestino as { id: number; numeroFormatado: string; novo: boolean } | null;
         if (destino) {
-          // Categoria diferente do grupo → foi para uma prescrição separada
+          // Categoria diferente do grupo → foi para uma prescrição separada. Guarda
+          // o destino para o Finalizar desta sessão alcançar esse grupo também.
+          extraGrupoIdsRef.current.add(destino.id);
           toast.success(destino.novo
             ? `Item de categoria diferente movido para a nova prescrição #${destino.numeroFormatado}`
             : `Item movido para a prescrição #${destino.numeroFormatado} (mesma categoria)`);
@@ -947,6 +958,17 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         ids = [grupo.id];
       } else {
         ids = [];
+      }
+
+      // Grupos-destino de um split de categoria feito NESTA sessão (item que virou
+      // CONTROLADO/GERAL na edição e migrou para uma prescrição irmã) — sem isto,
+      // esse item ficava numa prescrição SALVA que ninguém finalizava e nunca
+      // aparecia na Execução de Prescrição, mesmo com o "Finalizar" respondendo OK.
+      if (extraGrupoIdsRef.current.size > 0) {
+        for (const extraId of extraGrupoIdsRef.current) {
+          if (!ids.includes(extraId)) ids.push(extraId);
+        }
+        extraGrupoIdsRef.current.clear();
       }
 
       // Finaliza cada prescrição; agrega alertas de estoque das que faltarem
@@ -1928,7 +1950,6 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   const [filtroStatus,       setFiltroStatus]       = useState<'todos' | StatusGrupo>('todos');
   const [page,               setPage]               = useState(1);
   const [limit]                                     = useState(10);
-  const [showEditModal,      setShowEditModal]      = useState(false);
   const [editingGrupo,       setEditingGrupo]       = useState<PrescricaoGrupo | null>(null);
   const [viewingGrupo,       setViewingGrupo]       = useState<PrescricaoGrupo | null>(null);
   const [inlineFormKey,      setInlineFormKey]      = useState(0);
@@ -1953,7 +1974,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
 
   useEffect(() => { if (!loadingPerms) carregar(); }, [carregar, loadingPerms]);
 
-  const abrirEdicao = (g: PrescricaoGrupo) => { setEditingGrupo(g); setShowEditModal(true); };
+  const abrirEdicao = (g: PrescricaoGrupo) => { setEditingGrupo(g); };
 
   // Visualização SOMENTE LEITURA — busca o detalhe e abre o VisualizacaoGrupo,
   // sem entrar em modo de edição (independente do status).
@@ -2032,7 +2053,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
     editIdAplicadoRef.current = editItemId;
     api.get(`/clinica/prescricoes/grupos/${editItemId}`)
       .then(res => {
-        if (res.data?.dados) { setEditingGrupo(res.data.dados as PrescricaoGrupo); setShowEditModal(true); }
+        if (res.data?.dados) { setEditingGrupo(res.data.dados as PrescricaoGrupo); }
         onEditConsumed?.();
       })
       .catch(() => {});
@@ -2074,7 +2095,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       setLoadingForceDireto(false);
     }
   };
-  const fecharModal = () => { setShowEditModal(false); setEditingGrupo(null); };
+  const fecharModal = () => { setEditingGrupo(null); };
   const onSaved = () => { carregar(); onFaturaAtualizada(); onSalvo?.(); };
 
   const handleExcluirCancelar = async (motivo: string) => {
@@ -2126,9 +2147,41 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
 
       <InlineError message={erroInline} className="mx-5 mt-4" />
 
+      {/* Edição inline — MESMO layout da criação (isInline), não mais um modal
+          popup: era a única tela do submódulo que fugia do padrão (view/create
+          já eram inline), e o usuário perdia o contexto da página ao editar. */}
+      {editingGrupo && (
+        <div className="border-b border-gray-100">
+          <div className="flex items-center justify-between px-5 pt-4">
+            <div className="flex items-center gap-1.5">
+              <Pencil size={12} className="text-amber-500" />
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                Editando Prescrição #{editingGrupo.numeroFormatado}
+              </p>
+            </div>
+            <button onClick={fecharModal}
+              className="p-1 text-gray-400 hover:text-gray-600 transition-colors" title="Fechar edição">
+              <X size={16} />
+            </button>
+          </div>
+          <GrupoModal
+            key={`edit-${editingGrupo.id}`}
+            animalId={animalId}
+            animal={animal}
+            grupo={editingGrupo}
+            canEdit={podeEditar}
+            canFinalizarCancelar={canFinalizarCancelar}
+            podeImprimir={podeImprimir}
+            onClose={fecharModal}
+            onSaved={onSaved}
+            isInline
+          />
+        </div>
+      )}
+
       {/* Visualização inline (Histórico de Evolução Clínica): campos da
           prescrição populados no formulário da página, somente leitura */}
-      {viewingGrupo && (
+      {!editingGrupo && viewingGrupo && (
         <div className="border-b border-gray-100">
           <div className="flex items-center justify-between px-5 pt-4">
             <div className="flex items-center gap-1.5">
@@ -2158,7 +2211,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       )}
 
       {/* Formulário inline de criação */}
-      {!viewingGrupo && canEdit && (
+      {!editingGrupo && !viewingGrupo && canEdit && (
         semEvolucaoAtiva ? (
           <div className="flex flex-col items-center justify-center py-12 text-gray-400 px-4 border-b border-gray-100">
             <FileText size={28} className="mb-2 text-gray-200" />
@@ -2434,27 +2487,6 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       </>
       )}
 
-      {/* Modal de edição de prescrição existente — só GESTOR pode alterar itens */}
-      {showEditModal && editingGrupo && (
-        <GrupoModal
-          // Força remount ao trocar de prescrição (ex: clicar em outro item do
-          // histórico com o modal já aberto) — sem isso, o estado interno do
-          // modal (itens carregados na abertura) ficava travado no primeiro
-          // grupo aberto e não mostrava os itens da nova prescrição selecionada.
-          key={editingGrupo.id}
-          animalId={animalId}
-          animal={animal}
-          grupo={editingGrupo}
-          // Quem tem ALTERAR na matriz edita de fato. Estava fixo em `isGestor`: para
-          // todo o resto da equipe o botão "Alterar" abria o modal em modo LEITURA —
-          // parecia visualização, e a prescrição não executada era inalterável.
-          canEdit={podeEditar}
-          canFinalizarCancelar={canFinalizarCancelar}
-          podeImprimir={podeImprimir}
-          onClose={fecharModal}
-          onSaved={onSaved}
-        />
-      )}
       {deletingId !== null && (
         <CancelarModal onConfirmar={handleExcluirCancelar} onCancelar={() => setDeletingId(null)} />
       )}

@@ -33,11 +33,23 @@ const PROMPTS = {
   // v7: + ehLaudoExame — classifica se o documento É um laudo de exame antes de
   //     tentar extrair qualquer coisa dele (rejeita nota fiscal, contrato, foto
   //     qualquer etc. anexados por engano no fluxo de exame não pedido)
+  // v8: chamada virou MULTIMODAL — o documento (PDF/foto) vai anexado junto do
+  //     texto, não só o texto. PASSO 2 passou a mandar usar a LOGOMARCA (brasão,
+  //     papel timbrado, marca d'água) para identificar o laboratório quando o
+  //     nome não aparece em texto simples — antes só o texto extraído do PDF era
+  //     considerado, e um laboratório cujo nome existisse só como imagem no
+  //     cabeçalho nunca era encontrado.
   'parse_laudo': {
-    version: 'v7',
-    build: (texto) => `Extraia os dados do laudo laboratorial veterinário abaixo.
+    version: 'v8',
+    build: (texto) => `Extraia os dados do laudo laboratorial veterinário anexado.
 
-O texto vem de PDF e pode estar fora da ordem visual, com colunas separadas.
+Você recebe o DOCUMENTO ANEXADO (imagem ou PDF) e, abaixo, o texto já extraído
+dele quando havia texto embutido (pode vir vazio — documento só com imagem/scan).
+O texto, quando presente, é a fonte mais confiável para os VALORES da tabela
+(PASSO 6) — não releia número em imagem se o texto já o traz. O documento anexado
+é a fonte para o que só existe visualmente: a LOGOMARCA do laboratório (PASSO 2).
+
+O texto pode estar fora da ordem visual, com colunas separadas.
 Ancore cada valor no NOME do exame. Não reconstrua a tabela pela ordem dos números.
 
 # PROIBIÇÕES
@@ -49,14 +61,14 @@ Ancore cada valor no NOME do exame. Não reconstrua a tabela pela ordem dos núm
 - Não associe valores por posição.
 
 # PASSO 0 — É UM LAUDO DE EXAME?
-Classifique "ehLaudoExame" como false quando o texto claramente NÃO é um laudo/
-resultado de exame laboratorial (ex.: nota fiscal, contrato, receita de
-medicamento, ficha de cadastro, mensagem, imagem sem texto reconhecível, página em
-branco). Classifique true quando houver nomes de exames/parâmetros com resultados,
-unidades ou valores de referência, mesmo que incompletos ou malformatados. Na
-dúvida, prefira true — só rejeite quando não houver NENHUM indício de exame.
-Sendo false, pare aqui: devolva a SAÍDA com "ehLaudoExame": false e os demais
-campos vazios ("exames": []).
+Classifique "ehLaudoExame" como false quando o documento claramente NÃO é um
+laudo/resultado de exame laboratorial (ex.: nota fiscal, contrato, receita de
+medicamento, ficha de cadastro, mensagem, foto qualquer sem relação com exame,
+página em branco). Classifique true quando houver nomes de exames/parâmetros com
+resultados, unidades ou valores de referência, mesmo que incompletos ou
+malformatados — no texto OU visíveis na imagem. Na dúvida, prefira true — só
+rejeite quando não houver NENHUM indício de exame. Sendo false, pare aqui:
+devolva a SAÍDA com "ehLaudoExame": false e os demais campos vazios ("exames": []).
 
 # PASSO 1 — DATA
 Localize a data de realização em: "Realizado", "Realizado em", "Data do Exame",
@@ -64,8 +76,15 @@ Localize a data de realização em: "Realizado", "Realizado em", "Data do Exame"
 Converta para YYYY-MM-DD. Não encontrou: null.
 
 # PASSO 2 — LABORATÓRIO
-Extraia o nome do laboratório emissor do cabeçalho, rodapé ou marca d'água do
-documento (razão social ou nome fantasia). Não encontrou: null.
+Identifique o laboratório emissor (razão social ou nome fantasia). Procure em
+DUAS fontes, nesta ordem:
+1. Texto: cabeçalho, rodapé ou marca d'água escrita.
+2. IMAGEM DO DOCUMENTO ANEXADO: a LOGOMARCA impressa no papel timbrado (brasão,
+   selo, logotipo) — o nome do laboratório muitas vezes existe SÓ como parte da
+   logo, sem aparecer como texto simples em lugar nenhum do documento. Reconheça
+   o laboratório pela logo mesmo sem nenhum texto correspondente.
+Não encontrou em nenhuma das duas: null. Nunca invente um nome plausível — só
+devolva o que estiver de fato escrito ou identificável na logomarca.
 
 # PASSO 3 — NOME DO EXAME
 Extraia o nome do painel/perfil impresso no cabeçalho do laudo (ex.: "Hemograma
@@ -142,8 +161,129 @@ Saída correspondente:
 
 ${SO_JSON}
 
+# TEXTO EXTRAÍDO DO DOCUMENTO
+${texto.trim() ? texto.slice(0, 22000) : '(nenhum texto embutido — documento é imagem/scan; use o anexo)'}`,
+  },
+
+  // ── Exame de Imagem: laudo em PDF com texto embutido → TRANSCRIÇÃO literal ──
+  // v1: só transcreve o texto do laudo (radiografia/US/etc.), nunca interpreta —
+  //     mesma regra do exame de Imagem: laudo verbatim (ver CLAUDE.md §12/28-d).
+  // v2: + "tipoExame" — a MODALIDADE do laudo (Ultrassonografia, Radiografia...),
+  //     copiada do próprio documento. Existe para rotular cada laudo quando o
+  //     exame recebe MAIS de um arquivo (ex.: Ultrassom + Raio-X no mesmo
+  //     registro) — sem isso os textos eram concatenados com um separador
+  //     genérico ("---"), sem dizer qual seção é qual.
+  'parse_laudo_imagem_texto': {
+    version: 'v2',
+    build: (texto) => `Transcreva o laudo de exame de imagem veterinário abaixo.
+
+O texto vem de PDF e pode estar fora da ordem visual, com colunas separadas.
+
+# PROIBIÇÕES
+- Não resuma o laudo.
+- Não interprete o achado.
+- Não diagnostique, não opine, não conclua nada que o texto não escreva.
+- Não corrija ortografia, gramática ou terminologia do texto original.
+- Não invente conteúdo ausente do documento.
+- Não descreva a imagem radiográfica/ultrassonográfica em si — transcreva
+  somente o texto do documento.
+
+# PASSO 0 — É UM LAUDO DE EXAME DE IMAGEM?
+Classifique "ehLaudoImagem" como false quando o texto claramente NÃO é um laudo
+de exame de imagem veterinário (radiografia, ultrassonografia, tomografia,
+ressonância, endoscopia etc.) — ex.: nota fiscal, contrato, receita de
+medicamento, ficha de cadastro, mensagem, página em branco. Classifique true
+quando houver texto de um laudo/relatório de exame por imagem, mesmo que
+incompleto. Na dúvida, prefira true — só rejeite quando não houver NENHUM
+indício de laudo. Sendo false, pare aqui: devolva a SAÍDA com "ehLaudoImagem":
+false, "tipoExame": null e "laudo": "".
+
+# TIPO DE EXAME
+Identifique a MODALIDADE do exame (ex.: "Ultrassonografia Abdominal",
+"Radiografia de Tórax", "Tomografia Computadorizada", "Endoscopia") a partir do
+título/cabeçalho do próprio documento. Copie o que está escrito — nunca
+deduza pela imagem clínica nem invente uma modalidade que o documento não
+nomeie. Não encontrou um nome explícito: null.
+
+# DATA
+Localize a data de realização em: "Realizado", "Realizado em", "Data do Exame".
+Ignore datas próximas a "Nascimento" ou "Nasc". Converta para YYYY-MM-DD. Não
+encontrou: null.
+
 # LAUDO
+Copie o texto do corpo do laudo (achados, descrição, conclusão/impressão) na
+ordem em que aparece, exatamente como está escrito. Preserve quebras de
+parágrafo com \\n. Ignore cabeçalho/rodapé de identificação (logotipo,
+contato, numeração de página) — extraia só o conteúdo clínico do laudo.
+
+# SAÍDA
+{
+  "ehLaudoImagem": true ou false,
+  "tipoExame": "modalidade copiada do documento ou null",
+  "dataExame": "YYYY-MM-DD ou null",
+  "laudo": ""
+}
+
+${SO_JSON}
+
+# DOCUMENTO
 ${texto.slice(0, 22000)}`,
+  },
+
+  // ── Exame de Imagem: laudo fotografado/escaneado → TRANSCRIÇÃO literal (visão) ──
+  // v1: irmão do parse_laudo_imagem_texto, para quando o arquivo é foto/scan sem
+  //     texto embutido — mesmo mecanismo multimodal de parse_composicao_visao.
+  // v2: + "tipoExame" — mesmo campo/motivo do irmão de texto (v2), acima.
+  'parse_laudo_imagem_visao': {
+    version: 'v2',
+    // Sem build — prompt fixo enviado junto com a imagem
+    text: `Transcreva o laudo de exame de imagem veterinário fotografado nesta imagem.
+
+# PROIBIÇÕES
+- Não resuma o laudo.
+- Não interprete o achado.
+- Não diagnostique, não opine, não conclua nada que o texto não escreva.
+- Não corrija ortografia, gramática ou terminologia do texto original.
+- Não invente conteúdo ausente do documento.
+- Não descreva a imagem radiográfica/ultrassonográfica em si — transcreva
+  somente o TEXTO impresso ou manuscrito no documento fotografado.
+
+# É UM LAUDO DE EXAME DE IMAGEM?
+Classifique "ehLaudoImagem" como false quando a imagem claramente NÃO mostra um
+laudo/relatório de exame de imagem veterinário (radiografia, ultrassonografia,
+tomografia, ressonância, endoscopia etc.) — ex.: foto do próprio animal, nota
+fiscal, documento não relacionado, página em branco, imagem ilegível.
+Classifique true quando houver texto de um laudo, mesmo que parcialmente
+legível. Na dúvida, prefira true.
+Sendo false: devolva a SAÍDA com "ehLaudoImagem": false, "tipoExame": null e
+"laudo": "".
+
+# TIPO DE EXAME
+Identifique a MODALIDADE do exame (ex.: "Ultrassonografia Abdominal",
+"Radiografia de Tórax", "Tomografia Computadorizada", "Endoscopia") a partir do
+título/cabeçalho impresso no documento fotografado. Copie o que está escrito —
+nunca deduza pela imagem clínica nem invente uma modalidade que o documento não
+nomeie. Não encontrou um nome explícito: null.
+
+# DATA
+Localize a data de realização do exame, se impressa no documento. Converta
+para YYYY-MM-DD. Não encontrou: null.
+
+# LAUDO
+Transcreva o texto do corpo do laudo (achados, descrição, conclusão/impressão)
+na ordem em que aparece, exatamente como está escrito. Preserve quebras de
+parágrafo com \\n. Ignore cabeçalho/rodapé de identificação (logotipo,
+contato, numeração de página) — extraia só o conteúdo clínico do laudo.
+
+# SAÍDA
+{
+  "ehLaudoImagem": true ou false,
+  "tipoExame": "modalidade copiada do documento ou null",
+  "dataExame": "YYYY-MM-DD ou null",
+  "laudo": ""
+}
+
+${SO_JSON}`,
   },
 
   // ── Evolução clínica: título + itens faturáveis ─────────────────────────────

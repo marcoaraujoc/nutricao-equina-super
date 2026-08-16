@@ -274,6 +274,11 @@ function ViewEvolucaoModal({ ev, onClose, onImprimir, podeImprimir }: {
               <p className="text-sm font-semibold text-gray-900 mb-1.5">{ev.titulo}</p>
             )}
             <div className="flex items-center gap-2 flex-wrap">
+              {ev.atendimentoNumero && (
+                <span className="font-mono font-bold text-emerald-700 text-xs">
+                  {ev.atendimentoNumero}
+                </span>
+              )}
               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_CONFIG[ev.status].cls}`}>
                 {STATUS_CONFIG[ev.status].label}
               </span>
@@ -463,14 +468,21 @@ function ExclusaoModal({ ev, titulo, descricao, labelConfirmar, onConfirmar, onC
 // A evolução aberta pelo PRÓPRIO usuário não passa por aqui — ela bloqueia a
 // criação de outra e não pode ser assumida (o caminho é editar/finalizar/cancelar).
 
-function EvolucaoAbertaModal({ info, onAssumir, onCriarNova, onCancelar, saving }: {
+function EvolucaoAbertaModal({ info, animalNome, onAssumir, onCriarNova, onCancelar, saving }: {
   info:        EvolucaoAbertaInfo;
+  animalNome?: string;
   onAssumir:   () => void;
   onCriarNova: () => void;
   onCancelar:  () => void;
   saving:      boolean;
 }) {
   const responsavel = info.veterinarioNome ?? 'outro profissional';
+  const numero       = info.atendimentoNumero;
+  // "por" (gênero-neutro), nunca "pela"/"pelo": `responsavel` pode ser qualquer profissional.
+  const titulo    = `Evolução${numero ? ` ${numero}` : ''}${animalNome ? ` do paciente ${animalNome}` : ''} está em andamento`;
+  // `formatarDataHora` separa data e hora por vírgula (padrão do app); aqui, dentro da
+  // frase, "às" lê melhor — troca só nesta string, sem mexer no util compartilhado.
+  const subtitulo = `${numero ? `A evolução ${numero}` : 'A evolução'} foi iniciada em ${formatarDataHora(info.dataInicio).replace(', ', ' às ')} por ${responsavel}`;
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md border border-gray-100">
@@ -479,32 +491,17 @@ function EvolucaoAbertaModal({ info, onAssumir, onCriarNova, onCancelar, saving 
             <AlertTriangle size={18} className="text-amber-600" />
           </div>
           <div className="min-w-0">
-            <h3 className="font-bold text-gray-900">Evolução em andamento</h3>
-            <p className="text-xs text-gray-500">Em atendimento por {responsavel}</p>
+            <h3 className="font-bold text-gray-900">{titulo}</h3>
           </div>
         </div>
 
         <div className="px-6">
-          <div className="border border-amber-200 bg-amber-50/60 rounded-xl p-4 space-y-1">
-            {info.atendimentoNumero && (
-              <p className="text-xs font-bold text-emerald-700">{info.atendimentoNumero}</p>
-            )}
-            <p className="text-sm font-semibold text-gray-800 break-words">
-              {info.titulo?.trim() || info.especialidade}
-            </p>
-            <p className="text-[11px] text-gray-500">
-              <User size={10} className="inline mb-0.5 mr-1" />
-              {responsavel}
-              <span className="text-gray-300"> · </span>
-              iniciada em {formatarDataHora(info.dataInicio)}
+          <div className="border border-amber-200 bg-amber-50/60 rounded-xl p-4">
+            <p className="text-sm text-gray-700 flex items-start gap-1.5">
+              <User size={13} className="text-gray-400 flex-shrink-0 mt-0.5" />
+              <span>{subtitulo}</span>
             </p>
           </div>
-
-          <p className="text-xs text-gray-500 mt-4">
-            Assuma a condução da evolução ({responsavel} será comunicado por e-mail e
-            WhatsApp) ou registre um novo atendimento em paralelo — nesse caso a
-            evolução dele continua sob a responsabilidade dele.
-          </p>
         </div>
 
         <div className="flex flex-col gap-2 p-6 pt-4">
@@ -1070,6 +1067,12 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const agendamentoPreSelecionado = useRef(false);
   // Só propõe a decisão (assumir × nova) uma vez por chegada da agenda.
   const decisaoAgendaProposta     = useRef(false);
+  // Agendamento que o "Iniciar" da agenda já marcou EM_ANDAMENTO antes de saber
+  // que havia conflito (evolução aberta de outro profissional). Guardado só
+  // quando a decisão nasce DESSE caminho — nunca de um clique manual em "Nova
+  // Evolução" nem de um 409 ao salvar — para Cancelar/Assumir/Criar-nova saberem
+  // se há um agendamento "órfão" para reverter ou anexar. Ver os 3 handlers abaixo.
+  const agendamentoConflitoOrigemRef = useRef<number | null>(null);
 
   // Rola a página até o formulário quando ele é populado via Visualizar/Alterar
   // (a tabela do histórico fica abaixo — sem isso o usuário não vê os campos).
@@ -1131,7 +1134,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   useEffect(() => { if (!loadingPerms) carregarEvolucoes(); }, [carregarEvolucoes, loadingPerms]);
 
   // Trocar de paciente reabre a decisão: a proposta é por animal, não por sessão.
-  useEffect(() => { decisaoAgendaProposta.current = false; }, [animalId]);
+  useEffect(() => {
+    decisaoAgendaProposta.current = false;
+    agendamentoConflitoOrigemRef.current = null;
+  }, [animalId]);
 
   useEffect(() => {
     if (loadingPerms) return;
@@ -1148,6 +1154,31 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       .finally(() => onViewConsumed?.());
   }, [openItemId]);
 
+  /**
+   * Busca os agendamentos AGENDADO do animal (opções do seletor "Agendamento
+   * vinculado") e, se `manterId` for informado e não estiver nessa lista, tenta
+   * achá-lo mesmo assim: o "Iniciar" da agenda já marca o agendamento como
+   * EM_ANDAMENTO ANTES de navegar para cá (CLAUDE.md, "Iniciar atendimento"), então
+   * o filtro AGENDADO sozinho não o encontra mesmo sendo o agendamento certo. Sem
+   * isso a evolução nasce sem `agendamentoId` e o agendamento fica travado em
+   * EM_ANDAMENTO, sem nenhuma evolução apontando para ele.
+   */
+  const carregarAgendamentosParaFormulario = async (manterId?: number | null) => {
+    let lista: AgendamentoItem[] = [];
+    try {
+      const res = await api.get(`/clinica/agendamentos/animal/${animalId}?status=AGENDADO`);
+      lista = res.data?.dados ?? [];
+    } catch { /* segue com a lista vazia — não impede o formulário de abrir */ }
+    if (manterId && !lista.some(a => a.id === manterId)) {
+      try {
+        const res = await api.get(`/clinica/agendamentos/animal/${animalId}?status=EM_ANDAMENTO`);
+        const encontrado = (res.data?.dados ?? []).find((a: AgendamentoItem) => a.id === manterId);
+        if (encontrado) lista = [...lista, encontrado];
+      } catch { /* mantém só o que já tinha */ }
+    }
+    return lista;
+  };
+
   // Quando vindo da tela de Agendamentos via "Iniciar" (ou restaurando do localStorage):
   // pré-seleciona o agendamento no formulário de nova evolução assim que os dados carregarem.
   useEffect(() => {
@@ -1160,24 +1191,24 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     if (temEvolucaoAberta && !criandoConcorrente) {
       if (evolucaoAbertaDeOutro && !minhaEvolucaoAberta && !decisaoAgendaProposta.current) {
         decisaoAgendaProposta.current = true;
+        // Guarda QUAL agendamento o "Iniciar" já deixou EM_ANDAMENTO — é o que
+        // permite Cancelar reverter, e Assumir/Criar-nova anexá-lo depois.
+        agendamentoConflitoOrigemRef.current = agendamentoIdProp;
         setEvolucaoAbertaInfo(infoDaLista(evolucaoAbertaDeOutro));
       }
       return;
     }
     agendamentoPreSelecionado.current = true;
-    api.get(`/clinica/agendamentos/animal/${animalId}?status=AGENDADO`)
-      .then(res => {
-        const lista: AgendamentoItem[] = res.data?.dados ?? [];
-        setAgendamentosDisponiveis(lista);
-        // Se o agendamento já foi concluído (não está mais na lista AGENDADO),
-        // limpa o localStorage para não pré-selecionar novamente.
-        if (lista.some(a => a.id === agendamentoIdProp)) {
-          setAgendamentoSelecionadoId(agendamentoIdProp);
-        } else {
-          localStorage.removeItem(`s2vet_ag_${animalId}`);
-        }
-      })
-      .catch(() => {});
+    carregarAgendamentosParaFormulario(agendamentoIdProp).then(lista => {
+      setAgendamentosDisponiveis(lista);
+      // Se o agendamento já foi concluído (não está mais em nenhuma das duas
+      // listas), limpa o localStorage para não pré-selecionar novamente.
+      if (lista.some(a => a.id === agendamentoIdProp)) {
+        setAgendamentoSelecionadoId(agendamentoIdProp);
+      } else {
+        localStorage.removeItem(`s2vet_ag_${animalId}`);
+      }
+    });
   }, [loading, agendamentoIdProp, animalId, temEvolucaoAberta, criandoConcorrente, evolucoes]);
 
   // ── Rascunho automático (mobile-safe) ────────────────────────────────────────
@@ -1229,16 +1260,20 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const handleFormChange = (field: keyof FormEvolucao, value: string) =>
     setForm(prev => ({ ...prev, [field]: value }));
 
-  const prepararFormularioNovo = async () => {
+  // `manterAgendamentoId` é usado pelo "Criar uma nova" da decisão: o agendamento
+  // que o "Iniciar" já deixou EM_ANDAMENTO precisa continuar selecionado, senão a
+  // evolução nova nasce solta e ele fica travado sem nada apontando para ele.
+  const prepararFormularioNovo = async (manterAgendamentoId?: number | null) => {
     setArquivosModal([]);
     setForm(FORM_INICIAL);
     setEditingEv(null);
     setFormLeitura(false);
     setAgendamentoSelecionadoId(null);
-    try {
-      const res = await api.get(`/clinica/agendamentos/animal/${animalId}?status=AGENDADO`);
-      setAgendamentosDisponiveis(res.data?.dados ?? []);
-    } catch { setAgendamentosDisponiveis([]); }
+    const lista = await carregarAgendamentosParaFormulario(manterAgendamentoId);
+    setAgendamentosDisponiveis(lista);
+    if (manterAgendamentoId && lista.some(a => a.id === manterAgendamentoId)) {
+      setAgendamentoSelecionadoId(manterAgendamentoId);
+    }
     setShowModal(true);
   };
 
@@ -1279,8 +1314,15 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     if (!podeEditar) { semPermissao('assumir evolução'); return; }
     setErroInline(null);
     setAssumindoEv(true);
+    // O agendamento que o "Iniciar" já deixou EM_ANDAMENTO (se foi assim que a
+    // decisão surgiu) não tem relação nenhuma com a evolução assumida — ela
+    // MANTÉM o número que já tinha. O backend só o ANEXA (sem sobrescrever um
+    // agendamento que a evolução assumida já possuía) e marca EM_ANDAMENTO nele.
+    const agendamentoId = agendamentoConflitoOrigemRef.current;
     try {
-      await api.patch(`/clinica/evolucoes/${id}/assumir`);
+      await api.patch(`/clinica/evolucoes/${id}/assumir`, agendamentoId ? { agendamentoId } : {});
+      agendamentoConflitoOrigemRef.current = null;
+      localStorage.removeItem(`s2vet_ag_${animalId}`);
       toast.success('Evolução assumida — o profissional anterior foi comunicado');
       setEvolucaoAbertaInfo(null);
       setCriandoConcorrente(false);
@@ -1298,9 +1340,30 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   };
 
   const handleCriarNovaConcorrente = async () => {
+    // Idem: leva o agendamento recém-iniciado para o formulário, para a evolução
+    // NOVA nascer com ele anexado (número próprio dela, `numero` gerado normalmente).
+    const agendamentoId = agendamentoConflitoOrigemRef.current;
+    agendamentoConflitoOrigemRef.current = null;
     setEvolucaoAbertaInfo(null);
     setCriandoConcorrente(true);
-    await prepararFormularioNovo();
+    await prepararFormularioNovo(agendamentoId);
+  };
+
+  // Cancelar a decisão (nem assumir, nem criar em paralelo) — quando ela nasceu do
+  // "Iniciar" da agenda, o agendamento já tinha sido marcado EM_ANDAMENTO ANTES de
+  // saber que havia conflito. Sem reverter aqui, ele fica preso nesse status para
+  // sempre, sem nenhuma evolução criada/assumida por trás. Volta para AGENDADO — se
+  // o horário já tiver passado, o cron `marcarAgendamentosAtrasados` o marca como
+  // ATRASADA de novo na próxima varredura (é o único lugar que grava esse status).
+  const handleCancelarDecisaoEvolucao = async () => {
+    const agendamentoId = agendamentoConflitoOrigemRef.current;
+    agendamentoConflitoOrigemRef.current = null;
+    setEvolucaoAbertaInfo(null);
+    if (!agendamentoId) return;
+    try {
+      await api.patch(`/clinica/agendamentos/${agendamentoId}/status`, { status: 'AGENDADO' });
+    } catch { /* reversão best-effort — não impede o usuário de sair da decisão */ }
+    localStorage.removeItem(`s2vet_ag_${animalId}`);
   };
 
   const fecharModal = () => {
@@ -1738,9 +1801,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         <div className="mx-4 mt-3 flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
           <AlertTriangle size={13} className="text-amber-600 flex-shrink-0 mt-0.5" />
           <p className="text-[11px] text-amber-800 leading-snug">
-            Atendimento em paralelo: este paciente já tem uma evolução em andamento
+            Existe uma evolução em andamento
             {evolucaoAbertaDeOutro?.veterinario?.fullName ? ` com ${evolucaoAbertaDeOutro.veterinario.fullName}` : ''}.
-            Ao salvar, o profissional responsável por ela é comunicado por e-mail e WhatsApp.
           </p>
         </div>
       )}
@@ -1830,6 +1892,12 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                     </span>
                   </div>
 
+                  {ev.atendimentoNumero && (
+                    <span className="inline-block font-mono font-bold text-emerald-700 text-[11px] mb-0.5">
+                      {ev.atendimentoNumero}
+                    </span>
+                  )}
+
                   <p className="text-xs text-gray-500">
                     {ev.veterinario?.fullName ?? '—'}
                     <span className="text-gray-300"> · </span>
@@ -1916,6 +1984,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-100">
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Nº</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Data Início</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Data Fim</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Título</th>
@@ -1953,6 +2022,11 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                     onClick={() => setViewingEv(ev)}
                     className={`hover:bg-gray-50 transition-colors cursor-pointer ${!ev.aprovado ? 'bg-amber-50/40' : ''}`}>
 
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <span className="font-mono font-bold text-emerald-700 text-sm">
+                        {ev.atendimentoNumero ?? '—'}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-gray-700 whitespace-nowrap">
                       <div>{formatarDataHora(ev.dataInicio)}</div>
                       {!ev.aprovado && (
@@ -2093,10 +2167,11 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       {evolucaoAbertaInfo && (
         <EvolucaoAbertaModal
           info={evolucaoAbertaInfo}
+          animalNome={animal?.nome}
           saving={assumindoEv}
           onAssumir={() => handleAssumirEvolucao(evolucaoAbertaInfo.id)}
           onCriarNova={handleCriarNovaConcorrente}
-          onCancelar={() => setEvolucaoAbertaInfo(null)}
+          onCancelar={handleCancelarDecisaoEvolucao}
         />
       )}
 

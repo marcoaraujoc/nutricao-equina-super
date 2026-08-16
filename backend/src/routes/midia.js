@@ -14,6 +14,7 @@ const router           = express.Router();
 const MidiaController  = require('../controllers/MidiaController');
 const { authenticate } = require('../middlewares/auth');
 
+router.get('/:chave/preview', authenticate, MidiaController.visualizarDocx);
 router.get('/:chave', authenticate, MidiaController.baixar);
 
 module.exports = router;

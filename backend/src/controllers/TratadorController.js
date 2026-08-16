@@ -4,6 +4,8 @@
 const prisma = require('../lib/prisma').default;
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
+const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
+const { registrarAuditoria } = require('../lib/auditoria');
 
 const normalizarTexto = v => (v ?? '').trim().toLowerCase();
 
@@ -85,7 +87,7 @@ const TratadorController = {
         orderBy: [{ ativo: 'desc' }, { nome: 'asc' }],
       });
 
-      res.json({ sucesso: true, dados: tratadores });
+      res.json({ sucesso: true, dados: await anexarTrilha(tratadores, 'tratador') });
     } catch (err) {
       console.error('Erro ao listar tratadores:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar tratadores' });
@@ -196,14 +198,31 @@ const TratadorController = {
       if (!podeAlterarRegistroEscopado(existe, req))
         return res.status(403).json({ sucesso: false, mensagem: 'Você não tem acesso para alterar este tratador.' });
 
-      const tratador = await prisma.tratador.update({
-        where: { id: Number(id) },
-        data:  { ativo: !existe.ativo },
+      const vaiInativar = existe.ativo;
+      if (vaiInativar) {
+        await registrarInativacao(prisma, 'tratador', existe.id, req.user.id);
+      } else {
+        await registrarAtivacao(prisma, 'tratador', existe.id, req.user.id);
+      }
+
+      // Mesma auditoria de Fornecedor/Prestador (lib/auditoria.js) — quem foi
+      // (in)ativado, quando (timestamp da própria linha) e quem fez a ação.
+      await registrarAuditoria(prisma, req, {
+        categoria: 'ALTERACAO',
+        entidade:  'TRATADOR',
+        entidadeId: existe.id,
+        detalhes:  `${req.user.fullName ?? req.user.email} ${vaiInativar ? 'inativou' : 'ativou'} o tratador ${existe.nome}`,
       });
+
+      const tratadorAtualizado = await prisma.tratador.findUnique({
+        where: { id: existe.id },
+        include: { localizacao: { select: { id: true, nome: true, tipoLocalizacao: true } } },
+      });
+      const [comTrilha] = await anexarTrilha([tratadorAtualizado], 'tratador');
       res.json({
         sucesso:  true,
-        dados:    tratador,
-        mensagem: `Tratador ${tratador.ativo ? 'ativado' : 'inativado'} com sucesso`,
+        dados:    comTrilha,
+        mensagem: vaiInativar ? 'Tratador inativado' : 'Tratador ativado',
       });
     } catch (err) {
       console.error('Erro ao alternar status do tratador:', err);

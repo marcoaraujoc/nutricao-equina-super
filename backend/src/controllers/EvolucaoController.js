@@ -832,6 +832,12 @@ const EvolucaoController = {
 
   assumir: async (req, res) => {
     const { id } = req.params;
+    // Agendamento que o "Iniciar" da agenda já deixou EM_ANDAMENTO antes de o
+    // usuário decidir ASSUMIR esta evolução (que não tem relação nenhuma com ele —
+    // é da OUTRA pessoa). Sem anexá-lo, ele fica travado em EM_ANDAMENTO sem
+    // nenhuma evolução apontando para ele. Opcional: só existe quando a decisão
+    // nasceu desse caminho (ver `agendamentoConflitoOrigemRef` no frontend).
+    const { agendamentoId } = req.body;
     const userId = req.user.id;
 
     try {
@@ -861,6 +867,21 @@ const EvolucaoController = {
 
       const anteriorId = existente.veterinarioId;
 
+      // Só anexa quando a evolução assumida AINDA não tem agendamento próprio —
+      // isto é um vínculo que faltava, não uma substituição do que já existia. O
+      // número/tipoAtendimento da evolução assumida NÃO mudam: ela continua com o
+      // que já tinha, só ganha o agendamento que estava solto.
+      let agendamentoNovo = null;
+      if (agendamentoId && !existente.agendamentoId) {
+        agendamentoNovo = await prisma.agendamentoClinico.findFirst({
+          where: {
+            id: Number(agendamentoId), animalId: existente.animalId, ativo: true,
+            status: { in: ['AGENDADO', 'EM_ANDAMENTO', 'ATRASADA'] },
+          },
+          select: { id: true },
+        });
+      }
+
       // Assumir o ATENDIMENTO arrasta a AGENDA junto: a evolução nascida de um
       // agendamento (AG-XXXX) tem o agendamento apontando para o vet anterior.
       // Mover só a evolução deixaria o atendimento na agenda de quem não o conduz
@@ -876,6 +897,7 @@ const EvolucaoController = {
             veterinarioId:   userId,
             modificadoPorId: userId,
             dataModificacao: new Date(),
+            ...(agendamentoNovo ? { agendamentoId: agendamentoNovo.id } : {}),
           },
           include: INCLUDE_PADRAO,
         });
@@ -896,6 +918,16 @@ const EvolucaoController = {
               animalId: existente.animalId, deVetId: anteriorId,
             });
           }
+        }
+
+        // O agendamento novo é do PRÓPRIO usuário (ele mesmo clicou "Iniciar") —
+        // não é uma transferência de outro profissional, só o vínculo que faltava.
+        // Sem rastro de "assumido de": ninguém tirou nada de ninguém aqui.
+        if (agendamentoNovo) {
+          await tx.agendamentoClinico.update({
+            where: { id: agendamentoNovo.id },
+            data:  { veterinarioId: userId, status: 'EM_ANDAMENTO' },
+          });
         }
 
         // A auditoria entra na MESMA transaction que a troca: ou a transferência e o

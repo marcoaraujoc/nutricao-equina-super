@@ -461,7 +461,10 @@ export default function CadastroLocalizacao() {
       {/* ── Modal de criação / edição ──────────────────────────────────────────── */}
       {modalAberto && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/50">
-          <div className="bg-white rounded-3xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col">
+          {/* `dvh` (viewport dinâmico), não `vh` — mesmo padrão do modal de Fornecedor:
+              no mobile, `90vh` fica preso à altura ANTES do teclado abrir, e com um
+              campo em foco o rodapé (Cadastrar/Salvar) ficava atrás do teclado. */}
+          <div className="bg-white rounded-3xl shadow-xl w-full max-w-lg max-h-[92dvh] flex flex-col">
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
               <h2 className="text-lg font-bold text-gray-800">
@@ -582,8 +585,6 @@ export default function CadastroLocalizacao() {
             </div>
 
             {/* Footer */}
-            <InlineError message={erroModal} className="mx-6 mt-3 flex-shrink-0" />
-
             <div className="flex gap-3 px-6 py-4 border-t border-gray-100 flex-shrink-0">
               <button onClick={() => setModalAberto(false)}
                 className="flex-1 py-2.5 border border-gray-200 rounded-2xl text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors">
@@ -595,6 +596,15 @@ export default function CadastroLocalizacao() {
                 {editando ? 'Salvar alterações' : 'Cadastrar'}
               </button>
             </div>
+
+            {/* Erro ABAIXO do botão que o disparou (mesmo padrão do modal de
+                Fornecedor) — nunca na página atrás do overlay. Fora do corpo
+                rolável (`flex-shrink-0`), então nasce sempre à vista. */}
+            {erroModal && (
+              <div className="px-6 pb-6 flex-shrink-0">
+                <InlineError message={erroModal} />
+              </div>
+            )}
           </div>
         </div>
       )}

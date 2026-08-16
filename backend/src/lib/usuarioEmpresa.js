@@ -382,23 +382,58 @@ async function anexarFotoEmRelacao(itens, chave, empresaId, client = prisma) {
 const EMPRESA_ATIVA_SQL = `COALESCE(e.status, 'ATIVA') = 'ATIVA'`;
 
 /**
+ * `tb_prestadores.user_id`/`acesso_sistema` já existem no banco? Mesmo guard e mesma
+ * razão de `temColunasPagamento` (migration `20260822000000_prestador_pagamento_local_acesso`).
+ */
+let _temColunasPrestador = null;
+let _temColunasPrestadorEm = 0;
+async function temColunasPrestadorAcesso() {
+  if (_temColunasPrestador === true) return true;
+  if (_temColunasPrestador === false && Date.now() - _temColunasPrestadorEm < 60_000) return false;
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'schs2vet' AND table_name = 'tb_prestadores'
+          AND column_name = 'user_id' LIMIT 1`,
+    );
+    _temColunasPrestador = rows.length > 0;
+  } catch { _temColunasPrestador = false; }
+  _temColunasPrestadorEm = Date.now();
+  return _temColunasPrestador;
+}
+
+/**
  * O usuário pode entrar na aplicação?
  *
- * Regra: quem TEM vínculo de empresa precisa de ao menos UM que seja, ao mesmo tempo,
- * **com acesso liberado** E **numa empresa ATIVA**. Quem não tem vínculo nenhum (vet
+ * Regra: quem TEM vínculo precisa de ao menos UM que seja, ao mesmo tempo, **com
+ * acesso liberado** E **numa empresa ATIVA**. Quem não tem vínculo nenhum (vet
  * autônomo, proprietário legado, ADMIN da plataforma) não é barrado — não há quem tenha
  * concedido ou negado nada a ele.
+ *
+ * O vínculo pode vir de `tb_usuario_empresa` (membro de equipe) OU de
+ * `tb_prestadores.user_id` (Prestador com login mas SEM MembroEquipe — ver §3.2 do
+ * plano "Prestador: pagamento/local/acesso"). Sem contar o segundo, o toggle "acesso
+ * ao sistema" do Prestador seria decorativo: zero vínculo em `tb_usuario_empresa`
+ * sempre libera por padrão (linha `r.total === 0` abaixo).
  */
 async function podeAcessarSistema(userId, client = prisma) {
   if (!userId) return true;
-  if (!(await temColunasPagamento())) return true;
+  const [temEmpresa, temPrestador] = await Promise.all([temColunasPagamento(), temColunasPrestadorAcesso()]);
+  if (!temEmpresa && !temPrestador) return true;
   try {
+    const partes = [];
+    if (temEmpresa) partes.push(`
+      SELECT ue.acesso_sistema AND ${EMPRESA_ATIVA_SQL} AS liberado
+        FROM schs2vet.tb_usuario_empresa ue
+        JOIN schs2vet.tb_empresas e ON e.id = ue.empresa_id
+       WHERE ue.user_id = $1`);
+    if (temPrestador) partes.push(`
+      SELECT p.acesso_sistema AS liberado
+        FROM schs2vet.tb_prestadores p
+       WHERE p.user_id = $1`);
     const rows = await comEscopoPlataforma(() => client.$queryRawUnsafe(
-      `SELECT COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE ue.acesso_sistema AND ${EMPRESA_ATIVA_SQL})::int AS liberados
-         FROM schs2vet.tb_usuario_empresa ue
-         JOIN schs2vet.tb_empresas e ON e.id = ue.empresa_id
-        WHERE ue.user_id = $1`,
+      `SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE liberado)::int AS liberados
+         FROM (${partes.join(' UNION ALL ')}) vinculos`,
       Number(userId),
     ));
     const r = rows?.[0];

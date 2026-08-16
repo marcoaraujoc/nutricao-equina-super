@@ -13,6 +13,7 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
+import { formatDate } from '../utils/dateUtils';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -46,6 +47,11 @@ interface Tratador {
   createdAt:     string;
   updatedAt:     string;
   localizacao:   { id: number; nome: string; tipoLocalizacao: string } | null;
+  // Trilha de ativação/inativação (quem fez, quando) — ver lib/cadastroAtivacao.js
+  ativoEm?:        string | null;
+  ativoPorNome?:   string | null;
+  inativoEm?:      string | null;
+  inativoPorNome?: string | null;
 }
 
 interface FormTratador {
@@ -183,8 +189,8 @@ export default function CadastroTratador() {
     if (!podeAtivar) { setErroInline('Sem permissão para ativar/inativar tratadores.'); return; }
     setErroInline(null);
     try {
-      await api.patch(`/cadastro/tratadores/${t.id}/toggle`);
-      toast.success(`Tratador ${t.ativo ? 'inativado' : 'ativado'}`);
+      const res = await api.patch(`/cadastro/tratadores/${t.id}/toggle`);
+      toast.success(res.data?.mensagem ?? (t.ativo ? 'Tratador inativado' : 'Tratador ativado'));
       carregar();
     } catch {
       setErroInline('Erro ao alterar status');
@@ -305,6 +311,19 @@ export default function CadastroTratador() {
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Local de Trabalho</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Telefone</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
+                  {filtroAtivo === 'ativo' && (
+                    <>
+                      <th className="px-4 py-3 text-left font-semibold text-gray-600 whitespace-nowrap">Criado em</th>
+                      <th className="px-4 py-3 text-left font-semibold text-gray-600 whitespace-nowrap">Ativado em</th>
+                      <th className="px-4 py-3 text-left font-semibold text-gray-600 whitespace-nowrap">Ativado por</th>
+                    </>
+                  )}
+                  {filtroAtivo === 'inativo' && (
+                    <>
+                      <th className="px-4 py-3 text-left font-semibold text-gray-600 whitespace-nowrap">Inativado em</th>
+                      <th className="px-4 py-3 text-left font-semibold text-gray-600 whitespace-nowrap">Inativado por</th>
+                    </>
+                  )}
                   <th className="px-4 py-3 text-center font-semibold text-gray-600">Ações</th>
                 </tr>
               </thead>
@@ -327,6 +346,19 @@ export default function CadastroTratador() {
                         {t.ativo ? 'Ativo' : 'Inativo'}
                       </span>
                     </td>
+                    {filtroAtivo === 'ativo' && (
+                      <>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(t.createdAt)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(t.ativoEm)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{t.ativoPorNome ?? '—'}</td>
+                      </>
+                    )}
+                    {filtroAtivo === 'inativo' && (
+                      <>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(t.inativoEm)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{t.inativoPorNome ?? '—'}</td>
+                      </>
+                    )}
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-center gap-2">
                         {t.tipoEntrada === 'SYSTEM' && !isAdmin ? (
@@ -335,16 +367,16 @@ export default function CadastroTratador() {
                           <>
                             {podeEditar && (
                               <button onClick={() => abrirEditar(t)}
-                                className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-xl transition-colors"
+                                className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-xl transition-colors"
                                 title="Editar">
                                 <Pencil size={15} />
                               </button>
                             )}
                             {podeAtivar && (
                               <button onClick={() => toggleAtivo(t)}
-                                className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-xl transition-colors"
+                                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-xl transition-colors"
                                 title={t.ativo ? 'Inativar' : 'Ativar'}>
-                                {t.ativo ? <ToggleRight size={15} /> : <ToggleLeft size={15} />}
+                                {t.ativo ? <ToggleRight size={15} className="text-emerald-600" /> : <ToggleLeft size={15} />}
                               </button>
                             )}
                             {!podeEditar && !podeAtivar && (
@@ -388,6 +420,19 @@ export default function CadastroTratador() {
               <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-2">
                 <Phone size={12} /> {t.telefone}
               </div>
+            )}
+
+            {filtroAtivo === 'ativo' && (
+              <p className="text-[11px] text-gray-400 mb-2">
+                Criado em {formatDate(t.createdAt)}
+                {t.ativoEm ? ` · Ativado em ${formatDate(t.ativoEm)}${t.ativoPorNome ? ` por ${t.ativoPorNome}` : ''}` : ''}
+              </p>
+            )}
+            {filtroAtivo === 'inativo' && (
+              <p className="text-[11px] text-gray-400 mb-2">
+                Inativado em {formatDate(t.inativoEm)}
+                {t.inativoPorNome ? ` por ${t.inativoPorNome}` : ''}
+              </p>
             )}
 
             <div className="flex items-center justify-between pt-2 border-t border-gray-100">

@@ -10,6 +10,10 @@ const { garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa } = require(
 const { registrarAuditoria, registrarAlteracao, registrarTransferencia, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 const { animalEstaInativo } = require('../lib/animalInativo');
+const {
+  DOSES_POR_DIA, elegivelParaFluxoNovo, dosesTotaisEsperadas, primeiraDoseEsperada,
+  calcularProximaDose, classificarExecucao, diferencaEmMinutos,
+} = require('../lib/agendaDoses');
 
 const MSG_PACIENTE_INATIVO = 'Paciente inativo — reative com o gestor antes de registrar algo novo.';
 
@@ -44,14 +48,7 @@ const proximoNumero = async (tx, animalId) => {
 };
 
 // ─── Helpers: cálculo, reserva e baixa de estoque ────────────────────────────
-
-const DOSES_POR_DIA = {
-  '1xDia':        1,    '12em12h':  2,    '8em8h':        3,
-  '6em6h':        4,    '4em4h':    6,    '1em1h':        24,
-  'continuo':     1,    'seNecessario': 1, 'SOS':         1,
-  '1x2dias':      1/2,  '1x3dias':  1/3,  '1xSemana':    1/7,
-  '1x21dias':     1/21, '1x30dias': 1/30, '1x90dias':    1/90,
-};
+// `DOSES_POR_DIA` mora em lib/agendaDoses.js — fonte única com o cron de WhatsApp.
 
 // ─── Conversão de unidades ────────────────────────────────────────────────────
 // Estratégia: converter TUDO para a unidade base (g para massa, mL para volume),
@@ -137,8 +134,8 @@ function janelaDoItem(item, hojeStr) {
   };
 }
 
-function qtdDiariaEstoque(item, unidadeEstoque) {
-  const qtdBruta = calcularQuantidadeDiaria(item);
+function qtdDiariaEstoque(item, unidadeEstoque, resolverQtd = calcularQuantidadeDiaria) {
+  const qtdBruta = resolverQtd(item);
   if (!mesmoGrupo(item.unidade, unidadeEstoque)) return qtdBruta;
   return deBase(paraBase(qtdBruta, item.unidade), unidadeEstoque);
 }
@@ -270,14 +267,17 @@ async function liberarReservas(tx, grupoId) {
   await tx.reservaEstoque.deleteMany({ where: { prescricaoGrupoId: grupoId } });
 }
 
-// Debita 1 dia de tratamento do estoque e cria MovimentoEstoque.
-// MULTI-LOTE: a dose do dia é debitada em FEFO através das entradas do
+// Debita estoque e cria MovimentoEstoque para a quantidade que `resolverQtd(item)`
+// determinar — por padrão, a dose do DIA INTEIRO (`calcularQuantidadeDiaria`, itens
+// legados sem horário definido); a execução por dose passa um resolvedor que
+// devolve só a quantidade de UMA dose (ver `executar`).
+// MULTI-LOTE: a quantidade é debitada em FEFO através das entradas do
 // medicamento — quando uma entrada não basta, o restante sai da próxima.
 // Se `grupoId` for informado, as reservas DESTE grupo são abatidas na mesma
 // proporção (evita contagem dupla: estoque já baixado + reserva ainda ativa).
 // Retorna { precos, unidades } por medicamentoCatId (para lançar na fatura) —
-// precos contém o VALOR TOTAL da dose do dia (soma dos lotes debitados).
-async function debitarEstoqueDia(tx, itens, empresaId, grupoId = null) {
+// precos contém o VALOR TOTAL da quantidade debitada (soma dos lotes).
+async function debitarEstoqueDia(tx, itens, empresaId, grupoId = null, resolverQtd = calcularQuantidadeDiaria) {
   const precos   = new Map();
   const unidades = new Map();
   for (const item of itens) {
@@ -287,7 +287,7 @@ async function debitarEstoqueDia(tx, itens, empresaId, grupoId = null) {
     const estoques = await buscarEstoquesFEFO(tx, item.medicamentoCatId, empresaId);
     if (estoques.length === 0) continue;
     const unidadeEstoque = estoques[0].medicamento?.unidade ?? item.unidade;
-    const qtdDia         = calcularQuantidadeDiaria(item);
+    const qtdDia         = resolverQtd(item);
 
     // Quantidade do dia na unidade do estoque
     let restante = mesmoGrupo(item.unidade, unidadeEstoque)
@@ -295,8 +295,8 @@ async function debitarEstoqueDia(tx, itens, empresaId, grupoId = null) {
       : qtdDia;
 
     const desc = item.dosagem
-      ? `${item.dosagem}${item.unidade ? ' ' + item.unidade : ''} × ${item.frequencia} (1 dia)`
-      : `${item.frequencia} (1 dia)`;
+      ? `${item.dosagem}${item.unidade ? ' ' + item.unidade : ''} × ${item.frequencia} (1 dose)`
+      : `${item.frequencia} (1 dose)`;
 
     let valorDaDose = 0;
     for (const estoque of estoques) {
@@ -393,10 +393,11 @@ async function debitarInsumoUnidade(tx, prefixoNome, empresaId, motivo) {
   return { valor, nome: estoque.medicamento.nome };
 }
 
-// Verifica estoque para 1 dia de tratamento — retorna lista de alertas.
+// Verifica estoque para a quantidade que `resolverQtd(item)` determinar (por
+// padrão, o dia inteiro) — retorna lista de alertas.
 // MULTI-LOTE: soma a quantidade de TODAS as entradas do medicamento — uma
 // entrada insuficiente não bloqueia se outra cobre o restante.
-async function verificarEstoqueParaDia(itens, empresaId) {
+async function verificarEstoqueParaDia(itens, empresaId, resolverQtd = calcularQuantidadeDiaria) {
   const alertas = [];
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
@@ -405,17 +406,18 @@ async function verificarEstoqueParaDia(itens, empresaId) {
     const estoques = await buscarEstoquesFEFO(prisma, item.medicamentoCatId, empresaId);
     if (estoques.length === 0) continue; // medicamento não cadastrado no estoque da clínica — ignorar silenciosamente
     const unidadeEstoque = estoques[0].medicamento?.unidade ?? item.unidade;
+    const necessario      = resolverQtd(item);
     const totalEstoque   = estoques.reduce((s, e) => s + (e.qtdEstoque ?? 0), 0);
     const disponBase     = paraBase(totalEstoque, unidadeEstoque);
-    const necessarioBase = paraBase(calcularQuantidadeDiaria(item), item.unidade);
+    const necessarioBase = paraBase(necessario, item.unidade);
     const comparavel     = mesmoGrupo(item.unidade, unidadeEstoque);
-    const insuficiente   = comparavel ? disponBase < necessarioBase : totalEstoque < calcularQuantidadeDiaria(item);
+    const insuficiente   = comparavel ? disponBase < necessarioBase : totalEstoque < necessario;
     if (insuficiente) {
       alertas.push({
         tipo:          'INSUFICIENTE',
         medicamento:   item.medicamento,
         unidade:       unidadeEstoque,
-        qtdNecessaria: qtdDiariaEstoque(item, unidadeEstoque),
+        qtdNecessaria: qtdDiariaEstoque(item, unidadeEstoque, resolverQtd),
         qtdDisponivel: totalEstoque,
       });
     }
@@ -799,32 +801,36 @@ const criar = async (req, res) => {
             if (tipoItem !== 'PROCEDIMENTO') medicamentoCatId = cacheCatalogo.get(chaveCatalogo);
           }
 
-          const criado = await tx.prescricao.create({
-            data: {
-              animalId:           Number(animalId),
-              veterinarioId,
-              grupoId:            grp.id,
-              medicamentoCatId,
-              tipo:               item.tipo             ?? 'MEDICAMENTO',
-              medicamento:        String(item.medicamento ?? ''),
-              dosagem:            item.dosagem           ?? null,
-              unidade:            item.unidade           ?? null,
-              via:                item.via               ?? 'Oral',
-              frequencia:         item.frequencia        ?? '',
-              duracaoDias:        Number(item.duracaoDias ?? 1),
-              horaInicio:         item.horaInicio        ?? null,
-              observacao:         item.observacao        ?? null,
-              dataInicio:         item.dataInicio ? new Date(item.dataInicio) : new Date(),
-              status:             'RASCUNHO',
-              medicamentoCliente: item.medicamentoCliente === true,
-              // Importado do orçamento: guarda o valor UNITÁRIO aceito pelo cliente —
-              // é ele que vai para a fatura, e não o preço do catálogo/estoque.
-              orcamentoItemId:    item.orcamentoItemId ? Number(item.orcamentoItemId) : null,
-              valorOrcado:        item.valorOrcado != null && item.valorOrcado !== ''
-                ? Number(item.valorOrcado)
-                : null,
-            },
-          });
+          const dadosItem = {
+            animalId:           Number(animalId),
+            veterinarioId,
+            grupoId:            grp.id,
+            medicamentoCatId,
+            tipo:               item.tipo             ?? 'MEDICAMENTO',
+            medicamento:        String(item.medicamento ?? ''),
+            dosagem:            item.dosagem           ?? null,
+            unidade:            item.unidade           ?? null,
+            via:                item.via               ?? 'Oral',
+            frequencia:         item.frequencia        ?? '',
+            duracaoDias:        Number(item.duracaoDias ?? 1),
+            horaInicio:         item.horaInicio        ?? null,
+            observacao:         item.observacao        ?? null,
+            dataInicio:         item.dataInicio ? new Date(item.dataInicio) : new Date(),
+            status:             'RASCUNHO',
+            medicamentoCliente: item.medicamentoCliente === true,
+            // Importado do orçamento: guarda o valor UNITÁRIO aceito pelo cliente —
+            // é ele que vai para a fatura, e não o preço do catálogo/estoque.
+            orcamentoItemId:    item.orcamentoItemId ? Number(item.orcamentoItemId) : null,
+            valorOrcado:        item.valorOrcado != null && item.valorOrcado !== ''
+              ? Number(item.valorOrcado)
+              : null,
+          };
+          // Âncora do rolling schedule — só quando o item tem horário definido e
+          // frequência que implica horário esperado (ver lib/agendaDoses.js).
+          if (elegivelParaFluxoNovo(dadosItem)) {
+            dadosItem.proximaDoseEm = primeiraDoseEsperada(dadosItem);
+          }
+          const criado = await tx.prescricao.create({ data: dadosItem });
           // Coluna nova gravada por SQL cru — o client Prisma pode não tê-la ainda
           // (no Windows o `generate` falha com o backend rodando).
           await gravarAplicadaProprietario(tx, criado.id, item.aplicadaPeloProprietario === true);
@@ -944,25 +950,29 @@ const adicionarItem = async (req, res) => {
         destinoId = destinoInfo.id;
       }
 
+      const dadosNovoItem = {
+        animalId:          grupo.animalId,
+        veterinarioId,
+        grupoId:           destinoId,
+        medicamentoCatId:  medicamentoCatId ? Number(medicamentoCatId) : null,
+        tipo:              tipo              ?? 'MEDICAMENTO',
+        medicamento:       String(medicamento),
+        dosagem:           dosagem           ?? null,
+        unidade:           unidade           ?? null,
+        via:               via               ?? 'Oral',
+        frequencia:        frequencia        ?? '',
+        duracaoDias:       Number(duracaoDias ?? 1),
+        horaInicio:        horaInicio        ?? null,
+        observacao:        observacao        ?? null,
+        dataInicio:        dataInicio ? new Date(dataInicio) : new Date(),
+        status:            'RASCUNHO',
+        medicamentoCliente: medicamentoCliente === true,
+      };
+      if (elegivelParaFluxoNovo(dadosNovoItem)) {
+        dadosNovoItem.proximaDoseEm = primeiraDoseEsperada(dadosNovoItem);
+      }
       const novoItem = await tx.prescricao.create({
-        data: {
-          animalId:          grupo.animalId,
-          veterinarioId,
-          grupoId:           destinoId,
-          medicamentoCatId:  medicamentoCatId ? Number(medicamentoCatId) : null,
-          tipo:              tipo              ?? 'MEDICAMENTO',
-          medicamento:       String(medicamento),
-          dosagem:           dosagem           ?? null,
-          unidade:           unidade           ?? null,
-          via:               via               ?? 'Oral',
-          frequencia:        frequencia        ?? '',
-          duracaoDias:       Number(duracaoDias ?? 1),
-          horaInicio:        horaInicio        ?? null,
-          observacao:        observacao        ?? null,
-          dataInicio:        dataInicio ? new Date(dataInicio) : new Date(),
-          status:            'RASCUNHO',
-          medicamentoCliente: medicamentoCliente === true,
-        },
+        data: dadosNovoItem,
         include: {
           veterinario:    { select: { id: true, fullName: true } },
           medicamentoCat: { select: { id: true, nome: true } },
@@ -1029,6 +1039,18 @@ const atualizarItem = async (req, res) => {
     if (observacao         !== undefined) data.observacao        = observacao;
     if (dataInicio         !== undefined) data.dataInicio        = new Date(dataInicio);
     if (medicamentoCliente !== undefined) data.medicamentoCliente = medicamentoCliente === true;
+
+    // Recalcula a âncora do rolling schedule quando um campo que a afeta muda —
+    // só é alcançável aqui porque o item ainda não teve NENHUMA execução (guard
+    // acima), então `dosesExecutadas` é sempre 0 e a "próxima dose" é sempre a 1ª.
+    if (horaInicio !== undefined || dataInicio !== undefined || frequencia !== undefined) {
+      const itemFinal = {
+        horaInicio: data.horaInicio !== undefined ? data.horaInicio : item.horaInicio,
+        dataInicio: data.dataInicio ?? item.dataInicio,
+        frequencia: data.frequencia !== undefined ? data.frequencia : item.frequencia,
+      };
+      data.proximaDoseEm = elegivelParaFluxoNovo(itemFinal) ? primeiraDoseEsperada(itemFinal) : null;
+    }
     // Editar NÃO transfere a autoria (2026-08-04): quem chegou até aqui é o próprio dono
     // ou o gestor, e um ajuste feito pelo gestor não pode tirar do veterinário a
     // prescrição que ele conduz. A troca de dono tem caminho próprio (assumir/transferir).
@@ -1605,21 +1627,43 @@ async function resolverValorProcedimento(tx, empresaId, nome) {
   return proc.valorVenda ?? 0;
 }
 
+// Horário previsto de UMA dose: se já houve dose(s) antes, é o rolling schedule
+// já persistido (`proximaDoseEm`); sem nenhuma dose ainda, é a 1ª dose esperada.
+// Mesma fórmula em `executar` e no cron de WhatsApp — nunca recalcular à parte.
+function horarioPrevistoDoItem(item) {
+  return (item.dosesExecutadas ?? 0) > 0 && item.proximaDoseEm
+    ? item.proximaDoseEm
+    : primeiraDoseEsperada(item);
+}
+
+const CLASSIFICACAO_LABEL = { NO_HORARIO: 'no horário', ANTECIPADA: 'antecipada', ATRASADA: 'atrasada' };
+
+function fmtDataHora(d) {
+  const dt = new Date(d);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+}
+
 const executar = async (req, res) => {
   try {
     const grupoId       = Number(req.params.id);
     const veterinarioId = req.user.id;
     // itemIds (opcional): executa/fatura SOMENTE esses itens (execução item a item).
-    // Sem itemIds → mantém o comportamento antigo (todos os itens da janela de hoje).
+    // Sem itemIds → mantém o comportamento antigo (todos os itens pendentes).
     const itemIdsFiltro = Array.isArray(req.body?.itemIds)
       ? req.body.itemIds.map(Number).filter(Number.isInteger)
       : null;
+    // Execução fora do horário (antecipada/atrasada) exige confirmação explícita do
+    // front (tela de aviso, não-bloqueante) — sem ela, nada é debitado/faturado.
+    // "Executar Todos" manda esta flag sempre true (ação de lote — não abre N modais).
+    const confirmarHorario = req.body?.confirmarHorario === true;
 
     const grupo = await prisma.prescricaoGrupo.findUnique({
       where:   { id: grupoId },
       include: {
         itens:   { where: { ativo: true }, include: { medicamentoCat: true } },
         evolucao: { select: { id: true, numero: true, tipoAtendimento: true, status: true } },
+        animal:   { select: { nome: true } },
       },
     });
     if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
@@ -1631,30 +1675,58 @@ const executar = async (req, res) => {
 
     const hojeStr = hojeLocalStr();
 
-    // Só processa/trava hoje os itens cuja própria janela (dataInicio + duracaoDias)
-    // cobre o dia de hoje — itens de duração menor já executados em dias anteriores
-    // não são re-debitados/re-faturados, e itens que ainda não começaram são ignorados.
-    // Itens processáveis hoje: dentro da janela, ainda não executados HOJE, e — se
-    // itemIds foi enviado — restritos a esses (execução item a item).
     grupo.itens = await anexarAplicadaProprietario(prisma, grupo.itens);
 
+    // Itens processáveis AGORA:
+    //   elegível ao fluxo novo (horário definido) → uma dose de cada vez, até o
+    //     total de doses do curso ser atingido (não é mais "uma vez por dia").
+    //   legado (sem horário definido)             → mantém o comportamento antigo:
+    //     dentro da janela do dia, ainda não executado hoje.
     // Item aplicado pelo proprietário nunca é executado pela clínica — a lista do
     // plantão já não o mostra, e o filtro aqui fecha a porta de um POST com itemIds
     // (execução item a item) que o alcançasse mesmo assim.
-    const itensHoje = grupo.itens.filter(item =>
-      !item.aplicadaPeloProprietario &&
-      janelaDoItem(item, hojeStr).dentro &&
-      !executadoHojeItem(item, hojeStr) &&
-      (!itemIdsFiltro || itemIdsFiltro.includes(item.id))
-    );
+    const itensHoje = grupo.itens.filter(item => {
+      if (item.aplicadaPeloProprietario) return false;
+      if (itemIdsFiltro && !itemIdsFiltro.includes(item.id)) return false;
+      if (elegivelParaFluxoNovo(item)) {
+        return (item.dosesExecutadas ?? 0) < dosesTotaisEsperadas(item);
+      }
+      return janelaDoItem(item, hojeStr).dentro && !executadoHojeItem(item, hojeStr);
+    });
     if (itensHoje.length === 0) {
       return res.status(400).json({ error: 'Nenhum item da prescrição para executar agora.' });
     }
 
+    const agora = new Date();
+
+    // Gate de confirmação — ANTES de tocar em estoque/fatura/log. Cobre antecipada
+    // E atrasada com a MESMA tela no front ("mesmas regras da antecipação").
+    if (!confirmarHorario) {
+      for (const item of itensHoje) {
+        if (!elegivelParaFluxoNovo(item)) continue;
+        const previsto      = horarioPrevistoDoItem(item);
+        const classificacao = classificarExecucao(agora, previsto);
+        if (classificacao !== 'NO_HORARIO') {
+          return res.status(400).json({
+            erro:          'CONFIRMACAO_NECESSARIA',
+            itemId:        item.id,
+            medicamento:   item.medicamento,
+            previsto,
+            agora,
+            classificacao,
+          });
+        }
+      }
+    }
+
+    // Quantidade a debitar/faturar por item: UMA dose (elegível) ou o dia inteiro
+    // (legado) — ver lib/agendaDoses.js e a nota em `debitarEstoqueDia`.
+    const resolverQtdExecucao = (item) =>
+      elegivelParaFluxoNovo(item) ? (parseFloat(item.dosagem) || 1) : calcularQuantidadeDiaria(item);
+
     const empresaIdEfetivo = grupo.empresaId ?? req.empresaId ?? null;
 
-    // Verifica estoque para a dose do dia (não para o tratamento completo)
-    const alertasEstoque = await verificarEstoqueParaDia(itensHoje, empresaIdEfetivo);
+    const alertasEstoque = await verificarEstoqueParaDia(itensHoje, empresaIdEfetivo, resolverQtdExecucao);
     if (alertasEstoque.length > 0) {
       return res.status(409).json({ erro: 'ESTOQUE_INSUFICIENTE', alertas: alertasEstoque });
     }
@@ -1665,14 +1737,14 @@ const executar = async (req, res) => {
     const atendNum = grupo.evolucao
       ? formatAtendimentoNum(grupo.evolucao.tipoAtendimento, grupo.evolucao.numero)
       : null;
-    const agora = new Date();
 
     await prisma.$transaction(async (tx) => {
-      // Debita dose do dia (multi-lote FEFO) e retorna preços/unidades por medicamento.
-      // Passa o grupoId para abater as reservas deste grupo junto com a baixa.
-      const { precos, unidades } = await debitarEstoqueDia(tx, itensHoje, empresaIdEfetivo, grupoId);
+      // Debita a quantidade resolvida por item (multi-lote FEFO) e retorna
+      // preços/unidades por medicamento. Passa o grupoId para abater as reservas
+      // deste grupo junto com a baixa.
+      const { precos, unidades } = await debitarEstoqueDia(tx, itensHoje, empresaIdEfetivo, grupoId, resolverQtdExecucao);
 
-      // Lança na fatura ABERTA do proprietário NESTA empresa (quantidade do dia)
+      // Lança na fatura ABERTA do proprietário NESTA empresa
       const fatura = await getOrCreateFatura(tx, proprietarioId, empresaIdEfetivo);
 
       for (const item of itensHoje) {
@@ -1749,24 +1821,67 @@ const executar = async (req, res) => {
           }
         }
 
-        // Trava o item (edição/exclusão) e registra a data da última execução —
-        // atualizado a cada dia processado, para o Mapa de Atendimento saber se a
-        // dose de HOJE já foi dada (não só se o item já foi executado alguma vez).
-        await tx.prescricao.update({ where: { id: item.id }, data: { executadoEm: agora } });
+        // Trava o item (edição/exclusão) e registra a data da última execução.
+        // Elegível: grava a DOSE individual (rolling schedule + auditoria); legado:
+        // só marca `executadoEm`, como sempre (o Mapa de Atendimento usa isso para
+        // saber se a dose de HOJE já foi dada).
+        if (elegivelParaFluxoNovo(item)) {
+          const previsto      = horarioPrevistoDoItem(item);
+          const classificacao = classificarExecucao(agora, previsto);
+          const diffMin       = diferencaEmMinutos(agora, previsto);
+
+          await tx.prescricao.update({
+            where: { id: item.id },
+            data:  {
+              executadoEm:     agora,
+              dosesExecutadas: { increment: 1 },
+              proximaDoseEm:   calcularProximaDose(agora, item.frequencia),
+            },
+          });
+          await tx.prescricaoExecucaoDose.create({
+            data: {
+              prescricaoId:     item.id,
+              grupoId,
+              animalId:         grupo.animalId,
+              numeroDose:       (item.dosesExecutadas ?? 0) + 1,
+              horarioPrevisto:  previsto,
+              horarioExecutado: agora,
+              executadoPorId:   veterinarioId,
+              classificacao,
+              diferencaMinutos: diffMin,
+            },
+          });
+          await registrarAuditoria(tx, req, {
+            categoria:  'EXECUCAO',
+            entidade:   'PRESCRICAO_DOSE',
+            entidadeId: item.id,
+            animalId:   grupo.animalId,
+            detalhes:   `${grupo.animal?.nome ?? 'paciente'} — ${item.medicamento}: `
+              + `previsto ${fmtDataHora(previsto)}, executado ${fmtDataHora(agora)} `
+              + `(${CLASSIFICACAO_LABEL[classificacao]}${classificacao !== 'NO_HORARIO' ? ` ${Math.abs(diffMin)}min` : ''})`,
+          });
+        } else {
+          await tx.prescricao.update({ where: { id: item.id }, data: { executadoEm: agora } });
+        }
       }
 
-      // Transita para EXECUTADO só quando TODOS os itens ativos já foram executados
-      // e cada um alcançou o último dia da sua janela (respeita execução item a item
-      // e durações diferentes). Backend-autoritativo — relê o estado já atualizado.
-      // Item aplicado pelo proprietário está FORA da conta: ele nunca será executado,
-      // e exigi-lo aqui deixaria o documento eternamente FINALIZADO — preso na tela
-      // de execução mesmo com tudo o que é da clínica já aplicado.
+      // Transita para EXECUTADO só quando TODOS os itens ativos já foram executados —
+      // elegível: todas as doses do curso já foram dadas; legado: o critério antigo
+      // (executado e alcançou o último dia da janela). Backend-autoritativo — relê o
+      // estado já atualizado. Item aplicado pelo proprietário está FORA da conta: ele
+      // nunca será executado, e exigi-lo aqui deixaria o documento eternamente
+      // FINALIZADO — preso na tela de execução mesmo com tudo já aplicado.
       const itensAtuais = (await anexarAplicadaProprietario(prisma, await tx.prescricao.findMany({
         where:  { grupoId, ativo: true },
-        select: { id: true, executadoEm: true, dataInicio: true, duracaoDias: true },
+        select: {
+          id: true, executadoEm: true, dataInicio: true, duracaoDias: true,
+          frequencia: true, horaInicio: true, dosesExecutadas: true,
+        },
       }))).filter(i => !i.aplicadaPeloProprietario);
       const tudoConcluido = itensAtuais.length > 0 &&
-        itensAtuais.every(item => item.executadoEm && janelaDoItem(item, hojeStr).ultimoDia);
+        itensAtuais.every(item => elegivelParaFluxoNovo(item)
+          ? (item.dosesExecutadas ?? 0) >= dosesTotaisEsperadas(item)
+          : (item.executadoEm && janelaDoItem(item, hojeStr).ultimoDia));
       if (tudoConcluido) {
         await tx.prescricaoGrupo.update({
           where: { id: grupoId },
@@ -1904,7 +2019,9 @@ const listarParaExecucao = async (req, res) => {
       );
     }
 
-    // Adiciona diaAtual em cada item para exibição frontend (base UTC)
+    // Adiciona diaAtual em cada item para exibição frontend (base UTC) + os campos
+    // do fluxo por dose (elegível: doses dadas/esperadas + próximo horário — usados
+    // pelo front para saber se ainda falta dose hoje e montar a tela de confirmação).
     const comDia = resultado.map(g => ({
       ...g,
       numeroFormatado: formatNumero(g.numero),
@@ -1912,7 +2029,14 @@ const listarParaExecucao = async (req, res) => {
         const inicioStr = new Date(item.dataInicio).toISOString().split('T')[0];
         const inicio    = new Date(inicioStr + 'T00:00:00Z');
         const diaAtual  = Math.floor((hoje.getTime() - inicio.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-        return { ...item, diaAtual };
+        const elegivel  = elegivelParaFluxoNovo(item);
+        return {
+          ...item,
+          diaAtual,
+          dosesExecutadas:      elegivel ? (item.dosesExecutadas ?? 0) : null,
+          dosesTotaisEsperadas: elegivel ? dosesTotaisEsperadas(item) : null,
+          proximaDoseEm:        elegivel ? horarioPrevistoDoItem(item) : null,
+        };
       }),
     }));
 

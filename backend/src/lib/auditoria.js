@@ -19,7 +19,10 @@ const { comEscopoPlataforma } = require('./prismaTenant');
 // ALTERACAO      → edição de registro do atendimento, com o antes → depois.
 // CRIACAO        → nasceu um registro. Sem ela a trilha tem buraco: dá para ver que um
 //                  agendamento foi cancelado, mas não que ele existiu nem quem o marcou.
-const CATEGORIAS = ['EXCLUSAO', 'CANCELAMENTO', 'AJUSTE', 'CONFIGURACAO', 'TRANSFERENCIA', 'ALTERACAO', 'CRIACAO'];
+// EXECUCAO       → execução de UMA dose de prescrição (paciente, medicamento, horário
+//                  previsto x executado, quem executou) — toda dose é auditada, não só
+//                  as fora do horário (ver PrescricaoGrupoController.executar).
+const CATEGORIAS = ['EXCLUSAO', 'CANCELAMENTO', 'AJUSTE', 'CONFIGURACAO', 'TRANSFERENCIA', 'ALTERACAO', 'CRIACAO', 'EXECUCAO'];
 
 /**
  * Extrai o IP de origem do request de forma consistente com o `trust proxy`

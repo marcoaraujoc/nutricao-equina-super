@@ -15,8 +15,11 @@
 //   sem contexto algum → só ADMIN (arquivo legado sem dono identificado)
 'use strict';
 
-const prisma = require('../lib/prisma').default;
+const prisma  = require('../lib/prisma').default;
+const mammoth = require('mammoth');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+
+const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 // Espelha a whitelist que o express.static usava: o que não é mídia reconhecida vai
 // como anexo (Content-Disposition: attachment), neutralizando XSS armazenado por
@@ -92,7 +95,17 @@ async function enviarArquivo(req, res, midia) {
   const comuns = (publico) => {
     res.setHeader('Content-Type', midia.mimeType);
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox; frame-ancestors 'none'");
+    // `frame-ancestors`: 'none' bloqueava a PRÓPRIA aplicação de exibir o arquivo —
+    // o visualizador embute PDF num <iframe> same-origin (VisualizadorArquivos, em
+    // Exames.tsx) e o navegador recusava a navegação do frame ("localhost recusou
+    // a conexão" dentro da caixa do visualizador, sem nenhuma requisição de rede
+    // sequer aparecer — é bloqueio de CSP, não erro de servidor). Inline (o que a
+    // UI efetivamente embute) libera SÓ a própria origem; anexo para download
+    // (Content-Disposition abaixo) nunca é embutido em frame nenhum, então segue
+    // vedado a todos.
+    res.setHeader('Content-Security-Policy',
+      inline ? "default-src 'none'; sandbox; frame-ancestors 'self'"
+             : "default-src 'none'; sandbox; frame-ancestors 'none'");
     // Cache PRIVADO para dado de cliente: proxy compartilhado não pode guardá-lo.
     // `immutable` é seguro porque a chave é única por conteúdo — trocar a foto gera
     // outra chave. A marca do produto é pública e pode ser cacheada por qualquer um.
@@ -196,6 +209,53 @@ const MidiaController = {
     } catch (err) {
       console.error('MidiaController.baixar:', err);
       return res.status(500).json({ error: 'Erro ao obter arquivo' });
+    }
+  },
+
+  // GET /api/midia/:chave/preview — SÓ para .docx.
+  //
+  // O navegador não sabe renderizar DOCX nativamente (nem num <iframe>, nem numa
+  // <img>) — a única forma de "ver" o arquivo sem passar por um app externo é
+  // convertê-lo para algo que ele entenda. Reusa o MESMO `mammoth` que o backend já
+  // usa para extrair texto do laudo (exameParserService), agora pedindo HTML em vez
+  // de texto puro — parágrafos/negrito/tabelas do documento saem preservados.
+  // Mesma autorização de `baixar` (por dono do arquivo); devolve JSON `{ html }`,
+  // nunca HTML direto — quem renderiza é o front, dentro de um <iframe sandbox>
+  // (sem `allow-scripts`), então mesmo um DOCX malicioso não executa nada.
+  visualizarDocx: async (req, res) => {
+    try {
+      const chave = String(req.params.chave ?? '');
+      if (!/^[a-f0-9]{16,64}$/i.test(chave)) {
+        return res.status(400).json({ error: 'Chave inválida' });
+      }
+
+      const midia = await prisma.midiaArquivo.findUnique({
+        where:  { chave },
+        select: SELECT_META,
+      });
+      if (!midia) return res.status(404).json({ error: 'Arquivo não encontrado' });
+
+      if (!(await autorizar(req, midia))) {
+        return res.status(404).json({ error: 'Arquivo não encontrado' });
+      }
+
+      if (midia.mimeType !== MIME_DOCX) {
+        return res.status(415).json({ error: 'Pré-visualização só é suportada para arquivos DOCX' });
+      }
+
+      const completo = await prisma.midiaArquivo.findUnique({
+        where:  { id: midia.id },
+        select: { conteudo: true },
+      });
+      if (!completo) return res.status(404).json({ error: 'Arquivo não encontrado' });
+
+      const { value: html } = await mammoth.convertToHtml({ buffer: completo.conteudo });
+      // Mesmo cache privado do download — a chave é única por conteúdo.
+      res.setHeader('Cache-Control', 'private, max-age=86400, immutable');
+      return res.json({ dados: { html } });
+    } catch (err) {
+      console.error('MidiaController.visualizarDocx:', err);
+      return res.status(500).json({ error: 'Erro ao gerar a pré-visualização do arquivo' });
     }
   },
 };

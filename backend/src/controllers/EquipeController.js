@@ -30,6 +30,9 @@ const { salvarVinculo, vincularMembro, normalizarPagamento, salvarPagamentoEAces
         anexarPagamentoEmRelacao, anexarFotoEmRelacao, empresasSemAcesso } = require('../lib/usuarioEmpresa');
 // Limite de usuários do plano — fonte única da conta de assentos (fase 2 do multi-tenancy)
 const { garantirVagaDeUsuario, consomeAssento } = require('../lib/planoEmpresa');
+// Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — ver toggleMembro/listarMembros
+const { registrarAtivacao, registrarInativacao, anexarTrilhaAtivacaoEmRelacao } = require('../lib/usuarioAtivacao');
+const { registrarAuditoria } = require('../lib/auditoria');
 
 // ─── Helper: encontra a empresa do usuário (owner OU gestor convidado) ─────────
 // empresaIdPreferida (req.empresaId, vindo do seletor de empresa no frontend):
@@ -1645,7 +1648,7 @@ const EquipeController = {
         const membros = await prisma.membroEquipe.findMany({
           where:   { equipeId: equipe.id, NOT: { user: { role: 'ADMIN' } } },
           include: {
-            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: equipe.empresaId }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
+            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, createdAt: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: equipe.empresaId }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
             equipe: { select: { nome: true } },
           },
           orderBy: { createdAt: 'desc' },
@@ -1654,11 +1657,13 @@ const EquipeController = {
         return res.json({
           sucesso: true,
           // Cadastro do profissional é o DESTA empresa (ver lib/profissionalPerfil.js).
-          // A remuneração/acesso vêm por fora (colunas novas, SQL cru) para o
-          // formulário de edição reabrir com o que já foi acordado.
-          dados:        await anexarFotoEmRelacao(await anexarPagamentoEmRelacao(await aplicarPerfilProfEmRelacao(
+          // A remuneração/acesso e a trilha de ativação/inativação vêm por fora
+          // (colunas novas, SQL cru) para o formulário de edição reabrir com o que
+          // já foi acordado, e para as colunas de "desde quando"/"por quem" das
+          // abas Ativos/Inativos (ver Equipe.tsx).
+          dados:        await anexarTrilhaAtivacaoEmRelacao(await anexarFotoEmRelacao(await anexarPagamentoEmRelacao(await aplicarPerfilProfEmRelacao(
             await anexarLocaisTrabalho(await anexarExpedienteTrabalho(await anexarPerfisGlobais(membros, { todos: true }))), // ADMIN da plataforma vê tudo
-            'user', equipe.empresaId), 'user', equipe.empresaId), 'user', equipe.empresaId),
+            'user', equipe.empresaId), 'user', equipe.empresaId), 'user', equipe.empresaId), 'user'),
           equipeId:     equipe.id,
           isGestor:      true,
           todasEquipes: todasEquipes.map(e => ({ id: e.id, nome: e.nome, empresaNome: e.empresa?.nome ?? '' })),
@@ -1699,16 +1704,16 @@ const EquipeController = {
         const membrosDaEquipe = await prisma.membroEquipe.findMany({
           where:   { equipeId: vinculo.equipeId, NOT: { user: { role: 'ADMIN' } } },
           include: {
-            user:   { select: { id: true, fullName: true, ativo: true, userType: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: equipeDoVinculo?.empresaId ?? -1 }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
+            user:   { select: { id: true, fullName: true, ativo: true, createdAt: true, userType: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: equipeDoVinculo?.empresaId ?? -1 }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
             equipe: { select: { nome: true } },
           },
           orderBy: { createdAt: 'desc' },
         });
         return res.json({
           sucesso:  true,
-          dados:    await anexarFotoEmRelacao(await aplicarPerfilProfEmRelacao(
+          dados:    await anexarTrilhaAtivacaoEmRelacao(await anexarFotoEmRelacao(await aplicarPerfilProfEmRelacao(
             await anexarLocaisTrabalho(await anexarExpedienteTrabalho(membrosDaEquipe)),
-            'user', equipeDoVinculo?.empresaId ?? null), 'user', equipeDoVinculo?.empresaId ?? null),
+            'user', equipeDoVinculo?.empresaId ?? null), 'user', equipeDoVinculo?.empresaId ?? null), 'user'),
           equipeId: vinculo.equipeId,
           isGestor: false,
         });
@@ -1724,7 +1729,7 @@ const EquipeController = {
       const membros = await prisma.membroEquipe.findMany({
         where:   { equipeId: equipeAlvo.id, NOT: { user: { role: 'ADMIN' } } },
         include: {
-          user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: empresa.id }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
+          user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, createdAt: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: empresa.id }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
           equipe: { select: { nome: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -1732,9 +1737,9 @@ const EquipeController = {
       res.json({
         sucesso: true,
         // Perfis restritos à PRÓPRIA empresa — o que o membro é em outras empresas não aparece
-        dados:        await anexarFotoEmRelacao(await anexarPagamentoEmRelacao(await aplicarPerfilProfEmRelacao(
+        dados:        await anexarTrilhaAtivacaoEmRelacao(await anexarFotoEmRelacao(await anexarPagamentoEmRelacao(await aplicarPerfilProfEmRelacao(
           await anexarLocaisTrabalho(await anexarExpedienteTrabalho(await anexarPerfisGlobais(membros, { empresaId: empresa.id }))),
-          'user', empresa.id), 'user', empresa.id), 'user', empresa.id),
+          'user', empresa.id), 'user', empresa.id), 'user', empresa.id), 'user'),
         equipeId:     equipeAlvo.id,
         isGestor,
         empresaId:    empresa.id,
@@ -2369,8 +2374,24 @@ const EquipeController = {
       const membro  = await prisma.membroEquipe.findUnique({ where: { id: Number(id) }, include: { user: true } });
       if (!membro) return res.status(404).json({ sucesso: false, mensagem: 'Membro não encontrado' });
 
-      await prisma.user.update({ where: { id: membro.userId }, data: { ativo: !membro.user.ativo } });
-      res.json({ sucesso: true, mensagem: membro.user.ativo ? 'Membro inativado' : 'Membro ativado' });
+      const vaiInativar = membro.user.ativo;
+
+      if (vaiInativar) {
+        await registrarInativacao(prisma, membro.userId, req.user.id);
+      } else {
+        await registrarAtivacao(prisma, membro.userId, req.user.id);
+      }
+
+      // Auditoria: quem foi (in)ativado, quando (timestamp da própria linha) e
+      // quem fez (userId/userName/email da própria linha, gravados pelo helper).
+      await registrarAuditoria(prisma, req, {
+        categoria: 'ALTERACAO',
+        entidade:  'USUARIO',
+        entidadeId: membro.userId,
+        detalhes:  `${req.user.fullName ?? req.user.email} ${vaiInativar ? 'inativou' : 'ativou'} o usuário ${membro.user.fullName}`,
+      });
+
+      res.json({ sucesso: true, mensagem: vaiInativar ? 'Usuário inativado' : 'Usuário ativado' });
     } catch (err) {
       console.error('Erro ao alternar status do membro:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });

@@ -2,5 +2,7 @@ node_modules
 dist
 # Keep environment variables out of version control
 .env
+listar_modelos.py
+validar_bula_completa.py
 
 /src/generated/prisma

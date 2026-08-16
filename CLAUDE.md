@@ -1,5 +1,10 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-08-21 (Prestador: cadastro NOVO e INDEPENDENTE de Fornecedor —
+#   tb_prestadores própria, RLS tenant direto igual tb_fornecedores, rota
+#   /cadastro/prestadores; correções de UX/bugs em Agendamentos — voz, animais somem
+#   por Set vazio truthy, scroll do "Expediente Ativo" resetando — e padronização de
+#   modais de cadastro no estilo Tratador/Localização)
 # Atualizado em: 2026-08-11 (grupo2corrigir FECHADO: bug real em ExameCompra.tsx (setSelectedAnimal
 #   não aceita forma funcional), duplicata inativa de fornecedor ganhou fluxo de "Ativar existente",
 #   relatorioNutricional.service.ts do FRONTEND removido — órfão MySQL, nunca importado)
@@ -278,6 +283,22 @@ FornecedorEspecialidade → especialidades do cadastro Fornecedor. unique(fornec
                     No Cadastro Pessoal do convidado o filtro usa as espécies da empresa; no cadastro direto
                     do vet usa as espécies que ele atende. Componente reutilizável: EspecialidadeSelector.tsx.
                     Agenda (Agendamentos.tsx) lê especialidades do catálogo (fallback p/ VetSubespecialidade legado).
+Prestador         → catálogo de PRESTADORES de serviço (tb_prestadores) — cópia da FORMA de
+                    Fornecedor (nome, CPF/CNPJ, contato, tipoServico livre VARCHAR(50), endereço,
+                    tipoEntrada SYSTEM|CLIENTE, empresaId/equipeId SEM FK) mas TABELA e RLS PRÓPRIAS
+                    (migration 20260821000000, decisão explícita: entidade independente, não view/
+                    filtro sobre Fornecedor). RLS tenant direto igual tb_fornecedores (policy
+                    `empresa_id = app_empresa_id() OR app_empresa_id() IS NULL`). Sem especialidade
+                    por catálogo (FornecedorEspecialidade) nem vínculo a User — é um cadastro mais
+                    simples, sem a integração com login/estoque que Fornecedor tem.
+                    Controller/rotas: PrestadorController.js + routes/prestadores.js, mesmo padrão
+                    de FornecedorController (verificarDuplicidade por CPF ou nome+tipo+telefone,
+                    podeAlterarRegistroEscopado de lib/cadastroScopeAccess.js). Slugs
+                    `cadastro.prestador.*` (seed 002, mesmos defaults por perfil que `cadastro.
+                    fornecedor.*`). Front: CadastroPrestador.tsx (cópia de CadastroFornecedor.tsx,
+                    sem EspecialidadeSelector — tipo de serviço é select simples), rota
+                    /cadastro/prestadores, entrada própria no Sidebar (não reaproveita a de
+                    Fornecedores).
 Alimento          → banco de alimentos
 Nutriente         → banco de nutrientes
 ComposicaoAlimento → composição nutricional por alimento/espécie

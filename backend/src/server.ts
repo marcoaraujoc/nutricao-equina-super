@@ -225,6 +225,10 @@ const tratadoresRoutes         = require('./routes/tratadores');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const fornecedoresRoutes       = require('./routes/fornecedores');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+const prestadoresRoutes        = require('./routes/prestadores');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const catalogoTipoServicoRoutes = require('./routes/catalogoTipoServico');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const localizacoesRoutes       = require('./routes/localizacoes');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const encaminhamentosRoutes    = require('./routes/encaminhamentos');
@@ -303,6 +307,8 @@ app.use('/api/orcamentos',            orcamentosRoutes);
 app.use('/api/cadastro/proprietarios', proprietariosRoutes);
 app.use('/api/cadastro/tratadores',   tratadoresRoutes);
 app.use('/api/cadastro/fornecedores', fornecedoresRoutes);
+app.use('/api/cadastro/prestadores',  prestadoresRoutes);
+app.use('/api/cadastro/tipos-servico', catalogoTipoServicoRoutes);
 app.use('/api/cadastro/localizacoes', localizacoesRoutes);
 app.use('/api/admin/vacinas',         vacinaAdminRoutes);
 app.use('/api/clinica/vacinas',       vacinaClinicaRoutes);
@@ -411,6 +417,21 @@ app.use((err: Error & { status?: number; statusCode?: number; code?: string; det
       code:     'ARQUIVO_GRANDE_DEMAIS',
       mensagem: `Arquivo acima do limite de ${limiteMb} MB.`,
       error:    `Arquivo acima do limite de ${limiteMb} MB.`,
+    });
+  }
+
+  // Formato de arquivo que a IA não sabe ler (.doc, .docx, planilha etc.) — recusado
+  // no `fileFilter` do multer ANTES do upload (routes/clinica-exames.js). 415 + code
+  // para o front mostrar o motivo real em vez de "erro ao analisar com a IA".
+  if (err.code === 'FORMATO_ARQUIVO_NAO_SUPORTADO') {
+    logger.warn(`${req.method} ${req.path} — formato de arquivo não suportado`, {
+      requestId: req.requestId, message: err.message,
+    });
+    return res.status(415).json({
+      sucesso:  false,
+      code:     'FORMATO_ARQUIVO_NAO_SUPORTADO',
+      mensagem: err.message,
+      error:    err.message,
     });
   }
 
@@ -583,6 +604,35 @@ registrarJob('lembrete_whatsapp', {
     const cabecalho = `${r.total} lembrete(s) de WhatsApp enviado(s) de ${verificados} agendamento(s) na janela, em ${r.empresas} empresa(s).`;
     const resumo = detalhes.length > 0 ? `${cabecalho}\n\n${detalhes.join('\n\n')}` : cabecalho;
     // Só alerta o admin quando de fato enviou algo (roda a cada 5 min → evita spam)
+    return { ok: true, notificar: r.total > 0 || r.falhas.length > 0, resumo };
+  }),
+});
+
+// ============== CRON — AVISO DE PRÓXIMA DOSE DE PRESCRIÇÃO (WhatsApp, 15min antes) ==============
+// Execução de prescrição por DOSE individual (ver lib/agendaDoses.js e
+// PrescricaoGrupoController.executar): a cada dose, o horário da PRÓXIMA é
+// recalculado a partir do horário REAL da anterior (rolling schedule). Este job
+// varre `Prescricao.proximaDoseEm` e avisa TODA A EQUIPE quando faltam 15min.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { enviarLembretesDosePrescricao } = require('./services/lembreteDosePrescricaoService');
+
+registrarJob('lembrete_dose_prescricao', {
+  nome: 'Aviso de próxima dose de prescrição (WhatsApp)',
+  exprPadrao: '*/5 * * * *', // a cada 5 minutos — mesma granularidade do lembrete de agendamento
+  // `…ComEnvio` pelo mesmo motivo do job acima: este job manda WhatsApp, não pode
+  // rodar dentro de uma transação por empresa.
+  fn: () => comAlerta('Aviso de próxima dose de prescrição (WhatsApp)', async () => {
+    const detalhes: string[] = [];
+    let verificados = 0;
+    const r = await paraCadaEmpresaComEnvio('Lembrete-Dose-WA', async (empresa: { id: number }) => {
+      const res = await enviarLembretesDosePrescricao(empresa.id);
+      verificados += res.verificados;
+      if (res.detalhes?.length) detalhes.push(...res.detalhes);
+      return res.enviados;
+    });
+    if (r.total > 0) logger.info(`[Lembrete-Dose-WA] ${r.total} aviso(s) enviado(s) de ${verificados} dose(s) na janela`);
+    const cabecalho = `${r.total} aviso(s) de próxima dose enviado(s) de ${verificados} dose(s) na janela, em ${r.empresas} empresa(s).`;
+    const resumo = detalhes.length > 0 ? `${cabecalho}\n\n${detalhes.join('\n\n')}` : cabecalho;
     return { ok: true, notificar: r.total > 0 || r.falhas.length > 0, resumo };
   }),
 });

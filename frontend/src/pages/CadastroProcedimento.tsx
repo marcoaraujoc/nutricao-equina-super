@@ -12,6 +12,7 @@ import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import ModalJustificativa from '../components/ModalJustificativa';
+import DropdownSelect from '../components/DropdownSelect';
 import {
   ListChecks, Search, Pencil, Trash2, X, Loader2, Check, Layers, PackagePlus,
 } from 'lucide-react';
@@ -99,6 +100,7 @@ export default function CadastroProcedimento() {
   const [espSel,         setEspSel]         = useState('');
   const [procedimentos,  setProcedimentos]  = useState<Procedimento[]>([]);
   const [combos,         setCombos]         = useState<Combo[]>([]);
+  const [buscaCombos,    setBuscaCombos]    = useState('');
   const [busca,          setBusca]          = useState('');
   const [aba,            setAba]            = useState<'procedimentos' | 'combos'>('procedimentos');
   const [loading,        setLoading]        = useState(true);
@@ -191,6 +193,12 @@ export default function CadastroProcedimento() {
     return procedimentos.filter(p =>
       p.nome.toLowerCase().includes(q) || p.categoria.toLowerCase().includes(q));
   }, [procedimentos, busca]);
+
+  const combosFiltrados = useMemo(() => {
+    const q = buscaCombos.trim().toLowerCase();
+    if (!q) return combos;
+    return combos.filter(c => c.nome.toLowerCase().includes(q));
+  }, [combos, buscaCombos]);
 
   // ── Valor da empresa (gestor) ─────────────────────────────────────────────
 
@@ -402,10 +410,7 @@ export default function CadastroProcedimento() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1.5">Especialidade</label>
-                <select value={espSel} onChange={e => setEspSel(e.target.value)} className={inputCls}>
-                  <option value="">— Selecionar —</option>
-                  {especialidades.map(e => <option key={e} value={e}>{e}</option>)}
-                </select>
+                <DropdownSelect value={espSel} onChange={setEspSel} options={especialidades} className={inputCls} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1.5">Buscar</label>
@@ -531,19 +536,32 @@ export default function CadastroProcedimento() {
 
       {aba === 'combos' && (
         <div className="space-y-4">
-          {podeCriar && (
-            <button onClick={abrirNovoCombo}
-              className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors">
-              <PackagePlus size={15} /> Novo Combo
-            </button>
-          )}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            {podeCriar && (
+              <button onClick={abrirNovoCombo}
+                className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors flex-shrink-0">
+                <PackagePlus size={15} /> Novo Combo
+              </button>
+            )}
+            {combos.length > 0 && (
+              <div className="relative sm:max-w-xs w-full">
+                <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
+                <input type="text" value={buscaCombos} onChange={e => setBuscaCombos(e.target.value)}
+                  placeholder="Buscar combo por nome..." className={`${inputCls} pl-8`} />
+              </div>
+            )}
+          </div>
           {combos.length === 0 ? (
             <div className="text-center py-14 text-gray-400 text-sm">
               Nenhum combo cadastrado{podeGerirEmpresa ? ' — crie o primeiro combo de procedimentos da empresa.' : '.'}
             </div>
+          ) : combosFiltrados.length === 0 ? (
+            <div className="text-center py-14 text-gray-400 text-sm">
+              Nenhum combo encontrado para &ldquo;{buscaCombos}&rdquo;.
+            </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
-              {combos.map(c => (
+              {combosFiltrados.map(c => (
                 <div key={c.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-col">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -616,10 +634,13 @@ export default function CadastroProcedimento() {
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Especialidade</label>
-                <select value={formProc.especialidade} onChange={e => setFormProc(f => ({ ...f, especialidade: e.target.value }))} className={inputCls}>
-                  <option value="">— Sem especialidade —</option>
-                  {especialidades.map(e => <option key={e} value={e}>{e}</option>)}
-                </select>
+                <DropdownSelect
+                  value={formProc.especialidade}
+                  onChange={especialidade => setFormProc(f => ({ ...f, especialidade }))}
+                  options={especialidades}
+                  placeholder="— Sem especialidade —"
+                  className={inputCls}
+                />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Descrição</label>
@@ -661,10 +682,12 @@ export default function CadastroProcedimento() {
                       e escolhe o que a lista de procedimentos mostra. Trocá-la troca a
                       lista, mas NÃO limpa o que já foi marcado — é assim que se reúnem
                       áreas diferentes no mesmo pacote. */}
-                  <select value={comboEsp} onChange={e => { setComboEsp(e.target.value); setComboBusca(''); }} className={inputCls}>
-                    <option value="">— Selecionar —</option>
-                    {especialidades.map(e => <option key={e} value={e}>{e}</option>)}
-                  </select>
+                  <DropdownSelect
+                    value={comboEsp}
+                    onChange={v => { setComboEsp(v); setComboBusca(''); }}
+                    options={especialidades}
+                    className={inputCls}
+                  />
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

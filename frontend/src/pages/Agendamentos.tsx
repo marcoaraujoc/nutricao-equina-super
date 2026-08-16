@@ -1,5 +1,5 @@
 // src/pages/Agendamentos.tsx
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
@@ -18,6 +18,7 @@ import {
   CheckCircle2, AlertCircle, UserCheck, CalendarDays, MapPin, Ban,
 } from 'lucide-react';
 import InlineError from '../components/InlineError';
+import ModalJustificativa from '../components/ModalJustificativa';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -226,11 +227,6 @@ const MESES_PT      = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Ju
 const DIAS_PT       = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 const DIAS_FULL_PT  = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
 
-const MOTIVOS_CANCELAMENTO = [
-  'Imprevisto do proprietário','Animal indisponível',
-  'Profissional indisponível','Reagendamento para outra data','Outro motivo',
-];
-
 const DOT_COR: Record<DiaStatus, string> = {
   LIVRE:   'bg-emerald-500',
   PARCIAL: 'bg-amber-400',
@@ -314,7 +310,8 @@ interface CalendarioProps {
    *  usado no reagendamento, que não pode cair num dia que já passou. */
   minDate?:     string;
   /** Esconde o atalho "Ir para Hoje". No reagendamento ele não faz sentido: o alvo é
-   *  uma data FUTURA, e o atalho só devolve o usuário ao dia em que ele já está. */
+   *  uma data FUTURA, e o atalho só devolve o usuário ao dia em que ele já está. Também
+   *  retirado do calendário principal de `/agendamentos` a pedido (2026-08-14). */
   semAtalhoHoje?: boolean;
 }
 
@@ -517,8 +514,11 @@ interface AgendamentosProps {
   /**
    * Aba "Minha Agenda" do Atendimento (`/clinica/agenda`). É ESTA MESMA TELA: renderiza
    * só o card "Agendamentos do Dia" (sem cabeçalho de página, sem a barra
-   * Animal↔Proprietário, sem calendário e sem o Expediente Ativo), com os MESMOS
-   * layout, ações e modais — inclusive o reagendamento com calendário e grade.
+   * Animal↔Proprietário, sem o calendário grande fixo e sem o Expediente Ativo), com os
+   * MESMOS layout, ações e modais — inclusive o reagendamento com calendário e grade.
+   * O título "Agendamentos do Dia" vira botão nesse modo e abre um mini calendário
+   * (mesmo `CalendarioInterativo`, em popover) para trocar de data sem precisar do
+   * calendário grande, que só existe na tela cheia.
    *
    * ⚠️ Existe para NÃO duplicar a agenda em dois arquivos. A divergência entre as duas
    * telas foi a origem de uma série de "sumiu o botão X" — ver CLAUDE.md 28-g.
@@ -528,6 +528,15 @@ interface AgendamentosProps {
   modoMinhaAgenda?: boolean;
   /** Clique no nome do paciente (só faz sentido dentro do shell de Atendimento). */
   onSelecionarAnimal?: (animalId: number) => void;
+}
+
+// Wrappers do modo aba × modo página — em escopo de MÓDULO de propósito: precisam ser
+// referências ESTÁVEIS entre renders (ver comentário onde `Wrapper` é escolhido).
+function FragmentoWrapper({ children }: { children: React.ReactNode }) {
+  return <>{children}</>;
+}
+function PageWrapper({ children }: { children: React.ReactNode }) {
+  return <PageContainer maxWidth="7xl">{children}</PageContainer>;
 }
 
 export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnimal }: AgendamentosProps = {}) {
@@ -660,40 +669,50 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     return p.get('date') ?? hoje();
   });
 
-  // ── Filtro de animais por LOCAL + DIA de atendimento do profissional ──────────
-  // Traz só os animais localizados onde o veterinário atende no dia selecionado.
-  // Dia da semana (0=Dom…6=Sáb) do dia selecionado — meio-dia evita desvio de fuso.
-  const diaSemanaSelecionado = useMemo(() => {
-    const [y, m, d] = selectedDate.split('-').map(Number);
-    return new Date(y, m - 1, d, 12).getDay();
-  }, [selectedDate]);
-  // Profissional-alvo: o filtrado na visão da agenda; senão o próprio usuário logado.
-  const vetAlvoId = filtroVetId ? Number(filtroVetId) : meuUserId;
-  // Localizações onde o profissional-alvo atende no dia. null = sem restrição
-  // (ex.: gestor/sem locais configurados) → não filtra os animais.
-  const locaisPermitidos = useMemo<Set<number> | null>(() => {
-    const vet = vets.find(v => v.userId === vetAlvoId);
-    if (!vet || vet.locais.length === 0) return null;
-    const set = new Set<number>();
-    for (const l of vet.locais) {
-      // Local sem dias definidos = atende todos os dias ali
-      if (!l.dias || l.dias.length === 0 || l.dias.includes(diaSemanaSelecionado)) {
-        set.add(l.localizacaoId);
-      }
+  // Mini calendário do cabeçalho "Agendamentos do Dia" — só em `modoMinhaAgenda`
+  // (a tela cheia já mostra o CalendarioInterativo fixo ao lado). `position: fixed`
+  // porque o cabeçalho vive dentro de um container `overflow-hidden` (cantos
+  // arredondados) que cortaria um popover absoluto.
+  const [miniCalAberto, setMiniCalAberto] = useState(false);
+  const [miniCalPos, setMiniCalPos] = useState<{ top: number; left: number } | null>(null);
+  const miniCalBtnRef = useRef<HTMLButtonElement>(null);
+  const miniCalPopRef = useRef<HTMLDivElement>(null);
+  function toggleMiniCal() {
+    if (miniCalAberto) { setMiniCalAberto(false); return; }
+    const rect = miniCalBtnRef.current?.getBoundingClientRect();
+    if (rect) setMiniCalPos({ top: rect.bottom + 6, left: rect.left });
+    setMiniCalAberto(true);
+  }
+  useEffect(() => {
+    if (!miniCalAberto) return;
+    const fn = (e: MouseEvent) => {
+      const alvo = e.target as Node;
+      if (miniCalPopRef.current?.contains(alvo)) return;
+      if (miniCalBtnRef.current?.contains(alvo)) return;
+      setMiniCalAberto(false);
+    };
+    document.addEventListener('mousedown', fn);
+    return () => document.removeEventListener('mousedown', fn);
+  }, [miniCalAberto]);
+  // Reposiciona se o popover estourar a borda direita da tela (mesma correção do
+  // popover de horários — ver useLayoutEffect de `slotPopoverRef` acima).
+  useLayoutEffect(() => {
+    if (!miniCalAberto || !miniCalPopRef.current) return;
+    const el = miniCalPopRef.current;
+    const margem = 8;
+    const rect = el.getBoundingClientRect();
+    if (rect.right > window.innerWidth - margem) {
+      el.style.left = `${Math.max(margem, window.innerWidth - rect.width - margem)}px`;
     }
-    return set;
-  }, [vets, vetAlvoId, diaSemanaSelecionado]);
-  // Animais no local/dia de atendimento (base para os seletores de animal)
-  const animaisNoLocal = useMemo(
-    () => locaisPermitidos
-      ? animais.filter(a => a.localizacaoId != null && locaisPermitidos.has(a.localizacaoId))
-      : animais,
-    [animais, locaisPermitidos],
-  );
-  // Filtra ainda pelo proprietário selecionado (barra superior)
+  }, [miniCalAberto]);
+
+  // Seleção de animal NÃO é restrita por local/dia de trabalho do profissional — o
+  // combo mostra todos os animais da empresa, e quem escolhe é o usuário.
+  const animaisDisponiveis = animais;
+  // Filtra pelo proprietário selecionado (barra superior)
   const animaisFiltradosBar = useMemo(
-    () => selectedProprId ? animaisNoLocal.filter(a => String(a.user?.id) === selectedProprId) : animaisNoLocal,
-    [animaisNoLocal, selectedProprId],
+    () => selectedProprId ? animaisDisponiveis.filter(a => String(a.user?.id) === selectedProprId) : animaisDisponiveis,
+    [animaisDisponiveis, selectedProprId],
   );
   const [agendamentos, setAgendamentos] = useState<AgendamentoGlobal[]>([]);
   const [loading, setLoading]           = useState(false);
@@ -724,11 +743,24 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   const [reagOcupados, setReagOcupados]   = useState<Array<{ iniMin: number; fimMin: number }>>([]);
   const [reagLoading, setReagLoading]     = useState(false);
   const [salvandoReag, setSalvandoReag]   = useState(false);
+  // Justificativa do usuário quando o reagendamento nasce da decisão de cancelamento
+  // (vira parte do `motivo` do PATCH final) — null quando é o botão "Reagendar" direto,
+  // que não passa por essa etapa e mantém só o texto informativo automático.
+  const [reagMotivoUsuario, setReagMotivoUsuario] = useState<string | null>(null);
   // O modal do reagendamento ROLA (calendário + grade de horários). Só posicionar o
   // erro depois do botão não basta: ele nasce no fim do formulário, que pode estar
   // logo abaixo da dobra. Este ref traz o erro para a vista quando ele aparece.
   const erroReagRef                       = useRef<HTMLDivElement>(null);
-  const [cancelando, setCancelando]       = useState<number | null>(null);
+  // Cancelamento — mesmo com o atendimento já EM_ANDAMENTO, cancelar precisa ser
+  // possível. Antes da justificativa, uma escolha: cancelar em definitivo ou
+  // remarcar a consulta. As duas exigem justificativa (`ModalJustificativa`) e vão
+  // para a auditoria — remarcar leva direto para a tela de reagendamento, já com a
+  // justificativa em mãos, em vez de fechar tudo e obrigar o usuário a clicar de novo.
+  const [decisaoCancelamento, setDecisaoCancelamento]         = useState<AgendamentoGlobal | null>(null);
+  const [justificandoCancelamento, setJustificandoCancelamento] =
+    useState<{ ag: AgendamentoGlobal; tipo: 'DEFINITIVO' | 'REMARCAR' } | null>(null);
+  const [salvandoCancelamento, setSalvandoCancelamento]       = useState(false);
+  const [erroCancelamento, setErroCancelamento]               = useState<string | null>(null);
   // Confirmação de conflito: animal já possui agendamento — o vet precisa dar ciência antes de prosseguir
   const [conflitoConfirm, setConflitoConfirm] = useState<{
     animalNome: string; quando: string; hora: string; vetNome: string; onConfirm: () => void;
@@ -751,6 +783,10 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   const [vozAberto, setVozAberto]             = useState(false);
   const [vozContexto, setVozContexto]         = useState<BookingInfo | null>(null);
   const [vozEtapa, setVozEtapa]               = useState<VozEtapa>('IDLE');
+  // Motivo real do 'ERRO' — sem isso a tela sempre mostrava o mesmo texto genérico
+  // ("Não foi possível interpretar"), fosse microfone bloqueado, silêncio, sem rede
+  // com o serviço de reconhecimento, ou falha no backend/IA. `null` = usa o fallback.
+  const [vozErroMsg, setVozErroMsg]           = useState<string | null>(null);
   const [vozTranscricao, setVozTranscricao]   = useState('');
   const [vozTextoManual, setVozTextoManual]   = useState('');
   const [vozResultado, setVozResultado]       = useState<InterpretacaoResultado | null>(null);
@@ -760,21 +796,76 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   const recognitionRef                        = useRef<any>(null);
 
   // ── Dropdown de slots ────────────────────────────────────────────────────────
+  // Abre/fecha por CLIQUE, não por hover: o popover é `position: fixed` (pode ficar
+  // longe, na tela, do botão que o abriu) e o caminho do mouse até ele passa por uma
+  // zona "morta" entre os dois — com hover+timer isso soltava mouseleave/mouseenter
+  // repetidos ao tentar alcançar um horário, e o navegador reage a essas trocas de
+  // :hover ajustando o scroll da lista sozinho (oscilando pra cima e pra baixo).
+  // Clique elimina a ambiguidade: só fecha por clique-fora ou clique de novo no botão.
   const [slotPos, setSlotPos]   = useState<{ top: number; left: number } | null>(null);
-  const slotCloseRef            = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Duas refs, não uma: a tabela desktop (`hidden md:block`) e os cards mobile
+  // (`md:hidden`) SEMPRE existem os dois no DOM ao mesmo tempo — só o CSS esconde um
+  // dos dois por breakpoint. Com UMA ref só, a linha da versão escondida sobrescrevia
+  // a da visível (mesma `linha.key`, ambas com `isOpen` true), e o clique-fora
+  // considerava o clique no popover VISÍVEL como "fora" do popover (que a ref
+  // apontava, errado, para a cópia escondida) — fechava antes do clique no horário
+  // registrar.
+  const slotWrapDesktopRef      = useRef<HTMLDivElement | null>(null);
+  const slotWrapMobileRef       = useRef<HTMLDivElement | null>(null);
+  // Popover do DESKTOP (a coluna "Horários Disponíveis" é a última da tabela, perto
+  // da borda direita) — mede o próprio tamanho depois de renderizado e se reposiciona
+  // se estourar a tela. Sem isso ele nascia cortado à direita e a página inteira
+  // ganhava scroll horizontal, dando a sensação de "tela se mexendo sozinha" ao tentar
+  // alcançar um horário perto da borda. O popover do mobile já nasce com left/right
+  // fixos (16px de cada lado) e não precisa disso.
+  const slotPopoverRef          = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    if (!openSlotKey || !slotPopoverRef.current) return;
+    const el = slotPopoverRef.current;
+    const rect = el.getBoundingClientRect();
+    const margem = 8;
+    // Só o eixo X: o `translateY` do CSS não afeta a leitura de `rect.left`, então o
+    // valor medido aqui é o mesmo que `style.left` — corrigir é seguro. Em Y o
+    // `getBoundingClientRect()` já vem PÓS-transform e mexer em `style.top` direto
+    // brigaria com o `translateY(calc(-100% - 6px))` que empurra o popover pra cima
+    // do botão; o caso vertical não foi observado no bug relatado, então não mexe.
+    if (rect.right > window.innerWidth - margem) {
+      el.style.left = `${Math.max(margem, window.innerWidth - rect.width - margem)}px`;
+    }
+  }, [openSlotKey]);
 
-  function openSlotMenu(key: string, el: HTMLElement) {
-    if (slotCloseRef.current) clearTimeout(slotCloseRef.current);
+  // Preserva o scroll interno da grade "Expediente Ativo" — escolher um horário
+  // recalcula `linhasAtendimento` (reabastece agendamentos/ocupação), e o container
+  // perdia o scrollTop nesse recálculo, jogando o profissional escolhido para fora
+  // da tela. `onScroll` grava a posição a cada rolagem; o efeito abaixo a reaplica
+  // depois de todo re-render da lista.
+  const expedienteDesktopRef  = useRef<HTMLDivElement>(null);
+  const expedienteMobileRef   = useRef<HTMLDivElement>(null);
+  const expedienteScrollTop   = useRef({ desktop: 0, mobile: 0 });
+
+  function toggleSlotMenu(key: string, el: HTMLElement) {
+    if (openSlotKey === key) { setOpenSlotKey(null); setSlotPos(null); return; }
     const rect = el.getBoundingClientRect();
     setSlotPos({ top: rect.top, left: rect.left });
     setOpenSlotKey(key);
   }
-  function scheduleCloseSlot() {
-    slotCloseRef.current = setTimeout(() => { setOpenSlotKey(null); setSlotPos(null); }, 80);
+  function closeSlotMenu() {
+    setOpenSlotKey(null);
+    setSlotPos(null);
   }
-  function cancelCloseSlot() {
-    if (slotCloseRef.current) clearTimeout(slotCloseRef.current);
-  }
+  // Fecha o popover de horários ao clicar fora dele (mesmo padrão do combo de animal).
+  // "Fora" = fora das DUAS refs — só uma delas tem nó de verdade (a outra ref fica
+  // null, pois só a linha realmente aberta recebe `ref={...}` naquele breakpoint).
+  useEffect(() => {
+    const fn = (e: MouseEvent) => {
+      const alvo = e.target as Node;
+      const dentroDesktop = slotWrapDesktopRef.current?.contains(alvo) ?? false;
+      const dentroMobile  = slotWrapMobileRef.current?.contains(alvo) ?? false;
+      if (!dentroDesktop && !dentroMobile) closeSlotMenu();
+    };
+    document.addEventListener('mousedown', fn);
+    return () => document.removeEventListener('mousedown', fn);
+  }, []);
 
   // Auto-abre voz quando ?auto=1; pré-seleciona animal quando ?animalId=X; salta para ?date=X
   useEffect(() => {
@@ -863,7 +954,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
           temposConsulta?: Record<string, number>;
         }> | null;
         user: {
-          id: number; fullName: string; userType: string;
+          id: number; fullName: string; userType: string; ativo?: boolean;
           vetPerfil?: { subespecialidades?: { nome: string }[] } | null;
           fornecedorPerfil?: { tipoServico?: string | null } | null;
           especialidades?: { especialidadeId?: number; especialidade?: { id?: number; nome?: string | null } | null }[] | null;
@@ -875,7 +966,10 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
         // coluna dele para conseguir marcar na PRÓPRIA agenda, já que ninguém além
         // do gestor agenda na agenda de outro (regra basal). Só o cliente fica fora.
         // O CARGO desta empresa é quem manda, nunca o `userType` do login.
-        .filter(m => m.cargo !== 'PROPRIETARIO' && m.user?.userType !== 'ADMIN')
+        // `user.ativo` já vem do backend como a conjunção ativo-global × ativo-na-
+        // empresa (ver lib/profissionalPerfil.js) — profissional inativo não entra
+        // na grade, ele não deve receber novo agendamento.
+        .filter(m => m.cargo !== 'PROPRIETARIO' && m.user?.userType !== 'ADMIN' && m.user?.ativo !== false)
         .map(m => {
           let especialidades: string[];
           if (m.cargo === 'FORNECEDOR') {
@@ -1336,6 +1430,18 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   }, [vetsFiltrados, selectedDate, filtroEspId, filtroLocalId, faixaHorarioFiltro,
       agendamentos, ocupacaoGlobal, expediente, vets, tempoPadraoEmpresa]);
 
+  // Reaplica o scroll salvo depois que a lista recalcula (ex.: ao agendar um
+  // horário, `agendamentos` muda e `linhasAtendimento` é recriada) — sem isso o
+  // container voltava para o topo e o profissional escolhido saía da tela.
+  // `openSlotKey` também entra: abrir o popover de horários insere um elemento novo
+  // (`position: fixed`, mas ainda filho de dentro do container) e o "scroll anchoring"
+  // do navegador reajusta o scrollTop sozinho ao ver o DOM mudar — mesmo o popover não
+  // ocupando espaço visual ali. Reaplicar aqui corrige o salto assim que ele acontece.
+  useLayoutEffect(() => {
+    if (expedienteDesktopRef.current) expedienteDesktopRef.current.scrollTop = expedienteScrollTop.current.desktop;
+    if (expedienteMobileRef.current)  expedienteMobileRef.current.scrollTop  = expedienteScrollTop.current.mobile;
+  }, [linhasAtendimento, openSlotKey]);
+
   // Rótulo "Seg, Qua · 08:00–12:00" — dias e horário na MESMA coluna
   const labelDiasHorario = (l: { dias: number[] | null; horaInicio: string | null; horaFim: string | null }): string => {
     const dias = l.dias === null ? 'Todos os dias'
@@ -1357,7 +1463,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     if (bookingForm.animalId) el.select();
   };
 
-  const animalSelecionadoCombo = animaisNoLocal.find(a => String(a.id) === bookingForm.animalId) ?? null;
+  const animalSelecionadoCombo = animaisDisponiveis.find(a => String(a.id) === bookingForm.animalId) ?? null;
   // ⚠️ Depois de escolher, `comboQuery` guarda o RÓTULO ("Mel (Haras H.P.)"), que NÃO
   // casa com `a.nome` ("Mel"). Filtrar por ele zerava a lista: reabrir o combo mostrava
   // "Nenhum animal encontrado" e o usuário ficava PRESO à primeira escolha, sem jeito de
@@ -1365,7 +1471,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // é busca — é a exibição da escolha —, então a lista inteira continua disponível.
   const queryEhRotuloSelecionado =
     !!animalSelecionadoCombo && comboQuery === rotuloAnimalCombo(animalSelecionadoCombo);
-  const animaisCombo = animaisNoLocal.filter(a =>
+  const animaisCombo = animaisDisponiveis.filter(a =>
     !comboQuery || queryEhRotuloSelecionado || a.nome.toLowerCase().includes(comboQuery.toLowerCase()));
 
   // ── Conflict check ────────────────────────────────────────────────────────────
@@ -1434,11 +1540,33 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch {} recognitionRef.current = null; }
     setVozAberto(false); setVozContexto(null); setVozEtapa('IDLE');
     setVozTranscricao(''); setVozTextoManual(''); setVozResultado(null); setVozSlotConflito(null);
+    setVozErroMsg(null);
+  }
+
+  // Código de erro do SpeechRecognition (`ev.error`) → mensagem que diz o que
+  // realmente aconteceu. Antes qualquer motivo (mic bloqueado, sem fala, sem rede
+  // com o serviço de reconhecimento) caía na mesma frase genérica de "tente de novo".
+  function msgErroReconhecimentoVoz(codigo?: string): string {
+    switch (codigo) {
+      case 'not-allowed':
+      case 'service-not-allowed':
+        return 'Permissão de microfone negada. Libere o acesso ao microfone nas configurações do navegador e tente novamente.';
+      case 'no-speech':
+        return 'Nenhuma fala foi detectada. Fale mais próximo do microfone e tente novamente.';
+      case 'audio-capture':
+        return 'Nenhum microfone foi encontrado neste dispositivo.';
+      case 'network':
+        return 'Sem conexão com o serviço de reconhecimento de voz. Verifique sua internet e tente novamente.';
+      case 'aborted':
+        return 'Gravação interrompida. Tente novamente.';
+      default:
+        return 'Tente novamente ou use o formulário manual.';
+    }
   }
 
   function iniciarGravacao() {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) { setVozEtapa('ERRO'); return; }
+    if (!SR) { setVozErroMsg('Seu navegador não suporta gravação de voz. Use o campo de texto.'); setVozEtapa('ERRO'); return; }
     const rec = new SR();
     rec.lang = 'pt-BR'; rec.continuous = true; rec.interimResults = true;
     rec.onresult = (ev: any) => {
@@ -1446,8 +1574,9 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
       for (let i = 0; i < ev.results.length; i++) t += ev.results[i][0].transcript;
       setVozTranscricao(t);
     };
-    rec.onerror = () => setVozEtapa('ERRO');
+    rec.onerror = (ev: any) => { setVozErroMsg(msgErroReconhecimentoVoz(ev?.error)); setVozEtapa('ERRO'); };
     rec.start(); recognitionRef.current = rec;
+    setVozErroMsg(null);
     setVozEtapa('GRAVANDO'); setVozTranscricao('');
   }
 
@@ -1459,7 +1588,11 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
 
   async function processarVoz(textoOverride?: string) {
     const texto = textoOverride ?? vozTranscricao ?? vozTextoManual;
-    if (!texto.trim()) { setVozEtapa('ERRO'); return; }
+    if (!texto.trim()) {
+      setVozErroMsg('Não foi possível captar nenhuma fala. Tente novamente ou digite o pedido.');
+      setVozEtapa('ERRO');
+      return;
+    }
     setVozEtapa('PROCESSANDO');
     try {
       const res = await api.post('/clinica/agendamentos/interpretar', { texto, dataReferencia: selectedDate, vetHint: vozContexto?.vetId, horaHint: vozContexto?.hora });
@@ -1484,7 +1617,13 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
 
       setVozResultado(resultado);
       setVozEtapa(resultado?.disponivel ? 'DISPONIVEL' : 'INDISPONIVEL');
-    } catch { setVozEtapa('ERRO'); }
+    } catch (err) {
+      // Antes o catch era mudo (`catch { setVozEtapa('ERRO'); }`): 403 de permissão,
+      // 500 do backend/IA e falha de rede caíam todos na mesma frase genérica, sem
+      // pista nenhuma do que de fato falhou.
+      setVozErroMsg(msgErroAgenda(err, 'Não foi possível interpretar a solicitação. Tente novamente ou use o formulário manual.'));
+      setVozEtapa('ERRO');
+    }
   }
 
   async function confirmarVoz() {
@@ -1554,17 +1693,46 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     executarConfirmarBooking();
   }
 
-  async function handleStatus(id: number, novoStatus: string, motivo?: string) {
+  // Abre a escolha "cancelar em definitivo × remarcar" — o Cancelar da linha chama
+  // isto, nunca a justificativa direto: mesmo com o atendimento já EM_ANDAMENTO,
+  // cancelar tem que continuar possível, e a decisão vem ANTES do motivo.
+  function abrirDecisaoCancelamento(ag: AgendamentoGlobal) {
+    setErroLista(null);
+    setDecisaoCancelamento(ag);
+  }
+
+  function escolherTipoCancelamento(tipo: 'DEFINITIVO' | 'REMARCAR') {
+    if (!decisaoCancelamento) return;
+    setErroCancelamento(null);
+    setJustificandoCancelamento({ ag: decisaoCancelamento, tipo });
+    setDecisaoCancelamento(null);
+  }
+
+  // Confirma a justificativa (`ModalJustificativa` já a exige e ela vai para a
+  // auditoria em ambos os casos). DEFINITIVO cancela na hora; REMARCAR guarda a
+  // justificativa e abre a MESMA tela de reagendamento (calendário + grade), que a
+  // usa no PATCH final — sem essa etapa a justificativa do "por quê" se perderia.
+  async function confirmarCancelamento(motivo: string) {
+    if (!justificandoCancelamento) return;
+    const { ag, tipo } = justificandoCancelamento;
+    if (tipo === 'REMARCAR') {
+      setJustificandoCancelamento(null);
+      abrirReagendamento(ag, motivo);
+      return;
+    }
+    setSalvandoCancelamento(true);
+    setErroCancelamento(null);
     try {
-      await api.patch(`/clinica/agendamentos/${id}/status`, { status: novoStatus, motivo });
-      toast.success(novoStatus === 'CONCLUIDO' ? 'Confirmado' : 'Cancelado');
-      setCancelando(null);
+      await api.patch(`/clinica/agendamentos/${ag.id}/status`, { status: 'CANCELADO', motivo });
+      toast.success('Cancelado');
       setAgendamentos(prev => prev.map(a =>
-        a.id === id
-          ? { ...a, status: novoStatus as StatusAgendamento, observacao: novoStatus === 'CANCELADO' && motivo ? motivo : a.observacao }
-          : a
-      ));
-    } catch { setErroLista('Erro ao atualizar'); }
+        a.id === ag.id ? { ...a, status: 'CANCELADO' as StatusAgendamento, observacao: motivo } : a));
+      setJustificandoCancelamento(null);
+    } catch (err) {
+      setErroCancelamento(msgErroAgenda(err, 'Erro ao cancelar'));
+    } finally {
+      setSalvandoCancelamento(false);
+    }
   }
 
   async function handleIniciarAtendimento(ag: AgendamentoGlobal) {
@@ -1685,13 +1853,16 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
 
   // Abre o modal de reagendamento já na agenda: dia do agendamento (ou hoje, se ele
   // já passou — não se reagenda para trás) e nenhum horário pré-selecionado.
-  function abrirReagendamento(ag: AgendamentoGlobal) {
+  // `motivoUsuario` só vem da decisão de cancelamento ("Remarcar a consulta") — o
+  // botão "Reagendar" direto não passa por essa etapa e não tem justificativa própria.
+  function abrirReagendamento(ag: AgendamentoGlobal, motivoUsuario?: string) {
     setErroModal(null);
     const diaAtual = formatarDateInput(ag.dataHora).slice(0, 10);
     setReagendando(ag);
     setReagData(diaAtual < hoje() ? hoje() : diaAtual);
     setReagHora('');
     setReagOcupados([]);
+    setReagMotivoUsuario(motivoUsuario ?? null);
   }
 
   // Ocupação do profissional no dia ESCOLHIDO (não no dia da tela): agenda do contexto
@@ -1773,9 +1944,13 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
       const novaHoraStr = novaData.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
       // TRANSFERIDO (e não CANCELADO): o atendimento não foi desmarcado, mudou de
       // data. O horário antigo é liberado e a observação registra para quando foi.
+      // Vindo da decisão de cancelamento ("Remarcar a consulta"), a justificativa do
+      // usuário entra JUNTO — reagendar também vai para a auditoria com o motivo,
+      // não só com o texto informativo automático.
+      const motivoInformativo = `Reagendado para ${novaDataStr} às ${novaHoraStr}`;
       await api.patch(`/clinica/agendamentos/${reagendando.id}/status`, {
         status: 'REAGENDADO',
-        motivo: `Reagendado para ${novaDataStr} às ${novaHoraStr}`,
+        motivo: reagMotivoUsuario ? `${reagMotivoUsuario} — ${motivoInformativo}` : motivoInformativo,
       });
       cancelado = true;
       await api.post('/clinica/agendamentos', {
@@ -1786,7 +1961,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
         especialidadeId: reagendando.especialidade?.id ?? undefined,
       });
       toast.success('Reagendado');
-      setReagendando(null); fetchAgendamentos(selectedDate); setMesCarregado('');
+      setReagendando(null); setReagMotivoUsuario(null); fetchAgendamentos(selectedDate); setMesCarregado('');
     } catch (err) {
       if (cancelado) {
         await api.patch(`/clinica/agendamentos/${reagendando.id}/status`, {
@@ -1802,9 +1977,15 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // ─── Render ───────────────────────────────────────────────────────────────────
   // No modo aba (`/clinica/agenda`) o shell do Atendimento já dá container e cabeçalho:
   // aqui vai só o conteúdo, num fragmento.
-  const Wrapper = modoMinhaAgenda
-    ? ({ children }: { children: React.ReactNode }) => <>{children}</>
-    : ({ children }: { children: React.ReactNode }) => <PageContainer maxWidth="7xl">{children}</PageContainer>;
+  // ⚠️ `Wrapper` tem que ser uma referência ESTÁVEL entre renders — `FragmentoWrapper`/
+  // `PageWrapper` vivem em escopo de MÓDULO (fora do componente) por isso. Definir a
+  // função aqui dentro (mesmo com a mesma lógica) cria uma IDENTIDADE NOVA a cada
+  // render; o React não reconhece "mesmo componente, output igual" e desmonta +
+  // remonta a árvore inteira, inclusive modais abertos. Se isso cai bem no meio de um
+  // clique (entre mousedown e mouseup), o botão original é destruído e o clique não
+  // vira `click` nenhum — sintoma: qualquer botão da tela parecia precisar de DOIS
+  // cliques, porque o primeiro sempre corria o risco de esbarrar num re-render.
+  const Wrapper = modoMinhaAgenda ? FragmentoWrapper : PageWrapper;
 
   return (
     <Wrapper>
@@ -1949,6 +2130,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
             selectedDate={selectedDate}
             onChange={date => { setSelectedDate(date); if (date.slice(0,7) !== mesCarregado) setMesCarregado(''); }}
             statusPorDia={statusPorDia}
+            semAtalhoHoje
           />
         </div>
 
@@ -2052,7 +2234,10 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
             ) : (
               <>
               {/* Desktop table — uma linha por profissional × local × especialidade */}
-              <div className="hidden md:block overflow-x-auto max-h-[280px] overflow-y-auto">
+              <div ref={expedienteDesktopRef}
+                onScroll={e => { expedienteScrollTop.current.desktop = e.currentTarget.scrollTop; }}
+                style={{ overflowAnchor: 'none' }}
+                className="hidden md:block overflow-x-auto max-h-[280px] overflow-y-auto">
                 <table className="w-full text-left">
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
@@ -2101,10 +2286,10 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                             {podeGerenciar ? (
                               <div
                                 className="inline-block"
-                                onMouseEnter={e => openSlotMenu(linha.key, e.currentTarget)}
-                                onMouseLeave={scheduleCloseSlot}
+                                ref={isOpen ? slotWrapDesktopRef : undefined}
                               >
                                 <button
+                                  onClick={e => toggleSlotMenu(linha.key, e.currentTarget)}
                                   className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all border bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
                                 >
                                   {livres.length} {livres.length === 1 ? 'Livre' : 'Livres'}
@@ -2112,9 +2297,8 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                                 </button>
                                 {isOpen && slotPos && (
                                   <div
+                                    ref={slotPopoverRef}
                                     style={{ position: 'fixed', top: slotPos.top, left: slotPos.left, transform: 'translateY(calc(-100% - 6px))', zIndex: 9999 }}
-                                    onMouseEnter={cancelCloseSlot}
-                                    onMouseLeave={scheduleCloseSlot}
                                     className="bg-white border border-gray-200 rounded-2xl shadow-xl p-2.5 min-w-[200px]"
                                   >
                                     <p className="text-[9px] font-bold text-gray-400 uppercase px-1 pb-1.5">Clique para agendar</p>
@@ -2141,7 +2325,10 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
               </div>
 
               {/* Mobile cards — mesma linha, empilhada */}
-              <div className="md:hidden divide-y divide-gray-50 max-h-[340px] overflow-y-auto">
+              <div ref={expedienteMobileRef}
+                onScroll={e => { expedienteScrollTop.current.mobile = e.currentTarget.scrollTop; }}
+                style={{ overflowAnchor: 'none' }}
+                className="md:hidden divide-y divide-gray-50 max-h-[340px] overflow-y-auto">
                 {linhasAtendimento.map(linha => {
                   const { vet, livres } = linha;
                   const isOpen = openSlotKey === linha.key;
@@ -2154,14 +2341,10 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                         {podeGerenciar ? (
                           <div
                             className="inline-block flex-shrink-0"
-                            onMouseEnter={e => openSlotMenu(linha.key, e.currentTarget)}
-                            onMouseLeave={scheduleCloseSlot}
+                            ref={isOpen ? slotWrapMobileRef : undefined}
                           >
                             <button
-                              onClick={e => {
-                                if (isOpen) { setOpenSlotKey(null); setSlotPos(null); }
-                                else openSlotMenu(linha.key, e.currentTarget);
-                              }}
+                              onClick={e => toggleSlotMenu(linha.key, e.currentTarget)}
                               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all border bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
                             >
                               {livres.length} {livres.length === 1 ? 'Livre' : 'Livres'}
@@ -2170,8 +2353,6 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                             {isOpen && slotPos && (
                               <div
                                 style={{ position: 'fixed', top: slotPos.top, left: 16, right: 16, transform: 'translateY(calc(-100% - 6px))', zIndex: 9999 }}
-                                onMouseEnter={cancelCloseSlot}
-                                onMouseLeave={scheduleCloseSlot}
                                 className="bg-white border border-gray-200 rounded-2xl shadow-xl p-2.5"
                               >
                                 <p className="text-[9px] font-bold text-gray-400 uppercase px-1 pb-1.5">Toque para agendar</p>
@@ -2214,11 +2395,40 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 gap-2 flex-wrap">
           <div className="flex items-center gap-2">
             <Calendar size={14} className="text-gray-500" />
-            <p className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">
-              Agendamentos do Dia · {labelDia(selectedDate)}
-            </p>
+            {modoMinhaAgenda ? (
+              <button
+                ref={miniCalBtnRef}
+                type="button"
+                onClick={toggleMiniCal}
+                className="flex items-center gap-1 text-[10px] font-bold text-gray-600 uppercase tracking-wider hover:text-emerald-700 transition-colors"
+              >
+                Agendamentos do Dia · {labelDia(selectedDate)}
+                <ChevronDown size={11} className={`transition-transform ${miniCalAberto ? 'rotate-180' : ''}`} />
+              </button>
+            ) : (
+              <p className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">
+                Agendamentos do Dia · {labelDia(selectedDate)}
+              </p>
+            )}
             {loading && <Loader2 size={13} className="text-emerald-600 animate-spin" />}
           </div>
+          {modoMinhaAgenda && miniCalAberto && miniCalPos && (
+            <div
+              ref={miniCalPopRef}
+              style={{ position: 'fixed', top: miniCalPos.top, left: miniCalPos.left, zIndex: 9999 }}
+              className="w-72"
+            >
+              <CalendarioInterativo
+                selectedDate={selectedDate}
+                onChange={date => {
+                  setSelectedDate(date);
+                  if (date.slice(0, 7) !== mesCarregado) setMesCarregado('');
+                  setMiniCalAberto(false);
+                }}
+                statusPorDia={statusPorDia}
+              />
+            </div>
+          )}
           <div className="flex items-center gap-2">
             {/* Transferir a agenda de um dia inteiro é o MESMO ato do "Transferir" da
                 linha — passar atendimento para outro profissional — e segue a mesma
@@ -2240,8 +2450,12 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
             {/* Filtro de status — mora AQUI, e não no bloco "Filtros" acima, porque só
                 recorta ESTA lista; aquele bloco governa a grade do Expediente Ativo. */}
             <div className="relative">
+              {/* `font-sans` explícito — o botão "Transferir dia inteiro" ao lado usa a
+                  fonte da aplicação por herança normal; o <select>, mesmo com
+                  `appearance-none`, ainda pode cair na fonte padrão do SO em alguns
+                  navegadores/mobile. Fixar `font-sans` garante a mesma tipografia. */}
               <select value={filtroStatus} onChange={e => setFiltroStatus(e.target.value as FiltroStatus)}
-                className="text-xs border border-gray-200 rounded-xl pl-3 pr-7 py-1.5 bg-gray-50 text-gray-700 font-semibold outline-none cursor-pointer appearance-none">
+                className="text-xs border border-gray-200 rounded-xl pl-3 pr-7 py-1.5 bg-gray-50 text-gray-700 font-semibold outline-none cursor-pointer appearance-none font-sans">
                 <option value="ABERTOS">Em aberto</option>
                 <option value="TODOS">Todos os status</option>
                 <optgroup label="Somente">
@@ -2386,25 +2600,13 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                             Assumir
                           </button>
                         )}
-                        {isAgendado && podeOperarLinha(ag) && (
-                          <button onClick={() => setCancelando(ag.id)} className="flex items-center gap-1 px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl text-xs font-semibold">
+                        {/* Cancelar continua disponível com o atendimento EM_ANDAMENTO — só
+                            fica indisponível quando já está livre (cancelado/reagendado). */}
+                        {(isAgendado || isEmAndamento) && podeOperarLinha(ag) && (
+                          <button onClick={() => abrirDecisaoCancelamento(ag)} className="flex items-center gap-1 px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl text-xs font-semibold">
                             <Ban size={11} /> Cancelar
                           </button>
                         )}
-                      </div>
-                    )}
-                    {cancelando === ag.id && (
-                      <div className="bg-red-50 border border-red-100 rounded-xl p-3 flex flex-col gap-2">
-                        <p className="text-xs font-semibold text-red-800">Motivo do cancelamento:</p>
-                        <div className="relative">
-                          <select onChange={e => e.target.value && handleStatus(ag.id, 'CANCELADO', e.target.value)} defaultValue=""
-                            className="w-full text-xs border border-red-200 rounded-xl py-2 pl-3 pr-7 bg-white text-red-800 font-semibold outline-none cursor-pointer appearance-none">
-                            <option value="" disabled>Selecione...</option>
-                            {MOTIVOS_CANCELAMENTO.map(m => <option key={m} value={m}>{m}</option>)}
-                          </select>
-                          <ChevronDown size={11} className="absolute right-2.5 top-2.5 text-red-400 pointer-events-none" />
-                        </div>
-                        <button onClick={() => setCancelando(null)} className="text-xs text-gray-500 self-end">Desistir</button>
                       </div>
                     )}
                   </div>
@@ -2529,27 +2731,15 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                                   <UserCheck size={13} />
                                 </button>
                               )}
-                              {isAgendado && podeOperarLinha(ag) && (
-                                <button onClick={() => setCancelando(ag.id)} title="Cancelar"
+                              {/* Cancelar continua disponível com o atendimento EM_ANDAMENTO —
+                                  só fica indisponível quando já está livre. */}
+                              {(isAgendado || isEmAndamento) && podeOperarLinha(ag) && (
+                                <button onClick={() => abrirDecisaoCancelamento(ag)} title="Cancelar"
                                   className="p-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl transition-colors">
                                   <Ban size={13} />
                                 </button>
                               )}
                             </div>
-                            {cancelando === ag.id && (
-                              <div className="mt-2 bg-red-50 border border-red-100 rounded-xl p-2 flex items-center gap-2">
-                                <AlertTriangle size={11} className="text-red-500 flex-shrink-0" />
-                                <div className="relative flex-1">
-                                  <select onChange={e => e.target.value && handleStatus(ag.id, 'CANCELADO', e.target.value)} defaultValue=""
-                                    className="w-full text-[10px] border border-red-200 rounded-lg py-1 pl-2 pr-5 bg-white text-red-800 font-semibold outline-none cursor-pointer appearance-none">
-                                    <option value="" disabled>Motivo...</option>
-                                    {MOTIVOS_CANCELAMENTO.map(m => <option key={m} value={m}>{m}</option>)}
-                                  </select>
-                                  <ChevronDown size={9} className="absolute right-1.5 top-2 text-red-400 pointer-events-none" />
-                                </div>
-                                <button onClick={() => setCancelando(null)}><X size={11} className="text-gray-400" /></button>
-                              </div>
-                            )}
                           </td>
                         )}
                       </tr>
@@ -2692,6 +2882,62 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
         </div>
       )}
 
+      {/* ── Modal: escolha do cancelamento (definitivo × remarcar) ──────────────
+          Etapa ANTES da justificativa — mesmo com o atendimento EM_ANDAMENTO, o
+          Cancelar da linha chega aqui primeiro, nunca direto no motivo. */}
+      {decisaoCancelamento && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
+            <div className="bg-red-600 px-5 py-3.5 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Ban size={15} className="text-white/90" />
+                <p className="font-bold text-sm text-white">Cancelar atendimento?</p>
+              </div>
+              <button onClick={() => setDecisaoCancelamento(null)} className="text-white/60 hover:text-white"><X size={18} /></button>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="text-sm text-gray-600">
+                {decisaoCancelamento.animal?.nome ?? labelTipo(decisaoCancelamento.tipo)} · {formatarHora(decisaoCancelamento.dataHora)}
+                {decisaoCancelamento.veterinario?.fullName && <> · {decisaoCancelamento.veterinario.fullName}</>}
+              </p>
+              <button onClick={() => escolherTipoCancelamento('REMARCAR')}
+                className="w-full flex items-center gap-3 p-3.5 border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 rounded-xl text-left transition-colors">
+                <RefreshCw size={16} className="text-emerald-700 flex-shrink-0" />
+                <span>
+                  <span className="block text-sm font-semibold text-emerald-800">Remarcar a consulta</span>
+                  <span className="block text-xs text-emerald-700/80">Libera este horário e leva direto para escolher o novo dia e horário.</span>
+                </span>
+              </button>
+              <button onClick={() => escolherTipoCancelamento('DEFINITIVO')}
+                className="w-full flex items-center gap-3 p-3.5 border border-red-200 bg-red-50 hover:bg-red-100 rounded-xl text-left transition-colors">
+                <Ban size={16} className="text-red-700 flex-shrink-0" />
+                <span>
+                  <span className="block text-sm font-semibold text-red-800">Cancelar em definitivo</span>
+                  <span className="block text-xs text-red-700/80">Não fica agendado — para reagendar depois, é preciso marcar de novo.</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: justificativa do cancelamento/remarcação ──────────────────────
+          Comum aos dois caminhos: ambos exigem motivo e vão para a auditoria
+          (ModalJustificativa já grava isso — CLAUDE.md armadilha 33). */}
+      <ModalJustificativa
+        aberto={!!justificandoCancelamento}
+        titulo={justificandoCancelamento?.tipo === 'REMARCAR' ? 'Remarcar consulta' : 'Cancelar em definitivo'}
+        descricao={justificandoCancelamento
+          ? `${justificandoCancelamento.ag.animal?.nome ?? labelTipo(justificandoCancelamento.ag.tipo)} · ${formatarHora(justificandoCancelamento.ag.dataHora)}`
+          : undefined}
+        acaoLabel={justificandoCancelamento?.tipo === 'REMARCAR' ? 'Continuar para o reagendamento' : 'Cancelar atendimento'}
+        placeholder="Descreva o motivo (obrigatório)..."
+        processando={salvandoCancelamento}
+        erro={erroCancelamento}
+        onConfirmar={confirmarCancelamento}
+        onFechar={() => { setJustificandoCancelamento(null); setErroCancelamento(null); }}
+      />
+
       {/* ── Modal: Reagendar ─────────────────────────────────────────────────── */}
       {reagendando && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
@@ -2701,7 +2947,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                 <p className="text-[10px] font-bold text-emerald-200 uppercase tracking-widest">Reagendar</p>
                 <h3 className="text-lg font-bold text-white flex items-center gap-2"><RefreshCw size={16} /> Nova Data e Horário</h3>
               </div>
-              <button onClick={() => { setReagendando(null); setErroModal(null); }} className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors"><X size={18} /></button>
+              <button onClick={() => { setReagendando(null); setReagMotivoUsuario(null); setErroModal(null); }} className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors"><X size={18} /></button>
             </div>
             {/* Identificação em UMA linha: o nome do animal já está no título
                 ("Consulta - Mel"), então repeti-lo embaixo era eco. */}
@@ -2784,7 +3030,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
               )}
               <div className="bg-emerald-50 rounded-xl p-3 text-xs text-emerald-700">O horário anterior será liberado e um novo agendamento será criado.</div>
               <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100">
-                <button type="button" onClick={() => { setReagendando(null); setErroModal(null); }}
+                <button type="button" onClick={() => { setReagendando(null); setReagMotivoUsuario(null); setErroModal(null); }}
                   className="px-4 py-2 border border-gray-200 hover:bg-gray-50 text-gray-600 text-sm font-semibold rounded-xl transition-colors">Fechar</button>
                 <button type="submit" disabled={salvandoReag || !novaDataHora || !!foraDoExpediente(novaDataHora, expedienteReagendando)}
                   className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-bold rounded-xl transition-colors">
@@ -3002,9 +3248,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                   <div className="text-center">
                     <p className="text-sm font-bold text-red-700">Não foi possível interpretar</p>
                     <p className="text-xs text-gray-500 mt-1">
-                      {typeof window !== 'undefined' && !((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
-                        ? 'Seu navegador não suporta gravação de voz. Use o campo de texto.'
-                        : 'Tente novamente ou use o formulário manual.'}
+                      {vozErroMsg ?? 'Tente novamente ou use o formulário manual.'}
                     </p>
                   </div>
                   <div className="flex gap-2 w-full">

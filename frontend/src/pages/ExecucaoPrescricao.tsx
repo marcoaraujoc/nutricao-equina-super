@@ -5,11 +5,13 @@ import { useNavigate } from 'react-router-dom';
 import {
   CheckCircle2, ClipboardList, Loader2, Search,
   Eye, Printer, ChevronLeft, ChevronRight, Calendar,
-  User, X, Link, Ban, Syringe, Pill,
+  User, X, Link, Ban, Syringe, Pill, Stethoscope,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import ModalJustificativa from '../components/ModalJustificativa';
+import ConfirmModal from '../components/ConfirmModal';
+import { regimeExigeResumo, gerarResumoDoses } from '../utils/posologia';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { imprimirPrescricao, type PrintGrupoPrescricao, type PrintItemPrescricao } from '../utils/PrescricaoPrint';
@@ -37,7 +39,14 @@ export interface ItemExecucao {
   observacao:      string | null;
   dataInicio:      string;
   diaAtual:        number;
-  executadoEm?:    string | null; // última execução do item (atualizado a cada dia)
+  executadoEm?:    string | null; // última execução do item (atualizado a cada dose)
+  // Execução por DOSE individual (null = item fora do fluxo novo — sem horaInicio
+  // definido, ou frequência agora/SOS/seNecessario; mantém o comportamento antigo).
+  dosesExecutadas?:      number | null;
+  dosesTotaisEsperadas?: number | null;
+  /** Próximo horário esperado (ISO) — ROLLING: recalculado a cada execução a partir
+   *  do horário REAL da dose anterior, não uma grade fixa desde `horaInicio`. */
+  proximaDoseEm?:         string | null;
 }
 
 export interface GrupoExecucao {
@@ -163,9 +172,14 @@ export function dataLocalDe(iso: string | null | undefined): string | null {
  * o item executado à noite não contaria como feito hoje.
  */
 export function itemPendenteEm(
-  item: Pick<ItemExecucao, 'diaAtual' | 'duracaoDias' | 'executadoEm'>,
+  item: Pick<ItemExecucao, 'diaAtual' | 'duracaoDias' | 'executadoEm' | 'dosesExecutadas' | 'dosesTotaisEsperadas'>,
   data: string,
 ): boolean {
+  // Elegível ao fluxo por dose: pendente enquanto restar dose do curso, sem
+  // depender de "já executou hoje" — pode haver mais de uma dose no mesmo dia.
+  if (item.dosesTotaisEsperadas != null) {
+    return (item.dosesExecutadas ?? 0) < item.dosesTotaisEsperadas;
+  }
   const dentroJanela = item.diaAtual >= 1 && item.diaAtual <= item.duracaoDias;
   return dentroJanela && dataLocalDe(item.executadoEm) !== data;
 }
@@ -471,6 +485,15 @@ export function ModalExecucao({
   // inteira não mora mais aqui — é o botão da linha na lista de /execucao-prescricao.
   const [cancelarItem, setCancelarItem] = useState<ItemExecucao | null>(null);
   const [cancelando,   setCancelando]   = useState(false);
+  // Doses executadas NESTA sessão do modal, além do que `item.dosesExecutadas` já
+  // trazia do backend — o `grupo` prop fica parado até o pai recarregar a lista
+  // (`onClose`), então sem isso a 2ª dose do mesmo item pareceria sempre disponível.
+  const [doseOverride, setDoseOverride] = useState<Record<number, number>>({});
+  // Execução fora do horário pendente de confirmação (antecipada/atrasada) — a
+  // MESMA tela para os dois casos, nunca bloqueia, só avisa o horário correto.
+  const [confirmacao, setConfirmacao] = useState<{
+    item: ItemExecucao; slots: string[]; previsto: string; agora: string; classificacao: string;
+  } | null>(null);
 
   const itensDoDia = grupo.itens.filter(
     i => i.diaAtual >= 1 && i.diaAtual <= i.duracaoDias,
@@ -485,10 +508,23 @@ export function ModalExecucao({
     return d.getFullYear() === h.getFullYear() && d.getMonth() === h.getMonth() && d.getDate() === h.getDate();
   };
 
+  // Doses do item já dadas, contando o que este modal executou nesta sessão —
+  // só existe para itens elegíveis ao fluxo por dose (`dosesTotaisEsperadas != null`).
+  const dosesFeitas = (item: ItemExecucao): number =>
+    (item.dosesExecutadas ?? 0) + (doseOverride[item.id] ?? 0);
+
+  // "Concluído" decide o estilo do card e se o botão de executar habilita:
+  // elegível → todas as doses do curso já foram dadas (pode haver mais de uma por
+  // dia); legado (sem horário) → o critério antigo, executado hoje.
+  const itemConcluido = (item: ItemExecucao): boolean =>
+    item.dosesTotaisEsperadas != null
+      ? dosesFeitas(item) >= item.dosesTotaisEsperadas
+      : executadoHojeFront(item) || (getActiveSlotIdx(calcSlots(item)) >= 0 && isSlotDone(execMap, item.id, getActiveSlotIdx(calcSlots(item))));
+
   const itensComInfo = itensDoDia.map(item => {
     const slots      = calcSlots(item);
     const activeIdx  = getActiveSlotIdx(slots);
-    const activeDone = executadoHojeFront(item) || (activeIdx >= 0 && isSlotDone(execMap, item.id, activeIdx));
+    const activeDone = itemConcluido(item);
     return { item, slots, activeIdx, activeDone };
   });
 
@@ -522,23 +558,49 @@ export function ModalExecucao({
   };
 
   // Execução ITEM A ITEM: lança o item na fatura assim que ele é executado.
-  const handleExecutarItem = async (item: ItemExecucao, slots: string[]) => {
+  // `confirmarHorario`: reenvio após o usuário confirmar execução fora do horário
+  // (antecipada/atrasada) na tela de aviso — nunca bloqueia, só confirma.
+  const handleExecutarItem = async (item: ItemExecucao, slots: string[], confirmarHorario = false) => {
     if (salvando) return;
     setSalvando(true);
     setExecItemId(item.id);
     setErroEstoque([]);
     try {
-      await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, { itemIds: [item.id] });
+      await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, {
+        itemIds: [item.id],
+        ...(confirmarHorario ? { confirmarHorario: true } : {}),
+      });
       const m = marcarItemFeito(execMap, item.id, slots);
       saveExecMap(grupo.id, m);
       setExecMap(m);
+      // Doses do curso ainda por vir: soma localmente até o pai recarregar a lista.
+      if (item.dosesTotaisEsperadas != null) {
+        setDoseOverride(prev => ({ ...prev, [item.id]: (prev[item.id] ?? 0) + 1 }));
+      }
+      setConfirmacao(null);
       toast.success(`${item.medicamento} — executado e lançado na fatura`);
       // Execução é POR ITEM: mantém o modal aberto para executar os demais. Só fecha
       // quando TODOS os itens do dia já estão executados (este + os demais já feitos).
-      const todosExecutados = itensComInfo.every(x => x.item.id === item.id || x.activeDone);
+      const todosExecutados = itensComInfo.every(x =>
+        x.item.id === item.id
+          ? (item.dosesTotaisEsperadas != null ? dosesFeitas(item) + 1 >= item.dosesTotaisEsperadas : true)
+          : x.activeDone,
+      );
       if (todosExecutados) { markDoneToday(grupo.id); onClose(); }
-    } catch (err) {
-      tratarErroExec(err, 'Erro ao executar item');
+    } catch (err: unknown) {
+      const e = err as { response?: { status?: number; data?: {
+        erro?: string; previsto?: string; agora?: string; classificacao?: string;
+      } } };
+      if (e?.response?.status === 400 && e?.response?.data?.erro === 'CONFIRMACAO_NECESSARIA') {
+        setConfirmacao({
+          item, slots,
+          previsto:      e.response.data.previsto ?? new Date().toISOString(),
+          agora:         e.response.data.agora ?? new Date().toISOString(),
+          classificacao: e.response.data.classificacao ?? 'ANTECIPADA',
+        });
+      } else {
+        tratarErroExec(err, 'Erro ao executar item');
+      }
     } finally {
       setSalvando(false);
       setExecItemId(null);
@@ -546,12 +608,13 @@ export function ModalExecucao({
   };
 
   // Executa TODOS os itens restantes do dia de uma vez (backend ignora os já
-  // executados hoje). Cada item continua sendo faturado individualmente.
+  // executados). Ação de LOTE: manda `confirmarHorario` direto, sem abrir um
+  // aviso por item — o próprio clique em "Executar Todos" já é a confirmação.
   const handleExecutarTodos = async () => {
     setSalvando(true);
     setErroEstoque([]);
     try {
-      await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, {});
+      await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, { confirmarHorario: true });
       let m = { ...execMap };
       for (const { item, slots, activeIdx } of itensComInfo) {
         if (activeIdx >= 0) m = marcarItemFeito(m, item.id, slots);
@@ -678,6 +741,27 @@ export function ModalExecucao({
                     {item.duracaoDias > 0 ? ` • ${item.duracaoDias} dia(s)` : ''}
                   </p>
 
+                  {regimeExigeResumo(item.frequencia, item.duracaoDias) && (() => {
+                    const resumo = gerarResumoDoses(item.frequencia, item.duracaoDias);
+                    // Só a linha da dose que será executada AGORA — não o curso inteiro.
+                    // Elegível (backend rastreia por dose): a próxima é `dosesExecutadas`
+                    // (0-indexado, já é a próxima). Legado (sem rastreio por dose): a
+                    // 1ª dose do dia corrente (`diaAtual`).
+                    const linhaAtual = item.dosesExecutadas != null
+                      ? resumo[item.dosesExecutadas]
+                      : resumo.find(d => d.dia === item.diaAtual);
+                    if (!linhaAtual) return null;
+                    return (
+                      <p className="mt-1.5 text-xs font-bold text-red-600">
+                        {POSOLOGIAS[item.frequencia] ?? item.frequencia} por {item.duracaoDias} dia{item.duracaoDias > 1 ? 's' : ''} — {
+                          linhaAtual.simples
+                            ? `${String(linhaAtual.dia).padStart(2, '0')}/${String(linhaAtual.totalDias).padStart(2, '0')}`
+                            : `${linhaAtual.rotulo} Execução - ${String(linhaAtual.dia).padStart(2, '0')}/${String(linhaAtual.totalDias).padStart(2, '0')} Dias`
+                        }
+                      </p>
+                    );
+                  })()}
+
                   {slots.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5">
                       {slots.map((slot, idx) => {
@@ -723,19 +807,15 @@ export function ModalExecucao({
                   <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
                     <button
                       // Execução item a item: já debita o estoque e lança este item na fatura.
+                      // Antecipada/atrasada NUNCA bloqueia aqui — o backend responde
+                      // CONFIRMACAO_NECESSARIA e a tela de aviso decide, não este botão.
                       onClick={() => handleExecutarItem(item, slots)}
-                      disabled={activeIdx < 0 || activeDone || salvando}
-                      title={activeDone ? 'Executado'
-                        : activeIdx < 0 ? 'Aguardando o horário'
-                        : 'Executar item'}
-                      aria-label={activeDone ? 'Item executado'
-                        : activeIdx < 0 ? 'Aguardando o horário'
-                        : 'Executar item'}
+                      disabled={activeDone || salvando}
+                      title={activeDone ? 'Executado' : 'Executar item'}
+                      aria-label={activeDone ? 'Item executado' : 'Executar item'}
                       className={`p-1.5 rounded-lg transition-colors ${
                         activeDone
                           ? 'text-emerald-600 cursor-default'
-                          : activeIdx < 0
-                          ? 'text-gray-300 cursor-not-allowed'
                           : 'text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50'
                       }`}>
                       {execItemId === item.id
@@ -830,6 +910,29 @@ export function ModalExecucao({
         onFechar={() => { if (!cancelando) setCancelarItem(null); }}
       />
     )}
+
+    {/* Execução antecipada OU atrasada — MESMA tela para os dois casos, nunca
+        bloqueia: só avisa o horário correto e deixa confirmar. A execução real
+        (com auditoria de paciente/medicamento/previsto/executado/quem) só acontece
+        ao confirmar. */}
+    <ConfirmModal
+      open={!!confirmacao}
+      variante="aviso"
+      titulo={confirmacao?.classificacao === 'ATRASADA' ? 'Dose atrasada' : 'Dose antecipada'}
+      mensagem={confirmacao && (
+        <>
+          <strong>{confirmacao.item.medicamento}</strong> está agendado para{' '}
+          <strong>{new Date(confirmacao.previsto).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong>.
+          {confirmacao.classificacao === 'ATRASADA'
+            ? ' Já passou do horário — deseja executar agora mesmo assim?'
+            : ' Ainda não chegou o horário — deseja executar agora mesmo assim?'}
+        </>
+      )}
+      labelConfirmar={salvando ? 'Executando…' : 'Executar mesmo assim'}
+      labelCancelar="Cancelar"
+      onConfirmar={() => { if (confirmacao) handleExecutarItem(confirmacao.item, confirmacao.slots, true); }}
+      onCancelar={() => setConfirmacao(null)}
+    />
     </>
   );
 }
@@ -879,8 +982,6 @@ function CalendarioInterativo({ selectedDate, onChange, statusPorDia }: Calendar
   const [viewAno, setViewAno]   = useState(ano);
   const [viewMes, setViewMes]   = useState(mes - 1);
   const [viewMode, setViewMode] = useState<ViewMode>('MES');
-
-  const dataHoje = localToday();
 
   function diasDoMes(a: number, m: number): Date[] {
     const days: Date[] = [];
@@ -1029,13 +1130,6 @@ function CalendarioInterativo({ selectedDate, onChange, statusPorDia }: Calendar
             </button>
           ))}
         </div>
-
-        <button
-          onClick={() => onChange(dataHoje)}
-          className="mt-2 w-full text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 py-1.5 rounded-xl transition-colors"
-        >
-          Ir para Hoje
-        </button>
       </div>
     </div>
   );
@@ -1109,14 +1203,16 @@ function LinhaExecucao({
         )}
       </div>
 
-      <div className="flex-shrink-0 text-xs px-3 border-r border-gray-100 hidden md:block min-w-[140px]">
-        <p className="text-[10px] text-gray-400 uppercase tracking-wide">Veterinário Responsável</p>
-        <p className="text-gray-700 font-medium truncate">{veterinarioNome}</p>
+      <div className="flex-shrink-0 text-xs px-3 border-r border-gray-100 hidden md:flex md:items-start md:gap-4 min-w-[140px]">
+        <div className="min-w-0">
+          <p className="text-[10px] text-gray-400 uppercase tracking-wide whitespace-nowrap">Veterinário Responsável</p>
+          <p className="text-gray-700 font-medium truncate">{veterinarioNome}</p>
+        </div>
         {executorNome && (
-          <>
-            <p className="text-[10px] text-gray-400 uppercase tracking-wide mt-1">Executor</p>
+          <div className="min-w-0">
+            <p className="text-[10px] text-gray-400 uppercase tracking-wide whitespace-nowrap">Executor</p>
             <p className="text-gray-700 font-medium truncate">{executorNome}</p>
-          </>
+          </div>
         )}
       </div>
 
@@ -1460,6 +1556,47 @@ export default function ExecucaoPrescricao() {
     ? aplicarBusca(grupos.filter(g => g.status !== 'CANCELADO' && foiExecutadoHoje(g)))
     : [];
 
+  // Medicamentos e Procedimentos são fluxos distintos do plantão (aplicar um remédio
+  // não é o mesmo gesto que executar um procedimento) — a fila é separada por tipo de
+  // ITEM. Um grupo com itens dos dois tipos aparece nas duas seções: a separação é por
+  // conteúdo pendente, não por documento (a prescrição continua sendo um documento só).
+  const grupoTemTipo = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO') =>
+    g.itens.some(i => i.tipo === tipo);
+  const gruposMedicamentos    = filtrados.filter(g => grupoTemTipo(g, 'MEDICAMENTO'));
+  const gruposProcedimentos   = filtrados.filter(g => grupoTemTipo(g, 'PROCEDIMENTO'));
+  const historicoMedicamentos  = executadasHoje.filter(g => grupoTemTipo(g, 'MEDICAMENTO'));
+  const historicoProcedimentos = executadasHoje.filter(g => grupoTemTipo(g, 'PROCEDIMENTO'));
+
+  const renderGrupoAtivo = (g: GrupoExecucao) => (
+    <LinhaGrupo
+      key={g.id}
+      g={g}
+      onExecutar={() => { if (!podeExecutarAcao) { semPermissao('executar prescrição'); return; } setModalVer(false); setModal(g); }}
+      onVer={() => { setModalVer(true); setModal(g); }}
+      onImprimir={() => podeImprimir ? handleImprimirGrupo(g) : semPermissao('imprimir prescrição')}
+      onCancelar={() => { setErroInline(null); setCancelarAlvo(g); }}
+      podeExecutarAcao={podeExecutarAcao && g.status !== 'CANCELADO'}
+      podeImprimir={podeImprimir}
+      podeCancelar={podeCancelar && g.status !== 'CANCELADO'}
+      soVisualizacao={!isHoje || g.status === 'CANCELADO'}
+    />
+  );
+
+  const renderGrupoHistorico = (g: GrupoExecucao) => (
+    <LinhaGrupo
+      key={g.id}
+      g={g}
+      onExecutar={() => {}}
+      onVer={() => { setModalVer(true); setModal(g); }}
+      onImprimir={() => podeImprimir ? handleImprimirGrupo(g) : semPermissao('imprimir prescrição')}
+      podeExecutarAcao={false}
+      podeImprimir={podeImprimir}
+      soVisualizacao
+      executada
+      horaExecucao={horaExecucaoDe(g)}
+    />
+  );
+
   if (loadingPerm) return (
     <div className="flex items-center justify-center py-20">
       <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
@@ -1498,6 +1635,9 @@ export default function ExecucaoPrescricao() {
 
         <div className="flex flex-col lg:flex-row gap-5">
 
+          {/* Coluna esquerda: só o calendário — o Histórico vira uma faixa própria,
+              abaixo de TODA a agenda (calendário + execuções), ocupando a largura
+              inteira da tela. */}
           <div className="lg:w-72 flex-shrink-0">
             <CalendarioInterativo
               selectedDate={dataSel}
@@ -1506,7 +1646,7 @@ export default function ExecucaoPrescricao() {
             />
           </div>
 
-          <div className="flex-1 flex flex-col gap-4">
+          <div className="flex-1 flex flex-col gap-4 min-w-0">
 
             {!isHoje && (
               <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-700">
@@ -1528,159 +1668,181 @@ export default function ExecucaoPrescricao() {
               />
             </div>
 
-            {!loading && filtrados.length > 0 && (
-              <div className="flex items-center justify-between px-1 pb-1">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
-                  <Pill size={13} className="text-emerald-600" /> Medicamentos a aplicar
-                </p>
-                <span className="text-xs text-gray-400">
-                  {filtrados.length} prescrição{filtrados.length !== 1 ? 'ões' : ''}
-                </span>
-              </div>
-            )}
-
-            {loading ? (
-              <div className="flex justify-center py-24">
-                <Loader2 size={24} className="animate-spin text-emerald-600" />
-              </div>
-            ) : filtrados.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-gray-400 gap-3">
-                <CheckCircle2 size={40} />
-                <p className="text-sm">
-                  {grupos.length === 0
-                    ? `Nenhuma prescrição para ${isHoje ? 'hoje' : formatDataSel(dataSel)}`
-                    : executadasHoje.length > 0
-                    ? 'Todas as prescrições de hoje já foram executadas'
-                    : 'Nenhum resultado para a busca'}
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {filtrados.map(g => (
-                  <LinhaGrupo
-                    key={g.id}
-                    g={g}
-                    onExecutar={() => { if (!podeExecutarAcao) { semPermissao('executar prescrição'); return; } setModalVer(false); setModal(g); }}
-                    onVer={() => { setModalVer(true); setModal(g); }}
-                    onImprimir={() => podeImprimir ? handleImprimirGrupo(g) : semPermissao('imprimir prescrição')}
-                    onCancelar={() => { setErroInline(null); setCancelarAlvo(g); }}
-                    podeExecutarAcao={podeExecutarAcao && g.status !== 'CANCELADO'}
-                    podeImprimir={podeImprimir}
-                    podeCancelar={podeCancelar && g.status !== 'CANCELADO'}
-                    soVisualizacao={!isHoje || g.status === 'CANCELADO'}
-                  />
-                ))}
-              </div>
-            )}
-
-            {/* ── Vacinas a aplicar (FINALIZADAS) — só no dia de hoje ─────── */}
-            {!loading && isHoje && vacinasFiltradas.length > 0 && (
-              <div className="pt-2">
-                <div className="flex items-center justify-between px-1 pb-2">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
-                    <Syringe size={13} className="text-emerald-600" /> Vacinas a aplicar
-                  </p>
-                  <span className="text-xs text-gray-400">
-                    {vacinasFiltradas.length} vacina{vacinasFiltradas.length !== 1 ? 's' : ''}
-                  </span>
+            {/* ── Execuções pendentes — um card só, com scroll interno, para a fila
+                não empurrar o resto da tela quando o plantão está cheio. */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-3 max-h-[70vh] overflow-y-auto space-y-4">
+              {loading ? (
+                <div className="flex justify-center py-24">
+                  <Loader2 size={24} className="animate-spin text-emerald-600" />
                 </div>
-                <div className="space-y-2">
-                  {vacinasFiltradas.map(v => (
-                    <LinhaExecucao
-                      key={v.id}
-                      animal={v.animal}
-                      detalhe={[
-                        v.nome,
-                        v.dose,
-                        v.via,
-                        v.quantidade && v.quantidade > 1 ? `${v.quantidade} doses` : null,
-                      ].filter(Boolean).join(' · ')}
-                      numeroLabel="Nº Vacina"
-                      numeroFormatado={formatNumeroClinico(v.numero)}
-                      onNumero={() => navigate(`/clinica/vacina/${v.animal.id}?item=${v.id}`)}
-                      tituloNumero="Ir para a vacina original"
-                      veterinarioNome={v.veterinario?.fullName ?? '—'}
-                    >
-                      {/* MESMA ORDEM da linha da prescrição: VISUALIZAR · EXECUTAR ·
-                          IMPRIMIR (a vacina não tem cancelar aqui — o cancelamento é na
-                          tela de Vacina). Ver e Executar abrem a MESMA tela, como no
-                          medicamento; só o olho a abre em somente leitura. */}
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <button onClick={() => { setVacModoVer(true); setVacModal(v); }}
-                          title="Ver vacina"
-                          aria-label="Ver vacina"
-                          className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-100 rounded-lg transition-colors">
-                          <Eye size={14} />
-                        </button>
-                        {podeExecutarAcao && (
-                          <button
-                            onClick={() => { setVacModoVer(false); setVacModal(v); }}
-                            title="Aplicar vacina"
-                            aria-label="Aplicar vacina"
-                            className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
-                            <CheckCircle2 size={16} />
-                          </button>
-                        )}
-                        {podeImprimir && (
-                          <button onClick={() => imprimirVacinaExec(v)}
-                            title="Imprimir vacina"
-                            aria-label="Imprimir vacina"
-                            className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-                            <Printer size={14} />
-                          </button>
-                        )}
-                        {podeCancelar && (
-                          <button
-                            onClick={() => { setErroInline(null); setCancelarVacina(v); }}
-                            title="Cancelar vacina"
-                            aria-label="Cancelar vacina"
-                            className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                            <Ban size={14} />
-                          </button>
-                        )}
+              ) : filtrados.length === 0 && vacinasFiltradas.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-gray-400 gap-3">
+                  <CheckCircle2 size={40} />
+                  <p className="text-sm">
+                    {grupos.length === 0 && vacinas.length === 0
+                      ? `Nenhuma prescrição para ${isHoje ? 'hoje' : formatDataSel(dataSel)}`
+                      : executadasHoje.length > 0
+                      ? 'Todas as prescrições de hoje já foram executadas'
+                      : 'Nenhum resultado para a busca'}
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {gruposMedicamentos.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between px-1 pb-1">
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                          <Pill size={13} className="text-emerald-600" /> Medicamentos a aplicar
+                        </p>
+                        <span className="text-xs text-gray-400">
+                          {gruposMedicamentos.length} prescrição{gruposMedicamentos.length !== 1 ? 'ões' : ''}
+                        </span>
                       </div>
-                    </LinhaExecucao>
-                  ))}
-                </div>
-              </div>
-            )}
+                      <div className="space-y-2">
+                        {gruposMedicamentos.map(renderGrupoAtivo)}
+                      </div>
+                    </div>
+                  )}
 
-            {/* ── Histórico — prescrições já executadas hoje ───────────────
-                ⚠️ É SEMPRE O ÚLTIMO CARD DA TELA. O medicamento executado sai da fila
-                de "a aplicar" e desce para cá (a vacina executada some da tela: vira
-                EXECUTADA e o /para-execucao deixa de devolvê-la). Seção nova entra
-                ACIMA deste bloco — nada é renderizado depois dele. */}
-            {!loading && executadasHoje.length > 0 && (
-              <div className="pt-2">
-                <div className="flex items-center justify-between px-1 pb-2">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
-                    <CheckCircle2 size={13} className="text-emerald-600" /> Histórico — executadas hoje
-                  </p>
-                  <span className="text-xs text-gray-400">
-                    {executadasHoje.length} prescrição{executadasHoje.length !== 1 ? 'ões' : ''}
-                  </span>
-                </div>
-                <div className="space-y-2 opacity-90">
-                  {executadasHoje.map(g => (
-                    <LinhaGrupo
-                      key={g.id}
-                      g={g}
-                      onExecutar={() => {}}
-                      onVer={() => { setModalVer(true); setModal(g); }}
-                      onImprimir={() => podeImprimir ? handleImprimirGrupo(g) : semPermissao('imprimir prescrição')}
-                      podeExecutarAcao={false}
-                      podeImprimir={podeImprimir}
-                      soVisualizacao
-                      executada
-                      horaExecucao={horaExecucaoDe(g)}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
+                  {gruposProcedimentos.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between px-1 pb-1">
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                          <Stethoscope size={13} className="text-blue-600" /> Procedimentos a executar
+                        </p>
+                        <span className="text-xs text-gray-400">
+                          {gruposProcedimentos.length} prescrição{gruposProcedimentos.length !== 1 ? 'ões' : ''}
+                        </span>
+                      </div>
+                      <div className="space-y-2">
+                        {gruposProcedimentos.map(renderGrupoAtivo)}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Vacinas a aplicar (FINALIZADAS) — só no dia de hoje ─────── */}
+                  {isHoje && vacinasFiltradas.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between px-1 pb-1">
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                          <Syringe size={13} className="text-emerald-600" /> Vacinas a aplicar
+                        </p>
+                        <span className="text-xs text-gray-400">
+                          {vacinasFiltradas.length} vacina{vacinasFiltradas.length !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                      <div className="space-y-2">
+                        {vacinasFiltradas.map(v => (
+                          <LinhaExecucao
+                            key={v.id}
+                            animal={v.animal}
+                            detalhe={[
+                              v.nome,
+                              v.dose,
+                              v.via,
+                              v.quantidade && v.quantidade > 1 ? `${v.quantidade} doses` : null,
+                            ].filter(Boolean).join(' · ')}
+                            numeroLabel="Nº Vacina"
+                            numeroFormatado={formatNumeroClinico(v.numero)}
+                            onNumero={() => navigate(`/clinica/vacina/${v.animal.id}?item=${v.id}`)}
+                            tituloNumero="Ir para a vacina original"
+                            veterinarioNome={v.veterinario?.fullName ?? '—'}
+                          >
+                            {/* MESMA ORDEM da linha da prescrição: VISUALIZAR · EXECUTAR ·
+                                IMPRIMIR (a vacina não tem cancelar aqui — o cancelamento é na
+                                tela de Vacina). Ver e Executar abrem a MESMA tela, como no
+                                medicamento; só o olho a abre em somente leitura. */}
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              <button onClick={() => { setVacModoVer(true); setVacModal(v); }}
+                                title="Ver vacina"
+                                aria-label="Ver vacina"
+                                className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-100 rounded-lg transition-colors">
+                                <Eye size={14} />
+                              </button>
+                              {podeExecutarAcao && (
+                                <button
+                                  onClick={() => { setVacModoVer(false); setVacModal(v); }}
+                                  title="Aplicar vacina"
+                                  aria-label="Aplicar vacina"
+                                  className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
+                                  <CheckCircle2 size={16} />
+                                </button>
+                              )}
+                              {podeImprimir && (
+                                <button onClick={() => imprimirVacinaExec(v)}
+                                  title="Imprimir vacina"
+                                  aria-label="Imprimir vacina"
+                                  className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
+                                  <Printer size={14} />
+                                </button>
+                              )}
+                              {podeCancelar && (
+                                <button
+                                  onClick={() => { setErroInline(null); setCancelarVacina(v); }}
+                                  title="Cancelar vacina"
+                                  aria-label="Cancelar vacina"
+                                  className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                                  <Ban size={14} />
+                                </button>
+                              )}
+                            </div>
+                          </LinhaExecucao>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
 
           </div>
         </div>
+
+        {/* ── Histórico — prescrições já executadas hoje ───────────────────
+            Faixa própria, ABAIXO da agenda inteira (calendário + execuções),
+            ocupando a largura toda: o medicamento/procedimento executado sai da
+            fila e desce pra cá (a vacina executada some da tela: vira EXECUTADA
+            e o /para-execucao deixa de devolvê-la). Card com scroll interno
+            para não esticar a página quando o histórico do dia é longo. */}
+        {!loading && executadasHoje.length > 0 && (
+          <div className="bg-white rounded-2xl border border-gray-200 p-3 max-h-[50vh] overflow-y-auto space-y-4">
+            <p className="px-1 text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+              <CheckCircle2 size={13} className="text-emerald-600" /> Histórico — executadas hoje
+            </p>
+
+            {historicoMedicamentos.length > 0 && (
+              <div className="space-y-2 opacity-90">
+                <div className="flex items-center justify-between px-1 pb-1">
+                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
+                    <Pill size={12} className="text-emerald-600" /> Medicamentos
+                  </p>
+                  <span className="text-xs text-gray-400">
+                    {historicoMedicamentos.length} prescrição{historicoMedicamentos.length !== 1 ? 'ões' : ''}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {historicoMedicamentos.map(renderGrupoHistorico)}
+                </div>
+              </div>
+            )}
+
+            {historicoProcedimentos.length > 0 && (
+              <div className="space-y-2 opacity-90">
+                <div className="flex items-center justify-between px-1 pb-1">
+                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
+                    <Stethoscope size={12} className="text-blue-600" /> Procedimentos
+                  </p>
+                  <span className="text-xs text-gray-400">
+                    {historicoProcedimentos.length} prescrição{historicoProcedimentos.length !== 1 ? 'ões' : ''}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {historicoProcedimentos.map(renderGrupoHistorico)}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {modal && (

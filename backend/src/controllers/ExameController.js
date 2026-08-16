@@ -136,7 +136,7 @@ exports.analisarLLM = async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
     if (!animalId) return res.status(400).json({ error: 'animalId é obrigatório' });
 
-    const resultado = await processarExame(req.file.path, req.user?.id ?? null, null, req.empresaId ?? null);
+    const resultado = await processarExame(req.file.path, req.user?.id ?? null, null, req.empresaId ?? null, req.file.mimetype);
     const { dataExame, exames } = await montarExamesDoLaudo(resultado, animalId);
 
     res.json({ dataExame, exames });
@@ -166,7 +166,7 @@ exports.analisarImagens = async (req, res) => {
     for (const file of arquivos) {
       let resultado = null;
       try {
-        resultado = await processarExame(file.path, req.user?.id ?? null, null, req.empresaId ?? null);
+        resultado = await processarExame(file.path, req.user?.id ?? null, null, req.empresaId ?? null, file.mimetype);
       } catch {
         resultado = null; // LLM não conseguiu interpretar → trata como imagem
       }

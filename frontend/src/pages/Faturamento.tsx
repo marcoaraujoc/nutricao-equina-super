@@ -584,7 +584,10 @@ function PainelFatura({
   // Um único animal → já vem selecionado por padrão (sem precisar escolher).
   const [novoAnimalId,      setNovoAnimalId]      = useState<string>(prop.animais.length === 1 ? String(prop.animais[0].id) : '');
   const [novoNome,          setNovoNome]          = useState('');
-  const [novoTipo,          setNovoTipo]          = useState<ItemTipo>('ASSISTENCIA');
+  const [novoTipo,          setNovoTipo]          = useState<ItemTipo | string>('ASSISTENCIA');
+  // Tipo digitado quando novoTipo === '__NOVO__' (opção "+ Novo tipo…" do select) —
+  // FaturaItem.tipo é VARCHAR(50) livre no backend, então qualquer texto é aceito.
+  const [novoTipoCustom,    setNovoTipoCustom]    = useState('');
   const [novoQty,           setNovoQty]           = useState('1');
   const [novoValor,         setNovoValor]         = useState('0');
   const [novoValorDisplay,  setNovoValorDisplay]  = useState('0,00');
@@ -710,10 +713,12 @@ function PainelFatura({
     if (!podeLancar) { semPermissao('lançar cobrança na fatura'); return; }
     if (!fatura) return;
     if (!novoNome.trim()) { setErroInline('Informe a descrição do item'); return; }
+    if (novoTipo === '__NOVO__' && !novoTipoCustom.trim()) { setErroInline('Informe o novo tipo'); return; }
+    const tipoFinal = novoTipo === '__NOVO__' ? novoTipoCustom.trim() : novoTipo;
     setLancando(true);
     try {
       const r = await api.post(`/clinica/faturas/${fatura.id}/itens`, {
-        tipo:          novoTipo,
+        tipo:          tipoFinal,
         descricao:     novoNome.trim(),
         valor:         Number(novoValor),
         quantidade:    Number(novoQty),
@@ -734,7 +739,7 @@ function PainelFatura({
       if (!novoCatIdx && desc && !jaExiste) {
         try {
           // Salva só o NOME do item frequente (sem valor — informado a cada lançamento).
-          await api.post('/clinica/faturas/catalogo-itens', { tipo: novoTipo, descricao: desc, valor: 0 });
+          await api.post('/clinica/faturas/catalogo-itens', { tipo: tipoFinal, descricao: desc, valor: 0 });
           carregarCatalogo();
         } catch { /* silencioso — não impede o lançamento */ }
       }
@@ -743,6 +748,7 @@ function PainelFatura({
       setNovoAnimalId(prop.animais.length === 1 ? String(prop.animais[0].id) : '');
       setNovoQty('1'); setNovoValor('0'); setNovoValorDisplay('0,00');
       setNovoDescTipo(''); setNovoDescValor(0); setNovoDescDisplay('');
+      setNovoTipoCustom('');
       toast.success('Item lançado');
     } catch { setErroInline('Erro ao lançar item'); }
     finally { setLancando(false); }
@@ -1072,12 +1078,18 @@ function PainelFatura({
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
               <div>
                 <label className="block text-[11px] font-semibold text-gray-500 mb-1">Tipo</label>
-                <select value={novoTipo} onChange={e => setNovoTipo(e.target.value as ItemTipo)}
+                <select value={novoTipo} onChange={e => { setNovoTipo(e.target.value); if (e.target.value !== '__NOVO__') setNovoTipoCustom(''); }}
                   className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 bg-white">
                   <option value="ASSISTENCIA">Assistência</option>
                   <option value="MEDICAMENTO">Medicamento</option>
                   <option value="PROCEDIMENTO">Procedimento</option>
+                  <option value="__NOVO__">+ Novo tipo…</option>
                 </select>
+                {novoTipo === '__NOVO__' && (
+                  <input value={novoTipoCustom} onChange={e => setNovoTipoCustom(e.target.value.toUpperCase())}
+                    placeholder="Ex.: TRANSPORTE"
+                    className="w-full mt-1.5 border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400"/>
+                )}
               </div>
               <div className="col-span-2">
                 <label className="block text-[11px] font-semibold text-gray-500 mb-1">

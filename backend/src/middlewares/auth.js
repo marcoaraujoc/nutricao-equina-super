@@ -57,9 +57,20 @@ const authenticate = async (req, res, next) => {
     const decoded = jwt.verify(token, SECRET);
 
     // Rejeita imediatamente se a conta foi desativada
-    const userCheck = await prisma.user.findUnique({ where: { id: decoded.id }, select: { ativo: true } });
+    const userCheck = await prisma.user.findUnique({
+      where:  { id: decoded.id },
+      select: { ativo: true, sessionVersion: true },
+    });
     if (!userCheck || userCheck.ativo === false) {
       return res.status(401).json({ error: 'Conta desativada. Entre em contato com o administrador.' });
+    }
+
+    // Login novo (senha, 2FA ou Google) incrementa User.sessionVersion e emite o
+    // access token já com o valor atual — divergiu do banco, é um token de uma
+    // sessão anterior (a pessoa entrou de novo em outro dispositivo) e cai AQUI,
+    // sem esperar os ~30min do access token expirar sozinho.
+    if (decoded.sessionVersion !== userCheck.sessionVersion) {
+      return res.status(401).json({ error: 'Sessão encerrada: login realizado em outro dispositivo.' });
     }
 
     req.user = decoded;

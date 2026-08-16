@@ -167,11 +167,9 @@ export function EmpresaProvider({ children }: { children: ReactNode }) {
     // as telas com um animal a que ela não tem acesso, e tudo responde 403.
     localStorage.removeItem('lastSelectedAnimalId');
 
-    // Rota presa a um animal (ex.: /clinica/evolucao/43) também não sobrevive à troca:
-    // o id é de outra empresa. Volta para a lista de pacientes do novo contexto.
-    if (ROTA_COM_ANIMAL.test(window.location.hash)) {
-      window.location.hash = '#/animais';
-    }
+    // Troca de contexto sempre pousa no Painel Principal — a tela em que se estava é
+    // de outra empresa (paciente, agenda, fatura...) e não faz sentido no contexto novo.
+    window.location.hash = '#/painel-principal';
 
     // Reload garante que todas as páginas refaçam os fetches no novo contexto
     window.location.reload();

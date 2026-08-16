@@ -306,14 +306,19 @@ function ModalProprietario({
     onFormChange({ valorAssistencia: digits ? formatarMoeda(digits) : '' });
   };
 
-  const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 transition-colors';
+  // Mesmo padrão da tela de Tratador/Localização: rounded-2xl + anel emerald no foco.
+  const inputCls = 'w-full border border-gray-200 rounded-2xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-400 transition-colors';
   // Vazio => aviso suave (rosa claro). Apontado pelo erro do Salvar => destaque forte.
   const inputReqCls = (v: string, campo?: string) =>
-    classeErro(erroAcao, campo ?? '', `${inputCls} ${!v.trim() ? 'border-red-200 focus:border-red-400' : ''}`);
+    classeErro(erroAcao, campo ?? '', `${inputCls} ${!v.trim() ? 'border-red-200 focus:ring-red-300' : ''}`);
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-2xl max-h-[92vh] flex flex-col border border-gray-100">
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
+      {/* `dvh`, não `vh`: no mobile, `92vh` ficava preso à altura ANTES do teclado
+          abrir, e o fim do formulário/rodapé ficava atrás do teclado (mesma correção
+          aplicada em CadastroFornecedor). `rounded-3xl` em toda largura, como
+          Tratador/Localização — antes só arredondava o topo no mobile. */}
+      <div className="bg-white rounded-3xl shadow-xl w-full sm:max-w-2xl max-h-[90dvh] flex flex-col border border-gray-100">
 
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
           <h3 className="font-bold text-gray-900 flex items-center gap-2">
@@ -457,15 +462,19 @@ function ModalProprietario({
                 <input value={form.bairro} onChange={e => onFormChange({ bairro: e.target.value })}
                   className={inputCls} />
               </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Cidade</label>
-                <input value={form.cidade} onChange={e => onFormChange({ cidade: e.target.value })}
-                  className={inputCls} />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Estado</label>
-                <input value={form.estado} onChange={e => onFormChange({ estado: e.target.value.toUpperCase().slice(0, 2) })}
-                  placeholder="SP" maxLength={2} className={inputCls} />
+              {/* Cidade e Estado na mesma linha — mesmo padrão de CadastroFornecedor:
+                  um sub-grid de 2 colunas ocupando uma célula do grid de 3 colunas. */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Cidade</label>
+                  <input value={form.cidade} onChange={e => onFormChange({ cidade: e.target.value })}
+                    className={inputCls} />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Estado</label>
+                  <input value={form.estado} onChange={e => onFormChange({ estado: e.target.value.toUpperCase().slice(0, 2) })}
+                    placeholder="SP" maxLength={2} className={inputCls} />
+                </div>
               </div>
             </div>
           </section>
@@ -486,22 +495,44 @@ function ModalProprietario({
               </button>
             </div>
 
-            {form.mensalista && (
-              <div className="mb-3">
-                <label className="block text-xs text-gray-500 mb-1">Valor da Assistência Veterinária *</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">R$</span>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={form.valorAssistencia}
-                    onChange={e => handleValorChange(e.target.value)}
-                    placeholder="0,00"
-                    className={`${inputCls} pl-9`}
-                  />
+            {/* Valor da assinatura e dia de vencimento da fatura na mesma linha —
+                logo abaixo de Mensalista e acima de Localidades. Sem mensalista não
+                há valor a cobrar, então a linha vira só o vencimento (largura cheia). */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+              {form.mensalista && (
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Valor da Assistência Veterinária *</label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">R$</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={form.valorAssistencia}
+                      onChange={e => handleValorChange(e.target.value)}
+                      placeholder="0,00"
+                      className={`${inputCls} pl-9`}
+                    />
+                  </div>
                 </div>
+              )}
+              <div className={!form.mensalista ? 'sm:col-span-2' : ''}>
+                <label className="block text-xs text-gray-500 mb-1">Dia de vencimento da fatura *</label>
+                <input type="number" min={1} max={25}
+                  value={form.diaVencimentoFatura}
+                  onChange={e => onFormChange({ diaVencimentoFatura: e.target.value })}
+                  placeholder="Ex.: 5"
+                  className={`${inputCls} ${diaVencimentoErro ? 'border-red-300 focus:border-red-400' : ''}`} />
+                {diaVencimentoErro ? (
+                  <p className="text-[11px] text-red-500 mt-1 flex items-center gap-1">
+                    <AlertCircle size={11} /> {diaVencimentoErro}
+                  </p>
+                ) : (
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    Dia do mês entre <b>1 e 25</b>. Fatura fechada e não paga após o vencimento fica <b>Atrasada</b>.
+                  </p>
+                )}
               </div>
-            )}
+            </div>
 
             {/* ── Localidades atendidas + frequência de CADA uma ──────────────
                 Ex.: Sociedade Hípica Brasileira 2x/semana e Haras H.P. 3x/semana.
@@ -601,24 +632,6 @@ function ModalProprietario({
                 </div>
               )}
               {erroLoc && <p className="text-xs text-red-600 mt-1.5">{erroLoc}</p>}
-            </div>
-
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Dia de vencimento da fatura *</label>
-              <input type="number" min={1} max={25}
-                value={form.diaVencimentoFatura}
-                onChange={e => onFormChange({ diaVencimentoFatura: e.target.value })}
-                placeholder="Ex.: 5"
-                className={`${inputCls} ${diaVencimentoErro ? 'border-red-300 focus:border-red-400' : ''}`} />
-              {diaVencimentoErro ? (
-                <p className="text-[11px] text-red-500 mt-1 flex items-center gap-1">
-                  <AlertCircle size={11} /> {diaVencimentoErro}
-                </p>
-              ) : (
-                <p className="text-[10px] text-gray-400 mt-1">
-                  Escolha um dia do mês entre <b>1 e 25</b>. Fatura fechada e não paga após o vencimento fica <b>Atrasada</b>.
-                </p>
-              )}
             </div>
           </section>
 
@@ -985,13 +998,13 @@ export default function CadastroProprietario() {
                       <div className="flex items-center justify-center gap-2">
                         {podeEditar ? (
                           <button onClick={() => abrirEdicao(p)} title="Editar"
-                            className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-xl transition-colors">
+                            className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-xl transition-colors">
                             <Pencil size={15} />
                           </button>
                         ) : null}
                         {podeRemover ? (
                           <button onClick={() => handleRemoverDaEmpresa(p)} title="Remover da empresa"
-                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors">
+                            className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-colors">
                             <Trash2 size={15} />
                           </button>
                         ) : null}

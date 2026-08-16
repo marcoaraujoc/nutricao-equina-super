@@ -2,7 +2,7 @@
 // em CadastroFornecedor.tsx, mas como modal autônomo que chama a API internamente.
 // Usado em UsuarioFormModal quando "Incluir novo fornecedor" é clicado.
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useRef } from 'react';
 import toast from 'react-hot-toast';
 import {
   X, Loader2, Truck, User as UserIcon,
@@ -11,28 +11,17 @@ import {
 import api from '../services/api';
 import { isValidEmail } from '../utils/validators';
 import { usePermissoes } from '../hooks/usePermissoes';
-import EspecialidadeSelector from './EspecialidadeSelector';
+import TipoServicoSelect from './TipoServicoSelect';
 import InlineError from './InlineError';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-export const TIPOS_SERVICO = [
-  'Cardiologista',
-  'Dermatologista',
-  'Farmácia',
-  'Ferrador',
-  'Fisioterapeuta',
-  'Laboratório',
-  'Loja',
-  'Quiroprata',
-  'Radiologista',
-] as const;
+type TipoDoc = 'cpf' | 'cnpj';
 
-type TipoDoc     = 'cpf' | 'cnpj';
-
-// Tipo de fornecedor — especialidades só se aplicam a Veterinário
-const TIPOS_FORNECEDOR = ['Veterinário', 'Farmácia', 'Laboratório'] as const;
-type TipoFornecedor = typeof TIPOS_FORNECEDOR[number];
+// Tipo de fornecedor — "Veterinário" SAIU daqui (2026-08-25), mesma regra de
+// CadastroFornecedor.tsx: virou cargo de equipe, não fornecedor contratado.
+// Lista é só o ponto de partida do combobox "criável" (TipoServicoSelect).
+const TIPOS_FORNECEDOR_PADRAO = ['Farmácia', 'Laboratório'] as const;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -93,8 +82,7 @@ interface FormForn {
   cnpj:        string;
   telefone:    string;
   email:       string;
-  tipoFornecedor: TipoFornecedor;
-  especialidadeIds: number[];
+  tipoServico: string;
   cep:         string;
   endereco:    string;
   complemento: string;
@@ -105,7 +93,7 @@ interface FormForn {
 
 const FORM_INICIAL: FormForn = {
   nome: '', tipoDoc: 'cnpj', cpf: '', cnpj: '', telefone: '', email: '',
-  tipoFornecedor: 'Veterinário', especialidadeIds: [],
+  tipoServico: '',
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
 
@@ -136,17 +124,6 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
   const cnpjTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Espécies atendidas pela empresa — filtram as especialidades oferecidas.
-  const [especiesEmpresa, setEspeciesEmpresa] = useState<number[]>([]);
-  useEffect(() => {
-    api.get('/equipes/especies-atendidas')
-      .then(res => {
-        const lista = res.data?.dados?.especiesAtendidas ?? [];
-        setEspeciesEmpresa(Array.isArray(lista) ? lista : []);
-      })
-      .catch(() => setEspeciesEmpresa([]));
-  }, []);
 
   const upd = (updates: Partial<FormForn>) => setForm(prev => ({ ...prev, ...updates }));
 
@@ -208,8 +185,7 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
 
   const handleSalvar = async (force = false) => {
     if (!form.nome.trim())             { setErroInline('Nome é obrigatório'); return; }
-    // Especialidade do fornecedor é OPCIONAL (regra 2026-07-28) — sem nenhuma, o
-    // tipoServico legado fica sendo o próprio tipo de fornecedor.
+    if (!form.tipoServico)             { setErroInline('Selecione o tipo de fornecedor'); return; }
     if (!form.email.trim())            { setErroInline('E-mail é obrigatório'); return; }
     if (!isValidEmail(form.email))     { setErroInline('Informe um e-mail válido'); return; }
     if (!form.telefone.trim())         { setErroInline('Telefone é obrigatório'); return; }
@@ -226,11 +202,7 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
         cnpj:        form.tipoDoc === 'cnpj' && docCNPJ ? form.cnpj : null,
         telefone:    form.telefone,
         email:       form.email.trim() ? form.email.trim().toLowerCase() : null,
-        // Veterinário → especialidades do catálogo; demais tipos (e veterinário sem
-        // especialidade selecionada) → tipoServico é o próprio tipo de fornecedor
-        especialidadeIds: form.tipoFornecedor === 'Veterinário' ? form.especialidadeIds : [],
-        ...(form.tipoFornecedor !== 'Veterinário' || form.especialidadeIds.length === 0
-          ? { tipoServico: form.tipoFornecedor } : {}),
+        tipoServico: form.tipoServico,
         cep:         form.cep         || null,
         endereco:    form.endereco    || null,
         complemento: form.complemento || null,
@@ -347,30 +319,14 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
               </div>
               <div>
                 <label className={lbl}>Tipo de Fornecedor *</label>
-                <select
-                  value={form.tipoFornecedor}
-                  onChange={e => upd({
-                    tipoFornecedor: e.target.value as TipoFornecedor,
-                    // Especialidades só se aplicam a Veterinário — limpa ao trocar
-                    ...(e.target.value !== 'Veterinário' ? { especialidadeIds: [] } : {}),
-                  })}
+                <TipoServicoSelect
+                  categoria="FORNECEDOR"
+                  value={form.tipoServico}
+                  onChange={tipoServico => upd({ tipoServico })}
+                  defaults={TIPOS_FORNECEDOR_PADRAO}
                   className={inp}
-                >
-                  {TIPOS_FORNECEDOR.map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
+                />
               </div>
-              {form.tipoFornecedor === 'Veterinário' && (
-                <div>
-                  <label className={lbl}>Especialidade <span className="font-normal text-gray-400">(opcional)</span></label>
-                  <EspecialidadeSelector
-                    variant="dropdown"
-                    value={form.especialidadeIds}
-                    onChange={ids => upd({ especialidadeIds: ids })}
-                    especieIds={especiesEmpresa}
-                    emptyText="A empresa ainda não configurou as espécies atendidas (Configurações)."
-                  />
-                </div>
-              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className={lbl}>E-mail *</label>

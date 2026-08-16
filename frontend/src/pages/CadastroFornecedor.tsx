@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import api from '../services/api';
-import EspecialidadeSelector from '../components/EspecialidadeSelector';
 import toast from 'react-hot-toast';
 import {
   Pencil, Search, Loader2, X, Truck,
@@ -16,37 +15,20 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import { isValidEmail } from '../utils/validators';
 import InlineError from '../components/InlineError';
+import TipoServicoSelect from '../components/TipoServicoSelect';
+import { formatDate } from '../utils/dateUtils';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const TIPOS_SERVICO = [
-  'Cardiologista',
-  'Dermatologista',
-  'Farmácia',
-  'Ferrador',
-  'Fisioterapeuta',
-  'Laboratório',
-  'Loja',
-  'Quiroprata',
-  'Radiologista',
-] as const;
-
-type TipoServico = typeof TIPOS_SERVICO[number];
-type TipoDoc     = 'cpf' | 'cnpj';
-
-// Tipo de fornecedor/profissional — especialidades só se aplicam a Veterinário.
-// Estagiário e Secretária SAÍRAM daqui (2026-08-04): são CARGOS na equipe, definidos
-// no Incluir Membro, não prestadores contratados pela clínica.
-// ⚠️ Cadastro ANTIGO gravado com um desses tipos continua existindo. Como o
-// `abrirEdicao` só reconhece o que está nesta lista, ele reabre como "Veterinário" —
-// e aí o formulário passa a exigir especialidade. Se aparecerem registros assim,
-// corrigir o tipo (ou reintroduzir o valor apenas para leitura) antes de salvar.
-const TIPOS_FORNECEDOR = [
-  'Veterinário',
+// Tipo de fornecedor — "Veterinário" SAIU daqui (2026-08-25): virou cargo de
+// equipe (Incluir Membro), não fornecedor contratado. A lista agora é só o
+// ponto de partida do combobox "criável" (TipoServicoSelect) — o catálogo
+// tenant-scoped (tb_catalogo_tipo_servico) cresce por uso, ver CLAUDE.md.
+const TIPOS_FORNECEDOR_PADRAO = [
   'Farmácia',
   'Laboratório',
 ] as const;
-type TipoFornecedor = typeof TIPOS_FORNECEDOR[number];
+type TipoDoc = 'cpf' | 'cnpj';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -117,6 +99,11 @@ interface Fornecedor {
   estado:      string | null;
   ativo:       boolean;
   createdAt:   string;
+  // Trilha de ativação/inativação (quem fez, quando) — ver lib/cadastroAtivacao.js
+  ativoEm?:        string | null;
+  ativoPorNome?:   string | null;
+  inativoEm?:      string | null;
+  inativoPorNome?: string | null;
 }
 
 interface FormForn {
@@ -126,9 +113,7 @@ interface FormForn {
   cnpj:        string;
   telefone:    string;
   email:       string;
-  tipoFornecedor: TipoFornecedor;
-  tipoServico: TipoServico[];
-  especialidadeIds: number[];
+  tipoServico: string;
   cep:         string;
   endereco:    string;
   complemento: string;
@@ -139,7 +124,7 @@ interface FormForn {
 
 const FORM_INICIAL: FormForn = {
   nome: '', tipoDoc: 'cnpj', cpf: '', cnpj: '', telefone: '', email: '',
-  tipoFornecedor: 'Veterinário', tipoServico: [], especialidadeIds: [],
+  tipoServico: '',
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
 
@@ -177,13 +162,12 @@ function ModalDuplicataInativa({
 // ─── Modal ────────────────────────────────────────────────────────────────────
 
 function ModalFornecedor({
-  editando, form, saving, especiesEmpresa, erro,
+  editando, form, saving, erro,
   onFormChange, onSalvar, onClose,
 }: {
   editando:    Fornecedor | null;
   form:        FormForn;
   saving:      boolean;
-  especiesEmpresa: number[];
   /** Erro da ação do MODAL — exibido abaixo do rodapé, junto do botão clicado. */
   erro:        string | null;
   onFormChange:(updates: Partial<FormForn>) => void;
@@ -257,11 +241,16 @@ function ModalFornecedor({
     finally { setBuscandoCEP(false); }
   };
 
-  const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 transition-colors';
+  // Mesmo padrão da tela de Tratador/Localização: rounded-2xl + anel emerald no foco.
+  const inputCls = 'w-full border border-gray-200 rounded-2xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-400 transition-colors';
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-2xl max-h-[92vh] flex flex-col border border-gray-100">
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
+      {/* `dvh` (viewport dinâmico), não `vh`: no mobile, `92vh` fica preso à altura
+          ANTES do teclado abrir — com o campo em foco, o rodapé (Salvar) e o fim do
+          formulário ficavam atrás do teclado e o scroll não alcançava mais nada.
+          `rounded-3xl` em toda largura — mesmo padrão de Tratador/Localização. */}
+      <div className="bg-white rounded-3xl shadow-xl w-full sm:max-w-2xl max-h-[92dvh] flex flex-col border border-gray-100">
 
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
           <h3 className="font-bold text-gray-900 flex items-center gap-2">
@@ -327,30 +316,14 @@ function ModalFornecedor({
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Tipo de fornecedor *</label>
-                <select
-                  value={form.tipoFornecedor}
-                  onChange={e => onFormChange({
-                    tipoFornecedor: e.target.value as TipoFornecedor,
-                    // Especialidades só se aplicam a Veterinário — limpa ao trocar
-                    ...(e.target.value !== 'Veterinário' ? { especialidadeIds: [] } : {}),
-                  })}
+                <TipoServicoSelect
+                  categoria="FORNECEDOR"
+                  value={form.tipoServico}
+                  onChange={tipoServico => onFormChange({ tipoServico })}
+                  defaults={TIPOS_FORNECEDOR_PADRAO}
                   className={inputCls}
-                >
-                  {TIPOS_FORNECEDOR.map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
+                />
               </div>
-              {form.tipoFornecedor === 'Veterinário' && (
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Especialidade *</label>
-                  <EspecialidadeSelector
-                    variant="dropdown"
-                    value={form.especialidadeIds}
-                    onChange={ids => onFormChange({ especialidadeIds: ids })}
-                    especieIds={especiesEmpresa}
-                    emptyText="A empresa ainda não configurou as espécies atendidas (Configurações)."
-                  />
-                </div>
-              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">E-mail</label>
@@ -497,18 +470,6 @@ export default function CadastroFornecedor() {
 
   useEffect(() => { if (!loadingPerms) carregar(); }, [carregar, loadingPerms]);
 
-  // Espécies atendidas pela empresa — filtram as especialidades oferecidas no cadastro.
-  const [especiesEmpresa, setEspeciesEmpresa] = useState<number[]>([]);
-  useEffect(() => {
-    if (loadingPerms) return;
-    api.get('/equipes/especies-atendidas')
-      .then(res => {
-        const lista = res.data?.dados?.especiesAtendidas ?? [];
-        setEspeciesEmpresa(Array.isArray(lista) ? lista : []);
-      })
-      .catch(() => setEspeciesEmpresa([]));
-  }, [loadingPerms]);
-
   const abrirNovo = () => { setEditando(null); setForm(FORM_INICIAL); setErroModal(null); setShowModal(true); };
 
   // Veio de "Incluir Membro" (Equipe) via "+ Cadastrar Novo Fornecedor" — abre o modal direto
@@ -520,7 +481,7 @@ export default function CadastroFornecedor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const abrirEdicao = async (f: Fornecedor) => {
+  const abrirEdicao = (f: Fornecedor) => {
     setErroModal(null);
     setEditando(f);
     setForm({
@@ -530,14 +491,7 @@ export default function CadastroFornecedor() {
       cnpj:        f.cnpj ? mascaraCNPJ(f.cnpj.replace(/\D/g,'')) : '',
       telefone:    f.telefone ? mascaraTelefone(f.telefone.replace(/\D/g,'')) : '',
       email:       f.email ?? '',
-      // tipoServico exatamente igual a um tipo não-veterinário → é esse tipo; senão Veterinário
-      tipoFornecedor: (TIPOS_FORNECEDOR as readonly string[]).includes(f.tipoServico?.trim() ?? '') && f.tipoServico?.trim() !== 'Veterinário'
-        ? (f.tipoServico.trim() as TipoFornecedor)
-        : 'Veterinário',
-      tipoServico: f.tipoServico
-        ? (f.tipoServico.split(',').map(t => t.trim()).filter(t => (TIPOS_SERVICO as readonly string[]).includes(t)) as TipoServico[])
-        : [],
-      especialidadeIds: [],
+      tipoServico: f.tipoServico?.trim() ?? '',
       cep:         f.cep         ? mascaraCEP(f.cep.replace(/\D/g,'')) : '',
       endereco:    f.endereco    ?? '',
       complemento: f.complemento ?? '',
@@ -546,12 +500,6 @@ export default function CadastroFornecedor() {
       estado:      f.estado      ?? '',
     });
     setShowModal(true);
-    // Carrega as especialidades vinculadas (catálogo por espécie) do detalhe.
-    try {
-      const res = await api.get(`/cadastro/fornecedores/${f.id}`);
-      const ids = res.data?.dados?.especialidadeIds;
-      if (Array.isArray(ids)) setForm(prev => ({ ...prev, especialidadeIds: ids }));
-    } catch { /* mantém vazio */ }
   };
 
   const fecharModal = () => { setShowModal(false); setEditando(null); setForm(FORM_INICIAL); setErroModal(null); };
@@ -563,9 +511,7 @@ export default function CadastroFornecedor() {
     if (editando && !podeEditar) { setErroModal(msgSemPermissao('alterar fornecedor')); return; }
     if (!editando && !podeCriar) { setErroModal(msgSemPermissao('criar fornecedor')); return; }
     if (!form.nome.trim())       { setErroModal('Nome é obrigatório'); return; }
-    if (form.tipoFornecedor === 'Veterinário' && form.especialidadeIds.length === 0) {
-      setErroModal('Selecione ao menos uma especialidade'); return;
-    }
+    if (!form.tipoServico)       { setErroModal('Selecione o tipo de fornecedor'); return; }
     if (form.email.trim() && !isValidEmail(form.email)) { setErroModal('Informe um e-mail válido'); return; }
     if (!form.telefone.trim())   { setErroModal('Telefone é obrigatório'); return; }
     const docCPF  = form.cpf.replace(/\D/g,'');
@@ -584,9 +530,7 @@ export default function CadastroFornecedor() {
       cnpj:        form.tipoDoc === 'cnpj' && docCNPJ ? form.cnpj : null,
       telefone:    form.telefone,
       email:       form.email.trim() ? form.email.trim().toLowerCase() : null,
-      // Veterinário → especialidades do catálogo; demais tipos → tipoServico é o próprio tipo
-      especialidadeIds: form.tipoFornecedor === 'Veterinário' ? form.especialidadeIds : [],
-      ...(form.tipoFornecedor !== 'Veterinário' ? { tipoServico: form.tipoFornecedor } : {}),
+      tipoServico: form.tipoServico,
       cep:         form.cep         || null,
       endereco:    form.endereco    || null,
       complemento: form.complemento || null,
@@ -650,12 +594,14 @@ export default function CadastroFornecedor() {
 
       <InlineError message={erroInline} className="mt-3" />
 
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-2 mb-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Truck size={24} className="text-emerald-600" /> Fornecedores / Profissionais
-          </h1>
-        </div>
+      {/* Mesma linha em qualquer largura (padrão do resto da aplicação — ver
+          CadastroTratador): título à esquerda, botão pequeno à direita. Com
+          `flex-col sm:flex-row` o botão herdava `align-items: stretch` no mobile e
+          virava uma faixa de largura total abaixo do título. */}
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4 flex-wrap">
+        <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+          <Truck size={24} className="text-emerald-600" /> Fornecedores
+        </h1>
         {podeCriar && (
           <button onClick={abrirNovo}
             className="flex items-center gap-2 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors">
@@ -734,6 +680,18 @@ export default function CadastroFornecedor() {
                     {f.ativo ? 'Ativo' : 'Inativo'}
                   </span>
                 </div>
+                {filtroAtivo === 'ativo' && (
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    Criado em {formatDate(f.createdAt)}
+                    {f.ativoEm ? ` · Ativado em ${formatDate(f.ativoEm)}${f.ativoPorNome ? ` por ${f.ativoPorNome}` : ''}` : ''}
+                  </p>
+                )}
+                {filtroAtivo === 'inativo' && (
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    Inativado em {formatDate(f.inativoEm)}
+                    {f.inativoPorNome ? ` por ${f.inativoPorNome}` : ''}
+                  </p>
+                )}
                 {(f.tipoEntrada !== 'SYSTEM' || isAdmin) && (podeEditar || podeAtivar) && (
                   <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-50">
                     {podeEditar && (
@@ -765,6 +723,19 @@ export default function CadastroFornecedor() {
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Telefone</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipo de Serviço</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                  {filtroAtivo === 'ativo' && (
+                    <>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Criado em</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado em</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado por</th>
+                    </>
+                  )}
+                  {filtroAtivo === 'inativo' && (
+                    <>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado em</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado por</th>
+                    </>
+                  )}
                   {(podeEditar || podeAtivar) && <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>}
                 </tr>
               </thead>
@@ -802,6 +773,19 @@ export default function CadastroFornecedor() {
                         {f.ativo ? 'Ativo' : 'Inativo'}
                       </span>
                     </td>
+                    {filtroAtivo === 'ativo' && (
+                      <>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(f.createdAt)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(f.ativoEm)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{f.ativoPorNome ?? '—'}</td>
+                      </>
+                    )}
+                    {filtroAtivo === 'inativo' && (
+                      <>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(f.inativoEm)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{f.inativoPorNome ?? '—'}</td>
+                      </>
+                    )}
                     {(podeEditar || podeAtivar) && (
                       <td className="px-4 py-3">
                         {f.tipoEntrada === 'SYSTEM' && !isAdmin ? (
@@ -837,7 +821,6 @@ export default function CadastroFornecedor() {
           editando={editando}
           form={form}
           saving={saving}
-          especiesEmpresa={especiesEmpresa}
           erro={erroModal}
           onFormChange={handleFormChange}
           onSalvar={handleSalvar}

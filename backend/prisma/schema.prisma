@@ -36,11 +36,25 @@ model User {
   estado               String?   @db.VarChar(2)
   createdAt            DateTime  @default(now())
   ativo                Boolean   @default(true)
+  // Trilha de quem ATIVOU/INATIVOU este usuário e quando (migration
+  // 20260824000000) — `ativo` sozinho só diz o estado ATUAL. Sem FK cascade:
+  // excluir quem fez a ação não pode apagar nem destravar o estado do usuário
+  // afetado (mesmo padrão de `Animal.inativoPorId`).
+  ativoEm              DateTime? @map("ativo_em")
+  ativoPorId           Int?      @map("ativo_por_id")
+  inativoEm            DateTime? @map("inativo_em")
+  inativoPorId         Int?      @map("inativo_por_id")
   resetPasswordToken   String?   @unique @db.VarChar(255)
   resetPasswordExpires DateTime?
   mustChangePassword   Boolean   @default(false)
   isConvidado          Boolean   @default(false)
   refreshToken         String?   @db.VarChar(512)
+  // Contador de geração de sessão. Todo login (senha, 2FA, Google) INCREMENTA e
+  // grava no access token (`sessionTokens.js#assinarAccessToken`); `authenticate`
+  // compara a cada requisição contra o valor do banco — divergiu, o token é de um
+  // login anterior e cai na hora (não espera os ~30min do access expirar). Refresh
+  // NÃO incrementa (é o mesmo dispositivo continuando a sessão, não um login novo).
+  sessionVersion       Int       @default(0) @map("session_version")
   // 2FA por e-mail no login com senha. Ligado por padrão; desligar por usuário
   // aqui, ou globalmente via MFA_EMAIL_ENABLED=false (kill-switch de emergência).
   mfaAtivo             Boolean   @default(true) @map("mfa_ativo")
@@ -67,6 +81,7 @@ model User {
   evolucoesCriadas     EvolucaoClinica[]      @relation("EvolucaoVeterinario")
   evolucoesModificadas EvolucaoClinica[]      @relation("EvolucaoModificadoPor")
   prescricoes          Prescricao[]           @relation("PrescricaoVeterinario")
+  prescricaoDosesExecutadas PrescricaoExecucaoDose[] @relation("PrescricaoDoseExecutadaPor")
   prescricaoGrupos          PrescricaoGrupo[]      @relation("PrescricaoGrupoVet")
   prescricaoGruposFinalizou PrescricaoGrupo[]      @relation("PrescricaoGrupoFinaliza")
   prescricaoGruposExecutou  PrescricaoGrupo[]      @relation("PrescricaoGrupoExecuta")
@@ -87,6 +102,7 @@ model User {
   profissionalPerfis       ProfissionalPerfil[]    @relation("ProfissionalPerfilUser")
   empresasVinculadas       UsuarioEmpresa[]        @relation("UsuarioEmpresaUser")
   fornecedorPerfil         Fornecedor?             @relation("FornecedorUser")
+  prestadorPerfil          Prestador?              @relation("PrestadorUser")
   encaminhamentosRecebidos EncaminhamentoClinico[] @relation("EncaminhamentoPrestador")
   designacoesComoPrestador DesignacaoPrestador[]   @relation("DesignacaoPrestadorUser")
   designacoesCriadas       DesignacaoPrestador[]   @relation("DesignacaoCriadoPor")
@@ -99,6 +115,10 @@ model User {
   orcamentos               Orcamento[]             @relation("OrcamentoProprietario")
   orcamentosCriados        Orcamento[]             @relation("OrcamentoCriadoPor")
   animalHistoricoRegistrado AnimalHistorico[]      @relation("AnimalHistoricoCriadoPor")
+  ativoPor                 User?                   @relation("UserAtivoPor",   fields: [ativoPorId],   references: [id], onDelete: SetNull)
+  inativoPor               User?                   @relation("UserInativoPor", fields: [inativoPorId], references: [id], onDelete: SetNull)
+  usuariosQueAtivou        User[]                  @relation("UserAtivoPor")
+  usuariosQueInativou      User[]                  @relation("UserInativoPor")
   @@index([equipeId])
   @@map("users")
   @@schema("schs2vet")
@@ -388,8 +408,11 @@ model ExameNutricional {
   @@schema("schs2vet")
 }
 
-// Anexos da página Resultado de Exame · Imagem — arquivo interpretado pela LLM:
-// laudo (dados extraídos) vira ExameNutricional; imagem é apenas ARMAZENADA aqui.
+// Anexos da página Resultado de Exame — arquivo é ARMAZENADO aqui, para qualquer tipo
+// de exame clínico (`exameClinicoId`, nullable). Nasceu só para Imagem (nome legado),
+// mas Laboratorial/Bioquímico passou a usá-la também para guardar TODOS os arquivos
+// de um resultado com mais de um documento anexado — `ExameClinico.arquivoUrl`
+// continua apontando só para o primeiro, por compatibilidade com leitores antigos.
 model ExameImagemAnexo {
   id             Int      @id @default(autoincrement())
   animalId       Int
@@ -600,11 +623,26 @@ model Prescricao {
   // não gera FaturaItem nem reserva/debita estoque. Irmão do `medicamentoCliente`
   // (que trata de quem FORNECE) — os dois são por ITEM, nunca por documento.
   aplicadaPeloProprietario Boolean @default(false) @map("aplicada_pelo_proprietario")
-  executadoEm         DateTime? // setado na 1ª execução do item; presente = item travado (imutável)
+  executadoEm         DateTime? // horário da ÚLTIMA dose executada (não só a 1ª — ver §execução por dose)
   // Origem no orçamento: `valorOrcado` é o valor UNITÁRIO aceito pelo cliente e tem
   // precedência sobre o preço do catálogo/estoque no lançamento da fatura.
   orcamentoItemId     Int?      @map("orcamento_item_id")
   valorOrcado         Float?    @map("valor_orcado")
+
+  // ── Execução por DOSE individual (não mais por dia) ──────────────────────────
+  // `dosesExecutadas`/`proximaDoseEm` são desnormalizados a partir do log
+  // `PrescricaoExecucaoDose` — evitam um COUNT/ORDER BY a cada leitura (tela de
+  // execução, cron de WhatsApp). `proximaDoseEm` é ROLLING: recalculado a cada
+  // execução como (horário REAL da última dose) + intervalo da frequência — não é
+  // uma grade fixa desde `horaInicio`. Só itens COM `horaInicio` e frequência
+  // diferente de agora/SOS/seNecessario entram nesse fluxo (ver lib/agendaDoses.js
+  // `elegivelParaFluxoNovo`); os demais mantêm o comportamento antigo (1x/dia).
+  dosesExecutadas          Int       @default(0) @map("doses_executadas")
+  proximaDoseEm            DateTime? @map("proxima_dose_em")
+  // Guarda QUAL `proximaDoseEm` já recebeu o aviso de WhatsApp de 15min — muda
+  // sozinho quando uma dose antecipada/atrasada desloca o próximo horário,
+  // permitindo reenviar sem precisar de uma segunda coluna de controle.
+  proximaDoseAvisoEnviado DateTime? @map("proxima_dose_aviso_enviado")
 
   animal           Animal           @relation("AnimalPrescricoes",     fields: [animalId],         references: [id], onDelete: Cascade)
   veterinario      User?            @relation("PrescricaoVeterinario", fields: [veterinarioId],    references: [id], onDelete: SetNull)
@@ -612,12 +650,43 @@ model Prescricao {
   medicamentoCat   Medicamento?     @relation("MedicamentoPrescricoes", fields: [medicamentoCatId], references: [id])
   faturaItens      FaturaItem[]     @relation("FaturaItemPrescricao")
   orcamentoItem    OrcamentoItem?   @relation("PrescricaoOrcamento",   fields: [orcamentoItemId],  references: [id], onDelete: SetNull)
+  execucoesDose    PrescricaoExecucaoDose[] @relation("PrescricaoExecucoesDose")
 
   @@index([animalId])
   @@index([veterinarioId])
   @@index([grupoId])
   @@index([orcamentoItemId])
+  @@index([proximaDoseEm])
   @@map("tb_prescricoes")
+  @@schema("schs2vet")
+}
+
+// Log append-only de CADA dose individual executada de um item de prescrição —
+// substitui o modelo antigo de "uma execução cobre o dia inteiro". Uma linha por
+// clique em Executar. Fonte de auditoria (paciente/medicamento/previsto/executado/
+// quem) e base do rolling schedule (a última linha do item define a próxima dose
+// esperada). `grupoId`/`animalId` são denormalizados para o cron de WhatsApp e para
+// a policy de RLS lerem sem precisar de join até `Prescricao`.
+model PrescricaoExecucaoDose {
+  id                Int      @id @default(autoincrement())
+  prescricaoId      Int
+  grupoId           Int
+  animalId          Int
+  numeroDose        Int      @map("numero_dose") // 1..N dentro do item — só para exibição/auditoria
+  horarioPrevisto   DateTime @map("horario_previsto")
+  horarioExecutado  DateTime @default(now()) @map("horario_executado")
+  executadoPorId    Int?     @map("executado_por_id")
+  // NO_HORARIO | ANTECIPADA | ATRASADA
+  classificacao     String   @db.VarChar(20)
+  diferencaMinutos  Int      @map("diferenca_minutos") // executado − previsto, em minutos
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  prescricao   Prescricao @relation("PrescricaoExecucoesDose", fields: [prescricaoId], references: [id], onDelete: Cascade)
+  executadoPor User?      @relation("PrescricaoDoseExecutadaPor", fields: [executadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([prescricaoId])
+  @@index([grupoId])
+  @@map("tb_prescricao_execucoes_dose")
   @@schema("schs2vet")
 }
 
@@ -2224,6 +2293,13 @@ model Tratador {
   localizacaoId Int?     @map("localizacao_id")
   tipoEntrada   String   @default("CLIENTE") @db.VarChar(10) @map("tipo_entrada")
   ativo         Boolean  @default(true)
+  // Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — mesma lógica de Fornecedor/
+  // Prestador (migration 20260825000000), replicada aqui (migration 20260826000000).
+  // Sem FK cascade: excluir quem fez a ação não apaga nem destrava o registro afetado.
+  ativoEm      DateTime? @map("ativo_em")
+  ativoPorId   Int?      @map("ativo_por_id")
+  inativoEm    DateTime? @map("inativo_em")
+  inativoPorId Int?      @map("inativo_por_id")
   // SYSTEM (ADMIN) e registros legados: empresaId/equipeId null = visível para todos.
   // CLIENTE novo: escopado à empresa/equipe ativa (req.empresaId/req.equipeId) de quem criou.
   empresaId     Int      @map("empresa_id") // sem FK — sobrevive à exclusão da empresa
@@ -2258,6 +2334,14 @@ model Fornecedor {
   cidade      String?  @db.VarChar(255)
   estado      String?  @db.VarChar(2)
   ativo       Boolean  @default(true)
+  // Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — mesma lógica de `User`
+  // (migration 20260824000000_user_ativacao_trilha), replicada aqui (migration
+  // 20260825000000). Sem FK cascade: excluir quem fez a ação não apaga nem
+  // destrava o registro afetado.
+  ativoEm      DateTime? @map("ativo_em")
+  ativoPorId   Int?      @map("ativo_por_id")
+  inativoEm    DateTime? @map("inativo_em")
+  inativoPorId Int?      @map("inativo_por_id")
   // SYSTEM (ADMIN) e registros legados: empresaId/equipeId null = visível para todos.
   // CLIENTE novo: escopado à empresa/equipe ativa (req.empresaId/req.equipeId) de quem criou.
   empresaId   Int?     @map("empresa_id") // sem FK — sobrevive à exclusão da empresa
@@ -2274,6 +2358,99 @@ model Fornecedor {
   @@index([empresaId])
   @@index([equipeId])
   @@map("tb_fornecedores")
+  @@schema("schs2vet")
+}
+
+// Prestadores de serviço — catálogo PRÓPRIO e INDEPENDENTE de Fornecedor (2026-08-14).
+// Mesma forma de cadastro (nome, documento, contato, tipo de serviço, endereço) e o
+// mesmo tratamento SYSTEM×CLIENTE, mas em tabela e RLS próprios — dado de prestador
+// não compartilha linha com fornecedor. `empresaId`/`equipeId` SEM FK, de propósito
+// (igual Fornecedor.empresaId): sobrevivem à exclusão da empresa/equipe.
+model Prestador {
+  id          Int      @id @default(autoincrement())
+  nome        String   @db.VarChar(255)
+  cpf         String?  @db.VarChar(20)
+  cnpj        String?  @db.VarChar(20)
+  telefone    String?  @db.VarChar(30)
+  email       String?  @db.VarChar(255)
+  tipoServico String   @db.VarChar(50) @map("tipo_servico")
+  tipoEntrada String   @default("CLIENTE") @db.VarChar(10) @map("tipo_entrada")
+  cep         String?  @db.VarChar(10)
+  endereco    String?  @db.VarChar(500)
+  complemento String?  @db.VarChar(255)
+  bairro      String?  @db.VarChar(255)
+  cidade      String?  @db.VarChar(255)
+  estado      String?  @db.VarChar(2)
+  ativo       Boolean  @default(true)
+  // Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — mesma lógica de `User`/
+  // `Fornecedor` (migration 20260825000000). Sem FK cascade.
+  ativoEm      DateTime? @map("ativo_em")
+  ativoPorId   Int?      @map("ativo_por_id")
+  inativoEm    DateTime? @map("inativo_em")
+  inativoPorId Int?      @map("inativo_por_id")
+  empresaId   Int?     @map("empresa_id")
+  equipeId    Int?     @map("equipe_id")
+  // Login opcional, SEM MembroEquipe (decisão de 2026-08-21 revista): dá para logar,
+  // mas sem RBAC — quem precisa de tela de verdade continua indo por Equipe > Incluir
+  // Membro (cargo Fornecedor). Ver §5 do plano "Prestador: pagamento/local/acesso".
+  userId         Int?     @unique @map("user_id")
+  tipoPagamento  String?  @db.VarChar(20) @map("tipo_pagamento")
+  formaPagamento String?  @db.VarChar(20) @map("forma_pagamento")
+  valorPagamento Float?   @map("valor_pagamento")
+  acessoSistema  Boolean  @default(false) @map("acesso_sistema")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt      @map("updated_at")
+
+  user           User?                    @relation("PrestadorUser", fields: [userId], references: [id], onDelete: SetNull)
+  locaisTrabalho PrestadorLocalTrabalho[]
+
+  @@index([empresaId])
+  @@index([equipeId])
+  @@map("tb_prestadores")
+  @@schema("schs2vet")
+}
+
+// Local(is) de trabalho do Prestador — irmã de MembroLocalTrabalho, mais simples
+// (sem especialidade/tempo de consulta: Prestador não entra na Agenda nem tem
+// catálogo de especialidade próprio). empresaId/equipeId são denormalizados do
+// Prestador pai só para a policy de RLS.
+model PrestadorLocalTrabalho {
+  id                 Int      @id @default(autoincrement())
+  prestadorId        Int      @map("prestador_id")
+  localizacaoId      Int      @map("localizacao_id")
+  diasTrabalho       String?  @db.VarChar(20) @map("dias_trabalho")
+  horaInicioTrabalho String?  @db.VarChar(5)  @map("hora_inicio_trabalho")
+  horaFimTrabalho    String?  @db.VarChar(5)  @map("hora_fim_trabalho")
+  empresaId          Int?     @map("empresa_id")
+  equipeId           Int?     @map("equipe_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  prestador   Prestador         @relation(fields: [prestadorId], references: [id], onDelete: Cascade)
+  localizacao LocalizacaoAnimal @relation(fields: [localizacaoId], references: [id], onDelete: Cascade)
+
+  @@index([prestadorId])
+  @@index([localizacaoId])
+  @@map("tb_prestador_locais_trabalho")
+  @@schema("schs2vet")
+}
+
+// Catálogo de "tipo de fornecedor" (categoria FORNECEDOR) e "tipo de serviço do
+// prestador" (categoria PRESTADOR) — cresce por uso: quando alguém digita um
+// tipo novo no cadastro, ele é gravado aqui e passa a aparecer como opção nas
+// próximas vezes. TENANT DIRETO (mesma policy de tb_fornecedores/tb_prestadores,
+// migration 20260825000000): cada empresa só vê/cria os PRÓPRIOS tipos —
+// nenhuma leitura cross-tenant aqui, mesmo para o "type ahead" do formulário.
+// ADMIN (escopo de plataforma) grava com empresaId null.
+model CatalogoTipoServico {
+  id          Int      @id @default(autoincrement())
+  categoria   String   @db.VarChar(20)  // 'FORNECEDOR' | 'PRESTADOR'
+  nome        String   @db.VarChar(100)
+  empresaId   Int?     @map("empresa_id")
+  criadoPorId Int?     @map("criado_por_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([categoria, empresaId])
+  @@map("tb_catalogo_tipo_servico")
   @@schema("schs2vet")
 }
 
@@ -2322,6 +2499,7 @@ model LocalizacaoAnimal {
   animais         Animal[]
   tratadores      Tratador[]
   locaisTrabalho  MembroLocalTrabalho[]
+  locaisPrestador PrestadorLocalTrabalho[]
   proprietarios   ProprietarioLocalidade[] @relation("ProprietarioLocalidadeLocal")
   historico       AnimalHistorico[]
   equipe          Equipe?    @relation("EquipeLocalizacoes", fields: [equipeId], references: [id], onDelete: SetNull)

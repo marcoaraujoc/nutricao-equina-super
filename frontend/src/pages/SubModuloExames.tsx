@@ -19,6 +19,7 @@ import { imprimirExame as imprimirExameUtil } from '../utils/ExamePrint';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import { temResultadoExame } from '../utils/exameClinico';
 import InlineError from '../components/InlineError';
+import LaudoTexto from '../components/LaudoTexto';
 
 
 // ─── Types catálogo ───────────────────────────────────────────────────────────
@@ -214,122 +215,6 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-// ─── CarregarResultadoModal — carregar resultado/laudo de um exame ─────────────
-// ex != null: exame PEDIDO (SOLICITADO). ex == null: exame NÃO PEDIDO (informa tipo+descrição).
-// Laboratorial/Bioquímico: upload de arquivo → o laudo é lido em tabela. Imagem: laudo
-// VERBATIM (sem interpretação) + imagens anexadas. Ao salvar → exame vira Realizado.
-function CarregarResultadoModal({ ex, saving, onClose, onSalvar }: {
-  ex:       ExameClinico | null;
-  saving:   boolean;
-  onClose:  () => void;
-  onSalvar: (data: { tipo: TipoExame; descricao: string; laudo: string; arquivos: File[] }) => void;
-}) {
-  const [tipo,      setTipo]      = useState<TipoExame>(ex?.tipo ?? 'Laboratorial');
-  const [descricao, setDescricao] = useState(ex?.descricao ?? '');
-  const [laudo,     setLaudo]     = useState('');
-  const [arquivos,  setArquivos]  = useState<File[]>([]);
-  const [erro,      setErro]      = useState<string | null>(null);
-
-  const tipoEfetivo = ex ? ex.tipo : tipo;
-  const isImagem    = tipoEfetivo === 'Imagem';
-
-  const confirmar = () => {
-    if (!ex && !descricao.trim()) { setErro('Informe a descrição do exame'); return; }
-    if (isImagem && laudo.trim().length === 0 && arquivos.length === 0) { setErro('Informe o laudo ou anexe imagens'); return; }
-    if (!isImagem && arquivos.length === 0) { setErro('Anexe o arquivo do laudo'); return; }
-    setErro(null);
-    onSalvar({ tipo: tipoEfetivo, descricao: descricao.trim(), laudo: laudo.trim(), arquivos });
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-lg border border-gray-100 max-h-[92vh] flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
-          <div className="flex items-center gap-2 min-w-0">
-            {isImagem ? <Scan size={16} className="text-blue-600 flex-shrink-0" /> : <FlaskConical size={16} className="text-blue-600 flex-shrink-0" />}
-            <div className="min-w-0">
-              <h3 className="font-bold text-gray-900">Carregar resultado</h3>
-              <p className="text-[11px] text-gray-500 truncate">{ex ? `${ex.tipo} · ${ex.descricao}` : 'Exame não pedido na evolução'}</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 flex-shrink-0"><X size={18} /></button>
-        </div>
-
-        <div className="p-5 space-y-4 overflow-y-auto">
-          {!ex && (
-            <>
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Tipo do exame</label>
-                <select value={tipo} onChange={e => setTipo(e.target.value as TipoExame)}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-400 bg-white">
-                  <option value="Laboratorial">Laboratorial</option>
-                  <option value="Bioquímico">Bioquímico</option>
-                  <option value="Imagem">Imagem</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Descrição *</label>
-                <input type="text" value={descricao} onChange={e => setDescricao(e.target.value)}
-                  placeholder="Ex: Hemograma completo, Raio-X de tórax..."
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-400" />
-              </div>
-            </>
-          )}
-
-          {isImagem ? (
-            <>
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Laudo (exatamente como escrito)</label>
-                <textarea value={laudo} onChange={e => setLaudo(e.target.value)} rows={6}
-                  placeholder="Cole/digite o laudo do exame de imagem — salvo literalmente, sem interpretação da IA."
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-400 resize-none" />
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Imagens</label>
-                <input type="file" accept="image/*,application/pdf" multiple
-                  onChange={e => setArquivos(Array.from(e.target.files ?? []))}
-                  className="w-full text-xs text-gray-600 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:text-xs file:font-semibold" />
-                {arquivos.length > 0 && <p className="text-[11px] text-gray-500 mt-1">{arquivos.length} arquivo(s) selecionado(s)</p>}
-              </div>
-            </>
-          ) : (
-            <>
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Arquivo do laudo (PDF/imagem) *</label>
-                <input type="file" accept="image/*,application/pdf"
-                  onChange={e => setArquivos(e.target.files?.[0] ? [e.target.files[0]] : [])}
-                  className="w-full text-xs text-gray-600 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:text-xs file:font-semibold" />
-                {arquivos.length > 0 && <p className="text-[11px] text-gray-500 mt-1">{arquivos[0].name}</p>}
-                <p className="text-[11px] text-gray-400 mt-1">O laudo é lido e salvo em tabela (parâmetro / valor / referência) e o arquivo fica armazenado.</p>
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Observação (opcional)</label>
-                <textarea value={laudo} onChange={e => setLaudo(e.target.value)} rows={2}
-                  placeholder="Notas adicionais sobre o resultado..."
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-blue-400 resize-none" />
-              </div>
-            </>
-          )}
-
-          <InlineError message={erro} />
-        </div>
-
-        <div className="flex gap-2 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
-          <button onClick={onClose} disabled={saving}
-            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50">
-            Cancelar
-          </button>
-          <button onClick={confirmar} disabled={saving}
-            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors">
-            {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-            Salvar resultado
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void }) {
   const extra    = parseExtra(ex.observacao);
   const tipoMeta = TIPOS_META[ex.tipo];
@@ -494,21 +379,37 @@ function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void })
               {(ex.resultado ?? '').trim() && (
                 <div>
                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Laudo</p>
-                  <p className="text-sm text-gray-800 whitespace-pre-wrap">{ex.resultado}</p>
+                  <LaudoTexto texto={ex.resultado ?? ''} className="text-sm text-gray-800 whitespace-pre-wrap" />
                 </div>
               )}
 
               {(ex.imagens?.length ?? 0) > 0 && (
                 <div>
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Imagens ({ex.imagens!.length})</p>
+                  {/* Rótulo genérico: além das fotos do exame de Imagem, este mesmo
+                      anexo passou a guardar TODOS os arquivos de um Laboratorial/
+                      Bioquímico com mais de um arquivo carregado (ver CLAUDE.md,
+                      seção do exame clínico) — nem sempre é uma "imagem". */}
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Arquivos ({ex.imagens!.length})</p>
                   <div className="flex flex-wrap gap-2">
-                    {ex.imagens!.map(img => (
-                      <a key={img.id} href={img.arquivoUrl} target="_blank" rel="noreferrer"
-                        className="block w-20 h-20 rounded-lg border border-gray-200 overflow-hidden bg-gray-50 hover:border-blue-300 transition-colors"
-                        title={img.nome ?? 'Imagem'}>
-                        <img src={img.arquivoUrl} alt={img.nome ?? 'Imagem'} className="w-full h-full object-cover" />
-                      </a>
-                    ))}
+                    {ex.imagens!.map(img => {
+                      // PDF não renderiza em <img> — vira ícone + nome, não uma
+                      // miniatura quebrada. Laboratorial anexa PDF com frequência.
+                      const ehPdf = /\.pdf(\?|$)/i.test(img.nome ?? img.arquivoUrl ?? '');
+                      return (
+                        <a key={img.id} href={img.arquivoUrl} target="_blank" rel="noreferrer"
+                          className="block w-20 h-20 rounded-lg border border-gray-200 overflow-hidden bg-gray-50 hover:border-blue-300 transition-colors"
+                          title={img.nome ?? 'Arquivo'}>
+                          {ehPdf ? (
+                            <div className="w-full h-full flex flex-col items-center justify-center gap-1 px-1">
+                              <FileText size={22} className="text-gray-400" />
+                              <span className="text-[9px] text-gray-500 truncate w-full text-center">{img.nome ?? 'PDF'}</span>
+                            </div>
+                          ) : (
+                            <img src={img.arquivoUrl} alt={img.nome ?? 'Arquivo'} className="w-full h-full object-cover" />
+                          )}
+                        </a>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -637,9 +538,6 @@ export default function SubModuloExames({
   const [confirmId,    setConfirmId]    = useState<number | null>(null);
   const [finalizandoId, setFinalizandoId] = useState<number | null>(null);
   const [filtroStatus, setFiltroStatus] = useState<FiltroStatusExame>('todos');
-  // Carregar resultado: exame PEDIDO (ExameClinico) ou 'novo' (não pedido na evolução)
-  const [carregandoResultado, setCarregandoResultado] = useState<ExameClinico | 'novo' | null>(null);
-  const [savingResultado, setSavingResultado] = useState(false);
   // Visualização vinda do Histórico de Evolução Clínica: popula os campos do
   // formulário da página em SOMENTE LEITURA (sem abrir popup).
   const [exameVisualizando, setExameVisualizando] = useState<ExameClinico | null>(null);
@@ -677,15 +575,6 @@ export default function SubModuloExames({
   // (o RESULTADO/laudo do exame) e não gateiam o pedido.
   const podeCriarLab = podeCriar;
   const podeCriarImg = podeCriar;
-
-  // RESULTADO/laudo — gate distinto do pedido (item #7). Lab/Bioquímico usa
-  // exames.laboratorial.editar; Imagem usa exames.imagem.editar.
-  const podeResultadoLab = isGestor || podeExecutar('exames.laboratorial.editar');
-  const podeResultadoImg = isGestor || podeExecutar('exames.imagem.editar');
-  const podeCarregarResultado = (ex: ExameClinico) =>
-    ex.tipo === 'Imagem' ? podeResultadoImg : (ex.tipo === 'Compra' ? false : podeResultadoLab);
-  // Exames PEDIDOS (SOLICITADO) do animal aguardando resultado, que o usuário pode carregar
-  const examesPendentes = historico.filter(ex => ex.ativo && getStatusExame(ex) === 'SALVA' && podeCarregarResultado(ex));
 
   const semPermissao = (acao: string) =>
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável.`);
@@ -1059,6 +948,13 @@ export default function SubModuloExames({
       setImagemExamesCat([]);
       setImagemProcSearch('');
       setShowImagemProcDrop(false);
+      // Faltavam aqui — só o ramo laboratorial (abaixo) resetava. "Quantidade de
+      // imagens" usa o MESMO estado `qtdAmostra` de "Qtd. de Amostras" (só muda o
+      // rótulo conforme a aba), então ficava com o valor do exame anterior depois de
+      // Inserir/Salvar na aba Imagem.
+      setDataHoraColeta('');
+      setTipoAmostra('');
+      setQtdAmostra(1);
       setIndicacaoClinica('');
       setObservacao('');
     } else {
@@ -1199,45 +1095,6 @@ export default function SubModuloExames({
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       setErroInline(msg ?? 'Erro ao finalizar exame');
     } finally { setFinalizandoId(null); }
-  };
-
-  // Carregar resultado — exame PEDIDO ou 'novo' (não pedido). No 'novo', cria o pedido
-  // primeiro (POST /clinica/exames com a evolução do atendimento) e então carrega o resultado.
-  const handleSalvarResultado = async (data: { tipo: TipoExame; descricao: string; laudo: string; arquivos: File[] }) => {
-    const alvo = carregandoResultado;
-    if (!alvo) return;
-    setSavingResultado(true);
-    try {
-      let exameId: number;
-      if (alvo === 'novo') {
-        if (!evolucaoId) {
-          setErroInline('Para carregar um exame não pedido, abra o atendimento (evolução) do paciente.');
-          return;
-        }
-        const criado = await api.post('/clinica/exames', {
-          animalId, tipo: data.tipo, evolucaoId, descricao: data.descricao,
-        });
-        exameId = criado.data?.dados?.id as number;
-      } else {
-        if (!podeCarregarResultado(alvo)) { semPermissao('carregar resultado'); return; }
-        exameId = alvo.id;
-      }
-      if (!exameId) { setErroInline('Não foi possível identificar o exame'); return; }
-
-      const fd = new FormData();
-      if (data.laudo) fd.append('resultado', data.laudo);
-      for (const f of data.arquivos) fd.append('arquivos', f);
-      await api.patch(`/clinica/exames/${exameId}/resultado`, fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      toast.success('Resultado carregado — exame Realizado');
-      setCarregandoResultado(null);
-      carregarHistorico();
-      onSalvo?.();
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroInline(msg ?? 'Erro ao carregar resultado');
-    } finally { setSavingResultado(false); }
   };
 
   const imprimirExame = (ex: ExameClinico) => {
@@ -2016,32 +1873,6 @@ export default function SubModuloExames({
         </div>
       )}
 
-      {/* ── Carregar resultado — seletor dos exames pedidos (+ não pedido) ──── */}
-      {(podeResultadoLab || podeResultadoImg) && (
-        <div className="px-4 py-3 border-b border-gray-100 bg-teal-50/40 flex flex-col sm:flex-row sm:items-center gap-2">
-          <label className="text-xs font-semibold text-gray-600 flex items-center gap-1.5 flex-shrink-0">
-            <FlaskConical size={13} className="text-teal-600" /> Carregar resultado
-          </label>
-          <select
-            value=""
-            onChange={e => {
-              const v = e.target.value;
-              if (!v) return;
-              if (v === '__novo__') { setCarregandoResultado('novo'); return; }
-              const ex = examesPendentes.find(x => String(x.id) === v);
-              if (ex) setCarregandoResultado(ex);
-            }}
-            className="flex-1 border border-teal-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-teal-500 bg-white">
-            <option value="">
-              {examesPendentes.length > 0 ? 'Selecione o exame pedido…' : 'Nenhum exame pedido pendente'}
-            </option>
-            {examesPendentes.map(ex => (
-              <option key={ex.id} value={String(ex.id)}>{fmtNumero(ex.numero)} · {ex.tipo} · {ex.descricao}</option>
-            ))}
-            <option value="__novo__">➕ Carregar exame não pedido…</option>
-          </select>
-        </div>
-      )}
 
       {/* ── Histórico ──────────────────────────────────────────────────────── */}
       <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
@@ -2303,15 +2134,6 @@ export default function SubModuloExames({
       )}
 
       {viewingEx && <ViewModal ex={viewingEx} onFechar={() => setViewingEx(null)} />}
-
-      {carregandoResultado && (
-        <CarregarResultadoModal
-          ex={carregandoResultado === 'novo' ? null : carregandoResultado}
-          saving={savingResultado}
-          onClose={() => { if (!savingResultado) setCarregandoResultado(null); }}
-          onSalvar={handleSalvarResultado}
-        />
-      )}
 
       <ModalJustificativa
         aberto={confirmId != null}

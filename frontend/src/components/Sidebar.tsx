@@ -15,7 +15,7 @@ import {
   FileText, Syringe, Microscope, Scan,
   FolderOpen, UserCog, Truck, MapPin, CalendarClock,
   Package, UserPlus, ScrollText, Building2,
-  Bell, Gauge, ListChecks, Receipt, Layers,
+  Bell, Gauge, ListChecks, Receipt, Layers, HardHat,
 } from 'lucide-react';
 import { usePermissoes } from '../hooks/usePermissoes';
 
@@ -121,6 +121,7 @@ export default function Sidebar() {
   const podeVerProprietarios   = isAdmin || isGestor || podeExecutar('cadastro.proprietario.ler');
   const podeVerTratadores      = isAdmin || isGestor || podeExecutar('cadastro.tratador.ler');
   const podeVerFornecedores    = isAdmin || isGestor || podeExecutar('cadastro.fornecedor.ler');
+  const podeVerPrestadores     = isAdmin || isGestor || podeExecutar('cadastro.prestador.ler');
   const podeVerLocalizacoes    = isAdmin || isGestor || podeExecutar('cadastro.localizacao.ler');
   const podeVerEquipe          = isAdmin || isGestor || podeExecutar('equipe.membros.ler');
   const podeVerRelatorios      = isGestor || podeExecutar('relatorios.gerencial.ler');
@@ -173,6 +174,7 @@ export default function Sidebar() {
     podVerCadastroPessoal ||       // profissionais com ao menos 1 permissão ativa
     podeVerEquipe ||
     podeVerFornecedores ||
+    podeVerPrestadores ||
     podeVerLocalizacoes ||
     podeVerCadProcedimentos ||
     podeVerProprietarios ||
@@ -338,6 +340,8 @@ export default function Sidebar() {
 
               {openGroup === 'cadastro' && (
                 <div className="mt-1 pl-6 space-y-0.5">
+                  {podVerCadastroPessoal && subLink('/cadastro-pessoal', <User size={14} />, 'Pessoal', p.startsWith('/cadastro-pessoal'))}
+
                   {temAcessoClinico
                     ? (podeVerAnimais && (
                       <Link key="/animais-vet" to="/animais-vet" onClick={closeMobile}
@@ -351,9 +355,9 @@ export default function Sidebar() {
                     : subLink('/meus-animais', <Zap size={14} />, 'Animais', p.startsWith('/meus-animais'))
                   }
 
-                  {podVerCadastroPessoal && subLink('/cadastro-pessoal', <User size={14} />, 'Pessoal', p.startsWith('/cadastro-pessoal'))}
                   {podeVerEquipe        && subLink('/equipe',                 <Users2 size={14} />,  'Equipe',        p === '/equipe')}
                   {podeVerFornecedores  && subLink('/cadastro/fornecedores',  <Truck size={14} />,   'Fornecedores',  p.startsWith('/cadastro/fornecedores'))}
+                  {podeVerPrestadores   && subLink('/cadastro/prestadores',   <HardHat size={14} />, 'Prestadores',   p.startsWith('/cadastro/prestadores'))}
                   {podeVerLocalizacoes  && subLink('/cadastro/localizacoes',  <MapPin size={14} />,  'Localizações',  p.startsWith('/cadastro/localizacoes'))}
                   {podeVerCadProcedimentos && subLink('/cadastro/procedimentos', <ListChecks size={14} />, 'Procedimentos', p.startsWith('/cadastro/procedimentos'))}
                   {podeVerProprietarios && subLink('/cadastro/proprietarios', <Users size={14} />,   'Proprietários', p.startsWith('/cadastro/proprietarios'))}

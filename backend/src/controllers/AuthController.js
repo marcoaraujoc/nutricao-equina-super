@@ -184,6 +184,9 @@ const AuthController = {
           role:     true,
           userType: true,
           mustChangePassword: true,
+          // Refresh NÃO é login novo (mesmo dispositivo continuando a sessão) —
+          // o token reemitido carrega a MESMA versão, sem incrementar.
+          sessionVersion: true,
         },
       });
 

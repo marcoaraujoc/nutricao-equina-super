@@ -115,6 +115,9 @@ const CAMINHO_EXPLICITO = {
   tb_orcamento_itens:               'orcamento_id',
   // ── clínico: o dono é o ANIMAL (evolução/lote/orçamento são opcionais) ──
   tb_prescricoes:                   'grupoId',
+  // Log de execução por dose — mesmo pai que o item (tb_prescricao_grupos), lido
+  // direto pela coluna denormalizada `grupoId` (evita 2 saltos via tb_prescricoes).
+  tb_prescricao_execucoes_dose:     'grupoId',
   tb_exames_clinicos:               'animalId',
   tb_vacinas_clinicas:              'animalId',
   tb_encaminhamentos_clinicos:      'animalId',

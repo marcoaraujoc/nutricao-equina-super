@@ -6,7 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Calendar, Camera, AlertCircle, RefreshCw, MapPin, CheckCircle2, X, Plus, User2, Loader2 } from 'lucide-react';
+import { Calendar, Camera, AlertCircle, RefreshCw, MapPin, CheckCircle2, X, Plus, User2, Loader2, ChevronDown } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
@@ -1075,17 +1075,20 @@ const Animal = () => {
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Sexo <span className="text-red-500">*</span></label>
-                  <select
-                    value={formData.sexo}
-                    onChange={e => { setFormData({ ...formData, sexo: e.target.value }); setErros(p => { const { sexo: _s, ...r } = p; return r; }); }}
-                    onBlur={() => validarCampo('sexo')}
-                    data-campo="sexo"
-                    className={erros.sexo ? inputClassErro : inputClass}
-                  >
-                    <option value="" disabled>Selecione o sexo</option>
-                    <option value="Macho">Macho</option>
-                    <option value="Fêmea">Fêmea</option>
-                  </select>
+                  <div className="relative">
+                    <select
+                      value={formData.sexo}
+                      onChange={e => { setFormData({ ...formData, sexo: e.target.value }); setErros(p => { const { sexo: _s, ...r } = p; return r; }); }}
+                      onBlur={() => validarCampo('sexo')}
+                      data-campo="sexo"
+                      className={`${erros.sexo ? inputClassErro : inputClass} appearance-none pr-9`}
+                    >
+                      <option value="" disabled>Selecione o sexo</option>
+                      <option value="Macho">Macho</option>
+                      <option value="Fêmea">Fêmea</option>
+                    </select>
+                    <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                  </div>
                   <ErroCampo campo="sexo" />
                 </div>
               </div>
@@ -1219,33 +1222,39 @@ const Animal = () => {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Espécie <span className="text-red-500">*</span></label>
-                <select
-                  value={formData.especieId}
-                  onChange={e => { setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null }); setErros(p => { const { especieId: _e, ...r } = p; return r; }); }}
-                  onBlur={() => validarCampo('especieId')}
-                  data-campo="especieId"
-                  disabled={especies.length <= 1}
-                  className={`${erros.especieId ? inputClassErro : inputClass} ${especies.length <= 1 ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
-                >
-                  <option value={0} disabled>Selecione a espécie</option>
-                  {especies.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
-                </select>
+                <div className="relative">
+                  <select
+                    value={formData.especieId}
+                    onChange={e => { setFormData({ ...formData, especieId: parseInt(e.target.value), racaId: null }); setErros(p => { const { especieId: _e, ...r } = p; return r; }); }}
+                    onBlur={() => validarCampo('especieId')}
+                    data-campo="especieId"
+                    disabled={especies.length <= 1}
+                    className={`${erros.especieId ? inputClassErro : inputClass} appearance-none pr-9 ${especies.length <= 1 ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                  >
+                    <option value={0} disabled>Selecione a espécie</option>
+                    {especies.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                  </select>
+                  <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                </div>
                 <ErroCampo campo="especieId" />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
                   Raça <span className="text-red-500">*</span>
                 </label>
-                <select
-                  value={formData.racaId || ''}
-                  onChange={e => { setFormData({ ...formData, racaId: parseInt(e.target.value) }); setErros(p => { const { racaId: _r, ...rest } = p; return rest; }); }}
-                  onBlur={() => validarCampo('racaId')}
-                  data-campo="racaId"
-                  className={erros.racaId ? inputClassErro : inputClass}
-                >
-                  <option value="">Selecione</option>
-                  {racasFiltradas.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
-                </select>
+                <div className="relative">
+                  <select
+                    value={formData.racaId || ''}
+                    onChange={e => { setFormData({ ...formData, racaId: parseInt(e.target.value) }); setErros(p => { const { racaId: _r, ...rest } = p; return rest; }); }}
+                    onBlur={() => validarCampo('racaId')}
+                    data-campo="racaId"
+                    className={`${erros.racaId ? inputClassErro : inputClass} appearance-none pr-9`}
+                  >
+                    <option value="">Selecione</option>
+                    {racasFiltradas.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
+                  </select>
+                  <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                </div>
                 <ErroCampo campo="racaId" />
               </div>
             </div>
@@ -1323,28 +1332,31 @@ const Animal = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Pelagem</label>
-                <select
-                  value={formData.pelagem}
-                  onChange={e => setFormData(p => ({ ...p, pelagem: e.target.value }))}
-                  className={inputClass}
-                >
-                  <option value="">— selecione —</option>
-                  <option>Alazão</option>
-                  <option>Apaloosa</option>
-                  <option>Baio</option>
-                  <option>Castanho</option>
-                  <option>Gateado/Dun</option>
-                  <option>Isabel (Champagne/Cremello)</option>
-                  <option>Murzelo</option>
-                  <option>Overo</option>
-                  <option>Palomino</option>
-                  <option>Pampa/Pampeano (Pinto/Paint)</option>
-                  <option>Preto (Tordilho preto/Zaino)</option>
-                  <option>Ruão (Roano/Roan)</option>
-                  <option>Tobiano</option>
-                  <option>Tordilho</option>
-                  <option>Zebrado</option>
-                </select>
+                <div className="relative">
+                  <select
+                    value={formData.pelagem}
+                    onChange={e => setFormData(p => ({ ...p, pelagem: e.target.value }))}
+                    className={`${inputClass} appearance-none pr-9`}
+                  >
+                    <option value="">— selecione —</option>
+                    <option>Alazão</option>
+                    <option>Apaloosa</option>
+                    <option>Baio</option>
+                    <option>Castanho</option>
+                    <option>Gateado/Dun</option>
+                    <option>Isabel (Champagne/Cremello)</option>
+                    <option>Murzelo</option>
+                    <option>Overo</option>
+                    <option>Palomino</option>
+                    <option>Pampa/Pampeano (Pinto/Paint)</option>
+                    <option>Preto (Tordilho preto/Zaino)</option>
+                    <option>Ruão (Roano/Roan)</option>
+                    <option>Tobiano</option>
+                    <option>Tordilho</option>
+                    <option>Zebrado</option>
+                  </select>
+                  <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Altura (cernelha)</label>
@@ -1381,20 +1393,23 @@ const Animal = () => {
             {/* ── Finalidade (multi-seleção: select + pills removíveis) ────── */}
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">Finalidade</label>
-              <select
-                value=""
-                onChange={e => {
-                  const val = e.target.value;
-                  if (val && !formData.finalidades.includes(val))
-                    setFormData(p => ({ ...p, finalidades: [...p.finalidades, val] }));
-                }}
-                className={inputClass}
-              >
-                <option value="">Adicionar finalidade...</option>
-                {FINALIDADES.filter(f => !formData.finalidades.includes(f)).map(f => (
-                  <option key={f} value={f}>{f}</option>
-                ))}
-              </select>
+              <div className="relative">
+                <select
+                  value=""
+                  onChange={e => {
+                    const val = e.target.value;
+                    if (val && !formData.finalidades.includes(val))
+                      setFormData(p => ({ ...p, finalidades: [...p.finalidades, val] }));
+                  }}
+                  className={`${inputClass} appearance-none pr-9`}
+                >
+                  <option value="">Adicionar finalidade...</option>
+                  {FINALIDADES.filter(f => !formData.finalidades.includes(f)).map(f => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                </select>
+                <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              </div>
               {formData.finalidades.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-2">
                   {formData.finalidades.map(f => (
@@ -1425,17 +1440,20 @@ const Animal = () => {
                     <label className="block text-sm font-semibold text-gray-700 mb-1">
                       Categoria <span className="text-red-500">*</span>
                     </label>
-                    <select
-                      value={formData.categoriaAnimal}
-                      onChange={e => { setFormData({ ...formData, categoriaAnimal: e.target.value, tipoExercicio: '' }); setErros(p => { const { categoriaAnimal: _c, ...r } = p; return r; }); }}
-                      onBlur={() => validarCampo('categoriaAnimal')}
-                      disabled={!temIdadeOuData}
-                      data-campo="categoriaAnimal"
-                      className={`${erros.categoriaAnimal ? inputClassErro : inputClass} ${!temIdadeOuData ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
-                    >
-                      <option value="">Selecione a categoria</option>
-                      {categoriasDisponiveis.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
+                    <div className="relative">
+                      <select
+                        value={formData.categoriaAnimal}
+                        onChange={e => { setFormData({ ...formData, categoriaAnimal: e.target.value, tipoExercicio: '' }); setErros(p => { const { categoriaAnimal: _c, ...r } = p; return r; }); }}
+                        onBlur={() => validarCampo('categoriaAnimal')}
+                        disabled={!temIdadeOuData}
+                        data-campo="categoriaAnimal"
+                        className={`${erros.categoriaAnimal ? inputClassErro : inputClass} appearance-none pr-9 ${!temIdadeOuData ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                      >
+                        <option value="">Selecione a categoria</option>
+                        {categoriasDisponiveis.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                      <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                    </div>
                     <ErroCampo campo="categoriaAnimal" />
                   </div>
                   <div>
@@ -1449,17 +1467,20 @@ const Animal = () => {
                         não ficava vermelho e a mensagem não aparecia embaixo dele — o
                         usuário preenchia tudo o que estava marcado e o erro continuava,
                         sem dizer onde. Campo obrigatório novo precisa dos QUATRO. */}
-                    <select
-                      value={formData.tipoExercicio}
-                      onChange={e => { setFormData({ ...formData, tipoExercicio: e.target.value }); setErros(p => { const { tipoExercicio: _t, ...r } = p; return r; }); }}
-                      onBlur={() => validarCampo('tipoExercicio')}
-                      disabled={!formData.categoriaAnimal || tiposDisponiveis.length === 0}
-                      data-campo="tipoExercicio"
-                      className={`${erros.tipoExercicio ? inputClassErro : inputClass} ${(!formData.categoriaAnimal || tiposDisponiveis.length === 0) ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
-                    >
-                      <option value="">Selecione o tipo</option>
-                      {tiposDisponiveis.map(t => <option key={t} value={t}>{t}</option>)}
-                    </select>
+                    <div className="relative">
+                      <select
+                        value={formData.tipoExercicio}
+                        onChange={e => { setFormData({ ...formData, tipoExercicio: e.target.value }); setErros(p => { const { tipoExercicio: _t, ...r } = p; return r; }); }}
+                        onBlur={() => validarCampo('tipoExercicio')}
+                        disabled={!formData.categoriaAnimal || tiposDisponiveis.length === 0}
+                        data-campo="tipoExercicio"
+                        className={`${erros.tipoExercicio ? inputClassErro : inputClass} appearance-none pr-9 ${(!formData.categoriaAnimal || tiposDisponiveis.length === 0) ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                      >
+                        <option value="">Selecione o tipo</option>
+                        {tiposDisponiveis.map(t => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                      <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                    </div>
                     <ErroCampo campo="tipoExercicio" />
                   </div>
                 </div>

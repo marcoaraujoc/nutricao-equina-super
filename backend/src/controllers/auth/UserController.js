@@ -29,10 +29,18 @@ async function acessoBloqueado(user) {
  * verificação do segundo fator. Não duplicar esta lógica.
  */
 async function emitirSessao(req, res, user) {
-  const token = assinarAccessToken(user);
-
   const refreshToken = generateRefreshToken(user.id);
-  await prisma.user.update({ where: { id: user.id }, data: { refreshToken } });
+
+  // Incrementa a versão de sessão do usuário — é o que derruba na hora o access
+  // token de um dispositivo anterior (ver `authenticate`, middlewares/auth.js, e
+  // o comentário de `User.sessionVersion` no schema). O token é assinado só DEPOIS,
+  // com o valor que acabou de ser gravado.
+  const { sessionVersion } = await prisma.user.update({
+    where:  { id: user.id },
+    data:   { refreshToken, sessionVersion: { increment: 1 } },
+    select: { sessionVersion: true },
+  });
+  const token = assinarAccessToken({ ...user, sessionVersion });
 
   // Tokens em cookies HttpOnly (não legíveis por JS). O corpo mantém os tokens
   // por compatibilidade com clientes não-navegador; o frontend não os usa mais.

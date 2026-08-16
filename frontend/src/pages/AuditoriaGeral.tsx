@@ -11,7 +11,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import {
   ScrollText, Search, RefreshCw, ChevronLeft, ChevronRight, Trash2, Ban, ShieldCheck,
-  ArrowLeftRight, PencilLine, PlusCircle, Eye, X,
+  ArrowLeftRight, PencilLine, PlusCircle, Eye, X, CheckCircle2,
 } from 'lucide-react';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -35,12 +35,13 @@ interface LogAuditoria {
 
 interface Meta { total: number; page: number; limit: number; totalPages: number }
 
-type FiltroCategoria = '' | 'EXCLUSAO' | 'CANCELAMENTO' | 'CONFIGURACAO' | 'TRANSFERENCIA' | 'ALTERACAO' | 'CRIACAO';
+type FiltroCategoria = '' | 'EXCLUSAO' | 'CANCELAMENTO' | 'CONFIGURACAO' | 'TRANSFERENCIA' | 'ALTERACAO' | 'CRIACAO' | 'EXECUCAO';
 
 const ENTIDADE_LABEL: Record<string, string> = {
   EVOLUCAO:          'Evolução',
   PRESCRICAO:        'Prescrição',
   PRESCRICAO_ITEM:   'Item de prescrição',
+  PRESCRICAO_DOSE:   'Dose de prescrição',
   EXAME_CLINICO:     'Exame clínico',
   EXAME_NUTRICIONAL: 'Exame nutricional',
   VACINA:            'Vacina',
@@ -52,6 +53,10 @@ const ENTIDADE_LABEL: Record<string, string> = {
   PROCEDIMENTO:      'Procedimento (catálogo)',
   DIETA_ITEM:        'Item de dieta',
   CONFIGURACAO_SEGURANCA: 'Configuração de segurança',
+  USUARIO:           'Usuário (equipe)',
+  FORNECEDOR:        'Fornecedor',
+  PRESTADOR:         'Prestador',
+  TRATADOR:          'Tratador',
 };
 
 /**
@@ -111,6 +116,12 @@ function BadgeCategoria({ categoria }: { categoria: string | null }) {
   if (categoria === 'ALTERACAO') return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
       <PencilLine size={9} /> ALTERAÇÃO
+    </span>
+  );
+  // Execução de dose de prescrição — o `detalhes` traz previsto x executado x quem
+  if (categoria === 'EXECUCAO') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-100 text-teal-700">
+      <CheckCircle2 size={9} /> EXECUÇÃO
     </span>
   );
   return (
@@ -315,7 +326,7 @@ export default function AuditoriaGeral() {
         {/* Filtros */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-3">
           <div className="flex flex-wrap gap-2">
-            {([['', 'Todas'], ['EXCLUSAO', 'Exclusões'], ['CANCELAMENTO', 'Cancelamentos'], ['TRANSFERENCIA', 'Transferências'], ['ALTERACAO', 'Alterações'], ['CRIACAO', 'Criações'], ['CONFIGURACAO', 'Configuração']] as [FiltroCategoria, string][]).map(([key, label]) => (
+            {([['', 'Todas'], ['EXCLUSAO', 'Exclusões'], ['CANCELAMENTO', 'Cancelamentos'], ['TRANSFERENCIA', 'Transferências'], ['ALTERACAO', 'Alterações'], ['CRIACAO', 'Criações'], ['EXECUCAO', 'Execuções'], ['CONFIGURACAO', 'Configuração']] as [FiltroCategoria, string][]).map(([key, label]) => (
               <button key={key} onClick={() => setCategoria(key)}
                 className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
                   categoria === key

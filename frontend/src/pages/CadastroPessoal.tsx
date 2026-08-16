@@ -18,7 +18,7 @@ import {
   TEMPO_CONSULTA_PADRAO_SISTEMA, LocalTrabalhoFields, rotuloPagamento,
   type LocalTrabalhoForm,
 } from '../components/UsuarioFormModal';
-import { CheckCircle2, XCircle, Loader2, Info, User, Plus, MapPin, Pencil, Trash2, Camera, KeyRound, ChevronDown } from 'lucide-react';
+import { CheckCircle2, XCircle, Loader2, Info, User, Plus, MapPin, Pencil, Trash2, Camera, KeyRound, X } from 'lucide-react';
 import InlineError from '../components/InlineError';
 import FieldError from '../components/FieldError';
 
@@ -123,7 +123,7 @@ export default function CadastroPessoal() {
   const { user, refreshUser }      = useAuth();
   // Contexto ativo (seletor de empresa) — o cadastro carregado é o DESTA empresa
   const { loading: empresaLoading, contextoAtivo } = useEmpresa();
-  const { refreshSelectedAnimal }  = useSelectedAnimal();
+  const { refreshSelectedAnimal, cadastroCompleto } = useSelectedAnimal();
   const navigate                   = useNavigate();
   const { loading: loadingPerms }  = usePermissoes();
   const [loading,     setLoading]     = useState(true);
@@ -640,6 +640,13 @@ export default function CadastroPessoal() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Capturado ANTES do salvar: só quando o cadastro chega INCOMPLETO nesta
+    // empresa é que salvar é conclusão de ONBOARDING (guia o usuário para o
+    // próximo passo). Cadastro já completo → é uma EDIÇÃO de rotina (menu
+    // "Cadastro Pessoal"), e sair da página sozinho depois de salvar era o
+    // que incomodava: a pessoa corrige o telefone e é jogada para o Mapa de
+    // Atendimento sem pedir.
+    const eraOnboarding = !cadastroCompleto;
     const errs: Record<string, string> = {};
     ORDEM_CAMPOS.forEach(c => { const msg = validarCampo(c); if (msg) errs[c] = msg; });
     if (Object.keys(errs).length > 0) {
@@ -713,28 +720,35 @@ export default function CadastroPessoal() {
         // O backend renovou o cookie de acesso com o userType atualizado.
         // Recarrega o perfil (identidade vem de /me).
         await refreshUser();
-        toast.success('Cadastro pessoal salvo com sucesso!');
-
         await refreshSelectedAnimal();
+        // Posição própria (centro do topo) — o padrão da aplicação é canto
+        // superior direito, mas nesta tela o aviso de salvo fica mais visível
+        // no meio, sem depender de override global do Toaster.
+        toast.success('Cadastro pessoal salvo com sucesso!', { position: 'top-center' });
 
-        // Profissional (qualquer cargo da empresa: gestor, vet, estagiário, enfermeiro,
-        // secretaria, financeiro, fornecedor) vai ao Mapa de Atendimento. Só o CLIENTE
-        // segue o fluxo de animais. Antes, só quem tinha `tipoUsuario` VETERINARIO caía
-        // no mapa — os demais iam parar em "meus animais", que não é tela deles.
-        const ehClienteAqui = !cargoEquipe && form.tipoUsuario === 'PROPRIETARIO';
-        if (!ehClienteAqui) {
-          localStorage.setItem('s2vet_ob', 'd');
-          navigate('/mapa-atendimento');
-        } else {
-          const ob = localStorage.getItem('s2vet_ob');
-          if (ob === 'p') {
-            localStorage.setItem('s2vet_ob', 'a');
-            navigate('/animais');
-          } else if (ob === 'convite') {
-            localStorage.removeItem('s2vet_ob');
-            navigate('/');
+        // Edição de rotina (cadastro já estava completo antes deste salvar): fica
+        // na página, o toast acima já avisou. Só onboarding (cadastro estava
+        // incompleto) segue guiando a pessoa para o próximo passo.
+        if (eraOnboarding) {
+          // Profissional (qualquer cargo da empresa: gestor, vet, estagiário, enfermeiro,
+          // secretaria, financeiro, fornecedor) vai ao Mapa de Atendimento. Só o CLIENTE
+          // segue o fluxo de animais. Antes, só quem tinha `tipoUsuario` VETERINARIO caía
+          // no mapa — os demais iam parar em "meus animais", que não é tela deles.
+          const ehClienteAqui = !cargoEquipe && form.tipoUsuario === 'PROPRIETARIO';
+          if (!ehClienteAqui) {
+            localStorage.setItem('s2vet_ob', 'd');
+            navigate('/mapa-atendimento');
           } else {
-            navigate('/meus-animais');
+            const ob = localStorage.getItem('s2vet_ob');
+            if (ob === 'p') {
+              localStorage.setItem('s2vet_ob', 'a');
+              navigate('/animais');
+            } else if (ob === 'convite') {
+              localStorage.removeItem('s2vet_ob');
+              navigate('/');
+            } else {
+              navigate('/meus-animais');
+            }
           }
         }
       } else {
@@ -1286,6 +1300,20 @@ export default function CadastroPessoal() {
           {/* Erro de salvamento/conexão — junto ao botão, visível ao agir */}
           <InlineError message={erroInline} />
 
+          {/* "Alterar senha" — ACIMA de Cancelar/Salvar, abre em MODAL (mesmo padrão
+              da tela de Tratador: painel rounded-3xl, X para fechar). Endpoint
+              (PATCH /users/me/senha) e submit são independentes do Salvar do
+              cadastro — por isso o botão é `type="button"`, fora do fluxo do form. */}
+          <div className="flex justify-end mt-2">
+            <button
+              type="button"
+              onClick={() => setMostrarTrocarSenha(true)}
+              className="flex items-center gap-2 text-sm font-semibold text-emerald-700 hover:text-emerald-800 transition-colors"
+            >
+              <KeyRound size={16} /> Alterar senha
+            </button>
+          </div>
+
           {/* Botões no tamanho padrão da aplicação (mesmas classes da tela de
               prescrição), alinhados à direita. */}
           <div className="flex justify-end gap-2 mt-2">
@@ -1307,42 +1335,38 @@ export default function CadastroPessoal() {
 
         </form>
 
-        {/* ── Senha de acesso — seção própria, FORA do <form> do cadastro: submit e
-            endpoint independentes (PATCH /users/me/senha), não misturam com o Salvar
-            de cima. Mesma coleta/validação do 1º acesso (FormularioNovaSenha,
-            `embedded`), só que aqui pede a SENHA ATUAL — ver comentário do handler. */}
-        <div className="pt-6 mt-6 border-t border-gray-100">
-          {!mostrarTrocarSenha ? (
-            <button
-              type="button"
-              onClick={() => setMostrarTrocarSenha(true)}
-              className="flex items-center gap-2 text-sm font-semibold text-emerald-700 hover:text-emerald-800 transition-colors"
-            >
-              <KeyRound size={16} /> Alterar senha
-            </button>
-          ) : (
-            <div>
-              <button
-                type="button"
-                onClick={() => setMostrarTrocarSenha(false)}
-                className="flex items-center gap-1 text-sm font-semibold text-gray-500 hover:text-gray-700 mb-4 transition-colors"
-              >
-                <ChevronDown size={16} className="rotate-180" /> Fechar
-              </button>
-              <FormularioNovaSenha
-                embedded
-                comSenhaAtual
-                titulo="Alterar senha"
-                subtitulo="Defina uma nova senha de acesso"
-                textoBotao="Salvar nova senha"
-                salvando={salvandoSenha}
-                erro={erroSenha}
-                onSubmit={handleTrocarSenha}
-                onAlterar={() => setErroSenha('')}
-              />
+        {/* ── Senha de acesso — MODAL, no padrão visual da tela de Tratador (painel
+            rounded-3xl, X fecha). Formulário e endpoint (PATCH /users/me/senha)
+            independentes do <form> do cadastro acima. */}
+        {mostrarTrocarSenha && (
+          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/50">
+            <div className="bg-white rounded-3xl shadow-xl w-full max-w-md flex flex-col max-h-[90vh]">
+              <div className="flex items-center justify-end px-4 pt-4 flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setMostrarTrocarSenha(false)}
+                  className="p-2 text-gray-400 hover:text-gray-600 rounded-xl"
+                  aria-label="Fechar"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="overflow-y-auto flex-1 px-6 pb-6 -mt-2">
+                <FormularioNovaSenha
+                  embedded
+                  comSenhaAtual
+                  titulo="Alterar senha"
+                  subtitulo="Defina uma nova senha de acesso"
+                  textoBotao="Salvar nova senha"
+                  salvando={salvandoSenha}
+                  erro={erroSenha}
+                  onSubmit={handleTrocarSenha}
+                  onAlterar={() => setErroSenha('')}
+                />
+              </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </PageContainer>
   );

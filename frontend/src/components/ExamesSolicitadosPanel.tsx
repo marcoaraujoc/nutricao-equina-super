@@ -9,26 +9,34 @@
 // saber o que havia sido pedido, e o resultado acabava lançado solto — sem vínculo com
 // o pedido, com a evolução e com a fatura que nasceram dele.
 //
-// Cada pedido oferece os DOIS caminhos, porque o laboratório às vezes entrega o PDF e
-// às vezes só dita os valores por telefone:
-//   • Carregar resultado    → anexa o laudo; a tabela é lida do arquivo (IA)
-//   • Preencher manualmente → digita a tabela (Lab) ou o laudo (Imagem), sem arquivo
+// Cada pedido oferece "Carregar Resultados": anexa o laudo; a IA lê o arquivo e vira
+// TABELA (Lab) ou TEXTO TRANSCRITO literal, nunca interpretado (Imagem). O laudo digitado
+// à mão continua disponível como campo dentro dessa mesma tela (Imagem). Na aba
+// Laboratorial existe AINDA um segundo caminho, "Preencher manualmente" — digita a
+// tabela direto, sem arquivo (nem todo laboratório entrega laudo em PDF/foto).
 //
-// Ambos caem no MESMO endpoint (PATCH /clinica/exames/:id/resultado), que transita o
+// Cai no endpoint (PATCH /clinica/exames/:id/resultado), que transita o
 // exame para REALIZADO. O gate é o slug de RESULTADO (exames.laboratorial.editar /
 // exames.imagem.editar), distinto do slug do PEDIDO — ver CLAUDE.md, armadilha 29.
 //
-// Exame NÃO PEDIDO (ExameNaoPedidoModal, mais abaixo): achado antigo, laudo externo, ou
-// resultado que chegou sem passar pelo Pedido de Exames. Não exige evolução — é um
-// registro AVULSO, como o exame de Compra — e cria + já REALIZA num único passo
-// (POST /clinica/exames/nao-pedido), com todos os campos revisáveis antes de salvar.
+// Exame NÃO PEDIDO (mesmo componente ResultadoModal, mais abaixo, com `ex={null}`):
+// achado antigo, laudo externo, ou resultado que chegou sem passar pelo Pedido de
+// Exames. Não exige evolução — é um registro AVULSO, como o exame de Compra — e
+// cria + já REALIZA num único passo (POST /clinica/exames/nao-pedido), com todos
+// os campos revisáveis antes de salvar.
+//
+// Cancelar (Ban): soft delete do PEDIDO (DELETE, motivo obrigatório) — mesmo endpoint
+// do "Cancelar exame" da tela de Pedido de Exames, então reflete lá como CANCELADA.
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { ClipboardList, Scan, Upload, PencilLine, Loader2, X, Plus, Trash2, CheckCircle2, FilePlus2, Camera } from 'lucide-react';
+import { ClipboardList, Scan, Upload, Table2, Loader2, X, Plus, Trash2, CheckCircle2, FilePlus2, Camera, Ban, Eye } from 'lucide-react';
 import api from '../services/api';
 import InlineError from './InlineError';
+import ModalJustificativa from './ModalJustificativa';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { isMobile } from '../services/whisperService';
+import { comprimirImagensAteLimite } from '../utils/imageCompress';
+import { temResultadoExame } from '../utils/exameClinico';
 
 type TipoExame = 'Laboratorial' | 'Bioquímico' | 'Imagem' | 'Compra';
 
@@ -59,7 +67,7 @@ export interface ExameSolicitado {
   veterinario:     { id: number; fullName: string } | null;
 }
 
-interface ItemManual {
+export interface ItemManual {
   parametro:  string;
   valor:      string;
   unidade:    string;
@@ -96,8 +104,8 @@ function tiposDaAba(tipo: string): TipoExame[] {
 }
 
 // ─── Tabela de resultado (editável) ────────────────────────────────────────────
-// Compartilhada pelo "Preencher manualmente" (pedido) e pelo exame NÃO PEDIDO —
-// mesma grade, mesmo comportamento de adicionar/remover linha.
+// Usada pelo exame NÃO PEDIDO (Carregar Exames sem Pedido) para digitar a tabela
+// à mão — mesma grade, mesmo comportamento de adicionar/remover linha.
 
 function TabelaResultadoEditavel({ itens, setItens }: {
   itens:    ItemManual[];
@@ -186,23 +194,56 @@ function SeletorArquivo({ multiple, onEscolher, onFoto }: {
   onFoto:     (foto: File) => void;
 }) {
   const cameraRef = useRef<HTMLInputElement>(null);
+  // Input nativo fica OCULTO — o texto do botão/"nenhum arquivo escolhido" é do
+  // navegador (idioma do SO, não controlável por CSS) e ficava em inglês mesmo com o
+  // resto da tela em português. O gatilho é um botão nosso, com o texto que queremos.
+  //
+  // SEM `accept` no input principal: com o filtro, o seletor de arquivo do Windows
+  // acusava "Nenhum dos arquivos desta pasta é compatível" sempre que a pasta tinha
+  // algo fora de imagem/PDF — mensagem do próprio SO, incontrolável por aqui. O
+  // formato ainda é validado no servidor (`fileFilter` de `routes/clinica-exames.js`).
+  const arquivoRef = useRef<HTMLInputElement>(null);
+  const [comprimindo, setComprimindo] = useState(false);
+
+  const processarSelecao = async (files: File[]): Promise<File[]> => {
+    if (files.length === 0) return files;
+    setComprimindo(true);
+    try {
+      return await comprimirImagensAteLimite(files);
+    } finally {
+      setComprimindo(false);
+    }
+  };
+
   return (
     <div className="flex items-center gap-2">
-      <input type="file" accept="image/*,application/pdf" multiple={multiple}
-        onChange={e => { onEscolher(Array.from(e.target.files ?? [])); e.target.value = ''; }}
-        className="flex-1 min-w-0 text-xs text-gray-600 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-emerald-50 file:text-emerald-700 file:text-xs file:font-semibold" />
+      <input type="file" multiple={multiple} ref={arquivoRef}
+        onChange={async e => {
+          const lista = Array.from(e.target.files ?? []);
+          e.target.value = '';
+          onEscolher(await processarSelecao(lista));
+        }}
+        className="hidden" />
+      <button type="button" onClick={() => arquivoRef.current?.click()} disabled={comprimindo}
+        className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-semibold hover:bg-emerald-100 disabled:opacity-60 transition-colors">
+        {comprimindo && <Loader2 size={12} className="animate-spin" />}
+        {comprimindo ? 'Otimizando imagens...' : 'Carregar Arquivos'}
+      </button>
       {isMobile() && (
         <>
           <input type="file" accept="image/*" capture="environment" ref={cameraRef}
-            onChange={e => {
+            onChange={async e => {
               const foto = e.target.files?.[0];
-              if (foto) onFoto(foto);
               e.target.value = '';
+              if (foto) {
+                const [comprimida] = await processarSelecao([foto]);
+                onFoto(comprimida);
+              }
             }}
             className="hidden" />
-          <button type="button" onClick={() => cameraRef.current?.click()}
+          <button type="button" onClick={() => cameraRef.current?.click()} disabled={comprimindo}
             title="Tirar foto" aria-label="Tirar foto"
-            className="flex-shrink-0 p-2 border border-gray-200 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition-colors">
+            className="flex-shrink-0 p-2 border border-gray-200 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors">
             <Camera size={16} />
           </button>
         </>
@@ -211,36 +252,152 @@ function SeletorArquivo({ multiple, onEscolher, onFoto }: {
   );
 }
 
-// ─── Modal do resultado (exame PEDIDO) ─────────────────────────────────────────
-// `modo` decide o corpo: 'upload' pede o arquivo, 'manual' abre o editor.
-
-function ResultadoModal({ ex, modo, saving, onClose, onSalvar }: {
-  ex:       ExameSolicitado;
-  modo:     'upload' | 'manual';
+// ─── Modal do resultado — PEDIDO existente e NÃO PEDIDO, tela ÚNICA ────────────
+// Mesmo formulário, sempre, nas DUAS situações — `ex` só muda o TÍTULO/subtítulo,
+// o endpoint (PATCH .../resultado × POST /nao-pedido, decidido por quem chama), o
+// `exameId` mandado à IA (evita falso "já carregado" contra o próprio pedido) e
+// SE os campos vêm pré-preenchidos: só quando `ex` JÁ TEM um resultado salvo
+// (edição, via "Editar" em Exames.tsx) — a fila de pendentes nunca tem, então
+// começa em branco por definição (ver `jaTemResultado` no corpo). Data do exame
+// fica sem uso quando `ex` existe — nada aqui lê/grava a data do pedido. SEM
+// seletor de "Tipo do exame" — o tipo é sempre conhecido (o do pedido) ou
+// detectado pela IA, nunca escolhido.
+export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, somenteLeitura, arquivosSalvos, onVerArquivo, onClose, onSalvar }: {
+  /** Exame PEDIDO — presente quando é "Carregar/Editar Resultados"; `null` no
+   *  fluxo avulso "Carregar Exames sem Pedido". Decide texto do cabeçalho,
+   *  endpoint (via quem chama), o `exameId` da análise e SE os campos vêm
+   *  pré-preenchidos: só quando já existe um resultado salvo nele (edição),
+   *  nunca quando é a fila de pendentes (ver `jaTemResultado` no corpo). */
+  ex:       ExameSolicitado | null;
+  /** Aba atual ('laboratorial' | 'imagem') — só usada quando `ex` é `null`, para
+   *  decidir o tipo padrão (a IA pode corrigir para Bioquímico depois). */
+  tipoAba?: string;
+  animalId: string;
   saving:   boolean;
+  /** Erro do POST de criação no fluxo avulso (ex.: "Este exame já foi
+   *  carregado"), vindo de fora — precisa aparecer AQUI dentro, não atrás do
+   *  overlay (regra de erro em modal). */
+  erroSalvar?: string | null;
+  /** Visualizar (não editar) — usado pelo "olho" de um resultado já salvo em
+   *  Exames.tsx. `<fieldset disabled>` trava todo campo; a seção de anexar
+   *  arquivo some, no lugar entra a lista de `arquivosSalvos` (cada um abre o
+   *  visualizador de verdade via `onVerArquivo`). Rodapé vira só "Fechar". */
+  somenteLeitura?: boolean;
+  arquivosSalvos?: { nome: string }[];
+  onVerArquivo?:   (indice: number) => void;
   onClose:  () => void;
-  onSalvar: (data: { laudo: string; arquivos: File[]; itens: ItemManual[] }) => void;
+  onSalvar: (data: {
+    tipo: TipoExame; descricao: string; laboratorio: string; dataExame: string;
+    laudo: string; itens: ItemManual[]; arquivos: File[];
+  }) => void;
 }) {
-  const isImagem = ex.tipo === 'Imagem';
-  const [laudo,    setLaudo]    = useState('');
-  const [arquivos, setArquivos] = useState<File[]>([]);
-  const [itens,    setItens]    = useState<ItemManual[]>([{ ...LINHA_VAZIA }]);
-  const [erro,     setErro]     = useState<string | null>(null);
+  // `ex` PENDENTE (fila de "aguardando resultado") nunca tem laudo/laboratório/
+  // tabela salvos ainda — começa em branco por definição. `ex` JÁ REALIZADO
+  // (aberto pelo "Editar" em Exames.tsx) tem, e é isso que esta tela edita: tem
+  // de vir com o que já foi salvo, senão "editar" apaga o resultado por engano.
+  // `temResultadoExame` (mesmo critério do badge "Realizado"/"Finalizado sem
+  // Resultado") é o que distingue os dois — não dá para usar só `!!ex`.
+  const jaTemResultado = !!ex && temResultadoExame(ex);
 
+  const [tipo,        setTipo]        = useState<TipoExame>(ex ? ex.tipo : (tipoAba === 'imagem' ? 'Imagem' : 'Laboratorial'));
+  const [descricao,   setDescricao]   = useState(jaTemResultado ? (ex?.descricao ?? '') : '');
+  const [dataExame,   setDataExame]   = useState('');
+  const [laudo,       setLaudo]       = useState(jaTemResultado ? (ex?.resultado ?? '') : '');
+  const [laboratorio, setLaboratorio] = useState(jaTemResultado ? (ex?.laboratorio ?? '') : '');
+  const [itens,       setItens]       = useState<ItemManual[]>(
+    jaTemResultado && ex && ex.resultadoItens.length > 0
+      ? ex.resultadoItens.map(i => ({ parametro: i.parametro, valor: i.valor ?? '', unidade: i.unidade ?? '', referencia: i.referencia ?? '' }))
+      : [{ ...LINHA_VAZIA }]
+  );
+  const [arquivos,    setArquivos]    = useState<File[]>([]);
+  const [analisando,  setAnalisando]  = useState(false);
+  // Progresso SIMULADO (a chamada de IA não emite eventos de progresso real) — mesmo
+  // padrão de CriaComposicaoAlimentar.tsx/CriaExameNutricional.tsx.
+  const [progresso,   setProgresso]   = useState(0);
+  const [erro,        setErro]        = useState<string | null>(null);
+  // Nomes dos arquivos aceitos no upload mas sem transcrição automática (.doc) —
+  // aviso, não erro: o arquivo é anexado normalmente ao salvar (mesmo loop de
+  // upload de qualquer outro), só não teve prévia da IA.
+  const [naoTranscritos, setNaoTranscritos] = useState<string[]>([]);
+
+  const isImagem = tipo === 'Imagem';
   const preenchidos = itens.filter(i => i.parametro.trim());
 
+  // Lê os arquivos com a IA e pré-preenche laboratório + tabela (ou o laudo
+  // transcrito, em Imagem) — tudo continua editável logo abaixo. `exameId`
+  // (só quando `ex` existe) exclui o PRÓPRIO pedido da checagem de duplicidade lá
+  // dentro: sem ele, todo upload bateria com o pedido que está recebendo o
+  // resultado e devolveria 409.
+  const analisarArquivo = async (files: File[]) => {
+    if (files.length === 0) return;
+    // RESETA antes de analisar: cada novo lote de arquivos parte do zero. Sem isto,
+    // um campo que a IA não detectasse desta vez continuaria mostrando o valor do
+    // lote ANTERIOR — parecendo (errado) que veio do arquivo que acabou de ser
+    // anexado.
+    setDescricao('');
+    setLaboratorio('');
+    setDataExame('');
+    setLaudo('');
+    setItens([{ ...LINHA_VAZIA }]);
+    setNaoTranscritos([]);
+    setAnalisando(true);
+    setProgresso(0);
+    setErro(null);
+    const interval = setInterval(() => setProgresso(p => (p >= 90 ? 90 : p + 10)), 300);
+    try {
+      const fd = new FormData();
+      files.forEach(f => fd.append('arquivos', f));
+      fd.append('animalId', animalId);
+      if (isImagem) fd.append('tipo', 'Imagem');
+      if (ex) fd.append('exameId', String(ex.id));
+      const res = await api.post('/clinica/exames/analisar', fd);
+      setProgresso(100);
+      const d = res.data?.dados;
+      if (d) {
+        if (Array.isArray(d.naoTranscritos) && d.naoTranscritos.length > 0) setNaoTranscritos(d.naoTranscritos);
+        if (isImagem) {
+          if (d.laudo)     setLaudo(d.laudo);
+          if (d.dataExame) setDataExame(d.dataExame);
+        } else {
+          if (d.tipoSugerido === 'Bioquímico' || d.tipoSugerido === 'Laboratorial') setTipo(d.tipoSugerido);
+          if (d.descricao)   setDescricao(d.descricao);
+          if (d.laboratorio) setLaboratorio(d.laboratorio);
+          if (d.dataExame)   setDataExame(d.dataExame);
+          if (Array.isArray(d.itens) && d.itens.length > 0) {
+            setItens(d.itens.map((i: { parametro: string; valor: string | null; unidade: string | null; referencia: string | null }) => ({
+              parametro: i.parametro ?? '', valor: i.valor ?? '', unidade: i.unidade ?? '', referencia: i.referencia ?? '',
+            })));
+          }
+        }
+      }
+    } catch (err: unknown) {
+      // best-effort para falha/indisponibilidade da IA — mas "nenhum arquivo é um
+      // exame", "esse exame já foi carregado" e "formato não suportado" são
+      // diagnóstico, não indisponibilidade, e precisam aparecer: sem isto, o
+      // usuário confirmaria uma tabela vazia (ou duplicada) sem entender por quê.
+      const resp = (err as { response?: { data?: { code?: string; error?: string } } })?.response;
+      if (['ARQUIVO_NAO_E_EXAME', 'EXAME_JA_CARREGADO', 'FORMATO_ARQUIVO_NAO_SUPORTADO'].includes(resp?.data?.code ?? '')) {
+        setErro(resp?.data?.error ?? 'Não foi possível analisar o(s) arquivo(s).');
+      }
+    } finally {
+      clearInterval(interval);
+      setAnalisando(false);
+    }
+  };
+
   const confirmar = () => {
-    if (modo === 'upload' && arquivos.length === 0) {
-      setErro(isImagem ? 'Anexe as imagens ou o laudo do exame' : 'Anexe o arquivo do laudo'); return;
-    }
-    if (modo === 'manual' && isImagem && !laudo.trim()) {
-      setErro('Escreva o laudo do exame'); return;
-    }
-    if (modo === 'manual' && !isImagem && preenchidos.length === 0) {
-      setErro('Informe ao menos um parâmetro do resultado'); return;
+    if (!descricao.trim()) { setErro('Informe a descrição do exame'); return; }
+    if (isImagem) {
+      if (arquivos.length === 0 && !laudo.trim()) { setErro('Anexe as imagens ou escreva o laudo'); return; }
+    } else if (preenchidos.length === 0) {
+      setErro('Informe ao menos um parâmetro do resultado');
+      return;
     }
     setErro(null);
-    onSalvar({ laudo: laudo.trim(), arquivos, itens: modo === 'manual' ? preenchidos : [] });
+    onSalvar({
+      tipo, descricao: descricao.trim(), laboratorio: laboratorio.trim(), dataExame,
+      laudo: laudo.trim(), itens: preenchidos, arquivos,
+    });
   };
 
   return (
@@ -249,11 +406,210 @@ function ResultadoModal({ ex, modo, saving, onClose, onSalvar }: {
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
           <div className="flex items-center gap-2 min-w-0">
             {isImagem ? <Scan size={16} className="text-emerald-700 flex-shrink-0" />
-                      : <ClipboardList size={16} className="text-emerald-700 flex-shrink-0" />}
+                      : ex ? <ClipboardList size={16} className="text-emerald-700 flex-shrink-0" />
+                           : <FilePlus2 size={16} className="text-emerald-700 flex-shrink-0" />}
             <div className="min-w-0">
-              <h3 className="font-bold text-gray-900">
-                {modo === 'upload' ? 'Carregar resultado' : 'Preencher manualmente'}
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-gray-900">{ex ? 'Carregar Resultados' : 'Carregar Exames sem Pedido'}</h3>
+                {somenteLeitura && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide bg-emerald-100 text-emerald-700 flex-shrink-0">
+                    Somente leitura
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-gray-500 truncate">
+                {ex ? `${numeroExame(ex)} · ${ex.tipo} · ${ex.descricao}` : 'Achado antigo ou laudo externo — sem passar pelo Pedido de Exames'}
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 flex-shrink-0"><X size={18} /></button>
+        </div>
+
+        <div className="p-5 space-y-4 overflow-y-auto">
+          {/* `somenteLeitura`: dois <fieldset disabled> em volta dos campos — a
+              lista de arquivos SALVOS, entre eles, fica DE FORA de propósito
+              (senão o "ver arquivo" também travaria; fieldset desabilita todo
+              controle de formulário descendente, `<button>` incluso). Nunca usar
+              `className="contents"` no fieldset — quebra o `space-y-*`, que
+              seleciona só filho direto (mesma armadilha da tela de Exame de
+              Compra, CLAUDE.md). */}
+          <fieldset disabled={somenteLeitura} className="min-w-0 space-y-4 border-0 p-0 m-0">
+            <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                Descrição do exame *
+              </label>
+              <input type="text" value={descricao} onChange={e => setDescricao(e.target.value)}
+                placeholder="Ex: Hemograma completo, Raio-X de tórax..."
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500" />
+            </div>
+
+            {!isImagem && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Laboratório</label>
+                  <input type="text" value={laboratorio} onChange={e => setLaboratorio(e.target.value)}
+                    placeholder="Identificado ao anexar o laudo"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Data do exame</label>
+                  <input type="date" value={dataExame} onChange={e => setDataExame(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500" />
+                </div>
+              </div>
+            )}
+          </fieldset>
+
+          {somenteLeitura ? (
+            <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                Arquivos anexados
+              </label>
+              {arquivosSalvos && arquivosSalvos.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {arquivosSalvos.map((a, idx) => (
+                    <button key={idx} type="button" onClick={() => onVerArquivo?.(idx)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-xl text-xs text-emerald-700 hover:bg-emerald-50 hover:border-emerald-300 transition-colors">
+                      <Eye size={12} /> {a.nome}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400 italic">Nenhum arquivo anexado.</p>
+              )}
+            </div>
+          ) : (
+            <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                {isImagem ? 'Imagens / laudo (PDF ou imagem)' : 'Anexar laudo(s) (opcional)'}
+              </label>
+              <SeletorArquivo multiple
+                onEscolher={lista => {
+                  // A cada mudança na seleção, a IA lê o LOTE INTEIRO de novo — é o que
+                  // garante que todo arquivo anexado seja tratado (inclusive ao trocar
+                  // a seleção por uma nova, que substitui a anterior).
+                  setArquivos(lista);
+                  if (lista.length > 0) analisarArquivo(lista);
+                }}
+                onFoto={foto => {
+                  const nova = [...arquivos, foto];
+                  setArquivos(nova);
+                  analisarArquivo(nova);
+                }} />
+              {arquivos.length > 0 && (
+                <p className="text-[11px] text-gray-500 mt-1">
+                  {arquivos.length === 1 ? arquivos[0].name : `${arquivos.length} arquivo(s) selecionado(s)`}
+                </p>
+              )}
+              {analisando && (
+                <div className="mt-2">
+                  <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                    <div className="h-full bg-emerald-600 transition-all duration-300" style={{ width: `${progresso}%` }} />
+                  </div>
+                  <p className="text-center text-[11px] text-gray-500 mt-1">
+                    {isImagem
+                      ? `Lendo o laudo com IA — transcrevendo o texto… ${progresso}%`
+                      : `Lendo o laudo com IA — identificando laboratório e resultado… ${progresso}%`}
+                  </p>
+                </div>
+              )}
+              {naoTranscritos.length > 0 && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-2">
+                  {naoTranscritos.length === 1
+                    ? `O arquivo "${naoTranscritos[0]}" não é suportado para ser interpretado, ele será somente salvo no resultado. Os formatos suportados para leitura automática são ${isImagem ? 'PDF, DOCX ou TXT' : 'PDF, DOCX, TXT ou imagem'}.`
+                    : `Os arquivos ${naoTranscritos.map(n => `"${n}"`).join(', ')} não são suportados para serem interpretados, eles serão somente salvos no resultado. Os formatos suportados para leitura automática são ${isImagem ? 'PDF, DOCX ou TXT' : 'PDF, DOCX, TXT ou imagem'}.`}
+                </p>
+              )}
+            </div>
+          )}
+
+          <fieldset disabled={somenteLeitura} className="min-w-0 space-y-4 border-0 p-0 m-0">
+            {isImagem ? (
+              <div>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                  Laudo {arquivos.length === 0 ? '*' : ''}
+                </label>
+                <textarea value={laudo} onChange={e => setLaudo(e.target.value)} rows={6}
+                  placeholder="Digite o laudo do exame de imagem — salvo literalmente, sem interpretação da IA."
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 resize-none" />
+              </div>
+            ) : (
+              <>
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                    Resultado *
+                  </label>
+                  <TabelaResultadoEditavel itens={itens} setItens={setItens} />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Observação (opcional)</label>
+                  <textarea value={laudo} onChange={e => setLaudo(e.target.value)} rows={2}
+                    placeholder="Notas adicionais sobre o resultado..."
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 resize-none" />
+                </div>
+              </>
+            )}
+          </fieldset>
+
+          <InlineError message={erro ?? erroSalvar} />
+        </div>
+
+        <div className="flex justify-end gap-2 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
+          {somenteLeitura ? (
+            <button onClick={onClose}
+              className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+              Fechar
+            </button>
+          ) : (
+            <>
+              <button onClick={onClose} disabled={saving}
+                className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50">
+                Cancelar
+              </button>
+              <button onClick={confirmar} disabled={saving}
+                className="flex items-center gap-1.5 px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors">
+                {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                {ex ? 'Salvar resultado' : 'Salvar exame'}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Modal de preenchimento MANUAL do resultado (só Laboratorial/Bioquímico) ──
+// Nem todo laboratório entrega arquivo — às vezes só dita os valores por telefone.
+// Digita a tabela direto, sem anexar nada. Some do fluxo de Imagem: lá o laudo
+// digitado já cabe dentro do "Carregar Resultados" (campo Laudo), sem precisar de
+// uma tabela estruturada.
+
+export function ResultadoManualModal({ ex, saving, onClose, onSalvar }: {
+  ex:       ExameSolicitado;
+  saving:   boolean;
+  onClose:  () => void;
+  onSalvar: (data: { laudo: string; itens: ItemManual[] }) => void;
+}) {
+  const [itens, setItens] = useState<ItemManual[]>([{ ...LINHA_VAZIA }]);
+  const [laudo, setLaudo] = useState(ex.resultado ?? '');
+  const [erro,  setErro]  = useState<string | null>(null);
+
+  const confirmar = () => {
+    const preenchidos = itens.filter(i => i.parametro.trim());
+    if (preenchidos.length === 0) { setErro('Informe ao menos um parâmetro do resultado'); return; }
+    setErro(null);
+    onSalvar({ laudo: laudo.trim(), itens: preenchidos });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-2xl border border-gray-100 max-h-[92vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <ClipboardList size={16} className="text-emerald-700 flex-shrink-0" />
+            <div className="min-w-0">
+              <h3 className="font-bold text-gray-900">Preencher manualmente</h3>
               <p className="text-[11px] text-gray-500 truncate">
                 {numeroExame(ex)} · {ex.tipo} · {ex.descricao}
               </p>
@@ -263,58 +619,18 @@ function ResultadoModal({ ex, modo, saving, onClose, onSalvar }: {
         </div>
 
         <div className="p-5 space-y-4 overflow-y-auto">
-          {modo === 'upload' ? (
-            <>
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
-                  {isImagem ? 'Imagens / laudo (PDF ou imagem) *' : 'Arquivo do laudo (PDF/imagem) *'}
-                </label>
-                <SeletorArquivo multiple={isImagem}
-                  onEscolher={lista => setArquivos(lista)}
-                  onFoto={foto => setArquivos(prev => isImagem ? [...prev, foto] : [foto])} />
-                {arquivos.length > 0 && (
-                  <p className="text-[11px] text-gray-500 mt-1">
-                    {arquivos.length === 1 ? arquivos[0].name : `${arquivos.length} arquivo(s) selecionado(s)`}
-                  </p>
-                )}
-                {!isImagem && (
-                  <p className="text-[11px] text-gray-400 mt-1">
-                    O laudo é lido e salvo em tabela (parâmetro / valor / referência); o arquivo fica armazenado.
-                  </p>
-                )}
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
-                  {isImagem ? 'Laudo (exatamente como escrito)' : 'Observação (opcional)'}
-                </label>
-                <textarea value={laudo} onChange={e => setLaudo(e.target.value)} rows={isImagem ? 5 : 2}
-                  placeholder={isImagem ? 'Salvo literalmente, sem interpretação da IA.' : 'Notas adicionais sobre o resultado...'}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 resize-none" />
-              </div>
-            </>
-          ) : isImagem ? (
-            <div>
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Laudo *</label>
-              <textarea value={laudo} onChange={e => setLaudo(e.target.value)} rows={8}
-                placeholder="Digite o laudo do exame de imagem — salvo literalmente, sem interpretação da IA."
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 resize-none" />
-            </div>
-          ) : (
-            <>
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
-                  Resultado *
-                </label>
-                <TabelaResultadoEditavel itens={itens} setItens={setItens} />
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Observação (opcional)</label>
-                <textarea value={laudo} onChange={e => setLaudo(e.target.value)} rows={2}
-                  placeholder="Notas adicionais sobre o resultado..."
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 resize-none" />
-              </div>
-            </>
-          )}
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+              Resultado *
+            </label>
+            <TabelaResultadoEditavel itens={itens} setItens={setItens} />
+          </div>
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Observação (opcional)</label>
+            <textarea value={laudo} onChange={e => setLaudo(e.target.value)} rows={2}
+              placeholder="Notas adicionais sobre o resultado..."
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 resize-none" />
+          </div>
 
           <InlineError message={erro} />
         </div>
@@ -335,238 +651,6 @@ function ResultadoModal({ ex, modo, saving, onClose, onSalvar }: {
   );
 }
 
-// ─── Modal do exame NÃO PEDIDO ──────────────────────────────────────────────────
-// Uma tela só, com TODOS os campos editáveis — anexar o laudo é opcional e só serve
-// para a IA pré-preencher tipo/descrição/laboratório/data/tabela; nada é salvo até o
-// usuário revisar e confirmar. Cria + já REALIZA num único POST (sem evolução).
-
-function ExameNaoPedidoModal({ tipoAba, animalId, saving, erroSalvar, onClose, onSalvar }: {
-  /** Aba atual ('laboratorial' | 'imagem') — decide o tipo padrão/opções do exame. */
-  tipoAba:  string;
-  animalId: string;
-  saving:   boolean;
-  /** Erro do POST de criação (ex.: "Este exame já foi carregado"), vindo do painel —
-   *  precisa aparecer AQUI dentro, não atrás do overlay (regra de erro em modal). */
-  erroSalvar: string | null;
-  onClose:  () => void;
-  onSalvar: (data: {
-    tipo: TipoExame; descricao: string; laboratorio: string; dataExame: string;
-    laudo: string; itens: ItemManual[]; arquivos: File[];
-  }) => void;
-}) {
-  const [tipo,        setTipo]        = useState<TipoExame>(tipoAba === 'imagem' ? 'Imagem' : 'Laboratorial');
-  const [descricao,   setDescricao]   = useState('');
-  const [laboratorio, setLaboratorio] = useState('');
-  const [dataExame,   setDataExame]   = useState('');
-  const [laudo,       setLaudo]       = useState('');
-  const [itens,       setItens]       = useState<ItemManual[]>([{ ...LINHA_VAZIA }]);
-  const [arquivos,    setArquivos]    = useState<File[]>([]);
-  const [analisando,  setAnalisando]  = useState(false);
-  // Progresso SIMULADO (a chamada de IA não emite eventos de progresso real) — mesmo
-  // padrão de CriaComposicaoAlimentar.tsx/CriaExameNutricional.tsx: sobe até 90% em
-  // ticks enquanto a requisição está no ar, salta para 100% quando ela responde.
-  const [progresso,   setProgresso]   = useState(0);
-  const [erro,        setErro]        = useState<string | null>(null);
-
-  const isImagem = tipo === 'Imagem';
-  const preenchidos = itens.filter(i => i.parametro.trim());
-
-  // Lê o laudo com a IA e pré-preenche tipo/descrição/laboratório/data/tabela — tudo
-  // continua editável logo abaixo. Falha ou indisponibilidade da IA não bloqueia nada:
-  // os campos seguem em branco para preenchimento manual.
-  const analisarArquivo = async (file: File) => {
-    setAnalisando(true);
-    setProgresso(0);
-    setErro(null);
-    const interval = setInterval(() => setProgresso(p => (p >= 90 ? 90 : p + 10)), 300);
-    try {
-      const fd = new FormData();
-      fd.append('arquivo', file);
-      fd.append('animalId', animalId);
-      const res = await api.post('/clinica/exames/analisar', fd);
-      setProgresso(100);
-      const d = res.data?.dados;
-      if (d) {
-        if (d.tipoSugerido === 'Bioquímico' || d.tipoSugerido === 'Laboratorial') setTipo(d.tipoSugerido);
-        if (d.descricao)   setDescricao(d.descricao);
-        if (d.laboratorio) setLaboratorio(d.laboratorio);
-        if (d.dataExame)   setDataExame(d.dataExame);
-        if (Array.isArray(d.itens) && d.itens.length > 0) {
-          setItens(d.itens.map((i: { parametro: string; valor: string | null; unidade: string | null; referencia: string | null }) => ({
-            parametro: i.parametro ?? '', valor: i.valor ?? '', unidade: i.unidade ?? '', referencia: i.referencia ?? '',
-          })));
-        }
-      }
-    } catch (err: unknown) {
-      // best-effort para falha/indisponibilidade da IA (ver comentário acima) — mas
-      // "o arquivo não é um exame" e "esse exame já foi carregado" são diagnóstico,
-      // não indisponibilidade, e precisam aparecer: sem isto, o usuário confirmaria
-      // uma tabela vazia (ou duplicada) sem entender por quê.
-      const resp = (err as { response?: { data?: { code?: string; error?: string } } })?.response;
-      if (resp?.data?.code === 'ARQUIVO_NAO_E_EXAME' || resp?.data?.code === 'EXAME_JA_CARREGADO') {
-        setErro(resp.data.error ?? 'Não foi possível analisar o arquivo.');
-      }
-    } finally {
-      clearInterval(interval);
-      setAnalisando(false);
-    }
-  };
-
-  const confirmar = () => {
-    if (!descricao.trim()) { setErro('Informe a descrição do exame'); return; }
-    if (isImagem && arquivos.length === 0 && !laudo.trim()) {
-      setErro('Anexe as imagens ou escreva o laudo'); return;
-    }
-    if (!isImagem && preenchidos.length === 0) {
-      setErro('Informe ao menos um parâmetro do resultado'); return;
-    }
-    setErro(null);
-    onSalvar({
-      tipo, descricao: descricao.trim(), laboratorio: laboratorio.trim(), dataExame,
-      laudo: laudo.trim(), itens: preenchidos, arquivos,
-    });
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-2xl border border-gray-100 max-h-[92vh] flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <FilePlus2 size={16} className="text-emerald-700 flex-shrink-0" />
-            <div className="min-w-0">
-              <h3 className="font-bold text-gray-900">Exame não pedido</h3>
-              <p className="text-[11px] text-gray-500 truncate">
-                Achado antigo ou laudo externo — sem passar pelo Pedido de Exames
-              </p>
-            </div>
-          </div>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 flex-shrink-0"><X size={18} /></button>
-        </div>
-
-        <div className="p-5 space-y-4 overflow-y-auto">
-          {tipoAba !== 'imagem' && (
-            <div>
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
-                Tipo do exame
-              </label>
-              <select value={tipo} onChange={e => setTipo(e.target.value as TipoExame)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 bg-white">
-                <option value="Laboratorial">Laboratorial</option>
-                <option value="Bioquímico">Bioquímico</option>
-              </select>
-            </div>
-          )}
-
-          <div>
-            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
-              Descrição do exame *
-            </label>
-            <input type="text" value={descricao} onChange={e => setDescricao(e.target.value)}
-              placeholder="Ex: Hemograma completo, Raio-X de tórax..."
-              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500" />
-          </div>
-
-          {!isImagem && (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Laboratório</label>
-                <input type="text" value={laboratorio} onChange={e => setLaboratorio(e.target.value)}
-                  placeholder="Identificado ao anexar o laudo"
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500" />
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Data do exame</label>
-                <input type="date" value={dataExame} onChange={e => setDataExame(e.target.value)}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500" />
-              </div>
-            </div>
-          )}
-
-          <div>
-            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
-              {isImagem ? 'Imagens / laudo (PDF ou imagem)' : 'Anexar laudo (opcional)'}
-            </label>
-            <SeletorArquivo multiple={isImagem}
-              onEscolher={lista => {
-                setArquivos(lista);
-                if (!isImagem && lista[0]) analisarArquivo(lista[0]);
-              }}
-              onFoto={foto => {
-                if (isImagem) {
-                  setArquivos(prev => [...prev, foto]);
-                } else {
-                  setArquivos([foto]);
-                  analisarArquivo(foto);
-                }
-              }} />
-            {arquivos.length > 0 && (
-              <p className="text-[11px] text-gray-500 mt-1">
-                {arquivos.length === 1 ? arquivos[0].name : `${arquivos.length} arquivo(s) selecionado(s)`}
-              </p>
-            )}
-            {analisando && (
-              <div className="mt-2">
-                <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                  <div className="h-full bg-emerald-600 transition-all duration-300" style={{ width: `${progresso}%` }} />
-                </div>
-                <p className="text-center text-[11px] text-gray-500 mt-1">
-                  Lendo o laudo com IA — identificando tipo, composto, laboratório, data e resultado… {progresso}%
-                </p>
-              </div>
-            )}
-            {!isImagem && (
-              <p className="text-[11px] text-gray-400 mt-1">
-                Sem arquivo, preencha a tabela abaixo à mão. Com arquivo, a IA sugere a
-                tabela — revise antes de salvar, tudo continua editável.
-              </p>
-            )}
-          </div>
-
-          {isImagem ? (
-            <div>
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
-                Laudo (exatamente como escrito) {arquivos.length === 0 ? '*' : ''}
-              </label>
-              <textarea value={laudo} onChange={e => setLaudo(e.target.value)} rows={6}
-                placeholder="Digite o laudo do exame de imagem — salvo literalmente, sem interpretação da IA."
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 resize-none" />
-            </div>
-          ) : (
-            <>
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
-                  Resultado *
-                </label>
-                <TabelaResultadoEditavel itens={itens} setItens={setItens} />
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Observação (opcional)</label>
-                <textarea value={laudo} onChange={e => setLaudo(e.target.value)} rows={2}
-                  placeholder="Notas adicionais sobre o resultado..."
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 resize-none" />
-              </div>
-            </>
-          )}
-
-          <InlineError message={erro ?? erroSalvar} />
-        </div>
-
-        <div className="flex justify-end gap-2 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
-          <button onClick={onClose} disabled={saving}
-            className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50">
-            Cancelar
-          </button>
-          <button onClick={confirmar} disabled={saving}
-            className="flex items-center gap-1.5 px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors">
-            {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-            Salvar exame
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Painel ───────────────────────────────────────────────────────────────────
 
 export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onRealizadosChange }: Props) {
@@ -575,23 +659,30 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
   const podeResultadoLab = isGestor || podeExecutar('exames.laboratorial.editar');
   const podeResultadoImg = isGestor || podeExecutar('exames.imagem.editar');
   const podeLancar = (ex: ExameSolicitado) => (ex.tipo === 'Imagem' ? podeResultadoImg : podeResultadoLab);
-  // Encerrar o PEDIDO é ação do pedido, não do resultado: usa o slug do Atendimento.
+  // Cancelar o PEDIDO (soft delete, ativo:false) é ação do pedido, não do resultado:
+  // usa o mesmo slug/endpoint do "Cancelar" da tela de Pedido de Exames — é o que faz
+  // o cancelamento aparecer como CANCELADA no Histórico de Exames de lá também.
   // Sem filtro por autoria — quem tem a ação concedida opera o registro (CLAUDE.md 28-c).
-  const podeFinalizar = isGestor || podeExecutar('atendimento.exames.finalizar');
+  const podeCancelar = isGestor || podeExecutar('atendimento.exames.deletar');
+  // "Preencher manualmente" (tabela sem arquivo) só na aba Laboratorial — na aba
+  // Imagem o laudo digitado já cabe dentro do "Carregar Resultados" (upload).
+  const permiteManual = tipo === 'laboratorial';
 
   const [pendentes,  setPendentes]  = useState<ExameSolicitado[]>([]);
   const [carregando, setCarregando] = useState(false);
   const [erro,       setErro]       = useState<string | null>(null);
   const [saving,     setSaving]     = useState(false);
-  const [alvo,       setAlvo]       = useState<{ ex: ExameSolicitado; modo: 'upload' | 'manual' } | null>(null);
+  const [alvo,       setAlvo]       = useState<ExameSolicitado | null>(null);
+  const [alvoManual, setAlvoManual] = useState<ExameSolicitado | null>(null);
   const [naoPedidoAberto, setNaoPedidoAberto] = useState(false);
   // Erro do POST de criação do "não pedido" — separado do `erro` do painel (topo da
   // página) porque precisa aparecer DENTRO do modal, que cobre a tela toda.
   const [erroNaoPedido, setErroNaoPedido] = useState<string | null>(null);
-  // Confirmação do "Finalizar": encerrar sem resultado é decisão que não se desfaz
-  // pela tela, então não pode sair de um clique solto.
-  const [finalizando,   setFinalizando]   = useState<ExameSolicitado | null>(null);
-  const [salvandoFinal, setSalvandoFinal] = useState(false);
+  // Confirmação do "Cancelar": é uma exclusão (soft delete) e exige motivo, como toda
+  // exclusão/cancelamento da aplicação (ModalJustificativa).
+  const [cancelando,        setCancelando]        = useState<ExameSolicitado | null>(null);
+  const [salvandoCancelamento, setSalvandoCancelamento] = useState(false);
+  const [erroCancelamento,  setErroCancelamento]  = useState<string | null>(null);
 
   const carregar = useCallback(async () => {
     if (!animalId) return;
@@ -622,19 +713,40 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
     carregar();
   }, [carregar, loadingPerms]);
 
-  const salvarResultado = async ({ laudo, arquivos, itens }: { laudo: string; arquivos: File[]; itens: ItemManual[] }) => {
+  const salvarResultado = async ({ laudo, laboratorio, itens, arquivos }: { laudo: string; laboratorio: string; itens: ItemManual[]; arquivos: File[] }) => {
     if (!alvo) return;
     setSaving(true);
     setErro(null);
     try {
-      // multipart no mesmo endpoint dos dois modos: no manual não vai arquivo, só a
-      // tabela em JSON (todo campo de multipart é texto — o backend faz o parse).
       const fd = new FormData();
       if (laudo) fd.append('resultado', laudo);
-      arquivos.forEach(a => fd.append('arquivos', a));
+      fd.append('laboratorio', laboratorio);
       if (itens.length > 0) fd.append('itens', JSON.stringify(itens));
-      await api.patch(`/clinica/exames/${alvo.ex.id}/resultado`, fd);
+      arquivos.forEach(a => fd.append('arquivos', a));
+      await api.patch(`/clinica/exames/${alvo.id}/resultado`, fd);
       setAlvo(null);
+      await carregar();
+      onSalvo?.();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setErro(msg ?? 'Erro ao salvar o resultado');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Preenchimento MANUAL (só Laboratorial) — mesmo endpoint, só a tabela em JSON,
+  // sem arquivo nenhum.
+  const salvarResultadoManual = async ({ laudo, itens }: { laudo: string; itens: ItemManual[] }) => {
+    if (!alvoManual) return;
+    setSaving(true);
+    setErro(null);
+    try {
+      const fd = new FormData();
+      if (laudo) fd.append('resultado', laudo);
+      fd.append('itens', JSON.stringify(itens));
+      await api.patch(`/clinica/exames/${alvoManual.id}/resultado`, fd);
+      setAlvoManual(null);
       await carregar();
       onSalvo?.();
     } catch (err: unknown) {
@@ -676,31 +788,32 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
     }
   };
 
-  // Encerra o PEDIDO sem resultado: o exame passa a FINALIZADO SEM RESULTADO aqui e na
-  // tela de Pedido de Exames, e sai da fila de espera.
-  const finalizarSemResultado = async () => {
-    if (!finalizando) return;
-    setSalvandoFinal(true);
-    setErro(null);
+  // Cancela o PEDIDO (soft delete, ativo:false) — mesmo endpoint/comportamento do
+  // "Cancelar exame" da tela de Pedido de Exames: sai da fila de espera aqui E passa
+  // a constar CANCELADA no Histórico de Exames de lá (getStatusExame usa !ativo).
+  const cancelarExame = async (motivo: string) => {
+    if (!cancelando) return;
+    setSalvandoCancelamento(true);
+    setErroCancelamento(null);
     try {
-      await api.patch(`/clinica/exames/${finalizando.id}/finalizar`);
-      setFinalizando(null);
+      await api.delete(`/clinica/exames/${cancelando.id}`, { data: { motivo } });
+      setCancelando(null);
       await carregar();
       onSalvo?.();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErro(msg ?? 'Erro ao finalizar o exame');
+      setErroCancelamento(msg ?? 'Erro ao cancelar o exame');
     } finally {
-      setSalvandoFinal(false);
+      setSalvandoCancelamento(false);
     }
   };
 
   if (loadingPerms) return null;
-  // O painel some só para quem não pode NEM lançar resultado NEM encerrar o pedido.
-  // Quem tem apenas `atendimento.exames.finalizar` continua vendo a fila — é dele a
-  // decisão de encerrar o pedido que nunca vai receber laudo.
+  // O painel some só para quem não pode NEM lançar resultado NEM cancelar o pedido.
+  // Quem tem apenas `atendimento.exames.deletar` continua vendo a fila — é dele a
+  // decisão de cancelar o pedido que nunca vai receber laudo.
   const podeLancarNaAba = tipo === 'imagem' ? podeResultadoImg : podeResultadoLab;
-  if (!podeLancarNaAba && !podeFinalizar) return null;
+  if (!podeLancarNaAba && !podeCancelar) return null;
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100">
@@ -715,7 +828,7 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
             <button onClick={() => { setErroNaoPedido(null); setNaoPedidoAberto(true); }}
               title="Incluir exame não pedido" aria-label="Incluir exame não pedido"
               className="flex items-center gap-1 px-2 py-1 text-emerald-700 hover:bg-emerald-50 rounded-lg text-[11px] font-semibold transition-colors">
-              <FilePlus2 size={13} /> Exame não pedido
+              <FilePlus2 size={13} /> Carregar Exames sem Pedido
             </button>
           )}
           {carregando && <Loader2 size={14} className="animate-spin text-emerald-600" />}
@@ -742,24 +855,24 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
                 {/* Só ícones, mesma linha — ver o bloco equivalente do desktop */}
                 <div className="flex items-center gap-1 mt-2 flex-nowrap">
                   {podeLancar(ex) && (
-                    <>
-                      <button onClick={() => setAlvo({ ex, modo: 'upload' })}
-                        title="Carregar resultado" aria-label="Carregar resultado"
-                        className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
-                        <Upload size={15} />
-                      </button>
-                      <button onClick={() => setAlvo({ ex, modo: 'manual' })}
-                        title="Preencher manualmente" aria-label="Preencher manualmente"
-                        className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
-                        <PencilLine size={15} />
-                      </button>
-                    </>
+                    <button onClick={() => setAlvo(ex)}
+                      title="Carregar Resultados" aria-label="Carregar Resultados"
+                      className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
+                      <Upload size={15} />
+                    </button>
                   )}
-                  {podeFinalizar && (
-                    <button onClick={() => setFinalizando(ex)}
-                      title="Finalizar sem resultado" aria-label="Finalizar sem resultado"
-                      className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
-                      <CheckCircle2 size={15} />
+                  {permiteManual && podeLancar(ex) && (
+                    <button onClick={() => setAlvoManual(ex)}
+                      title="Preencher manualmente" aria-label="Preencher manualmente"
+                      className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
+                      <Table2 size={15} />
+                    </button>
+                  )}
+                  {podeCancelar && (
+                    <button onClick={() => { setErroCancelamento(null); setCancelando(ex); }}
+                      title="Cancelar" aria-label="Cancelar"
+                      className="p-1.5 text-red-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                      <Ban size={15} />
                     </button>
                   )}
                 </div>
@@ -797,24 +910,24 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
                           botão para leitor de tela e no hover. */}
                       <div className="flex items-center gap-1 flex-nowrap">
                         {podeLancar(ex) && (
-                          <>
-                            <button onClick={() => setAlvo({ ex, modo: 'upload' })}
-                              title="Carregar resultado" aria-label="Carregar resultado"
-                              className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
-                              <Upload size={15} />
-                            </button>
-                            <button onClick={() => setAlvo({ ex, modo: 'manual' })}
-                              title="Preencher manualmente" aria-label="Preencher manualmente"
-                              className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
-                              <PencilLine size={15} />
-                            </button>
-                          </>
+                          <button onClick={() => setAlvo(ex)}
+                            title="Carregar Resultados" aria-label="Carregar Resultados"
+                            className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
+                            <Upload size={15} />
+                          </button>
                         )}
-                        {podeFinalizar && (
-                          <button onClick={() => setFinalizando(ex)}
-                            title="Finalizar sem resultado" aria-label="Finalizar sem resultado"
-                            className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
-                            <CheckCircle2 size={15} />
+                        {permiteManual && podeLancar(ex) && (
+                          <button onClick={() => setAlvoManual(ex)}
+                            title="Preencher manualmente" aria-label="Preencher manualmente"
+                            className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
+                            <Table2 size={15} />
+                          </button>
+                        )}
+                        {podeCancelar && (
+                          <button onClick={() => { setErroCancelamento(null); setCancelando(ex); }}
+                            title="Cancelar" aria-label="Cancelar"
+                            className="p-1.5 text-red-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                            <Ban size={15} />
                           </button>
                         )}
                       </div>
@@ -834,16 +947,26 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
 
       {alvo && (
         <ResultadoModal
-          ex={alvo.ex}
-          modo={alvo.modo}
+          ex={alvo}
+          animalId={animalId}
           saving={saving}
           onClose={() => setAlvo(null)}
           onSalvar={salvarResultado}
         />
       )}
 
+      {alvoManual && (
+        <ResultadoManualModal
+          ex={alvoManual}
+          saving={saving}
+          onClose={() => setAlvoManual(null)}
+          onSalvar={salvarResultadoManual}
+        />
+      )}
+
       {naoPedidoAberto && (
-        <ExameNaoPedidoModal
+        <ResultadoModal
+          ex={null}
           tipoAba={tipo}
           animalId={animalId}
           saving={saving}
@@ -853,36 +976,16 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
         />
       )}
 
-      {finalizando && (
-        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-          <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-md border border-gray-100">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-              <h3 className="font-bold text-gray-900">Finalizar sem resultado</h3>
-              <button onClick={() => setFinalizando(null)} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
-            </div>
-            <div className="p-5 space-y-2">
-              <p className="text-sm text-gray-700">
-                Encerrar <span className="font-semibold">{finalizando.descricao}</span> sem lançar resultado?
-              </p>
-              <p className="text-xs text-gray-500">
-                O pedido sai da fila de espera e passa a constar como
-                <span className="font-semibold"> Finalizado sem Resultado</span> aqui e no Pedido de Exames.
-              </p>
-            </div>
-            <div className="flex justify-end gap-2 px-5 pb-5 pt-3 border-t border-gray-100">
-              <button onClick={() => setFinalizando(null)} disabled={salvandoFinal}
-                className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50">
-                Cancelar
-              </button>
-              <button onClick={finalizarSemResultado} disabled={salvandoFinal}
-                className="flex items-center gap-1.5 px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors">
-                {salvandoFinal ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                Finalizar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ModalJustificativa
+        aberto={cancelando != null}
+        titulo="Cancelar exame"
+        descricao={cancelando ? `${cancelando.tipo}: ${cancelando.descricao}` : undefined}
+        acaoLabel="Cancelar exame"
+        processando={salvandoCancelamento}
+        erro={erroCancelamento}
+        onConfirmar={cancelarExame}
+        onFechar={() => setCancelando(null)}
+      />
     </div>
   );
 }
