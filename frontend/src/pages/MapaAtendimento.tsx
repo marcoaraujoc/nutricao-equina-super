@@ -22,7 +22,7 @@ interface CronogramaItem {
   localizacao:   Localizacao | null;
   procedimento:  string;
   descricao:     string;
-  status:        'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'EXECUTADO' | 'CANCELADO' | 'SEM_ATENDIMENTO';
+  status:        'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'EXECUTADO' | 'CANCELADO' | 'CANCELADO_AUTOMATICAMENTE' | 'SEM_ATENDIMENTO';
   dataHora:      string | null;
   responsavel:   string | null;
   responsavelId: number | null;
@@ -191,6 +191,13 @@ function StatusBadge({ status }: { status: string }) {
   if (status === 'CANCELADO') return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
       <XCircle size={11} /> Cancelado
+    </span>
+  );
+  // A rotina noturna encerrou sozinha (nunca realizado, ou EM_ANDAMENTO sem conclusão).
+  // Tom mais claro que CANCELADO de propósito — mesma família, cancelamento distinto.
+  if (status === 'CANCELADO_AUTOMATICAMENTE') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-50 text-red-400">
+      <XCircle size={11} /> Cancelado automaticamente
     </span>
   );
   if (status === 'SEM_ATENDIMENTO') return (

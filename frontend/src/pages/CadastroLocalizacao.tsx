@@ -334,7 +334,8 @@ export default function CadastroLocalizacao() {
           </div>
         ) : (
           <div className="bg-white rounded-3xl border border-gray-200 overflow-hidden">
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto rounded-3xl">
+            <table className="w-full min-w-[760px] text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Nome</th>
@@ -395,6 +396,7 @@ export default function CadastroLocalizacao() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </div>

@@ -1,6 +1,7 @@
 // frontend/src/utils/ExamePrint.ts
 
-import { resolverUrlAbsoluta } from './printUrl';
+import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura } from './print/PrintShell';
+import { imprimirHtml } from './print/imprimirHtml';
 
 export interface LaudoCompra {
   gerais:    Record<string, string>;
@@ -100,22 +101,18 @@ const TIPO_BADGE: Record<string, { color: string; bg: string }> = {
 // ─── CSS compartilhado ────────────────────────────────────────────────────────
 
 const CSS = `
-  @page { size: A4; margin: 16mm 20mm; }
+  ${PRINT_SHELL_CSS}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; font-size: 11px; color: #111; background: #fff; }
+  body { font-family: Arial, sans-serif; font-size: 11px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
   .exam-page { }
   .page-break { page-break-before: always; break-before: page; }
-  .header { border-bottom: 2px solid #1d4ed8; padding-bottom: 10px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: flex-end; }
-  .header h1 { font-size: 20px; font-weight: 700; color: #1d4ed8; }
-  .brand-logo { max-height: 32px; max-width: 200px; object-fit: contain; }
-  .header .sub { font-size: 10px; color: #6b7280; margin-top: 2px; }
+  .doc-info-row { display: flex; justify-content: flex-end; margin-bottom: 12px; }
   .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
   .card-title { font-size: 10px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; border-bottom: 1px solid #f3f4f6; padding-bottom: 6px; }
   .card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 16px; }
   .lbl { display: block; font-size: 9px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
   .val { font-size: 11px; font-weight: 600; color: #111; }
   .section-title { font-size: 10px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 8px; }
-  .footer { border-top: 1px solid #e5e7eb; padding-top: 8px; margin-top: 20px; display: flex; justify-content: space-between; color: #9ca3af; font-size: 9px; }
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 `;
 
@@ -218,7 +215,6 @@ function gerarPaginaExame(
   const tipo       = opts?.tipo ?? ex.tipo;
   const badge      = TIPO_BADGE[tipo] ?? { color: '#374151', bg: '#f3f4f6' };
   const isCompra   = tipo === 'Compra';
-  const logoUrl    = resolverUrlAbsoluta(animal?.logoUrl);
 
   // Valores resolvidos (opts sobrescrevem extra)
   const laboratorio      = opts !== undefined && 'laboratorio'      in opts ? opts.laboratorio      : extra.laboratorio;
@@ -357,22 +353,10 @@ function gerarPaginaExame(
         </div>` : ''}
     </div>` : '';
 
-  // ── Assinatura ────────────────────────────────────────────────────────────
-  const signaturaBlock = ex.veterinario ? `
-    <div style="margin-top:40px;display:flex;justify-content:flex-end;">
-      <div style="text-align:center;width:220px;">
-        <div style="border-top:1px solid #374151;padding-top:6px;font-size:10px;font-weight:600;color:#374151;">${esc(ex.veterinario.fullName)}</div>
-        <div style="font-size:9px;color:#9ca3af;margin-top:2px;">Médico Veterinário Responsável</div>
-      </div>
-    </div>` : '';
-
   return `
-  <div class="header">
-    <div>
-      ${logoUrl ? `<img class="brand-logo" src="${logoUrl}" alt="Logo">` : `<h1>S2Vet</h1>`}
-      <p class="sub">Sistema Hospitalar Veterinário · Módulo Clínico</p>
-      <p class="sub" style="margin-top:4px;">Emitido em: ${new Date().toLocaleString('pt-BR')}</p>
-    </div>
+  ${renderCabecalho(animal?.logoUrl)}
+
+  <div class="doc-info-row">
     <div style="text-align:right;">
       <p style="font-size:10px;color:#9ca3af;margin-bottom:4px;">REQUISIÇÃO DE EXAME</p>
       <span style="display:inline-block;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:700;color:${badge.color};background:${badge.bg};">${esc(tipo)}</span>
@@ -393,13 +377,7 @@ function gerarPaginaExame(
 
   ${examListBlock}
   ${camposFormBlock}
-  ${laudoBlock}
-  ${signaturaBlock}
-
-  <div class="footer">
-    <span>S2Vet · Sistema Hospitalar Veterinário</span>
-    <span>Emitido em ${new Date().toLocaleString('pt-BR')}</span>
-  </div>`;
+  ${laudoBlock}`;
 }
 
 // ─── Gerador HTML principal ───────────────────────────────────────────────────
@@ -464,6 +442,9 @@ export function gerarHtmlExame(ex: PrintExameClinico, animal?: PrintAnimalExame 
 </head>
 <body>
 ${bodyContent}
+
+${renderRodapeAssinatura(ex.veterinario, 'Médico Veterinário Responsável')}
+
 </body>
 </html>`;
 }
@@ -471,25 +452,5 @@ ${bodyContent}
 // ─── Função principal ─────────────────────────────────────────────────────────
 
 export function imprimirExame(ex: PrintExameClinico, animal?: PrintAnimalExame | null): void {
-  const iframe = document.createElement('iframe');
-  Object.assign(iframe.style, {
-    position: 'fixed', top: '-9999px', left: '-9999px',
-    width: '0', height: '0', border: 'none',
-  });
-  document.body.appendChild(iframe);
-
-  const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
-  if (!doc) { document.body.removeChild(iframe); return; }
-
-  doc.open();
-  doc.write(gerarHtmlExame(ex, animal));
-  doc.close();
-
-  setTimeout(() => {
-    iframe.contentWindow?.focus();
-    iframe.contentWindow?.print();
-    setTimeout(() => {
-      if (document.body.contains(iframe)) document.body.removeChild(iframe);
-    }, 500);
-  }, 250);
+  imprimirHtml(gerarHtmlExame(ex, animal));
 }

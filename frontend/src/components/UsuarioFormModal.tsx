@@ -53,6 +53,10 @@ export interface UsuarioFormValues {
   /** Locais de trabalho — o membro pode ter vários na mesma empresa, cada um com
    *  dias e horário próprios. Quando presente, é a fonte do expediente. */
   locaisTrabalho?: LocalTrabalhoForm[];
+  /** "Atender somente no local de trabalho" — false (padrão) = atende em qualquer
+   *  local, nada muda. true = a lista de pacientes deste profissional fica restrita
+   *  aos animais que estão num dos `locaisTrabalho` dele configurados para HOJE. */
+  restringirPorLocal?: boolean;
 }
 
 export interface LocalTrabalhoForm {
@@ -185,7 +189,7 @@ const FORM_VAZIO: UsuarioFormValues = {
   fullName: '', email: '', phone: '', perfil: 'VETERINARIO', cargos: ['VETERINARIO'], senha: '', ativo: true,
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
   diasTrabalho: [], horaInicioTrabalho: '', horaFimTrabalho: '', especialidadeIds: [],
-  locaisTrabalho: [],
+  locaisTrabalho: [], restringirPorLocal: false,
   // Pagamento nasce em branco DE PROPÓSITO: é acordo com a pessoa, não tem padrão
   // razoável a chutar. Acesso nasce marcado — é o caso da esmagadora maioria.
   tipoPagamento: '', formaPagamento: 'VALOR', valorPagamento: '', acessoSistema: true,
@@ -1184,6 +1188,26 @@ export default function UsuarioFormModal({
               <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
                 <MapPin size={12} /> Locais de trabalho
               </h4>
+
+              {/* Desligado (padrão) = atende em qualquer local, nada muda. Ligado = a
+                  lista de pacientes deste profissional fica restrita aos animais que
+                  estão num dos locais de trabalho DELE configurados para o dia de hoje
+                  (backend: lib/animalScope.js). */}
+              <label className="flex items-start gap-2.5 mb-3 p-3 bg-gray-50 border border-gray-100 rounded-xl cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!!form.restringirPorLocal}
+                  onChange={e => set('restringirPorLocal', e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-400"
+                />
+                <span className="text-xs text-gray-600 leading-snug">
+                  <span className="font-semibold text-gray-800">Atender somente no local de trabalho</span>
+                  <br />
+                  Desmarcado, o profissional atende o paciente em qualquer local — nada muda.
+                  Marcado, ele só verá os pacientes que estão, hoje, num dos locais de trabalho
+                  configurados abaixo.
+                </span>
+              </label>
 
               {/* Locais já adicionados — cada um em UMA linha */}
               {(form.locaisTrabalho ?? []).length > 0 ? (

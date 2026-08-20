@@ -7,17 +7,19 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
-import ModalJustificativa from '../components/ModalJustificativa';
 import {
-  AlertTriangle, Lock, Plus, Pencil, Trash2,
+  AlertTriangle, Lock, Plus, Pencil,
   Search, RefreshCw, X, BarChart2, Package,
   ChevronDown, Eye, ArrowUpDown,
+  ToggleLeft, ToggleRight,
 } from 'lucide-react';
 import { formatDateShort, formatDate } from '../utils/dateUtils';
 import DateInput from '../components/DateInput';
 import ModalNovoFornecedor, { type NovoFornecedorResult } from '../components/ModalNovoFornecedor';
 import InlineError from '../components/InlineError';
 import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
+import ModalJustificativa from '../components/ModalJustificativa';
+import JustificativaCancelamento from '../components/JustificativaCancelamento';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -55,13 +57,20 @@ interface EstoqueItem {
   emUso?: boolean;
   medicamento: Medicamento;
   fornecedor: FornecedorItem | null;
+  createdAt:  string;
+  // Trilha de ativação/inativação (quem fez, quando) — ver lib/cadastroAtivacao.js
+  ativoEm?:        string | null;
+  ativoPorNome?:   string | null;
+  inativoEm?:      string | null;
+  inativoPorNome?: string | null;
+  inativoMotivo?:  string | null;
 }
 
 interface Meta { total: number; totalControlados: number; totalAbaixoMinimo: number; totalAbaixoAlarmante: number }
 
 interface MovimentoEstoque { id: number; tipo: string; quantidade: number; motivo: string | null; createdAt: string }
 
-type FiltroTab = 'todos' | 'critico' | 'alarmante' | 'controlados' | 'inativos';
+type FiltroTab = 'todos' | 'ativos' | 'inativos' | 'critico' | 'alarmante' | 'controlados';
 
 
 // Tipos de fornecedor relevantes para farmácia (excluem prestadores de serviço clínico)
@@ -144,7 +153,9 @@ export default function Farmacia() {
   const podeCriar   = isGestor || podeExecutar('farmacia.estoque.criar');
   const podeEditar  = isGestor || podeExecutar('farmacia.estoque.editar');
   const podeAjustar = isGestor || podeExecutar('farmacia.estoque.ajustar');
-  const podeDeletar = isGestor || podeExecutar('farmacia.estoque.deletar');
+  // Mesma permissão que antes gateava a exclusão passou a gatear o toggle
+  // ativar/inativar (mesma regra de /cadastro/fornecedores — ver EstoqueController.toggle).
+  const podeAtivar  = isGestor || podeExecutar('farmacia.estoque.deletar');
   const semPermissao = (acao: string) =>
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
@@ -159,7 +170,7 @@ export default function Farmacia() {
   const [meta,         setMeta]         = useState<Meta>({ total:0, totalControlados:0, totalAbaixoMinimo:0, totalAbaixoAlarmante:0 });
   const [loading,      setLoading]      = useState(false);
   const [busca,        setBusca]        = useState('');
-  const [filtroTab,    setFiltroTab]    = useState<FiltroTab>('todos');
+  const [filtroTab,    setFiltroTab]    = useState<FiltroTab>('ativos');
 
   const [form,         setForm]         = useState({ ...FORM_VAZIO });
   const [editandoId,   setEditandoId]   = useState<number | null>(null);
@@ -173,7 +184,6 @@ export default function Farmacia() {
   const [loadingMov,     setLoadingMov]     = useState(false);
 
   const [itemView,       setItemView]       = useState<EstoqueItem | null>(null);
-  const [confirmExcluir, setConfirmExcluir] = useState<EstoqueItem | null>(null);
 
   // Modal Ajuste de Estoque (correção manual de quantidade — cria MovimentoEstoque AJUSTE)
   const [modalAjusteAberto,     setModalAjusteAberto]     = useState(false);
@@ -246,8 +256,8 @@ export default function Farmacia() {
     try {
       const params: Record<string, string> = {};
       if (busca) params.busca = busca;
-      if (filtroTab === 'inativos') params.ativo = 'false';
-      else                          params.ativo = 'true';
+      if (filtroTab === 'inativos')    params.ativo = 'false';
+      else if (filtroTab !== 'todos')  params.ativo = 'true';
       if (filtroTab === 'controlados') params.controlado = 'true';
 
       const [estoqueRes, medRes, fornRes] = await Promise.all([
@@ -470,17 +480,30 @@ export default function Farmacia() {
     } finally { setSalvando(false); }
   };
 
-  const confirmarExcluir = async (motivo: string) => {
-    if (!confirmExcluir) return;
-    if (!podeDeletar) { semPermissao('inativar item do estoque'); return; }
+  // Ativar/Inativar — mesma regra de /cadastro/fornecedores: um clique alterna
+  // o estado; inativar exige justificativa (ModalJustificativa), ativar segue direto.
+  const [inativandoItem, setInativandoItem] = useState<EstoqueItem | null>(null);
+  const [togglingAtivo,  setTogglingAtivo]  = useState(false);
+
+  const handleToggle = (item: EstoqueItem) => {
+    setErroInline(null);
+    if (!podeAtivar) { semPermissao('alternar status do item'); return; }
+    if (item.ativo) { setInativandoItem(item); return; }
+    confirmarToggle(item);
+  };
+
+  const confirmarToggle = async (item: EstoqueItem, motivo?: string) => {
+    setTogglingAtivo(true);
     try {
-      await api.delete(`/farmacia/estoque/${confirmExcluir.id}`, { data: { motivo } });
-      toast.success('Item inativado.');
-      setConfirmExcluir(null);
+      await api.patch(`/farmacia/estoque/${item.id}/toggle`, motivo ? { motivo } : undefined);
+      toast.success(item.ativo ? 'Item inativado.' : 'Item ativado.');
+      setInativandoItem(null);
       carregarEstoque();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroInline(msg ?? 'Erro ao inativar.');
+      setErroInline(msg ?? 'Erro ao alternar status.');
+    } finally {
+      setTogglingAtivo(false);
     }
   };
 
@@ -549,14 +572,6 @@ export default function Farmacia() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const tabsBadge: Record<FiltroTab, string | number> = {
-    todos:       meta.total,
-    critico:     meta.totalAbaixoMinimo,
-    alarmante:   meta.totalAbaixoAlarmante,
-    controlados: meta.totalControlados,
-    inativos:    '',
-  };
-
   if (loadingPerm) return (
     <div className="flex items-center justify-center py-20">
       <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full" />
@@ -580,7 +595,7 @@ export default function Farmacia() {
               <Package size={20} className="text-emerald-700" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">Estoque da Clínica</h1>
+              <h1 className="text-2xl font-bold text-gray-900">Estoque de Farmácia</h1>
               <p className="text-sm text-gray-500">Entradas, saídas e níveis de reposição por estabelecimento.</p>
             </div>
           </div>
@@ -635,11 +650,12 @@ export default function Farmacia() {
 
           <div className="flex flex-wrap gap-2 mb-4">
             {([
-              ['todos','Ativos'],
+              ['todos','Todos'],
+              ['ativos','Ativos'],
+              ['inativos','Inativos'],
               ['critico','🔴 Crítico'],
               ['alarmante','🟡 Alarmante'],
               ['controlados','🔒 Controlados'],
-              ['inativos','Inativos'],
             ] as [FiltroTab, string][]).map(([key, label]) => (
               <button key={key} onClick={() => setFiltroTab(key)}
                 className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
@@ -647,7 +663,7 @@ export default function Farmacia() {
                     ? 'bg-emerald-600 text-white border-emerald-600'
                     : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
                 }`}>
-                {label}{tabsBadge[key] !== '' ? ` ${tabsBadge[key]}` : ''}
+                {label}
               </button>
             ))}
           </div>
@@ -666,6 +682,19 @@ export default function Farmacia() {
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Medicamento</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Estoque</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                      {filtroTab !== 'inativos' ? (
+                        <>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Criado em</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado em</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado por</th>
+                        </>
+                      ) : (
+                        <>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado em</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado por</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
+                        </>
+                      )}
                       <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
                     </tr>
                   </thead>
@@ -703,6 +732,19 @@ export default function Farmacia() {
                               {item.ativo ? 'ATIVO' : 'INATIVO'}
                             </span>
                           </td>
+                          {filtroTab !== 'inativos' ? (
+                            <>
+                              <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(item.createdAt)}</td>
+                              <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(item.ativoEm ?? item.createdAt)}</td>
+                              <td className="px-4 py-3 whitespace-nowrap text-gray-600">{item.ativoPorNome ?? '—'}</td>
+                            </>
+                          ) : (
+                            <>
+                              <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(item.inativoEm)}</td>
+                              <td className="px-4 py-3 whitespace-nowrap text-gray-600">{item.inativoPorNome ?? '—'}</td>
+                              <td className="px-4 py-3"><JustificativaCancelamento texto={item.inativoMotivo} /></td>
+                            </>
+                          )}
                           <td className="px-4 py-3 whitespace-nowrap">
                             <div className="flex items-center justify-center gap-1">
                               {item.emUso ? (
@@ -712,14 +754,16 @@ export default function Farmacia() {
                                 </button>
                               ) : podeEditar ? (
                                 <button onClick={() => preencherEdicao(item)} title="Editar"
-                                  className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50">
+                                  className="p-1.5 rounded-lg border border-orange-200 text-orange-500 hover:bg-orange-50">
                                   <Pencil size={13} />
                                 </button>
                               ) : null}
-                              <button onClick={() => setConfirmExcluir(item)} title="Inativar"
-                                className="p-1.5 rounded-lg border border-red-200 text-red-400 hover:bg-red-50">
-                                <Trash2 size={13} />
-                              </button>
+                              {podeAtivar && (
+                                <button onClick={() => handleToggle(item)} title={item.ativo ? 'Inativar' : 'Ativar'}
+                                  className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50">
+                                  {item.ativo ? <ToggleRight size={13} className="text-blue-600" /> : <ToggleLeft size={13} className="text-blue-600" />}
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -755,6 +799,17 @@ export default function Farmacia() {
                         {item.lote && ` · Lote ${item.lote}`}
                         {' · '}{item.ativo ? 'Ativo' : 'Inativo'}
                       </p>
+                      {!item.ativo && item.inativoEm && (
+                        <p className="text-[10px] text-gray-400 mt-0.5">
+                          Inativado em {formatDate(item.inativoEm)}{item.inativoPorNome ? ` por ${item.inativoPorNome}` : ''}
+                          {item.inativoMotivo ? <> — <JustificativaCancelamento texto={item.inativoMotivo} className="inline" /></> : ''}
+                        </p>
+                      )}
+                      {item.ativo && item.ativoPorNome && (
+                        <p className="text-[10px] text-gray-400 mt-0.5">
+                          Ativado em {formatDate(item.ativoEm)} por {item.ativoPorNome}
+                        </p>
+                      )}
                       <div className="flex flex-wrap gap-2 mt-2">
                         {item.emUso ? (
                           <button onClick={() => setItemView(item)}
@@ -763,14 +818,17 @@ export default function Farmacia() {
                           </button>
                         ) : podeEditar ? (
                           <button onClick={() => preencherEdicao(item)}
-                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
+                            className="flex items-center gap-1 px-2.5 py-1 border border-orange-200 text-orange-600 rounded-lg text-xs hover:bg-orange-50 transition-colors">
                             <Pencil size={11} /> Editar
                           </button>
                         ) : null}
-                        <button onClick={() => setConfirmExcluir(item)}
-                          className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
-                          <Trash2 size={11} /> Inativar
-                        </button>
+                        {podeAtivar && (
+                          <button onClick={() => handleToggle(item)}
+                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                            {item.ativo ? <ToggleRight size={11} className="text-blue-600" /> : <ToggleLeft size={11} className="text-blue-600" />}
+                            {item.ativo ? 'Inativar' : 'Ativar'}
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
@@ -1062,30 +1120,17 @@ export default function Farmacia() {
                 </div>
               )}
 
-              {/* Status */}
-              <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-                <p className="text-[10px] font-semibold text-gray-500 mb-2">Status Cadastral</p>
-                <div className="flex gap-1">
-                  {['Inativo','Ativo'].map((opt) => (
-                    <button key={opt} onClick={() => setForm((f) => ({ ...f, ativo: opt === 'Ativo' }))}
-                      className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                        (opt === 'Ativo') === form.ativo
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-white border border-gray-300 text-gray-600 hover:bg-gray-100'
-                      }`}>{opt}</button>
-                  ))}
-                </div>
-              </div>
-
               <ErroAcao erro={erroAcao} className="mb-2" />
-              <div className="flex gap-2">
-                <button onClick={salvar} disabled={salvando}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl text-sm font-semibold disabled:opacity-60">
-                  {salvando ? 'Salvando...' : editandoId ? 'Salvar Alterações' : estoqueExistente ? 'Adicionar ao Estoque' : 'Registrar Entrada'}
-                </button>
+              {/* Rodapé no padrão da aplicação: Cancelar + ação principal, tamanho
+                  padrão (px-4/px-6 py-2.5), alinhados à direita. */}
+              <div className="flex items-center justify-end gap-3">
                 <button onClick={limparForm}
-                  className="px-4 border border-gray-300 text-gray-600 rounded-xl text-sm hover:bg-gray-50">
+                  className="px-4 py-2.5 border border-gray-300 text-gray-600 rounded-xl text-sm font-semibold hover:bg-gray-50 transition-colors">
                   Cancelar
+                </button>
+                <button onClick={salvar} disabled={salvando}
+                  className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white rounded-xl text-sm font-semibold transition-colors">
+                  {salvando ? 'Salvando...' : 'Salvar'}
                 </button>
               </div>
             </div>
@@ -1453,16 +1498,6 @@ export default function Farmacia() {
         </>
       )}
 
-      {/* ── Modal: confirmar exclusão (justificativa obrigatória) ────────── */}
-      <ModalJustificativa
-        aberto={!!confirmExcluir}
-        titulo="Inativar item do estoque?"
-        descricao={confirmExcluir ? `${confirmExcluir.medicamento.nome}${confirmExcluir.lote ? ` · Lote ${confirmExcluir.lote}` : ''}` : undefined}
-        acaoLabel="Inativar"
-        onConfirmar={confirmarExcluir}
-        onFechar={() => setConfirmExcluir(null)}
-      />
-
       {/* ── Modal: cadastrar novo fornecedor pelo seletor da entrada de estoque ── */}
       {showNovoForn && (
         <ModalNovoFornecedor
@@ -1470,6 +1505,16 @@ export default function Farmacia() {
           onClose={() => setShowNovoForn(false)}
         />
       )}
+
+      <ModalJustificativa
+        aberto={!!inativandoItem}
+        titulo="Inativar item do estoque?"
+        descricao={inativandoItem ? `${inativandoItem.medicamento.nome}${inativandoItem.lote ? ` — Lote ${inativandoItem.lote}` : ''} deixa de aparecer como ativo.` : undefined}
+        acaoLabel="Inativar"
+        processando={togglingAtivo}
+        onConfirmar={(motivo) => { if (inativandoItem) confirmarToggle(inativandoItem, motivo); }}
+        onFechar={() => setInativandoItem(null)}
+      />
     </PageContainer>
   );
 }

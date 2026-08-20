@@ -37,6 +37,7 @@ const {
 } = require('../lib/usuarioEmpresa');
 const { storage } = require('../storage');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
+const { notificarAdminSeNaoEncontrado: notificarCrmvNaoEncontrado } = require('../services/crmvService');
 
 // Remove zeros à esquerda do número CRMV, mantém a UF
 // Ex: "00123/SP" → "123/SP" | "13557/RJ" → "13557/RJ"
@@ -382,6 +383,18 @@ const UserController = {
       // (o antigo flag `isConvidado` deixou de decidir a troca de tipo — quem decide
       // é o vínculo no contexto ativo, logo abaixo)
 
+      // CRMV já salvo ANTES desta gravação — capturado cedo, porque mais abaixo o
+      // vínculo/perfil é sobrescrito com o valor novo. Serve pra: (1) o gate de
+      // CRMV_OBRIGATORIO logo a seguir e (2) decidir, no fim da função, se o aviso
+      // silencioso ao ADMIN (crmv não encontrado no CFMV) precisa disparar — reenviar
+      // o MESMO CRMV a cada save da tela não deve gerar um e-mail novo toda vez.
+      const crmvAntesDoSalvamento = String(
+        (req.empresaId
+          ? (await perfilDaEmpresa(Number(req.user.id), Number(req.empresaId)))?.crmv
+          : (await prisma.vetPerfil.findUnique({ where: { userId: Number(req.user.id) }, select: { crmv: true } }))?.crmv
+        ) ?? ''
+      ).trim();
+
       // ── DECLAROU ESPECIALIDADE ⇒ PRECISA DE CRMV (2026-08-16) ──────────────────
       // A especialidade é a atuação clínica: quem a declara está dizendo que atende, e
       // atendimento tem responsável técnico. Vale para QUALQUER cargo — inclusive o
@@ -404,10 +417,7 @@ const UserController = {
       if (especDoBody.length > 0 && !String(crmv ?? '').trim()) {
         // Só exige quando ele TAMBÉM não tem CRMV já cadastrado nesta empresa: quem já
         // informou antes pode salvar outras partes da tela sem reenviar o campo.
-        const crmvSalvo = req.empresaId
-          ? (await perfilDaEmpresa(Number(req.user.id), Number(req.empresaId)))?.crmv
-          : null;
-        if (!String(crmvSalvo ?? '').trim()) {
+        if (!crmvAntesDoSalvamento) {
           return res.status(400).json({
             success: false,
             code:    'CRMV_OBRIGATORIO',
@@ -650,6 +660,20 @@ const UserController = {
       }
 
       console.log('✅ Cadastro Pessoal atualizado - Email:', email);
+
+      // Verificação SILENCIOSA do CRMV contra o índice do CFMV — nunca bloqueia o
+      // cadastro (ver crmvService.js). Só dispara quando o CRMV é novo/mudou (não
+      // reenvia o mesmo alerta a cada save) e não é aguardado: falha ou demora aqui
+      // não pode atrasar nem derrubar a resposta ao usuário, que nunca vê o resultado.
+      const crmvNovoNormalizado = String(crmv ?? '').trim();
+      if (crmvNovoNormalizado && crmvNovoNormalizado.toUpperCase() !== crmvAntesDoSalvamento.toUpperCase()) {
+        notificarCrmvNaoEncontrado({
+          crmv:        crmvNovoNormalizado,
+          nome:        updatedUser.fullName,
+          telefone:    updatedUser.phone,
+          tipoUsuario: membroCtx?.cargo ?? updatedUser.userType,
+        }).catch(() => {}); // a própria função já loga a falha — aqui é só a garantia de nunca propagar
+      }
 
       const novoToken = assinarAccessToken(updatedUser); // ← userType já corrigido
 

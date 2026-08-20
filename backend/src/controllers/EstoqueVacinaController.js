@@ -5,6 +5,7 @@
 const prisma = require('../lib/prisma').default;
 const { escopoCatalogoEmpresa } = require('../middlewares/empresaAtiva.middleware');
 const { registrarAuditoria } = require('../lib/auditoria');
+const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
 
 const INCLUDE_LOTE = {
   vacina:         { select: { id: true, nome: true, fabricante: true, via: true, ativo: true } },
@@ -70,7 +71,7 @@ const listar = async (req, res) => {
 
     // Não-ADMIN sem empresa ativa não vê nada
     if (!empresaId && req.user?.userType !== 'ADMIN') {
-      return res.json({ dados: [], meta: { totalLotes: 0, totalVencidos: 0, totalVencendo: 0, totalDoses: 0 } });
+      return res.json({ dados: [], meta: { totalLotes: 0, totalVencidos: 0, totalVencendo: 0, totalDoses: 0, totalAbaixoMinimo: 0, totalAbaixoAlarmante: 0 } });
     }
 
     const where = {};
@@ -100,11 +101,12 @@ const listar = async (req, res) => {
       }
     }
 
-    const lotes = await prisma.loteVacina.findMany({
+    const lotesRaw = await prisma.loteVacina.findMany({
       where,
       include: INCLUDE_LOTE,
       orderBy: { validade: 'asc' },
     });
+    const lotes = await anexarTrilha(lotesRaw, 'lote_vacina');
 
     const hoje = new Date();
     const em30 = new Date(); em30.setDate(em30.getDate() + 30);
@@ -113,10 +115,12 @@ const listar = async (req, res) => {
     const totalVencidos = lotes.filter(l => l.ativo && new Date(l.validade) < hoje).length;
     const totalVencendo = lotes.filter(l => l.ativo && new Date(l.validade) >= hoje && new Date(l.validade) <= em30).length;
     const totalDoses    = lotes.filter(l => l.ativo).reduce((acc, l) => acc + l.qtdDisponivel, 0);
+    const totalAbaixoMinimo    = lotes.filter(l => l.ativo && l.qtdDisponivel <= l.estoqueMinimo).length;
+    const totalAbaixoAlarmante = lotes.filter(l => l.ativo && l.qtdDisponivel <= l.estoqueAlarmante && l.qtdDisponivel > l.estoqueMinimo).length;
 
     return res.json({
       dados: lotes,
-      meta: { totalLotes, totalVencidos, totalVencendo, totalDoses },
+      meta: { totalLotes, totalVencidos, totalVencendo, totalDoses, totalAbaixoMinimo, totalAbaixoAlarmante },
     });
   } catch (err) {
     console.error('EstoqueVacinaController.listar:', err);
@@ -319,11 +323,15 @@ const criar = async (req, res) => {
       valorUnitario,
       valorUnitarioRepassado,
       dataRecebimento,
+      estoqueMinimo    = 0,
+      estoqueAlarmante = 0,
     } = req.body;
 
     if (!vacinaId && !medicamentoCatId)
       return res.status(400).json({ error: 'vacinaId ou medicamentoCatId é obrigatório.' });
     if (!validade) return res.status(400).json({ error: 'Validade é obrigatória.' });
+    if (Number(estoqueMinimo) < 0 || Number(estoqueAlarmante) < 0)
+      return res.status(400).json({ error: 'Quantidades não podem ser negativas.' });
 
     const qtdFrascosN     = Number(qtdFrascos);
     const dosesPorFrascoN = Number(dosesPorFrasco) || 1;
@@ -392,6 +400,8 @@ const criar = async (req, res) => {
         qtdDisponivel:          qtdNovasDoses,
         qtdFrascos:             qtdFrascosN,
         dosesPorFrasco:         dosesPorFrascoN,
+        estoqueMinimo:          Number(estoqueMinimo)    || 0,
+        estoqueAlarmante:       Number(estoqueAlarmante) || 0,
         validadeHoras:          validadeHoras  != null ? Number(validadeHoras)  : null,
         validadeDias:           Number(validadeDias) || 0,
         valorUnitario:          valorUnitario  != null ? Number(valorUnitario)  : null,
@@ -418,11 +428,15 @@ const atualizar = async (req, res) => {
     const {
       lote, validade, qtdFrascos, dosesPorFrasco,
       validadeHoras, validadeDias, valorUnitario, valorUnitarioRepassado, dataRecebimento, ativo,
+      estoqueMinimo, estoqueAlarmante,
     } = req.body;
 
     const existe = await prisma.loteVacina.findUnique({ where: { id } });
     if (!existe) return res.status(404).json({ error: 'Lote não encontrado.' });
     if (!pertenceAEmpresa(existe, req)) return res.status(403).json({ error: 'Acesso não autorizado.' });
+
+    if (estoqueMinimo    !== undefined && Number(estoqueMinimo)    < 0) return res.status(400).json({ error: 'Estoque mínimo não pode ser negativo.' });
+    if (estoqueAlarmante !== undefined && Number(estoqueAlarmante) < 0) return res.status(400).json({ error: 'Estoque alarmante não pode ser negativo.' });
 
     const data = {};
     if (lote     !== undefined) data.lote     = lote?.trim() ?? null;
@@ -446,12 +460,65 @@ const atualizar = async (req, res) => {
     if (valorUnitarioRepassado !== undefined) data.valorUnitarioRepassado = valorUnitarioRepassado != null ? Number(valorUnitarioRepassado) : null;
     if (dataRecebimento        !== undefined) data.dataRecebimento        = dataRecebimento ? new Date(dataRecebimento) : null;
     if (ativo                  !== undefined) data.ativo                  = Boolean(ativo);
+    if (estoqueMinimo          !== undefined) data.estoqueMinimo          = Number(estoqueMinimo)    || 0;
+    if (estoqueAlarmante       !== undefined) data.estoqueAlarmante       = Number(estoqueAlarmante) || 0;
 
     const loteAtualizado = await prisma.loteVacina.update({ where: { id }, data, include: INCLUDE_LOTE });
     return res.json({ dados: loteAtualizado });
   } catch (err) {
     console.error('EstoqueVacinaController.atualizar:', err);
     return res.status(500).json({ error: 'Erro ao atualizar lote.' });
+  }
+};
+
+// ─── Ativar / Inativar (toggle) ───────────────────────────────────────────────
+// Mesma regra de /cadastro/fornecedores: um clique alterna o estado nos dois
+// sentidos; a trilha (quem/quando) fica em `ativo_em`/`ativo_por_id`/
+// `inativo_em`/`inativo_por_id` (lib/cadastroAtivacao.js). Justificativa
+// OBRIGATÓRIA só para INATIVAR (migration 20260901000001) — ativar segue direto.
+
+const toggle = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { motivo } = req.body ?? {};
+    const existe = await prisma.loteVacina.findUnique({
+      where:   { id },
+      include: { vacina: { select: { nome: true } }, medicamentoCat: { select: { nome: true } } },
+    });
+    if (!existe) return res.status(404).json({ error: 'Lote não encontrado.' });
+    if (!pertenceAEmpresa(existe, req)) return res.status(403).json({ error: 'Acesso não autorizado.' });
+
+    const vaiInativar = existe.ativo;
+
+    if (vaiInativar && !motivo?.trim()) {
+      return res.status(400).json({ error: 'É obrigatório informar o motivo da inativação' });
+    }
+
+    if (vaiInativar) {
+      await registrarInativacao(prisma, 'lote_vacina', id, req.user.id, motivo.trim());
+    } else {
+      await registrarAtivacao(prisma, 'lote_vacina', id, req.user.id);
+    }
+
+    const nome = existe.medicamentoCat?.nome ?? existe.vacina?.nome ?? 'Vacina';
+    await registrarAuditoria(null, req, {
+      categoria:  'ALTERACAO',
+      entidade:   'ESTOQUE_VACINA',
+      entidadeId: id,
+      motivo:     vaiInativar ? motivo.trim() : null,
+      detalhes:   `${req.user.fullName ?? req.user.email} ${vaiInativar ? 'inativou' : 'ativou'} ${nome}${existe.lote ? ` — Lote ${existe.lote}` : ''}`,
+    });
+
+    const loteAtualizado = await prisma.loteVacina.findUnique({ where: { id }, include: INCLUDE_LOTE });
+    const [comTrilha] = await anexarTrilha([loteAtualizado], 'lote_vacina');
+
+    return res.json({
+      dados:    comTrilha,
+      mensagem: vaiInativar ? 'Lote inativado' : 'Lote ativado',
+    });
+  } catch (err) {
+    console.error('EstoqueVacinaController.toggle:', err);
+    return res.status(500).json({ error: 'Erro ao alternar status.' });
   }
 };
 
@@ -599,5 +666,6 @@ module.exports = {
   criar,
   atualizar,
   excluir,
+  toggle,
   ajustar,
 };

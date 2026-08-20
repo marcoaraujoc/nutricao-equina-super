@@ -1,5 +1,5 @@
 ﻿// src/pages/CadastroPessoal.tsx
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
@@ -18,11 +18,9 @@ import {
   TEMPO_CONSULTA_PADRAO_SISTEMA, LocalTrabalhoFields, rotuloPagamento,
   type LocalTrabalhoForm,
 } from '../components/UsuarioFormModal';
-import { CheckCircle2, XCircle, Loader2, Info, User, Plus, MapPin, Pencil, Trash2, Camera, KeyRound, X } from 'lucide-react';
+import { Loader2, Info, User, Plus, MapPin, Pencil, Trash2, Camera, KeyRound, X } from 'lucide-react';
 import InlineError from '../components/InlineError';
 import FieldError from '../components/FieldError';
-
-type CrmvStatus = 'idle' | 'checking' | 'valido' | 'invalido' | 'indice_vazio' | 'erro';
 
 const CRMV_REGEX = /^\d{1,6}\/(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/i;
 
@@ -128,9 +126,7 @@ export default function CadastroPessoal() {
   const { loading: loadingPerms }  = usePermissoes();
   const [loading,     setLoading]     = useState(true);
   const [saving,      setSaving]      = useState(false);
-  const [crmvStatus,  setCrmvStatus]  = useState<CrmvStatus>('idle');
   const fromConvite = localStorage.getItem('s2vet_ob') === 'convite';
-  const crmvTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [especies,        setEspecies]        = useState<{ id: number; nome: string }[]>([]);
   const [especiesLoaded,  setEspeciesLoaded]  = useState(false);
@@ -491,25 +487,6 @@ export default function CadastroPessoal() {
     return `${digitos}/${letras}`;
   };
 
-  const verificarCRMV = (crmv: string) => {
-    if (crmvTimerRef.current) clearTimeout(crmvTimerRef.current);
-    if (!CRMV_REGEX.test(crmv.trim())) { setCrmvStatus('idle'); return; }
-
-    setCrmvStatus('checking');
-    crmvTimerRef.current = setTimeout(async () => {
-      try {
-        const res = await api.get('/crmv/validar', { params: { crmv: crmv.trim() } });
-        const { valido, motivo } = res.data.dados ?? {};
-        if (valido === true)  setCrmvStatus('valido');
-        else if (valido === false && motivo === 'nao_encontrado') setCrmvStatus('invalido');
-        else if (motivo === 'indice_vazio') setCrmvStatus('indice_vazio');
-        else setCrmvStatus('erro');
-      } catch {
-        setCrmvStatus('erro');
-      }
-    }, 600);
-  };
-
   // Limpa o erro de um campo assim que o usuário começa a corrigi-lo
   const limparErro = (name: string) =>
     setErrors(prev => (prev[name] ? { ...prev, [name]: '' } : prev));
@@ -517,7 +494,6 @@ export default function CadastroPessoal() {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setForm(prev => ({ ...prev, [name]: value }));
-    if (name === 'tipoUsuario') setCrmvStatus('idle');
     limparErro(name);
   };
 
@@ -559,8 +535,13 @@ export default function CadastroPessoal() {
               : 'Informe o CRMV: declarar especialidade significa atuar clinicamente.';
           }
           if (!CRMV_REGEX.test(form.crmv.trim())) return 'Formato de CRMV inválido. Use o formato: 12345/SP';
-          if (crmvStatus === 'invalido') return 'CRMV não encontrado no cadastro do CFMV. Verifique o número e o estado.';
-          if (crmvStatus === 'checking') return 'Aguarde a verificação do CRMV ser concluída';
+          // O CRMV NUNCA é conferido contra o índice do CFMV aqui — o índice é uma
+          // cópia raspada, sempre incompleta (nomes comuns já ficaram fora mesmo com
+          // sincronização "bem-sucedida"), e barrar o cadastro por isso travaria
+          // profissional legítimo. A checagem acontece em silêncio no backend, que
+          // libera o acesso de qualquer forma e só avisa o ADMIN por e-mail quando o
+          // número não bate — o usuário nunca vê esse resultado (ver UserController.
+          // updateMe / crmvService.notificarAdminSeNaoEncontrado).
         }
         return '';
       case 'especiesAtendidas':
@@ -1020,38 +1001,18 @@ export default function CadastroPessoal() {
                   onChange={e => {
                     const masked = maskCRMV(e.target.value);
                     setForm(prev => ({ ...prev, crmv: masked }));
-                    setCrmvStatus('idle');
                     limparErro('crmv');
-                    verificarCRMV(masked);
                   }}
                   onBlur={() => handleBlur('crmv')}
                   placeholder="12345/SP" maxLength={9}
                   className={inputCls('crmv')}
                 />
                 <FieldError message={errors.crmv} />
-                {crmvStatus === 'idle' && (
-                  <p className="text-xs text-gray-400 mt-1">Formato: 12345/SP</p>
-                )}
-                {crmvStatus === 'checking' && (
-                  <p className="flex items-center gap-1.5 text-xs text-gray-500 mt-1">
-                    <Loader2 size={12} className="animate-spin" /> Verificando no CFMV...
-                  </p>
-                )}
-                {crmvStatus === 'valido' && (
-                  <p className="flex items-center gap-1.5 text-xs text-emerald-600 mt-1">
-                    <CheckCircle2 size={12} /> CRMV encontrado no cadastro do CFMV
-                  </p>
-                )}
-                {crmvStatus === 'invalido' && (
-                  <p className="flex items-center gap-1.5 text-xs text-red-600 mt-1">
-                    <XCircle size={12} /> CRMV não encontrado no cadastro do CFMV
-                  </p>
-                )}
-                {(crmvStatus === 'indice_vazio' || crmvStatus === 'erro') && (
-                  <p className="flex items-center gap-1.5 text-xs text-amber-600 mt-1">
-                    <Info size={12} /> Verificação indisponível — formato aceito
-                  </p>
-                )}
+                {/* SEM feedback de verificação contra o CFMV, de propósito — o índice
+                    é uma cópia raspada e sempre incompleta; mostrar "não encontrado"
+                    aqui soaria como recusa de um profissional legítimo. A checagem
+                    acontece em silêncio no backend (ver validarCampo acima). */}
+                <p className="text-xs text-gray-400 mt-1">Formato: 12345/SP</p>
               </div>
 
               {/* Espécies: convidado = automático; independente = seleção.

@@ -21,6 +21,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { isValidEmail } from '../utils/validators';
 import InlineError from '../components/InlineError';
 import TipoServicoSelect from '../components/TipoServicoSelect';
+import ModalJustificativa from '../components/ModalJustificativa';
+import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import { formatDate } from '../utils/dateUtils';
 import {
   LocalizacaoCombobox, HoraInput, TIPOS_PAGAMENTO,
@@ -162,6 +164,7 @@ interface Prestador {
   ativoPorNome?:   string | null;
   inativoEm?:      string | null;
   inativoPorNome?: string | null;
+  inativoMotivo?:  string | null;
 }
 
 interface FormPrest {
@@ -488,7 +491,7 @@ function ModalPrestador({
                     <span className="text-xs text-gray-700 truncate">{resumoLocalPrestador(l)}</span>
                     <div className="flex items-center gap-1 flex-shrink-0">
                       <button type="button" onClick={() => editarLocal(idx)}
-                        className="p-1 text-emerald-500 hover:text-emerald-700 transition-colors"><Pencil size={13} /></button>
+                        className="p-1 text-orange-500 hover:text-orange-700 transition-colors"><Pencil size={13} /></button>
                       <button type="button" onClick={() => removerLocal(idx)}
                         className="p-1 text-red-400 hover:text-red-600 transition-colors"><Trash2 size={13} /></button>
                     </div>
@@ -809,33 +812,43 @@ export default function CadastroPrestador() {
     } finally { setSaving(false); }
   };
 
-  const handleToggle = async (p: Prestador) => {
+  // Prestador em vias de ser INATIVADO — pede justificativa antes do PATCH
+  // (ativar continua direto, sem modal). `viaModal` diferencia se o toggle veio
+  // da lista ou de dentro do modal de edição (para saber se sincroniza `editando`).
+  const [inativando, setInativando] = useState<{ p: Prestador; viaModal: boolean } | null>(null);
+
+  const handleToggle = (p: Prestador) => {
     setErroLista(null);
     if (p.tipoEntrada === 'SYSTEM' && !isAdmin) { setErroLista(msgSemPermissao('alternar status de prestador do catálogo global')); return; }
     if (!podeAtivar) { setErroLista(msgSemPermissao('alternar status do prestador')); return; }
-    try {
-      await api.patch(`/cadastro/prestadores/${p.id}/toggle`);
-      toast.success(p.ativo ? 'Prestador inativado' : 'Prestador ativado');
-      carregar();
-    } catch { setErroLista('Erro ao alternar status'); }
+    if (p.ativo) { setInativando({ p, viaModal: false }); return; }
+    confirmarToggle(p, false);
   };
 
   // Ativo/Inativo DENTRO do modal — mesmo endpoint do toggle da listagem, sem
   // duplicar a mutação. Atualiza `editando` no lugar (o modal continua aberto).
   const [togglingAtivo, setTogglingAtivo] = useState(false);
-  const handleToggleAtivoModal = async () => {
+  const handleToggleAtivoModal = () => {
     if (!editando) return;
     setErroModal(null);
     if (editando.tipoEntrada === 'SYSTEM' && !isAdmin) { setErroModal(msgSemPermissao('alternar status de prestador do catálogo global')); return; }
     if (!podeAtivar) { setErroModal(msgSemPermissao('alternar status do prestador')); return; }
+    if (editando.ativo) { setInativando({ p: editando, viaModal: true }); return; }
+    confirmarToggle(editando, true);
+  };
+
+  const confirmarToggle = async (p: Prestador, viaModal: boolean, motivo?: string) => {
+    const setErro = viaModal ? setErroModal : setErroLista;
+    setErro(null);
     setTogglingAtivo(true);
     try {
-      const res = await api.patch(`/cadastro/prestadores/${editando.id}/toggle`);
+      const res = await api.patch(`/cadastro/prestadores/${p.id}/toggle`, motivo ? { motivo } : undefined);
       const atualizado = res.data.dados as Prestador;
-      setEditando(prev => prev ? { ...prev, ativo: atualizado.ativo } : prev);
+      if (viaModal) setEditando(prev => prev ? { ...prev, ativo: atualizado.ativo } : prev);
       toast.success(atualizado.ativo ? 'Prestador ativado' : 'Prestador inativado');
+      setInativando(null);
       carregar();
-    } catch { setErroModal('Erro ao alternar status'); }
+    } catch { setErro('Erro ao alternar status'); }
     finally { setTogglingAtivo(false); }
   };
 
@@ -941,20 +954,21 @@ export default function CadastroPrestador() {
                 {filtroAtivo === 'ativo' && (
                   <p className="text-[11px] text-gray-400 mt-1">
                     Criado em {formatDate(p.createdAt)}
-                    {p.ativoEm ? ` · Ativado em ${formatDate(p.ativoEm)}${p.ativoPorNome ? ` por ${p.ativoPorNome}` : ''}` : ''}
+                    {p.ativoPorNome ? ` · Ativado em ${formatDate(p.ativoEm ?? p.createdAt)} por ${p.ativoPorNome}` : ''}
                   </p>
                 )}
                 {filtroAtivo === 'inativo' && (
                   <p className="text-[11px] text-gray-400 mt-1">
                     Inativado em {formatDate(p.inativoEm)}
                     {p.inativoPorNome ? ` por ${p.inativoPorNome}` : ''}
+                    {p.inativoMotivo ? <> — <JustificativaCancelamento texto={p.inativoMotivo} className="inline" /></> : ''}
                   </p>
                 )}
                 {(p.tipoEntrada !== 'SYSTEM' || isAdmin) && (podeEditar || podeAtivar) && (
                   <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-50">
                     {podeEditar && (
                       <button onClick={() => abrirEdicao(p)}
-                        className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-emerald-200 rounded-lg text-xs text-emerald-600 hover:bg-emerald-50 transition-colors">
+                        className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-orange-200 rounded-lg text-xs text-orange-600 hover:bg-orange-50 transition-colors">
                         <Pencil size={11} /> Editar
                       </button>
                     )}
@@ -973,7 +987,8 @@ export default function CadastroPrestador() {
 
           {/* Desktop */}
           <div className="hidden md:block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto rounded-2xl">
+            <table className="w-full min-w-[1020px] text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nome</th>
@@ -992,6 +1007,7 @@ export default function CadastroPrestador() {
                     <>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado em</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado por</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
                     </>
                   )}
                   {(podeEditar || podeAtivar) && <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>}
@@ -1032,7 +1048,7 @@ export default function CadastroPrestador() {
                     {filtroAtivo === 'ativo' && (
                       <>
                         <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(p.createdAt)}</td>
-                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(p.ativoEm)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(p.ativoEm ?? p.createdAt)}</td>
                         <td className="px-4 py-3 whitespace-nowrap text-gray-600">{p.ativoPorNome ?? '—'}</td>
                       </>
                     )}
@@ -1040,6 +1056,7 @@ export default function CadastroPrestador() {
                       <>
                         <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(p.inativoEm)}</td>
                         <td className="px-4 py-3 whitespace-nowrap text-gray-600">{p.inativoPorNome ?? '—'}</td>
+                        <td className="px-4 py-3"><JustificativaCancelamento texto={p.inativoMotivo} /></td>
                       </>
                     )}
                     {(podeEditar || podeAtivar) && (
@@ -1050,7 +1067,7 @@ export default function CadastroPrestador() {
                           <div className="flex items-center justify-end gap-1">
                             {podeEditar && (
                               <button onClick={() => abrirEdicao(p)} title="Editar"
-                                className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                                className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
                                 <Pencil size={14} />
                               </button>
                             )}
@@ -1068,6 +1085,7 @@ export default function CadastroPrestador() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         </>
       )}
@@ -1093,6 +1111,16 @@ export default function CadastroPrestador() {
           onCancelar={() => setDupInativoInfo(null)}
         />
       )}
+
+      <ModalJustificativa
+        aberto={!!inativando}
+        titulo="Inativar prestador?"
+        descricao={inativando ? `${inativando.p.nome} deixa de aparecer como ativo.` : undefined}
+        acaoLabel="Inativar"
+        processando={togglingAtivo}
+        onConfirmar={(motivo) => { if (inativando) confirmarToggle(inativando.p, inativando.viaModal, motivo); }}
+        onFechar={() => setInativando(null)}
+      />
     </PageContainer>
   );
 }

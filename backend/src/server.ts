@@ -825,8 +825,11 @@ registrarJob('marcar_faturas_atrasadas', {
 
 // ===================== CRON — CANCELAMENTO DE AGENDAMENTOS NÃO REALIZADOS =====================
 // Corporativo (todas as empresas). Liga/desliga e horário ficam sob controle do ADMIN
-// na tela de Configuração (CronAgenda). Cancela os agendamentos ainda AGENDADO cujo
-// horário já passou (não realizados/CONCLUIDO), preservando os EM_ANDAMENTO e futuros.
+// na tela de Configuração (CronAgenda). Cancela (status CANCELADO_AUTOMATICAMENTE — só
+// esta rotina o grava) os agendamentos AGENDADO/ATRASADA/EM_ANDAMENTO cujo horário já
+// passou e que nunca chegaram a CONCLUIDO/FINALIZADO — inclui EM_ANDAMENTO desde
+// 2026-08-18: o atendimento pode ter sido INICIADO e nunca concluído, e sem este ramo
+// ficava travado em "Em Andamento" para sempre. Futuros são sempre preservados.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { cancelarAgendamentosNaoRealizados, marcarAgendamentosAtrasados } = require('./services/agendamentoCronService');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -887,12 +890,26 @@ registrarJob('marcar_agendamentos_atrasados', {
 // itens já passou: sem nenhuma execução → CANCELADO; execução parcial → CANCELADO_PARCIALMENTE
 // (itens não executados cancelados, executados/faturados preservados). Libera reservas de estoque.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { cancelarPrescricoesNaoExecutadas } = require('./services/prescricaoCronService');
+const { cancelarPrescricoesNaoExecutadas, cancelarDosesPrescricaoPerdidas } = require('./services/prescricaoCronService');
 registrarJob('cancelar_prescricoes_nao_executadas', {
   nome: 'Cancelamento de prescrições não executadas',
   exprPadrao: '40 23 * * *', // diariamente às 23:40
   fn: () => comAlerta('Cancelamento de prescrições não executadas',
     porEmpresa('PrescricaoCancelamento-Cron', 'prescrição', cancelarPrescricoesNaoExecutadas)),
+});
+
+// ===================== CRON — CANCELAMENTO DE DOSE PERDIDA (ROLLING SCHEDULE) ==========
+// Regra de produto (2026-08-18): dose de item elegível (Hora Início opcional em "1x a
+// cada N dias") que NUNCA foi dada e cuja data prevista já passou é cancelada — item por
+// item, não o grupo inteiro — no dia seguinte. "Mesmo sem executar não pode mostrar em
+// outros dias": sem este cron, o item ficaria "atrasado, ainda pendente" para sempre.
+// Só alcança item com dosesExecutadas=0 (nunca tocado) — item que já teve QUALQUER dose
+// real dada nunca é mexido por cron automático (mesma cautela do job acima).
+registrarJob('cancelar_doses_prescricao_perdidas', {
+  nome: 'Cancelamento de doses de prescrição perdidas',
+  exprPadrao: '35 23 * * *', // diariamente às 23:35 — antes do cron de fim de janela (23:40)
+  fn: () => comAlerta('Cancelamento de doses de prescrição perdidas',
+    porEmpresa('PrescricaoDosePerdida-Cron', 'item', cancelarDosesPrescricaoPerdidas)),
 });
 
 // ===================== CRON — CANCELAMENTO DE ORÇAMENTOS VENCIDOS =====================

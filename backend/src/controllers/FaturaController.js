@@ -267,6 +267,17 @@ const FaturaController = {
         });
         const idsEmpresa = animaisEmpresa.map(a => a.userId);
         proprietarioIds = [...new Set([...proprietarioIds, ...idsEmpresa])];
+
+        // Proprietário INATIVADO (removido da empresa) some dos animais ativos acima,
+        // mas não pode sumir da tela enquanto tiver fatura pendente de pagamento —
+        // senão o financeiro perde de vista uma cobrança em aberto só porque o
+        // cliente foi desligado. Cobre ABERTA/FECHADA/ATRASADA (qualquer uma ainda
+        // não paga); fatura já PAGA não precisa reter o proprietário na lista.
+        const faturasPendentes = await prisma.fatura.findMany({
+          where:  { empresaId, status: { in: ['ABERTA', 'FECHADA', 'ATRASADA'] }, proprietarioId: { not: null } },
+          select: { proprietarioId: true },
+        });
+        proprietarioIds = [...new Set([...proprietarioIds, ...faturasPendentes.map(f => f.proprietarioId)])];
       }
 
       if (proprietarioIds.length === 0) return res.json({ dados: [] });
@@ -290,7 +301,7 @@ const FaturaController = {
       const proprietarios = await prisma.user.findMany({
         where: { id: { in: proprietarioIds } },
         select: {
-          id: true, fullName: true, email: true, phone: true,
+          id: true, fullName: true, email: true, phone: true, ativo: true,
           valorAssistencia: true, mensalista: true,
           animais: {
             where: whereAnimaisDoEscopo,
@@ -706,13 +717,18 @@ const FaturaController = {
   },
 
   // POST /catalogo-itens { tipo, descricao, valor } — cria item frequente
+  // `tipo` é texto livre (igual FaturaItem.tipo, ver adicionarItem) — NÃO validar
+  // contra uma lista fixa. Já existiu uma whitelist só com ASSISTENCIA/MEDICAMENTO/
+  // PROCEDIMENTO que rebaixava silenciosamente qualquer outro tipo (TRANSPORTE, ou
+  // qualquer tipo novo digitado no modal "+ Novo tipo…" da tela de Faturamento)
+  // para ASSISTENCIA — o item entrava no catálogo, só que arquivado no tipo errado
+  // e inalcançável de novo pelo tipo escolhido.
   criarItemCatalogo: async (req, res) => {
     const { tipo, descricao, valor } = req.body;
     if (!descricao || !String(descricao).trim()) {
       return res.status(400).json({ error: 'Informe a descrição do item' });
     }
-    const tiposValidos = ['ASSISTENCIA', 'MEDICAMENTO', 'PROCEDIMENTO'];
-    const tipoFinal = tiposValidos.includes(tipo) ? tipo : 'ASSISTENCIA';
+    const tipoFinal = (tipo && String(tipo).trim()) ? String(tipo).trim().toUpperCase() : 'ASSISTENCIA';
     try {
       const item = await prisma.faturaItemCatalogo.create({
         data: {

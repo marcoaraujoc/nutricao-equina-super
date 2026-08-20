@@ -359,7 +359,9 @@ export default function PainelPrincipal() {
 
   const agendaOrdenada = useMemo(
     () => [...agenda]
-      .filter(a => a.status !== 'CANCELADO')
+      // CANCELADO_AUTOMATICAMENTE sai daqui pelo mesmo motivo que CANCELADO: a rotina
+      // noturna também é uma desistência do atendimento, só que do sistema.
+      .filter(a => a.status !== 'CANCELADO' && a.status !== 'CANCELADO_AUTOMATICAMENTE')
       .sort((a, b) => a.dataHora.localeCompare(b.dataHora)),
     [agenda],
   );

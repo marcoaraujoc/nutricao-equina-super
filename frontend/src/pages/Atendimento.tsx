@@ -695,9 +695,20 @@ const Atendimento = () => {
       // oferecendo o Finalizar de um atendimento alheio. A MINHA vence, mesma regra
       // de `carregarEvolucoes` em SubModuloEvolucao.
       const res = await api.get(`/clinica/evolucoes/animal/${effectiveAnimalId}?status=EM_ANDAMENTO&limit=20&page=1`);
-      const dados = res.data?.dados ?? [];
+      type EvDados = {
+        id: number; veterinarioId?: number | null; agendamentoId?: number | null;
+        numero?: number | null; tipoAtendimento?: string | null; atendimentoNumero?: string | null;
+      };
+      const dados: EvDados[] = res.data?.dados ?? [];
       if (dados.length > 0) {
-        const ev = dados.find((e: { veterinarioId?: number | null }) => e.veterinarioId === (user?.id ?? 0)) ?? dados[0];
+        const minhas = dados.filter(e => e.veterinarioId === (user?.id ?? 0));
+        // Mais de uma MINHA aberta ao mesmo tempo (consultas distintas do mesmo
+        // animal — ex.: Clínica e Dermatologia no mesmo dia): o agendamento que veio
+        // na URL (o mesmo que o "Iniciar" da agenda propaga) desempata, dizendo qual
+        // das duas é a de agora. Sem esse contexto, cai na mais recente.
+        const ev = (agendamentoIdFromUrl != null
+          ? minhas.find(e => e.agendamentoId === agendamentoIdFromUrl)
+          : undefined) ?? minhas[0] ?? dados[0];
         setEvolucaoAtiva({
           id:               ev.id,
           numero:           ev.numero ?? null,
@@ -709,15 +720,21 @@ const Atendimento = () => {
         setEvolucaoAtiva(null);
       }
     } catch { /* silencioso */ }
-  }, [effectiveAnimalId]);
+  }, [effectiveAnimalId, agendamentoIdFromUrl, user?.id]);
 
   useEffect(() => {
     setEvolucaoAtiva(null);
     setViewPrescricaoId(null);
     setViewExameId(null);
     carregarAnimal();
-    carregarEvolucaoAtiva();
   }, [effectiveAnimalId]);
+
+  // Separado do reset acima de propósito: precisa recarregar quando o AGENDAMENTO da
+  // URL muda (ex.: "Iniciar" de uma segunda consulta do mesmo animal), não só quando o
+  // ANIMAL muda — é o agendamento que desempata qual das minhas evoluções abertas é a
+  // ativa agora (ver `carregarEvolucaoAtiva`). Rodar o reset acima a cada troca de
+  // agendamento limparia estado (viewPrescricaoId/viewExameId) sem necessidade.
+  useEffect(() => { carregarEvolucaoAtiva(); }, [carregarEvolucaoAtiva]);
 
   // Lista de pacientes (alimenta o SeletorAnimal). ESPERA o contexto ativo resolver —
   // senão no login a busca ia sem os headers x-empresa-id/x-equipe-id e voltava vazia,
@@ -847,6 +864,7 @@ const Atendimento = () => {
             } : null}
             onFaturaAtualizada={() => {}}
             evolucaoId={evolucaoAtiva?.id}
+            evolucaoDeOutro={!!evolucaoAtiva && !evolucaoAtivaEhMinha(evolucaoAtiva)}
             atendimentoNumero={evolucaoAtiva?.atendimentoNumero ?? undefined}
             onSalvo={refreshHistorico}
             openItemId={openItemId ?? viewPrescricaoId ?? undefined}
@@ -863,6 +881,7 @@ const Atendimento = () => {
             animalId={animalIdNum}
             animal={animal}
             evolucaoId={evolucaoAtiva?.id}
+            evolucaoDeOutro={!!evolucaoAtiva && !evolucaoAtivaEhMinha(evolucaoAtiva)}
             atendimentoNumero={evolucaoAtiva?.atendimentoNumero ?? undefined}
             onSalvo={refreshHistorico}
             openItemId={openItemId ?? viewExameId ?? undefined}
@@ -874,6 +893,7 @@ const Atendimento = () => {
           <SubModuloEncaminhamento
             animalId={animalIdNum}
             evolucaoId={evolucaoAtiva?.id}
+            evolucaoDeOutro={!!evolucaoAtiva && !evolucaoAtivaEhMinha(evolucaoAtiva)}
             atendimentoNumero={evolucaoAtiva?.atendimentoNumero ?? undefined}
             onSalvo={refreshHistorico}
           />

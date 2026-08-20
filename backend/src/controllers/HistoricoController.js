@@ -8,6 +8,17 @@ const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { escopoEvolucaoWhere, escopoFilhoEvolucaoWhere, escopoPrescricaoGrupoWhere } = require('../lib/clinicalScope');
 const { resumirHistorico } = require('../services/clinicaLLMService');
 const { formatAtendimentoNum } = require('../lib/faturaUtils');
+const { ehGestorNoContexto } = require('../middlewares/permissao.middleware');
+
+// Animal desativado (Animal.ativo=false) só é alcançável pelo gestor/admin — mesma
+// trava de AnimalController.obterPorId. `verificarAcessoAnimal` decide TENANT/
+// vínculo, não `ativo`; sem este check o histórico de um paciente excluído
+// continuava de pé.
+async function animalDesativadoBloqueiaAcesso(animalId, req) {
+  if (ehGestorNoContexto(req)) return false;
+  const animal = await prisma.animal.findUnique({ where: { id: animalId }, select: { ativo: true } });
+  return !animal?.ativo;
+}
 
 const VET_SELECT = { select: { id: true, fullName: true } };
 
@@ -42,6 +53,9 @@ const HistoricoController = {
       const acesso = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+      if (await animalDesativadoBloqueiaAcesso(animalId, req)) {
+        return res.status(404).json({ error: 'Animal não encontrado' });
+      }
 
       const whereAtivo = { animalId, ativo: true };
 
@@ -205,6 +219,9 @@ const HistoricoController = {
       const acesso = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+      if (await animalDesativadoBloqueiaAcesso(animalId, req)) {
+        return res.status(404).json({ error: 'Animal não encontrado' });
+      }
 
       const whereAtivo = { animalId, ativo: true };
 

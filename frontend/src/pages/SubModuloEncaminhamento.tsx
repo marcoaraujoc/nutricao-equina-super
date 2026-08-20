@@ -7,7 +7,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  Share2, Loader2, Check, Ban,
+  Share2, Loader2, Check, Ban, CheckSquare,
   UserCheck, ExternalLink, ShieldCheck, AlertTriangle, FileText,
   ChevronLeft, ChevronRight, MessageCircle, Mail,
 } from 'lucide-react';
@@ -16,6 +16,7 @@ import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import ModalJustificativa from '../components/ModalJustificativa';
 import InlineError from '../components/InlineError';
+import JustificativaCancelamento from '../components/JustificativaCancelamento';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -54,11 +55,20 @@ interface Encaminhamento {
   prestadorId:        number | null;
   prestador:          { id: number; fullName: string } | null;
   veterinario:        { id: number; fullName: string } | null;
+  // Justificativa do CANCELAMENTO (não confundir com `motivo`, que é o motivo do
+  // ENCAMINHAMENTO em si). O registro não tem coluna própria — o backend a resolve
+  // a partir do AuditLog na listagem, só para os `status === 'CANCELADO'`.
+  justificativaCancelamento?: string | null;
 }
 
 interface Props {
   animalId:           number;
   evolucaoId?:        number;
+  /** Evolução ativa existe, mas pertence a OUTRO profissional (não assumida por
+   *  mim, e eu não sou gestor) — bloqueia a CRIAÇÃO de encaminhamento nela. O
+   *  backend já recusa com 403 (EncaminhamentoController.criar); isto só evita o
+   *  formulário inteiro preenchido pra falhar no fim. */
+  evolucaoDeOutro?:   boolean;
   atendimentoNumero?: string;
   onSalvo?:           () => void;
 }
@@ -106,11 +116,14 @@ const montarTextoEncaminhamento = (enc: Encaminhamento): string => {
 
 // ─── Card mobile (padrão do Histórico de Evolução Clínica) ─────────────────────
 
-function EncaminhamentoCard({ enc, podeEditar, podeCompartilhar, onStatus }: {
+function EncaminhamentoCard({ enc, podeEditar, podeFinalizar, podeCompartilhar, finalizando, onStatus, onFinalizar }: {
   enc:              Encaminhamento;
   podeEditar:       boolean;
+  podeFinalizar:    boolean;
   podeCompartilhar: boolean;
-  onStatus:         (id: number, status: StatusEnc) => void;
+  finalizando:      boolean;
+  onStatus:         (id: number, status: 'CANCELADO') => void;
+  onFinalizar:      (id: number) => void;
 }) {
   const urgencia = URGENCIA_BADGE[enc.urgencia] ?? URGENCIA_BADGE.NORMAL;
   const { destino, interno } = getDestino(enc);
@@ -135,7 +148,13 @@ function EncaminhamentoCard({ enc, podeEditar, podeCompartilhar, onStatus }: {
         <span className="text-[10px] text-gray-400 flex-shrink-0">{interno ? '· prestador' : '· externo'}</span>
       </p>
 
-      {enc.motivo && <p className="text-[11px] text-gray-400 mt-0.5 line-clamp-1">{enc.motivo}</p>}
+      {enc.motivo && <p title={enc.motivo} className="text-[11px] text-gray-400 mt-0.5 line-clamp-1">{enc.motivo}</p>}
+      {enc.status === 'CANCELADO' && enc.justificativaCancelamento && (
+        <p className="text-[11px] text-gray-400 mt-0.5">
+          Justificativa:{' '}
+          <JustificativaCancelamento texto={enc.justificativaCancelamento} className="inline-block align-bottom max-w-[70vw]" />
+        </p>
+      )}
 
       {interno && enc.status === 'PENDENTE' && (
         <p className="flex items-center gap-1 mt-1 text-[11px] text-emerald-700">
@@ -148,6 +167,12 @@ function EncaminhamentoCard({ enc, podeEditar, podeCompartilhar, onStatus }: {
       </p>
 
       <div className="flex flex-wrap gap-2 mt-2">
+        {enc.status === 'PENDENTE' && podeFinalizar && (
+          <button onClick={() => onFinalizar(enc.id)} disabled={finalizando}
+            className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors disabled:opacity-50">
+            {finalizando ? <Loader2 size={11} className="animate-spin" /> : <CheckSquare size={11} />} Concluir
+          </button>
+        )}
         {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
         {podeCompartilhar && (
           <button onClick={() => abrirWhatsApp(texto)}
@@ -174,11 +199,14 @@ function EncaminhamentoCard({ enc, podeEditar, podeCompartilhar, onStatus }: {
 
 // ─── Linha da tabela desktop (padrão do Histórico de Evolução Clínica) ─────────
 
-function EncaminhamentoRow({ enc, podeEditar, podeCompartilhar, onStatus }: {
+function EncaminhamentoRow({ enc, podeEditar, podeFinalizar, podeCompartilhar, finalizando, onStatus, onFinalizar }: {
   enc:              Encaminhamento;
   podeEditar:       boolean;
+  podeFinalizar:    boolean;
   podeCompartilhar: boolean;
-  onStatus:         (id: number, status: StatusEnc) => void;
+  finalizando:      boolean;
+  onStatus:         (id: number, status: 'CANCELADO') => void;
+  onFinalizar:      (id: number) => void;
 }) {
   const urgencia = URGENCIA_BADGE[enc.urgencia] ?? URGENCIA_BADGE.NORMAL;
   const { destino, interno } = getDestino(enc);
@@ -196,7 +224,12 @@ function EncaminhamentoRow({ enc, podeEditar, podeCompartilhar, onStatus }: {
             {urgencia.label}
           </span>
         )}
-        {enc.motivo && <p className="text-[11px] text-gray-400 mt-0.5 line-clamp-1">{enc.motivo}</p>}
+        {enc.motivo && <p title={enc.motivo} className="text-[11px] text-gray-400 mt-0.5 line-clamp-1">{enc.motivo}</p>}
+      </td>
+      <td className="px-4 py-3">
+        {enc.status === 'CANCELADO'
+          ? <JustificativaCancelamento texto={enc.justificativaCancelamento} />
+          : <span className="text-gray-300">—</span>}
       </td>
       <td className="px-4 py-3 max-w-[180px]">
         <p className="flex items-center gap-1.5 text-xs text-gray-700">
@@ -212,6 +245,12 @@ function EncaminhamentoRow({ enc, podeEditar, podeCompartilhar, onStatus }: {
       </td>
       <td className="px-4 py-3">
         <div className="flex items-center justify-start gap-1">
+          {enc.status === 'PENDENTE' && podeFinalizar && (
+            <button onClick={() => onFinalizar(enc.id)} disabled={finalizando} title="Concluir"
+              className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
+              {finalizando ? <Loader2 size={14} className="animate-spin" /> : <CheckSquare size={14} />}
+            </button>
+          )}
           {podeCompartilhar && (
             <button onClick={() => abrirWhatsApp(texto)} title="WhatsApp"
               className="p-1.5 text-green-500 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors">
@@ -531,20 +570,26 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
 
 // ─── SubModuloEncaminhamento ──────────────────────────────────────────────────
 
-export default function SubModuloEncaminhamento({ animalId, evolucaoId, onSalvo }: Props) {
+export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucaoDeOutro, onSalvo }: Props) {
   const { user } = useAuth();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
   const podeCriar   = isGestor || podeExecutar('atendimento.encaminhamentos.criar');
   const podeEditar  = isGestor || podeExecutar('atendimento.encaminhamentos.editar');
+  // Concluir é uma ação PRÓPRIA (`atendimento.encaminhamentos.finalizar`) — não pode
+  // herdar de `editar`, senão o Controle de Acesso deixa de ter efeito: um perfil com
+  // Editar liberado e Finalizar negado (ou vice-versa) precisa dos dois resultados
+  // distintos na tela, exatamente como já acontece em Evolução/Prescrição/Vacina/Exames.
+  const podeFinalizar = isGestor || podeExecutar('atendimento.encaminhamentos.finalizar');
   // WhatsApp/e-mail tiram o conteúdo do sistema — mesmo gate do IMPRIMIR.
   const podeCompartilhar = isGestor || podeExecutar('atendimento.encaminhamentos.imprimir');
-  // FORNECEDOR só cancela/edita encaminhamentos que ele próprio criou
+  // FORNECEDOR só cancela/edita/finaliza encaminhamentos que ele próprio criou
 
   const [encaminhamentos, setEncaminhamentos] = useState<Encaminhamento[]>([]);
   const [loading,          setLoading]         = useState(true);
   const [formKey,          setFormKey]         = useState(0);
   const [cancelandoId,     setCancelandoId]    = useState<number | null>(null);
+  const [finalizandoId,    setFinalizandoId]   = useState<number | null>(null);
   const [page,             setPage]            = useState(1);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
@@ -571,28 +616,44 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, onSalvo 
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
-  const handleStatus = async (id: number, status: StatusEnc, motivo?: string) => {
+  // Cancelamento — rota /status, gateada por `atendimento.encaminhamentos.editar`.
+  const handleStatus = async (id: number, status: 'CANCELADO', motivo?: string) => {
     if (!podeEditar) { semPermissao('alterar encaminhamentos'); return; }
-    // Cancelamento exige justificativa — abre o modal e retorna aqui com o motivo
-    if (status === 'CANCELADO' && !motivo) { setCancelandoId(id); return; }
+    // Exige justificativa — abre o modal e retorna aqui com o motivo
+    if (!motivo) { setCancelandoId(id); return; }
     try {
-      await api.patch(`/clinica/encaminhamentos/${id}/status`, { status, ...(motivo ? { motivo } : {}) });
+      await api.patch(`/clinica/encaminhamentos/${id}/status`, { status, motivo });
       const enc = encaminhamentos.find(e => e.id === id);
-      if (status === 'CONCLUIDO') {
-        toast.success(enc?.prestador
-          ? 'Encaminhamento concluído — acesso do prestador encerrado'
-          : 'Encaminhamento concluído');
-      } else {
-        toast(enc?.prestador
-          ? 'Encaminhamento cancelado — acesso do prestador encerrado'
-          : 'Encaminhamento cancelado', { icon: '🔒' });
-      }
+      toast(enc?.prestador
+        ? 'Encaminhamento cancelado — acesso do prestador encerrado'
+        : 'Encaminhamento cancelado', { icon: '🔒' });
       carregar();
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
       if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao atualizar encaminhamento');
     } finally {
       setCancelandoId(null);
+    }
+  };
+
+  // Concluir — rota PRÓPRIA /finalizar, gateada por `atendimento.encaminhamentos.finalizar`
+  // (mesmo padrão de Evolução/Prescrição/Vacina/Exames: não reusa a rota /status,
+  // que é do `editar` — senão o Controle de Acesso deixaria de valer para esta ação).
+  const handleFinalizar = async (id: number) => {
+    if (!podeFinalizar) { semPermissao('finalizar encaminhamentos'); return; }
+    setFinalizandoId(id);
+    try {
+      await api.patch(`/clinica/encaminhamentos/${id}/finalizar`);
+      const enc = encaminhamentos.find(e => e.id === id);
+      toast.success(enc?.prestador
+        ? 'Encaminhamento concluído — acesso do prestador encerrado'
+        : 'Encaminhamento concluído');
+      carregar();
+    } catch (err) {
+      const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
+      if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao concluir encaminhamento');
+    } finally {
+      setFinalizandoId(null);
     }
   };
 
@@ -617,6 +678,21 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, onSalvo 
         <p className="font-medium text-sm text-gray-500">Evolução necessária</p>
         <p className="text-xs mt-1 text-center max-w-xs">
           Inicie uma evolução na aba Evolução para registrar encaminhamentos neste atendimento.
+        </p>
+      </div>
+    );
+  }
+
+  // Evolução existe, mas é de OUTRO profissional (não assumida) — mesma regra que
+  // o backend já aplica em EncaminhamentoController.criar; aqui só evita chegar ao
+  // formulário pra falhar com 403 no fim.
+  if (evolucaoDeOutro) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+        <FileText size={32} className="mb-3 text-gray-200" />
+        <p className="font-medium text-sm text-gray-500">Evolução de outro profissional</p>
+        <p className="text-xs mt-1 text-center max-w-xs">
+          Você só pode encaminhar dentro de um atendimento seu. Assuma esta evolução na aba Evolução para registrar encaminhamentos aqui.
         </p>
       </div>
     );
@@ -672,8 +748,11 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, onSalvo 
                   key={enc.id}
                   enc={enc}
                   podeEditar={podeEditar && (isGestor || eAutor)}
+                  podeFinalizar={podeFinalizar && (isGestor || eAutor)}
                   podeCompartilhar={podeCompartilhar}
+                  finalizando={finalizandoId === enc.id}
                   onStatus={handleStatus}
+                  onFinalizar={handleFinalizar}
                 />
               );
             })}
@@ -686,6 +765,7 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, onSalvo 
                 <tr className="bg-gray-50 border-b border-gray-100">
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Data</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Especialidade</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Destino</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Responsável</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
@@ -699,8 +779,11 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, onSalvo 
                       key={enc.id}
                       enc={enc}
                       podeEditar={podeEditar && (isGestor || eAutor)}
+                      podeFinalizar={podeFinalizar && (isGestor || eAutor)}
                       podeCompartilhar={podeCompartilhar}
+                      finalizando={finalizandoId === enc.id}
                       onStatus={handleStatus}
+                      onFinalizar={handleFinalizar}
                     />
                   );
                 })}

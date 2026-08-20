@@ -42,6 +42,10 @@ const TENANT_PLANE = [
   // `resolverTipoNoContexto` e escopo de plataforma em `podeAcessarSistema`/
   // `empresasSemAcesso` (todas por user_id). Ver §16.5 do plano.
   'tb_usuario_empresa',
+  // ✅ 2026-08-30 — reserva de estoque de VACINA (espelho de tb_reservas_estoque, que é
+  // AGUARDANDO_RLS ainda). Nasceu direto com RLS: TENANT VIA PAI (tb_lotes_vacina, que
+  // tem empresa_id DIRETO) — migration 20260830000000_reserva_estoque_vacina.
+  'tb_reservas_estoque_vacina',
 ];
 
 // ─── AGUARDANDO RLS — são de tenant, ainda sem policy ─────────────────────────

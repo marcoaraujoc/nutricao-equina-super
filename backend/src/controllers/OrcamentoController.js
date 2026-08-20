@@ -12,6 +12,7 @@ const {
   aplicarPerfilEmRelacao: aplicarPerfilProprietarioEmRelacao,
 } = require('../lib/proprietarioPerfil');
 const { buildAnimalScopeWhere } = require('../lib/animalScope');
+const { proprietarioAtivoNaEmpresa } = require('../lib/visibilidade');
 const { registrarAuditoria } = require('../lib/auditoria');
 const { recalcularTotal, normalizarDesconto, descontoDoItem } = require('../lib/faturaUtils');
 const {
@@ -48,6 +49,7 @@ const TIPOS_COM_POSOLOGIA = ['MEDICAMENTO', 'PROCEDIMENTO', 'COMBO'];
 const ITEM_SELECT = {
   id: true, animalId: true, tipo: true, refId: true, especialidade: true,
   descricao: true, quantidade: true, unidade: true, dias: true, frequencia: true,
+  tipoDose: true, via: true,
   valorUnitario: true, descontoTipo: true, descontoValor: true,
   valorTotal: true, statusItem: true, importadoEm: true,
   animal: { select: { id: true, nome: true } },
@@ -114,6 +116,17 @@ function validarEspecialidade(item) {
   return `Informe a especialidade do item "${String(item.descricao ?? '').trim() || item.tipo}".`;
 }
 
+// VACINA exige Tipo de Dose e Via — os mesmos dois campos obrigatórios da tela
+// de aplicação (SubModuloVacina). Capturados aqui para a importação já vir
+// pronta, sem exigir preenchimento manual depois de importar.
+function validarVacina(item) {
+  if (item.tipo !== 'VACINA') return null;
+  const nome = String(item.descricao ?? '').trim() || 'vacina';
+  if (!String(item.tipoDose ?? '').trim()) return `Informe o tipo de dose de "${nome}".`;
+  if (!String(item.via ?? '').trim())      return `Informe a via de aplicação de "${nome}".`;
+  return null;
+}
+
 // Monta os dados de gravação de um item — usado por criar e atualizar (que
 // substitui a lista inteira), mantendo as duas rotas com as mesmas regras.
 function dadosDoItem(item, orcamentoId, refId) {
@@ -137,6 +150,9 @@ function dadosDoItem(item, orcamentoId, refId) {
     unidade:       item.unidade || null,
     dias,
     frequencia:    temPosologia && item.frequencia ? String(item.frequencia).slice(0, 50) : null,
+    // VACINA — tipo de dose e via de aplicação orçados (ver validarVacina).
+    tipoDose:      item.tipo === 'VACINA' && item.tipoDose ? String(item.tipoDose).slice(0, 50)  : null,
+    via:           item.tipo === 'VACINA' && item.via      ? String(item.via).slice(0, 100)      : null,
     valorUnitario: vu,
     descontoTipo:  desconto.descontoTipo,
     descontoValor: desconto.descontoValor,
@@ -241,6 +257,8 @@ const OrcamentoController = {
         if (!it.descricao?.trim())    return res.status(400).json({ error: 'Item sem descrição.' });
         const erroEsp = validarEspecialidade(it);
         if (erroEsp) return res.status(400).json({ error: erroEsp });
+        const erroVac = validarVacina(it);
+        if (erroVac) return res.status(400).json({ error: erroVac });
         // Desconto do item — valida antes de abrir a transação
         try { normalizarDesconto(it.descontoTipo, it.descontoValor); }
         catch (e) { return res.status(400).json({ error: e.message }); }
@@ -299,6 +317,8 @@ const OrcamentoController = {
         if (!TIPOS.includes(it.tipo)) return res.status(400).json({ error: `Tipo de item inválido: ${it.tipo}` });
         const erroEsp = validarEspecialidade(it);
         if (erroEsp) return res.status(400).json({ error: erroEsp });
+        const erroVac = validarVacina(it);
+        if (erroVac) return res.status(400).json({ error: erroVac });
         // Desconto do item — valida antes de abrir a transação
         try { normalizarDesconto(it.descontoTipo, it.descontoValor); }
         catch (e) { return res.status(400).json({ error: e.message }); }
@@ -384,8 +404,16 @@ const OrcamentoController = {
       if (orc.status === 'CANCELADO') return res.status(400).json({ error: 'Este orçamento já está cancelado.' });
 
       await prisma.$transaction(async (tx) => {
-        // Continua ativo=true — o orçamento permanece na listagem, agora como CANCELADO
-        await tx.orcamento.update({ where: { id }, data: { status: 'CANCELADO' } });
+        // Continua ativo=true — o orçamento permanece na listagem, agora como CANCELADO.
+        // `motivo` é ACRESCENTADO à observação (nunca sobrescreve o que o usuário já
+        // tinha escrito) — mesmo padrão do cancelamento automático por validade vencida
+        // (orcamentoCronService.js) e por inativação de proprietário
+        // (ProprietarioController.removerDaEmpresa). É o que faz a tela de Orçamento
+        // conseguir mostrar o motivo do cancelamento, manual ou automático, pelo mesmo campo.
+        await tx.orcamento.update({
+          where: { id },
+          data:  { status: 'CANCELADO', observacao: [orc.observacao?.trim(), motivo].filter(Boolean).join('\n') },
+        });
         await registrarAuditoria(tx, req, {
           categoria:  'CANCELAMENTO',
           entidade:   'ORCAMENTO',
@@ -675,8 +703,16 @@ const OrcamentoController = {
         where:  { AND: [scopeWhere, { ativo: true }] },
         select: { userId: true },
       });
+      // Proprietário removido DESTA empresa (ProprietarioPerfil.ativo=false) não entra
+      // pela via direta — só continuaria aparecendo se tivesse animal ativo no escopo
+      // (já coberto por `animais` acima).
+      const filtroPerfilAtivo = proprietarioAtivoNaEmpresa(empresaId).user;
       const propsDiretos = await prisma.user.findMany({
-        where: { userType: 'PROPRIETARIO', empresaId }, select: { id: true },
+        where: {
+          userType: 'PROPRIETARIO', empresaId, ativo: true,
+          ...(filtroPerfilAtivo?.OR ? { OR: filtroPerfilAtivo.OR } : {}),
+        },
+        select: { id: true },
       });
       const ids = [...new Set([...animais.map(a => a.userId), ...propsDiretos.map(p => p.id)])];
       if (ids.length === 0) return res.json({ dados: [] });

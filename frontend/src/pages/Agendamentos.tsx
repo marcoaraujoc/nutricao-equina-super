@@ -27,7 +27,10 @@ type TipoAgendamento   = 'CONSULTA' | 'VACINA' | 'RETORNO' | 'EXAME' | 'PROCEDIM
 // foi movido (diferente de CANCELADO, que é desistência).
 // TRANSFERIDO é o nome ANTIGO do mesmo estado — mantido só para os registros já
 // gravados; nada novo nasce com ele.
-type StatusAgendamento = 'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'CANCELADO' | 'ATRASADA' | 'REAGENDADO' | 'TRANSFERIDO';
+// CANCELADO_AUTOMATICAMENTE: mesmo efeito de CANCELADO (libera a grade), mas é o
+// SISTEMA que desiste — gravado só pela rotina noturna de fechamento do dia, nunca por
+// um clique humano (o backend recusa). Ver AgendamentoController#STATUS_SOMENTE_SISTEMA.
+type StatusAgendamento = 'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'CANCELADO' | 'CANCELADO_AUTOMATICAMENTE' | 'ATRASADA' | 'REAGENDADO' | 'TRANSFERIDO';
 type DiaStatus         = 'LIVRE' | 'PARCIAL' | 'OCUPADO';
 /**
  * Recorte da lista do dia:
@@ -167,7 +170,7 @@ const TIPOS: { value: TipoAgendamento; label: string; cor: string }[] = [
 ];
 
 // Espelha STATUS_LIVRES do AgendamentoController: não ocupam mais a grade.
-const STATUS_LIVRES: StatusAgendamento[] = ['CANCELADO', 'REAGENDADO', 'TRANSFERIDO'];
+const STATUS_LIVRES: StatusAgendamento[] = ['CANCELADO', 'CANCELADO_AUTOMATICAMENTE', 'REAGENDADO', 'TRANSFERIDO'];
 // "Foi remarcado" cobre o nome NOVO e o LEGADO. Importa para a observação: no
 // reagendamento ela diz "Reagendado para dd/mm às HH:MM"; no cancelamento é o motivo.
 const foiReagendado = (s: StatusAgendamento) => s === 'REAGENDADO' || s === 'TRANSFERIDO';
@@ -184,7 +187,7 @@ const STATUS_ABERTOS: StatusAgendamento[] = ['AGENDADO', 'EM_ANDAMENTO', 'ATRASA
 // operacional e só são consultados quando alguém procura por eles.
 // TRANSFERIDO não entra na lista — é o nome legado de REAGENDADO, e a opção
 // "Reagendado" já casa com os dois (ver `statusCasaFiltro`).
-const STATUS_FILTRAVEIS: StatusAgendamento[] = ['CONCLUIDO', 'FINALIZADO', 'CANCELADO', 'REAGENDADO'];
+const STATUS_FILTRAVEIS: StatusAgendamento[] = ['CONCLUIDO', 'FINALIZADO', 'CANCELADO', 'CANCELADO_AUTOMATICAMENTE', 'REAGENDADO'];
 
 /** O agendamento entra na lista com o filtro escolhido? */
 function statusCasaFiltro(status: StatusAgendamento, filtro: FiltroStatus): boolean {
@@ -269,6 +272,9 @@ const STATUS_COR: Record<StatusAgendamento, string> = {
   CONCLUIDO:    'bg-green-100 text-green-700',
   FINALIZADO:   'bg-green-100 text-green-700',
   CANCELADO:    'bg-red-100 text-red-700',
+  // Tom mais claro que CANCELADO de propósito: mesma família (é um cancelamento), mas
+  // visualmente distinguível de "a clínica desmarcou" — foi o SISTEMA que encerrou.
+  CANCELADO_AUTOMATICAMENTE: 'bg-red-50 text-red-400',
   ATRASADA:     'bg-orange-100 text-orange-700',
   REAGENDADO:   'bg-violet-100 text-violet-700',
   TRANSFERIDO:  'bg-violet-100 text-violet-700',   // legado
@@ -279,6 +285,7 @@ const STATUS_LABEL: Record<StatusAgendamento, string> = {
   CONCLUIDO:    'CONCLUÍDO',
   FINALIZADO:   'FINALIZADO',
   CANCELADO:    'CANCELADO',
+  CANCELADO_AUTOMATICAMENTE: 'CANCELADO AUTOMATICAMENTE',
   ATRASADA:     'ATRASADA',
   REAGENDADO:   'REAGENDADO',
   TRANSFERIDO:  'REAGENDADO',   // legado: mesmo estado, nome antigo
@@ -589,6 +596,18 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
    */
   const podeOperarLinha = (ag: AgendamentoGlobal) =>
     podeGerenciar && ehMinhaAgenda(ag);
+
+  /**
+   * INICIAR é mais estreito que as demais ações da linha: só aparece para quem
+   * VAI EXECUTAR o atendimento — o profissional atribuído (ou, sem ninguém
+   * atribuído, qualquer um com a ação liberada, já que aí não há de quem seria).
+   * ⚠️ Diferente de `ehMinhaAgenda`, NÃO inclui o bypass do gestor nem do criador:
+   * gestor que não é o executor e quem apenas AGENDOU para outro profissional não
+   * são quem vai atender — o caminho deles é ASSUMIR primeiro (`podeAssumir`,
+   * sempre disponível), e só depois disso Iniciar aparece.
+   */
+  const podeIniciarAtendimento = (ag: AgendamentoGlobal) =>
+    podeGerenciar && (!ag.veterinario?.id || ag.veterinario.id === meuUserId);
 
   // Transferir o atendimento para OUTRO profissional é ação EXCLUSIVA DO GESTOR
   // (2026-08-04). Não é permissão da matriz e não se configura: passar o paciente para
@@ -1737,9 +1756,9 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
 
   async function handleIniciarAtendimento(ag: AgendamentoGlobal) {
     if (!ag.animal?.id) { setErroLista('Animal não identificado no agendamento'); return; }
-    // Autoria: iniciar o atendimento de outro profissional abriria uma evolução no
-    // agendamento dele. O caminho é ASSUMIR primeiro (botão ao lado).
-    if (!ehMinhaAgenda(ag)) {
+    // Só quem VAI EXECUTAR inicia — nem gestor nem quem só agendou para outro
+    // profissional. O caminho para os dois é ASSUMIR primeiro (botão ao lado).
+    if (!podeIniciarAtendimento(ag)) {
       setErroLista('Este atendimento é de outro profissional. Assuma o agendamento antes de iniciá-lo.');
       return;
     }
@@ -2519,7 +2538,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                 const isAgendado    = ag.status === 'AGENDADO' || ag.status === 'ATRASADA';
                 const isCancelado   = STATUS_LIVRES.includes(ag.status);
                 const isEmAndamento = ag.status === 'EM_ANDAMENTO';
-                const podeContinuar = isEmAndamento && podeGerenciar;
+                const podeContinuar = isEmAndamento && podeIniciarAtendimento(ag);
                 // Antes da hora marcada não se inicia o atendimento — reagende.
                 const antecipado    = agendamentoAntecipado(ag.dataHora);
                 return (
@@ -2575,7 +2594,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                     {podeGerenciar && !isCancelado && (
                       <div onClick={e => e.stopPropagation()} className="flex items-center gap-2 flex-wrap border-t border-gray-100 pt-2">
                         {/* Adiantar pode: o título só INFORMA que o horário ainda não chegou */}
-                        {isAgendado && podeOperarLinha(ag) && (
+                        {isAgendado && podeIniciarAtendimento(ag) && (
                           <button onClick={() => handleIniciarAtendimento(ag)}
                             title={antecipado ? `Marcado para ${formatarHora(ag.dataHora)} — iniciar agora adianta o atendimento` : 'Iniciar atendimento'}
                             className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl text-xs font-semibold">
@@ -2633,7 +2652,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                 const isAgendado    = ag.status === 'AGENDADO' || ag.status === 'ATRASADA';
                     const isCancelado   = STATUS_LIVRES.includes(ag.status);
                     const isEmAndamento = ag.status === 'EM_ANDAMENTO';
-                    const podeContinuar = isEmAndamento && podeGerenciar;
+                    const podeContinuar = isEmAndamento && podeIniciarAtendimento(ag);
                     // Antes da hora marcada não se inicia o atendimento — reagende.
                     const antecipado    = agendamentoAntecipado(ag.dataHora);
                     return (
@@ -2705,7 +2724,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                                 usuário da agenda no meio da ação. */}
                             <div onClick={e => e.stopPropagation()} className="flex items-center justify-center gap-1.5">
                               {/* Adiantar pode: o título só INFORMA que o horário ainda não chegou */}
-                              {isAgendado && podeOperarLinha(ag) && (
+                              {isAgendado && podeIniciarAtendimento(ag) && (
                                 <button onClick={() => handleIniciarAtendimento(ag)}
                                   title={antecipado ? `Marcado para ${formatarHora(ag.dataHora)} — iniciar agora adianta o atendimento` : 'Iniciar atendimento'}
                                   className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl transition-colors">

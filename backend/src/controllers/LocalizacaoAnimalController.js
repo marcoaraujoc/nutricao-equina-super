@@ -3,6 +3,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
+const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 
 // Mapeamento estático: tipoLocalizacao → espécies atendidas (null = TODOS)
 const TIPO_ESPECIES = {
@@ -179,6 +180,12 @@ const LocalizacaoAnimalController = {
           equipeId:          equipeAlvo,
         },
       });
+      await registrarAuditoria(prisma, req, {
+        categoria:  'CRIACAO',
+        entidade:   'LOCALIZACAO',
+        entidadeId: loc.id,
+        detalhes:   `${loc.nome} — ${loc.tipoLocalizacao.replace(/_/g, ' ')}`,
+      });
       res.status(201).json({ sucesso: true, dados: loc });
     } catch (err) {
       console.error('Erro ao criar localização:', err);
@@ -221,6 +228,21 @@ const LocalizacaoAnimalController = {
           ...(tipoLocalizacao && { tipoLocalizacao }),
         },
       });
+
+      await registrarAlteracao(prisma, req, {
+        entidade:   'LOCALIZACAO',
+        entidadeId: Number(id),
+        campos: {
+          'nome':               { de: existe.nome,              para: loc.nome },
+          'CNPJ':               { de: existe.cnpj,              para: loc.cnpj },
+          'CEP':                { de: existe.cep,               para: loc.cep },
+          'endereço':           { de: existe.endereco,          para: loc.endereco },
+          'pessoa responsável': { de: existe.pessoaResponsavel, para: loc.pessoaResponsavel },
+          'telefone':           { de: existe.telefone,          para: loc.telefone },
+          'tipo':               { de: existe.tipoLocalizacao,   para: loc.tipoLocalizacao },
+        },
+      });
+
       res.json({ sucesso: true, dados: loc });
     } catch (err) {
       if (err.code === 'P2025')
@@ -245,6 +267,12 @@ const LocalizacaoAnimalController = {
       const loc = await prisma.localizacaoAnimal.update({
         where: { id: Number(id) },
         data: { ativo: !existe.ativo },
+      });
+      await registrarAuditoria(prisma, req, {
+        categoria:  'ALTERACAO',
+        entidade:   'LOCALIZACAO',
+        entidadeId: loc.id,
+        detalhes:   `${req.user.fullName ?? req.user.email} ${loc.ativo ? 'ativou' : 'inativou'} a localização ${loc.nome}`,
       });
       res.json({
         sucesso: true,

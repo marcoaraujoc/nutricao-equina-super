@@ -44,6 +44,9 @@ model User {
   ativoPorId           Int?      @map("ativo_por_id")
   inativoEm            DateTime? @map("inativo_em")
   inativoPorId         Int?      @map("inativo_por_id")
+  // Justificativa da inativação (migration 20260901000000) — obrigatória no
+  // endpoint (EquipeController.toggleMembro), exibida na aba Inativos da Equipe.
+  inativoMotivo        String?   @db.Text @map("inativo_motivo")
   resetPasswordToken   String?   @unique @db.VarChar(255)
   resetPasswordExpires DateTime?
   mustChangePassword   Boolean   @default(false)
@@ -154,6 +157,19 @@ model Animal {
   photoUrl           String?  @db.Text
   dataCadastro       DateTime @default(now())
   ativo              Boolean  @default(true)
+  // Trilha de ATIVAÇÃO/DESATIVAÇÃO do `ativo` acima (exclusão lógica — o animal
+  // some de tudo enquanto ativo=false; ver AnimalController.excluir/reativar e
+  // lib/animalAtivacao.js, migration 20260827000001). Nomes DELIBERADAMENTE
+  // diferentes de `inativo*` abaixo: aquele é outro recurso (bloqueio, paciente
+  // continua visível) e já ocupa `inativo_em`/`inativo_por_id`.
+  ativoEm        DateTime? @map("ativo_em")
+  ativoPorId     Int?      @map("ativo_por_id")
+  desativadoEm   DateTime? @map("desativado_em")
+  desativadoPorId Int?     @map("desativado_por_id")
+  // Justificativa da EXCLUSÃO LÓGICA acima (migration 20260901000000) — NÃO
+  // confundir com `inativoMotivo` abaixo, que é do bloqueio somente-leitura
+  // (Animal.inativo, outro recurso). Obrigatória em AnimalController.excluir.
+  desativadoMotivo String? @db.Text @map("desativado_motivo")
   especieId          Int
   racaId             Int?
   userId             Int
@@ -211,6 +227,7 @@ model Animal {
   faturaItens     FaturaItem[]           @relation("FaturaItemAnimal")
   resumosIA       ResumoAtendimentoIA[]  @relation("AnimalResumosIA")
   reservasEstoque ReservaEstoque[]       @relation("AnimalReservas")
+  reservasEstoqueVacina ReservaEstoqueVacina[] @relation("AnimalReservasVacina")
   designacoes     DesignacaoPrestador[]  @relation("AnimalDesignacoes")
   agendamentos    AgendamentoClinico[]   @relation("AnimalAgendamentos")
   resenha         ResenhaEquino?         @relation("AnimalResenha")
@@ -787,6 +804,11 @@ model LoteVacina {
   validade        DateTime
   qtdTotal        Int       @default(0) @map("qtd_total")
   qtdDisponivel   Int       @default(0) @map("qtd_disponivel")
+  // Alertas de nível de estoque (doses) — mesma lógica de EstoqueClinica.estoqueMinimo/
+  // .estoqueAlarmante (farmácia): mínimo = alerta vermelho, alarmante = alerta amarelo.
+  // 🔴 Migration GERADA (20260919000000), NÃO aplicada.
+  estoqueMinimo    Int      @default(0) @map("estoque_minimo")
+  estoqueAlarmante Int      @default(0) @map("estoque_alarmante")
   dosesPorFrasco  Int       @default(1)  @map("doses_por_frasco")
   qtdFrascos      Int       @default(0)  @map("qtd_frascos")
   validadeHoras   Int?      @map("validade_horas")
@@ -795,12 +817,23 @@ model LoteVacina {
   valorUnitarioRepassado Float?    @map("valor_unitario_repassado")
   dataRecebimento        DateTime? @map("data_recebimento")
   ativo           Boolean   @default(true)
+  // Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — mesma lógica de
+  // `Fornecedor` (migration 20260828000000_estoque_ativacao_trilha). Sem FK
+  // cascade: excluir quem fez a ação não apaga nem destrava o registro afetado.
+  ativoEm         DateTime? @map("ativo_em")
+  ativoPorId      Int?      @map("ativo_por_id")
+  inativoEm       DateTime? @map("inativo_em")
+  inativoPorId    Int?      @map("inativo_por_id")
+  // Justificativa da inativação (migration 20260901000001) — obrigatória em
+  // EstoqueVacinaController.toggle, exibida na aba Inativos.
+  inativoMotivo   String?   @db.Text @map("inativo_motivo")
   createdAt       DateTime  @default(now()) @map("created_at")
 
   vacina         Vacina?      @relation(fields: [vacinaId],         references: [id], onDelete: Cascade)
   medicamentoCat Medicamento? @relation("MedicamentoLotes",         fields: [medicamentoCatId], references: [id], onDelete: SetNull)
   empresa        Empresa      @relation("LoteVacinaEmpresa",        fields: [empresaId],        references: [id], onDelete: Restrict)
   aplicacoes     VacinaClinica[] @relation("LoteAplicacoes")
+  reservas       ReservaEstoqueVacina[] @relation("LoteVacinaReservas")
 
   @@index([vacinaId])
   @@index([empresaId])
@@ -845,6 +878,7 @@ model VacinaClinica {
   loteVacina  LoteVacina?      @relation("LoteAplicacoes",    fields: [loteId],        references: [id], onDelete: SetNull)
   evolucao    EvolucaoClinica? @relation("EvolucaoVacinas",   fields: [evolucaoId],    references: [id], onDelete: SetNull)
   faturaItens FaturaItem[]     @relation("FaturaItemVacina")
+  reservas    ReservaEstoqueVacina[] @relation("VacinaReservas")
 
   @@index([animalId])
   @@index([vacinaId])
@@ -1384,6 +1418,11 @@ model OrcamentoItem {
   // os dois campos voltam preenchidos na importação para a Prescrição (duração e frequência).
   dias          Int?
   frequencia    String?   @db.VarChar(50)
+  // VACINA: mesmos campos obrigatórios da tela de aplicação (Tipo Dose/Via) —
+  // capturados aqui (migration 20260902000000) para a importação já vir pronta,
+  // sem exigir preenchimento manual depois de importar.
+  tipoDose      String?   @db.VarChar(50)  @map("tipo_dose")
+  via           String?   @db.VarChar(100)
   valorUnitario Float     @default(0) @map("valor_unitario")
   // Desconto do item: PERCENTUAL (0-100) ou VALOR (R$ sobre o bruto). null/0 = sem desconto.
   descontoTipo  String?   @map("desconto_tipo") @db.VarChar(12)
@@ -1750,6 +1789,17 @@ model ProprietarioPerfil {
   diaVencimentoFatura Int?     @map("dia_vencimento_fatura")
   // Ativo DENTRO desta empresa (User.ativo continua global, só o ADMIN mexe)
   ativo     Boolean  @default(true)
+  // Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — mesma lógica de Fornecedor/
+  // Prestador/Tratador (migration 20260827000000), lida/gravada por
+  // lib/cadastroAtivacao.js. Sem FK cascade: excluir quem fez a ação não apaga
+  // nem restaura o registro afetado.
+  ativoEm      DateTime? @map("ativo_em")
+  ativoPorId   Int?      @map("ativo_por_id")
+  inativoEm    DateTime? @map("inativo_em")
+  inativoPorId Int?      @map("inativo_por_id")
+  // Justificativa da inativação (migration 20260901000000) — obrigatória em
+  // ProprietarioController.removerDaEmpresa, exibida na aba Inativos.
+  inativoMotivo String?  @db.Text @map("inativo_motivo")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -1944,6 +1994,12 @@ model MembroEquipe {
   diasTrabalho       String?  @db.VarChar(20) // CSV 0-6 (0=Dom … 6=Sáb)
   horaInicioTrabalho String?  @db.VarChar(5)  // HH:MM
   horaFimTrabalho    String?  @db.VarChar(5)  // HH:MM
+  // Checkbox "Atender somente no local de trabalho" (Incluir/Editar Membro). false
+  // (padrão) = atende em qualquer local, comportamento de sempre — nada muda. true = a
+  // listagem de animais deste profissional (lib/animalScope.js) fica restrita aos
+  // animais cuja localização bate com um dos `locaisTrabalho` DELE configurados para o
+  // dia de HOJE.
+  restringirPorLocal Boolean  @default(false) @map("restringir_por_local")
   createdAt DateTime @default(now())
 
   equipe Equipe @relation(fields: [equipeId], references: [id], onDelete: Cascade)
@@ -2153,12 +2209,14 @@ model CrmvValido {
 
 // Log de cada execução do scraper
 model CrmvSyncLog {
-  id             Int      @id @default(autoincrement())
-  executadoEm    DateTime @default(now())
-  totalRegistros Int      @default(0)
-  duracao        Int?     // segundos
-  sucesso        Boolean  @default(true)
-  erro           String?  @db.Text
+  id                Int      @id @default(autoincrement())
+  executadoEm       DateTime @default(now()) @db.Timestamptz
+  totalRegistros    Int      @default(0)
+  totalAdicionados  Int      @default(0)
+  totalRemovidos    Int      @default(0)
+  duracao           Int?     // segundos
+  sucesso           Boolean  @default(true)
+  erro              String?  @db.Text
 
   @@map("tb_crmv_sync_log")
   @@schema("schs2vet")
@@ -2245,6 +2303,16 @@ model EstoqueClinica {
   estoqueMinimo    Float     @default(0)        // alerta vermelho
   estoqueAlarmante Float     @default(0)        // alerta amarelo
   ativo            Boolean   @default(true)
+  // Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — mesma lógica de
+  // `Fornecedor` (migration 20260828000000_estoque_ativacao_trilha). Sem FK
+  // cascade: excluir quem fez a ação não apaga nem destrava o registro afetado.
+  ativoEm          DateTime? @map("ativo_em")
+  ativoPorId       Int?      @map("ativo_por_id")
+  inativoEm        DateTime? @map("inativo_em")
+  inativoPorId     Int?      @map("inativo_por_id")
+  // Justificativa da inativação (migration 20260901000001) — obrigatória em
+  // EstoqueController.toggle, exibida na aba Inativos.
+  inativoMotivo    String?   @db.Text @map("inativo_motivo")
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -2300,6 +2368,9 @@ model Tratador {
   ativoPorId   Int?      @map("ativo_por_id")
   inativoEm    DateTime? @map("inativo_em")
   inativoPorId Int?      @map("inativo_por_id")
+  // Justificativa da inativação (migration 20260901000000) — obrigatória em
+  // TratadorController.toggleAtivo, exibida na aba Inativos.
+  inativoMotivo String?  @db.Text @map("inativo_motivo")
   // SYSTEM (ADMIN) e registros legados: empresaId/equipeId null = visível para todos.
   // CLIENTE novo: escopado à empresa/equipe ativa (req.empresaId/req.equipeId) de quem criou.
   empresaId     Int      @map("empresa_id") // sem FK — sobrevive à exclusão da empresa
@@ -2342,6 +2413,9 @@ model Fornecedor {
   ativoPorId   Int?      @map("ativo_por_id")
   inativoEm    DateTime? @map("inativo_em")
   inativoPorId Int?      @map("inativo_por_id")
+  // Justificativa da inativação (migration 20260901000000) — obrigatória em
+  // FornecedorController.toggleAtivo, exibida na aba Inativos.
+  inativoMotivo String?  @db.Text @map("inativo_motivo")
   // SYSTEM (ADMIN) e registros legados: empresaId/equipeId null = visível para todos.
   // CLIENTE novo: escopado à empresa/equipe ativa (req.empresaId/req.equipeId) de quem criou.
   empresaId   Int?     @map("empresa_id") // sem FK — sobrevive à exclusão da empresa
@@ -2388,6 +2462,9 @@ model Prestador {
   ativoPorId   Int?      @map("ativo_por_id")
   inativoEm    DateTime? @map("inativo_em")
   inativoPorId Int?      @map("inativo_por_id")
+  // Justificativa da inativação (migration 20260901000000) — obrigatória em
+  // PrestadorController.toggleAtivo, exibida na aba Inativos.
+  inativoMotivo String?  @db.Text @map("inativo_motivo")
   empresaId   Int?     @map("empresa_id")
   equipeId    Int?     @map("equipe_id")
   // Login opcional, SEM MembroEquipe (decisão de 2026-08-21 revista): dá para logar,
@@ -2470,6 +2547,32 @@ model ReservaEstoque {
   @@unique([prescricaoGrupoId, estoqueId])
   @@index([estoqueId])
   @@map("tb_reservas_estoque")
+  @@schema("schs2vet")
+}
+
+// Reserva de doses de VACINA — espelho de `ReservaEstoque` (prescrição/medicamento),
+// mesma lógica: criada ao FINALIZAR (SALVA→FINALIZADA) via FEFO entre os lotes do
+// medicamento/vacina do catálogo, respeitando o que já está reservado por OUTRAS
+// vacinas; consumida (debitada de verdade em `LoteVacina.qtdDisponivel`) ao EXECUTAR;
+// liberada sem debitar ao CANCELAR antes da execução. Migration 20260830000000.
+// Não existe para o quadrante cliente:true (nunca debita) nem para
+// aplicadaPeloProprietario×!cliente (debita direto na FINALIZAÇÃO, sem passar pelo
+// plantão — não há intervalo "reservado, aguardando execução" para essa vacina).
+model ReservaEstoqueVacina {
+  id              Int      @id @default(autoincrement())
+  loteVacinaId    Int
+  vacinaClinicaId Int
+  animalId        Int
+  quantidade      Int
+  criadoEm        DateTime @default(now())
+
+  loteVacina    LoteVacina    @relation("LoteVacinaReservas", fields: [loteVacinaId],    references: [id], onDelete: Cascade)
+  vacinaClinica VacinaClinica @relation("VacinaReservas",     fields: [vacinaClinicaId], references: [id], onDelete: Cascade)
+  animal        Animal        @relation("AnimalReservasVacina", fields: [animalId],       references: [id], onDelete: Cascade)
+
+  @@unique([vacinaClinicaId, loteVacinaId])
+  @@index([loteVacinaId])
+  @@map("tb_reservas_estoque_vacina")
   @@schema("schs2vet")
 }
 

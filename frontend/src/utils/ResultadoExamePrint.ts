@@ -6,6 +6,8 @@
 // o conteúdo é o que voltou do laboratório, não o que foi pedido.
 
 import { resolverUrlAbsoluta } from './printUrl';
+import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura } from './print/PrintShell';
+import { imprimirHtml } from './print/imprimirHtml';
 
 export interface ResultadoItemPrint {
   parametro:  string;
@@ -59,8 +61,6 @@ export function numeroExamePrint(ex: { numero: number | null; id: number }): str
 // ─── Impressão ──────────────────────────────────────────────────────────────
 
 function gerarHtmlResultado(ex: ExameParaPrint, animal?: AnimalParaPrint | null): string {
-  const logoUrl = resolverUrlAbsoluta(animal?.logoUrl);
-
   const tabela = ex.resultadoItens.length > 0 ? `
     <table style="width:100%;border-collapse:collapse;margin-top:10px;">
       <thead>
@@ -104,29 +104,22 @@ function gerarHtmlResultado(ex: ExameParaPrint, animal?: AnimalParaPrint | null)
 <meta charset="UTF-8">
 <title>Resultado de Exame — S2Vet</title>
 <style>
-  @page { size: A4; margin: 16mm 20mm; }
+  ${PRINT_SHELL_CSS}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; font-size: 11px; color: #111; background: #fff; }
-  .header { border-bottom: 2px solid #1d4ed8; padding-bottom: 10px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: flex-end; }
-  .header h1 { font-size: 20px; font-weight: 700; color: #1d4ed8; }
-  .brand-logo { max-height: 32px; max-width: 200px; object-fit: contain; }
-  .header .sub { font-size: 10px; color: #6b7280; margin-top: 2px; }
+  body { font-family: Arial, sans-serif; font-size: 11px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
+  .doc-info-row { display: flex; justify-content: flex-end; margin-bottom: 12px; }
   .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
   .card-title { font-size: 10px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; border-bottom: 1px solid #f3f4f6; padding-bottom: 6px; }
   .card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 16px; }
   .lbl { display: block; font-size: 9px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
   .val { font-size: 11px; font-weight: 600; color: #111; }
-  .footer { border-top: 1px solid #e5e7eb; padding-top: 8px; margin-top: 20px; display: flex; justify-content: space-between; color: #9ca3af; font-size: 9px; }
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 </style>
 </head>
 <body>
-  <div class="header">
-    <div>
-      ${logoUrl ? `<img class="brand-logo" src="${logoUrl}" alt="Logo">` : `<h1>S2Vet</h1>`}
-      <p class="sub">Sistema Hospitalar Veterinário · Módulo Clínico</p>
-      <p class="sub" style="margin-top:4px;">Emitido em: ${new Date().toLocaleString('pt-BR')}</p>
-    </div>
+  ${renderCabecalho(animal?.logoUrl)}
+
+  <div class="doc-info-row">
     <div style="text-align:right;">
       <p style="font-size:10px;color:#9ca3af;margin-bottom:4px;">RESULTADO DE EXAME</p>
       <span style="display:inline-block;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:700;color:#065f46;background:#d1fae5;">${esc(ex.tipo)}</span>
@@ -159,31 +152,13 @@ function gerarHtmlResultado(ex: ExameParaPrint, animal?: AnimalParaPrint | null)
   ${laudo}
   ${imagens}
 
-  <div class="footer">
-    <span>S2Vet · Sistema Hospitalar Veterinário</span>
-    <span>Emitido em ${new Date().toLocaleString('pt-BR')}</span>
-  </div>
+  ${renderRodapeAssinatura(ex.veterinario, 'Médico Veterinário Responsável')}
 </body>
 </html>`;
 }
 
 export function imprimirResultadoExame(ex: ExameParaPrint, animal?: AnimalParaPrint | null): void {
-  const iframe = document.createElement('iframe');
-  Object.assign(iframe.style, { position: 'fixed', top: '-9999px', left: '-9999px', width: '0', height: '0', border: 'none' });
-  document.body.appendChild(iframe);
-
-  const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
-  if (!doc) { document.body.removeChild(iframe); return; }
-
-  doc.open();
-  doc.write(gerarHtmlResultado(ex, animal));
-  doc.close();
-
-  setTimeout(() => {
-    iframe.contentWindow?.focus();
-    iframe.contentWindow?.print();
-    setTimeout(() => { if (document.body.contains(iframe)) document.body.removeChild(iframe); }, 500);
-  }, 250);
+  imprimirHtml(gerarHtmlResultado(ex, animal));
 }
 
 // ─── Compartilhamento (texto) ───────────────────────────────────────────────

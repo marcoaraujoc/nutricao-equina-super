@@ -12,6 +12,7 @@ import { RefreshCw, ChevronDown, ChevronRight, Download, Printer, FileBarChart }
 import PageContainer from '../components/PageContainer';
 import InlineError from '../components/InlineError';
 import { formatDateTime } from '../utils/dateUtils';
+import { imprimirHtml } from '../utils/print/imprimirHtml';
 import * as XLSX from 'xlsx';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -357,13 +358,7 @@ const RelatorioNutricional = () => {
         <td>${item.Percentual_Atendido != null ? Number(item.Percentual_Atendido).toFixed(3) + '%' : '—'}</td>
         <td>${item.status_nutricional}</td>
       </tr>`).join('');
-    const iframe = document.createElement('iframe');
-    Object.assign(iframe.style, { position: 'fixed', top: '-9999px', left: '-9999px', width: '0', height: '0', border: 'none' });
-    document.body.appendChild(iframe);
-    const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
-    if (!doc) { document.body.removeChild(iframe); return; }
-    doc.open();
-    doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"/>
+    imprimirHtml(`<!DOCTYPE html><html><head><meta charset="utf-8"/>
       <title>Relatório Nutricional — ${nomeAnimal}</title>
       <style>
         body{font-family:Arial,sans-serif;padding:20px;font-size:11px;}
@@ -381,12 +376,6 @@ const RelatorioNutricional = () => {
         <th>Exigido NRC</th><th>Saldo</th><th>% Atendido</th><th>Status</th>
       </tr></thead><tbody>${linhas}</tbody></table>
     </body></html>`);
-    doc.close();
-    setTimeout(() => {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
-      setTimeout(() => { if (document.body.contains(iframe)) document.body.removeChild(iframe); }, 500);
-    }, 250);
     setShowExportMenu(false);
   };
 

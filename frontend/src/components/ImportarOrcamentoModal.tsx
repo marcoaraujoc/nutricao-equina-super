@@ -37,6 +37,9 @@ export interface OrcamentoItemImport {
   /** MEDICAMENTO — posologia orçada; preenche duração/frequência na prescrição */
   dias: number | null;
   frequencia: string | null;
+  /** VACINA — tipo de dose e via de aplicação orçados; preenchem a Vacina na importação */
+  tipoDose: string | null;
+  via: string | null;
   valorUnitario: number;
   valorTotal: number;
   animalId: number | null;
@@ -162,6 +165,8 @@ export default function ImportarOrcamentoModal({ animalId, tipos, onFechar, onIm
                           {' · '}{i.quantidade} × {brl(i.valorUnitario)}
                           {i.tipo === 'MEDICAMENTO' && i.dias ? ` · ${i.dias} dia${i.dias > 1 ? 's' : ''}` : ''}
                           {i.tipo === 'VACINA' ? ` · ${i.quantidade} dose${i.quantidade > 1 ? 's' : ''}` : ''}
+                          {i.tipo === 'VACINA' && i.tipoDose ? ` · ${i.tipoDose}` : ''}
+                          {i.tipo === 'VACINA' && i.via ? ` · ${i.via}` : ''}
                         </p>
                       </div>
                       <span className="text-sm font-semibold text-gray-700 flex-shrink-0">{brl(i.valorTotal)}</span>

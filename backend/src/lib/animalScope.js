@@ -23,6 +23,45 @@ async function obterUserType(userId) {
   return { userType: u?.userType ?? 'PROPRIETARIO', role: u?.role ?? 'USER' };
 }
 
+// ⚠️ NUNCA `new Date().toISOString()` para "dia da semana de hoje" — vira UTC e já é o
+// dia seguinte a partir das 21h em Brasília (mesma armadilha documentada em vários
+// pontos do sistema, ex. `hojeLocalStr`). `getDay()` já lê no fuso local do servidor.
+function diaDaSemanaLocal() {
+  return new Date().getDay(); // 0=Dom … 6=Sáb
+}
+
+/**
+ * "Atender somente no local de trabalho" (checkbox de Incluir/Editar Membro,
+ * `MembroEquipe.restringirPorLocal`). Desligada (padrão) → `null`, sem restrição
+ * nenhuma — é o comportamento de sempre.
+ *
+ * Ligada → devolve os IDs de `LocalizacaoAnimal` em que o profissional atende HOJE,
+ * segundo os `MembroLocalTrabalho` cadastrados para ele NESTA equipe (dias CSV 0-6).
+ * Pode devolver `[]` (restrição ligada, mas nenhum local configurado para hoje) — é
+ * "não atende hoje", não "sem restrição"; `localizacaoId: { in: [] }` corretamente não
+ * bate com nenhum animal.
+ *
+ * Escopo: só a equipe INFORMADA (`equipeId`) — o mesmo profissional pode ter vínculos
+ * em várias equipes/empresas, cada um com sua própria configuração; misturar os locais
+ * de uma equipe com a restrição de outra não faz sentido nenhum.
+ */
+async function localizacoesRestritasDeHoje(userId, equipeId) {
+  if (!equipeId) return null;
+  const membro = await prisma.membroEquipe.findUnique({
+    where:  { equipeId_userId: { equipeId: Number(equipeId), userId: Number(userId) } },
+    select: {
+      restringirPorLocal: true,
+      locaisTrabalho: { select: { localizacaoId: true, diasTrabalho: true } },
+    },
+  });
+  if (!membro?.restringirPorLocal) return null;
+
+  const hoje = String(diaDaSemanaLocal());
+  return membro.locaisTrabalho
+    .filter(l => (l.diasTrabalho ?? '').split(',').map(d => d.trim()).includes(hoje))
+    .map(l => l.localizacaoId);
+}
+
 /**
  * Constrói o filtro Prisma de Animal que o usuário pode LISTAR no contexto ativo.
  * Requer que o middleware checkPermission já tenha rodado (define req.membroCargo/equipeId)
@@ -78,6 +117,18 @@ async function buildAnimalScopeWhere(req) {
       ]
     : [{ empresaId: req.empresaId }];
 
+  // "Atender somente no local de trabalho" (MembroEquipe.restringirPorLocal) — só
+  // avalia com uma equipe ATIVA resolvida (req.equipeId): sem ela não há "o local de
+  // trabalho dele NESTA equipe" para consultar, e a restrição fica de fora (permissiva)
+  // em vez de arriscar aplicar a configuração errada. Desligada → `null`, `scopeOR`
+  // segue igual (nada muda, é o padrão).
+  const restricaoLocalIds = isMembroEquipe
+    ? await localizacoesRestritasDeHoje(userId, req.equipeId)
+    : null;
+  const scopeOREfetivo = restricaoLocalIds
+    ? scopeOR.map(clausula => ({ ...clausula, localizacaoId: { in: restricaoLocalIds } }))
+    : scopeOR;
+
   // ⚠️ REGRA BASE × CONVIDADO REMOVIDA (fase 3 do multi-tenancy).
   //
   // Aqui existiam `vetSolicitacoesWhere` (vínculos do vet em QUALQUER empresa) e
@@ -96,11 +147,11 @@ async function buildAnimalScopeWhere(req) {
     ? {}
     : userType === 'PROPRIETARIO'
       ? isProprietarioMulticargo
-        ? { OR: [{ userId: Number(userId) }, ...scopeOR] }
+        ? { OR: [{ userId: Number(userId) }, ...scopeOREfetivo] }
         : { userId: Number(userId) }
       : userType === 'FORNECEDOR'
         ? isFornecedorGestorContexto
-          ? { OR: scopeOR }
+          ? { OR: scopeOREfetivo }
           : designacoesWhere
         : userType === 'VETERINARIO'
           // Vet atuando como PRESTADOR no contexto: só o que lhe foi designado (D1 —
@@ -108,12 +159,12 @@ async function buildAnimalScopeWhere(req) {
           ? isVetPrestadorContexto
             ? designacoesWhere
             : isMembroEquipe
-              ? { OR: scopeOR }
+              ? { OR: scopeOREfetivo }
               // Sem empresa resolvida (vet autônomo/legado): só os animais que ele mesmo
               // cadastrou. Antes caía nos vínculos, que não existem mais.
               : { userId: Number(userId) }
           : isMembroEquipe
-            ? { OR: scopeOR }
+            ? { OR: scopeOREfetivo }
             : {};
 
   return { where, isAdmin, userType, role };

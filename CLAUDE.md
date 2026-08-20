@@ -1,5 +1,97 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-09-02 (Orçamento de VACINA passou a capturar TIPO DOSE
+#   e VIA APLICAÇÃO — mesmos dois campos obrigatórios da tela de Vacina
+#   (SubModuloVacina). Antes o orçamento só guardava vacina+quantidade(doses);
+#   ao importar, Dose/Via chegavam em branco e tinham que ser preenchidas de
+#   novo na Vacina, mesmo já tendo sido orçadas. Colunas novas
+#   `OrcamentoItem.tipoDose`/`.via` (migration `20260902000000`, 🔴 gerada, NÃO
+#   aplicada); aba Vacinas do Orçamento ganhou os dois selects (mesmas opções de
+#   `DOSES`/`VIAS_PADRAO`, extraídas para `utils/vacina.ts` — fonte única,
+#   reusada pela tela de Vacina) e passaram a ser OBRIGATÓRIOS para adicionar
+#   qualquer vacina ao orçamento (`OrcamentoController.validarVacina`, mesmo
+#   padrão de `validarEspecialidade` para Procedimento/Combo). Import na Vacina
+#   (`SubModuloVacina.importarDoOrcamento`) usa `tipoDose`/`via` do item quando
+#   presentes; item de orçamento ANTERIOR à mudança (sem os dois campos) cai no
+#   comportamento antigo — Via pelo heurístico do catálogo, Dose em branco.)
+# Atualizado em: 2026-09-02 (parte 2) (`podeVerMedicamentos`/`podeVerProcedimentos`
+#   da Sidebar — decisão de produto que estava em aberto desde 2026-07-31 —
+#   RESOLVIDA: assumido ADMIN-only, as duas variáveis mortas foram removidas.
+#   Ver a entrada da sessão 2026-07-31, marcada concluída.)
+# Atualizado em: 2026-09-01 (parte 2) (Mesma justificativa OBRIGATÓRIA na
+#   INATIVAÇÃO, estendida a Estoque de Vacinas e Estoque de Farmácia
+#   (`EstoqueVacinaController.toggle`/`EstoqueController.toggle`) — a lib
+#   `lib/cadastroAtivacao.js` já suportava as tabelas 'lote_vacina'/
+#   'estoque_farmacia' de propósito, então foi só ligar o mesmo fio: coluna
+#   `inativo_motivo` nas duas tabelas, `ModalJustificativa` antes do toggle (só
+#   ao inativar) e coluna "Justificativa" na aba Inativos de `EstoqueVacina.tsx`/
+#   `Farmacia.tsx`. 🔴 Migration GERADA
+#   (`20260901000001_justificativa_inativacao_estoque`), NÃO aplicada.)
+# Atualizado em: 2026-09-01 (Justificativa OBRIGATÓRIA na INATIVAÇÃO de Equipe,
+#   Fornecedor, Prestador, Tratador e Proprietário — mesmo padrão que Paciente
+#   (Animal) já tinha. Coluna nova `inativo_motivo` (Animal: `desativado_motivo`,
+#   nome diferente por já existir `inativo_motivo` de OUTRO recurso naquela tabela)
+#   nas 6 tabelas, exibida como coluna "Justificativa" na aba Inativos de cada tela
+#   (`components/JustificativaCancelamento.tsx`, truncado+tooltip). Toggle de
+#   Equipe/Fornecedor/Prestador/Tratador passou a exigir motivo via
+#   `ModalJustificativa` só ao INATIVAR — ativar continua direto. 🔴 Migration
+#   GERADA (`20260901000000_justificativa_inativacao`), NÃO aplicada — confirmar
+#   antes de `npx prisma migrate deploy`. Faturamento: proprietário inativado
+#   (`removerDaEmpresa`) não some mais da lista enquanto tiver fatura
+#   ABERTA/FECHADA/ATRASADA (`FaturaController.listarProprietarios`), com selo
+#   "Inativo" no card. `removerDaEmpresa` passou a cancelar automaticamente todo
+#   orçamento APROVADO/APROVADO_PARCIALMENTE do proprietário — motivo "Cancelado
+#   pelo sistema — proprietário inativado." acrescentado a `Orcamento.observacao`
+#   (mesmo padrão do `orcamentoCronService.js`); `OrcamentoController.excluir`
+#   (cancelamento manual) passou a fazer o mesmo, e a tela de Orçamento ganhou a
+#   coluna "Motivo do Cancelamento" — só quando o filtro é Cancelado.)
+# Atualizado em: 2026-08-31 (Execução de Prescrição: card do item mostra o
+#   HISTÓRICO de aplicações dentro da própria execução — Periodicidade+Dose em
+#   vermelho, uma linha "Aplicação (DD/MM) — Executada" por dose já dada e a linha
+#   de AGORA com "Em Execução" + botão; datas via `gerarResumoDoses`+`dataDoDiaISO`,
+#   sem chamada nova ao backend. "1x na semana" ganhou rótulo "Qtd. Semanas" no
+#   formulário de prescrição; Hora Início perdeu o ícone e os 4 campos da linha
+#   Frequência/Hora/Qtd/Data ganharam `whitespace-nowrap` para não desalinhar.
+#   Ação Finalizar REMOVIDA dos ícones de ação da Evolução — junto com todo o
+#   código que só existia para ela, ver §12)
+# Atualizado em: 2026-08-31 (Prescrição: frequências "1x a cada N dias" — o campo
+#   Duração (dias) virou "Qtd. de Vezes" no formulário; internamente segue gravando
+#   duracaoDias em DIAS (vezes × intervalo) para o backend continuar contando as
+#   doses certas. Hora Início passou a ser OBRIGATÓRIA nessas frequências — sem ela
+#   o item cai no fluxo antigo, sem o rolling schedule, e fica "pendente" todo dia
+#   da janela em vez de só nas datas certas)
+# Atualizado em: 2026-08-31 (Prescrição/Exames/Vacina: colunas Nº|Data Início|Data Fim
+#   no lugar do "Nº X" + "Data" único; Vacina reordenada p/ Nº|Aplicação|Vacina|...;
+#   ordem/cor de ícone virou regra ÚNICA nestas 3 telas — Alterar(laranja) primeiro,
+#   Visualizar(verde), Imprimir(azul), WhatsApp(verde)/E-mail(azul) quando existirem,
+#   Cancelar(vermelho) por último; WhatsApp/E-mail que só existiam no card mobile
+#   entraram também na tabela desktop de Prescrição e Vacina)
+# Atualizado em: 2026-08-31 (Incluir/Editar Membro: checkbox "Atender somente no local
+#   de trabalho" — MembroEquipe.restringirPorLocal. Desligada = atende em qualquer
+#   local, nada muda. Ligada = lib/animalScope.js restringe a lista de pacientes do
+#   profissional aos animais cujo local bate com um dos locais de trabalho DELE
+#   configurados para hoje. 🔴 Migration GERADA, confirmar aplicação antes de usar)
+# Atualizado em: 2026-08-18 (Vacina ganhou RESERVA de estoque — model novo
+#   ReservaEstoqueVacina, espelho de ReservaEstoque/PrescricaoGrupoController: reserva
+#   ao finalizar (FEFO), consome ao executar, libera ao cancelar. 🔴 Migration GERADA
+#   em prisma/migrations/20260830000000_reserva_estoque_vacina — NÃO aplicada, precisa
+#   de `npx prisma migrate deploy` + `npx prisma generate` antes de usar)
+# Atualizado em: 2026-08-18 (Vacina: Tipo Dose/Via passaram a ser exigidos ANTES de
+#   entrar na lista (não só no Finalizar); corrigido bug real de estoque — cancelar
+#   vacina nunca executada inflava o lote; coluna "Justificativa" nas listas de
+#   registros cancelados/inativos de todo o módulo Atendimento, com tooltip do texto
+#   inteiro — Exame e Encaminhamento resolvidos via AuditLog, sem migration)
+# Atualizado em: 2026-08-18 (Evolução: duas consultas do MESMO animal no MESMO dia —
+#   ex. Clínica + Dermatologia — voltaram a ser tratadas como atendimentos DISTINTOS
+#   mesmo quando o mesmo profissional assume as duas; o bloqueio de "evolução própria
+#   já aberta" agora casa por agendamentoId, não pelo animal inteiro)
+# Atualizado em: 2026-08-18 (Agendamento: novo status CANCELADO_AUTOMATICAMENTE — a
+#   rotina noturna cancela AGENDADO/ATRASADA e agora também EM_ANDAMENTO com dataHora no
+#   passado, e é a ÚNICA que grava esse status; o backend recusa como input manual)
+# Atualizado em: 2026-08-18 (Execução de Prescrição: Histórico navega por dia (não só
+#   "hoje") e a fila Medicamentos×Procedimentos passou a decidir "a executar"×"Histórico"
+#   POR TIPO de item, não pelo documento inteiro — corrige item já executado ficando
+#   preso/sem ação na fila até o outro tipo também terminar)
 # Atualizado em: 2026-08-21 (Prestador: cadastro NOVO e INDEPENDENTE de Fornecedor —
 #   tb_prestadores própria, RLS tenant direto igual tb_fornecedores, rota
 #   /cadastro/prestadores; correções de UX/bugs em Agendamentos — voz, animais somem
@@ -1292,6 +1384,477 @@ New-Item -ItemType Junction `
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
 
+### Sessão 2026-08-31 (parte 4) — Execução de Prescrição: histórico dentro da execução
+- [x] **Card do item, dentro do `ModalExecucao`, redesenhado** para os itens com
+      regime multi-dose/multi-dia (`regimeExigeResumo` — já existia, agora reusado
+      para mais que a "linha atual"): substituiu a linha "dosagem • via • frequência
+      • duração" + a linha vermelha única + os pills de horário + "Dia XX/YY" por:
+      - **Periodicidade + Dose em vermelho**, sempre no topo: `"1x ao dia por 7
+        dias - 10mL"`.
+      - **Uma linha por aplicação JÁ COBERTA**, em cinza: `"Aplicação (01/07) —
+        Executada"` — da 1ª dose até a de HOJE, nunca as futuras (que ainda não
+        chegaram e nem têm data garantida, dado o rolling schedule).
+      - **A linha da dose ATUAL** troca "Executada" por **"Em Execução"** e é a
+        ÚNICA com o botão de executar (antes ficava solto na lateral do card,
+        agora mora na própria linha — CLAUDE.md pedia "Botão de execução" ali).
+      - **Nome do medicamento/procedimento por último**, com o selo Med/Proc.
+      Item SEM regime (dose única, SOS, se necessário) mantém o layout simples de
+      sempre (periodicidade+dose em vermelho, sem histórico) — não há curso para
+      listar.
+      **Nenhuma chamada nova ao backend**: as datas de cada linha vêm de
+      `dataDoDiaISO(item.dataInicio, linha.dia)` sobre o que `gerarResumoDoses`
+      (`utils/posologia.ts`) já calculava — a PRÉVIA teórica do regime (frequência
+      × duração), a mesma que a tela de criar prescrição usa. Isso é uma projeção,
+      não o horário REAL de cada dose (que é rolling e pode atrasar/adiantar) —
+      compatível com o que a função já documentava de si mesma ("sem depender de
+      horário real"); exato o bastante para "qual dia é esta aplicação", que é o
+      que a tela precisa mostrar.
+      ⚠️ **`idxAtual` (qual linha é "a de agora") usa `dosesFeitas(item)`, NUNCA
+      `item.dosesExecutadas` cru** — o prop só atualiza quando o modal fecha e o
+      pai recarrega a lista; `dosesFeitas` soma o `doseOverride` desta SESSÃO do
+      modal. Usar o valor cru faria a linha "Em Execução" ficar PRESA na mesma
+      aplicação depois de executá-la, sem revelar a próxima, até o modal reabrir.
+- [x] **Evolução: ação Finalizar REMOVIDA dos ícones de ação** (desktop e mobile) —
+      pedido explícito, o atendimento se finaliza pelo banner "Finalizar
+      Atendimento" do shell (`Atendimento.tsx`), não mais pelo ícone da linha.
+      Removido por inteiro, não só escondido: `handleFinalizarDireto`,
+      `handleFinalizarConfirmado`, o estado `confirmFinalizar`, o `ConfirmModal`
+      que ele abria e as duas cópias de `podeFinalizarEsta`/`nivelFinalizar`
+      (mobile e desktop) — sem outro call site, ficariam mortos e o `tsc -b`
+      já reprova variável/import não lido.
+
+### Sessão 2026-08-31 (parte 3) — Prescrição: "1x a cada N dias" agenda por Qtd. de Vezes
+- [x] **Pedido**: nas frequências "1x a cada N dias" (2/3/21/30/90 e "1x por semana"),
+      o vet pensa em QUANTAS VEZES aplicar, não em quantos DIAS o tratamento dura.
+      Ex.: 1x/semana, 5 vezes, começando hoje (18/08) → doses em 18/08, 25/08, 01/09,
+      08/09, 15/09.
+      **Não precisou de NENHUMA mudança de agendamento no backend** — o rolling
+      schedule já existia (`lib/agendaDoses.js#calcularProximaDose`: a PRÓXIMA dose
+      prevista é sempre a ÚLTIMA EXECUTADA + o intervalo da frequência, nunca uma
+      grade fixa recontada) e já produz exatamente essas datas. O único papel de
+      `Prescricao.duracaoDias` (`Int NOT NULL`) nesse fluxo é alimentar
+      `dosesTotaisEsperadas = round(duracaoDias / dosesPorDia)`, que decide QUANDO o
+      curso está completo (`dosesExecutadas >= dosesTotaisEsperadas`) — a data de
+      cada dose não vem daí.
+      A mudança inteira é de FORMULÁRIO (`SubModuloPrescricao.tsx`): `INTERVALO_DIAS`
+      mapeia cada frequência ao intervalo em dias (2/3/7/21/30/90). Com uma
+      frequência dessas selecionada, o campo (ainda o mesmo `form.duracaoDias`
+      internamente) passa a **exibir e receber "vezes"**, convertendo na hora:
+      mostra `duracaoDias ÷ intervalo` arredondado; ao digitar, grava
+      `vezes × intervalo`. Nada no envio ao backend muda — `duracaoDias` chega em
+      DIAS como sempre chegou, só que agora calculado para bater exatamente com o
+      nº de vezes pedido (`vezes × intervalo` sempre arredonda para `vezes`, sem
+      erro de precisão).
+      `ItemRow` (chip da lista) segue a mesma lógica: mostra **"Qtd: 5x"** em vez de
+      **"Dur: 35d"**, e o chip **"Fim:"** passa a ser a data da ÚLTIMA dose
+      (`início + (vezes-1)×intervalo`) — usar `duracaoDias` bruto ali (35 dias)
+      sobraria além do curso real, que termina na 5ª aplicação (dia 28), não no dia 34.
+- [x] **Hora Início virou OBRIGATÓRIA nessas frequências** (asterisco condicional +
+      validação nova). Motivo: o rolling schedule só entra em ação quando o item é
+      "elegível" (`elegivelParaFluxoNovo` exige `horaInicio` preenchido) — sem hora,
+      o item cai no fluxo LEGADO (`janelaDoItem`), que trata qualquer dia dentro da
+      janela `dataInicio..dataInicio+duracaoDias` como pendente. Sem essa trava, uma
+      prescrição "1x/semana" sem Hora Início apareceria "a executar" TODO santo dia
+      do curso, não só nas datas certas — o oposto do que foi pedido.
+- [x] **Ajustes finos do mesmo formulário** (pedido em seguida, mesma sessão):
+      "1x por semana" ganhou rótulo PRÓPRIO — **"QTD. SEMANAS"** em vez do genérico
+      "QTD. DE VEZES" (`QTD_LABEL`, só essa frequência; as demais seguem no
+      genérico — 1 dose/semana faz "nº de semanas" e "nº de vezes" serem o MESMO
+      número, então é só um rótulo mais natural, sem mudar a conta). O ícone
+      `<Clock>` saiu do rótulo "HORA INÍCIO" (era o único campo da linha com
+      ícone). Os 4 campos da linha Frequência/Hora Início/Qtd·Duração/Data Início
+      ganharam `whitespace-nowrap` no `<label>` — sem isso, o rótulo mais longo
+      ("QTD. DE VEZES *") podia quebrar em 2 linhas num viewport estreito e
+      descia o campo dele sozinho, desalinhando da Hora Início ao lado.
+
+### Sessão 2026-08-31 (parte 2) — Prescrição/Exames/Vacina: colunas e ordem/cor de ícone
+- [x] **Nº | Data Início | Data Fim substituem o "Nº X" + "Data" único**, em Prescrição
+      e Exames. Nenhum campo novo no banco — os dois modelos já carregavam o suficiente
+      via `include` (padrão "top-level include devolve todos os escalares" — ver §13):
+      - **Prescrição** (`PrescricaoGrupo`): Data Início = `createdAt` (igual à coluna
+        "Data" antiga); Data Fim = `dataFimGrupo(g)` → `executadoEm ?? finalizadoEm`
+        (a EXECUÇÃO é o fim de verdade — dose aplicada; sem ela, a FINALIZAÇÃO é o
+        melhor "fim" disponível). Rascunho (SALVO) mostra "—" nas duas colunas de fim.
+      - **Exames** (`ExameClinico`): Data Início = `dataSolicitacao`; Data Fim =
+        `dataResultado` (`null` até o resultado ser carregado/finalizado → "—").
+      Cabeçalho de Prescrição também: "Nº Prescrição"→"Nº", "Veterinário"→"Responsável",
+      e Status/Justificativa migraram para o fim da tabela (antes ficavam logo após o
+      Nº). Exames: "Nº Exame"→"Nº", "Solicitante" subiu para antes de Status/
+      Justificativa, e o `<th>` de Ações (antes vazio) ganhou rótulo.
+- [x] **Vacina**: cabeçalho passou de `ID|Vacina|Dose|Qtd|Lote|Via|Aplicação|Status|
+      Justificativa|Executor` para `Nº|Aplicação|Vacina|Dose|Qtd|Lote|Via|Status|
+      Justificativa|Executor|Ações` — a data de aplicação (com o selo de reforço
+      vencido) passou a ficar logo após o Nº, antes do nome da vacina; nenhum dado
+      novo, só reordenação de colunas já existentes.
+- [x] **Ordem e cor do ícone de ação viraram regra ÚNICA nestas 3 telas** (desktop
+      ícone-only E card mobile com rótulo), substituindo a ordem ad-hoc que cada tela
+      tinha: **Alterar (laranja) → Visualizar (verde/emerald) → Imprimir (azul) →
+      WhatsApp (verde, quando existir) → E-mail (azul, quando existir) → Cancelar
+      (vermelho, sempre por último)**. Ações que não fazem parte deste conjunto
+      (Finalizar, no caso de Prescrição/Exames) mantiveram a posição relativa que já
+      tinham entre Visualizar e Imprimir — o pedido não as mencionou.
+      - **Exames**: só reordenou/recoloriu o que já existia — o Visualizar (`Eye`) era
+        `text-blue-600` e virou `text-emerald-600` (verde, igual às outras duas telas);
+        não tem Alterar (nunca teve rota de edição do pedido) nem foi criado um agora.
+      - **Prescrição**: já tinha Alterar (laranja) e Visualizar (emerald) no desktop,
+        mas SEM WhatsApp/E-mail — esses dois só existiam no card mobile. Entraram
+        também na tabela desktop, reaproveitando `abrirWhatsApp`/`abrirEmail`/
+        `montarTextoPrescricao` que o card mobile já usava.
+      - **Vacina**: mesma lacuna — Alterar (laranja) e Visualizar (emerald) já existiam
+        no desktop (reaproveitando `editarHistoricoNoForm`/`podeEditarVac`, os mesmos
+        que o card mobile usa para carregar a vacina de volta no formulário de
+        criação), mas WhatsApp/E-mail só estavam no mobile. Entraram na tabela
+        desktop com `abrirWhatsApp`/`abrirEmail`/`montarTextoVacina`.
+      ⚠️ Nenhum endpoint novo foi necessário — carregar a vacina no formulário
+      (`PUT /clinica/vacinas/:id`) já existia desde que o "Alterar" foi implementado
+      no card mobile; esta sessão só levou a MESMA ação para o ícone da tabela.
+
+### Sessão 2026-08-31 — Checkbox "Atender somente no local de trabalho"
+> 🔴 **MIGRATION GERADA — confirmar aplicação com o usuário antes.**
+> `prisma/migrations/20260831000000_membro_restringir_por_local/` (só `ALTER TABLE
+> ADD COLUMN restringir_por_local BOOLEAN NOT NULL DEFAULT false` em
+> `tb_membros_equipe` — sem RLS novo, a tabela já está classificada em
+> `AGUARDANDO_RLS`). Aplicar com `DATABASE_URL=$DATABASE_URL_MIGRATIONS npx prisma
+> migrate deploy` (o usuário padrão do app não tem `CREATE`/`ALTER` no schema) +
+> `npx prisma generate`.
+
+- [x] **Novo campo `MembroEquipe.restringirPorLocal`** (Boolean, default `false`) — o
+      checkbox fica na seção "Locais de trabalho" do Incluir/Editar Membro
+      (`UsuarioFormModal.tsx`, `comExpediente`), logo abaixo do título: **desmarcado
+      (padrão) = atende em qualquer local, nada muda**; **marcado = a lista de
+      pacientes deste profissional fica restrita aos animais cuja `localizacaoId` bate
+      com um dos `MembroLocalTrabalho` DELE, NESTA equipe, cujo `diasTrabalho` inclui o
+      dia da semana de HOJE**.
+      Persistência: `EquipeController.incluirMembroDireto` (cria) e `atualizarMembro`
+      (atualiza — só quando a tela envia o campo, mesmo cuidado de PATCH parcial que
+      `cargo` já tinha). `Equipe.tsx` é o ÚNICO caller que expõe a seção (`comExpediente`
+      passado sem exceção de cargo, tanto no Incluir quanto no Editar) — `ControleAcesso.
+      TabEquipe` inclui membro sem `comExpediente` (fluxo de convite/Fornecedor), então
+      o checkbox não aparece lá; nada a mudar naquele payload.
+- [x] **Aplicação real do filtro: `lib/animalScope.js` (`buildAnimalScopeWhere`) —
+      FONTE ÚNICA reusada por `AnimalController.listar`, agendamento, execução de
+      prescrição e Painel Principal (CLAUDE.md §5/§16)** — mexer AQUI propaga a
+      restrição para toda tela que lista paciente por este caminho, de propósito: um
+      profissional restrito não deveria ver o paciente na lista, mas continuar vendo-o
+      na agenda ou na fila do plantão. Novo `localizacoesRestritasDeHoje(userId,
+      equipeId)`: com a flag desligada (ou sem `req.equipeId` resolvido) devolve `null`
+      → `scopeOREfetivo` = `scopeOR` de sempre (comportamento idêntico ao de antes).
+      Ligada → devolve os IDs de `LocalizacaoAnimal` válidos hoje (pode ser `[]` —
+      "não atende hoje", não "sem restrição" — e `localizacaoId: { in: [] }` já não bate
+      com animal nenhum, sem precisar de um caso especial). O resultado é injetado como
+      campo extra em CADA cláusula do `scopeOR` (`{ ...clausula, localizacaoId: {in:...} }`),
+      então continua valendo tanto para "meus equipes" quanto para "empresa toda, sem
+      equipe" — as duas pernas do `OR`.
+      ⚠️ **Escopo deliberado: só avalia com uma equipe ATIVA resolvida
+      (`req.equipeId`)** — sem ela não há "o local de trabalho dele NESTA equipe" para
+      consultar (o mesmo profissional pode ter configurações diferentes em cada
+      equipe/empresa), e a escolha em caso de ambiguidade é NÃO restringir (permissivo),
+      nunca adivinhar. Na prática cobre o caso comum, onde o seletor de contexto sempre
+      resolve `req.equipeId`.
+      ⚠️ **Só aplica ao "meu equipe" (`isMembroEquipe`)** — PROPRIETARIO (vê os
+      PRÓPRIOS animais) e FORNECEDOR/prestador puro (`designacoesWhere`, escopo por
+      designação — regra própria, D1) não passam por `scopeOREfetivo`; a flag marcada
+      num membro FORNECEDOR não tem efeito nenhum (herdaria sentido só se ele também
+      atuar como gestor no contexto — `isFornecedorGestorContexto` — caso em que já usa
+      o mesmo `scopeOREfetivo`, por consistência).
+      ⚠️ **NÃO estendido ao Cadastro Pessoal (auto-edição)** — `CadastroPessoal.tsx`
+      renderiza a própria seção "Locais de trabalho" (`LocalTrabalhoFields` direto, fora
+      do `UsuarioFormModal`), separada do fluxo de Incluir/Editar Membro. Decisão de
+      escopo: o pedido foi "na hora de incluir o membro" (ação do GESTOR sobre outra
+      pessoa); deixar o profissional se autorrestringir sem o gestor decidir é
+      comportamento diferente, não pedido. Se um dia for necessário, o gancho é o mesmo
+      campo (`restringirPorLocal`) — só falta o checkbox lá e o campo no payload de
+      `PUT /users/me`.
+
+### Sessão 2026-08-18 (parte 5) — Vacina ganhou RESERVA de estoque — mesma lógica do medicamento
+> 🔴 **MIGRATION GERADA, NÃO APLICADA** — `prisma/migrations/20260830000000_reserva_estoque_vacina/`.
+> Antes de usar: `npx prisma migrate deploy` (aplica no banco) + `npx prisma generate`
+> (o client tipado; sem isto o Windows não reconhece `ReservaEstoqueVacina` — o
+> controller usa SQL cru de propósito, então FUNCIONA sem o generate, mas o
+> autocomplete/typecheck do Prisma só resolve depois). Depois de aplicada, adicionar
+> `tb_reservas_estoque_vacina` a `TENANT_PLANE` em
+> `backend/src/__tests__/tenancyRls.test.js` — a migration já ativa RLS nela (mesmo
+> padrão de `tb_reservas_estoque`), mas o gate só enxerga tabelas que existem de
+> verdade no banco, então listá-la ANTES da migration rodar reprovaria o teste 3
+> ("cita tabela inexistente"). É por isso que não fiz essa edição agora.
+
+- [x] **Pedido explícito: "use a mesma lógica que é empregada no estoque de
+      medicamentos para as vacinas"** — até aqui, vacina não tinha reserva NENHUMA
+      (diferente da prescrição, que usa `ReservaEstoque` desde sempre): `registrar()`
+      só fixava `loteId` como referência de preço; `qtdDisponivel` só era tocado no
+      momento do débito de verdade (`executar`, ou `finalizar` no quadrante
+      aplicadaPeloProprietário×!cliente). Sem reserva, duas vacinas concorrentes podiam
+      disputar o mesmo lote sem que nenhuma soubesse da outra — só na hora de executar
+      é que uma delas descobriria o saldo insuficiente.
+      Criado o espelho exato do sistema de `PrescricaoGrupoController`:
+      - **Model novo `ReservaEstoqueVacina`** (`tb_reservas_estoque_vacina`) — mesmas
+        colunas/formato de `ReservaEstoque`, trocando `estoqueId`→`loteVacinaId` e
+        `prescricaoGrupoId`→`vacinaClinicaId`. RLS "TENANT VIA PAI" (`tb_lotes_vacina`,
+        que tem `empresa_id` DIRETO — ao contrário de `tb_vacinas_clinicas`, que segue
+        `animalId` porque `lote_id` é opcional, ver `lib/tenancyMap.js`).
+      - **`criarReservaVacina`** (espelha `criarReservas`) — chamada por `finalizar()`
+        no quadrante que VAI para o plantão (`!isCliente && !aplicadaPeloProprietario`):
+        distribui a quantidade em FEFO entre os lotes do medicamento, respeitando o que
+        JÁ está reservado por outras vacinas; se faltar, força o restante na última
+        entrada (mesma "finalização forçada" da prescrição — nunca bloqueia o registro
+        clínico). Os OUTROS dois quadrantes não reservam: `cliente:true` nunca debita
+        (nada a reservar); aplicadaPeloProprietário×!cliente debita direto na
+        FINALIZAÇÃO via `darBaixaEFaturar` (nunca passa pelo plantão, não há intervalo
+        "reservado, aguardando execução").
+      - **`consumirReservaVacina`** (espelha `debitarEstoqueDia`/`consumirReservas`) —
+        chamada de DENTRO de `darBaixaEFaturar` (que agora é chamada tanto por
+        `finalizar` quanto por `executar`): consome a reserva PRIMEIRO — decrementa
+        `qtd_disponivel` de verdade em cada lote reservado (pode ser mais de um) e apaga
+        as linhas. Sem reserva (aplicadaPeloProprietário, ou registro legado anterior à
+        migration), cai no lookup direto de sempre (comportamento antigo preservado
+        intacto como fallback).
+      - **`excluir` (cancelar) libera a reserva pendente** — `DELETE` das linhas de
+        `tb_reservas_estoque_vacina` desta vacina, SEM tocar `qtd_disponivel` (a reserva
+        nunca decrementou o lote). Continua também restaurando estoque quando havia
+        débito de VERDADE (via a checagem por `FaturaItem` da sessão anterior — ver
+        abaixo) — as duas coisas são independentes e cobrem os três momentos possíveis
+        do cancelamento: SALVA (nada a fazer), FINALIZADA com reserva (libera a
+        reserva), EXECUTADA (restaura o débito real).
+      - **Deliberadamente NÃO fiz**: tabela de `MovimentoEstoque`-equivalente para
+        vacina. `EstoqueVacinaController.ajustar` já documenta, de propósito, que
+        "vacinas não têm tabela de movimento — o motivo é persistido no AuditLog"
+        (decisão existente, não uma lacuna desta sessão) — e a Farmácia (medicamento)
+        TAMBÉM não faz o CRUD de estoque (entrada/ajuste/exclusão de lote) reagir a
+        reservas, então replicar isso para vacina não seria "a mesma lógica", seria
+        além dela.
+- [x] 🔴 **Bug de estoque da sessão anterior, agora coberto pela reserva também** —
+      "cancelar vacina SALVA/FINALIZADA (nunca executada) inflava o lote" continua
+      corrigido pela checagem de `FaturaItem` (não mudou), e agora ganha uma segunda
+      camada: se a vacina JÁ tinha uma reserva (FINALIZADA, plantão), cancelar a
+      libera — sem isso, a reserva ficaria viva pra sempre, contando contra a
+      disponibilidade de qualquer vacina/registro futuro do mesmo lote (o MESMO bug de
+      "estoque inflado", só que ao contrário: estoque encolhido artificialmente).
+
+### Sessão 2026-08-18 (parte 4) — Vacina: validação de obrigatórios, bug de estoque e coluna Justificativa
+- [x] **Tipo de dose/Via deixaram de ser "opcionais até o Finalizar dar erro"** —
+      `SubModuloVacina.tsx`: `handleInserir` ("Inserir" do formulário) e `salvarEdicaoForm`
+      ("Atualizar item") só validavam a VACINA (`medicamentoId`); Dose e Via só eram
+      cobradas depois, em `salvarItens` (o "Finalizar"), quando o item já estava preso na
+      lista. Agora as duas funções recusam ANTES de entrar/voltar para a lista, com o
+      mesmo texto de erro e o mesmo `campos: ['dose'|'via']` (destaca o campo via
+      `classeErro`) que `salvarItens` já usava. Rótulos **TIPO DOSE \*** e **VIA
+      APLICAÇÃO \*** ganharam o asterisco — **VACINA \*** já tinha.
+- [x] **🔴 Bug de estoque confirmado e corrigido: cancelar vacina SALVA/FINALIZADA (nunca
+      executada) inflava o lote.** Pergunta que motivou a investigação — "o estoque só
+      debita na execução, mas RESERVA ao finalizar e libera se cancelada?" — resposta:
+      **não existe reserva nenhuma para vacina** (ao contrário da prescrição, que tem
+      `ReservaEstoque` de verdade). `registrar()` grava `loteId` na vacina só como
+      REFERÊNCIA de preço/lote sugerido (comentário already no código: "o débito do lote
+      acontece na EXECUÇÃO, não aqui no registro") — `qtdDisponivel` não é tocado.
+      `VacinaClinicaController.excluir` (cancelar), no entanto, **restaurava estoque a
+      partir da mera presença de `vacina.loteId`** — sem checar se aquele lote tinha
+      sido de fato debitado. Resultado real: registrar uma vacina (o `loteId` já é
+      fixado, seja escolhido ou por FEFO automático) e cancelá-la ANTES de executar
+      devolvia ao lote doses que nunca tinham saído dele — cada ciclo "registra e
+      cancela" inflava `qtdDisponivel`. Corrigido: `excluir` agora só restaura quando
+      existe `FaturaItem` vinculado (`vacinaClinicaId`) — a prova de que
+      `darBaixaEFaturar` rodou (chamada só por `finalizar`, no quadrante
+      aplicadaPeloProprietário×!cliente, ou por `executar`, no plantão; nunca por
+      `registrar`). Mesmo sinal que o resto do controller já usa como "foi cobrado".
+      ⚠️ Vacina **`cliente: true`** nunca é debitada mesmo passando por `executar`
+      (`if (!isCliente && ...)` guarda a chamada de `darBaixaEFaturar`) — por isso o
+      cheque é por FaturaItem, não por status (`EXECUTADA` sozinho mentiria para esse caso).
+- [x] **Coluna "Justificativa" nas listas de registros CANCELADOS/inativos do módulo
+      Atendimento** — texto truncado por CSS (`truncate`, acompanha a largura real da
+      coluna) + texto INTEIRO no tooltip nativo (`title`) ao passar o mouse. Componente
+      novo `components/JustificativaCancelamento.tsx` (reusado nos 5 lugares; `className`
+      controla display+largura — nunca fixo no componente, para não brigar entre o uso em
+      célula de tabela `block` e o uso inline dentro de frase do card mobile
+      `inline-block`). Aplicado em tabela desktop E card mobile de:
+      - **Evolução** (`justificativaExclusao`) e **Prescrição** (`motivoCancelamento`,
+        cobre `CANCELADO` E `CANCELADO_PARCIALMENTE`) — o campo já vinha de graça na
+        listagem (Prisma devolve todo escalar do model quando o `include` não usa
+        `select`); só faltava declarar no `interface` do front e renderizar.
+      - **Vacina** (`motivoInativacao`) — dado e tipo já existiam ponta a ponta; só
+        faltava a coluna/linha (só aparecia dentro do modal de detalhe).
+      - **Exame** e **Encaminhamento** — ⚠️ estes DOIS não tinham (e não têm, de
+        propósito, ver abaixo) coluna própria de justificativa de cancelamento no banco:
+        o motivo era gravado SÓ no `AuditLog` (`registrarAuditoria`), nunca no próprio
+        registro. Em vez de migration, o backend passou a ENRIQUECER a listagem com um
+        SELECT pontual no AuditLog (`categoria:'CANCELAMENTO'`, `entidade:'EXAME_CLINICO'`
+        ou `'ENCAMINHAMENTO'`, `entidadeId: {in: idsInativos/idsCancelados da página}`),
+        anexando `justificativa` (exame) / `justificativaCancelamento` (encaminhamento —
+        nome diferente de propósito: `motivo` já existe no encaminhamento e é o motivo do
+        ENCAMINHAMENTO em si, não o do cancelamento). **Decisão de escopo**: não criar
+        coluna nova no banco para isto — mudança de schema não se aplica sem autorização
+        explícita (ver `feedback_nada_no_banco_sem_autorizacao` na memória), e o dado já
+        existe de forma confiável no AuditLog; a query pontual resolve sem migration.
+      - Encaminhamento: a coluna Justificativa É exibida (só populada quando
+        `status === 'CANCELADO'`), mas isso não reabre a remoção deliberada do BADGE de
+        status (`SubModuloEncaminhamento.tsx`, comentário "Não reintroduzir a exibição
+        sem pedido") — não há pill/cor de status, só o texto da justificativa quando
+        existe. Drive-by: o `motivo` do encaminhamento (campo que JÁ era truncado por
+        `line-clamp-1` na linha/card) ganhou `title={enc.motivo}` — não tinha tooltip
+        nenhum, mesma lacuna que motivou o pedido original.
+
+### Sessão 2026-08-18 (parte 3) — Duas consultas do MESMO animal no MESMO dia são atendimentos DISTINTOS
+- [x] **Bug relatado: a 2ª consulta assumida "iniciava" na agenda mas nunca virava
+      evolução.** Repro: agendada a Corbela para a Marina como Clínica e, no mesmo dia,
+      de novo como Dermatologia (duas linhas na agenda, dois `AgendamentoClinico`).
+      Patrícia assumiu e iniciou a Clínica — ok, evolução criada. Assumiu e iniciou a
+      Dermatologia — o agendamento virou `EM_ANDAMENTO` (o "Iniciar" já marca isso
+      ANTES de existir evolução), mas nenhuma evolução nascia: o formulário nem abria.
+      Causa, nos dois lados:
+      - **Backend** (`EvolucaoController.criar`) — o bloqueio de "evolução própria já
+        aberta" (`minhaAberta`, regra de 2026-07-29) olhava só `veterinarioId`, pelo
+        ANIMAL inteiro, ignorando o `agendamentoId`. A evolução da Clínica (dela,
+        `EM_ANDAMENTO`) contava como "já tenho uma aberta para este animal" e bloquearia
+        (400) qualquer tentativa de abrir a da Dermatologia — se a chamada chegasse a
+        acontecer.
+      - **Frontend** (`SubModuloEvolucao.tsx`, useEffect do "Iniciar") — nem chegava a
+        chamar o backend: via `temEvolucaoAberta=true` (a evolução da Clínica) e
+        `evolucaoAbertaDeOutro` vazio (é dela mesma) → caía num `return` mudo, sem abrir
+        o formulário nem mostrar erro nenhum. Por isso "criou o registro na agenda [o
+        PATCH que marca EM_ANDAMENTO] porém não criou o atendimento na evolução".
+- [x] **Regra nova, nos dois lados: a evolução própria só bloqueia quando é a MESMA
+      CONSULTA** — sem agendamento (avulsa, ambígua por natureza: duas avulsas do mesmo
+      animal são indistinguíveis) ou vinculada ao MESMO `agendamentoId` que já está
+      aberto (reenvio/duplo clique). Vinculada a um agendamento DIFERENTE é uma consulta
+      DISTINTA — a mesma pessoa pode conduzir a Clínica e a Dermatologia do mesmo animal
+      no mesmo dia, em paralelo, como dois atendimentos de verdade. `agendamentoId` é o
+      que PROVA a distinção; é por isso que a regra não se aplica ao clique manual de
+      "Nova Evolução" sem ter passado por um agendamento — ver PENDENTE.
+      `EvolucaoController.criar`: `minhaAberta` agora casa por `agendamentoId` (não só
+      por animal); `evolucaoAberta` (o 409 de "outro profissional", que oferece
+      assumir/criar-nova) passou a EXCLUIR explicitamente as MINHAS — antes pegava
+      `abertas[0]` cru, e uma evolução minha (de agendamento diferente, já sem bloquear)
+      podia acabar ali, oferecendo "assumir" a mim mesma.
+      `SubModuloEvolucao.tsx`: o useEffect do "Iniciar" ganhou um terceiro caminho —
+      minha aberta de OUTRO agendamento não bloqueia mais nem pergunta nada (o clique em
+      "Iniciar" já É a decisão): liga `criandoConcorrente` e segue preparando o
+      formulário da consulta nova, com o "Agendamento vinculado" pré-selecionado nela.
+      O banner amarelo (antes só falava de "outro profissional") ganhou o texto para
+      este caso: nomeia a especialidade/atendimento que já está em andamento.
+- [x] **"Qual das minhas evoluções abertas é a ativa agora" passou a usar o
+      AGENDAMENTO como desempate — a resposta ao "pensei em um seletor" — em vez de
+      inventar um componente de escolha novo.** Com duas evoluções MINHAS abertas ao
+      mesmo tempo para o mesmo animal, o `agendamentoId` que veio na URL (o mesmo que o
+      "Iniciar" da agenda sempre propaga, via `agendamentoIdFromUrl`/localStorage
+      `s2vet_ag_<animalId>`) já identifica sem ambiguidade qual delas é "a de agora" —
+      não sobrava nada para um seletor decidir na prática. Aplicado nos DOIS lugares que
+      resolviam "a minha vence" arbitrariamente (`abertas.find(mine) ?? abertas[0]`):
+      `SubModuloEvolucao.carregarEvolucoes` (a quem prescrição/vacina/exame lançados
+      agora se vinculam) e `Atendimento.carregarEvolucaoAtiva` (o banner "Finalizar
+      Atendimento" do shell, quando a aba Evolução ainda não carregou). Este último
+      ganhou um `useEffect` PRÓPRIO — antes disparava junto do reset de animal
+      (`setEvolucaoAtiva(null); ...; carregarAnimal()`), que não pode rodar de novo só
+      porque o agendamento da URL mudou (limparia `viewPrescricaoId`/`viewExameId` à toa).
+- [ ] **PENDENTE:** o botão manual "Nova Evolução" (fora do fluxo "Iniciar" da agenda)
+      continua bloqueando sempre que há QUALQUER evolução minha aberta para o animal,
+      mesmo que exista um agendamento distinto disponível para escolher no seletor
+      "Agendamento vinculado" do formulário — porque o botão decide ANTES de a lista de
+      agendamentos ser buscada (só acontece quando o formulário abre). Not blocking o
+      "Iniciar" (o caminho real do bug relatado) resolve o caso concreto; deixar o botão
+      manual igualmente inteligente exigiria buscar os agendamentos ANTES do clique (ou
+      sempre abrir o formulário e deixar o back recusar no Salvar, como já acontece pelo
+      "Iniciar") — não fiz essa mudança para não alterar o comportamento hoje estável do
+      clique manual sem um pedido concreto.
+- [ ] **PENDENTE, de propósito, se algum dia a resolução por `agendamentoId` não bastar:**
+      um seletor explícito ("qual atendimento você está conduzindo agora?") só faria
+      diferença quando o usuário chega à aba Evolução SEM nenhum `agendamentoId` no
+      contexto (URL nem localStorage) E tem 2+ evoluções próprias abertas para o mesmo
+      animal — hoje isso cai no fallback antigo (mais recente). Não implementado por não
+      haver caso relatado; o gancho é o mesmo par de `find(mine)` citado acima.
+
+### Sessão 2026-08-18 (parte 2) — Agendamento: status `CANCELADO_AUTOMATICAMENTE`
+- [x] **Agendamento `EM_ANDAMENTO` ficava travado para sempre quando o atendimento nunca
+      era concluído** — `cancelarAgendamentosNaoRealizados` (`agendamentoCronService.js`,
+      job noturno `cancelar_agendamentos_nao_realizados`, 23:30) só cancelava
+      `AGENDADO`/`ATRASADA` com `dataHora` no passado; `EM_ANDAMENTO` (o "Iniciar" da
+      agenda já marca o agendamento assim ao abrir a evolução) era explicitamente
+      preservado, na premissa de que o atendimento ainda em curso não devia ser mexido.
+      Só que, sem ninguém finalizar a evolução, o agendamento ficava `EM_ANDAMENTO`
+      indefinidamente — dias, semanas — bloqueando a grade e sem nenhum caminho automático
+      de saída. Agora o cron também varre `EM_ANDAMENTO` com `dataHora` no passado.
+- [x] **Status novo `CANCELADO_AUTOMATICAMENTE`, EXCLUSIVO da rotina** — pedido explícito:
+      o cancelamento feito pelo sistema precisa ser DISTINGUÍVEL do cancelamento feito por
+      alguém (botão Cancelar + justificativa). Antes os dois caíam no mesmo `CANCELADO` e
+      a distinção se perdia. `AgendamentoController.STATUS_VALIDOS` ganhou o valor;
+      `STATUS_SOMENTE_SISTEMA = ['CANCELADO_AUTOMATICAMENTE']` é checado no INÍCIO de
+      `atualizarStatus` (antes até do gate de motivo) — um PATCH manual tentando setar
+      esse status responde 400. Nenhuma migration: `AgendamentoClinico.status` é
+      `VarChar`, não enum do Postgres.
+      Mesmo padrão de `CANCELADO_PARCIALMENTE` (prescrição) — status que só a rotina
+      grava já é precedente no código, não é ideia nova.
+      `STATUS_LIVRES` (não ocupa mais a grade) ganhou o valor: `ocupacaoDoDia`,
+      conflito de horário, listagem "futuros" do `AnimalDetail` — tudo que já lia
+      `STATUS_LIVRES` passou a tratar o cancelamento automático como o manual.
+      Motivo gravado em `observacao` é DIFERENTE por origem (`MOTIVO_NAO_INICIADO` ×
+      `MOTIVO_EM_ANDAMENTO`, `agendamentoCronService.js`) — quem abre o card entende se
+      ninguém nunca apareceu ou se o atendimento começou e ficou pendurado.
+      ⚠️ **PENDENTE, de propósito:** o ramo `EM_ANDAMENTO` só encerra o AGENDAMENTO — a
+      evolução clínica que ele abriu (se ainda `EM_ANDAMENTO`) NÃO é tocada. Fechá-la
+      sozinha apagaria/encerraria um registro clínico com conteúdo potencialmente já
+      escrito pelo profissional — decisão maior do que a desta rotina, e não foi pedida.
+      Mesmo padrão de `cancelarPrescricoesNaoExecutadas` (não cascateia para fora do
+      próprio grupo). Quem abrir o paciente ainda vê e pode finalizar/cancelar
+      manualmente a evolução aberta — os dois ciclos de vida (agendamento × evolução)
+      seguem independentes.
+- [x] **Front, backend e relatórios propagados** (mesma lição da armadilha do
+      `STATUS_CLS[status] undefined` quando REAGENDADO nasceu — ver §12, sessão
+      2026-07-28 parte 4): `Agendamentos.tsx` (`StatusAgendamento`, `STATUS_LIVRES`,
+      `STATUS_FILTRAVEIS` — aparece como opção no seletor "Somente" —, `STATUS_COR`/
+      `STATUS_LABEL`, tom **mais claro** que o `CANCELADO` manual — mesma família, cor
+      distinta), `AnimalDetail.tsx` (card do painel Agendamentos, badge "Cancelado
+      automaticamente"), `MapaAtendimento.tsx` (front: `StatusBadge` teria caído no
+      `else` — "Agendado", âmbar, a MESMA cor de pendente — se eu não tivesse adicionado
+      o branch explícito; back: `porStatus`/`totalAgend`/o KPI `cancelado` somam as duas
+      origens, é um agregado gerencial). `RelatoriosController.atendimento` (`canceladas`)
+      e `PainelPrincipal.tsx` (`agendaOrdenada`, senão o item cancelado pela rotina
+      continuava aparecendo como se fosse um agendamento do dia ainda por vir).
+
+### Sessão 2026-08-18 — Execução de Prescrição: Histórico por dia + fila por TIPO de item
+- [x] **Histórico deixou de ficar travado em "hoje"** — `ExecucaoPrescricao.tsx` sempre
+      teve um `CalendarioInterativo` para navegar dias anteriores (`dataSel`), mas a
+      faixa "Histórico" (prescrições/vacinas já executadas) só era montada quando
+      `dataSel === localToday()`: `carregar()` só chamava
+      `GET /clinica/vacinas/executadas-hoje` quando `isHoje`, e o cálculo de
+      `executadasHoje` (grupos) zerava fora do dia de hoje. Clicar num dia anterior no
+      calendário mostrava a fila "a executar" daquele dia (o backend já respeitava
+      `?data=`), mas o que já tinha sido executado NAQUELE dia simplesmente não
+      aparecia em lugar nenhum. Corrigido: `carregar()` sempre busca
+      `/clinica/vacinas/executadas-hoje?data=<dataSel>` e a categorização por tipo
+      (abaixo) não depende mais de `isHoje`. `VacinaClinicaController.listarExecutadasHoje`
+      ganhou o mesmo `?data=` que `PrescricaoGrupoController.listarParaExecucao` já
+      tinha — antes calculava sempre a partir de `new Date()` do servidor, ignorando
+      qualquer data pedida. O rótulo do card também virou "Histórico — executadas em
+      dd/mm" fora do dia de hoje (`rotuloHistorico`), em vez de sempre "hoje".
+- [x] **"a executar" × "Histórico" passou a ser decidido POR TIPO de item, não pelo
+      documento inteiro** — bug relatado assim: prescrição com medicamento E
+      procedimento; executado o medicamento, o item "sumia" (não aparecia no
+      Histórico) e ao abrir o procedimento a tela parecia travada ("nenhum botão
+      funciona"); só depois de executar TAMBÉM o procedimento (e a 2ª dose do
+      medicamento, no caso relatado) é que os dois desciam JUNTOS para o Histórico.
+      Causa: `foiExecutadoHoje(g)` avaliava o GRUPO inteiro (`!g.itens.some(itemPendenteHoje)`
+      — TODOS os itens, dos dois tipos) para decidir se ele saía da fila "a executar" e
+      ia para o Histórico. Com o medicamento pronto e o procedimento pendente, o grupo
+      inteiro continuava "a executar": a linha no card de Medicamentos continuava
+      oferecendo "Executar", mas abrir o modal (`tipoFiltro='MEDICAMENTO'`) só mostrava
+      o item já executado, com o ícone desabilitado e "Executar Todos" sempre inativo —
+      nada realmente quebrado, mas TODOS os botões daquele modal legitimamente sem
+      função nenhuma, o que lê como tela travada. E como o grupo nunca migrava (por tipo)
+      para o Histórico, o medicamento executado não deixava rastro visível em lugar
+      nenhum até o procedimento também ser concluído.
+      Novo `tipoConcluidoEm(g, tipo)`: cada CARD (Medicamentos, Procedimentos) decide
+      sozinho, olhando só os itens do seu próprio tipo — `gruposMedicamentos`/
+      `gruposProcedimentos` (a executar) e `historicoMedicamentos`/
+      `historicoProcedimentos` (no Histórico) são recomputados a partir de `grupos` com
+      esse critério, e um grupo com os dois tipos pode estar em "a executar" num card e
+      no "Histórico" no outro, ao mesmo tempo. `horaExecucaoDeTipo` (era `horaExecucaoDe`)
+      também passou a olhar só os itens do tipo do card, para o horário do medicamento
+      não vazar pro badge do procedimento. Cancelada nunca migra para o Histórico
+      (continua na fila "a executar" com o badge "Cancelada" — comportamento preservado).
+      Espelha o pedido explícito do usuário: **"os itens executados não deveriam sumir,
+      só mudar de status"** — mesmo padrão das demais abas (Evolução, Prescrição), onde
+      o item concluído ganha um badge e migra de seção, nunca desaparece sem deixar
+      rastro. `foiExecutadoHoje(g)` (documento inteiro) foi mantida só como fallback do
+      `soVisualizacao` do modal quando `modalTipo` é null.
+
 ### Sessão 2026-08-04 — Premissa de AUTORIA, arrasto do atendimento e auditoria da troca de dono
 > As três regras são uma só decisão de produto: **o atendimento pertence a quem o conduz.**
 > Detalhes técnicos e o "por quê" completo estão nas armadilhas **28, 28-b, 28-c, 28-e e 28-f-bis**.
@@ -2145,13 +2708,15 @@ New-Item -ItemType Junction `
 - [x] **Espaçamento do menu uniformizado** — ver armadilha 39.
 - [x] **Marca do produto**: `backend/uploads/empresas/s2vet-logo.png` (mesmo diretório das
       logos das clínicas, por decisão). Ver armadilha 40.
-- [ ] **`podeVerMedicamentos` / `podeVerProcedimentos` são código morto na Sidebar** e
-      escondem um descompasso: os links de Medicamentos e Procedimentos são gateados por
-      `isAdmin`, não pelo slug calculado (`medicamentos.catalogo.ler` /
-      `procedimentos.catalogo.ler`). Um GESTOR que receba o slug na matriz NÃO vê o item —
-      exatamente o antipadrão da armadilha 28-d. Decisão pendente: trocar o gate para a
-      permissão (o slug passa a valer) OU assumir ADMIN-only e remover as variáveis
-      (os slugs viram órfãos, como `exames.laboratorial.*`).
+- [x] **`podeVerMedicamentos` / `podeVerProcedimentos` — RESOLVIDO em 2026-09-02: assumido
+      ADMIN-only, variáveis removidas da Sidebar.** Os links de Medicamentos e
+      Procedimentos continuam gateados só por `isAdmin` (coerente com `requireAdmin`
+      em `routes/medicamentos.js` — o catálogo GLOBAL só o ADMIN cria/edita/exclui; o
+      que a empresa cadastra à mão em Orçamento/Prescrição entra por
+      `lib/catalogoManual.js`, com `empresaId` próprio, sem precisar desta tela). Os
+      slugs `medicamentos.catalogo.*`/`procedimentos.catalogo.*` ficam órfãos na
+      matriz (mesmo status de `exames.laboratorial.*`) — decisão aceita, não gateiam
+      nada de fato.
 - [ ] Busca global cobre paciente/atendimento/agenda. Proprietário, fatura e orçamento
       ficaram de fora — avaliar quando houver demanda (cada um exige o seu `*.ler`).
 
@@ -2405,13 +2970,10 @@ as MESMAS mudanças para a documentação funcional em `docs/`:
       `SubModuloPrescricao.tsx`, `TabProprietarios` e `handleAlterarCargo`(x2) em
       `ControleAcesso.tsx`, `navLinkBadge`/`isGeralActive` em `Sidebar.tsx`)
       apagados por inteiro. `npx tsc -b --noEmit` ficou limpo NESSA categoria.
-      ⚠️ **EXCEÇÃO deliberada, não tocada:** `podeVerMedicamentos`/
-      `podeVerProcedimentos` em `Sidebar.tsx` — são "código morto" pelo tsc, mas o
-      item da Sessão 2026-07-31 ("`podeVerMedicamentos` / `podeVerProcedimentos`
-      são código morto na Sidebar e escondem um descompasso") já registra que
-      apagá-las é tomar partido numa decisão de produto ainda em aberto (trocar o
-      gate para a permissão OU assumir ADMIN-only). Não remover sem resolver
-      aquele item primeiro.
+      A EXCEÇÃO que existia aqui (`podeVerMedicamentos`/`podeVerProcedimentos`,
+      código morto ligado a uma decisão de produto em aberto) foi resolvida na
+      Sessão 2026-09-02 — ver o item correspondente na sessão 2026-07-31, marcado
+      concluído.
 - [x] 🏷️ **`grupo2corrigir` — FECHADO em 2026-08-11.** Eram erros de TIPO que sobraram
       após a limpeza de código morto; a investigação, item a item, achou UM bug real
       e cinco casos de dívida de tipo pura (comportamento já correto, tipo é que

@@ -454,7 +454,8 @@ function CatalogoVacinasTab() {
 
           {/* Desktop — tabela */}
           <div className="hidden md:block bg-white rounded-2xl border shadow-sm overflow-hidden">
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto rounded-2xl">
+            <table className="w-full min-w-[820px] text-sm">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">Vacina</th>
@@ -515,6 +516,7 @@ function CatalogoVacinasTab() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         </>
       )}

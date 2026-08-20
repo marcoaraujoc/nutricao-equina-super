@@ -100,6 +100,52 @@ const emailService = {
     console.log(`[emailService] Alerta de cron "${nome}" (${ok ? 'OK' : 'ERRO'}) enviado → ${destinatarios}`);
   },
 
+  // ── CRMV não encontrado no índice do CFMV (Cadastro Pessoal) ──────────────
+  // O cadastro NUNCA é bloqueado por isso (ver nota em crmvService.js) — este
+  // e-mail é a única consequência visível de um CRMV que o índice raspado não
+  // confirmou, pra o ADMIN decidir (erro de digitação × buraco de cobertura da
+  // raspagem × tentativa de fraude), sem travar o profissional na hora do cadastro.
+  async enviarCrmvNaoEncontrado({ para, nome, telefone, tipoUsuario, crmv }) {
+    if (!podeEnviar()) {
+      console.warn('[emailService] Credenciais não configuradas — alerta de CRMV não encontrado suprimido');
+      return;
+    }
+    const destinatarios = Array.isArray(para) ? para.join(',') : para;
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      destinatarios,
+      subject: `[S2Vet] CRMV não encontrado no CFMV — ${nome ?? 'cadastro'}`,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#dc2626;padding:20px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:20px;font-weight:700;">🐴 S2Vet — CRMV não encontrado</h1>
+          </div>
+          <div style="background:#f9fafb;padding:28px 32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <p style="color:#374151;line-height:1.6;margin:0 0 20px;">
+              O CRMV abaixo não bateu com o índice local (raspado do CFMV) no cadastro
+              deste profissional. <strong>O acesso foi liberado normalmente</strong> —
+              o índice é uma cópia incompleta por natureza, então isto pode ser tanto
+              um número digitado errado quanto um profissional legítimo que a
+              raspagem ainda não alcançou.
+            </p>
+            <table style="width:100%;border-collapse:collapse;font-size:14px;">
+              <tr><td style="padding:6px 0;color:#6b7280;width:120px;">Nome</td><td style="padding:6px 0;color:#111827;font-weight:600;">${nome ?? '—'}</td></tr>
+              <tr><td style="padding:6px 0;color:#6b7280;">Telefone</td><td style="padding:6px 0;color:#111827;">${telefone ?? '—'}</td></tr>
+              <tr><td style="padding:6px 0;color:#6b7280;">Tipo de usuário</td><td style="padding:6px 0;color:#111827;">${tipoUsuario ?? '—'}</td></tr>
+              <tr><td style="padding:6px 0;color:#6b7280;">CRMV informado</td><td style="padding:6px 0;color:#dc2626;font-weight:700;">${crmv ?? '—'}</td></tr>
+            </table>
+            <p style="color:#9ca3af;font-size:12px;border-top:1px solid #e5e7eb;padding-top:16px;margin-top:24px;">
+              Alerta automático da verificação de CRMV do S2Vet — o profissional não foi
+              informado deste resultado.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`[emailService] Alerta de CRMV não encontrado (${crmv}) enviado → ${destinatarios}`);
+  },
+
   // ⚠️ FASE 3 DO MULTI-TENANCY — 8 TEMPLATES DE VÍNCULO REMOVIDOS:
   //   enviarSolicitacaoVinculo / enviarSolicitacaoVinculoProprietario
   //   enviarConfirmacaoVinculo

@@ -6,7 +6,7 @@ const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal }                   = require('../lib/animalAccess');
 // Escopo de DADOS de animal (base × convidado × prestador) — fonte única, ver §5
 const { buildAnimalScopeWhere }                   = require('../lib/animalScope');
-const { filhoDeAnimalVisivel }                    = require('../lib/visibilidade');
+const { filhoDeAnimalVisivel, animalVisivelNaEmpresa } = require('../lib/visibilidade');
 const { formatAtendimentoNum }                    = require('../lib/faturaUtils');
 const { registrarAuditoria, registrarTransferencia, registrarAlteracao } = require('../lib/auditoria');
 // Assumir/transferir a agenda arrasta a evolução aberta e tudo que está sob ela
@@ -18,8 +18,12 @@ const { tempoConsultaPadraoDaEmpresa }            = require('./EquipeController'
 // AUTORIA (2026-08-04): a ação vale sobre a PRÓPRIA agenda; só o GESTOR opera a de outro
 const { ehGestorNoContexto }                      = require('../middlewares/permissao.middleware');
 const { animalEstaInativo }                       = require('../lib/animalInativo');
+const { animalFoiExcluido }                       = require('../lib/animalAtivacao');
 // Rastro de "assumido de quem" (colunas novas lidas por SQL cru)
 const { marcarAssumido, anexarAssumido, anexarAssumidoEmLista } = require('../lib/agendamentoAssumido');
+// Cancelar o agendamento cancela junto a evolução EM_ANDAMENTO que ele abriu e tudo
+// que está atrelado a ela (prescrição, procedimento, exame, encaminhamento, vacina)
+const { cancelarEvolucoesDoAgendamento }          = require('../lib/cancelamentoPendencias');
 
 const TIPOS_VALIDOS  = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'];
 // EM_ANDAMENTO/FINALIZADO são setados automaticamente pelo fluxo de evolução clínica
@@ -33,13 +37,23 @@ const TIPOS_VALIDOS  = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'
 // CANCELADO, que é a desistência do atendimento.
 // TRANSFERIDO é o nome ANTIGO do mesmo estado (até 2026-08-04). Continua aceito para
 // não invalidar o que já está gravado; nada novo deve ser criado com ele.
-const STATUS_VALIDOS = ['AGENDADO', 'EM_ANDAMENTO', 'CONCLUIDO', 'FINALIZADO', 'CANCELADO', 'ATRASADA', 'REAGENDADO', 'TRANSFERIDO'];
+// CANCELADO_AUTOMATICAMENTE (2026-08-18): mesmo efeito de CANCELADO (libera a grade),
+// mas é o SISTEMA que desiste, não a pessoa — gravado só pela rotina noturna
+// `cancelarAgendamentosNaoRealizados` (agendamentoCronService), inclusive para o
+// AGENDADO/ATRASADA que ela já cancelava. Nunca aceito como input humano: ver o guard
+// em `atualizarStatus`. Existe para a Auditoria/relatório poderem distinguir "a clínica
+// desmarcou" de "ninguém tratou disso e o sistema encerrou sozinho" — antes das duas
+// caíam no mesmo CANCELADO e a distinção se perdia.
+const STATUS_VALIDOS = ['AGENDADO', 'EM_ANDAMENTO', 'CONCLUIDO', 'FINALIZADO', 'CANCELADO', 'CANCELADO_AUTOMATICAMENTE', 'ATRASADA', 'REAGENDADO', 'TRANSFERIDO'];
+// Status reservados à ROTINA — nunca um valor que `atualizarStatus` aceite vindo de um
+// clique humano (ver o guard logo no início dela).
+const STATUS_SOMENTE_SISTEMA = ['CANCELADO_AUTOMATICAMENTE'];
 // Status que NÃO ocupam mais a grade (o slot volta a ficar livre)
 // ⚠️ TRANSFERIDO continua aqui só por causa do LEGADO: até 2026-08-04 era o status que
 // o reagendamento gravava. Tirá-lo faria os agendamentos já reagendados voltarem a
 // ocupar a grade e a bloquear o horário que eles próprios liberaram.
 // Registro NOVO usa REAGENDADO — ver `atualizarStatus`.
-const STATUS_LIVRES = ['CANCELADO', 'REAGENDADO', 'TRANSFERIDO'];
+const STATUS_LIVRES = ['CANCELADO', 'CANCELADO_AUTOMATICAMENTE', 'REAGENDADO', 'TRANSFERIDO'];
 // Quem pode agendar/alterar é decidido pela matriz RBAC (checkPermission nas rotas
 // de agenda.js — atendimento.agendamentos.*). Nenhuma checagem de role aqui.
 // Autoria: "próprio" = veterinário responsável OU quem criou o agendamento.
@@ -464,6 +478,9 @@ const AgendamentoController = {
       const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+      if (await animalFoiExcluido(animalId)) {
+        return res.status(400).json({ error: 'Paciente inativado — reative-o na tela de Pacientes antes de registrar algo novo.', code: 'PACIENTE_EXCLUIDO' });
+      }
       if (await animalEstaInativo(animalId)) {
         return res.status(400).json({ error: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
       }
@@ -647,6 +664,12 @@ const AgendamentoController = {
       if (!STATUS_VALIDOS.includes(status)) {
         return res.status(400).json({ error: `status deve ser um de: ${STATUS_VALIDOS.join(', ')}` });
       }
+      // CANCELADO_AUTOMATICAMENTE é gravado só pela rotina noturna — se um clique humano
+      // pudesse setá-lo, a distinção "cancelado pela clínica" × "o sistema desistiu"
+      // (o motivo de o status existir) deixaria de valer alguma coisa.
+      if (STATUS_SOMENTE_SISTEMA.includes(status)) {
+        return res.status(400).json({ error: 'Este status é atribuído automaticamente pelo sistema e não pode ser definido manualmente.' });
+      }
 
       // Cancelamento exige justificativa (auditoria)
       if (STATUS_LIVRES.includes(status) && !motivo?.trim()) {
@@ -692,6 +715,14 @@ const AgendamentoController = {
             motivo,
             detalhes:   descricao,
           });
+
+          // O agendamento pode ter uma evolução EM_ANDAMENTO aberta a partir dele
+          // (o "Iniciar" da agenda cria/vincula uma) — cancelar o agendamento não
+          // pode deixá-la (e tudo que está atrelado a ela: prescrição, procedimento,
+          // exame, encaminhamento, vacina) conduzindo um atendimento que já foi
+          // desmarcado. Ao contrário do cancelar da EVOLUÇÃO, aqui o agendamento NÃO
+          // é reaberto — é ele que está sendo cancelado agora.
+          await cancelarEvolucoesDoAgendamento(tx, item.id, req, motivo);
         } else {
           // Inclui o REAGENDADO: ele libera o horário, mas NÃO é desistência — marcá-lo
           // como CANCELAMENTO faria o relatório contar remarcação como cancelamento.
@@ -898,8 +929,10 @@ const AgendamentoController = {
         if (u) vets.push(u);
       }
 
-      // Busca animais da empresa/equipe ativa
-      const animalWhere = { ativo: true };
+      // Busca animais da empresa/equipe ativa. `animalVisivelNaEmpresa` também exclui
+      // o animal cujo dono foi inativado NESTA empresa — `ativo:true` sozinho deixava
+      // esse caso passar (ver lib/visibilidade.js).
+      const animalWhere = { ...animalVisivelNaEmpresa(empresaId) };
       if (empresaId) animalWhere.empresaId = Number(empresaId);
       if (equipeId)  animalWhere.equipeId  = Number(equipeId);
       const animaisDb = await prisma.animal.findMany({

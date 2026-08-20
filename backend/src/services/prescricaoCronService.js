@@ -12,11 +12,29 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { elegivelParaFluxoNovo, primeiraDoseEsperada } = require('../lib/agendaDoses');
+// Mesmas funções que `removerItem` (cancelamento manual de UM item) usa para
+// recalcular a reserva de estoque do grupo sem deixar sobra órfã para os
+// demais itens — reusadas aqui em vez de duplicadas (armadilha conhecida:
+// duas cópias divergem na primeira correção).
+const {
+  criarReservas, liberarReservas, anexarAplicadaProprietario,
+} = require('../controllers/PrescricaoGrupoController');
 
 const MOTIVO_NAO_EXECUTADA =
   'Cancelada automaticamente pelo sistema — prescrição não executada dentro do período de tratamento.';
 const MOTIVO_PARCIAL =
   'Encerrada automaticamente pelo sistema — prescrição parcialmente executada; itens não executados foram cancelados.';
+const MOTIVO_DOSE_PERDIDA =
+  'Cancelada automaticamente pelo sistema — a dose não foi executada na data prevista.';
+
+// Data LOCAL (YYYY-MM-DD) de um instante — NUNCA `toISOString()` para "hoje"/datas
+// de referência: vira o dia seguinte a partir das 21h no horário de Brasília.
+function dataLocalStr(d) {
+  const dt = new Date(d);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+}
 
 // Último dia válido da janela do item (dataInicio + duracaoDias − 1), em 'YYYY-MM-DD'.
 // Mesmo cálculo do janelaDoItem do PrescricaoGrupoController (UTC).
@@ -101,4 +119,103 @@ async function cancelarPrescricoesNaoExecutadas(db = prisma, diario = null, empr
   };
 }
 
-module.exports = { cancelarPrescricoesNaoExecutadas, MOTIVO_NAO_EXECUTADA, MOTIVO_PARCIAL };
+/**
+ * Cancela o ITEM (não o grupo) de rolling schedule cuja dose NUNCA foi dada e
+ * cuja data prevista já passou — regra de produto (2026-08-18): "mesmo sem
+ * executar não pode mostrar em outros dias; se não executar, será cancelada
+ * automaticamente no dia seguinte."
+ *
+ * Só alcança itens com `dosesExecutadas === 0` — mesma cautela do cron irmão
+ * (`cancelarPrescricoesNaoExecutadas`): item que JÁ teve alguma dose real dada
+ * tem fatura/estoque associados a essa dose e nunca é tocado por um cron
+ * automático. Se a 2ª dose de um curso em andamento for perdida, ela
+ * simplesmente some da fila (não fica "atrasada, ainda pendente") — não há,
+ * hoje, fechamento automático para esse caso; decisão de produto em aberto.
+ *
+ * Cancela só ESTE item — os demais itens do mesmo grupo (outro medicamento,
+ * outra frequência) NÃO são afetados; o grupo muda de status apenas se ESTE
+ * era o último item ainda ativo.
+ */
+async function cancelarDosesPrescricaoPerdidas(db = prisma, diario = null, empresa = null) {
+  const hojeStr = dataLocalStr(new Date());
+
+  const itens = await db.prescricao.findMany({
+    where: {
+      ativo: true,
+      dosesExecutadas: 0,
+      grupo: { status: { in: ['FINALIZADO', 'CANCELADO_PARCIALMENTE'] } },
+    },
+    include: {
+      animal: { select: { nome: true } },
+      grupo:  { select: { id: true, numero: true, empresaId: true } },
+    },
+  });
+
+  let canceladas = 0;
+
+  for (const item of itens) {
+    if (!elegivelParaFluxoNovo(item)) continue; // legado — fica com a janela do curso, sem mudança
+    // dosesExecutadas === 0 → a próxima dose esperada É a 1ª do curso.
+    const previstoStr = dataLocalStr(primeiraDoseEsperada(item));
+    if (previstoStr >= hojeStr) continue; // é hoje ou ainda no futuro — não perdeu o prazo
+
+    await db.prescricao.update({
+      where: { id: item.id },
+      data:  { ativo: false, status: 'CANCELADA' },
+    });
+
+    // Recalcula a reserva de estoque do GRUPO com os itens que sobraram — mesma
+    // lógica multi-lote de `removerItem` (cancelamento manual de um item), para
+    // não deixar a fatia deste item reservada e bloqueando outras prescrições.
+    const restantes = await db.prescricao.findMany({
+      where: { grupoId: item.grupoId, ativo: true, id: { not: item.id } },
+    });
+    if (restantes.length === 0) {
+      await liberarReservas(db, item.grupoId);
+      const houveExecucaoNoGrupo = await db.prescricao.count({
+        where: { grupoId: item.grupoId, executadoEm: { not: null } },
+      });
+      await db.prescricaoGrupo.update({
+        where: { id: item.grupoId },
+        data:  { status: houveExecucaoNoGrupo > 0 ? 'CANCELADO_PARCIALMENTE' : 'CANCELADO' },
+      });
+    } else if (item.medicamentoCatId) {
+      // Lido por FORA da transaction do tenant de propósito — mesma ressalva de
+      // `anexarAplicadaProprietario` (a flag não muda dentro dela, então ler por
+      // fora não arrisca abortar o cron).
+      const itensRestantes = await anexarAplicadaProprietario(prisma, restantes);
+      const aindaUsaMedicamento = itensRestantes.some(i => i.medicamentoCatId === item.medicamentoCatId);
+      if (!aindaUsaMedicamento) {
+        const estoquesDoMed = await db.estoqueClinica.findMany({
+          where:  { medicamentoId: item.medicamentoCatId, ...(item.grupo?.empresaId != null ? { empresaId: item.grupo.empresaId } : {}), ativo: true },
+          select: { id: true },
+        });
+        if (estoquesDoMed.length > 0) {
+          await db.reservaEstoque.deleteMany({
+            where: { prescricaoGrupoId: item.grupoId, estoqueId: { in: estoquesDoMed.map(e => e.id) } },
+          });
+        }
+      }
+      await criarReservas(db, item.grupoId, item.animalId, itensRestantes, item.grupo?.empresaId ?? null);
+    }
+
+    canceladas++;
+    if (diario) {
+      diario.ok(empresa,
+        `prescrição #${String(item.grupo?.numero ?? item.grupoId).padStart(3, '0')} · ${item.animal?.nome ?? 'animal ?'} — `
+        + `item "${item.medicamento}" CANCELADO (dose prevista para ${previstoStr} não foi executada)`);
+    }
+  }
+
+  if (canceladas === 0) return { ok: true, notificar: false };
+  return {
+    ok: true,
+    notificar: true,
+    resumo: `${canceladas} item(ns) de prescrição cancelado(s) por dose perdida (não executada na data prevista).`,
+  };
+}
+
+module.exports = {
+  cancelarPrescricoesNaoExecutadas, MOTIVO_NAO_EXECUTADA, MOTIVO_PARCIAL,
+  cancelarDosesPrescricaoPerdidas, MOTIVO_DOSE_PERDIDA,
+};

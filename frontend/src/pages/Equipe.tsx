@@ -12,6 +12,9 @@ import PageContainer from '../components/PageContainer';
 import BotaoVoltar   from '../components/BotaoVoltar';
 import UsuarioFormModal, { type UsuarioFormValues } from '../components/UsuarioFormModal';
 import InlineError from '../components/InlineError';
+import ModalJustificativa from '../components/ModalJustificativa';
+import JustificativaCancelamento from '../components/JustificativaCancelamento';
+import { formatDate } from '../utils/dateUtils';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -23,6 +26,8 @@ interface Membro {
   diasTrabalho?:       string | null;  // CSV 0-6 (agregado — Agenda)
   horaInicioTrabalho?: string | null;  // HH:MM
   horaFimTrabalho?:    string | null;  // HH:MM
+  // "Atender somente no local de trabalho" — ver UsuarioFormValues.restringirPorLocal
+  restringirPorLocal?: boolean;
   locaisTrabalho?: Array<{
     localizacaoId:      number;
     localizacaoNome:    string | null;
@@ -38,6 +43,15 @@ interface Membro {
     email:    string;
     userType: string;
     ativo:    boolean;
+    createdAt?: string;
+    // Trilha de ativação/inativação (quem fez, quando) — ver lib/usuarioAtivacao.js
+    // no backend. null = nunca foi ativado/inativado por uma ação (ex.: conta
+    // ativa desde a criação, nunca desativada).
+    ativoEm?:        string | null;
+    ativoPorNome?:   string | null;
+    inativoEm?:      string | null;
+    inativoPorNome?: string | null;
+    inativoMotivo?:  string | null;
     phone?:       string | null;
     cep?:         string | null;
     endereco?:    string | null;
@@ -289,6 +303,9 @@ export default function Equipe() {
   const [showConvite,   setShowConvite]                   = useState(false);
   const [enviando,      setEnviando]                      = useState(false);
   const [togglingId,    setTogglingId]                    = useState<number | null>(null);
+  // Membro em vias de ser INATIVADO — pede justificativa antes do PATCH (ativar
+  // continua direto, sem modal, conforme pedido).
+  const [inativando,    setInativando]                    = useState<Membro | null>(null);
   const [filtroAtivo,   setFiltroAtivo]                   = useState<'all' | 'ativo' | 'inativo'>('ativo');
   const [busca,         setBusca]                         = useState('');
   const [membroEditando,   setMembroEditando]             = useState<Membro | null>(null);
@@ -366,6 +383,7 @@ export default function Equipe() {
         tipoServico:  values.tipoServico  ?? null,
         especialidadeIds:   values.especialidadeIds ?? [],
         locaisTrabalho:     mapLocaisParaPayload(values.locaisTrabalho),
+        restringirPorLocal: values.restringirPorLocal === true,
         // Vínculo com a empresa: remuneração (obrigatória) e acesso ao sistema
         tipoPagamento:  values.tipoPagamento,
         formaPagamento: values.formaPagamento ?? 'VALOR',
@@ -383,11 +401,18 @@ export default function Equipe() {
     } finally { setEnviando(false); }
   };
 
-  const handleToggle = async (membro: Membro) => {
+  const handleToggle = (membro: Membro) => {
+    // Inativar exige justificativa; ativar continua direto.
+    if (membro.user.ativo !== false) { setInativando(membro); return; }
+    confirmarToggle(membro);
+  };
+
+  const confirmarToggle = async (membro: Membro, motivo?: string) => {
     setTogglingId(membro.id);
     try {
-      await api.patch(`/equipes/membros/${membro.id}/toggle`);
-      toast.success(`${membro.user.fullName} ${membro.user.ativo === false ? 'ativado' : 'desativado'}`);
+      await api.patch(`/equipes/membros/${membro.id}/toggle`, motivo ? { motivo } : undefined);
+      toast.success(membro.user.ativo === false ? 'Usuário ativado' : 'Usuário inativado');
+      setInativando(null);
       carregarMembros();
     } catch { setErroInline('Erro ao alterar status'); }
     finally { setTogglingId(null); }
@@ -414,6 +439,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
         cidade:      values.cidade.trim()      || null,
         estado:      values.estado.trim()      || null,
         locaisTrabalho:     mapLocaisParaPayload(values.locaisTrabalho),
+        restringirPorLocal: values.restringirPorLocal === true,
         ...(values.especialidadeIds !== undefined && { especialidadeIds: values.especialidadeIds }),
         // GESTOR sem nada preenchido: UsuarioFormModal manda `tipoPagamento: undefined`
         // (campo opcional para o cargo). Sem este guard, `formaPagamento ?? 'VALOR'` e
@@ -501,7 +527,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
               {isGestor && (
                 <button onClick={() => setEditandoNome(true)}
                   title="Renomear equipe"
-                  className="p-1 text-emerald-500 hover:text-emerald-700 transition-colors">
+                  className="p-1 text-orange-500 hover:text-orange-700 transition-colors">
                   <Pencil size={14} />
                 </button>
               )}
@@ -620,18 +646,24 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                             // Local sem especialidade própria (cadastro anterior ao campo
                             // por local): cai nas do membro, para não sumir da tela.
                             const chips = e.especialidades.length > 0 ? e.especialidades : especialidadesDoMembro(m);
+                            // Cada bloco (turno): Especialidade / Localização / Dia e Horário,
+                            // uma embaixo da outra — `mt-2` (maior que o `space-y-0.5` interno)
+                            // separa um bloco do outro.
                             return (
-                              <div key={i} className="flex flex-wrap items-center gap-1 mt-1">
-                                {chips.map(t => (
-                                  <span key={t} className="text-[10px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium">
-                                    {t}
-                                  </span>
-                                ))}
-                                <span className="text-[11px] text-gray-500">
-                                  🕒 {e.local ? <span className="font-semibold text-gray-600">{e.local}</span> : null}
-                                  {e.local ? ' — ' : ''}
-                                  {e.quando ?? <span className="text-gray-400">expediente da empresa</span>}
-                                </span>
+                              <div key={i} className="mt-2 space-y-0.5">
+                                <div className="flex flex-wrap items-center gap-1">
+                                  {chips.map(t => (
+                                    <span key={t} className="text-[10px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium">
+                                      {t}
+                                    </span>
+                                  ))}
+                                </div>
+                                {e.local && (
+                                  <p className="text-[11px] font-semibold text-gray-600">{e.local}</p>
+                                )}
+                                <p className="text-[11px] text-gray-500">
+                                  🕒 {e.quando ?? <span className="text-gray-400">expediente da empresa</span>}
+                                </p>
                               </div>
                             );
                           })}
@@ -642,6 +674,21 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                           </span>
                         ))}
                       </div>
+                      {filtroAtivo === 'ativo' && (
+                        <p className="text-[11px] text-gray-400 mt-1">
+                          Criado em {formatDate(m.user.createdAt)}
+                          {/* Só repete "Ativado em" quando há uma reativação de verdade
+                              (ativoPorNome) — sem isso, a data é a mesma da criação. */}
+                          {m.user.ativoPorNome ? ` · Ativado em ${formatDate(m.user.ativoEm ?? m.user.createdAt)} por ${m.user.ativoPorNome}` : ''}
+                        </p>
+                      )}
+                      {filtroAtivo === 'inativo' && (
+                        <p className="text-[11px] text-gray-400 mt-1">
+                          Inativado em {formatDate(m.user.inativoEm)}
+                          {m.user.inativoPorNome ? ` por ${m.user.inativoPorNome}` : ''}
+                          {m.user.inativoMotivo ? <> — <JustificativaCancelamento texto={m.user.inativoMotivo} className="inline" /></> : ''}
+                        </p>
+                      )}
                     </div>
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
                       {ativo ? 'Ativo' : 'Inativo'}
@@ -651,7 +698,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                     <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-50">
                       {isGestor && (m.cargo !== 'GESTOR' || isAdminPlataforma || m.user.id === user?.id) && (
                         <button onClick={() => setMembroEditando(m)}
-                          className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-emerald-200 rounded-lg text-xs text-emerald-600 hover:bg-emerald-50 transition-colors">
+                          className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-orange-200 rounded-lg text-xs text-orange-600 hover:bg-orange-50 transition-colors">
                           <Pencil size={11} /> Editar
                         </button>
                       )}
@@ -681,6 +728,20 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Especialidade e expediente</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Cargo</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                  {filtroAtivo === 'ativo' && (
+                    <>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Criado em</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado em</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado por</th>
+                    </>
+                  )}
+                  {filtroAtivo === 'inativo' && (
+                    <>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado em</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado por</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
+                    </>
+                  )}
                   {(isGestor) && <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>}
                 </tr>
               </thead>
@@ -717,23 +778,29 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                             ))}
                           </div>
                         ) : (
-                          <div className="space-y-1">
+                          <div className="space-y-3">
                             {linhasExpediente(m).map((e, i) => {
                               // Local sem especialidade própria (cadastro anterior ao campo
                               // por local): cai nas do membro, para não sumir da tela.
                               const chips = e.especialidades.length > 0 ? e.especialidades : especialidadesDoMembro(m);
+                              // Cada bloco (turno): Especialidade / Localização / Dia e Horário,
+                              // uma embaixo da outra — `space-y-3` no container ACIMA separa
+                              // um bloco do outro (a "linha em branco" entre turnos).
                               return (
-                                <div key={i} className="flex flex-wrap items-center gap-1">
-                                  {chips.map(t => (
-                                    <span key={t} className="text-[11px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium">
-                                      {t}
-                                    </span>
-                                  ))}
-                                  <span className="text-xs text-gray-600 whitespace-nowrap">
-                                    {e.local && <span className="font-semibold text-gray-700">{e.local}</span>}
-                                    {e.local ? ' — ' : ''}
+                                <div key={i} className="space-y-0.5">
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    {chips.map(t => (
+                                      <span key={t} className="text-[11px] bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium">
+                                        {t}
+                                      </span>
+                                    ))}
+                                  </div>
+                                  {e.local && (
+                                    <p className="text-xs font-semibold text-gray-700 whitespace-nowrap">{e.local}</p>
+                                  )}
+                                  <p className="text-xs text-gray-600 whitespace-nowrap">
                                     {e.quando ?? <span className="text-gray-400">expediente da empresa</span>}
-                                  </span>
+                                  </p>
                                 </div>
                               );
                             })}
@@ -754,12 +821,28 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                           {ativo ? 'Ativo' : 'Inativo'}
                         </span>
                       </td>
+                      {filtroAtivo === 'ativo' && (
+                        <>
+                          <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(m.user.createdAt)}</td>
+                          {/* "Ativado em" nunca fica em branco: sem trilha própria (nunca
+                              foi desativado e reativado), a ativação É a criação. */}
+                          <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(m.user.ativoEm ?? m.user.createdAt)}</td>
+                          <td className="px-4 py-3 whitespace-nowrap text-gray-600">{m.user.ativoPorNome ?? '—'}</td>
+                        </>
+                      )}
+                      {filtroAtivo === 'inativo' && (
+                        <>
+                          <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(m.user.inativoEm)}</td>
+                          <td className="px-4 py-3 whitespace-nowrap text-gray-600">{m.user.inativoPorNome ?? '—'}</td>
+                          <td className="px-4 py-3"><JustificativaCancelamento texto={m.user.inativoMotivo} /></td>
+                        </>
+                      )}
                       {isGestor && (
                         <td className="px-4 py-3">
                           <div className="flex items-center justify-end gap-1">
                             {(m.cargo !== 'GESTOR' || isAdminPlataforma || m.user.id === user?.id) && (
                               <button onClick={() => setMembroEditando(m)} title="Editar perfil"
-                                className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                                className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
                                 <Pencil size={14} />
                               </button>
                             )}
@@ -843,6 +926,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
             bairro:      membroEditando.user.bairro      ?? '',
             cidade:      membroEditando.user.cidade      ?? '',
             estado:      membroEditando.user.estado      ?? '',
+            restringirPorLocal: membroEditando.restringirPorLocal === true,
             locaisTrabalho: (membroEditando.locaisTrabalho ?? []).map(l => ({
               localizacaoId:      l.localizacaoId,
               localizacaoNome:    l.localizacaoNome ?? '',
@@ -862,6 +946,16 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
           }}
         />
       )}
+
+      <ModalJustificativa
+        aberto={!!inativando}
+        titulo="Inativar usuário?"
+        descricao={inativando ? `${inativando.user.fullName} deixa de aparecer como ativo na equipe.` : undefined}
+        acaoLabel="Inativar"
+        processando={togglingId === inativando?.id}
+        onConfirmar={(motivo) => { if (inativando) confirmarToggle(inativando, motivo); }}
+        onFechar={() => setInativando(null)}
+      />
     </PageContainer>
   );
 }

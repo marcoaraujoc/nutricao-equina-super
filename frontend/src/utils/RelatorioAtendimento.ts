@@ -20,6 +20,7 @@ import {
   renderAnimalCard,
   type PrintAnimal,
 } from './AtendimentoPrint';
+import { imprimirHtml } from './print/imprimirHtml';
 
 // ─── Tipos (espelham o payload de EvolucaoController.relatorioAtendimento) ───
 
@@ -189,30 +190,8 @@ export function renderRodapeAtendimento(dados: RelatorioAtendimentoDados): strin
   </div>`;
 }
 
-/** Mecanismo de impressão compartilhado (offscreen iframe) — idêntico aos demais utils de print. */
-export function imprimirHtml(html: string): void {
-  const iframe = document.createElement('iframe');
-  Object.assign(iframe.style, {
-    position: 'fixed', top: '-9999px', left: '-9999px',
-    width: '0', height: '0', border: 'none',
-  });
-  document.body.appendChild(iframe);
-
-  const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
-  if (!doc) { document.body.removeChild(iframe); return; }
-
-  doc.open();
-  doc.write(html);
-  doc.close();
-
-  setTimeout(() => {
-    iframe.contentWindow?.focus();
-    iframe.contentWindow?.print();
-    setTimeout(() => {
-      if (document.body.contains(iframe)) document.body.removeChild(iframe);
-    }, 500);
-  }, 250);
-}
+/** Mecanismo de impressão compartilhado — reexportado para os consumidores existentes. */
+export { imprimirHtml };
 
 // ─── CSS específico do relatório (complementa o PRINT_CSS padrão) ────────────
 

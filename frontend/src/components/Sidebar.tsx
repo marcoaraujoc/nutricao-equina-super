@@ -115,8 +115,11 @@ export default function Sidebar() {
   const podeVerFaturas         = podeExecutar('financeiro.faturas.ler');
   const podeVerFarmacia        = podeExecutar('farmacia.estoque.ler');
   const podeVerEstoqueVacina   = isGestor || podeExecutar('vacina.estoque.ler');
-  const podeVerMedicamentos    = podeExecutar('medicamentos.catalogo.ler');
-  const podeVerProcedimentos   = podeExecutar('procedimentos.catalogo.ler');
+  // Medicamentos/Procedimentos (catálogo GLOBAL): os links abaixo são ADMIN-only
+  // por decisão — a rota (`requireAdmin` em routes/medicamentos.js) só aceita o
+  // ADMIN da plataforma para criar/editar/excluir. Os slugs `medicamentos.catalogo.*`/
+  // `procedimentos.catalogo.*` da matriz não controlam o acesso a esta tela (o
+  // gestor pode até "conceder" o slug a alguém, sem efeito nenhum aqui).
   const podeVerCadProcedimentos = isAdmin || isGestor || podeExecutar('cadastro.procedimento.ler');
   const podeVerProprietarios   = isAdmin || isGestor || podeExecutar('cadastro.proprietario.ler');
   const podeVerTratadores      = isAdmin || isGestor || podeExecutar('cadastro.tratador.ler');

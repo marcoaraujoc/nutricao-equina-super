@@ -13,6 +13,8 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
+import ModalJustificativa from '../components/ModalJustificativa';
+import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import { formatDate } from '../utils/dateUtils';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -52,6 +54,7 @@ interface Tratador {
   ativoPorNome?:   string | null;
   inativoEm?:      string | null;
   inativoPorNome?: string | null;
+  inativoMotivo?:  string | null;
 }
 
 interface FormTratador {
@@ -184,16 +187,30 @@ export default function CadastroTratador() {
   };
 
   // ── Toggle ativo ───────────────────────────────────────────────────────────
-  const toggleAtivo = async (t: Tratador) => {
+  // Tratador em vias de ser INATIVADO — pede justificativa antes do PATCH
+  // (ativar continua direto, sem modal).
+  const [inativando, setInativando] = useState<Tratador | null>(null);
+  const [togglingAtivo, setTogglingAtivo] = useState(false);
+
+  const toggleAtivo = (t: Tratador) => {
     if (t.tipoEntrada === 'SYSTEM' && !isAdmin) { setErroInline('Apenas ADMIN pode ativar/inativar tratadores do catálogo global.'); return; }
     if (!podeAtivar) { setErroInline('Sem permissão para ativar/inativar tratadores.'); return; }
     setErroInline(null);
+    if (t.ativo) { setInativando(t); return; }
+    confirmarToggle(t);
+  };
+
+  const confirmarToggle = async (t: Tratador, motivo?: string) => {
+    setTogglingAtivo(true);
     try {
-      const res = await api.patch(`/cadastro/tratadores/${t.id}/toggle`);
+      const res = await api.patch(`/cadastro/tratadores/${t.id}/toggle`, motivo ? { motivo } : undefined);
       toast.success(res.data?.mensagem ?? (t.ativo ? 'Tratador inativado' : 'Tratador ativado'));
+      setInativando(null);
       carregar();
     } catch {
       setErroInline('Erro ao alterar status');
+    } finally {
+      setTogglingAtivo(false);
     }
   };
 
@@ -304,7 +321,8 @@ export default function CadastroTratador() {
           </div>
         ) : (
           <div className="bg-white rounded-3xl border border-gray-200 overflow-hidden">
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto rounded-3xl">
+            <table className="w-full min-w-[820px] text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Nome</th>
@@ -322,6 +340,7 @@ export default function CadastroTratador() {
                     <>
                       <th className="px-4 py-3 text-left font-semibold text-gray-600 whitespace-nowrap">Inativado em</th>
                       <th className="px-4 py-3 text-left font-semibold text-gray-600 whitespace-nowrap">Inativado por</th>
+                      <th className="px-4 py-3 text-left font-semibold text-gray-600">Justificativa</th>
                     </>
                   )}
                   <th className="px-4 py-3 text-center font-semibold text-gray-600">Ações</th>
@@ -349,7 +368,7 @@ export default function CadastroTratador() {
                     {filtroAtivo === 'ativo' && (
                       <>
                         <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(t.createdAt)}</td>
-                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(t.ativoEm)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(t.ativoEm ?? t.createdAt)}</td>
                         <td className="px-4 py-3 whitespace-nowrap text-gray-600">{t.ativoPorNome ?? '—'}</td>
                       </>
                     )}
@@ -357,6 +376,7 @@ export default function CadastroTratador() {
                       <>
                         <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(t.inativoEm)}</td>
                         <td className="px-4 py-3 whitespace-nowrap text-gray-600">{t.inativoPorNome ?? '—'}</td>
+                        <td className="px-4 py-3"><JustificativaCancelamento texto={t.inativoMotivo} /></td>
                       </>
                     )}
                     <td className="px-4 py-3">
@@ -367,7 +387,7 @@ export default function CadastroTratador() {
                           <>
                             {podeEditar && (
                               <button onClick={() => abrirEditar(t)}
-                                className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-xl transition-colors"
+                                className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-xl transition-colors"
                                 title="Editar">
                                 <Pencil size={15} />
                               </button>
@@ -390,6 +410,7 @@ export default function CadastroTratador() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </div>
@@ -425,13 +446,14 @@ export default function CadastroTratador() {
             {filtroAtivo === 'ativo' && (
               <p className="text-[11px] text-gray-400 mb-2">
                 Criado em {formatDate(t.createdAt)}
-                {t.ativoEm ? ` · Ativado em ${formatDate(t.ativoEm)}${t.ativoPorNome ? ` por ${t.ativoPorNome}` : ''}` : ''}
+                {t.ativoPorNome ? ` · Ativado em ${formatDate(t.ativoEm ?? t.createdAt)} por ${t.ativoPorNome}` : ''}
               </p>
             )}
             {filtroAtivo === 'inativo' && (
               <p className="text-[11px] text-gray-400 mb-2">
                 Inativado em {formatDate(t.inativoEm)}
                 {t.inativoPorNome ? ` por ${t.inativoPorNome}` : ''}
+                {t.inativoMotivo ? <> — <JustificativaCancelamento texto={t.inativoMotivo} className="inline" /></> : ''}
               </p>
             )}
 
@@ -443,7 +465,7 @@ export default function CadastroTratador() {
                 <div className="flex gap-2">
                   {podeEditar && (
                     <button onClick={() => abrirEditar(t)}
-                      className="flex items-center gap-1 px-3 py-1.5 text-xs text-emerald-600 border border-emerald-200 rounded-xl hover:bg-emerald-50 transition-colors">
+                      className="flex items-center gap-1 px-3 py-1.5 text-xs text-orange-600 border border-orange-200 rounded-xl hover:bg-orange-50 transition-colors">
                       <Pencil size={11} /> Editar
                     </button>
                   )}
@@ -477,13 +499,6 @@ export default function CadastroTratador() {
 
             {/* Body */}
             <div className="overflow-y-auto flex-1 px-6 py-4 space-y-4">
-
-              {/* Banner informativo para não-ADMIN */}
-              {!isAdmin && !editando && (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-800">
-                  Este tratador será cadastrado como <strong>CLIENTE</strong>, vinculado à sua empresa/equipe ativa.
-                </div>
-              )}
 
               {/* Nome */}
               <div>
@@ -594,6 +609,16 @@ export default function CadastroTratador() {
           </div>
         </div>
       )}
+
+      <ModalJustificativa
+        aberto={!!inativando}
+        titulo="Inativar tratador?"
+        descricao={inativando ? `${inativando.nome} deixa de aparecer como ativo.` : undefined}
+        acaoLabel="Inativar"
+        processando={togglingAtivo}
+        onConfirmar={(motivo) => { if (inativando) confirmarToggle(inativando, motivo); }}
+        onFechar={() => setInativando(null)}
+      />
     </PageContainer>
   );
 }

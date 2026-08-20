@@ -5,7 +5,7 @@ const prisma = require('../lib/prisma').default;
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
 const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
-const { registrarAuditoria } = require('../lib/auditoria');
+const { registrarAuditoria, registrarAlteracao, nomeLocalizacao } = require('../lib/auditoria');
 
 const normalizarTexto = v => (v ?? '').trim().toLowerCase();
 
@@ -140,6 +140,16 @@ const TratadorController = {
           localizacao: { select: { id: true, nome: true, tipoLocalizacao: true } },
         },
       });
+      // Tratador nasce ativo=true (default do schema): grava a trilha de ativação
+      // também na CRIAÇÃO, senão "Ativado em/por" fica vazio até alguém desativar
+      // e reativar o registro.
+      await registrarAtivacao(prisma, 'tratador', tratador.id, req.user.id);
+      await registrarAuditoria(prisma, req, {
+        categoria:  'CRIACAO',
+        entidade:   'TRATADOR',
+        entidadeId: tratador.id,
+        detalhes:   `${tratador.nome}${tratador.localizacao ? ` — ${tratador.localizacao.nome}` : ''}`,
+      });
       res.status(201).json({ sucesso: true, dados: tratador });
     } catch (err) {
       console.error('Erro ao criar tratador:', err);
@@ -180,6 +190,20 @@ const TratadorController = {
           localizacao: { select: { id: true, nome: true, tipoLocalizacao: true } },
         },
       });
+
+      const [localAntes, localDepois] = locId !== undefined && locId !== existe.localizacaoId
+        ? await Promise.all([nomeLocalizacao(prisma, existe.localizacaoId), nomeLocalizacao(prisma, locId)])
+        : [null, null];
+      await registrarAlteracao(prisma, req, {
+        entidade:   'TRATADOR',
+        entidadeId: Number(id),
+        campos: {
+          'nome':      { de: existe.nome,     para: nome.trim() },
+          'telefone':  { de: existe.telefone, para: telefone?.trim() || null },
+          ...(locId !== undefined ? { 'localização': { de: localAntes, para: localDepois } } : {}),
+        },
+      });
+
       res.json({ sucesso: true, dados: tratador });
     } catch (err) {
       if (err.code === 'P2025')
@@ -192,6 +216,7 @@ const TratadorController = {
   // PATCH /api/cadastro/tratadores/:id/toggle — escopado por empresa/equipe (checkPermission na rota)
   toggleAtivo: async (req, res) => {
     const { id } = req.params;
+    const { motivo } = req.body ?? {};
     try {
       const existe = await prisma.tratador.findUnique({ where: { id: Number(id) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Tratador não encontrado' });
@@ -199,8 +224,14 @@ const TratadorController = {
         return res.status(403).json({ sucesso: false, mensagem: 'Você não tem acesso para alterar este tratador.' });
 
       const vaiInativar = existe.ativo;
+
+      // Justificativa obrigatória só para INATIVAR — ativar não pede motivo.
+      if (vaiInativar && !motivo?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da inativação' });
+      }
+
       if (vaiInativar) {
-        await registrarInativacao(prisma, 'tratador', existe.id, req.user.id);
+        await registrarInativacao(prisma, 'tratador', existe.id, req.user.id, motivo.trim());
       } else {
         await registrarAtivacao(prisma, 'tratador', existe.id, req.user.id);
       }
@@ -211,6 +242,7 @@ const TratadorController = {
         categoria: 'ALTERACAO',
         entidade:  'TRATADOR',
         entidadeId: existe.id,
+        motivo:    vaiInativar ? motivo.trim() : null,
         detalhes:  `${req.user.fullName ?? req.user.email} ${vaiInativar ? 'inativou' : 'ativou'} o tratador ${existe.nome}`,
       });
 

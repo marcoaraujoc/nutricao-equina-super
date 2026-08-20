@@ -6,6 +6,7 @@ const { registrarAuditoria } = require('../lib/auditoria');
 // por isso a checagem vem logo após o findUnique e ANTES de responder qualquer dado.
 const { garantirAcessoAnimal } = require('../middlewares/animalAcesso.middleware');
 const { animalEstaInativo }    = require('../lib/animalInativo');
+const { animalFoiExcluido }    = require('../lib/animalAtivacao');
 
 // =============================================================================
 // PLANOS DE DIETA
@@ -66,6 +67,9 @@ const PlanoDietaController = {
     if (!nome || !nome.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome do plano é obrigatório' });
 
     try {
+      if (await animalFoiExcluido(animalId)) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Paciente inativado — reative-o na tela de Pacientes antes de registrar algo novo.', code: 'PACIENTE_EXCLUIDO' });
+      }
       if (await animalEstaInativo(animalId)) {
         return res.status(400).json({ sucesso: false, mensagem: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
       }
@@ -263,6 +267,9 @@ const DietaItemController = {
     const userId = Number(criadopor || modificadopor || req.user?.id || 1);
 
     try {
+      if (await animalFoiExcluido(animalId)) {
+        return res.status(400).json({ error: 'Paciente inativado — reative-o na tela de Pacientes antes de registrar algo novo.', code: 'PACIENTE_EXCLUIDO' });
+      }
       if (await animalEstaInativo(animalId)) {
         return res.status(400).json({ error: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
       }

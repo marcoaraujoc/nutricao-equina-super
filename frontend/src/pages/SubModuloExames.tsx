@@ -19,6 +19,7 @@ import { imprimirExame as imprimirExameUtil } from '../utils/ExamePrint';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import { temResultadoExame } from '../utils/exameClinico';
 import InlineError from '../components/InlineError';
+import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import LaudoTexto from '../components/LaudoTexto';
 
 
@@ -104,10 +105,14 @@ interface ExameClinico {
   observacao:      string | null;
   qtdAmostra:      number | null;
   dataSolicitacao: string;
+  dataResultado?:  string | null;
   resultado?:      string | null;
   resultadoItens?: ExameResultadoItem[];
   imagens?:        ExameImagemAnexo[];
   veterinario:     { id: number; fullName: string } | null;
+  // Justificativa do cancelamento (exame INATIVO, ativo:false). O registro não tem
+  // coluna própria para isso — o backend a resolve a partir do AuditLog na listagem.
+  justificativa?:  string | null;
 }
 
 const fmtNumero = (n: number | null | undefined) =>
@@ -117,6 +122,11 @@ interface Props {
   animalId:           number;
   animal:             AnimalInfo | null;
   evolucaoId?:        number;
+  /** Evolução ativa existe, mas pertence a OUTRO profissional (não assumida por
+   *  mim, e eu não sou gestor) — bloqueia a CRIAÇÃO de pedido de exame nela.
+   *  O backend já recusa com 403 (ExameClinicoController.criar); isto só evita o
+   *  formulário inteiro preenchido pra falhar no fim. */
+  evolucaoDeOutro?:   boolean;
   atendimentoNumero?: string;
   onSalvo?:           () => void;
   openItemId?:        number;
@@ -473,7 +483,7 @@ function PendingGroupCard({ group, onRemove }: { group: PendingExamGroup; onRemo
 // ─── SubModuloExames ──────────────────────────────────────────────────────────
 
 export default function SubModuloExames({
-  animalId, animal, evolucaoId, atendimentoNumero: _atendimentoNumero, onSalvo, openItemId, onViewConsumed,
+  animalId, animal, evolucaoId, evolucaoDeOutro, atendimentoNumero: _atendimentoNumero, onSalvo, openItemId, onViewConsumed,
 }: Props) {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const { user } = useAuth();
@@ -985,6 +995,7 @@ export default function SubModuloExames({
   const handleInserir = () => {
     if (!podeCriar)  { semPermissao('registrar exames'); return; }
     if (!evolucaoId) { setErroInline('Inicie uma evolução antes de registrar um exame.'); return; }
+    if (evolucaoDeOutro) { setErroInline('Esta evolução pertence a outro profissional — assuma-a na aba Evolução antes de pedir exames.'); return; }
     if (!validateCurrentForm()) return;
     setPendingGroups(prev => [...prev, buildCurrentGroup()]);
     resetCurrentForm();
@@ -995,6 +1006,7 @@ export default function SubModuloExames({
   const handleSalvar = async () => {
     if (!podeCriar)  { semPermissao('registrar exames'); return; }
     if (!evolucaoId) { setErroInline('Inicie uma evolução antes de registrar um exame.'); return; }
+    if (evolucaoDeOutro) { setErroInline('Esta evolução pertence a outro profissional — assuma-a na aba Evolução antes de pedir exames.'); return; }
 
     let rawGroups = [...pendingGroups];
     if (canSave) {
@@ -1190,6 +1202,14 @@ export default function SubModuloExames({
               <p className="font-medium text-sm text-gray-500">Evolução necessária</p>
               <p className="text-xs mt-1 text-center max-w-xs">
                 Inicie uma evolução na aba Evolução para poder registrar exames neste atendimento.
+              </p>
+            </div>
+          ) : evolucaoDeOutro && !exameVisualizando ? (
+            <div className="flex flex-col items-center justify-center py-12 text-gray-400 px-4">
+              <FileText size={28} className="mb-2 text-gray-200" />
+              <p className="font-medium text-sm text-gray-500">Evolução de outro profissional</p>
+              <p className="text-xs mt-1 text-center max-w-xs">
+                Você só pode pedir exames dentro de um atendimento seu. Assuma esta evolução na aba Evolução para registrar exames aqui.
               </p>
             </div>
           ) : (
@@ -1966,6 +1986,12 @@ export default function SubModuloExames({
                     {extra.laboratorio && <>{extra.laboratorio} · </>}{formatDate(ex.dataSolicitacao)}
                   </p>
                   {ex.veterinario && <p className="text-[11px] text-gray-400 mt-0.5">Por: {ex.veterinario.fullName}</p>}
+                  {!ex.ativo && ex.justificativa && (
+                    <p className="text-[11px] text-gray-400 mt-0.5">
+                      Justificativa:{' '}
+                      <JustificativaCancelamento texto={ex.justificativa} className="inline-block align-bottom max-w-[70vw]" />
+                    </p>
+                  )}
 
                   <div className="flex flex-wrap gap-2 mt-2">
                     <button onClick={() => setViewingEx(ex)}
@@ -2013,15 +2039,17 @@ export default function SubModuloExames({
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nº Exame</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nº</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Início</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Fim</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipo</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Exames</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Laboratório</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Amostra</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Data</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Solicitante</th>
-                  <th className="px-4 py-3"></th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
@@ -2037,6 +2065,12 @@ export default function SubModuloExames({
                         <span className="text-xs font-bold text-gray-600 bg-gray-100 px-2 py-1 rounded-lg border border-gray-200">
                           {fmtNumero(ex.numero)}
                         </span>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-gray-700 whitespace-nowrap">
+                        {formatDate(ex.dataSolicitacao)}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-gray-700 whitespace-nowrap">
+                        {ex.dataResultado ? formatDate(ex.dataResultado) : <span className="text-gray-300">—</span>}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1">
@@ -2060,19 +2094,21 @@ export default function SubModuloExames({
                       <td className="px-4 py-3 text-xs text-gray-600">
                         {extra.tipoAmostra ?? <span className="text-gray-300">—</span>}
                       </td>
-                      <td className="px-4 py-3 text-xs text-gray-700 whitespace-nowrap">
-                        {formatDate(ex.dataSolicitacao)}
-                      </td>
-                      <td className="px-4 py-3">
-                        <StatusExameBadge status={getStatusExame(ex)} semResultado={!temResultadoExame(ex)} />
-                      </td>
                       <td className="px-4 py-3 text-xs text-gray-600">
                         {ex.veterinario?.fullName ?? <span className="text-gray-300">—</span>}
                       </td>
                       <td className="px-4 py-3">
+                        <StatusExameBadge status={getStatusExame(ex)} semResultado={!temResultadoExame(ex)} />
+                      </td>
+                      <td className="px-4 py-3">
+                        {!ex.ativo
+                          ? <JustificativaCancelamento texto={ex.justificativa} />
+                          : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
                           <button onClick={() => setViewingEx(ex)} title="Ver detalhes"
-                            className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
+                            className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                             <Eye size={14} />
                           </button>
                           {getStatusExame(ex) === 'SALVA' && podeFinalizarEx(ex) && (

@@ -7,7 +7,7 @@ const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
 const { normalizarPagamento } = require('../lib/usuarioEmpresa');
 const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
-const { registrarAuditoria } = require('../lib/auditoria');
+const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 const emailService = require('../services/emailService');
 
 // Whitelist fixa SAIU (2026-08-25) — o tipo de serviço agora vem do catálogo
@@ -310,7 +310,18 @@ const PrestadorController = {
         }).catch(err => console.error('[emailService] Falha ao enviar boas-vindas do prestador:', err));
       }
 
+      // Prestador nasce ativo=true (default do schema): grava a trilha de ativação
+      // também na CRIAÇÃO, senão "Ativado em/por" fica vazio até alguém desativar
+      // e reativar o registro.
+      await registrarAtivacao(prisma, 'prestador', prestadorId, req.user.id);
+
       const prestador = await prisma.prestador.findUnique({ where: { id: prestadorId }, include: PRESTADOR_INCLUDE });
+      await registrarAuditoria(prisma, req, {
+        categoria:  'CRIACAO',
+        entidade:   'PRESTADOR',
+        entidadeId: prestador.id,
+        detalhes:   `${prestador.nome} — ${prestador.tipoServico}`,
+      });
       res.status(201).json({ sucesso: true, dados: prestador });
     } catch (err) {
       if (err.code === 'EMAIL_JA_VINCULADO') {
@@ -415,6 +426,27 @@ const PrestadorController = {
       }
 
       const prestador = await prisma.prestador.findUnique({ where: { id: Number(id) }, include: PRESTADOR_INCLUDE });
+
+      await registrarAlteracao(prisma, req, {
+        entidade:   'PRESTADOR',
+        entidadeId: Number(id),
+        campos: {
+          'nome':            { de: existe.nome,          para: prestador.nome },
+          'CPF':             { de: existe.cpf,           para: prestador.cpf },
+          'CNPJ':            { de: existe.cnpj,          para: prestador.cnpj },
+          'telefone':        { de: existe.telefone,      para: prestador.telefone },
+          'e-mail':          { de: existe.email,         para: prestador.email },
+          'tipo de serviço': { de: existe.tipoServico,   para: prestador.tipoServico },
+          'CEP':             { de: existe.cep,           para: prestador.cep },
+          'endereço':        { de: existe.endereco,      para: prestador.endereco },
+          'complemento':     { de: existe.complemento,   para: prestador.complemento },
+          'bairro':          { de: existe.bairro,        para: prestador.bairro },
+          'cidade':          { de: existe.cidade,        para: prestador.cidade },
+          'estado':          { de: existe.estado,        para: prestador.estado },
+          'acesso ao sistema': { de: existe.acessoSistema, para: prestador.acessoSistema },
+        },
+      });
+
       res.json({ sucesso: true, dados: prestador });
     } catch (err) {
       if (err.code === 'EMAIL_JA_VINCULADO') {
@@ -430,14 +462,21 @@ const PrestadorController = {
   // PATCH /api/cadastro/prestadores/:id/toggle — escopado por empresa/equipe (checkPermission na rota)
   toggleAtivo: async (req, res) => {
     try {
+      const { motivo } = req.body ?? {};
       const existe = await prisma.prestador.findUnique({ where: { id: Number(req.params.id) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Prestador não encontrado' });
       if (!podeAlterarRegistroEscopado(existe, req))
         return res.status(403).json({ sucesso: false, mensagem: 'Você não tem acesso para alterar este prestador.' });
 
       const vaiInativar = existe.ativo;
+
+      // Justificativa obrigatória só para INATIVAR — ativar não pede motivo.
+      if (vaiInativar && !motivo?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da inativação' });
+      }
+
       if (vaiInativar) {
-        await registrarInativacao(prisma, 'prestador', existe.id, req.user.id);
+        await registrarInativacao(prisma, 'prestador', existe.id, req.user.id, motivo.trim());
       } else {
         await registrarAtivacao(prisma, 'prestador', existe.id, req.user.id);
       }
@@ -448,6 +487,7 @@ const PrestadorController = {
         categoria: 'ALTERACAO',
         entidade:  'PRESTADOR',
         entidadeId: existe.id,
+        motivo:    vaiInativar ? motivo.trim() : null,
         detalhes:  `${req.user.fullName ?? req.user.email} ${vaiInativar ? 'inativou' : 'ativou'} o prestador ${existe.nome}`,
       });
 

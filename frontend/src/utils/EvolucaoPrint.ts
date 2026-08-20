@@ -1,7 +1,8 @@
 // frontend/src/utils/EvolucaoPrint.ts
 // Utilitário de impressão para Evolução Clínica — segue o padrão de Dietaprint.ts
 
-import { resolverUrlAbsoluta } from './printUrl';
+import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura } from './print/PrintShell';
+import { imprimirHtml } from './print/imprimirHtml';
 
 export interface PrintAnimal {
   nome:      string;
@@ -87,7 +88,6 @@ export function gerarHtmlEvolucao(
   const statusLabel = STATUS_LABEL[ev.status] ?? ev.status;
   const statusColor = STATUS_COLOR[ev.status] ?? '#6b7280';
   const statusBg    = STATUS_BG[ev.status]    ?? '#f3f4f6';
-  const logoUrl     = resolverUrlAbsoluta(animal?.logoUrl);
 
   const animalSection = animal ? `
     <div class="card">
@@ -150,16 +150,9 @@ export function gerarHtmlEvolucao(
   <meta charset="UTF-8">
   <title>Evolução Clínica — S2Vet</title>
   <style>
-    @page { size: A4; margin: 18mm 20mm; }
+    ${PRINT_SHELL_CSS}
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: Arial, sans-serif; font-size: 12px; color: #111; background: #fff; }
-
-    /* Header */
-    .header { border-bottom: 2px solid #059669; padding-bottom: 10px; margin-bottom: 18px; }
-    .header h1 { font-size: 20px; font-weight: 700; color: #059669; }
-    .brand-logo { max-height: 32px; max-width: 200px; object-fit: contain; }
-    .header .subtitle { font-size: 11px; color: #6b7280; margin-top: 2px; }
-    .header .emissao { font-size: 10px; color: #9ca3af; margin-top: 4px; }
+    body { font-family: Arial, sans-serif; font-size: 12px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
 
     /* Cards */
     .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }
@@ -207,9 +200,6 @@ export function gerarHtmlEvolucao(
     .media-nome { font-size: 9px; color: #6b7280; margin-top: 3px; word-break: break-all; }
     .obs { font-size: 9px; color: #9ca3af; font-style: italic; margin-top: 4px; }
 
-    /* Footer */
-    .footer { border-top: 1px solid #e5e7eb; padding-top: 8px; margin-top: 20px; display: flex; justify-content: space-between; color: #9ca3af; font-size: 9px; }
-
     @media print {
       body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     }
@@ -217,11 +207,7 @@ export function gerarHtmlEvolucao(
 </head>
 <body>
 
-  <div class="header">
-    ${logoUrl ? `<img class="brand-logo" src="${logoUrl}" alt="Logo">` : `<h1>S2Vet</h1>`}
-    <p class="subtitle">Sistema Hospitalar Veterinário · Módulo Clínico</p>
-    <p class="emissao">Emitido em: ${new Date().toLocaleString('pt-BR')}</p>
-  </div>
+  ${renderCabecalho(animal?.logoUrl)}
 
   ${animalSection}
 
@@ -267,10 +253,11 @@ export function gerarHtmlEvolucao(
   ${videosHtml}
   ${audiosHtml}
 
-  <div class="footer">
-    <span>S2Vet · Sistema Hospitalar Veterinário</span>
+  <div class="ps-footer">
     <span>Evolução #${ev.id}</span>
   </div>
+
+  ${renderRodapeAssinatura({ fullName: ev.veterinario.fullName })}
 
 </body>
 </html>`;
@@ -282,25 +269,5 @@ export function imprimirEvolucao(
   ev:     PrintEvolucao,
   animal: PrintAnimal | null,
 ): void {
-  const iframe = document.createElement('iframe');
-  Object.assign(iframe.style, {
-    position: 'fixed', top: '-9999px', left: '-9999px',
-    width: '0', height: '0', border: 'none',
-  });
-  document.body.appendChild(iframe);
-
-  const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
-  if (!doc) { document.body.removeChild(iframe); return; }
-
-  doc.open();
-  doc.write(gerarHtmlEvolucao(ev, animal));
-  doc.close();
-
-  setTimeout(() => {
-    iframe.contentWindow?.focus();
-    iframe.contentWindow?.print();
-    setTimeout(() => {
-      if (document.body.contains(iframe)) document.body.removeChild(iframe);
-    }, 500);
-  }, 250);
+  imprimirHtml(gerarHtmlEvolucao(ev, animal));
 }

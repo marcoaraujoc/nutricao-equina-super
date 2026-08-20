@@ -18,6 +18,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { formatAtendimentoNum, valorLiquidoItem } = require('../lib/faturaUtils');
+const { animalVisivelNaEmpresa } = require('../lib/visibilidade');
 
 const SEM_LOCALIZACAO = 'Sem localização';
 
@@ -346,13 +347,15 @@ async function blocoEvolucoesEditadas(empresaId, periodo) {
 // na empresa. Reutilizado por todos os endpoints de relatório.
 async function resolverEscopo(req) {
   const empresaId   = req.empresaId ?? null;
-  const animalWhere = { ativo: true, ...(empresaId ? { empresaId } : {}) };
+  // `animalVisivelNaEmpresa` também exclui o animal cujo dono foi inativado NESTA
+  // empresa — `ativo:true` sozinho deixava esse caso passar.
+  const animalWhere = { ...animalVisivelNaEmpresa(empresaId), ...(empresaId ? { empresaId } : {}) };
 
   let propWhere = {};      // filtro para Fatura   (proprietarioId ∈ donos da empresa)
   let itemPropWhere = {};  // filtro para FaturaItem (via fatura.proprietarioId)
   if (empresaId) {
     const donos = await prisma.animal.findMany({
-      where:    { empresaId, ativo: true },
+      where:    { empresaId, ...animalVisivelNaEmpresa(empresaId) },
       select:   { userId: true },
       distinct: ['userId'],
     });

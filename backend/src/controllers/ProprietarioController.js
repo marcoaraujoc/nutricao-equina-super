@@ -5,9 +5,14 @@ const bcrypt       = require('bcryptjs');
 const prisma       = require('../lib/prisma').default;
 const emailService = require('../services/emailService');
 const { getContextoDoVet, getEquipeScopeDoUsuario } = require('../lib/vetUtils');
-const { registrarAuditoria } = require('../lib/auditoria');
+const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 const { normalizeEmail, findUserByEmail, whereEmailInsensitive } = require('../lib/email');
 const perfilProp = require('../lib/proprietarioPerfil');
+const { registrarAtivacao, registrarInativacao } = require('../lib/cadastroAtivacao');
+// Trilha de ativação/desativação do ANIMAL (quem/quando) — mesma usada por
+// AnimalController.excluir. registrarDesativacao já grava ativo=false sozinha.
+const { registrarDesativacao: registrarDesativacaoAnimal } = require('../lib/animalAtivacao');
+const { cancelarPendenciasDoAnimal } = require('../lib/cancelamentoPendencias');
 // Localidades atendidas do cliente, com a frequência de visitas de CADA uma
 const localidadesProp = require('../lib/proprietarioLocalidades');
 // Tabela de ligação usuário × empresa — perfil PROPRIETARIO + cadastro da empresa
@@ -96,7 +101,7 @@ const ProprietarioController = {
   // GET /api/cadastro/proprietarios
   listar: async (req, res) => {
     try {
-      const { busca } = req.query;
+      const { busca, ativo } = req.query;
       const isAdmin   = req.user?.role === 'ADMIN';
       const termo     = busca?.trim() ?? '';
 
@@ -145,8 +150,18 @@ const ProprietarioController = {
       // Reordena pelo nome da empresa ativa (o merge pode ter trocado o fullName)
       proprietarios.sort((a, b) => String(a.fullName ?? '').localeCompare(String(b.fullName ?? ''), 'pt-BR'));
 
+      // Filtro por status — mesmo contrato de FornecedorController.listar:
+      // 'all' = sem filtro; 'true'/'false' = só aquele estado; ausente = só ativos.
+      // `ativo` só existe no objeto DEPOIS do merge com o perfil (perfilProp.mesclar),
+      // por isso o filtro é em memória, não no `where` do Prisma.
+      if (ativo === 'all') { /* sem filtro */ }
+      else if (ativo !== undefined) proprietarios = proprietarios.filter(p => p.ativo === (ativo === 'true'));
+      else proprietarios = proprietarios.filter(p => p.ativo !== false);
+
       // Localidades atendidas + frequência de cada uma (combinado desta empresa)
       proprietarios = await localidadesProp.anexarEmLista(proprietarios, req.empresaId);
+      // Trilha de ativação/inativação (quem, quando) — abas Ativos/Inativos da tela
+      proprietarios = await perfilProp.anexarTrilhaAtivacaoEmLista(proprietarios, req.empresaId);
 
       res.json({ sucesso: true, dados: proprietarios });
     } catch (err) {
@@ -267,8 +282,19 @@ const ProprietarioController = {
           ...dadosDaEmpresa,
           ativo: true,
         });
-        await perfilProp.salvarPerfil(prisma, existente.id, req.empresaId, { ...dadosDaEmpresa, ativo: true });
+        const perfilCriado = await perfilProp.salvarPerfil(prisma, existente.id, req.empresaId, { ...dadosDaEmpresa, ativo: true });
         await localidadesProp.salvarLocalidades(prisma, existente.id, req.empresaId, locParsed.localidades);
+        // Perfil nasce ativo=true: grava a trilha de ativação também na CRIAÇÃO,
+        // senão "Ativado em/por" fica vazio até alguém desativar e reativar.
+        if (perfilCriado) {
+          await registrarAtivacao(prisma, 'proprietario', perfilCriado.id, req.user.id);
+        }
+        await registrarAuditoria(prisma, req, {
+          categoria:  'CRIACAO',
+          entidade:   'PROPRIETARIO',
+          entidadeId: existente.id,
+          detalhes:   `${dadosDaEmpresa.fullName} — ${emailNorm} (cadastro desta empresa; login já existia)`,
+        });
 
         // Proprietário legado sem empresa de origem: adota a atual (não sobrescreve)
         if (!existente.empresaId) {
@@ -317,9 +343,20 @@ const ProprietarioController = {
         });
         if (req.empresaId) {
           await salvarVinculo(tx, criado.id, req.empresaId, { perfil: 'PROPRIETARIO', ...dadosDaEmpresa, ativo: true });
-          await perfilProp.salvarPerfil(tx, criado.id, req.empresaId, { ...dadosDaEmpresa, ativo: true });
+          const perfilCriado = await perfilProp.salvarPerfil(tx, criado.id, req.empresaId, { ...dadosDaEmpresa, ativo: true });
           await localidadesProp.salvarLocalidades(tx, criado.id, req.empresaId, locParsed.localidades);
+          // Perfil nasce ativo=true: grava a trilha de ativação também na CRIAÇÃO,
+          // senão "Ativado em/por" fica vazio até alguém desativar e reativar.
+          if (perfilCriado) {
+            await registrarAtivacao(tx, 'proprietario', perfilCriado.id, req.user.id);
+          }
         }
+        await registrarAuditoria(tx, req, {
+          categoria:  'CRIACAO',
+          entidade:   'PROPRIETARIO',
+          entidadeId: criado.id,
+          detalhes:   `${criado.fullName} — ${criado.email}`,
+        });
         return criado;
       });
 
@@ -362,6 +399,12 @@ const ProprietarioController = {
       const isAdmin = req.user?.role === 'ADMIN';
       const existe  = await prisma.user.findFirst({ where: { id: Number(id), ...whereEhClienteDaEmpresa(req.empresaId) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Proprietário não encontrado' });
+
+      // "Antes" para a auditoria — a visão EFETIVA (mesclada com o perfil desta
+      // empresa), que é a mesma coisa que a tela de edição mostrou pro usuário.
+      // Comparar contra o User cru daria falso positivo de mudança em todo campo
+      // que o perfil da empresa sobrescreve.
+      const antes = await perfilProp.aplicarPerfil(existe, req.empresaId);
 
       if (!isAdmin && req.empresaId) {
         const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);
@@ -418,15 +461,44 @@ const ProprietarioController = {
       }
       if (isAdmin && ativo !== undefined) dataUser.ativo = Boolean(ativo);
 
+      // Diff para a auditoria — construído uma vez, usado nos dois ramos da
+      // transaction abaixo. Campos condicionais (só entram em `dadosDaEmpresa`
+      // quando o body os mandou) só entram aqui também — senão "não veio no body"
+      // seria lido como "mudou para vazio".
+      const camposDiff = {
+        'nome':        { de: antes.fullName,    para: dadosDaEmpresa.fullName },
+        'e-mail':      { de: antes.email,       para: emailNovo },
+        'telefone':    { de: antes.phone,       para: dadosDaEmpresa.phone },
+        'telefone 2':  { de: antes.phone2,      para: dadosDaEmpresa.phone2 },
+        'CEP':         { de: antes.cep,         para: dadosDaEmpresa.cep },
+        'endereço':    { de: antes.endereco,    para: dadosDaEmpresa.endereco },
+        'complemento': { de: antes.complemento, para: dadosDaEmpresa.complemento },
+        'bairro':      { de: antes.bairro,      para: dadosDaEmpresa.bairro },
+        'cidade':      { de: antes.cidade,      para: dadosDaEmpresa.cidade },
+        'estado':      { de: antes.estado,      para: dadosDaEmpresa.estado },
+        'CPF':         { de: antes.cpf,         para: dadosDaEmpresa.cpf },
+        'CNPJ':        { de: antes.cnpj,        para: dadosDaEmpresa.cnpj },
+        ...('mensalista' in dadosDaEmpresa
+          ? { 'mensalista': { de: antes.mensalista, para: dadosDaEmpresa.mensalista } } : {}),
+        ...('valorAssistencia' in dadosDaEmpresa
+          ? { 'valor da assistência': { de: antes.valorAssistencia, para: dadosDaEmpresa.valorAssistencia } } : {}),
+        ...('frequenciaVisitas' in dadosDaEmpresa
+          ? { 'frequência de visitas': { de: antes.frequenciaVisitas, para: dadosDaEmpresa.frequenciaVisitas } } : {}),
+        ...('diaVencimentoFatura' in dadosDaEmpresa
+          ? { 'dia de vencimento': { de: antes.diaVencimentoFatura, para: dadosDaEmpresa.diaVencimentoFatura } } : {}),
+      };
+
       const proprietario = await prisma.$transaction(async (tx) => {
         // Sem empresa ativa (ADMIN global) não há perfil a gravar: mantém o
         // comportamento antigo, escrevendo os dados no próprio User.
         if (!req.empresaId) {
-          return tx.user.update({
+          const atualizado = await tx.user.update({
             where:  { id: Number(id) },
             data:   { ...dataUser, ...dadosDaEmpresa },
             select: SELECT_PROPRIETARIO,
           });
+          await registrarAlteracao(tx, req, { entidade: 'PROPRIETARIO', entidadeId: Number(id), campos: camposDiff });
+          return atualizado;
         }
         const base = await tx.user.update({
           where:  { id: Number(id) },
@@ -446,6 +518,7 @@ const ProprietarioController = {
         });
         const perfil = await perfilProp.salvarPerfil(tx, Number(id), req.empresaId, dadosDaEmpresa);
         await localidadesProp.salvarLocalidades(tx, Number(id), req.empresaId, locParsed.localidades);
+        await registrarAlteracao(tx, req, { entidade: 'PROPRIETARIO', entidadeId: Number(id), campos: camposDiff });
         return perfilProp.mesclar(base, perfil);
       });
 
@@ -479,6 +552,12 @@ const ProprietarioController = {
         where:  { id: Number(id) },
         data:   { ativo: !existe.ativo },
         select: { id: true, fullName: true, ativo: true },
+      });
+      await registrarAuditoria(prisma, req, {
+        categoria:  'ALTERACAO',
+        entidade:   'PROPRIETARIO',
+        entidadeId: proprietario.id,
+        detalhes:   `${req.user.fullName ?? req.user.email} ${proprietario.ativo ? 'ativou' : 'inativou'} o proprietário ${proprietario.fullName} (acesso global)`,
       });
       res.json({ sucesso: true, dados: proprietario, mensagem: `Proprietário ${proprietario.ativo ? 'ativado' : 'inativado'}` });
     } catch (err) {
@@ -520,42 +599,137 @@ const ProprietarioController = {
 
       // Inativa os animais do proprietário no escopo (equipe ativa; legados sem equipe inclusos)
       const resultado = await prisma.$transaction(async (tx) => {
-        const upd = await tx.animal.updateMany({
+        // `findMany` (não `updateMany`) porque cada animal precisa da SUA trilha de
+        // desativação (quem/quando — mesma de AnimalController.excluir) E da cascata de
+        // cancelamento das pendências dele (agendamento/vacina/prescrição/exame/
+        // encaminhamento em aberto) — sem isso ficavam "fantasmas": sumidos das telas
+        // enquanto o cliente está inativo, mas com status de pendente ainda gravado.
+        const animaisAfetados = await tx.animal.findMany({
           where: {
             userId:    Number(id),
             empresaId: req.empresaId,
+            ativo:     true,
             ...(equipeScope ? { OR: [{ equipeId: { in: equipeScope } }, { equipeId: null }] } : {}),
           },
-          // ⚠️ NÃO zerar `empresaId`/`equipeId` (era `{ ativo:false, empresaId:null,
-          // equipeId:null }`). Aquilo transformava cada animal do cliente removido numa
-          // linha SEM DONO — o gerador de órfão nº 1 desta base, e justamente o que trava
-          // o `NOT NULL` da fase 5. Inativar responde "aparece?"; a tenancy responde "de
-          // quem é?". Remover o cliente da clínica não muda de quem o histórico é.
-          data: { ativo: false },
+          select: { id: true },
         });
-        // Inativa o cadastro DESTA empresa (o das outras e o login global ficam intactos)
-        await tx.proprietarioPerfil.updateMany({
-          where: { userId: Number(id), empresaId: req.empresaId },
-          data:  { ativo: false },
+
+        const motivoCascata = `Cancelado automaticamente: proprietário removido da empresa — ${motivo}`;
+        const pendencias = { agendamentos: 0, evolucoes: 0, vacinas: 0, prescricoes: 0, encaminhamentos: 0, exames: 0 };
+        for (const a of animaisAfetados) {
+          // ⚠️ NÃO zerar `empresaId`/`equipeId` — `registrarDesativacaoAnimal` só toca
+          // `ativo`/`ativo_em`/`ativo_por_id`. Zerar a tenancy era o gerador de órfão nº 1
+          // desta base: inativar responde "aparece?", a tenancy responde "de quem é?".
+          await registrarDesativacaoAnimal(tx, a.id, req.user.id, motivoCascata);
+          const c = await cancelarPendenciasDoAnimal(tx, a.id, req, motivoCascata);
+          for (const chave of Object.keys(pendencias)) pendencias[chave] += c[chave];
+        }
+
+        // Inativa o cadastro DESTA empresa (o das outras e o login global ficam intactos).
+        // `salvarPerfil` faz upsert (cria o perfil se o cliente nunca teve um nesta
+        // empresa) e devolve o `id` do PERFIL — é ele, não o userId, que
+        // `registrarInativacao` grava na trilha (cadastroAtivacao.js).
+        const perfilAtualizado = await perfilProp.salvarPerfil(tx, Number(id), req.empresaId, { ativo: false });
+        if (perfilAtualizado) {
+          await registrarInativacao(tx, 'proprietario', perfilAtualizado.id, req.user.id, motivo);
+        }
+
+        // Orçamento já ACEITO pelo cliente é um compromisso — não pode continuar
+        // "aprovado" para quem acabou de ser removido da empresa. Cancelamento
+        // AUTOMÁTICO, mesmo texto acrescentado à observação que
+        // `orcamentoCronService.js` já usa para o cancelamento por validade vencida
+        // (nunca sobrescreve o que o usuário escreveu).
+        const motivoOrcamento = 'Cancelado pelo sistema — proprietário inativado.';
+        const orcamentosAprovados = await tx.orcamento.findMany({
+          where: {
+            proprietarioId: Number(id),
+            empresaId:      req.empresaId,
+            ativo:          true,
+            status:         { in: ['APROVADO', 'APROVADO_PARCIALMENTE'] },
+          },
+          select: { id: true, numero: true, observacao: true },
         });
+        for (const orc of orcamentosAprovados) {
+          await tx.orcamento.update({
+            where: { id: orc.id },
+            data:  {
+              status:     'CANCELADO',
+              observacao: [orc.observacao?.trim(), motivoOrcamento].filter(Boolean).join('\n'),
+            },
+          });
+          await registrarAuditoria(tx, req, {
+            categoria:  'CANCELAMENTO',
+            entidade:   'ORCAMENTO',
+            entidadeId: orc.id,
+            motivo:     motivoOrcamento,
+            detalhes:   `Orçamento #${String(orc.numero).padStart(4, '0')} cancelado automaticamente — proprietário ${existe.fullName ?? ''} removido da empresa`,
+          });
+        }
+
         await registrarAuditoria(tx, req, {
           categoria:  'EXCLUSAO',
           entidade:   'PROPRIETARIO',
           entidadeId: Number(id),
           motivo,
-          detalhes:   `${existe.fullName ?? 'Proprietário'} removido da empresa — ${upd.count} animal(is) inativado(s) no escopo`,
+          detalhes:   `${existe.fullName ?? 'Proprietário'} removido da empresa — ${animaisAfetados.length} animal(is) inativado(s) no escopo`,
         });
-        return upd;
+        return { count: animaisAfetados.length, pendencias, orcamentosCancelados: orcamentosAprovados.length };
       });
 
       res.json({
         sucesso:  true,
         mensagem: `Proprietário removido da empresa. ${resultado.count} animal(is) inativado(s).`,
         animaisInativados: resultado.count,
+        pendenciasCanceladas: resultado.pendencias,
+        orcamentosCancelados: resultado.orcamentosCancelados,
       });
     } catch (err) {
       console.error('Erro ao remover proprietário da empresa:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao remover proprietário da empresa' });
+    }
+  },
+
+  // PATCH /api/cadastro/proprietarios/:id/reativar
+  // Gestor da empresa ativa: desfaz a remoção (ProprietarioPerfil.ativo=true).
+  // ⚠️ NÃO reativa os animais que foram inativados junto na remoção (decisão de
+  // produto) — cada um se reativa separadamente, na tela de Pacientes.
+  reativar: async (req, res) => {
+    const { id } = req.params;
+    const { motivo } = req.body ?? {};
+
+    if (!motivo?.trim()) {
+      return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da reativação' });
+    }
+    if (!req.empresaId) {
+      return res.status(403).json({ sucesso: false, mensagem: 'Operação requer contexto de empresa' });
+    }
+
+    try {
+      const existe = await prisma.user.findFirst({ where: { id: Number(id), ...whereEhClienteDaEmpresa(req.empresaId) } });
+      if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Proprietário não encontrado' });
+
+      const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);
+      const temAcesso = await verificarAcessoNoEscopo(Number(id), req.empresaId, equipeScope);
+      if (!temAcesso) return res.status(403).json({ sucesso: false, mensagem: 'Este proprietário não pertence à sua empresa' });
+
+      await prisma.$transaction(async (tx) => {
+        const perfilAtualizado = await perfilProp.salvarPerfil(tx, Number(id), req.empresaId, { ativo: true });
+        if (perfilAtualizado) {
+          await registrarAtivacao(tx, 'proprietario', perfilAtualizado.id, req.user.id);
+        }
+        await registrarAuditoria(tx, req, {
+          categoria:  'ALTERACAO',
+          entidade:   'PROPRIETARIO',
+          entidadeId: Number(id),
+          motivo,
+          detalhes:   `${existe.fullName ?? 'Proprietário'} reativado na empresa`,
+        });
+      });
+
+      res.json({ sucesso: true, mensagem: 'Proprietário reativado.' });
+    } catch (err) {
+      console.error('Erro ao reativar proprietário:', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao reativar proprietário' });
     }
   },
 };

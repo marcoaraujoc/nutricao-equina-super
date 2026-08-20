@@ -2,6 +2,8 @@
 // Utilitários de exportação: PDF (print), CSV e Share para o módulo financeiro
 
 import { resolverUrlAbsoluta } from './printUrl';
+import { imprimirHtml } from './print/imprimirHtml';
+import { htmlParaPdfBlob } from './gerarPdf';
 
 const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
@@ -165,28 +167,7 @@ export function imprimirFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl?
 </body>
 </html>`;
 
-  // Usa iframe oculto (mesmo padrão de Dieta/EvolucaoPrint) para não abrir nova aba
-  const iframe = document.createElement('iframe');
-  Object.assign(iframe.style, {
-    position: 'fixed', top: '-9999px', left: '-9999px',
-    width: '0', height: '0', border: 'none',
-  });
-  document.body.appendChild(iframe);
-
-  const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
-  if (!doc) { document.body.removeChild(iframe); return; }
-
-  doc.open();
-  doc.write(html);
-  doc.close();
-
-  setTimeout(() => {
-    iframe.contentWindow?.focus();
-    iframe.contentWindow?.print();
-    setTimeout(() => {
-      if (document.body.contains(iframe)) document.body.removeChild(iframe);
-    }, 500);
-  }, 250);
+  imprimirHtml(html);
 }
 
 // ─── CSV ──────────────────────────────────────────────────────────────────────
@@ -238,12 +219,6 @@ export function exportarFaturaCSV(fatura: FaturaMin, animais: AnimalMin[]) {
 // ─── WhatsApp — compartilhar PDF ─────────────────────────────────────────────
 
 async function gerarPdfBlob(fatura: FaturaMin, animais: AnimalMin[], logoUrl?: string | null): Promise<Blob> {
-  // Renderiza o HTML da fatura em um iframe oculto, captura com html2canvas e gera PDF
-  const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([
-    import('jspdf'),
-    import('html2canvas'),
-  ]);
-
   const inv   = `INV-${String(fatura.id).padStart(3, '0')}`;
   const nome  = fatura.proprietario?.fullName ?? 'Cliente';
 
@@ -323,36 +298,7 @@ async function gerarPdfBlob(fatura: FaturaMin, animais: AnimalMin[], logoUrl?: s
   <div class="footer">Emitido em ${new Date().toLocaleString('pt-BR')} · S2Vet</div>
   </body></html>`;
 
-  // Renderiza em div oculta fora da viewport
-  const wrapper = document.createElement('div');
-  Object.assign(wrapper.style, {
-    position: 'fixed', top: '-9999px', left: '-9999px',
-    width: '794px', background: '#fff',
-  });
-  wrapper.innerHTML = html;
-  document.body.appendChild(wrapper);
-
-  try {
-    const canvas = await html2canvas(wrapper, { scale: 1.5, useCORS: true, logging: false });
-    const imgData = canvas.toDataURL('image/jpeg', 0.92);
-
-    const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
-    const ratio  = canvas.height / canvas.width;
-    const imgH   = pageW * ratio;
-
-    let y = 0;
-    while (y < imgH) {
-      if (y > 0) pdf.addPage();
-      pdf.addImage(imgData, 'JPEG', 0, -y, pageW, imgH);
-      y += pageH;
-    }
-
-    return pdf.output('blob');
-  } finally {
-    document.body.removeChild(wrapper);
-  }
+  return htmlParaPdfBlob(html);
 }
 
 export async function compartilharFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl?: string | null) {

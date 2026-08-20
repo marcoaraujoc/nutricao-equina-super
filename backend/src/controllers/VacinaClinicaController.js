@@ -3,15 +3,129 @@ const prisma = require('../lib/prisma').default;
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { ANIMAL_VISIVEL } = require('../lib/visibilidade');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem } = require('../lib/faturaUtils');
-const { registrarAuditoria } = require('../lib/auditoria');
+const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 const { animalEstaInativo } = require('../lib/animalInativo');
+const { animalFoiExcluido } = require('../lib/animalAtivacao');
 
 const INCLUDE_VACINA = {
   veterinario: { select: { id: true, fullName: true } },
   vacina: { select: { id: true, nome: true, fabricante: true, via: true } },
   loteVacina: { select: { id: true, lote: true, validade: true, qtdDisponivel: true } },
 };
+
+// ─── Reserva de estoque (FEFO) para VACINA ───────────────────────────────────
+// Espelha PrescricaoGrupoController (medicamento): reserva ao FINALIZAR (SALVA→
+// FINALIZADA), consome de verdade (decrementa qtd_disponivel) ao EXECUTAR, libera sem
+// debitar ao CANCELAR antes da execução. Tabela `tb_reservas_estoque_vacina`
+// (migration 20260830000000) — por SQL cru, mesmo padrão do resto deste controller
+// ("fora do client gerado"): funciona sem depender de `npx prisma generate` ter
+// reconhecido o model novo. Não existe para `cliente:true` (nunca debita) nem para
+// aplicadaPeloProprietario×!cliente (debita direto na FINALIZAÇÃO — ver `finalizar` —
+// nunca passa pelo plantão, então não há intervalo "reservado, aguardando execução").
+
+// Lotes do medicamento/vacina em ordem FEFO (validade mais próxima primeiro), cada um
+// com `reservadoOutros` = soma do que JÁ está reservado por OUTRAS vacinas — é o que
+// permite duas vacinas concorrentes disputarem o mesmo lote sem uma "roubar" doses que
+// a outra já tinha garantido ao finalizar. `vacinaIdExcluir` tira a própria vacina da
+// conta (reenvio/edição antes de executar recalcula do zero).
+async function buscarLotesVacinaFEFO(client, medicamentoCatId, empresaId, vacinaIdExcluir = null) {
+  if (!medicamentoCatId) return [];
+  const params = empresaId != null ? [Number(medicamentoCatId), Number(empresaId)] : [Number(medicamentoCatId)];
+  const empresaFilter = empresaId != null ? 'AND (empresa_id = $2 OR empresa_id IS NULL)' : '';
+  const lotes = await client.$queryRawUnsafe(
+    `SELECT id, lote, qtd_disponivel AS "qtdDisponivel", doses_por_frasco AS "dosesPorFrasco",
+            COALESCE(valor_unitario_repassado, valor_unitario, 0)::float AS "valorBruto"
+     FROM schs2vet.tb_lotes_vacina
+     WHERE medicamento_cat_id = $1 AND ativo = true ${empresaFilter}
+     ORDER BY validade ASC NULLS LAST, id ASC`,
+    ...params
+  );
+  if (lotes.length === 0) return [];
+
+  const ids = lotes.map(l => Number(l.id));
+  const reservasParams = vacinaIdExcluir != null ? [ids, Number(vacinaIdExcluir)] : [ids];
+  const reservas = await client.$queryRawUnsafe(
+    `SELECT "loteVacinaId", quantidade FROM schs2vet.tb_reservas_estoque_vacina
+     WHERE "loteVacinaId" = ANY($1::int[]) ${vacinaIdExcluir != null ? 'AND "vacinaClinicaId" != $2' : ''}`,
+    ...reservasParams
+  );
+  const reservadoPorLote = new Map();
+  for (const r of reservas) {
+    reservadoPorLote.set(r.loteVacinaId, (reservadoPorLote.get(r.loteVacinaId) ?? 0) + Number(r.quantidade));
+  }
+  return lotes.map(l => ({ ...l, reservadoOutros: reservadoPorLote.get(Number(l.id)) ?? 0 }));
+}
+
+// Cria a reserva ao FINALIZAR — distribui `quantidade` entre os lotes em FEFO,
+// respeitando o que já está reservado por outras vacinas; se mesmo assim faltar, o
+// restante é reservado na ÚLTIMA entrada (mesma "finalização forçada" da prescrição —
+// nunca bloqueia o registro clínico por estoque insuficiente).
+async function criarReservaVacina(tx, { vacinaId, animalId, medicamentoCatId, quantidade, empresaId }) {
+  // Recalcula do zero: reenvio/edição antes da execução não pode duplicar reserva.
+  await tx.$executeRawUnsafe(
+    `DELETE FROM schs2vet.tb_reservas_estoque_vacina WHERE "vacinaClinicaId" = $1`, vacinaId
+  );
+  if (!medicamentoCatId) return;
+  const lotes = await buscarLotesVacinaFEFO(tx, medicamentoCatId, empresaId, vacinaId);
+  if (lotes.length === 0) return;
+
+  let restante = Math.max(1, Number(quantidade) || 1);
+  for (let i = 0; i < lotes.length && restante > 0; i++) {
+    const l = lotes[i];
+    const disponivel    = Math.max(Number(l.qtdDisponivel) - l.reservadoOutros, 0);
+    const ultimaEntrada  = i === lotes.length - 1;
+    const qtdEntrada    = ultimaEntrada ? restante : Math.min(disponivel, restante);
+    if (qtdEntrada <= 0) continue;
+    await tx.$executeRawUnsafe(
+      `INSERT INTO schs2vet.tb_reservas_estoque_vacina ("loteVacinaId", "vacinaClinicaId", "animalId", quantidade)
+       VALUES ($1, $2, $3, $4)`,
+      Number(l.id), vacinaId, animalId, qtdEntrada
+    );
+    restante -= qtdEntrada;
+  }
+}
+
+// Consome a(s) reserva(s) desta vacina ao EXECUTAR: decrementa `qtd_disponivel` de
+// verdade em cada lote reservado e apaga as linhas de reserva. Retorna `null` quando
+// não há reserva (vacina aplicada pelo proprietário, que nunca reserva, ou registro
+// legado anterior a esta migration) — o chamador cai no lookup direto de sempre.
+async function consumirReservaVacina(tx, vacinaId) {
+  const reservas = await tx.$queryRawUnsafe(
+    `SELECT r."loteVacinaId" AS "loteId", r.quantidade,
+            l.lote, l.doses_por_frasco AS "dosesPorFrasco",
+            COALESCE(l.valor_unitario_repassado, l.valor_unitario, 0)::float AS "valorBruto"
+     FROM schs2vet.tb_reservas_estoque_vacina r
+     JOIN schs2vet.tb_lotes_vacina l ON l.id = r."loteVacinaId"
+     WHERE r."vacinaClinicaId" = $1`,
+    vacinaId
+  );
+  if (reservas.length === 0) return null;
+
+  let valorTotal   = 0;
+  let qtdTotal     = 0;
+  let loteIdFinal  = null;
+  let loteNomeFinal = null;
+  for (const r of reservas) {
+    const qtd = Number(r.quantidade);
+    await tx.$executeRawUnsafe(
+      `UPDATE schs2vet.tb_lotes_vacina SET qtd_disponivel = GREATEST(qtd_disponivel - $1, 0) WHERE id = $2`,
+      qtd, r.loteId
+    );
+    const dosesFrasco = Number(r.dosesPorFrasco) || 1;
+    valorTotal += (Number(r.valorBruto) / dosesFrasco) * qtd;
+    qtdTotal   += qtd;
+    loteIdFinal   = r.loteId;   // último lote tocado — mantém compat com o campo único `loteId` da vacina
+    loteNomeFinal = r.lote;
+  }
+  await tx.$executeRawUnsafe(
+    `DELETE FROM schs2vet.tb_reservas_estoque_vacina WHERE "vacinaClinicaId" = $1`, vacinaId
+  );
+
+  // Preço MÉDIO por dose (pode ter vindo de lotes com preços diferentes) — o chamador
+  // multiplica de volta por `qtd` ao lançar na fatura, então precisa ser por-dose.
+  return { loteId: loteIdFinal, loteNome: loteNomeFinal, valorPorDose: qtdTotal > 0 ? valorTotal / qtdTotal : 0 };
+}
 
 async function listarPorAnimal(req, res) {
   try {
@@ -31,7 +145,8 @@ async function listarPorAnimal(req, res) {
         `SELECT id, numero, tipo_atendimento AS "tipoAtendimento",
                 quantidade, valor::float AS valor, cliente, status,
                 aplicada_pelo_proprietario AS "aplicadaPeloProprietario",
-                motivo_inativacao AS "motivoInativacao"
+                motivo_inativacao AS "motivoInativacao",
+                medicamento_cat_id AS "medicamentoCatId"
          FROM schs2vet.tb_vacinas_clinicas
          WHERE id = ANY($1::int[])`,
         ids
@@ -111,17 +226,29 @@ async function registrar(req, res) {
     const isAplicadaProp = aplicadaPropRaw === true || aplicadaPropRaw === 'true';
 
     if (!animalId)    return res.status(400).json({ error: 'animalId é obrigatório' });
+    if (await animalFoiExcluido(animalId)) {
+      return res.status(400).json({ error: 'Paciente inativado — reative-o na tela de Pacientes antes de registrar algo novo.', code: 'PACIENTE_EXCLUIDO' });
+    }
     if (await animalEstaInativo(animalId)) {
       return res.status(400).json({ error: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
     }
 
-    // Evolução é opcional — busca apenas para montar a descrição na fatura
+    // Evolução é opcional — busca para montar a descrição na fatura E para checar autoria
     const evolucao = evolucaoId
       ? await prisma.evolucaoClinica.findFirst({
           where:  { id: Number(evolucaoId), animalId: Number(animalId), ativo: true },
-          select: { id: true, numero: true, tipoAtendimento: true },
+          select: { id: true, numero: true, tipoAtendimento: true, veterinarioId: true },
         })
       : null;
+
+    // Autoria: registrar vacina dentro do atendimento de outro profissional é operar
+    // um documento que não é seu — mesma regra de editar/finalizar/excluir (ver
+    // `podeOperarRegistro` mais abaixo neste arquivo), só que aqui é ANTES do
+    // registro existir. Quem não conduz a evolução (não criou nem assumiu) só
+    // registra vacina depois de assumi-la.
+    if (evolucao && !podeOperarRegistro(req, evolucao.veterinarioId)) {
+      return res.status(403).json({ error: 'Só é possível registrar vacina dentro de uma evolução sua. Assuma o atendimento antes de registrar.' });
+    }
 
     let nomeVacina = nome;
     let fabricanteVacina = fabricante;
@@ -268,6 +395,124 @@ async function registrar(req, res) {
   }
 }
 
+// PUT /clinica/vacinas/:id — altera um registro ainda SALVA (antes de finalizar).
+// Mesma autoria de editar/finalizar/excluir (`podeOperarRegistro`). Depois de
+// FINALIZADA/EXECUTADA/CANCELADA a alteração é bloqueada — a partir da finalização o
+// registro pode ter fatura/estoque envolvidos (ver `finalizar`), e reescrever os
+// campos por baixo comprometeria o que já foi cobrado/debitado.
+async function atualizar(req, res) {
+  try {
+    const { id } = req.params;
+    const vacina = await prisma.vacinaClinica.findUnique({ where: { id: Number(id) } });
+    if (!vacina || !vacina.ativo) return res.status(404).json({ error: 'Registro não encontrado' });
+
+    if (!podeOperarRegistro(req, vacina.veterinarioId)) {
+      return res.status(403).json({ error: 'Seu nível de permissão só permite alterar vacinas que você registrou.' });
+    }
+
+    const infoRows = await prisma.$queryRawUnsafe(
+      `SELECT status, quantidade, cliente, medicamento_cat_id AS "medicamentoCatId",
+              aplicada_pelo_proprietario AS "aplicadaPeloProprietario"
+       FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`,
+      Number(id)
+    );
+    const infoAntes = infoRows[0] ?? {};
+    if (infoAntes.status !== 'SALVA') {
+      return res.status(400).json({ error: 'Só é possível alterar vacinas ainda não finalizadas.' });
+    }
+
+    const {
+      medicamentoCatId, loteId, dose, via, dataAplicacao, observacao,
+      quantidade, cliente: clienteRaw, aplicadaPeloProprietario: aplicadaPropRaw,
+    } = req.body;
+
+    const isCliente      = clienteRaw === true || clienteRaw === 'true';
+    const isAplicadaProp = aplicadaPropRaw === true || aplicadaPropRaw === 'true';
+
+    let nomeVacina    = vacina.nome;
+    const medCatIdFinal = medicamentoCatId != null && medicamentoCatId !== '' ? Number(medicamentoCatId) : null;
+    if (medCatIdFinal) {
+      const rows = await prisma.$queryRawUnsafe(
+        `SELECT nome FROM schs2vet.tb_medicamentos WHERE id = $1 LIMIT 1`, medCatIdFinal,
+      );
+      if (rows.length > 0) nomeVacina = rows[0].nome;
+    }
+    if (!nomeVacina?.trim()) return res.status(400).json({ error: 'Vacina é obrigatória' });
+
+    const qtdFinal = Math.max(1, Number(quantidade) || 1);
+
+    let loteNumFinal = null;
+    const loteIdFinal = loteId ? Number(loteId) : null;
+    if (loteIdFinal) {
+      const loteData = await prisma.loteVacina.findUnique({ where: { id: loteIdFinal } });
+      if (!loteData) return res.status(404).json({ error: 'Lote não encontrado' });
+      if (!isCliente) {
+        if (loteData.qtdDisponivel < qtdFinal) return res.status(400).json({ error: 'Lote sem saldo disponível' });
+        if (loteData.validade && new Date(loteData.validade) < new Date()) {
+          return res.status(400).json({ error: `Lote ${loteData.lote} está vencido (validade: ${new Date(loteData.validade).toLocaleDateString('pt-BR')}). Selecione um lote dentro da validade.` });
+        }
+      }
+      loteNumFinal = loteData.lote;
+    }
+
+    const doseNova = dose?.trim() || null;
+    const viaNova  = via?.trim() || null;
+
+    const atualizada = await prisma.$transaction(async (tx) => {
+      const upd = await tx.vacinaClinica.update({
+        where: { id: vacina.id },
+        data: {
+          loteId:        loteIdFinal,
+          nome:          nomeVacina.trim(),
+          lote:          loteNumFinal?.trim() || null,
+          dose:          doseNova,
+          via:           viaNova,
+          dataAplicacao: dataAplicacao ? new Date(dataAplicacao) : vacina.dataAplicacao,
+          observacao:    observacao?.trim() || null,
+        },
+        include: INCLUDE_VACINA,
+      });
+
+      await tx.$executeRawUnsafe(
+        `UPDATE schs2vet.tb_vacinas_clinicas
+         SET medicamento_cat_id = $1, quantidade = $2, cliente = $3, aplicada_pelo_proprietario = $4
+         WHERE id = $5`,
+        medCatIdFinal, qtdFinal, isCliente, isAplicadaProp, vacina.id,
+      );
+
+      await registrarAlteracao(tx, req, {
+        entidade:       'VACINA',
+        entidadeId:     vacina.id,
+        animalId:       vacina.animalId,
+        donoAnteriorId: vacina.veterinarioId,
+        donoAtualId:    vacina.veterinarioId,
+        campos: {
+          nome:       { de: vacina.nome, para: nomeVacina.trim() },
+          dose:       { de: vacina.dose, para: doseNova },
+          via:        { de: vacina.via,  para: viaNova },
+          quantidade: { de: infoAntes.quantidade, para: qtdFinal },
+        },
+      });
+
+      return upd;
+    });
+
+    const extras = await prisma.$queryRawUnsafe(
+      `SELECT id, numero, tipo_atendimento AS "tipoAtendimento",
+              quantidade, valor::float AS valor, cliente, status,
+              aplicada_pelo_proprietario AS "aplicadaPeloProprietario",
+              motivo_inativacao AS "motivoInativacao",
+              medicamento_cat_id AS "medicamentoCatId"
+       FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`,
+      vacina.id,
+    );
+    res.json({ dados: { ...atualizada, ...(extras[0] ?? {}) } });
+  } catch (err) {
+    console.error('atualizar vacina:', err);
+    res.status(500).json({ error: 'Erro ao alterar vacina' });
+  }
+}
+
 async function obterPorId(req, res) {
   try {
     const { id } = req.params;
@@ -281,7 +526,8 @@ async function obterPorId(req, res) {
       `SELECT id, numero, tipo_atendimento AS "tipoAtendimento",
               quantidade, valor::float AS valor, cliente, status,
               aplicada_pelo_proprietario AS "aplicadaPeloProprietario",
-              motivo_inativacao AS "motivoInativacao"
+              motivo_inativacao AS "motivoInativacao",
+              medicamento_cat_id AS "medicamentoCatId"
        FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`,
       Number(id)
     );
@@ -374,6 +620,20 @@ async function finalizar(req, res) {
           empresaId:     empresaIdEfetivo,
           equipeId:      req.equipeId ?? null,
           aplicadaEm:    vacina.dataAplicacao ?? agora,
+        });
+      } else if (!isCliente) {
+        // Vai para o plantão (Execução de Prescrição) — RESERVA agora, mesma lógica do
+        // medicamento (PrescricaoGrupoController): o débito de verdade só acontece na
+        // EXECUÇÃO (`executar` → `darBaixaEFaturar` → `consumirReservaVacina`). Sem
+        // isto o lote só era "tocado" na execução, sem nenhum rastro entre finalizar e
+        // executar — duas vacinas concorrentes podiam disputar o mesmo lote sem que
+        // nenhuma soubesse da outra.
+        await criarReservaVacina(tx, {
+          vacinaId:         vacina.id,
+          animalId:         vacina.animalId,
+          medicamentoCatId: info.medicamentoCatId,
+          quantidade:       Math.max(1, Number(info.quantidade) || 1),
+          empresaId:        empresaIdEfetivo,
         });
       }
 
@@ -476,6 +736,76 @@ async function listarParaExecucao(req, res) {
   } catch (err) {
     console.error('listarParaExecucao vacinas:', err);
     res.status(500).json({ error: 'Erro ao listar vacinas para execução' });
+  }
+}
+
+// Data 'YYYY-MM-DD' no fuso LOCAL do servidor — mesmo critério de
+// PrescricaoGrupoController#hojeLocalStr (nunca `toISOString()`, que já é o dia
+// seguinte a partir das 21h em Brasília).
+function hojeLocalStrVacina() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// GET /clinica/vacinas/executadas-hoje — vacinas que passaram por EXECUTADA na data
+// informada (`?data=YYYY-MM-DD`, default hoje), para a faixa "Histórico" da tela de
+// Execução de Prescrição. Aceita `data` pela mesma razão que `listarParaExecucao` das
+// prescrições já aceita: a tela navega por dia (calendário) e, sem o parâmetro, a
+// vacina executada num dia anterior nunca aparecia ao voltar para aquele dia — a busca
+// ficava travada em "hoje" (`new Date()`) não importa a data selecionada no front.
+// Mesma seção que já mostra medicamento/procedimento executado; a vacina só faltava
+// porque `VacinaClinica` não tem coluna própria de "quando executou" — aqui reusa o
+// registro de auditoria `EXECUCAO/VACINA` gravado em `executar()` como a fonte do
+// timestamp.
+async function listarExecutadasHoje(req, res) {
+  try {
+    const dataParam = req.query.data;
+    const dataStr = (typeof dataParam === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dataParam))
+      ? dataParam
+      : hojeLocalStrVacina();
+    const [ano, mes, dia] = dataStr.split('-').map(Number);
+    const inicioDia = new Date(ano, mes - 1, dia, 0, 0, 0, 0);
+    const fimDia     = new Date(ano, mes - 1, dia + 1, 0, 0, 0, 0);
+
+    const logs = await prisma.auditLog.findMany({
+      where: { categoria: 'EXECUCAO', entidade: 'VACINA', timestamp: { gte: inicioDia, lt: fimDia } },
+      select: { entidadeId: true },
+    });
+    const ids = [...new Set(logs.map((l) => l.entidadeId).filter((v) => v != null))];
+    if (ids.length === 0) return res.json({ dados: [] });
+
+    const vacinas = await prisma.vacinaClinica.findMany({
+      where: { id: { in: ids }, ativo: true, status: 'EXECUTADA' },
+      include: {
+        ...INCLUDE_VACINA,
+        animal: {
+          select: {
+            id: true, nome: true, photoUrl: true, peso: true, baia: true,
+            local: true, dataNascimento: true, idadeAnos: true,
+            localizacao: { select: { nome: true } },
+            especie: { select: { nome: true } },
+            raca:    { select: { nome: true } },
+          },
+        },
+      },
+      orderBy: { dataAplicacao: 'asc' },
+    });
+    if (vacinas.length === 0) return res.json({ dados: [] });
+
+    const extras = await prisma.$queryRawUnsafe(
+      `SELECT id, numero, tipo_atendimento AS "tipoAtendimento", quantidade,
+              valor::float AS valor, cliente, status,
+              aplicada_pelo_proprietario AS "aplicadaPeloProprietario"
+       FROM schs2vet.tb_vacinas_clinicas WHERE id = ANY($1::int[])`,
+      vacinas.map((v) => v.id),
+    );
+    const extrasMap = Object.fromEntries(extras.map((e) => [e.id, e]));
+
+    res.json({ dados: vacinas.map((v) => ({ ...v, ...extrasMap[v.id] })) });
+  } catch (err) {
+    console.error('listarExecutadasHoje vacinas:', err);
+    res.status(500).json({ error: 'Erro ao listar vacinas executadas hoje' });
   }
 }
 
@@ -591,6 +921,17 @@ async function executar(req, res) {
         `UPDATE schs2vet.tb_vacinas_clinicas SET status = 'EXECUTADA' WHERE id = $1`, Number(id)
       );
 
+      // Marca QUANDO a vacina foi executada — é o que permite a tela de Execução de
+      // Prescrição achar "executadas hoje" para o Histórico (VacinaClinica não tem
+      // coluna própria de execução; reusa o ledger da Auditoria, que já tem timestamp).
+      await registrarAuditoria(tx, req, {
+        categoria:  'EXECUCAO',
+        entidade:   'VACINA',
+        entidadeId: vacina.id,
+        animalId:   vacina.animalId,
+        detalhes:   `${vacina.nome}${vacina.dose ? ` — ${vacina.dose}` : ''}`,
+      });
+
       // Esquema de reforço (mensal/anual) com mais de uma dose: agenda as seguintes.
       // A aplicação de agora é a 1ª — por isso `quantidade - 1` agendamentos.
       agendados = await agendarReforcos(tx, {
@@ -631,41 +972,55 @@ async function darBaixaEFaturar(tx, { vacina, info, qtd, veterinarioId, empresaI
   let loteIdFinal = vacina.loteId ?? null;
   let loteValor   = 0;
 
-  let loteData = loteIdFinal ? await tx.loteVacina.findUnique({ where: { id: loteIdFinal } }) : null;
-  const loteInvalido = !loteData
-    || loteData.qtdDisponivel < qtd
-    || (loteData.validade && new Date(loteData.validade) < agora);
+  // Reserva feita ao FINALIZAR (fila do plantão) — consome ela primeiro: é o débito de
+  // VERDADE, já apurado por FEFO no momento em que o pedido entrou na fila, podendo
+  // estar espalhado por mais de um lote. Sem reserva (vacina aplicada pelo proprietário
+  // — debita direto aqui, na finalização, nunca reserva — ou registro legado anterior a
+  // esta migration), cai no lookup direto de sempre.
+  const consumida = await consumirReservaVacina(tx, vacina.id);
+  if (consumida) {
+    loteIdFinal = consumida.loteId;
+    loteValor   = consumida.valorPorDose;
+    if (loteIdFinal != null && loteIdFinal !== vacina.loteId) {
+      await tx.vacinaClinica.update({ where: { id: vacina.id }, data: { loteId: loteIdFinal, lote: consumida.loteNome ?? vacina.lote } });
+    }
+  } else {
+    let loteData = loteIdFinal ? await tx.loteVacina.findUnique({ where: { id: loteIdFinal } }) : null;
+    const loteInvalido = !loteData
+      || loteData.qtdDisponivel < qtd
+      || (loteData.validade && new Date(loteData.validade) < agora);
 
-  // Lote vinculado inválido/insuficiente → tenta FEFO pelo medicamento
-  if (loteInvalido && info.medicamentoCatId) {
-    const params = empresaIdEfetivo
-      ? [Number(info.medicamentoCatId), qtd, agora, empresaIdEfetivo]
-      : [Number(info.medicamentoCatId), qtd, agora];
-    const empresaFilter = empresaIdEfetivo ? 'AND (empresa_id = $4 OR empresa_id IS NULL)' : '';
-    const loteRows = await tx.$queryRawUnsafe(
-      `SELECT id, lote, doses_por_frasco AS "dosesPorFrasco",
-              COALESCE(valor_unitario_repassado, valor_unitario, 0)::float AS "valorBruto"
-       FROM schs2vet.tb_lotes_vacina
-       WHERE medicamento_cat_id = $1 AND ativo = true AND qtd_disponivel >= $2
-         AND (validade IS NULL OR validade >= $3) ${empresaFilter}
-       ORDER BY validade ASC NULLS LAST LIMIT 1`,
-      ...params
-    );
-    loteData = loteRows.length > 0
-      ? { id: Number(loteRows[0].id), lote: loteRows[0].lote, dosesPorFrasco: loteRows[0].dosesPorFrasco, valorUnitario: loteRows[0].valorBruto, valorUnitarioRepassado: null }
-      : null;
-  } else if (loteInvalido) {
-    loteData = null; // sem medicamentoCat p/ FEFO e lote vinculado inválido
-  }
+    // Lote vinculado inválido/insuficiente → tenta FEFO pelo medicamento
+    if (loteInvalido && info.medicamentoCatId) {
+      const params = empresaIdEfetivo
+        ? [Number(info.medicamentoCatId), qtd, agora, empresaIdEfetivo]
+        : [Number(info.medicamentoCatId), qtd, agora];
+      const empresaFilter = empresaIdEfetivo ? 'AND (empresa_id = $4 OR empresa_id IS NULL)' : '';
+      const loteRows = await tx.$queryRawUnsafe(
+        `SELECT id, lote, doses_por_frasco AS "dosesPorFrasco",
+                COALESCE(valor_unitario_repassado, valor_unitario, 0)::float AS "valorBruto"
+         FROM schs2vet.tb_lotes_vacina
+         WHERE medicamento_cat_id = $1 AND ativo = true AND qtd_disponivel >= $2
+           AND (validade IS NULL OR validade >= $3) ${empresaFilter}
+         ORDER BY validade ASC NULLS LAST LIMIT 1`,
+        ...params
+      );
+      loteData = loteRows.length > 0
+        ? { id: Number(loteRows[0].id), lote: loteRows[0].lote, dosesPorFrasco: loteRows[0].dosesPorFrasco, valorUnitario: loteRows[0].valorBruto, valorUnitarioRepassado: null }
+        : null;
+    } else if (loteInvalido) {
+      loteData = null; // sem medicamentoCat p/ FEFO e lote vinculado inválido
+    }
 
-  if (loteData) {
-    loteIdFinal = loteData.id;
-    const valorFrasco = Number(loteData.valorUnitarioRepassado ?? loteData.valorUnitario ?? 0);
-    const dosesFrasco = Number(loteData.dosesPorFrasco) || 1;
-    loteValor = valorFrasco / dosesFrasco;
-    await tx.loteVacina.update({ where: { id: loteData.id }, data: { qtdDisponivel: { decrement: qtd } } });
-    if (loteIdFinal !== vacina.loteId) {
-      await tx.vacinaClinica.update({ where: { id: vacina.id }, data: { loteId: loteIdFinal, lote: loteData.lote ?? vacina.lote } });
+    if (loteData) {
+      loteIdFinal = loteData.id;
+      const valorFrasco = Number(loteData.valorUnitarioRepassado ?? loteData.valorUnitario ?? 0);
+      const dosesFrasco = Number(loteData.dosesPorFrasco) || 1;
+      loteValor = valorFrasco / dosesFrasco;
+      await tx.loteVacina.update({ where: { id: loteData.id }, data: { qtdDisponivel: { decrement: qtd } } });
+      if (loteIdFinal !== vacina.loteId) {
+        await tx.vacinaClinica.update({ where: { id: vacina.id }, data: { loteId: loteIdFinal, lote: loteData.lote ?? vacina.lote } });
+      }
     }
   }
 
@@ -708,12 +1063,35 @@ async function excluir(req, res) {
     }
 
     await prisma.$transaction(async (tx) => {
+      // Reserva pendente (FINALIZADA, ainda não executada) — libera SEM tocar
+      // `qtdDisponivel`: a reserva nunca decrementou o lote, só separou a quantidade
+      // para esta vacina (ver `criarReservaVacina`). Sem isto, cancelar deixava a
+      // reserva viva, contando contra a disponibilidade de qualquer outra vacina para
+      // sempre — o mesmo bug de "estoque inflado", só que ao contrário (encolhido).
+      await tx.$executeRawUnsafe(
+        `DELETE FROM schs2vet.tb_reservas_estoque_vacina WHERE "vacinaClinicaId" = $1`, vacina.id
+      );
+
+      // O lote só foi DEBITADO se a vacina chegou a ser cobrada — mesmo caminho que
+      // debita o estoque (`darBaixaEFaturar`, chamado só por `finalizar` no quadrante
+      // aplicadaPeloProprietario×!cliente, ou por `executar` no plantão — nunca por
+      // `registrar`). `vacina.loteId` sozinho NÃO prova débito: `registrar` já grava
+      // essa coluna como referência de preço/lote sugerido, sem tocar `qtdDisponivel`
+      // (ver os comentários "só referência"/"aqui apenas fixa o lote sugerido" em
+      // `registrar`). Sem este cheque, cancelar uma vacina ainda SALVA/FINALIZADA
+      // (nunca debitada) DEVOLVIA ao lote doses que nunca saíram dele — inflava o
+      // estoque a cada registro seguido de cancelamento antes da execução.
+      const jaFaturada = await tx.faturaItem.findFirst({
+        where: { vacinaClinicaId: vacina.id }, select: { id: true },
+      });
+
       // Remove o FaturaItem vinculado, se houver (vacina do cliente nunca gerou um).
       // Bloqueia (lança FaturaPagaError) se a fatura de destino já estiver PAGA.
       await removerFaturaItensDaOrigem(tx, 'vacinaClinicaId', vacina.id);
 
-      // Restaura as doses ao lote se havia vínculo
-      if (vacina.loteId) {
+      // Restaura as doses ao lote SÓ quando havia FaturaItem (prova do débito) — nunca
+      // pela mera presença de `loteId`.
+      if (vacina.loteId && jaFaturada) {
         const lote = await tx.loteVacina.findUnique({ where: { id: vacina.loteId } });
         if (lote) {
           const qtdRows = await tx.$queryRawUnsafe(
@@ -758,9 +1136,11 @@ module.exports = {
   listarCatalogoAtivo,
   listarLotesDisponiveis,
   registrar,
+  atualizar,
   obterPorId,
   finalizar,
   listarParaExecucao,
+  listarExecutadasHoje,
   executar,
   excluir,
 };

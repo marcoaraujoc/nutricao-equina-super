@@ -4,6 +4,9 @@
 // Segue o mesmo padrão visual de Dietaprint.ts (referência de layout do sistema).
 
 import { resolverUrlAbsoluta } from './printUrl';
+import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura } from './print/PrintShell';
+import { imprimirHtml } from './print/imprimirHtml';
+import { DOSES_POR_DIA } from './posologia';
 
 export interface PrintAnimal {
   nome:      string;
@@ -116,21 +119,14 @@ function gerarResumoTexto(numero: string, dataAtendimento: string, itens: PrintA
 // Exportado para reuso por outros relatórios (RelatorioAtendimento.ts).
 
 export const PRINT_CSS = `
-  @page { size: A4; margin: 18mm 20mm; }
+  ${PRINT_SHELL_CSS}
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #111;
-    padding: 18mm 20mm;
+    padding: 5mm 5mm 17mm;
   }
 
-  .sys-header {
-    display: flex; justify-content: space-between; align-items: flex-start;
-    border-bottom: 2pt solid #059669; padding-bottom: 10pt; margin-bottom: 18pt;
-  }
-  .sys-name { font-size: 22pt; font-weight: 700; color: #059669; line-height: 1; }
-  .brand-logo { max-height: 28pt; max-width: 160pt; object-fit: contain; }
-  .sys-sub  { font-size: 9pt;  color: #6b7280; margin-top: 4pt; }
-  .sys-date { font-size: 9pt;  color: #9ca3af; text-align: right; line-height: 1.7; }
+  .sys-sub-line { font-size: 9pt; color: #6b7280; margin-bottom: 12pt; }
 
   .sec-title {
     font-size: 8pt; font-weight: 700; color: #059669;
@@ -215,18 +211,9 @@ export const PRINT_CSS = `
 
 /** Cabeçalho padrão do sistema: logo da empresa (ou marca S2Vet) + subtítulo + data de emissão. */
 export function renderSysHeader(logoUrl: string | null | undefined, subtitulo: string): string {
-  const logo  = resolverUrlAbsoluta(logoUrl);
-  const agora = new Date();
   return `
-  <div class="sys-header">
-    <div>
-      ${logo ? `<img class="brand-logo" src="${logo}" alt="Logo">` : `<div class="sys-name">S2Vet</div>`}
-      <div class="sys-sub">Sistema Hospitalar Veterinário · ${escaparHtml(subtitulo)}</div>
-    </div>
-    <div class="sys-date">
-      Emitido em ${agora.toLocaleDateString('pt-BR')}<br>às ${agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-    </div>
-  </div>`;
+  ${renderCabecalho(logoUrl)}
+  <div class="sys-sub-line">Sistema Hospitalar Veterinário · ${escaparHtml(subtitulo)}</div>`;
 }
 
 /** Card padrão "Dados do Animal": foto + nome, raça, idade e proprietário. */
@@ -258,7 +245,16 @@ function buildRegistroHtml(item: PrintAtendimentoItem): string {
           <tr><th>Medicamento</th><th>Dose</th><th>Via</th><th>Frequência</th><th>Duração</th></tr>
         </thead>
         <tbody>
-          ${item.prescricaoItens.map(m => `
+          ${item.prescricaoItens.map(m => {
+            // "1x a cada N dias" (inclui "1x por semana"): mesma regra do ItemRow da
+            // tela de Prescrição — `duracaoDias` vem em DIAS (vezes × intervalo), mas
+            // aqui se exibe em VEZES.
+            const dosesPorDiaItem = DOSES_POR_DIA[m.frequencia] ?? 1;
+            const intervaloDiasItem = dosesPorDiaItem < 1 ? Math.round(1 / dosesPorDiaItem) : null;
+            const duracaoTxt = intervaloDiasItem
+              ? `${Math.max(1, Math.round(m.duracaoDias / intervaloDiasItem))}x`
+              : m.duracaoDias ? `${m.duracaoDias} dia${m.duracaoDias > 1 ? 's' : ''}` : '—';
+            return `
             <tr>
               <td>
                 <div class="med-nome">${escaparHtml(m.medicamento)}</div>
@@ -267,9 +263,10 @@ function buildRegistroHtml(item: PrintAtendimentoItem): string {
               <td>${m.dosagem ? escaparHtml(`${m.dosagem}${m.unidade ? ' ' + m.unidade : ''}`) : '—'}</td>
               <td>${escaparHtml(m.via ?? '—')}</td>
               <td>${escaparHtml(POSOLOGIA_LABEL[m.frequencia] ?? m.frequencia ?? '—')}</td>
-              <td>${m.duracaoDias ? `${m.duracaoDias} dia${m.duracaoDias > 1 ? 's' : ''}` : '—'}</td>
+              <td>${duracaoTxt}</td>
             </tr>
-          `).join('')}
+          `;
+          }).join('')}
         </tbody>
       </table>
     `
@@ -325,10 +322,11 @@ export function gerarHtmlAtendimento(
   <div class="sec-title">Registros do Atendimento</div>
   ${at.itens.map(buildRegistroHtml).join('')}
 
-  <div class="footer">
-    <span>S2Vet · Sistema Hospitalar Veterinário</span>
+  <div class="ps-footer">
     <span>Atendimento ${escaparHtml(at.atendimentoNumero)}</span>
   </div>
+
+  ${renderRodapeAssinatura({ fullName: primeiro?.responsavel ?? null })}
 
 </body>
 </html>`;
@@ -340,25 +338,5 @@ export function imprimirAtendimento(
   at:     PrintAtendimento,
   animal: PrintAnimal | null,
 ): void {
-  const iframe = document.createElement('iframe');
-  Object.assign(iframe.style, {
-    position: 'fixed', top: '-9999px', left: '-9999px',
-    width: '0', height: '0', border: 'none',
-  });
-  document.body.appendChild(iframe);
-
-  const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
-  if (!doc) { document.body.removeChild(iframe); return; }
-
-  doc.open();
-  doc.write(gerarHtmlAtendimento(at, animal));
-  doc.close();
-
-  setTimeout(() => {
-    iframe.contentWindow?.focus();
-    iframe.contentWindow?.print();
-    setTimeout(() => {
-      if (document.body.contains(iframe)) document.body.removeChild(iframe);
-    }, 500);
-  }, 250);
+  imprimirHtml(gerarHtmlAtendimento(at, animal));
 }

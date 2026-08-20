@@ -136,6 +136,10 @@ const CAMINHO_EXPLICITO = {
   // ── estoque ──
   tb_reservas_estoque:              'estoqueId',
   tb_movimentos_estoque:            'estoqueId',
+  // Espelha tb_reservas_estoque, mas o pai é tb_lotes_vacina (que tem empresa_id
+  // direto, ao contrário de tb_vacinas_clinicas — ver o alerta acima sobre por que
+  // ESSA tabela segue `animalId`, não `lote_id`).
+  tb_reservas_estoque_vacina:       'loteVacinaId',
   // ── equipe / catálogo da empresa ──
   tb_membro_locais_trabalho:        'membro_equipe_id',
   tb_procedimento_combo_itens:      'combo_id',

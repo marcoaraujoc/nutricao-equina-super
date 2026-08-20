@@ -33,18 +33,63 @@ async function temColunas() {
   return _temColunas;
 }
 
-/** Grava a ATIVAÇÃO (ativo=true) + quem/quando. */
+// Cache PRÓPRIA para `inativo_motivo` (migration 20260901000000) — separada de
+// `temColunas()` de propósito: a trilha básica (ativo_em/ativo_por_id/...) já
+// pode estar em produção quando esta coluna ainda não foi migrada, e as duas
+// não podem cair juntas nesse intervalo (regressão da trilha básica, que já
+// funciona hoje).
+let _temMotivo = null;
+let _temMotivoEm = 0;
+async function temColunaMotivo() {
+  if (_temMotivo === true) return true;
+  if (_temMotivo === false && Date.now() - _temMotivoEm < 60_000) return false;
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'schs2vet' AND table_name = 'users'
+          AND column_name = 'inativo_motivo' LIMIT 1`,
+    );
+    _temMotivo = rows.length > 0;
+  } catch { _temMotivo = false; }
+  _temMotivoEm = Date.now();
+  return _temMotivo;
+}
+
+/**
+ * Grava a ATIVAÇÃO (ativo=true) + quem/quando.
+ * ⚠️ O ativo=true SEMPRE é gravado, mesmo sem as colunas de trilha (migration
+ * ainda não aplicada) — cair fora nesse caso deixava o toggle inteiro em NO-OP
+ * silencioso (o usuário nunca ativava/inativava, sem erro nenhum). A trilha
+ * (quem/quando) é só um EXTRA best-effort por cima do estado real.
+ */
 async function registrarAtivacao(client, userId, porUserId) {
-  if (!(await temColunas())) return;
+  if (!(await temColunas())) {
+    await client.$executeRawUnsafe(`UPDATE schs2vet.users SET ativo = true WHERE id = $1`, Number(userId));
+    return;
+  }
   await client.$executeRawUnsafe(
     `UPDATE schs2vet.users SET ativo = true, ativo_em = now(), ativo_por_id = $1 WHERE id = $2`,
     Number(porUserId), Number(userId),
   );
 }
 
-/** Grava a INATIVAÇÃO (ativo=false) + quem/quando. */
-async function registrarInativacao(client, userId, porUserId) {
-  if (!(await temColunas())) return;
+/**
+ * Grava a INATIVAÇÃO (ativo=false) + quem/quando + a justificativa (`motivo`,
+ * exigida por `EquipeController.toggleMembro`). Mesma garantia de best-effort
+ * acima para a trilha básica; `motivo` só é gravado quando a coluna já existe.
+ */
+async function registrarInativacao(client, userId, porUserId, motivo = null) {
+  if (!(await temColunas())) {
+    await client.$executeRawUnsafe(`UPDATE schs2vet.users SET ativo = false WHERE id = $1`, Number(userId));
+    return;
+  }
+  if (motivo != null && (await temColunaMotivo())) {
+    await client.$executeRawUnsafe(
+      `UPDATE schs2vet.users SET ativo = false, inativo_em = now(), inativo_por_id = $1, inativo_motivo = $2 WHERE id = $3`,
+      Number(porUserId), motivo, Number(userId),
+    );
+    return;
+  }
   await client.$executeRawUnsafe(
     `UPDATE schs2vet.users SET ativo = false, inativo_em = now(), inativo_por_id = $1 WHERE id = $2`,
     Number(porUserId), Number(userId),
@@ -53,16 +98,18 @@ async function registrarInativacao(client, userId, porUserId) {
 
 /**
  * Trilha de vários usuários de uma vez:
- * Map(userId → { ativoEm, ativoPorNome, inativoEm, inativoPorNome }).
+ * Map(userId → { ativoEm, ativoPorNome, inativoEm, inativoPorNome, inativoMotivo }).
  */
 async function lerTrilhaAtivacao(client, userIds) {
   const ids = [...new Set((userIds ?? []).map(Number).filter(Number.isInteger))];
   const mapa = new Map();
   if (ids.length === 0 || !(await temColunas())) return mapa;
+  const comMotivo = await temColunaMotivo();
   const ph = ids.map((_, i) => `$${i + 1}`).join(', ');
   const rows = await client.$queryRawUnsafe(
     `SELECT u.id AS id, u.ativo_em AS ativo_em, u.inativo_em AS inativo_em,
             ap."fullName" AS ativo_por_nome, ip."fullName" AS inativo_por_nome
+            ${comMotivo ? ', u.inativo_motivo AS inativo_motivo' : ''}
        FROM schs2vet.users u
        LEFT JOIN schs2vet.users ap ON ap.id = u.ativo_por_id
        LEFT JOIN schs2vet.users ip ON ip.id = u.inativo_por_id
@@ -75,6 +122,7 @@ async function lerTrilhaAtivacao(client, userIds) {
       ativoPorNome:   r.ativo_por_nome,
       inativoEm:      r.inativo_em,
       inativoPorNome: r.inativo_por_nome,
+      inativoMotivo:  comMotivo ? r.inativo_motivo : null,
     });
   }
   return mapa;

@@ -193,12 +193,17 @@ async function registrarTransferencia(client, req, { entidade, entidadeId, anima
 }
 
 /**
- * Registra ALTERAÇÃO de um registro do atendimento com o antes → depois.
+ * Registra ALTERAÇÃO de um registro com o antes → depois por campo.
  *
  * `campos` = { campo: { de, para } }. Campos sem mudança real são descartados aqui
- * mesmo — auditoria de "nada mudou" só faz ruído. Nada é gravado se a lista ficar
- * vazia. `donoAtual` entra sempre no texto: a mesma edição significa coisas
- * diferentes conforme quem conduz o atendimento no momento.
+ * mesmo — auditoria de "nada mudou" só faz ruído, e o CALLER não precisa filtrar
+ * antes de montar o objeto. Nada é gravado se a lista ficar vazia.
+ *
+ * `donoAnteriorId`/`donoAtualId` são OPCIONAIS e específicos de registro do
+ * ATENDIMENTO (evolução, prescrição...), onde "quem conduz" muda o que a mesma
+ * edição significa. Cadastro (Proprietário, Tratador, Fornecedor, Prestador,
+ * Localização) não tem essa noção — omitir os dois pula o prefixo "responsável:"
+ * e o texto fica só com os campos alterados.
  */
 async function registrarAlteracao(client, req, { entidade, entidadeId, animalId = null, campos = {}, donoAnteriorId = null, donoAtualId = null, motivo = null }) {
   const mudancas = Object.entries(campos)
@@ -207,10 +212,14 @@ async function registrarAlteracao(client, req, { entidade, entidadeId, animalId 
 
   if (mudancas.length === 0) return;
 
-  const donoDe   = await nomeDoUsuario(client, donoAnteriorId ?? donoAtualId);
-  const donoPara = donoAnteriorId != null && donoAtualId != null && Number(donoAnteriorId) !== Number(donoAtualId)
-    ? await nomeDoUsuario(client, donoAtualId)
-    : null;
+  let prefixo = '';
+  if (donoAnteriorId != null || donoAtualId != null) {
+    const donoDe   = await nomeDoUsuario(client, donoAnteriorId ?? donoAtualId);
+    const donoPara = donoAnteriorId != null && donoAtualId != null && Number(donoAnteriorId) !== Number(donoAtualId)
+      ? await nomeDoUsuario(client, donoAtualId)
+      : null;
+    prefixo = `responsável: ${donoDe}${donoPara ? ` → ${donoPara}` : ''} | `;
+  }
 
   await registrarAuditoria(client, req, {
     categoria: 'ALTERACAO',
@@ -218,8 +227,27 @@ async function registrarAlteracao(client, req, { entidade, entidadeId, animalId 
     entidadeId,
     animalId,
     motivo,
-    detalhes: `responsável: ${donoDe}${donoPara ? ` → ${donoPara}` : ''} | ${mudancas.join(' ; ')}`,
+    detalhes: `${prefixo}${mudancas.join(' ; ')}`,
   });
+}
+
+/**
+ * Nome legível de uma localização para o texto da auditoria — mesmo espírito de
+ * `nomeDoUsuario`: a auditoria não exibe id cru (decisão de 2026-08-04, ver CLAUDE.md
+ * §12 "Nenhuma referência NUMÉRICA na tela de auditoria").
+ */
+async function nomeLocalizacao(client, localizacaoId) {
+  if (localizacaoId == null) return '—';
+  try {
+    const c = client ?? prisma;
+    const [l] = await c.$queryRawUnsafe(
+      'SELECT nome FROM schs2vet.tb_localizacoes_animal WHERE id = $1',
+      Number(localizacaoId),
+    );
+    return l?.nome || 'localização não identificada';
+  } catch {
+    return 'localização não identificada';
+  }
 }
 
 module.exports = {
@@ -228,6 +256,7 @@ module.exports = {
   registrarTransferencia,
   registrarAlteracao,
   nomeDoUsuario,
+  nomeLocalizacao,
   resumoTexto,
   ipDoRequest,
 };

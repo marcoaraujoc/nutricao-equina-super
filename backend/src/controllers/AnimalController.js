@@ -7,7 +7,7 @@ const { storage }      = require('../storage');
 const { getEmpresaIdDoVet, getContextoDoVet, getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { buildAnimalScopeWhere } = require('../lib/animalScope');
-const { animalVisivelNaEmpresa } = require('../lib/visibilidade');
+const { animalVisivelNaEmpresa, ANIMAL_VISIVEL } = require('../lib/visibilidade');
 const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
 const { garantirFaturaAberta } = require('../services/FaturaService');
 const { registrarAuditoria } = require('../lib/auditoria');
@@ -17,6 +17,12 @@ const {
   marcarInativo, marcarAtivo, animalEstaInativo,
   anexarInativo, anexarInativoEmLista,
 } = require('../lib/animalInativo');
+const {
+  registrarAtivacao: registrarAtivacaoAnimal,
+  registrarDesativacao,
+  anexarTrilhaEmLista: anexarTrilhaAtivacaoEmLista,
+} = require('../lib/animalAtivacao');
+const { cancelarPendenciasDoAnimal } = require('../lib/cancelamentoPendencias');
 
 const prisma = require('../lib/prisma').default;
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
@@ -160,7 +166,11 @@ class AnimalController {
 
       try {
         const animais = await prisma.animal.findMany({
-          where:   { nome: { contains: nome.trim(), mode: 'insensitive' }, ativo: true },
+          // ANIMAL_VISIVEL (não a variante por empresa): a busca cruza empresas de
+          // propósito (detecção de duplicata) e não é o caso de aplicar o `ativo`
+          // POR EMPRESA do dono, que só faz sentido comparado à empresa do PRÓPRIO
+          // animal, não à de quem pesquisa.
+          where:   { nome: { contains: nome.trim(), mode: 'insensitive' }, ...ANIMAL_VISIVEL },
           include: {
             user:        { select: { id: true, fullName: true, email: true, phone: true } },
             especie:     { select: { id: true, nome: true } },
@@ -287,14 +297,32 @@ class AnimalController {
       // inativado some junto — nem como "inativo" ele aparece. `animalVisivelNaEmpresa`
       // aplica também o `ativo` POR EMPRESA do cliente (§36): inativado numa clínica,
       // ele continua visível nas outras.
-      const animais = await prisma.animal.findMany({
-        where: { ...where, ...animalVisivelNaEmpresa(req.empresaId) },
+      //
+      // Exceção: a aba Ativos/Inativos/Todos da tela de Pacientes precisa enxergar
+      // `ativo:false` — mas SÓ para gestor/admin do contexto, senão a aba vazaria
+      // pacientes excluídos para qualquer perfil que soubesse mandar `?ativo=`.
+      const visivel = animalVisivelNaEmpresa(req.empresaId);
+      let whereAtivo = visivel;
+      if (ehGestorNoContexto(req) && req.query.ativo !== undefined) {
+        const { ativo: _ignorado, ...visivelSemAtivo } = visivel;
+        if (req.query.ativo === 'all') whereAtivo = visivelSemAtivo;
+        else whereAtivo = { ...visivelSemAtivo, ativo: req.query.ativo === 'true' };
+      }
+
+      let animais = await prisma.animal.findMany({
+        where: { ...where, ...whereAtivo },
         include:  ANIMAL_INCLUDE,
         orderBy:  { dataCadastro: 'desc' },
       });
 
       // Nome/telefone do proprietário conforme o cadastro DESTA empresa
       await anexarInativoEmLista(animais);
+      // Trilha de ativação/desativação (quem, quando) — abas Ativos/Inativos da tela.
+      // ⚠️ `anexarTrilhaEmLista` (animalAtivacao.js) devolve uma lista NOVA (`.map`),
+      // ao contrário de `anexarInativoEmLista` (que muta os itens in-place) — sem
+      // reatribuir aqui, a trilha era calculada e descartada, e a coluna "Ativado
+      // em/por" e "Inativado em/por" da tela de Pacientes nunca recebia dado nenhum.
+      animais = await anexarTrilhaAtivacaoEmLista(animais);
       res.json({
         sucesso: true,
         dados:   await aplicarPerfilProprietarioEmRelacao(animais, 'user', req.empresaId),
@@ -318,6 +346,14 @@ class AnimalController {
         include: ANIMAL_INCLUDE,
       });
       if (!animal) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+
+      // Exclusão lógica (Animal.ativo — "some de tudo"): só o gestor/admin pode abrir
+      // o cadastro de um animal desativado (revisar antes de reativar, na tela de
+      // Pacientes). Para qualquer outro perfil, um animal desativado é 404 — mesmo
+      // com acesso de tenant/vínculo ao registro.
+      if (!animal.ativo && !ehGestorNoContexto(req)) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      }
 
       // Controle de acesso centralizado — cobre PROPRIETARIO, empresa (gestores), e vínculo direto
       if (req.user?.id) {
@@ -353,6 +389,12 @@ class AnimalController {
       const acesso = await verificarAcessoAnimal({ animalId: id, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)        return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+
+      // Mesma trava de `obterPorId`: animal desativado só é alcançável pelo gestor.
+      if (!ehGestorNoContexto(req)) {
+        const alvo = await prisma.animal.findUnique({ where: { id }, select: { ativo: true } });
+        if (!alvo?.ativo) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      }
 
       const logoUrl = await resolverLogoPorAnimal(id);
       res.json({ dados: { logoUrl } });
@@ -590,6 +632,13 @@ class AnimalController {
         depois:   { peso: animal.peso, localizacaoId: animal.localizacaoId, local: animal.local, baia: animal.baia },
         criadoPorId: req.user?.id ?? null,
       });
+
+      // Animal nasce ativo=true (default do schema): registra a trilha de ativação
+      // também na CRIAÇÃO, senão "Ativado em/por" (Pacientes.tsx) fica vazio até
+      // alguém desativar e reativar o registro — quem o criou não aparecia ali.
+      if (req.user?.id) {
+        await registrarAtivacaoAnimal(prisma, animal.id, req.user.id);
+      }
 
       if (isVet) {
         // ⚠️ FASE 3 DO MULTI-TENANCY — o `VetAnimalSolicitacao` que nascia aqui (VINCULO
@@ -840,8 +889,8 @@ class AnimalController {
         select: { nome: true, especie: { select: { nome: true } } },
       });
 
-      await prisma.$transaction(async (tx) => {
-        await tx.animal.update({ where: { id: animalId }, data: { ativo: false } });
+      const pendencias = await prisma.$transaction(async (tx) => {
+        await registrarDesativacao(tx, animalId, req.user.id, motivo);
         await registrarAuditoria(tx, req, {
           categoria:  'EXCLUSAO',
           entidade:   'ANIMAL',
@@ -850,12 +899,69 @@ class AnimalController {
           motivo,
           detalhes:   `${animal?.nome ?? 'Animal'}${animal?.especie?.nome ? ` (${animal.especie.nome})` : ''}`,
         });
+
+        // Paciente inativado some de toda tela do sistema — a fila de Execução de
+        // Prescrição inclusive. Sem isto, agendamento/vacina/prescrição/exame/
+        // encaminhamento pendentes ficavam "fantasmas": sumidos das telas, mas com
+        // status de "em aberto" ainda gravado — e voltavam a aparecer normalmente
+        // se o animal fosse reativado depois.
+        return cancelarPendenciasDoAnimal(
+          tx, animalId, req,
+          `Cancelado automaticamente: paciente inativado — ${motivo}`,
+        );
       });
 
-      res.json({ sucesso: true, mensagem: 'Animal inativado com sucesso' });
+      res.json({ sucesso: true, mensagem: 'Animal inativado com sucesso', pendenciasCanceladas: pendencias });
     } catch (error) {
       console.error('[AnimalController.excluir]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao excluir animal' });
+    }
+  }
+
+  // ── PATCH /api/animais/:id/reativar — desfaz a exclusão lógica (Animal.ativo)
+  // ⚠️ NÃO confundir com `ativar` (abaixo): aquele desfaz o BLOQUEIO de somente-
+  // leitura (Animal.inativo, paciente sempre visível). Este desfaz a EXCLUSÃO
+  // (Animal.ativo=false, paciente sumido de tudo) — sempre gestor/admin, mesmo
+  // que a matriz conceda `animais.ativar` a outro perfil (mesma regra fixa do
+  // `ativar` original: quem pode excluir não necessariamente pode trazer de volta).
+
+  async reativarExcluido(req, res) {
+    const animalId = Number(req.params.id);
+    const { motivo } = req.body ?? {};
+    try {
+      if (!motivo?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da reativação' });
+      }
+      if (!ehGestorNoContexto(req)) {
+        return res.status(403).json({ sucesso: false, mensagem: 'Apenas o gestor pode reativar um paciente excluído.' });
+      }
+
+      const animal = await prisma.animal.findUnique({ where: { id: animalId }, select: { nome: true, ativo: true } });
+      if (!animal) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      if (animal.ativo) return res.status(400).json({ sucesso: false, mensagem: 'Este paciente já está ativo.' });
+
+      // Mesmo escopo de tenant que as demais ações — sem isso, um gestor de OUTRA
+      // empresa poderia reativar paciente alheio só por saber o id.
+      const acesso = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
+      if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+
+      await prisma.$transaction(async (tx) => {
+        await registrarAtivacaoAnimal(tx, animalId, req.user.id);
+        await registrarAuditoria(tx, req, {
+          categoria:  'ALTERACAO',
+          entidade:   'ANIMAL',
+          entidadeId: animalId,
+          animalId,
+          motivo,
+          detalhes:   `Paciente reativado — ${animal.nome}`,
+        });
+      });
+
+      res.json({ sucesso: true, mensagem: 'Paciente reativado com sucesso' });
+    } catch (error) {
+      console.error('[AnimalController.reativarExcluido]', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao reativar paciente' });
     }
   }
 

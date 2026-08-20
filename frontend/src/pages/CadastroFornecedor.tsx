@@ -16,6 +16,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { isValidEmail } from '../utils/validators';
 import InlineError from '../components/InlineError';
 import TipoServicoSelect from '../components/TipoServicoSelect';
+import ModalJustificativa from '../components/ModalJustificativa';
+import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import { formatDate } from '../utils/dateUtils';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -104,6 +106,7 @@ interface Fornecedor {
   ativoPorNome?:   string | null;
   inativoEm?:      string | null;
   inativoPorNome?: string | null;
+  inativoMotivo?:  string | null;
 }
 
 interface FormForn {
@@ -454,6 +457,10 @@ export default function CadastroFornecedor() {
   const [form,            setForm]            = useState<FormForn>(FORM_INICIAL);
   const [saving,          setSaving]          = useState(false);
   const [dupInativoInfo,  setDupInativoInfo]  = useState<{ mensagem: string } | null>(null);
+  // Fornecedor em vias de ser INATIVADO — pede justificativa antes do PATCH
+  // (ativar continua direto, sem modal).
+  const [inativando,      setInativando]      = useState<Fornecedor | null>(null);
+  const [processandoToggle, setProcessandoToggle] = useState(false);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -561,15 +568,24 @@ export default function CadastroFornecedor() {
     } finally { setSaving(false); }
   };
 
-  const handleToggle = async (f: Fornecedor) => {
+  const handleToggle = (f: Fornecedor) => {
     setErroLista(null);
     if (f.tipoEntrada === 'SYSTEM' && !isAdmin) { setErroLista(msgSemPermissao('alternar status de fornecedor do catálogo global')); return; }
     if (!podeAtivar) { setErroLista(msgSemPermissao('alternar status do fornecedor')); return; }
+    // Inativar exige justificativa; ativar continua direto.
+    if (f.ativo) { setInativando(f); return; }
+    confirmarToggle(f);
+  };
+
+  const confirmarToggle = async (f: Fornecedor, motivo?: string) => {
+    setProcessandoToggle(true);
     try {
-      await api.patch(`/cadastro/fornecedores/${f.id}/toggle`);
+      await api.patch(`/cadastro/fornecedores/${f.id}/toggle`, motivo ? { motivo } : undefined);
       toast.success(f.ativo ? 'Fornecedor inativado' : 'Fornecedor ativado');
+      setInativando(null);
       carregar();
     } catch { setErroLista('Erro ao alternar status'); }
+    finally { setProcessandoToggle(false); }
   };
 
   if (loadingPerms) return (
@@ -683,27 +699,28 @@ export default function CadastroFornecedor() {
                 {filtroAtivo === 'ativo' && (
                   <p className="text-[11px] text-gray-400 mt-1">
                     Criado em {formatDate(f.createdAt)}
-                    {f.ativoEm ? ` · Ativado em ${formatDate(f.ativoEm)}${f.ativoPorNome ? ` por ${f.ativoPorNome}` : ''}` : ''}
+                    {f.ativoPorNome ? ` · Ativado em ${formatDate(f.ativoEm ?? f.createdAt)} por ${f.ativoPorNome}` : ''}
                   </p>
                 )}
                 {filtroAtivo === 'inativo' && (
                   <p className="text-[11px] text-gray-400 mt-1">
                     Inativado em {formatDate(f.inativoEm)}
                     {f.inativoPorNome ? ` por ${f.inativoPorNome}` : ''}
+                    {f.inativoMotivo ? <> — <JustificativaCancelamento texto={f.inativoMotivo} className="inline" /></> : ''}
                   </p>
                 )}
                 {(f.tipoEntrada !== 'SYSTEM' || isAdmin) && (podeEditar || podeAtivar) && (
                   <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-50">
                     {podeEditar && (
                       <button onClick={() => abrirEdicao(f)}
-                        className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
+                        className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-orange-200 rounded-lg text-xs text-orange-600 hover:bg-orange-50 transition-colors">
                         <Pencil size={11} /> Editar
                       </button>
                     )}
                     {podeAtivar && (
                       <button onClick={() => handleToggle(f)}
                         className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
-                        {f.ativo ? <ToggleRight size={11} className="text-emerald-600" /> : <ToggleLeft size={11} />}
+                        {f.ativo ? <ToggleRight size={11} className="text-blue-600" /> : <ToggleLeft size={11} />}
                         {f.ativo ? 'Inativar' : 'Ativar'}
                       </button>
                     )}
@@ -715,7 +732,8 @@ export default function CadastroFornecedor() {
 
           {/* Desktop */}
           <div className="hidden md:block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto rounded-2xl">
+            <table className="w-full min-w-[1020px] text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nome</th>
@@ -734,6 +752,7 @@ export default function CadastroFornecedor() {
                     <>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado em</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado por</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
                     </>
                   )}
                   {(podeEditar || podeAtivar) && <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>}
@@ -776,7 +795,7 @@ export default function CadastroFornecedor() {
                     {filtroAtivo === 'ativo' && (
                       <>
                         <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(f.createdAt)}</td>
-                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(f.ativoEm)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(f.ativoEm ?? f.createdAt)}</td>
                         <td className="px-4 py-3 whitespace-nowrap text-gray-600">{f.ativoPorNome ?? '—'}</td>
                       </>
                     )}
@@ -784,6 +803,7 @@ export default function CadastroFornecedor() {
                       <>
                         <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(f.inativoEm)}</td>
                         <td className="px-4 py-3 whitespace-nowrap text-gray-600">{f.inativoPorNome ?? '—'}</td>
+                        <td className="px-4 py-3"><JustificativaCancelamento texto={f.inativoMotivo} /></td>
                       </>
                     )}
                     {(podeEditar || podeAtivar) && (
@@ -794,14 +814,14 @@ export default function CadastroFornecedor() {
                           <div className="flex items-center justify-end gap-1">
                             {podeEditar && (
                               <button onClick={() => abrirEdicao(f)} title="Editar"
-                                className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                                className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
                                 <Pencil size={14} />
                               </button>
                             )}
                             {podeAtivar && (
                               <button onClick={() => handleToggle(f)} title={f.ativo ? 'Inativar' : 'Ativar'}
                                 className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
-                                {f.ativo ? <ToggleRight size={14} className="text-emerald-600" /> : <ToggleLeft size={14} />}
+                                {f.ativo ? <ToggleRight size={14} className="text-blue-600" /> : <ToggleLeft size={14} />}
                               </button>
                             )}
                           </div>
@@ -812,6 +832,7 @@ export default function CadastroFornecedor() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         </>
       )}
@@ -835,6 +856,16 @@ export default function CadastroFornecedor() {
           onCancelar={() => setDupInativoInfo(null)}
         />
       )}
+
+      <ModalJustificativa
+        aberto={!!inativando}
+        titulo="Inativar fornecedor?"
+        descricao={inativando ? `${inativando.nome} deixa de aparecer como ativo.` : undefined}
+        acaoLabel="Inativar"
+        processando={processandoToggle}
+        onConfirmar={(motivo) => { if (inativando) confirmarToggle(inativando, motivo); }}
+        onFechar={() => setInativando(null)}
+      />
     </PageContainer>
   );
 }

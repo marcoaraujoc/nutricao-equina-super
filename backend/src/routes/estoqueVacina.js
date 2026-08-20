@@ -19,6 +19,7 @@ router.get('/',    checkPermission('vacina.estoque.ler',    'LEITURA'), ctrl.lis
 router.post('/',   checkPermission('vacina.estoque.criar',   'PROPRIO'), ctrl.criar);
 router.put('/:id', checkPermission('vacina.estoque.editar',  'PROPRIO'), ctrl.atualizar);
 router.patch('/:id/ajuste', checkPermission('vacina.estoque.ajustar', 'PROPRIO'), ctrl.ajustar);
+router.patch('/:id/toggle', checkPermission('vacina.estoque.deletar', 'PROPRIO'), ctrl.toggle);
 router.delete('/:id', checkPermission('vacina.estoque.deletar', 'PROPRIO'), ctrl.excluir);
 
 module.exports = router;

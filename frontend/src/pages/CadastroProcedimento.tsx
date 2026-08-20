@@ -14,7 +14,7 @@ import InlineError from '../components/InlineError';
 import ModalJustificativa from '../components/ModalJustificativa';
 import DropdownSelect from '../components/DropdownSelect';
 import {
-  ListChecks, Search, Pencil, Trash2, X, Loader2, Check, Layers, PackagePlus,
+  ListChecks, Search, Pencil, X, Loader2, Check, Layers, PackagePlus, ToggleRight, ToggleLeft,
 } from 'lucide-react';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -45,6 +45,7 @@ interface Combo {
   especialidade: string | null;
   valor:         number;
   itens:         ComboItem[];
+  ativo:         boolean;
 }
 
 interface FormNovoProc {
@@ -101,6 +102,7 @@ export default function CadastroProcedimento() {
   const [procedimentos,  setProcedimentos]  = useState<Procedimento[]>([]);
   const [combos,         setCombos]         = useState<Combo[]>([]);
   const [buscaCombos,    setBuscaCombos]    = useState('');
+  const [filtroAtivoCombos, setFiltroAtivoCombos] = useState<'ativo' | 'inativo' | 'all'>('ativo');
   const [busca,          setBusca]          = useState('');
   const [aba,            setAba]            = useState<'procedimentos' | 'combos'>('procedimentos');
   const [loading,        setLoading]        = useState(true);
@@ -131,7 +133,7 @@ export default function CadastroProcedimento() {
   const [erroInline,    setErroInline]    = useState<string | null>(null);
   const [erroProc,      setErroProc]      = useState<string | null>(null);
   const [erroCombo,     setErroCombo]     = useState<string | null>(null);
-  const [comboExcluir,  setComboExcluir]  = useState<Combo | null>(null);
+  const [comboToggle,   setComboToggle]   = useState<Combo | null>(null);
 
   // Controle de acesso — slug cadastro.procedimento.* (GESTOR/ADMIN têm bypass via podeExecutar)
   const podeVer    = isAdmin || isGestor || gestorBackend || podeExecutar('cadastro.procedimento.ler');
@@ -163,9 +165,10 @@ export default function CadastroProcedimento() {
     finally { setLoadingProcs(false); }
   }, []);
 
-  const carregarCombos = useCallback(async () => {
+  const carregarCombos = useCallback(async (ativo: 'ativo' | 'inativo' | 'all') => {
     try {
-      const res = await api.get('/procedimentos/cadastro/combos');
+      const params = ativo === 'all' ? { ativo: 'all' } : { ativo: ativo === 'ativo' ? 'true' : 'false' };
+      const res = await api.get('/procedimentos/cadastro/combos', { params });
       if (!res.data) return;
       setCombos(res.data?.dados ?? []);
     } catch { /* silencioso */ }
@@ -174,8 +177,8 @@ export default function CadastroProcedimento() {
   useEffect(() => {
     if (loadingPerms) return;
     setLoading(true);
-    Promise.all([carregarEspecialidades(), carregarCombos()]).finally(() => setLoading(false));
-  }, [loadingPerms, carregarEspecialidades, carregarCombos]);
+    Promise.all([carregarEspecialidades(), carregarCombos(filtroAtivoCombos)]).finally(() => setLoading(false));
+  }, [loadingPerms, carregarEspecialidades, carregarCombos, filtroAtivoCombos]);
 
   useEffect(() => {
     if (loadingPerms) return;
@@ -194,10 +197,15 @@ export default function CadastroProcedimento() {
       p.nome.toLowerCase().includes(q) || p.categoria.toLowerCase().includes(q));
   }, [procedimentos, busca]);
 
+  // Busca pelo NOME do combo OU pelo seu CONTEÚDO (nome de qualquer procedimento
+  // que o compõe) — sem isso, procurar por um procedimento que só existe dentro
+  // de um combo (nunca no nome dele) não achava o combo nenhum.
   const combosFiltrados = useMemo(() => {
     const q = buscaCombos.trim().toLowerCase();
     if (!q) return combos;
-    return combos.filter(c => c.nome.toLowerCase().includes(q));
+    return combos.filter(c =>
+      c.nome.toLowerCase().includes(q) ||
+      c.itens.some(i => i.procedimento.nome.toLowerCase().includes(q)));
   }, [combos, buscaCombos]);
 
   // ── Valor da empresa (gestor) ─────────────────────────────────────────────
@@ -295,23 +303,23 @@ export default function CadastroProcedimento() {
       else               await api.post('/procedimentos/cadastro/combos', payload);
       toast.success(comboEditando ? 'Combo atualizado' : 'Combo criado');
       setShowCombo(false);
-      carregarCombos();
+      carregarCombos(filtroAtivoCombos);
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
       if (!e.isPermissionError) setErroCombo(e.response?.data?.error ?? 'Erro ao salvar combo');
     } finally { setSalvandoCombo(false); }
   };
 
-  const excluirCombo = async (motivo: string) => {
-    if (!comboExcluir) return;
+  const toggleCombo = async (motivo: string) => {
+    if (!comboToggle) return;
     try {
-      await api.delete(`/procedimentos/cadastro/combos/${comboExcluir.id}`, { data: { motivo } });
-      toast.success('Combo excluído');
-      setComboExcluir(null);
-      carregarCombos();
+      await api.patch(`/procedimentos/cadastro/combos/${comboToggle.id}/toggle`, { motivo });
+      toast.success(comboToggle.ativo ? 'Combo inativado' : 'Combo ativado');
+      setComboToggle(null);
+      carregarCombos(filtroAtivoCombos);
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
-      if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao excluir combo');
+      if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao alterar status do combo');
     }
   };
 
@@ -394,7 +402,7 @@ export default function CadastroProcedimento() {
           { key: 'procedimentos', label: 'Procedimentos', icon: <ListChecks size={14} /> },
           { key: 'combos',        label: 'Combos',        icon: <Layers size={14} /> },
         ] as { key: 'procedimentos' | 'combos'; label: string; icon: React.ReactNode }[]).map(t => (
-          <button key={t.key} onClick={() => setAba(t.key)}
+          <button key={t.key} onClick={() => { setAba(t.key); setBusca(''); setBuscaCombos(''); }}
             className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
               aba === t.key ? 'bg-emerald-700 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-emerald-300'
             }`}>
@@ -446,6 +454,7 @@ export default function CadastroProcedimento() {
             <>
               {/* Desktop */}
               <div className="hidden md:block bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className="overflow-x-auto rounded-2xl">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-[11px] uppercase tracking-wider text-gray-400 border-b border-gray-100">
@@ -495,6 +504,7 @@ export default function CadastroProcedimento() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
 
               {/* Mobile */}
@@ -543,6 +553,18 @@ export default function CadastroProcedimento() {
                 <PackagePlus size={15} /> Novo Combo
               </button>
             )}
+            {podeGerirEmpresa && (
+              <div className="flex border border-gray-200 rounded-xl overflow-hidden text-sm flex-shrink-0">
+                {(['all', 'ativo', 'inativo'] as const).map(v => (
+                  <button key={v} onClick={() => setFiltroAtivoCombos(v)}
+                    className={`px-3 py-2 font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
+                      filtroAtivoCombos === v ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
+                    }`}>
+                    {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
+                  </button>
+                ))}
+              </div>
+            )}
             {combos.length > 0 && (
               <div className="relative sm:max-w-xs w-full">
                 <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
@@ -562,10 +584,15 @@ export default function CadastroProcedimento() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
               {combosFiltrados.map(c => (
-                <div key={c.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-col">
+                <div key={c.id} className={`bg-white rounded-2xl border shadow-sm p-4 flex flex-col ${c.ativo ? 'border-gray-100' : 'border-red-100 opacity-70'}`}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="font-bold text-gray-900 text-sm truncate">{c.nome}</p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="font-bold text-gray-900 text-sm truncate">{c.nome}</p>
+                        {!c.ativo && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 flex-shrink-0">Inativo</span>
+                        )}
+                      </div>
                       {/* TODAS as especialidades do combo, uma por selo — ver
                           `especialidadesDoCombo`. */}
                       <div className="flex flex-wrap gap-1 mt-0.5">
@@ -589,14 +616,16 @@ export default function CadastroProcedimento() {
                   </ul>
                   {(podeEditar || podeExcluir) && (
                     <div className="flex justify-end gap-1 mt-3 pt-2 border-t border-gray-50">
-                      {podeEditar && (
+                      {podeEditar && c.ativo && (
                         <button onClick={() => abrirEdicaoCombo(c)} className="p-1.5 text-gray-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg" title="Editar">
                           <Pencil size={14} />
                         </button>
                       )}
                       {podeExcluir && (
-                        <button onClick={() => setComboExcluir(c)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Excluir">
-                          <Trash2 size={14} />
+                        <button onClick={() => setComboToggle(c)}
+                          className={`p-1.5 rounded-lg ${c.ativo ? 'text-gray-400 hover:text-red-600 hover:bg-red-50' : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'}`}
+                          title={c.ativo ? 'Inativar' : 'Ativar'}>
+                          {c.ativo ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
                         </button>
                       )}
                     </div>
@@ -793,12 +822,16 @@ export default function CadastroProcedimento() {
       )}
 
       <ModalJustificativa
-        aberto={comboExcluir !== null}
-        titulo="Excluir combo"
-        descricao={comboExcluir ? `O combo "${comboExcluir.nome}" será excluído. Esta ação será registrada na auditoria.` : undefined}
-        acaoLabel="Excluir"
-        onConfirmar={excluirCombo}
-        onFechar={() => setComboExcluir(null)}
+        aberto={comboToggle !== null}
+        titulo={comboToggle?.ativo ? 'Inativar combo' : 'Ativar combo'}
+        descricao={comboToggle
+          ? comboToggle.ativo
+            ? `O combo "${comboToggle.nome}" deixa de aparecer no Orçamento e na Prescrição. Orçamentos e faturas que já usaram este combo não são alterados. Esta ação será registrada na auditoria.`
+            : `O combo "${comboToggle.nome}" volta a aparecer no Orçamento e na Prescrição.`
+          : undefined}
+        acaoLabel={comboToggle?.ativo ? 'Inativar' : 'Ativar'}
+        onConfirmar={toggleCombo}
+        onFechar={() => setComboToggle(null)}
       />
     </PageContainer>
   );

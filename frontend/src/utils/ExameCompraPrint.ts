@@ -2,7 +2,8 @@
 // Gerador de HTML para impressão e PDF do Exame de Compra Equino.
 // Field definitions duplicadas intencionalmente para desacoplar da página.
 
-import { resolverUrlAbsoluta } from './printUrl';
+import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura } from './print/PrintShell';
+import { imprimirHtml } from './print/imprimirHtml';
 
 // ─── Field definitions ────────────────────────────────────────────────────────
 
@@ -132,14 +133,11 @@ export interface ExameCompraPrintAnimal {
 // ─── CSS ─────────────────────────────────────────────────────────────────────
 
 const CSS = `
-  @page { size: A4; margin: 14mm 18mm; }
+  ${PRINT_SHELL_CSS}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; font-size: 10.5px; color: #111; background: #fff; }
+  body { font-family: Arial, sans-serif; font-size: 10.5px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
   .page-break { page-break-before: always; break-before: page; }
-  .header { border-bottom: 2px solid #d97706; padding-bottom: 10px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: flex-end; }
-  .header h1 { font-size: 19px; font-weight: 700; color: #d97706; }
-  .brand-logo { max-height: 30px; max-width: 180px; object-fit: contain; }
-  .header .sub { font-size: 9.5px; color: #6b7280; margin-top: 2px; }
+  .doc-info-row { display: flex; justify-content: flex-end; margin-bottom: 12px; }
   .card { border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; }
   .card-title { font-size: 9.5px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; border-bottom: 1px solid #f3f4f6; padding-bottom: 5px; }
   .section-h { font-size: 9.5px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: .05em; margin: 14px 0 8px; padding: 5px 8px; background: #f9fafb; border-left: 3px solid #d97706; border-radius: 0 4px 4px 0; }
@@ -155,7 +153,6 @@ const CSS = `
   .anormal { color: #92400e; background: #fffbeb; font-weight: 700; }
   .obs-cell { color: #6b7280; font-style: italic; font-size: 9.5px; }
   .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 10.5px; font-weight: 700; color: #92400e; background: #fef3c7; }
-  .footer { border-top: 1px solid #e5e7eb; padding-top: 7px; margin-top: 18px; display: flex; justify-content: space-between; color: #9ca3af; font-size: 8.5px; }
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 `;
 
@@ -391,8 +388,6 @@ export function gerarHtmlExameCompra(
   ex:     ExameCompraPrintItem,
   animal?: ExameCompraPrintAnimal | null,
 ): string {
-  const logoUrl = resolverUrlAbsoluta(animal?.logoUrl);
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let laudo: any = parseLaudo(ex.observacao);
 
@@ -435,15 +430,6 @@ export function gerarHtmlExameCompra(
       </div>
     </div>`;
 
-  // ── Assinatura ──────────────────────────────────────────────────────────────
-  const sigBlock = ex.veterinario ? `
-    <div style="margin-top:36px;display:flex;justify-content:flex-end;">
-      <div style="text-align:center;width:210px;">
-        <div style="border-top:1px solid #374151;padding-top:5px;font-size:10px;font-weight:600;color:#374151;">${esc(ex.veterinario.fullName)}</div>
-        <div style="font-size:8.5px;color:#9ca3af;margin-top:2px;">Médico Veterinário Responsável</div>
-      </div>
-    </div>` : '';
-
   // ── Justificativa de alteração ──────────────────────────────────────────────
   const justificativaBlock = laudo?.justificativa ? `
     <div style="margin-top:10px;padding:8px 12px;background:#fffbeb;border:1px solid #fcd34d;border-radius:4px;">
@@ -453,12 +439,9 @@ export function gerarHtmlExameCompra(
 
   // ── Corpo ───────────────────────────────────────────────────────────────────
   const body = `
-  <div class="header">
-    <div>
-      ${logoUrl ? `<img class="brand-logo" src="${logoUrl}" alt="Logo">` : `<h1>S2Vet</h1>`}
-      <p class="sub">Sistema Hospitalar Veterinário · Módulo Clínico</p>
-      <p class="sub" style="margin-top:3px;">Emitido em: ${new Date().toLocaleString('pt-BR')}</p>
-    </div>
+  ${renderCabecalho(animal?.logoUrl)}
+
+  <div class="doc-info-row">
     <div style="text-align:right;">
       <p style="font-size:9.5px;color:#9ca3af;margin-bottom:4px;">LAUDO DE EXAME DE COMPRA</p>
       <span class="badge">Compra Equina</span>
@@ -516,12 +499,11 @@ export function gerarHtmlExameCompra(
     <p style="font-size:11px;color:#111;line-height:1.6;white-space:pre-line;">${esc(laudo.conclusao)}</p>
   </div>` : ''}
 
-  ${sigBlock}
+  <div class="ps-footer">
+    <span>Exame de Compra Equino ${fmtNumero(ex.numero)}</span>
+  </div>
 
-  <div class="footer">
-    <span>S2Vet · Sistema Hospitalar Veterinário · Exame de Compra Equino ${fmtNumero(ex.numero)}</span>
-    <span>Emitido em ${new Date().toLocaleString('pt-BR')}</span>
-  </div>`;
+  ${renderRodapeAssinatura(ex.veterinario, 'Médico Veterinário Responsável')}`;
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -540,27 +522,7 @@ export function imprimirExameCompra(
   ex:      ExameCompraPrintItem,
   animal?: ExameCompraPrintAnimal | null,
 ): void {
-  const iframe = document.createElement('iframe');
-  Object.assign(iframe.style, {
-    position: 'fixed', top: '-9999px', left: '-9999px',
-    width: '0', height: '0', border: 'none',
-  });
-  document.body.appendChild(iframe);
-
-  const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
-  if (!doc) { document.body.removeChild(iframe); return; }
-
-  doc.open();
-  doc.write(gerarHtmlExameCompra(ex, animal));
-  doc.close();
-
-  setTimeout(() => {
-    iframe.contentWindow?.focus();
-    iframe.contentWindow?.print();
-    setTimeout(() => {
-      if (document.body.contains(iframe)) document.body.removeChild(iframe);
-    }, 500);
-  }, 250);
+  imprimirHtml(gerarHtmlExameCompra(ex, animal));
 }
 
 // ─── Abrir em nova aba (para salvar como PDF e compartilhar) ──────────────────

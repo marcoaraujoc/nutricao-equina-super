@@ -38,6 +38,7 @@ interface Meta { total: number; page: number; limit: number; totalPages: number 
 type FiltroCategoria = '' | 'EXCLUSAO' | 'CANCELAMENTO' | 'CONFIGURACAO' | 'TRANSFERENCIA' | 'ALTERACAO' | 'CRIACAO' | 'EXECUCAO';
 
 const ENTIDADE_LABEL: Record<string, string> = {
+  ANIMAL:            'Paciente',
   EVOLUCAO:          'Evolução',
   PRESCRICAO:        'Prescrição',
   PRESCRICAO_ITEM:   'Item de prescrição',
@@ -57,6 +58,8 @@ const ENTIDADE_LABEL: Record<string, string> = {
   FORNECEDOR:        'Fornecedor',
   PRESTADOR:         'Prestador',
   TRATADOR:          'Tratador',
+  PROPRIETARIO:      'Proprietário',
+  LOCALIZACAO:       'Localização',
 };
 
 /**

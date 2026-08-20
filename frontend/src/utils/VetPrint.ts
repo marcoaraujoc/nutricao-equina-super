@@ -3,6 +3,9 @@
 // Segue o mesmo padrão visual do Dietaprint.ts (S2Vet, verde, A4).
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeSimples } from './print/PrintShell';
+import { imprimirHtml } from './print/imprimirHtml';
+
 export interface VetPrintAnimal {
   nome:            string;
   photoUrl?:       string | null;
@@ -66,17 +69,9 @@ function formatDataBR(d: string | Date | null | undefined): string {
 // ── CSS compartilhado ─────────────────────────────────────────────────────────
 
 const BASE_CSS = `
-  @page { size: A4; margin: 18mm 20mm; }
+  ${PRINT_SHELL_CSS}
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #111; }
-
-  .sys-header {
-    display: flex; justify-content: space-between; align-items: flex-start;
-    border-bottom: 2pt solid #059669; padding-bottom: 10pt; margin-bottom: 18pt;
-  }
-  .sys-name { font-size: 22pt; font-weight: 700; color: #059669; line-height: 1; }
-  .sys-sub  { font-size: 9pt;  color: #6b7280; margin-top: 4pt; }
-  .sys-date { font-size: 9pt;  color: #9ca3af; text-align: right; line-height: 1.7; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #111; padding: 5mm 5mm 17mm; }
 
   .sec-title {
     font-size: 8pt; font-weight: 700; color: #059669;
@@ -134,13 +129,6 @@ const BASE_CSS = `
   }
   .sig-label { font-size: 9pt; color: #374151; text-align: center; }
   .sig-sub   { font-size: 8pt; color: #9ca3af; text-align: center; margin-top: 2pt; }
-
-  .footer {
-    margin-top: 16pt; padding-top: 6pt;
-    border-top: 0.5pt solid #e5e7eb;
-    font-size: 8pt; color: #9ca3af;
-    display: flex; justify-content: space-between;
-  }
 `;
 
 // ── Prescrição ─────────────────────────────────────────────────────────────────
@@ -152,9 +140,7 @@ export function imprimirPrescricaoVet(
   itens:           VetPrintPrescricaoItem[],
   dataEmissaoISO?: string,
 ): void {
-  const agora        = new Date();
-  const dataEmissao  = agora.toLocaleDateString('pt-BR');
-  const horaEmissao  = agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const dataEmissao  = new Date().toLocaleDateString('pt-BR');
   const fotoUrl      = animal?.photoUrl ?? '';
   const dataDoc      = dataEmissaoISO ? formatDataBR(dataEmissaoISO) : dataEmissao;
 
@@ -200,15 +186,7 @@ export function imprimirPrescricaoVet(
 </head>
 <body>
 
-  <div class="sys-header">
-    <div>
-      <div class="sys-name">S2Vet</div>
-      <div class="sys-sub">Sistema Hospitalar Veterinário · Prontuário Clínico</div>
-    </div>
-    <div class="sys-date">
-      Emitido em ${dataEmissao}<br>às ${horaEmissao}
-    </div>
-  </div>
+  ${renderCabecalho(null)}
 
   ${animal ? `
   <div class="sec-title">Dados do Paciente</div>
@@ -250,15 +228,10 @@ export function imprimirPrescricaoVet(
     </div>
   </div>
 
-  <div class="footer">
-    <span>S2Vet — Sistema Hospitalar Veterinário</span>
-    <span>${itens.length} item${itens.length !== 1 ? 'ns' : ''}</span>
-  </div>
+  ${renderRodapeSimples(`${itens.length} item${itens.length !== 1 ? 'ns' : ''}`)}
 
-  <script>window.onload=function(){window.print();window.onafterprint=function(){window.close();};};<\/script>
 </body>
 </html>`;
 
-  const win = window.open('', '_blank', 'width=900,height=700');
-  if (win) { win.document.write(html); win.document.close(); }
+  imprimirHtml(html);
 }

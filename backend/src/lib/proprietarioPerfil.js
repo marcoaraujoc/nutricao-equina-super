@@ -125,6 +125,59 @@ async function garantirPerfil(client, userId, empresaId, sementes = {}) {
   return salvarPerfil(client, userId, empresaId, sementes);
 }
 
+/**
+ * Anexa a trilha de ATIVAÇÃO/INATIVAÇÃO do perfil (migration
+ * `20260827000000_proprietario_perfil_ativacao_trilha`, lida por
+ * `lib/cadastroAtivacao.js` quando se tem o `id` do PERFIL) a uma lista de
+ * proprietários já mesclados por `aplicarPerfilEmLista` — que expõe `id` como o
+ * `userId`, não o `id` do perfil. Por isso a trilha é lida aqui, direto por
+ * (userId, empresaId), em vez de reusar `cadastroAtivacao#anexarTrilha`.
+ * SQL cru com fallback silencioso: funciona antes da migration ser aplicada
+ * (client Prisma pode não conhecer as colunas ainda).
+ */
+async function anexarTrilhaAtivacaoEmLista(proprietarios, empresaId, client = prisma) {
+  if (!empresaId || !Array.isArray(proprietarios) || proprietarios.length === 0) return proprietarios;
+  const userIds = proprietarios.map(p => p.id);
+  let linhas;
+  // `inativo_motivo` (migration 20260901000000) pode ainda não existir no banco
+  // — tenta com a coluna, e se a query falhar por causa dela, cai para a forma
+  // antiga (sem motivo) em vez de deixar a lista de Proprietários inteira sem
+  // a trilha de ativação/inativação.
+  try {
+    linhas = await client.$queryRawUnsafe(
+      `SELECT pp.user_id AS "userId", pp.ativo_em AS "ativoEm", pp.inativo_em AS "inativoEm",
+              ap."fullName" AS "ativoPorNome", ip."fullName" AS "inativoPorNome",
+              pp.inativo_motivo AS "inativoMotivo"
+         FROM schs2vet.tb_proprietario_perfis pp
+         LEFT JOIN schs2vet.users ap ON ap.id = pp.ativo_por_id
+         LEFT JOIN schs2vet.users ip ON ip.id = pp.inativo_por_id
+        WHERE pp.empresa_id = $1 AND pp.user_id = ANY($2::int[])`,
+      Number(empresaId), userIds,
+    );
+  } catch {
+    try {
+      linhas = await client.$queryRawUnsafe(
+        `SELECT pp.user_id AS "userId", pp.ativo_em AS "ativoEm", pp.inativo_em AS "inativoEm",
+                ap."fullName" AS "ativoPorNome", ip."fullName" AS "inativoPorNome"
+           FROM schs2vet.tb_proprietario_perfis pp
+           LEFT JOIN schs2vet.users ap ON ap.id = pp.ativo_por_id
+           LEFT JOIN schs2vet.users ip ON ip.id = pp.inativo_por_id
+          WHERE pp.empresa_id = $1 AND pp.user_id = ANY($2::int[])`,
+        Number(empresaId), userIds,
+      );
+    } catch {
+      return proprietarios;
+    }
+  }
+  const mapa = new Map(linhas.map(l => [Number(l.userId), l]));
+  return proprietarios.map(p => {
+    const t = mapa.get(p.id);
+    return t
+      ? { ...p, ativoEm: t.ativoEm, ativoPorNome: t.ativoPorNome, inativoEm: t.inativoEm, inativoPorNome: t.inativoPorNome, inativoMotivo: t.inativoMotivo ?? null }
+      : p;
+  });
+}
+
 module.exports = {
   CAMPOS_PERFIL,
   SELECT_PERFIL,
@@ -135,4 +188,5 @@ module.exports = {
   aplicarPerfilEmRelacao,
   salvarPerfil,
   garantirPerfil,
+  anexarTrilhaAtivacaoEmLista,
 };

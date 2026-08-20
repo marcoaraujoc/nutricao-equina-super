@@ -5,7 +5,7 @@ const prisma = require('../lib/prisma').default;
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
 const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
-const { registrarAuditoria } = require('../lib/auditoria');
+const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 
 // Whitelist fixa SAIU (2026-08-25) — o tipo de fornecedor agora vem do catálogo
 // tenant-scoped (tb_catalogo_tipo_servico, CatalogoTipoServicoController), que
@@ -227,6 +227,18 @@ const FornecedorController = {
         });
       }
 
+      // Fornecedor nasce ativo=true (default do schema): grava a trilha de ativação
+      // também na CRIAÇÃO, senão "Ativado em/por" fica vazio até alguém desativar
+      // e reativar o registro.
+      await registrarAtivacao(prisma, 'fornecedor', fornecedor.id, req.user.id);
+
+      await registrarAuditoria(prisma, req, {
+        categoria:  'CRIACAO',
+        entidade:   'FORNECEDOR',
+        entidadeId: fornecedor.id,
+        detalhes:   `${fornecedor.nome} — ${fornecedor.tipoServico}`,
+      });
+
       res.status(201).json({ sucesso: true, dados: fornecedor });
     } catch (err) {
       console.error('Erro ao criar fornecedor:', err);
@@ -311,6 +323,25 @@ const FornecedorController = {
         await prisma.fornecedorEspecialidade.deleteMany({ where: { fornecedorId: fornecedor.id } });
       }
 
+      await registrarAlteracao(prisma, req, {
+        entidade:   'FORNECEDOR',
+        entidadeId: Number(id),
+        campos: {
+          'nome':               { de: existe.nome,        para: fornecedor.nome },
+          'CPF':                { de: existe.cpf,         para: fornecedor.cpf },
+          'CNPJ':               { de: existe.cnpj,        para: fornecedor.cnpj },
+          'telefone':           { de: existe.telefone,    para: fornecedor.telefone },
+          'e-mail':             { de: existe.email,       para: fornecedor.email },
+          'tipo de fornecedor': { de: existe.tipoServico, para: fornecedor.tipoServico },
+          'CEP':                { de: existe.cep,         para: fornecedor.cep },
+          'endereço':           { de: existe.endereco,    para: fornecedor.endereco },
+          'complemento':        { de: existe.complemento, para: fornecedor.complemento },
+          'bairro':             { de: existe.bairro,      para: fornecedor.bairro },
+          'cidade':             { de: existe.cidade,      para: fornecedor.cidade },
+          'estado':             { de: existe.estado,      para: fornecedor.estado },
+        },
+      });
+
       res.json({ sucesso: true, dados: fornecedor });
     } catch (err) {
       if (err.code === 'P2025')
@@ -323,14 +354,21 @@ const FornecedorController = {
   // PATCH /api/cadastro/fornecedores/:id/toggle — escopado por empresa/equipe (checkPermission na rota)
   toggleAtivo: async (req, res) => {
     try {
+      const { motivo } = req.body ?? {};
       const existe = await prisma.fornecedor.findUnique({ where: { id: Number(req.params.id) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Fornecedor não encontrado' });
       if (!podeAlterarRegistroEscopado(existe, req))
         return res.status(403).json({ sucesso: false, mensagem: 'Você não tem acesso para alterar este fornecedor.' });
 
       const vaiInativar = existe.ativo;
+
+      // Justificativa obrigatória só para INATIVAR — ativar não pede motivo.
+      if (vaiInativar && !motivo?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da inativação' });
+      }
+
       if (vaiInativar) {
-        await registrarInativacao(prisma, 'fornecedor', existe.id, req.user.id);
+        await registrarInativacao(prisma, 'fornecedor', existe.id, req.user.id, motivo.trim());
       } else {
         await registrarAtivacao(prisma, 'fornecedor', existe.id, req.user.id);
       }
@@ -341,6 +379,7 @@ const FornecedorController = {
         categoria: 'ALTERACAO',
         entidade:  'FORNECEDOR',
         entidadeId: existe.id,
+        motivo:    vaiInativar ? motivo.trim() : null,
         detalhes:  `${req.user.fullName ?? req.user.email} ${vaiInativar ? 'inativou' : 'ativou'} o fornecedor ${existe.nome}`,
       });
 

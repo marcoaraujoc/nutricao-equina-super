@@ -13,6 +13,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { Syringe } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -37,12 +38,14 @@ type AnimalExtended = SelectedAnimal & {
 interface EvolucaoAtiva {
   id:                number;
   atendimentoNumero: string | null;
+  veterinarioId:     number | null;
 }
 
 export default function Vacina() {
   const { animalId: animalIdParam } = useParams<{ animalId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const { user } = useAuth();
   const { selectedAnimal, setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
   const { loading: empresaLoading, contextoAtivo } = useEmpresa();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
@@ -82,13 +85,22 @@ export default function Vacina() {
   const carregarEvolucaoAtiva = useCallback(async () => {
     if (!effectiveAnimalId) { setEvolucaoAtiva(null); return; }
     try {
-      const res = await api.get(`/clinica/evolucoes/animal/${effectiveAnimalId}?status=EM_ANDAMENTO&limit=1&page=1`);
-      const dados = res.data?.dados ?? [];
-      setEvolucaoAtiva(dados.length > 0
-        ? { id: dados[0].id, atendimentoNumero: dados[0].atendimentoNumero ?? null }
-        : null);
+      // limit=20 (era 1) + "a MINHA vence": com atendimento em PARALELO o animal pode
+      // ter mais de uma evolução aberta, e pegar "a primeira" da API (de qualquer
+      // profissional) fazia a tela adotar a de OUTRO como se fosse a ativa — mesmo
+      // bug já corrigido em Atendimento.tsx#carregarEvolucaoAtiva.
+      const res = await api.get(`/clinica/evolucoes/animal/${effectiveAnimalId}?status=EM_ANDAMENTO&limit=20&page=1`);
+      const dados: { id: number; veterinarioId?: number | null; atendimentoNumero?: string | null }[] = res.data?.dados ?? [];
+      if (dados.length === 0) { setEvolucaoAtiva(null); return; }
+      const minhas = dados.filter(e => e.veterinarioId === (user?.id ?? 0));
+      const ev = minhas[0] ?? dados[0];
+      setEvolucaoAtiva({
+        id:                ev.id,
+        atendimentoNumero: ev.atendimentoNumero ?? null,
+        veterinarioId:     ev.veterinarioId ?? null,
+      });
     } catch { /* silencioso */ }
-  }, [effectiveAnimalId]);
+  }, [effectiveAnimalId, user?.id]);
 
   // ⚠️ DEPENDER SÓ DE [effectiveAnimalId, loadingPerms] — nunca das funções.
   // `setSelectedAnimal` e `refreshSelectedAnimal` do SelectedAnimalContext NÃO são

@@ -220,10 +220,14 @@ const atendimento = async (req, res) => {
     // janela de dataHora) — evita misturar "agendadas" (agenda) com "realizadas"
     // (evolução), que podiam divergir. "agendadas" = total marcado no período,
     // qualquer status; os outros 3 são subconjuntos por status.
+    // "canceladas" soma CANCELADO (desistência humana) + CANCELADO_AUTOMATICAMENTE (a
+    // rotina noturna encerrou sozinha) — para este número gerencial as duas são a MESMA
+    // coisa: o atendimento não aconteceu. A distinção entre quem cancelou fica para a
+    // Auditoria, não para este agregado.
     const [agendadas, realizadas, canceladas, naoRealizadas, procedimentos, exames] = await Promise.all([
       prisma.agendamentoClinico.count({ where: { ativo: true, dataHora: { gte: inicio, lte: fim }, ...escopoAnimal } }),
       prisma.agendamentoClinico.count({ where: { ativo: true, status: { in: ['CONCLUIDO', 'FINALIZADO'] }, dataHora: { gte: inicio, lte: fim }, ...escopoAnimal } }),
-      prisma.agendamentoClinico.count({ where: { ativo: true, status: 'CANCELADO', dataHora: { gte: inicio, lte: fim }, ...escopoAnimal } }),
+      prisma.agendamentoClinico.count({ where: { ativo: true, status: { in: ['CANCELADO', 'CANCELADO_AUTOMATICAMENTE'] }, dataHora: { gte: inicio, lte: fim }, ...escopoAnimal } }),
       // ATRASADA = já passou do horário (+30min) e ainda não foi concluída nem cancelada
       prisma.agendamentoClinico.count({ where: { ativo: true, status: 'ATRASADA', dataHora: { gte: inicio, lte: fim }, ...escopoAnimal } }),
       prisma.prescricao.count({         where: { ativo: true, tipo: 'PROCEDIMENTO', executadoEm:     { gte: inicio, lte: fim }, ...escopoAnimal } }),

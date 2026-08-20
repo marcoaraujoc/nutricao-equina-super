@@ -22,7 +22,9 @@ const ORDINAIS = [
   'Primeira', 'Segunda', 'Terceira', 'Quarta', 'Quinta', 'Sexta', 'Sétima', 'Oitava', 'Nona', 'Décima',
 ];
 
-function ordinal(n: number): string {
+/** Exportado — reusado pela Execução de Prescrição na linha "Aguardando execução
+ *  da Xª Dose" (referencia a dose ATUAL, a que está bloqueando a próxima). */
+export function ordinal(n: number): string {
   return n <= ORDINAIS.length ? ORDINAIS[n - 1] : `${n}ª`;
 }
 

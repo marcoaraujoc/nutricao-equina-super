@@ -2,6 +2,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { animalVisivelNaEmpresa } = require('../lib/visibilidade');
 const {
   resolverEscopo,
   carregarAnimaisComUltimoAtendimento,
@@ -36,7 +37,9 @@ const stats = async (req, res) => {
     inicioJanela.setDate(inicioJanela.getDate() - 29);
     inicioJanela.setHours(0, 0, 0, 0);
 
-    const animalWhere      = { ativo: true,  ...(empresaId ? { empresaId } : {}) };
+    // `animalVisivelNaEmpresa` também exclui o animal cujo dono foi inativado NESTA
+    // empresa — `ativo:true` sozinho deixava esse caso passar.
+    const animalWhere      = { ...animalVisivelNaEmpresa(empresaId), ...(empresaId ? { empresaId } : {}) };
     const evolucaoWhere    = { ativo: true,  ...(empresaId ? { animal: { empresaId } } : {}) };
     const prescricaoWhere  = { ativo: true,  ...(empresaId ? { animal: { empresaId } } : {}) };
 

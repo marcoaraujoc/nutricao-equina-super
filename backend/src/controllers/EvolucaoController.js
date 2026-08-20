@@ -6,6 +6,7 @@ const fs     = require('fs');
 const path   = require('path');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { animalEstaInativo } = require('../lib/animalInativo');
+const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const { storage } = require('../storage');
 const { escopoEvolucaoWhere }   = require('../lib/clinicalScope');
 // Rastro de "assumido de quem" no agendamento arrastado junto (SQL cru)
@@ -44,10 +45,12 @@ const INCLUDE_PADRAO = {
 // HELPER — registrar audit log
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function registrarAuditoria(userId, userName, email, action) {
+async function registrarAuditoria(userId, userName, email, action, empresaId = null) {
   try {
+    // RLS de tb_audit_logs exige empresaId = app_empresa_id() da sessão (fase 7c,
+    // sem escape para NULL) — omitir o campo grava NULL e a policy recusa o INSERT.
     await prisma.auditLog.create({
-      data: { userId, userName, email, action, timestamp: new Date() },
+      data: { userId, userName, email, action, empresaId, timestamp: new Date() },
     });
   } catch (err) {
     console.error('Erro ao registrar auditoria:', err);
@@ -66,6 +69,9 @@ const {
 const { podeOperarRegistro, ehGestorNoContexto } = require('../middlewares/permissao.middleware');
 // Assumir a evolução arrasta prescrição, exame, encaminhamento e vacina do atendimento
 const { transferirFilhosDasEvolucoes } = require('../lib/transferenciaAtendimento');
+// Cancelar/excluir a evolução cancela junto tudo que está atrelado a ela (prescrição,
+// procedimento, exame, encaminhamento, vacina) e estorna o item já lançado na fatura
+const { cancelarPendenciasDaEvolucao } = require('../lib/cancelamentoPendencias');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COMUNICAÇÃO ENTRE PROFISSIONAIS (e-mail + WhatsApp)
@@ -300,6 +306,12 @@ const EvolucaoController = {
         return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       }
 
+      if (await animalFoiExcluido(animalId)) {
+        return res.status(400).json({
+          sucesso: false, mensagem: 'Paciente inativado — reative-o na tela de Pacientes antes de registrar algo novo.',
+          code: 'PACIENTE_EXCLUIDO',
+        });
+      }
       if (await animalEstaInativo(animalId)) {
         return res.status(400).json({
           sucesso: false, mensagem: 'Paciente inativo — reative com o gestor antes de registrar algo novo.',
@@ -314,15 +326,25 @@ const EvolucaoController = {
         orderBy: { dataInicio: 'desc' },
         select: {
           id: true, numero: true, tipoAtendimento: true, dataInicio: true,
-          especialidade: true, titulo: true, veterinarioId: true,
+          especialidade: true, titulo: true, veterinarioId: true, agendamentoId: true,
           veterinario: { select: { id: true, fullName: true } },
         },
       });
 
-      // A PRÓPRIA evolução aberta BLOQUEIA — e nem `confirmarConcorrente` derruba
-      // isso: ninguém atende a si mesmo em paralelo no mesmo paciente. Finalize ou
-      // cancele a que você abriu antes de abrir outra.
-      const minhaAberta = abertas.find(e => Number(e.veterinarioId) === Number(userId));
+      // A PRÓPRIA evolução aberta só BLOQUEIA quando é a MESMA CONSULTA — sem
+      // agendamento (avulsa, ambígua por natureza: duas avulsas do mesmo animal são
+      // indistinguíveis) ou vinculada ao MESMO agendamento que já está aberto (reenvio/
+      // duplo clique). Vinculada a um AGENDAMENTO DIFERENTE é uma consulta DISTINTA —
+      // ex.: a mesma pessoa assumiu a consulta Clínica e a de Dermatologia do mesmo
+      // animal no mesmo dia — e não bloqueia: nem `confirmarConcorrente` é necessário,
+      // porque não há nada "concorrente" com outro profissional aqui, é a própria
+      // pessoa conduzindo dois atendimentos paralelos legítimos. `agendamentoId` é o
+      // que prova a distinção; sem ele (avulsa) não há como provar nada, então bloqueia.
+      const minhaAberta = abertas.find(e => {
+        if (Number(e.veterinarioId) !== Number(userId)) return false;
+        if (!agendamentoId) return true;
+        return Number(e.agendamentoId) === Number(agendamentoId);
+      });
       if (minhaAberta) {
         return res.status(400).json({
           sucesso:  false,
@@ -332,8 +354,11 @@ const EvolucaoController = {
       }
 
       // Aberta por OUTRO profissional: exige decisão explícita (assumir OU criar
-      // uma nova em paralelo, reenviando com `confirmarConcorrente`).
-      const evolucaoAberta = abertas[0] ?? null;
+      // uma nova em paralelo, reenviando com `confirmarConcorrente`). Evoluções MINHAS
+      // que passaram pelo bloqueio acima (agendamento diferente = consulta distinta)
+      // NUNCA entram aqui — não faz sentido "assumir" ou confirmar concorrência com
+      // algo que já é meu.
+      const evolucaoAberta = abertas.find(e => Number(e.veterinarioId) !== Number(userId)) ?? null;
       if (evolucaoAberta && !confirmarConcorrente) {
         return res.status(409).json({
           sucesso:  false,
@@ -439,7 +464,8 @@ const EvolucaoController = {
         userId,
         req.user.fullName,
         req.user.email,
-        `EVOLUCAO_CRIADA | id=${evolucao.id} | animal=${animalId} | num=${evolucao.tipoAtendimento}-${evolucao.numero} | status=${status}`
+        `EVOLUCAO_CRIADA | id=${evolucao.id} | animal=${animalId} | num=${evolucao.tipoAtendimento}-${evolucao.numero} | status=${status}`,
+        req.empresaId ?? null
       );
 
       // Atendimento em paralelo: o outro profissional (só chega aqui a evolução
@@ -639,7 +665,8 @@ const EvolucaoController = {
         userId,
         req.user.fullName,
         req.user.email,
-        `EVOLUCAO_EDITADA | id=${id} | animal=${existente.animalId} | status=${status ?? existente.status} | responsavelAnterior=${existente.veterinarioId} | responsavelNovo=${novoVetId}`
+        `EVOLUCAO_EDITADA | id=${id} | animal=${existente.animalId} | status=${status ?? existente.status} | responsavelAnterior=${existente.veterinarioId} | responsavelNovo=${novoVetId}`,
+        req.empresaId ?? null
       );
 
       res.json({ sucesso: true, dados: atualizada, acoesIA });
@@ -710,6 +737,12 @@ const EvolucaoController = {
       }
 
       await prisma.$transaction(async (tx) => {
+        // Tudo que estava atrelado a esta evolução (prescrição/procedimento, exame,
+        // encaminhamento, vacina ainda pendentes) cancela junto, com estorno do que
+        // já tinha ido para a fatura — senão a evolução some da tela mas deixa
+        // pendência clínica órfã por trás (ver cancelamentoPendencias.js).
+        await cancelarPendenciasDaEvolucao(tx, Number(id), req, justificativa.trim());
+
         await tx.evolucaoClinica.update({
           where: { id: Number(id) },
           data: {
@@ -776,6 +809,12 @@ const EvolucaoController = {
       }
 
       const cancelada = await prisma.$transaction(async (tx) => {
+        // Tudo que está atrelado a esta evolução (prescrição/procedimento, exame,
+        // encaminhamento, vacina ainda pendentes) cancela junto, com estorno do que
+        // já tinha ido para a fatura — cancelar a evolução não pode deixar a
+        // prescrição/exame "em aberto" sem ninguém mais conduzindo o atendimento.
+        await cancelarPendenciasDaEvolucao(tx, Number(id), req, justificativa.trim());
+
         const upd = await tx.evolucaoClinica.update({
           where: { id: Number(id) },
           data: {
@@ -952,7 +991,8 @@ const EvolucaoController = {
         userId,
         req.user.fullName,
         req.user.email,
-        `EVOLUCAO_ASSUMIDA | id=${existente.id} | animal=${existente.animalId} | de=${anteriorId ?? '-'} | para=${userId} | arrastados=${movidos.length}`
+        `EVOLUCAO_ASSUMIDA | id=${existente.id} | animal=${existente.animalId} | de=${anteriorId ?? '-'} | para=${userId} | arrastados=${movidos.length}`,
+        req.empresaId ?? null
       );
 
       notificarEvolucao({
@@ -1021,7 +1061,8 @@ const EvolucaoController = {
         userId,
         req.user.fullName,
         req.user.email,
-        `EVOLUCAO_APROVADA | id=${id} | animal=${existente.animalId}`
+        `EVOLUCAO_APROVADA | id=${id} | animal=${existente.animalId}`,
+        req.empresaId ?? null
       );
 
       res.json({ sucesso: true, dados: aprovada });

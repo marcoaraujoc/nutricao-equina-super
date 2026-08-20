@@ -15,7 +15,9 @@ export interface PrintItemPrescricao {
   dataInicio:       string;
 }
 
-import { resolverUrlAbsoluta } from './printUrl';
+import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeSimples } from './print/PrintShell';
+import { imprimirHtml } from './print/imprimirHtml';
+import { DOSES_POR_DIA } from './posologia';
 
 export interface PrintAnimalPrescricao {
   nome:     string;
@@ -115,7 +117,6 @@ function labelFrequencia(freq: string, horarios: string[] | null): string {
 
 export function gerarHtmlPrescricao(g: PrintGrupoPrescricao): string {
   const { animal } = g;
-  const logoUrl     = resolverUrlAbsoluta(animal.logoUrl);
   const statusLabel = STATUS_LABEL[g.status] ?? g.status;
   const statusColor = STATUS_COLOR[g.status] ?? '#6b7280';
   const statusBg    = STATUS_BG[g.status]    ?? '#f3f4f6';
@@ -142,19 +143,35 @@ export function gerarHtmlPrescricao(g: PrintGrupoPrescricao): string {
           </tr>
         </thead>
         <tbody>
-          ${itens.map(i => `
+          ${itens.map(i => {
+            // "1x a cada N dias" (inclui "1x por semana"): MESMA regra do ItemRow da
+            // tela de Prescrição — `duracaoDias` é guardado em DIAS (vezes × intervalo,
+            // para o backend contar as doses certas), mas aqui se exibe em VEZES, e o
+            // "Dt Fim" é a data da ÚLTIMA dose (início + (vezes-1)×intervalo), não
+            // início+duracaoDias-1 — que sobraria além do curso real.
+            const dosesPorDiaItem = DOSES_POR_DIA[i.frequencia] ?? 1;
+            const intervaloDiasItem = dosesPorDiaItem < 1 ? Math.round(1 / dosesPorDiaItem) : null;
+            const vezesItem = intervaloDiasItem ? Math.max(1, Math.round(i.duracaoDias / intervaloDiasItem)) : null;
+            const duracaoTxt = intervaloDiasItem
+              ? `${vezesItem}x`
+              : `${i.duracaoDias} dia${i.duracaoDias !== 1 ? 's' : ''}`;
+            const dtFim = i.dataInicio && i.duracaoDias
+              ? calcDataFim(i.dataInicio, intervaloDiasItem && vezesItem ? (vezesItem - 1) * intervaloDiasItem + 1 : i.duracaoDias)
+              : '—';
+            return `
             <tr>
               <td><strong>${esc(i.medicamento)}</strong></td>
               <td>${i.dosagem ? `${esc(i.dosagem)}${i.unidade ? ' ' + esc(i.unidade) : ''}` : '—'}</td>
               <td>${i.via ? esc(i.via) : '—'}</td>
               <td>${esc(labelFrequencia(i.frequencia, i.horariosGerados))}</td>
               <td>${i.horaInicio ? esc(i.horaInicio) : '—'}</td>
-              <td>${i.duracaoDias} dia${i.duracaoDias !== 1 ? 's' : ''}</td>
+              <td>${duracaoTxt}</td>
               <td>${fmtDate(i.dataInicio)}</td>
-              <td>${i.dataInicio && i.duracaoDias ? calcDataFim(i.dataInicio, i.duracaoDias) : '—'}</td>
+              <td>${dtFim}</td>
               <td>${i.observacao ? esc(i.observacao) : '—'}</td>
             </tr>
-          `).join('')}
+          `;
+          }).join('')}
         </tbody>
       </table>
     `;
@@ -166,15 +183,9 @@ export function gerarHtmlPrescricao(g: PrintGrupoPrescricao): string {
   <meta charset="UTF-8">
   <title>Prescrição #${g.numeroFormatado} — S2Vet</title>
   <style>
-    @page { size: A4; margin: 16mm 20mm; }
+    ${PRINT_SHELL_CSS}
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: Arial, sans-serif; font-size: 11px; color: #111; background: #fff; }
-
-    .header { border-bottom: 2px solid #059669; padding-bottom: 10px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: flex-end; }
-    .header h1 { font-size: 20px; font-weight: 700; color: #059669; }
-    .brand-logo { max-height: 32px; max-width: 200px; object-fit: contain; }
-    .header .sub { font-size: 10px; color: #6b7280; margin-top: 2px; }
-    .header .emissao { font-size: 9px; color: #9ca3af; text-align: right; }
+    body { font-family: Arial, sans-serif; font-size: 11px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
 
     .numero { font-size: 22px; font-weight: 800; color: #059669; font-family: monospace; }
 
@@ -209,7 +220,7 @@ export function gerarHtmlPrescricao(g: PrintGrupoPrescricao): string {
     .assinatura-linha { border-top: 1px solid #374151; padding-top: 6px; font-size: 10px; color: #374151; font-weight: 600; }
     .assinatura-sub { font-size: 9px; color: #9ca3af; margin-top: 2px; }
 
-    .footer { border-top: 1px solid #e5e7eb; padding-top: 8px; margin-top: 20px; display: flex; justify-content: space-between; color: #9ca3af; font-size: 9px; }
+    .doc-numero-row { display: flex; justify-content: flex-end; margin-bottom: 12px; }
 
     @media print {
       body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -218,12 +229,9 @@ export function gerarHtmlPrescricao(g: PrintGrupoPrescricao): string {
 </head>
 <body>
 
-  <div class="header">
-    <div>
-      ${logoUrl ? `<img class="brand-logo" src="${logoUrl}" alt="Logo">` : `<h1>S2Vet</h1>`}
-      <p class="sub">Sistema Hospitalar Veterinário · Módulo Clínico</p>
-      <p class="sub" style="margin-top:4px">Emitido em: ${new Date().toLocaleString('pt-BR')}</p>
-    </div>
+  ${renderCabecalho(animal.logoUrl)}
+
+  <div class="doc-numero-row">
     <div style="text-align:right">
       <p style="font-size:10px;color:#9ca3af;margin-bottom:2px">PRESCRIÇÃO</p>
       <p class="numero">#${esc(g.numeroFormatado)}</p>
@@ -282,10 +290,7 @@ export function gerarHtmlPrescricao(g: PrintGrupoPrescricao): string {
     `}
   </div>
 
-  <div class="footer">
-    <span>S2Vet · Sistema Hospitalar Veterinário</span>
-    <span>Prescrição #${esc(g.numeroFormatado)}</span>
-  </div>
+  ${renderRodapeSimples(`Prescrição #${esc(g.numeroFormatado)}`)}
 
 </body>
 </html>`;
@@ -294,25 +299,5 @@ export function gerarHtmlPrescricao(g: PrintGrupoPrescricao): string {
 // ─── Função principal ─────────────────────────────────────────────────────────
 
 export function imprimirPrescricao(g: PrintGrupoPrescricao): void {
-  const iframe = document.createElement('iframe');
-  Object.assign(iframe.style, {
-    position: 'fixed', top: '-9999px', left: '-9999px',
-    width: '0', height: '0', border: 'none',
-  });
-  document.body.appendChild(iframe);
-
-  const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
-  if (!doc) { document.body.removeChild(iframe); return; }
-
-  doc.open();
-  doc.write(gerarHtmlPrescricao(g));
-  doc.close();
-
-  setTimeout(() => {
-    iframe.contentWindow?.focus();
-    iframe.contentWindow?.print();
-    setTimeout(() => {
-      if (document.body.contains(iframe)) document.body.removeChild(iframe);
-    }, 500);
-  }, 250);
+  imprimirHtml(gerarHtmlPrescricao(g));
 }

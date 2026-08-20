@@ -256,18 +256,27 @@ function SeletorArquivo({ multiple, onEscolher, onFoto }: {
 // Mesmo formulário, sempre, nas DUAS situações — `ex` só muda o TÍTULO/subtítulo,
 // o endpoint (PATCH .../resultado × POST /nao-pedido, decidido por quem chama), o
 // `exameId` mandado à IA (evita falso "já carregado" contra o próprio pedido) e
-// SE os campos vêm pré-preenchidos: só quando `ex` JÁ TEM um resultado salvo
-// (edição, via "Editar" em Exames.tsx) — a fila de pendentes nunca tem, então
-// começa em branco por definição (ver `jaTemResultado` no corpo). Data do exame
-// fica sem uso quando `ex` existe — nada aqui lê/grava a data do pedido. SEM
+// SE os campos vêm pré-preenchidos:
+//   descrição/laboratório → sempre que `ex` existe, mesmo PENDENTE — são dados do
+//     PEDIDO (capturados na Evolução/Pedido de Exames, antes de existir qualquer
+//     resultado), não do resultado; reaproveitá-los evita reescrever o que já foi
+//     informado e é por isso que o campo não carrega mais um exemplo genérico
+//     (Hemograma/Raio-X de tórax) — o valor real já chega pronto.
+//   laudo/tabela → só quando `ex` JÁ TEM um resultado salvo (edição, via "Editar"
+//     em Exames.tsx); a fila de pendentes nunca tem, então começa em branco por
+//     definição (ver `jaTemResultado` no corpo) — é o RESULTADO em si, que ainda
+//     não existe.
+// Data do exame fica sem uso quando `ex` existe — é a data IMPRESSA no laudo
+// (que a IA extrai do arquivo), não a data em que o pedido foi feito. SEM
 // seletor de "Tipo do exame" — o tipo é sempre conhecido (o do pedido) ou
 // detectado pela IA, nunca escolhido.
 export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, somenteLeitura, arquivosSalvos, onVerArquivo, onClose, onSalvar }: {
   /** Exame PEDIDO — presente quando é "Carregar/Editar Resultados"; `null` no
    *  fluxo avulso "Carregar Exames sem Pedido". Decide texto do cabeçalho,
-   *  endpoint (via quem chama), o `exameId` da análise e SE os campos vêm
-   *  pré-preenchidos: só quando já existe um resultado salvo nele (edição),
-   *  nunca quando é a fila de pendentes (ver `jaTemResultado` no corpo). */
+   *  endpoint (via quem chama), o `exameId` da análise, e pré-preenche
+   *  descrição/laboratório (dados do PEDIDO, disponíveis mesmo pendente) — o
+   *  laudo/tabela só vêm quando já existe um resultado salvo (ver
+   *  `jaTemResultado` no corpo). */
   ex:       ExameSolicitado | null;
   /** Aba atual ('laboratorial' | 'imagem') — só usada quando `ex` é `null`, para
    *  decidir o tipo padrão (a IA pode corrigir para Bioquímico depois). */
@@ -291,19 +300,22 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
     laudo: string; itens: ItemManual[]; arquivos: File[];
   }) => void;
 }) {
-  // `ex` PENDENTE (fila de "aguardando resultado") nunca tem laudo/laboratório/
-  // tabela salvos ainda — começa em branco por definição. `ex` JÁ REALIZADO
-  // (aberto pelo "Editar" em Exames.tsx) tem, e é isso que esta tela edita: tem
-  // de vir com o que já foi salvo, senão "editar" apaga o resultado por engano.
-  // `temResultadoExame` (mesmo critério do badge "Realizado"/"Finalizado sem
-  // Resultado") é o que distingue os dois — não dá para usar só `!!ex`.
+  // `ex` PENDENTE (fila de "aguardando resultado") já tem descrição/laboratório
+  // (do pedido), mas nunca tem laudo/tabela salvos ainda — esses começam em
+  // branco por definição. `ex` JÁ REALIZADO (aberto pelo "Editar" em Exames.tsx)
+  // tem os dois, e é isso que esta tela edita: tem de vir com o que já foi
+  // salvo, senão "editar" apaga o resultado por engano. `temResultadoExame`
+  // (mesmo critério do badge "Realizado"/"Finalizado sem Resultado") é o que
+  // distingue os dois — não dá para usar só `!!ex`.
   const jaTemResultado = !!ex && temResultadoExame(ex);
 
   const [tipo,        setTipo]        = useState<TipoExame>(ex ? ex.tipo : (tipoAba === 'imagem' ? 'Imagem' : 'Laboratorial'));
-  const [descricao,   setDescricao]   = useState(jaTemResultado ? (ex?.descricao ?? '') : '');
+  // Descrição/laboratório vêm do PEDIDO (já existem antes do resultado) — ver
+  // comentário do componente. `ex` cobre pendente E já realizado.
+  const [descricao,   setDescricao]   = useState(ex?.descricao ?? '');
   const [dataExame,   setDataExame]   = useState('');
   const [laudo,       setLaudo]       = useState(jaTemResultado ? (ex?.resultado ?? '') : '');
-  const [laboratorio, setLaboratorio] = useState(jaTemResultado ? (ex?.laboratorio ?? '') : '');
+  const [laboratorio, setLaboratorio] = useState(ex?.laboratorio ?? '');
   const [itens,       setItens]       = useState<ItemManual[]>(
     jaTemResultado && ex && ex.resultadoItens.length > 0
       ? ex.resultadoItens.map(i => ({ parametro: i.parametro, valor: i.valor ?? '', unidade: i.unidade ?? '', referencia: i.referencia ?? '' }))
@@ -439,7 +451,7 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
                 Descrição do exame *
               </label>
               <input type="text" value={descricao} onChange={e => setDescricao(e.target.value)}
-                placeholder="Ex: Hemograma completo, Raio-X de tórax..."
+                placeholder="Nome do exame"
                 className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500" />
             </div>
 
@@ -684,11 +696,21 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
   const [salvandoCancelamento, setSalvandoCancelamento] = useState(false);
   const [erroCancelamento,  setErroCancelamento]  = useState<string | null>(null);
 
+  // Guarda a chamada MAIS RECENTE — trocar de aba (Laboratorial ↔ Imagem no submenu
+  // do Sidebar) refaz o fetch com o `tipo` novo, mas a resposta da aba ANTERIOR pode
+  // chegar DEPOIS (rede fora de ordem). Sem este guard, a resposta atrasada
+  // sobrescrevia a lista com o `tipo` errado — era assim que um pedido de Imagem
+  // aparecia na tela de resultado Laboratorial (ou vice-versa) depois de trocar de
+  // aba rápido. Só a chamada cujo id ainda é o mais recente pode gravar estado.
+  const requestIdRef = useRef(0);
+
   const carregar = useCallback(async () => {
     if (!animalId) return;
+    const meuRequestId = ++requestIdRef.current;
     setCarregando(true);
     try {
       const res = await api.get(`/clinica/exames/animal/${animalId}`);
+      if (requestIdRef.current !== meuRequestId) return; // resposta desatualizada
       // GET 403 resolve com data null (interceptor) — sem guard, estoura TypeError
       if (!res.data) { setPendentes([]); onRealizadosChange?.([]); return; }
       const permitidos = tiposDaAba(tipo);
@@ -702,9 +724,10 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
       setPendentes(lista.filter(ex => !encerrado(ex)));
       onRealizadosChange?.(lista.filter(encerrado));
     } catch {
+      if (requestIdRef.current !== meuRequestId) return;
       setErro('Erro ao carregar os exames solicitados');
     } finally {
-      setCarregando(false);
+      if (requestIdRef.current === meuRequestId) setCarregando(false);
     }
   }, [animalId, tipo, onRealizadosChange]);
 

@@ -10,6 +10,7 @@ const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFat
 const { registrarAuditoria, registrarAlteracao, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 const { animalEstaInativo } = require('../lib/animalInativo');
+const { animalFoiExcluido } = require('../lib/animalAtivacao');
 
 const INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -77,7 +78,26 @@ const EncaminhamentoController = {
         prisma.encaminhamentoClinico.count({ where }),
       ]);
 
-      res.json({ dados: items, total });
+      // Justificativa do CANCELAMENTO — o registro não tem coluna própria para isso
+      // (o `motivo` que ele já tem é o do ENCAMINHAMENTO em si, preenchido na criação);
+      // o texto do cancelamento só existe no AuditLog, gravado por `atualizarStatus`.
+      // Sem migration: um SELECT pontual, só para os cancelados da página.
+      const idsCancelados = items.filter(it => it.status === 'CANCELADO').map(it => it.id);
+      let dados = items;
+      if (idsCancelados.length > 0) {
+        const logs = await prisma.auditLog.findMany({
+          where:   { categoria: 'CANCELAMENTO', entidade: 'ENCAMINHAMENTO', entidadeId: { in: idsCancelados } },
+          orderBy: { timestamp: 'desc' },
+          select:  { entidadeId: true, motivo: true },
+        });
+        const motivoPorId = new Map();
+        for (const log of logs) if (!motivoPorId.has(log.entidadeId)) motivoPorId.set(log.entidadeId, log.motivo);
+        dados = items.map(it => it.status === 'CANCELADO'
+          ? { ...it, justificativaCancelamento: motivoPorId.get(it.id) ?? null }
+          : it);
+      }
+
+      res.json({ dados, total });
     } catch (err) {
       console.error('Erro ao listar encaminhamentos:', err);
       res.status(500).json({ error: 'Erro ao listar encaminhamentos' });
@@ -267,6 +287,9 @@ const EncaminhamentoController = {
       if (!evolucaoId) {
         return res.status(400).json({ error: 'evolucaoId é obrigatório', code: 'EVOLUCAO_REQUIRED' });
       }
+      if (await animalFoiExcluido(animalId)) {
+        return res.status(400).json({ error: 'Paciente inativado — reative-o na tela de Pacientes antes de registrar algo novo.', code: 'PACIENTE_EXCLUIDO' });
+      }
       if (await animalEstaInativo(animalId)) {
         return res.status(400).json({ error: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
       }
@@ -274,13 +297,21 @@ const EncaminhamentoController = {
       // Valida que a evolução existe e pertence ao animal
       const evolucao = await prisma.evolucaoClinica.findFirst({
         where:  { id: Number(evolucaoId), animalId: Number(animalId), ativo: true },
-        select: { id: true, numero: true, tipoAtendimento: true },
+        select: { id: true, numero: true, tipoAtendimento: true, veterinarioId: true },
       });
       if (!evolucao) return res.status(400).json({ error: 'Evolução não encontrada para este animal', code: 'EVOLUCAO_NOT_FOUND' });
 
       const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+
+      // Autoria: encaminhar dentro do atendimento de outro profissional é operar um
+      // documento que não é seu — mesma regra de atualizar/finalizar/excluir, só que
+      // aqui é ANTES do registro existir. Quem não conduz a evolução (não criou nem
+      // assumiu) só encaminha depois de assumi-la.
+      if (!podeOperarRegistro(req, evolucao.veterinarioId)) {
+        return res.status(403).json({ error: 'Só é possível encaminhar dentro de uma evolução sua. Assuma o atendimento antes de encaminhar.' });
+      }
 
       let equipeDesignacao = null;
       if (prestadorId) {

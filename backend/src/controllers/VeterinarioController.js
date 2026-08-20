@@ -11,6 +11,9 @@ const {
   whereProprietarioNoEscopo,
   whereEhClienteDaEmpresa,
 } = require('./ProprietarioController');
+// Proprietário INATIVADO nesta empresa (removerDaEmpresa) não pode aparecer aqui —
+// fonte única em lib/visibilidade.js, mesma regra aplicada a Animal.
+const { proprietarioAtivoNaEmpresa } = require('../lib/visibilidade');
 
 const prisma = new PrismaClient();
 
@@ -133,6 +136,11 @@ const VeterinarioController = {
       }
 
       const where = { ativo: true, AND: [whereEhClienteDaEmpresa(req.empresaId)] };
+
+      // Proprietário removido DESTA empresa (ProprietarioPerfil.ativo=false) não pode
+      // aparecer — mesma regra de `animalVisivelNaEmpresa`, aplicada ao cliente direto.
+      const filtroPerfilAtivo = proprietarioAtivoNaEmpresa(req.empresaId).user;
+      if (filtroPerfilAtivo?.OR) where.AND.push({ OR: filtroPerfilAtivo.OR });
 
       if (!isAdmin) {
         const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);

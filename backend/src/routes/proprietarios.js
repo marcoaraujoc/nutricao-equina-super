@@ -11,7 +11,8 @@ router.get   ('/',           authenticate, checkPermission('cadastro.proprietari
 router.post  ('/',           authenticate, checkPermission('cadastro.proprietario.criar',   'PROPRIO'), ProprietarioController.criar);
 router.get   ('/:id',        authenticate, checkPermission('cadastro.proprietario.ler',    'LEITURA'), ProprietarioController.obterPorId);
 router.put   ('/:id',        authenticate, checkPermission('cadastro.proprietario.editar',  'PROPRIO'), ProprietarioController.atualizar);
-router.patch ('/:id/toggle', authenticate, checkPermission('cadastro.proprietario.ativar',  'PROPRIO'), ProprietarioController.toggleAtivo);
-router.delete('/:id',        authenticate, checkPermission('cadastro.proprietario.deletar', 'PROPRIO'), ProprietarioController.removerDaEmpresa);
+router.patch ('/:id/toggle',   authenticate, checkPermission('cadastro.proprietario.ativar',  'PROPRIO'), ProprietarioController.toggleAtivo);
+router.patch ('/:id/reativar', authenticate, checkPermission('cadastro.proprietario.ativar',  'PROPRIO'), ProprietarioController.reativar);
+router.delete('/:id',          authenticate, checkPermission('cadastro.proprietario.deletar', 'PROPRIO'), ProprietarioController.removerDaEmpresa);
 
 module.exports = router;

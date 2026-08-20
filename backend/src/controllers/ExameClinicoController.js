@@ -8,6 +8,7 @@ const { lancarExameNaFatura, removerFaturaItensDaOrigem, atualizarFaturaItensDaO
 const { registrarAuditoria, registrarAlteracao, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro, getNivelEfetivo, NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
 const { animalEstaInativo } = require('../lib/animalInativo');
+const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const { processarExame, processarBuffer, processarLaudoImagem, processarLaudoImagemBuffer, ArquivoSemTranscricaoError } = require('../services/exameParserService');
 const { storage }        = require('../storage');
 
@@ -170,6 +171,22 @@ const ExameClinicoController = {
       });
 
       const dados = itens.map(it => ({ ...it, laboratorio: laboratorioDoExame(it) }));
+
+      // Justificativa do CANCELAMENTO (exame inativo, ativo:false) — o registro não tem
+      // coluna própria para isso (só `ativo`); o texto só existe no AuditLog, gravado
+      // por `excluir`. Sem migration: um SELECT pontual, só para os inativos da página.
+      const idsInativos = dados.filter(d => !d.ativo).map(d => d.id);
+      if (idsInativos.length > 0) {
+        const logs = await prisma.auditLog.findMany({
+          where:   { categoria: 'CANCELAMENTO', entidade: 'EXAME_CLINICO', entidadeId: { in: idsInativos } },
+          orderBy: { timestamp: 'desc' },
+          select:  { entidadeId: true, motivo: true },
+        });
+        const motivoPorId = new Map();
+        for (const log of logs) if (!motivoPorId.has(log.entidadeId)) motivoPorId.set(log.entidadeId, log.motivo);
+        for (const d of dados) if (!d.ativo) d.justificativa = motivoPorId.get(d.id) ?? null;
+      }
+
       res.json({ dados, meta: { total: dados.length } });
     } catch (err) {
       console.error('Erro ao listar exames clínicos:', err);
@@ -199,6 +216,9 @@ const ExameClinicoController = {
       });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
+      if (await animalFoiExcluido(animalId)) {
+        return res.status(400).json({ error: 'Paciente inativado — reative-o na tela de Pacientes antes de registrar algo novo.', code: 'PACIENTE_EXCLUIDO' });
+      }
       if (await animalEstaInativo(animalId)) {
         return res.status(400).json({ error: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
       }
@@ -207,9 +227,17 @@ const ExameClinicoController = {
       if (evolucaoId) {
         const evolucao = await prisma.evolucaoClinica.findFirst({
           where:  { id: Number(evolucaoId), animalId: Number(animalId), ativo: true },
-          select: { id: true },
+          select: { id: true, veterinarioId: true },
         });
         if (!evolucao) return res.status(400).json({ error: 'Evolução não encontrada para este animal', code: 'EVOLUCAO_NOT_FOUND' });
+
+        // Autoria: pedir exame dentro do atendimento de outro profissional é operar
+        // um documento que não é seu — mesma regra de atualizar/finalizar/excluir,
+        // só que aqui é ANTES do registro existir. Quem não conduz a evolução (não
+        // criou nem assumiu) só pede exame depois de assumi-la.
+        if (!podeOperarRegistro(req, evolucao.veterinarioId)) {
+          return res.status(403).json({ error: 'Só é possível pedir exame dentro de uma evolução sua. Assuma o atendimento antes de pedir exames.' });
+        }
       }
 
       // Campos extras armazenados em observacao como JSON
@@ -422,6 +450,9 @@ const ExameClinicoController = {
       });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
+      if (await animalFoiExcluido(animalId)) {
+        return res.status(400).json({ error: 'Paciente inativado — reative-o na tela de Pacientes antes de registrar algo novo.', code: 'PACIENTE_EXCLUIDO' });
+      }
       if (await animalEstaInativo(animalId)) {
         return res.status(400).json({ error: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
       }

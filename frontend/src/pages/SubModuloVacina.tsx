@@ -18,7 +18,9 @@ import {
 } from '../utils/PrescricaoPrint';
 import InlineError from '../components/InlineError';
 import ErroAcao, { classeErro, type ErroAcaoDados } from '../components/ErroAcao';
+import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import { formatNumeroClinico, numeroClinicoComHash } from '../utils/numeroClinico';
+import { DOSES, INTERVALO_REFORCO_MESES, VIAS_PADRAO, normalizeVia } from '../utils/vacina';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -66,6 +68,7 @@ interface VacinaClinica {
   numero:            number | null;
   tipoAtendimento:   string | null;
   nome:              string;
+  medicamentoCatId?: number | null;
   fabricante:        string | null;
   lote:              string | null;
   dose:              string | null;
@@ -106,54 +109,8 @@ const STATUS_VACINA: Record<StatusVacina, { label: string; cls: string }> = {
 const STATUS_ORDER: StatusVacina[] = ['SALVA', 'FINALIZADA', 'EXECUTADA', 'CANCELADA'];
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-// Tipo de dose, em ordem CRESCENTE. "Reforço Mensal"/"Reforço Anual" disparam o
-// agendamento automático das doses seguintes na execução (ver INTERVALO_REFORCO_MESES).
-const DOSES = [
-  '1ª Dose',
-  '2ª Dose',
-  '3ª Dose',
-  'Dose Única',
-  'Reforço Mensal',
-  'Reforço Anual',
-];
-
-// Reforço periódico → intervalo entre as doses, em MESES. Tipo fora deste mapa não
-// gera agendamento automático (dose avulsa//série sem periodicidade definida).
-const INTERVALO_REFORCO_MESES: Record<string, number> = {
-  'Reforço Mensal': 1,
-  'Reforço Anual':  12,
-};
-
-const VIAS_PADRAO = [
-  'Subcutânea (SC)',
-  'Intramuscular (IM)',
-  'Intranasal (IN)',
-  'Intravenosa (IV)',
-  'Oral',
-];
-
-const VIA_PREFIXES: [string, string][] = [
-  ['SUBCUTÂNEA',    'Subcutânea (SC)'],
-  ['SC',            'Subcutânea (SC)'],
-  ['INTRAMUSCULAR', 'Intramuscular (IM)'],
-  ['IM',            'Intramuscular (IM)'],
-  ['INTRANASAL',    'Intranasal (IN)'],
-  ['IN',            'Intranasal (IN)'],
-  ['INTRAVENOSA',   'Intravenosa (IV)'],
-  ['IV',            'Intravenosa (IV)'],
-  ['ORAL',          'Oral'],
-];
-
-function normalizeVia(via: string): string {
-  const u = via.trim().toUpperCase();
-  for (const [prefix, canonical] of VIA_PREFIXES) {
-    if (u === prefix || u.startsWith(prefix + ' ') || u.startsWith(prefix + '(') || u.startsWith(prefix + ',')) {
-      return canonical;
-    }
-  }
-  return via;
-}
+// DOSES/INTERVALO_REFORCO_MESES/VIAS_PADRAO/normalizeVia vêm de utils/vacina.ts —
+// fonte única, reusada pelo Orçamento (aba Vacinas) para capturar os mesmos campos.
 
 // Impressão da vacina reutiliza o MESMO gerador de HTML da prescrição
 // (gerarHtmlPrescricao/imprimirPrescricao em PrescricaoPrint.ts) — a vacina vira
@@ -535,8 +492,12 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   const [saving,      setSaving]      = useState(false);
   const [viewingV,    setViewingV]    = useState<VacinaClinica | null>(null);
   const [excluindoId, setExcluindoId] = useState<number | null>(null);
-  const [finalizandoId, setFinalizandoId] = useState<number | null>(null);
   const [filtroStatus, setFiltroStatus] = useState<FiltroStatus>('todos');
+  // Vacina SALVA do histórico em edição no formulário principal — mesmo fluxo do
+  // "Alterar" da prescrição (handleEditarServer): carrega os dados na tela principal
+  // em vez de abrir modal. Distinto de `editandoKey` (edição de item ainda em rascunho,
+  // não persistido).
+  const [editandoHistoricoId, setEditandoHistoricoId] = useState<number | null>(null);
 
   const [page, setPage] = useState(1);
   const limit = 10;
@@ -588,8 +549,11 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
         nome:             i.descricao,
         quantidade:       i.quantidade || 1,
         dataAplicacao:    hoje(),
-        dose:             '',
-        via:              vias.length === 1 ? vias[0] : '',
+        // Tipo Dose/Via foram capturados no orçamento (aba Vacinas) — vêm prontos.
+        // Item de orçamento ANTERIOR a essa captura (legado) chega sem os dois:
+        // Via cai no mesmo heurístico de sempre (só se o catálogo tiver 1 via só).
+        dose:             i.tipoDose || '',
+        via:              i.via || (vias.length === 1 ? vias[0] : ''),
         loteId:           '',
         cliente:          false,
         aplicadaPeloProprietario: false,
@@ -638,9 +602,10 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
     }
     setSaving(true);
     let ok = 0;
+    const criadosIds: number[] = [];
     try {
       for (const item of itens) {
-        await api.post('/clinica/vacinas', {
+        const res = await api.post('/clinica/vacinas', {
           animalId,
           medicamentoCatId: item.medicamentoCatId,
           ...(evolucaoId  && { evolucaoId }),
@@ -653,12 +618,30 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
           dataAplicacao: item.dataAplicacao,
           observacao: item.observacao.trim() || null,
         });
+        if (res.data?.dados?.id) criadosIds.push(res.data.dados.id);
         ok++;
       }
       // Salvou tudo → só agora marca os itens de ORÇAMENTO como importados
       // (orcamentoItemId 0 = item inserido manualmente, não vem de orçamento)
       await marcarOrcamentoImportado(itens.filter(i => i.orcamentoItemId > 0).map(i => i.orcamentoItemId));
-      toast.success(`${ok} vacina(s) registrada(s)`);
+
+      // Finaliza automaticamente — mesma unificação da prescrição (o rótulo "Finalizar"
+      // do botão principal grava E finaliza numa ação só, quando o perfil finaliza; sem
+      // a permissão, a vacina fica SALVA como antes). Sem isto o histórico ganhava um
+      // botão "Finalizar" por item só para cobrir o que este clique já deveria ter feito.
+      let finalizadas = 0;
+      if (podeFinalizar) {
+        for (const id of criadosIds) {
+          try { await api.patch(`/clinica/vacinas/${id}/finalizar`); finalizadas++; }
+          catch { /* item fica SALVA — segue disponível para editar e tentar de novo */ }
+        }
+      }
+
+      toast.success(
+        finalizadas === criadosIds.length && finalizadas > 0
+          ? `${finalizadas} vacina(s) finalizada(s) com sucesso`
+          : `${ok} vacina(s) registrada(s)`
+      );
       setItensImport([]);
       limparForm();
       setPage(1);
@@ -685,9 +668,10 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   const podeDeletar   = isGestor || podeExecutar('atendimento.vacinas.deletar');
   const podeImprimir  = isGestor || podeExecutar('atendimento.vacinas.imprimir');
   const podeFinalizar = isGestor || podeExecutar('atendimento.vacinas.finalizar');
-  // Só o gestor exclui/finaliza vacina de outro; os demais só as que registraram.
-  const podeExcluirVac   = (v: VacinaClinica) => podeDeletar   && (isGestor || v.veterinario?.id === user?.id);
-  const podeFinalizarVac = (v: VacinaClinica) => podeFinalizar && (isGestor || v.veterinario?.id === user?.id);
+  const podeEditar    = isGestor || podeExecutar('atendimento.vacinas.editar');
+  // Só o gestor exclui/finaliza/altera vacina de outro; os demais só as que registraram.
+  const podeExcluirVac = (v: VacinaClinica) => podeDeletar && (isGestor || v.veterinario?.id === user?.id);
+  const podeEditarVac  = (v: VacinaClinica) => podeEditar  && (isGestor || v.veterinario?.id === user?.id);
 
   // Mesma assinatura da prescrição: com id, o aviso nasce NA LINHA; sem id, no formulário.
   const semPermissao = (acao: string, id?: number) => {
@@ -766,7 +750,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
     }
   }, [medicamentoId, catalogo]);
 
-  const fetchLotes = useCallback(async (medId: number) => {
+  const fetchLotes = useCallback(async (medId: number, preferLoteId?: number) => {
     setLoadingLotes(true);
     setLoteId('');
     setLotesDisponiveis([]);
@@ -777,7 +761,8 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
       if (!res.data) return;
       const lotes: LoteDisponivel[] = res.data?.dados ?? [];
       setLotesDisponiveis(lotes);
-      if (lotes.length === 1) setLoteId(lotes[0].id);
+      if (preferLoteId != null && lotes.some(l => l.id === preferLoteId)) setLoteId(preferLoteId);
+      else if (lotes.length === 1) setLoteId(lotes[0].id);
     } catch { /* silencioso */ }
     finally { setLoadingLotes(false); }
   }, []);
@@ -832,6 +817,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   // Carrega um item importado NO FORMULÁRIO para edição (mesmo fluxo da prescrição).
   const editarNoForm = (item: VacImport) => {
     carregandoEdicaoRef.current = true; // impede os efeitos de resetarem lote/via
+    setEditandoHistoricoId(null); // os dois modos de edição são mutuamente exclusivos
     setEditandoKey(item.key);
     setMedicamentoId(item.medicamentoCatId ?? '');
     setLotesDisponiveis(item.lotes);
@@ -855,6 +841,14 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   const salvarEdicaoForm = () => {
     if (!editandoKey) return;
     if (!medicamentoId) { setErroForm({ mensagem: 'Selecione a vacina', campos: ['medicamento'] }); return; }
+    // Mesma checagem do Inserir: o item editado não pode voltar para a lista sem
+    // dose/via, senão o erro só apareceria de novo no Finalizar.
+    if (!String(dose ?? '').trim()) {
+      setErroForm({ mensagem: 'Informe o tipo de dose antes de atualizar o item.', campos: ['dose'] }); return;
+    }
+    if (!String(via ?? '').trim()) {
+      setErroForm({ mensagem: 'Informe a via de aplicação antes de atualizar o item.', campos: ['via'] }); return;
+    }
     patchImport(editandoKey, {
       medicamentoCatId: typeof medicamentoId === 'number' ? medicamentoId : null,
       nome:             medSelecionado?.nome ?? undefined,
@@ -899,6 +893,15 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   const handleInserir = () => {
     if (!podeCriar)     { semPermissao('registrar vacinas'); return; }
     if (!medicamentoId) { setErroForm({ mensagem: 'Selecione a vacina', campos: ['medicamento'] }); return; }
+    // Dose e via são OBRIGATÓRIAS (mesma checagem de `salvarItens`, mas aqui ANTES de
+    // entrar na lista — deixar inserir sem elas só adiava o erro para o Finalizar,
+    // com o item já preso na lista sem sinalização nenhuma de qual campo faltava).
+    if (!String(dose ?? '').trim()) {
+      setErroForm({ mensagem: 'Informe o tipo de dose antes de inserir.', campos: ['dose'] }); return;
+    }
+    if (!String(via ?? '').trim()) {
+      setErroForm({ mensagem: 'Informe a via de aplicação antes de inserir.', campos: ['via'] }); return;
+    }
     setErroForm(null);
     setItensImport(prev => [...prev, itemDoFormulario()]);
     limparForm();
@@ -943,19 +946,61 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
     executarSalvar();
   };
 
-  const handleFinalizar = async (v: VacinaClinica) => {
-    if (!podeFinalizarVac(v)) { semPermissao('finalizar vacina', v.id); return; }
-    setErroLinha(null);
-    setFinalizandoId(v.id);
+  // Carrega uma vacina SALVA do HISTÓRICO no formulário principal para edição — mesmo
+  // fluxo do "Alterar" da prescrição (`handleEditarServer`). Só é oferecido enquanto a
+  // vacina segue SALVA: depois de finalizada ela pode ter fatura/estoque envolvidos.
+  const editarHistoricoNoForm = (v: VacinaClinica) => {
+    if (!podeEditarVac(v)) { semPermissao('alterar vacina', v.id); return; }
+    carregandoEdicaoRef.current = true; // impede os efeitos reativos de resetar via/lote
+    setEditandoKey(null); // os dois modos de edição são mutuamente exclusivos
+    setEditandoHistoricoId(v.id);
+    setErroForm(null);
+    setMedicamentoId(v.medicamentoCatId ?? '');
+    setDose(v.dose ?? '');
+    setQtd(v.quantidade ?? 1);
+    setCliente(v.cliente);
+    setAplicadaPeloProprietario(v.aplicadaPeloProprietario);
+    setDataAplicacao(v.dataAplicacao.slice(0, 10));
+    setVia(v.via ?? '');
+    setObservacao(v.observacao ?? '');
+    setBuscaMed('');
+    setDropdownMedAberto(false);
+    if (v.medicamentoCatId) fetchLotes(v.medicamentoCatId, v.loteVacina?.id);
+    else { setLotesDisponiveis([]); setLoteId(''); }
+    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const cancelarEdicaoHistorico = () => { setEditandoHistoricoId(null); limparForm(); };
+
+  // Grava a alteração da vacina SALVA (PUT) — não passa pelo "Salvar"/"Inserir", que
+  // são exclusivos de registro NOVO.
+  const salvarEdicaoHistorico = async () => {
+    if (editandoHistoricoId == null) return;
+    if (!medicamentoId) { setErroForm({ mensagem: 'Selecione a vacina', campos: ['medicamento'] }); return; }
+    if (!String(dose ?? '').trim()) { setErroForm({ mensagem: 'Informe a dose', campos: ['dose'] }); return; }
+    if (!String(via ?? '').trim())  { setErroForm({ mensagem: 'Informe a via de administração', campos: ['via'] }); return; }
+    setErroForm(null);
+    setSaving(true);
     try {
-      await api.patch(`/clinica/vacinas/${v.id}/finalizar`);
-      toast.success('Vacina finalizada');
+      await api.put(`/clinica/vacinas/${editandoHistoricoId}`, {
+        medicamentoCatId: medicamentoId,
+        ...(loteId && { loteId }),
+        dose:       dose || null,
+        quantidade: qtd,
+        cliente,
+        aplicadaPeloProprietario,
+        via:        via || null,
+        dataAplicacao,
+        observacao: observacao.trim() || null,
+      });
+      toast.success('Vacina atualizada');
+      cancelarEdicaoHistorico();
       carregarHistorico();
       onSalvo?.();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroLinha({ id: v.id, mensagem: msg ?? 'Erro ao finalizar vacina' });
-    } finally { setFinalizandoId(null); }
+      setErroForm({ mensagem: msg ?? 'Erro ao atualizar vacina' });
+    } finally { setSaving(false); }
   };
 
   const handleExcluirSolicitado = (id: number) => {
@@ -1026,11 +1071,19 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
             />
           )}
 
-          {/* Aviso de edição de item importado */}
+          {/* Aviso de edição de item importado (ainda não gravado) */}
           {editandoKey && (
             <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-700">
               <Pencil size={12} />
               Editando um item importado — ajuste os campos e clique em <b>Atualizar item</b>.
+            </div>
+          )}
+
+          {/* Aviso de edição de vacina JÁ SALVA do histórico */}
+          {editandoHistoricoId != null && (
+            <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-xl bg-orange-50 border border-orange-200 text-xs text-orange-700">
+              <Pencil size={12} />
+              Editando a vacina do histórico — ajuste os campos e clique em <b>Atualizar vacina</b>.
             </div>
           )}
 
@@ -1153,7 +1206,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
             </div>
 
             <div className="sm:col-span-2">
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">VIA APLICAÇÃO</label>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">VIA APLICAÇÃO *</label>
               <select value={via} onChange={e => setVia(e.target.value)}
                 className={classeErro(erroForm, 'via', `w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-emerald-500 bg-white ${!via ? 'text-gray-400' : 'text-gray-900'}`)}>
                 <option value="">Selecione…</option>
@@ -1165,7 +1218,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
           {/* Linha 2: Tipo Dose / Qtd Doses / Data Aplicação */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
             <div>
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">TIPO DOSE</label>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">TIPO DOSE *</label>
               <select value={dose} onChange={e => setDose(e.target.value)}
                 className={classeErro(erroForm, 'dose', `w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-emerald-500 bg-white ${!dose ? 'text-gray-400' : 'text-gray-900'}`)}>
                 <option value="">Selecione…</option>
@@ -1237,10 +1290,24 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
             </label>
 
             {/* Inserir + Finalizar na MESMA LINHA dos checkboxes, encostados à direita
-                (`ml-auto`) — é onde eles vivem na prescrição. Editando um item da lista,
-                o par vira Cancelar + Atualizar item. */}
+                (`ml-auto`) — é onde eles vivem na prescrição. Editando um item da lista
+                (ainda não gravado), o par vira Cancelar + Atualizar item; editando uma
+                vacina JÁ SALVA do histórico, vira Cancelar + Atualizar vacina. */}
             <div className="flex items-center gap-2 ml-auto">
-              {editandoKey ? (
+              {editandoHistoricoId != null ? (
+                <>
+                  <button onClick={cancelarEdicaoHistorico}
+                    className="px-4 py-2 border border-gray-200 text-gray-600 text-sm font-semibold rounded-xl hover:bg-gray-50 transition-colors">
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={salvarEdicaoHistorico}
+                    disabled={saving || !medicamentoId || loadingLotes || (lotesDisponiveis.length > 1 && !loteId)}
+                    className="flex items-center gap-1.5 px-5 py-2 border border-orange-500 text-orange-600 hover:bg-orange-50 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-semibold rounded-xl transition-colors">
+                    {saving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} Atualizar vacina
+                  </button>
+                </>
+              ) : editandoKey ? (
                 <>
                   <button onClick={cancelarEdicaoForm}
                     className="px-4 py-2 border border-gray-200 text-gray-600 text-sm font-semibold rounded-xl hover:bg-gray-50 transition-colors">
@@ -1417,16 +1484,28 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                     </p>
                   )}
                   {v.veterinario && <p className="text-[11px] text-gray-400 mt-0.5">Por: {v.veterinario.fullName}</p>}
+                  {status === 'CANCELADA' && v.motivoInativacao && (
+                    <p className="text-[11px] text-gray-400 mt-0.5">
+                      Justificativa:{' '}
+                      <JustificativaCancelamento texto={v.motivoInativacao} className="inline-block align-bottom max-w-[70vw]" />
+                    </p>
+                  )}
 
                   <div className="flex flex-wrap gap-2 mt-2">
+                    {status === 'SALVA' && v.ativo && podeEditarVac(v) && (
+                      <button onClick={() => editarHistoricoNoForm(v)}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-orange-200 text-orange-600 rounded-lg text-xs hover:bg-orange-50 transition-colors">
+                        <Pencil size={11} /> Alterar
+                      </button>
+                    )}
                     <button onClick={() => setViewingV(v)}
                       className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
                       <Eye size={11} /> Visualizar
                     </button>
-                    {status === 'SALVA' && v.ativo && podeFinalizarVac(v) && (
-                      <button onClick={() => handleFinalizar(v)} disabled={finalizandoId === v.id}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors disabled:opacity-50">
-                        {finalizandoId === v.id ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />} Finalizar
+                    {podeImprimir && (
+                      <button onClick={() => imprimirVacina(v, animal)}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-blue-200 text-blue-600 rounded-lg text-xs hover:bg-blue-50 transition-colors">
+                        <Printer size={11} /> Imprimir
                       </button>
                     )}
                     {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
@@ -1440,12 +1519,6 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                       <button onClick={() => abrirEmail(`Vacina - ${v.nome}`, montarTextoVacina(v))}
                         className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
                         <Mail size={11} /> E-mail
-                      </button>
-                    )}
-                    {podeImprimir && (
-                      <button onClick={() => imprimirVacina(v, animal)}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-blue-200 text-blue-600 rounded-lg text-xs hover:bg-blue-50 transition-colors">
-                        <Printer size={11} /> Imprimir
                       </button>
                     )}
                     {podeExcluirVac(v) && v.ativo && (
@@ -1470,16 +1543,17 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">ID</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nº</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Aplicação</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Vacina</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Dose</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Qtd</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Lote</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Via</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Aplicação</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Executor</th>
-                  <th className="px-4 py-3"></th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
@@ -1497,6 +1571,14 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                             </button>
                           : <span className="text-gray-300">—</span>
                         }
+                      </td>
+                      <td className="px-4 py-3 text-xs text-gray-700 whitespace-nowrap">
+                        {formatDate(v.dataAplicacao)}
+                        {v.dataReforco && (
+                          <p className={`text-[10px] mt-0.5 ${reforcoVencido(v) ? 'text-red-500 font-medium' : 'text-gray-400'}`}>
+                            Reforço: {formatDate(v.dataReforco)} {reforcoVencido(v) && '⚠'}
+                          </p>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5 flex-wrap">
@@ -1520,38 +1602,47 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                         )}
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-600">{v.via ?? <span className="text-gray-300">—</span>}</td>
-                      <td className="px-4 py-3 text-xs text-gray-700 whitespace-nowrap">
-                        {formatDate(v.dataAplicacao)}
-                        {v.dataReforco && (
-                          <p className={`text-[10px] mt-0.5 ${reforcoVencido(v) ? 'text-red-500 font-medium' : 'text-gray-400'}`}>
-                            Reforço: {formatDate(v.dataReforco)} {reforcoVencido(v) && '⚠'}
-                          </p>
-                        )}
-                      </td>
                       <td className="px-4 py-3">
                         <StatusBadge status={status} />
+                      </td>
+                      <td className="px-4 py-3 text-xs">
+                        {status === 'CANCELADA'
+                          ? <JustificativaCancelamento texto={v.motivoInativacao} />
+                          : <span className="text-gray-300">—</span>}
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-600">
                         {v.veterinario?.fullName ?? <span className="text-gray-300">—</span>}
                       </td>
                       <td className="px-4 py-3">
-                        {/* Cores por AÇÃO (CLAUDE.md §6): ver/finalizar = emerald,
-                            imprimir = azul, cancelar = vermelho. */}
+                        {/* Cores por AÇÃO (CLAUDE.md §6): alterar = laranja, ver = emerald,
+                            imprimir = azul, whatsapp = verde, e-mail = azul, cancelar = vermelho. */}
                         <div className="flex items-center gap-1">
+                          {status === 'SALVA' && v.ativo && podeEditarVac(v) && (
+                            <button onClick={() => editarHistoricoNoForm(v)} title="Alterar vacina"
+                              className="p-1.5 text-orange-600 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
+                              <Pencil size={13} />
+                            </button>
+                          )}
                           <button onClick={() => setViewingV(v)} title="Visualizar"
                             className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                             <Eye size={13} />
                           </button>
-                          {status === 'SALVA' && v.ativo && podeFinalizarVac(v) && (
-                            <button onClick={() => handleFinalizar(v)} disabled={finalizandoId === v.id} title="Finalizar vacina"
-                              className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
-                              {finalizandoId === v.id ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
-                            </button>
-                          )}
                           {podeImprimir && (
                             <button onClick={() => imprimirVacina(v, animal)} title="Imprimir vacina"
                               className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
                               <Printer size={13} />
+                            </button>
+                          )}
+                          {podeImprimir && (
+                            <button onClick={() => abrirWhatsApp(montarTextoVacina(v))} title="Enviar por WhatsApp"
+                              className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors">
+                              <MessageCircle size={13} />
+                            </button>
+                          )}
+                          {podeImprimir && (
+                            <button onClick={() => abrirEmail(`Vacina - ${v.nome}`, montarTextoVacina(v))} title="Enviar por e-mail"
+                              className="p-1.5 text-blue-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                              <Mail size={13} />
                             </button>
                           )}
                           {podeExcluirVac(v) && v.ativo && (

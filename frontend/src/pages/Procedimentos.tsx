@@ -453,7 +453,7 @@ export default function Procedimentos() {
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-center gap-1">
                           <button onClick={() => abrirEdicao(p)}
-                            className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                            className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
                             <Pencil size={13} />
                           </button>
                           <button onClick={() => setInativandoId(p.id)}
@@ -485,7 +485,7 @@ export default function Procedimentos() {
                     </div>
                     <div className="flex gap-1 flex-shrink-0">
                       <button onClick={() => abrirEdicao(p)}
-                        className="p-1.5 text-emerald-500 hover:bg-emerald-50 rounded-lg">
+                        className="p-1.5 text-orange-500 hover:bg-orange-50 rounded-lg">
                         <Pencil size={13} />
                       </button>
                       <button onClick={() => setInativandoId(p.id)}

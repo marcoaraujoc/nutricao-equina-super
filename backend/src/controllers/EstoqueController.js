@@ -3,6 +3,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { registrarAuditoria } = require('../lib/auditoria');
+const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
 
 // Calcula preço por unidade base (R$/g ou R$/mL) a partir do preço total e
 // da quantidade em sua unidade de medida. Retorna null quando não é possível
@@ -87,7 +88,8 @@ const listar = async (req, res) => {
       ...(limit ? { take: parseInt(limit, 10) } : {}),
     });
 
-    const itens = rawItens.map(({ _count, ...i }) => ({ ...i, emUso: (_count?.movimentos ?? 0) > 0 }));
+    const itensComUso  = rawItens.map(({ _count, ...i }) => ({ ...i, emUso: (_count?.movimentos ?? 0) > 0 }));
+    const itens        = await anexarTrilha(itensComUso, 'estoque_farmacia');
 
     const [total, totalControlados] = await Promise.all([
       prisma.estoqueClinica.count({ where: { ativo: true, ...(empresaId ? { empresaId } : {}) } }),
@@ -337,6 +339,53 @@ const atualizar = async (req, res) => {
   }
 };
 
+// ─── Ativar / Inativar (toggle) ───────────────────────────────────────────────
+// Mesma regra de /cadastro/fornecedores: um clique alterna o estado nos dois
+// sentidos; a trilha (quem/quando) fica em `ativo_em`/`ativo_por_id`/
+// `inativo_em`/`inativo_por_id` (lib/cadastroAtivacao.js). Justificativa
+// OBRIGATÓRIA só para INATIVAR (migration 20260901000001) — ativar segue direto.
+
+const toggle = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { motivo } = req.body ?? {};
+    const existe = await prisma.estoqueClinica.findUnique({ where: { id }, include: { medicamento: { select: { nome: true } } } });
+    if (!existe) return res.status(404).json({ error: 'Item não encontrado.' });
+    if (!pertenceAEmpresa(existe, req)) return res.status(403).json({ error: 'Acesso não autorizado.' });
+
+    const vaiInativar = existe.ativo;
+
+    if (vaiInativar && !motivo?.trim()) {
+      return res.status(400).json({ error: 'É obrigatório informar o motivo da inativação' });
+    }
+
+    if (vaiInativar) {
+      await registrarInativacao(prisma, 'estoque_farmacia', id, req.user.id, motivo.trim());
+    } else {
+      await registrarAtivacao(prisma, 'estoque_farmacia', id, req.user.id);
+    }
+
+    await registrarAuditoria(null, req, {
+      categoria:  'ALTERACAO',
+      entidade:   'ESTOQUE_FARMACIA',
+      entidadeId: id,
+      motivo:     vaiInativar ? motivo.trim() : null,
+      detalhes:   `${req.user.fullName ?? req.user.email} ${vaiInativar ? 'inativou' : 'ativou'} ${existe.medicamento?.nome ?? 'item'}${existe.lote ? ` — Lote ${existe.lote}` : ''}`,
+    });
+
+    const itemAtualizado = await prisma.estoqueClinica.findUnique({ where: { id }, include: INCLUDE });
+    const [comTrilha] = await anexarTrilha([itemAtualizado], 'estoque_farmacia');
+
+    return res.json({
+      dados:    comTrilha,
+      mensagem: vaiInativar ? 'Item inativado' : 'Item ativado',
+    });
+  } catch (err) {
+    console.error('EstoqueController.toggle:', err);
+    return res.status(500).json({ error: 'Erro ao alternar status.' });
+  }
+};
+
 // ─── Excluir (soft delete) ────────────────────────────────────────────────────
 
 const excluir = async (req, res) => {
@@ -429,4 +478,4 @@ const listarMovimentos = async (req, res) => {
   }
 };
 
-module.exports = { listar, obterPorId, criar, atualizar, excluir, ajustarEstoque, listarMovimentos };
+module.exports = { listar, obterPorId, criar, atualizar, excluir, toggle, ajustarEstoque, listarMovimentos };

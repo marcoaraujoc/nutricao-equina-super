@@ -3,7 +3,7 @@
 // Seções independentes: Diário (por período do dia) | Semanal | Mensal
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { resolverUrlAbsoluta } from './printUrl';
+import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura } from './print/PrintShell';
 
 export interface PrintAnimal {
   nome: string;
@@ -157,21 +157,12 @@ function buildGroupedHTML(itens: PrintItem[]): string {
 // ── CSS ───────────────────────────────────────────────────────────────────────
 
 const PRINT_CSS = `
-  @page { size: A4; margin: 18mm 20mm; }
+  ${PRINT_SHELL_CSS}
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #111;
-    padding: 18mm 20mm;
+    padding: 5mm 5mm 17mm;
   }
-
-  .sys-header {
-    display: flex; justify-content: space-between; align-items: flex-start;
-    border-bottom: 2pt solid #059669; padding-bottom: 10pt; margin-bottom: 18pt;
-  }
-  .sys-name { font-size: 22pt; font-weight: 700; color: #059669; line-height: 1; }
-  .brand-logo { max-height: 28pt; max-width: 160pt; object-fit: contain; }
-  .sys-sub  { font-size: 9pt;  color: #6b7280; margin-top: 4pt; }
-  .sys-date { font-size: 9pt;  color: #9ca3af; text-align: right; line-height: 1.7; }
 
   .sec-title {
     font-size: 8pt; font-weight: 700; color: #059669;
@@ -243,13 +234,6 @@ const PRINT_CSS = `
   }
   .period-table tbody tr:last-child td { border-bottom: none; }
 
-  .footer {
-    margin-top: 20pt; padding-top: 8pt;
-    border-top: 0.5pt solid #e5e7eb;
-    font-size: 8pt; color: #9ca3af;
-    display: flex; justify-content: space-between;
-  }
-
   .empty-msg { color: #9ca3af; font-size: 10pt; text-align: center; padding: 12pt; }
 `;
 
@@ -261,11 +245,7 @@ export function gerarHtmlDieta(
   itens: PrintItem[],
   user: PrintUser | null,
 ): string {
-  const agora       = new Date();
-  const dataEmissao = agora.toLocaleDateString('pt-BR');
-  const horaEmissao = agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   const fotoUrl     = animal?.photoUrl ?? 'https://picsum.photos/id/1015/400/400';
-  const logoUrl     = resolverUrlAbsoluta(animal?.logoUrl);
   const totalItens  = itens.length;
   const groupedHTML = buildGroupedHTML(itens);
 
@@ -278,15 +258,7 @@ export function gerarHtmlDieta(
 </head>
 <body>
 
-  <div class="sys-header">
-    <div>
-      ${logoUrl ? `<img class="brand-logo" src="${logoUrl}" alt="Logo">` : `<div class="sys-name">S2Vet</div>`}
-      <div class="sys-sub">Sistema Hospitalar Veterinário · Módulo Nutricional</div>
-    </div>
-    <div class="sys-date">
-      Emitido em ${dataEmissao}<br>às ${horaEmissao}
-    </div>
-  </div>
+  ${renderCabecalho(animal?.logoUrl)}
 
   <div class="sec-title">Dados do Animal</div>
   <div class="animal-card">
@@ -322,10 +294,11 @@ export function gerarHtmlDieta(
 
   ${groupedHTML}
 
-  <div class="footer">
-    <span>S2Vet — Sistema Hospitalar Veterinário</span>
+  <div class="ps-footer">
     <span>Total: ${totalItens} ${totalItens === 1 ? 'alimento' : 'alimentos'}</span>
   </div>
+
+  ${renderRodapeAssinatura(user)}
 
 </body>
 </html>`;

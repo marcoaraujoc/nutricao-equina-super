@@ -458,6 +458,17 @@ const paraAtendimento = async (req, res) => {
       };
     });
 
+    // Vacina: em estoque primeiro (alfabético), depois as sem estoque (alfabético) —
+    // pedido explícito do seletor de vacina (Orçamento e SubModuloVacina, que
+    // compartilham este endpoint). `orderBy: nome` do Prisma já deixa cada grupo
+    // alfabético; só falta separar os dois grupos.
+    if (isVacina) {
+      dados.sort((a, b) => {
+        if (a.emEstoque !== b.emEstoque) return a.emEstoque ? -1 : 1;
+        return a.nome.localeCompare(b.nome, 'pt-BR');
+      });
+    }
+
     return res.json({ dados });
   } catch (err) {
     console.error('MedicamentoController.paraAtendimento:', err);

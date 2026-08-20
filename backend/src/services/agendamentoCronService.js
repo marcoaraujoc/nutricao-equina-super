@@ -16,31 +16,73 @@
 
 const prisma = require('../lib/prisma').default;
 
-const MOTIVO_CANCELAMENTO =
+// Status próprio da rotina — nunca 'CANCELADO' puro. `CANCELADO` continua reservado à
+// desistência HUMANA (botão Cancelar, com justificativa); esta rotina grava
+// 'CANCELADO_AUTOMATICAMENTE' para que a Auditoria/relatório consigam distinguir "a
+// clínica desmarcou" de "ninguém tratou disso e o sistema encerrou sozinho no fim do
+// dia". `AgendamentoController.atualizarStatus` recusa esse valor vindo de um clique
+// humano (STATUS_SOMENTE_SISTEMA) — é EXCLUSIVO desta rotina.
+const MOTIVO_NAO_INICIADO =
   'Cancelado automaticamente pelo sistema — agendamento não realizado no dia.';
+const MOTIVO_EM_ANDAMENTO =
+  'Cancelado automaticamente pelo sistema — atendimento foi iniciado (Em Andamento) e '
+  + 'não chegou a ser concluído/finalizado até o fechamento do dia.';
+// Mantido por compatibilidade com quem já importava esta constante (ex.: testes).
+const MOTIVO_CANCELAMENTO = MOTIVO_NAO_INICIADO;
 
 /**
- * Cancela todos os agendamentos ainda AGENDADO/ATRASADA cujo horário já passou (não
- * realizados). "Realizado" = status CONCLUIDO; itens EM_ANDAMENTO (em atendimento) e
- * futuros são preservados. Grava o motivo em `observacao` (mesmo campo exibido no
- * card do dia).
+ * Cancela os agendamentos que não foram REALIZADOS no dia — cujo horário já passou e
+ * que nunca chegaram a CONCLUIDO/FINALIZADO. Cobre dois casos, com motivo próprio para
+ * cada um:
+ *   AGENDADO/ATRASADA → ninguém sequer iniciou o atendimento.
+ *   EM_ANDAMENTO      → o atendimento foi INICIADO (a evolução foi aberta a partir daqui)
+ *                       mas ficou pendurado sem nunca ser concluído/finalizado — sem
+ *                       este ramo, o agendamento ficava travado em "Em Andamento" para
+ *                       sempre, mesmo com o dia (ou vários dias) já encerrado.
+ * Só CONCLUIDO/FINALIZADO conta como realizado; futuros são preservados (dataHora ainda
+ * não passou). Grava o motivo em `observacao` (mesmo campo exibido no card do dia).
+ *
+ * ⚠️ PENDENTE: o ramo EM_ANDAMENTO só encerra o AGENDAMENTO — a evolução clínica que
+ * ele abriu (se ainda EM_ANDAMENTO) NÃO é tocada aqui, de propósito: ela é um registro
+ * clínico com conteúdo potencialmente já escrito pelo profissional, e fechá-la sozinha
+ * é uma decisão maior do que a desta rotina (mesmo padrão de `cancelarPrescricoesNaoExecutadas`,
+ * que também não cascateia para fora do próprio grupo). Quem abrir o paciente ainda vê
+ * (e pode finalizar/cancelar manualmente) a evolução aberta, mesmo com o agendamento já
+ * CANCELADO_AUTOMATICAMENTE — os dois ciclos de vida são independentes.
  *
  * @returns ResultadoCron para o comAlerta/reportarCron (Monitoração + e-mail ADMIN).
  */
 async function cancelarAgendamentosNaoRealizados(db = prisma) {
   const agora = new Date();
 
-  const naoRealizados = await db.agendamentoClinico.findMany({
-    where:  { status: { in: ['AGENDADO', 'ATRASADA'] }, ativo: true, dataHora: { lt: agora } },
-    select: { id: true },
-  });
+  const [naoIniciados, emAndamento] = await Promise.all([
+    db.agendamentoClinico.findMany({
+      where:  { status: { in: ['AGENDADO', 'ATRASADA'] }, ativo: true, dataHora: { lt: agora } },
+      select: { id: true },
+    }),
+    db.agendamentoClinico.findMany({
+      where:  { status: 'EM_ANDAMENTO', ativo: true, dataHora: { lt: agora } },
+      select: { id: true },
+    }),
+  ]);
 
-  if (naoRealizados.length === 0) return { ok: true, notificar: false };
+  if (naoIniciados.length === 0 && emAndamento.length === 0) return { ok: true, notificar: false };
 
-  const { count } = await db.agendamentoClinico.updateMany({
-    where: { id: { in: naoRealizados.map(a => a.id) } },
-    data:  { status: 'CANCELADO', observacao: MOTIVO_CANCELAMENTO },
-  });
+  let count = 0;
+  if (naoIniciados.length > 0) {
+    const r = await db.agendamentoClinico.updateMany({
+      where: { id: { in: naoIniciados.map(a => a.id) } },
+      data:  { status: 'CANCELADO_AUTOMATICAMENTE', observacao: MOTIVO_NAO_INICIADO },
+    });
+    count += r.count;
+  }
+  if (emAndamento.length > 0) {
+    const r = await db.agendamentoClinico.updateMany({
+      where: { id: { in: emAndamento.map(a => a.id) } },
+      data:  { status: 'CANCELADO_AUTOMATICAMENTE', observacao: MOTIVO_EM_ANDAMENTO },
+    });
+    count += r.count;
+  }
 
   return {
     ok: true,
@@ -72,4 +114,8 @@ async function marcarAgendamentosAtrasados(db = prisma) {
   };
 }
 
-module.exports = { cancelarAgendamentosNaoRealizados, marcarAgendamentosAtrasados, MOTIVO_CANCELAMENTO, MINUTOS_TOLERANCIA_ATRASO };
+module.exports = {
+  cancelarAgendamentosNaoRealizados, marcarAgendamentosAtrasados,
+  MOTIVO_CANCELAMENTO, MOTIVO_NAO_INICIADO, MOTIVO_EM_ANDAMENTO,
+  MINUTOS_TOLERANCIA_ATRASO,
+};

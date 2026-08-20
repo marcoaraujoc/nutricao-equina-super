@@ -31,14 +31,41 @@ function intervaloEmMs(frequencia) {
 const FREQUENCIAS_SEM_HORARIO = new Set(['agora', 'SOS', 'seNecessario']);
 
 /**
- * Item elegível ao fluxo novo (rolling schedule, confirmação de antecipação/atraso,
- * aviso de WhatsApp)? Precisa de uma âncora de horário (`horaInicio`) e de uma
- * frequência que implique horário esperado. Sem isso, mantém o comportamento
- * antigo (uma execução cobre o dia inteiro, sem checagem de horário).
+ * "1x a cada N dias" (inclui "1x por semana") — a cadência é o que importa (a
+ * cada quantos DIAS), não a hora do dia. Por isso, ao contrário das frequências
+ * intra-dia (12em12h etc., que precisam de `horaInicio` para saber os horários
+ * do próprio dia), esta família NÃO exige `horaInicio` para entrar no rolling
+ * schedule — ver `elegivelParaFluxoNovo`.
+ */
+function ehIntervaloMultiDia(frequencia) {
+  const dosesPorDia = DOSES_POR_DIA[frequencia];
+  return dosesPorDia != null && dosesPorDia < 1;
+}
+
+/**
+ * Item elegível ao fluxo novo (rolling schedule — agenda só nas datas certas, não
+ * todo santo dia da janela do curso)?
+ *
+ * "1x a cada N dias" (inclui semana): SEMPRE elegível, com ou sem `horaInicio`.
+ * Hora Início NUNCA é impeditivo aqui — 🔴 exigi-la fazia o item cair no fluxo
+ * ANTIGO sem ela (uma execução cobrindo o dia inteiro, repetido todo dia da
+ * janela — ex.: "1x/semana × 4" virando "pendente" nos 28 dias, não só nas 4
+ * datas certas). Sem `horaInicio`, a 1ª dose fica esperada para `dataInicio` à
+ * meia-noite (`primeiraDoseEsperada`) — mera âncora de CALENDÁRIO, não de
+ * horário; a execução real da 1ª dose vira a base de tudo dali em diante
+ * (`calcularProximaDose(agora, frequencia)`, gravado como `proximaDoseEm` —
+ * ver `executar` em PrescricaoGrupoController). Ou seja: o HORÁRIO só se fixa
+ * DEPOIS da 1ª execução, nunca antes — CONFIRMACAO_NECESSARIA também não deve
+ * bloquear essa 1ª execução por "atraso" contra uma meia-noite que ninguém
+ * escolheu (ver o guard em `executar`).
+ *
+ * Demais frequências (intra-dia, tipo 12em12h): precisam de `horaInicio` — sem
+ * ele não há como saber os horários do próprio dia, então mantêm o fluxo antigo.
  */
 function elegivelParaFluxoNovo(item) {
   if (!item) return false;
   if (FREQUENCIAS_SEM_HORARIO.has(item.frequencia)) return false;
+  if (ehIntervaloMultiDia(item.frequencia)) return true;
   if (!item.horaInicio || !String(item.horaInicio).trim()) return false;
   return true;
 }
@@ -51,11 +78,28 @@ function dosesTotaisEsperadas(item) {
 }
 
 // 1ª dose esperada: dataInicio (só a data) + horaInicio (HH:MM).
+//
+// 🔴 SEM horaInicio (a família "1x a cada N dias" não exige mais — ver
+// `elegivelParaFluxoNovo`), o padrão NÃO PODE ser meia-noite UTC: `dataInicio`
+// chega do front como data pura ("2026-08-19") e `new Date(...)` interpreta
+// isso como meia-noite **UTC**, que em qualquer fuso negativo (Brasil é UTC-3)
+// já é 21h do dia ANTERIOR em horário local. Toda comparação de "que dia é
+// isso" no sistema usa componentes LOCAIS (`dataLocalStr`/`hojeLocalStr`, nunca
+// `toISOString()`) — então meia-noite UTC fazia a 1ª dose nascer "vencida
+// ontem": o item sumia da fila no PRÓPRIO dia em que foi prescrito, e o cron de
+// dose perdida (`prescricaoCronService.js`) cancelaria no dia seguinte um item
+// que ninguém teve a chance de executar. Meio-dia UTC (09h em horário de
+// Brasília) fica dentro do mesmo dia LOCAL de `dataInicio` com folga.
 function primeiraDoseEsperada(item) {
   const base = new Date(item.dataInicio);
   const diaBase = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate()));
-  const [h, m] = String(item.horaInicio).split(':').map(Number);
-  diaBase.setUTCHours(h || 0, m || 0, 0, 0);
+  const temHoraInicio = item.horaInicio && String(item.horaInicio).trim();
+  if (temHoraInicio) {
+    const [h, m] = String(item.horaInicio).split(':').map(Number);
+    diaBase.setUTCHours(h || 0, m || 0, 0, 0);
+  } else {
+    diaBase.setUTCHours(12, 0, 0, 0);
+  }
   return diaBase;
 }
 
@@ -87,6 +131,7 @@ function diferencaEmMinutos(agora, previsto) {
 module.exports = {
   DOSES_POR_DIA,
   intervaloEmMs,
+  ehIntervaloMultiDia,
   elegivelParaFluxoNovo,
   dosesTotaisEsperadas,
   primeiraDoseEsperada,

@@ -8,7 +8,7 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
   Search, ChevronDown, Loader2, CalendarClock,
-  Clock, User as UserIcon, X, Check, Trash2,
+  Clock, User as UserIcon, X, Check, Ban,
   Pill, Syringe, FlaskConical, Send, FileText, ExternalLink,
   Scan, Activity, Building2,
 } from 'lucide-react';
@@ -797,16 +797,20 @@ function GrupoHistoricoItem({
 
 // ─── Agendamentos ─────────────────────────────────────────────────────────────
 
-function CardAgendamento({ ag, podeGerenciar, onConcluir, onExcluir }: {
+function CardAgendamento({ ag, podeGerenciar, onConcluir, onCancelar }: {
   ag:            Agendamento;
   podeGerenciar: boolean;
   onConcluir:    (id: number) => void;
-  onExcluir:     (id: number) => void;
+  onCancelar:    (id: number) => void;
 }) {
   // REAGENDADO (e o legado TRANSFERIDO): sai da grade como o cancelado, mas NÃO é desistência —
   // tem badge próprio e mostra para quando o atendimento foi movido (observacao).
-  const isTransferido  = ag.status === 'REAGENDADO' || ag.status === 'TRANSFERIDO';
-  const isCancelado    = ag.status === 'CANCELADO' || isTransferido;
+  const isTransferido    = ag.status === 'REAGENDADO' || ag.status === 'TRANSFERIDO';
+  // CANCELADO_AUTOMATICAMENTE: a rotina noturna encerrou sozinha (agendamento nunca
+  // realizado, ou EM_ANDAMENTO que ficou pendurado sem conclusão). Conta como cancelado
+  // para o card (opacidade, some das ações), com um rótulo próprio no badge.
+  const isCanceladoAuto  = ag.status === 'CANCELADO_AUTOMATICAMENTE';
+  const isCancelado    = ag.status === 'CANCELADO' || isCanceladoAuto || isTransferido;
   const isConcluido    = ag.status === 'CONCLUIDO';
   const isEmAndamento  = ag.status === 'EM_ANDAMENTO';
   const isFinalizado   = ag.status === 'FINALIZADO';
@@ -825,9 +829,9 @@ function CardAgendamento({ ag, podeGerenciar, onConcluir, onExcluir }: {
             </span>
             {isCancelado && (
               <span className={`inline-block text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${
-                isTransferido ? 'bg-violet-100 text-violet-700' : 'bg-red-100 text-red-600'
+                isTransferido ? 'bg-violet-100 text-violet-700' : isCanceladoAuto ? 'bg-red-50 text-red-400' : 'bg-red-100 text-red-600'
               }`}>
-                {isTransferido ? 'Transferido' : 'Cancelado'}
+                {isTransferido ? 'Transferido' : isCanceladoAuto ? 'Cancelado automaticamente' : 'Cancelado'}
               </span>
             )}
             {isEmAndamento && (
@@ -857,15 +861,23 @@ function CardAgendamento({ ag, podeGerenciar, onConcluir, onExcluir }: {
             </div>
           )}
         </div>
-        {podeGerenciar && !isCancelado && !isEncerrado && !isEmAndamento && (
+        {podeGerenciar && !isCancelado && !isEncerrado && (
           <div className="flex flex-col gap-0.5 flex-shrink-0">
-            <button onClick={() => onConcluir(ag.id)} title="Concluir"
-              className="p-1 text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
-              <Check size={12} />
-            </button>
-            <button onClick={() => onExcluir(ag.id)} title="Cancelar agendamento"
+            {/* Concluir direto só faz sentido ANTES do atendimento começar — uma vez
+                EM_ANDAMENTO, o encerramento passa pela evolução, não por um flip de
+                status aqui. */}
+            {!isEmAndamento && (
+              <button onClick={() => onConcluir(ag.id)} title="Concluir"
+                className="p-1 text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
+                <Check size={12} />
+              </button>
+            )}
+            {/* EM_ANDAMENTO nunca é excluído — só cancelado (`onExcluir` já grava
+                status: CANCELADO, nunca um hard delete). Ícone precisa refletir isso:
+                Trash2 prometia exclusão que a ação nunca fez. */}
+            <button onClick={() => onCancelar(ag.id)} title="Cancelar agendamento"
               className="p-1 text-red-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-              <Trash2 size={12} />
+              <Ban size={12} />
             </button>
           </div>
         )}
@@ -975,7 +987,7 @@ const AnimalDetail = () => {
     }
   };
 
-  const handleExcluirAg = async (agId: number, motivo?: string) => {
+  const handleCancelarAg = async (agId: number, motivo?: string) => {
     // Cancelamento exige justificativa — abre o modal e retorna aqui com o motivo
     if (!motivo) { setCancelandoAgId(agId); return; }
     try {
@@ -985,7 +997,7 @@ const AnimalDetail = () => {
       carregarAgendamentos();
     } catch (err) {
       const e = err as { isPermissionError?: boolean };
-      if (!e.isPermissionError) setErroInline('Erro ao excluir agendamento');
+      if (!e.isPermissionError) setErroInline('Erro ao cancelar agendamento');
     }
   };
 
@@ -1129,12 +1141,16 @@ const AnimalDetail = () => {
         <div className="flex items-start gap-3 rounded-2xl px-4 py-3 border bg-amber-50 border-amber-300 text-amber-800">
           <span className="text-lg mt-0.5">🔒</span>
           <div className="flex-1">
-            <p className="font-semibold text-sm">Paciente inativo — somente leitura</p>
+            {/* Rótulo "Bloqueado" (não "Inativo"): a tela de Pacientes tem um recurso
+                DIFERENTE — a exclusão lógica de Animal.ativo — que também usa a palavra
+                "Inativo". Este banner é do BLOQUEIO (Animal.inativo): o paciente segue
+                visível em toda tela, só trava novos registros/edição. */}
+            <p className="font-semibold text-sm">Paciente bloqueado — somente leitura</p>
             <p className="text-xs mt-0.5">
               Nenhum registro novo pode ser criado nem o cadastro editado enquanto durar.
               {animal.inativoMotivo && <> Motivo: “{animal.inativoMotivo}”.</>}
-              {animal.inativoPor?.fullName && <> Inativado por {animal.inativoPor.fullName}.</>}
-              {' '}Só o gestor pode reativar.
+              {animal.inativoPor?.fullName && <> Bloqueado por {animal.inativoPor.fullName}.</>}
+              {' '}Só o gestor pode desbloquear.
             </p>
           </div>
         </div>
@@ -1204,7 +1220,7 @@ const AnimalDetail = () => {
               <CardAgendamento key={ag.id} ag={ag}
                 podeGerenciar={false}  // tela somente de visualização — gerenciar na Agenda
                 onConcluir={handleConcluirAg}
-                onExcluir={handleExcluirAg} />
+                onCancelar={handleCancelarAg} />
             ))}
           </div>
         </div>
@@ -1227,7 +1243,7 @@ const AnimalDetail = () => {
         aberto={cancelandoAgId !== null}
         titulo="Cancelar agendamento?"
         acaoLabel="Cancelar agendamento"
-        onConfirmar={(motivo) => { if (cancelandoAgId !== null) handleExcluirAg(cancelandoAgId, motivo); }}
+        onConfirmar={(motivo) => { if (cancelandoAgId !== null) handleCancelarAg(cancelandoAgId, motivo); }}
         onFechar={() => setCancelandoAgId(null)}
       />
     </div>

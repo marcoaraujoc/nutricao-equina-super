@@ -79,6 +79,11 @@ router.patch('/:id/inativar', authenticate, checkPermission('animais.ativar', 'P
 // (checkPermission só popula o contexto/req.membroCargo; o gate real é no controller)
 router.patch('/:id/ativar', authenticate, checkPermission('animais.ativar', 'PROPRIO'), animalIdParam, validate, animalController.ativar);
 
+// PATCH /api/animais/:id/reativar → desfaz a EXCLUSÃO lógica (Animal.ativo=false →
+// true). Diferente de `/ativar` acima (que desfaz o bloqueio Animal.inativo) —
+// SEMPRE gestor/admin (gate real no controller).
+router.patch('/:id/reativar', authenticate, checkPermission('animais.ativar', 'PROPRIO'), animalIdParam, validate, animalController.reativarExcluido);
+
 
 
 // ⚠️ ROTAS DE VÍNCULO REMOVIDAS na fase 3 do multi-tenancy

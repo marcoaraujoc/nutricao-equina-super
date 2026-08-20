@@ -7,15 +7,18 @@ import {
   Pencil, Trash2, Search, Loader2, X, Users,
   Building2, User as UserIcon, Plus,
   Phone, MapPin, BadgeCheck, AlertCircle, Info,
+  ToggleLeft, ToggleRight,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 // Mesmo seletor de localidade usado no card "Locais de trabalho" do profissional
 import { LocalizacaoCombobox } from '../components/UsuarioFormModal';
 import { usePermissoes } from '../hooks/usePermissoes';
 import ModalJustificativa from '../components/ModalJustificativa';
+import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import ErroAcao, { classeErro, type ErroAcaoDados } from '../components/ErroAcao';
+import { formatDate } from '../utils/dateUtils';
 
 // ─── Validações CPF/CNPJ ──────────────────────────────────────────────────────
 
@@ -121,6 +124,12 @@ interface Proprietario {
   estado:           string | null;
   ativo:            boolean;
   createdAt:        string;
+  // Trilha de ativação/inativação (quem fez, quando) — ver lib/cadastroAtivacao.js
+  ativoEm?:        string | null;
+  ativoPorNome?:   string | null;
+  inativoEm?:      string | null;
+  inativoPorNome?: string | null;
+  inativoMotivo?:  string | null;
 }
 
 interface FormProp {
@@ -496,26 +505,30 @@ function ModalProprietario({
             </div>
 
             {/* Valor da assinatura e dia de vencimento da fatura na mesma linha —
-                logo abaixo de Mensalista e acima de Localidades. Sem mensalista não
-                há valor a cobrar, então a linha vira só o vencimento (largura cheia). */}
+                logo abaixo de Mensalista e acima de Localidades. O campo de valor
+                fica sempre visível (não só quando Mensalista está marcado), mas só
+                é obrigatório e só é salvo quando Mensalista está ativo. */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-              {form.mensalista && (
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Valor da Assistência Veterinária *</label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">R$</span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={form.valorAssistencia}
-                      onChange={e => handleValorChange(e.target.value)}
-                      placeholder="0,00"
-                      className={`${inputCls} pl-9`}
-                    />
-                  </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">
+                  Valor da Assistência Veterinária {form.mensalista && '*'}
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">R$</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={form.valorAssistencia}
+                    onChange={e => handleValorChange(e.target.value)}
+                    placeholder="0,00"
+                    className={`${inputCls} pl-9`}
+                  />
                 </div>
-              )}
-              <div className={!form.mensalista ? 'sm:col-span-2' : ''}>
+                {!form.mensalista && (
+                  <p className="text-[10px] text-gray-400 mt-1">Só é cobrado quando Mensalista está ativo.</p>
+                )}
+              </div>
+              <div>
                 <label className="block text-xs text-gray-500 mb-1">Dia de vencimento da fatura *</label>
                 <input type="number" min={1} max={25}
                   value={form.diaVencimentoFatura}
@@ -557,7 +570,7 @@ function ModalProprietario({
                           setErroLoc(null);
                           setMostrarFormLoc(true);
                         }}
-                        className="flex items-center gap-1 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors flex-shrink-0">
+                        className="flex items-center gap-1 px-2 py-1 text-xs font-semibold text-orange-700 hover:bg-orange-50 rounded-lg transition-colors flex-shrink-0">
                         <Pencil size={13} /> Alterar
                       </button>
                       <button type="button"
@@ -667,6 +680,7 @@ export default function CadastroProprietario() {
   const podeCriar   = isGestor || podeExecutar('cadastro.proprietario.criar');
   const podeEditar  = isGestor || podeExecutar('cadastro.proprietario.editar');
   const podeRemover = isGestor || podeExecutar('cadastro.proprietario.deletar');
+  const podeAtivar  = isGestor || podeExecutar('cadastro.proprietario.ativar');
 
   const semPermissao = (acao: string) =>
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
@@ -684,6 +698,7 @@ export default function CadastroProprietario() {
   const [form,          setForm]          = useState<FormProp>(FORM_INICIAL);
   const [saving,        setSaving]        = useState(false);
   const [confirmRemov,  setConfirmRemov]  = useState<Proprietario | null>(null);
+  const [confirmReativ, setConfirmReativ] = useState<Proprietario | null>(null);
   const [filtroAtivo,   setFiltroAtivo]   = useState<'ativo' | 'inativo' | 'all'>('ativo');
   const [showInfo,      setShowInfo]      = useState(false);
 
@@ -823,7 +838,7 @@ export default function CadastroProprietario() {
   };
 
   const handleRemoverDaEmpresa = (p: Proprietario) => {
-    if (!podeRemover) { semPermissao('remover proprietário da empresa'); return; }
+    if (!podeRemover) { semPermissao('inativar proprietário'); return; }
     setConfirmRemov(p);
   };
 
@@ -832,13 +847,32 @@ export default function CadastroProprietario() {
     const p = confirmRemov;
     setConfirmRemov(null);
     try {
-      // Remoção exige justificativa (registrada na Auditoria)
+      // Inativação exige justificativa (registrada na Auditoria)
       await api.delete(`/cadastro/proprietarios/${p.id}`, { data: { motivo } });
-      toast.success(`Proprietário removido da empresa`);
+      toast.success('Proprietário inativado');
       carregar();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
       setErroInline(msg ?? 'Erro ao remover proprietário');
+    }
+  };
+
+  const handleReativar = (p: Proprietario) => {
+    if (!podeAtivar) { semPermissao('reativar proprietário'); return; }
+    setConfirmReativ(p);
+  };
+
+  const handleReativarConfirmado = async (motivo: string) => {
+    if (!confirmReativ) return;
+    const p = confirmReativ;
+    setConfirmReativ(null);
+    try {
+      await api.patch(`/cadastro/proprietarios/${p.id}/reativar`, { motivo });
+      toast.success('Proprietário reativado');
+      carregar();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
+      setErroInline(msg ?? 'Erro ao reativar proprietário');
     }
   };
 
@@ -939,15 +973,29 @@ export default function CadastroProprietario() {
           </div>
         ) : (
           <div className="bg-white rounded-3xl border border-gray-200 overflow-hidden">
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto rounded-3xl">
+            <table className="w-full min-w-[900px] text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Nome</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Documento</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Telefone</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Cidade</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Contrato</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
+                  {filtroAtivo === 'ativo' && (
+                    <>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Criado em</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado em</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado por</th>
+                    </>
+                  )}
+                  {filtroAtivo === 'inativo' && (
+                    <>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado em</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado por</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
+                    </>
+                  )}
                   <th className="px-4 py-3 text-center font-semibold text-gray-600">Ações</th>
                 </tr>
               </thead>
@@ -958,7 +1006,6 @@ export default function CadastroProprietario() {
                       <p className="font-medium text-gray-800">{p.fullName}</p>
                       <p className="text-xs text-gray-400 truncate max-w-[200px]">{p.email}</p>
                     </td>
-                    <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{labelDoc(p)}</td>
                     <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
                       {p.phone ?? <span className="text-gray-400">—</span>}
                     </td>
@@ -990,25 +1037,45 @@ export default function CadastroProprietario() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`px-2 py-1 rounded-xl text-xs font-medium ${p.ativo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${p.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
                         {p.ativo ? 'Ativo' : 'Inativo'}
                       </span>
                     </td>
+                    {filtroAtivo === 'ativo' && (
+                      <>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(p.createdAt)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(p.ativoEm ?? p.createdAt)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{p.ativoPorNome ?? '—'}</td>
+                      </>
+                    )}
+                    {filtroAtivo === 'inativo' && (
+                      <>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(p.inativoEm)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">{p.inativoPorNome ?? '—'}</td>
+                        <td className="px-4 py-3"><JustificativaCancelamento texto={p.inativoMotivo} /></td>
+                      </>
+                    )}
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-center gap-2">
                         {podeEditar ? (
                           <button onClick={() => abrirEdicao(p)} title="Editar"
-                            className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-xl transition-colors">
+                            className="p-1.5 text-orange-600 hover:text-orange-700 hover:bg-orange-50 rounded-xl transition-colors">
                             <Pencil size={15} />
                           </button>
                         ) : null}
-                        {podeRemover ? (
-                          <button onClick={() => handleRemoverDaEmpresa(p)} title="Remover da empresa"
-                            className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-colors">
-                            <Trash2 size={15} />
+                        {p.ativo && podeRemover ? (
+                          <button onClick={() => handleRemoverDaEmpresa(p)} title="Inativar proprietário"
+                            className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-xl transition-colors">
+                            <ToggleRight size={15} />
                           </button>
                         ) : null}
-                        {!podeEditar && !podeRemover && (
+                        {!p.ativo && podeAtivar ? (
+                          <button onClick={() => handleReativar(p)} title="Reativar"
+                            className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-xl transition-colors">
+                            <ToggleLeft size={15} />
+                          </button>
+                        ) : null}
+                        {!podeEditar && !podeRemover && !podeAtivar && (
                           <span className="text-xs text-gray-400 italic">Somente leitura</span>
                         )}
                       </div>
@@ -1017,6 +1084,7 @@ export default function CadastroProprietario() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </div>
@@ -1037,7 +1105,7 @@ export default function CadastroProprietario() {
                 <p className="font-semibold text-gray-800 truncate">{p.fullName}</p>
                 <p className="text-xs text-gray-500 truncate">{p.email}</p>
               </div>
-              <span className={`px-2 py-0.5 rounded-xl text-xs font-medium flex-shrink-0 ${p.ativo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${p.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
                 {p.ativo ? 'Ativo' : 'Inativo'}
               </span>
             </div>
@@ -1072,19 +1140,39 @@ export default function CadastroProprietario() {
               )}
             </div>
 
+            {filtroAtivo === 'ativo' && (
+              <p className="text-[11px] text-gray-400 mb-2">
+                Criado em {formatDate(p.createdAt)}
+                {p.ativoPorNome ? ` · Ativado em ${formatDate(p.ativoEm ?? p.createdAt)} por ${p.ativoPorNome}` : ''}
+              </p>
+            )}
+            {filtroAtivo === 'inativo' && (
+              <p className="text-[11px] text-gray-400 mb-2">
+                Inativado em {formatDate(p.inativoEm)}
+                {p.inativoPorNome ? ` por ${p.inativoPorNome}` : ''}
+                {p.inativoMotivo ? <> — <JustificativaCancelamento texto={p.inativoMotivo} className="inline" /></> : ''}
+              </p>
+            )}
+
             <div className="flex items-center justify-between pt-2 border-t border-gray-100">
               <span className="text-xs text-gray-400">{labelDoc(p)}</span>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-1">
                 {podeEditar && (
-                  <button onClick={() => abrirEdicao(p)}
-                    className="px-3 py-1.5 text-xs text-emerald-600 border border-emerald-200 rounded-xl hover:bg-emerald-50 transition-colors">
-                    Editar
+                  <button onClick={() => abrirEdicao(p)} title="Editar"
+                    className="p-2 text-orange-600 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
+                    <Pencil size={15} />
                   </button>
                 )}
-                {podeRemover && (
-                  <button onClick={() => handleRemoverDaEmpresa(p)}
-                    className="px-3 py-1.5 text-xs text-red-500 border border-red-200 rounded-xl hover:bg-red-50 transition-colors">
-                    Remover
+                {p.ativo && podeRemover && (
+                  <button onClick={() => handleRemoverDaEmpresa(p)} title="Inativar proprietário"
+                    className="p-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
+                    <ToggleRight size={15} />
+                  </button>
+                )}
+                {!p.ativo && podeAtivar && (
+                  <button onClick={() => handleReativar(p)} title="Reativar"
+                    className="p-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
+                    <ToggleLeft size={15} />
                   </button>
                 )}
               </div>
@@ -1105,16 +1193,27 @@ export default function CadastroProprietario() {
         />
       )}
 
-      {/* Remoção exige justificativa (registrada na Auditoria) */}
+      {/* Inativação exige justificativa (registrada na Auditoria) */}
       <ModalJustificativa
         aberto={confirmRemov != null}
-        titulo="Remover proprietário da empresa"
+        titulo="Inativar proprietário"
         descricao={confirmRemov
           ? `${confirmRemov.fullName} — todos os animais deste proprietário cadastrados na empresa serão inativados e ele não aparecerá mais nesta lista. Ele continuará existindo no sistema e poderá ser re-associado via novos cadastros de animais.`
           : undefined}
-        acaoLabel="Remover"
+        acaoLabel="Inativar"
         onConfirmar={handleRemoverConfirmado}
         onFechar={() => setConfirmRemov(null)}
+      />
+
+      <ModalJustificativa
+        aberto={confirmReativ != null}
+        titulo="Reativar proprietário"
+        descricao={confirmReativ
+          ? `${confirmReativ.fullName} volta a aparecer normalmente na empresa. Os animais dele que foram inativados junto na remoção NÃO são reativados automaticamente — cada um se reativa separadamente, em Pacientes.`
+          : undefined}
+        acaoLabel="Reativar"
+        onConfirmar={handleReativarConfirmado}
+        onFechar={() => setConfirmReativ(null)}
       />
     </PageContainer>
   );

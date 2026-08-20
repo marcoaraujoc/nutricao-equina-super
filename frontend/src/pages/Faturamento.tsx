@@ -2,6 +2,7 @@
 // Módulo Financeiro — Faturamento por proprietário, consolidando todos os animais
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
@@ -21,7 +22,7 @@ import FotoAnimal from '../components/FotoAnimal';
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
 type FaturaStatus = 'ABERTA' | 'PAGA' | 'CANCELADA' | 'FECHADA' | 'ATRASADA';
-type ItemTipo     = 'ASSISTENCIA' | 'MEDICAMENTO' | 'PROCEDIMENTO';
+type ItemTipo     = 'ASSISTENCIA' | 'TRANSPORTE' | 'MEDICAMENTO' | 'PROCEDIMENTO';
 /** Desconto do item: percentual sobre o bruto ou abatimento em reais */
 type DescontoTipo = 'PERCENTUAL' | 'VALOR';
 
@@ -53,6 +54,9 @@ interface FaturaResumo {
 interface ProprietarioItem {
   id: number; fullName: string; email: string; phone?: string;
   valorAssistencia?: number; mensalista?: boolean;
+  // Proprietário inativado (removido da empresa) continua aparecendo aqui
+  // enquanto tiver fatura pendente de pagamento — ver FaturaController.listarProprietarios.
+  ativo?: boolean;
   animais: AnimalResumo[];
   faturaAtiva?:    FaturaResumo | null;
   faturaFechada?:  FaturaResumo | null;
@@ -67,9 +71,10 @@ interface CatalogoItem {
 // ─── Catálogo de itens comuns ─────────────────────────────────────────────────
 
 const CATALOGO: Array<{ label: string; tipo: ItemTipo; descricao: string; valor: number }> = [
-  { label: 'GTA',                     tipo: 'ASSISTENCIA', descricao: 'GTA',                     valor: 0 },
-  { label: 'Assistência Veterinária', tipo: 'ASSISTENCIA', descricao: 'Assistência Veterinária',  valor: 0 },
+  { label: 'Assistência Veterinária', tipo: 'ASSISTENCIA', descricao: 'Assistência Veterinária', valor: 0 },
   { label: 'Atd. Emergencial',        tipo: 'ASSISTENCIA', descricao: 'Atd. Emergencial',         valor: 0 },
+  { label: 'GTA',                     tipo: 'TRANSPORTE',  descricao: 'GTA',                      valor: 0 },
+  { label: 'Deslocamento',            tipo: 'TRANSPORTE',  descricao: 'Deslocamento',              valor: 0 },
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -86,12 +91,127 @@ function formatBRL(v: number) {
   return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
+const TIPOS_FIXOS = ['ASSISTENCIA', 'TRANSPORTE', 'MEDICAMENTO', 'PROCEDIMENTO'];
+
+/** "TRANSPORTE" → "Transporte", "TAXA DE URGENCIA" → "Taxa De Urgencia" — só para
+ *  rótulo; o valor gravado/comparado continua o texto em CAIXA ALTA original. */
+function capitalizarTipo(t: string) {
+  return t.toLowerCase().split(' ').map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
+}
+
 const TIPO_COR: Record<string, string> = {
   ASSISTENCIA:  'bg-blue-100 text-blue-700',
+  TRANSPORTE:   'bg-cyan-100 text-cyan-700',
   MEDICAMENTO:  'bg-purple-100 text-purple-700',
   PROCEDIMENTO: 'bg-emerald-100 text-emerald-700',
   OUTROS:       'bg-amber-100 text-amber-700',
 };
+
+// ─── Dropdown flutuante — abre para CIMA do campo ─────────────────────────────
+// Um <select> nativo deixa o navegador/SO decidir a direção — não dá pra forçar
+// isso em HTML puro. Este combo substitui os selects de Tipo/Item Fatura por um
+// botão + lista própria, ancorada pela BORDA DE BAIXO (`bottom`, não `top`): com
+// `position: fixed` isso faz o conteúdo crescer para cima sozinho, sem precisar
+// medir a altura da lista antes de posicionar.
+// ⚠️ A lista vai num PORTAL para `document.body`, não `position: absolute` dentro
+// do card: o painel da fatura rola dentro de um container com `overflow-y-auto`
+// (PainelFatura), e QUALQUER `absolute` que tentasse ultrapassar a borda dele
+// era recortado ali — a lista parecia "abrir para dentro do card", cortada, por
+// mais alto que o z-index fosse (overflow corta antes do z-index decidir nada).
+// `position: fixed` com coordenadas de `getBoundingClientRect()` escapa desse
+// recorte porque o portal é filho de `body`, fora da árvore que rola.
+function DropdownAbaixo({ value, options, placeholder, actionLabel, onChange, onAction }: {
+  value: string;
+  options: { value: string; label: string }[];
+  placeholder: string;
+  actionLabel: string;
+  onChange: (v: string) => void;
+  onAction: () => void;
+}) {
+  const [aberto, setAberto] = useState(false);
+  const [pos, setPos] = useState<{ bottom: number; left: number; width: number } | null>(null);
+  const btnRef  = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const atualizarPosicao = () => {
+    const el = btnRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    // `bottom` é a distância do RODAPÉ da viewport até o TOPO do campo — ancora
+    // a lista ali e ela cresce para cima.
+    setPos({ bottom: window.innerHeight - r.top + 4, left: r.left, width: r.width });
+  };
+
+  // Recalcula ao abrir e a cada scroll/resize (a lista é `fixed`, não acompanha
+  // o campo sozinha) — `true` no listener de scroll captura o scroll do
+  // CONTAINER da fatura, não só da janela (scroll ali não borbulha até `window`
+  // sem a fase de captura).
+  useEffect(() => {
+    if (!aberto) return;
+    atualizarPosicao();
+    const onScrollOuResize = () => atualizarPosicao();
+    window.addEventListener('scroll', onScrollOuResize, true);
+    window.addEventListener('resize', onScrollOuResize);
+    return () => {
+      window.removeEventListener('scroll', onScrollOuResize, true);
+      window.removeEventListener('resize', onScrollOuResize);
+    };
+  }, [aberto]);
+
+  // Clique fora fecha — precisa checar os DOIS nós (botão + lista), já que a
+  // lista está no portal e não é mais descendente do botão no DOM.
+  useEffect(() => {
+    const onClickFora = (e: MouseEvent) => {
+      const alvo = e.target as Node;
+      if (btnRef.current?.contains(alvo) || listRef.current?.contains(alvo)) return;
+      setAberto(false);
+    };
+    document.addEventListener('mousedown', onClickFora);
+    return () => document.removeEventListener('mousedown', onClickFora);
+  }, []);
+
+  const atual = options.find(o => o.value === value);
+
+  return (
+    <div className="relative">
+      <button ref={btnRef} type="button" onClick={() => setAberto(a => !a)}
+        className="w-full flex items-center justify-between border border-gray-300 rounded-xl px-3 py-2 text-sm text-left focus:outline-none focus:border-indigo-400 bg-white">
+        <span className={`truncate ${atual ? 'text-gray-900' : 'text-gray-400'}`}>{atual ? atual.label : placeholder}</span>
+        <ChevronDown size={14} className={`text-gray-400 flex-shrink-0 ml-2 transition-transform ${aberto ? 'rotate-180' : ''}`} />
+      </button>
+      {aberto && pos && createPortal(
+        <div ref={listRef}
+          style={{ position: 'fixed', bottom: pos.bottom, left: pos.left, width: pos.width }}
+          className="z-50 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
+          <ul className="max-h-56 overflow-y-auto">
+            <li>
+              <button type="button" onClick={() => { onChange(''); setAberto(false); }}
+                className={`w-full text-left px-3 py-2 text-sm hover:bg-indigo-50 transition-colors ${!value ? 'bg-indigo-50 text-indigo-700 font-semibold' : 'text-gray-400'}`}>
+                {placeholder}
+              </button>
+            </li>
+            {options.map(o => (
+              <li key={o.value}>
+                <button type="button" onClick={() => { onChange(o.value); setAberto(false); }}
+                  className={`w-full text-left px-3 py-2 text-sm hover:bg-indigo-50 transition-colors ${value === o.value ? 'bg-indigo-50 text-indigo-700 font-semibold' : 'text-gray-800'}`}>
+                  {o.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {/* Sempre no rodapé, fixo — lista vazia (ex.: tipo sem item cadastrado)
+              só deixa ela como a única opção depois do placeholder, naturalmente,
+              sem precisar de nenhum caso especial. */}
+          <button type="button" onClick={() => { setAberto(false); onAction(); }}
+            className="w-full text-left px-3 py-2 text-sm text-indigo-600 font-semibold hover:bg-indigo-50 border-t border-gray-100 transition-colors">
+            {actionLabel}
+          </button>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
 
 // ─── Desconto do item (espelha lib/faturaUtils.js no backend) ─────────────────
 
@@ -255,9 +375,17 @@ function ItemRow({
           <select value={tipo} onChange={e => setTipo(e.target.value)}
             className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs font-semibold focus:outline-none focus:border-indigo-400 bg-white">
             <option value="ASSISTENCIA">ASSISTENCIA</option>
+            <option value="TRANSPORTE">TRANSPORTE</option>
             <option value="MEDICAMENTO">MEDICAMENTO</option>
             <option value="PROCEDIMENTO">PROCEDIMENTO</option>
             <option value="OUTROS">OUTROS</option>
+            {/* Tipo custom (criado pelo "+ Novo tipo…") que não está entre os fixos
+                acima — sem esta opção o <select> não acha o `value` atual, mostra a
+                PRIMEIRA opção (ASSISTENCIA) selecionada e um Salvar sem querer troca
+                o tipo de verdade para Assistência. */}
+            {!['ASSISTENCIA', 'TRANSPORTE', 'MEDICAMENTO', 'PROCEDIMENTO', 'OUTROS'].includes(item.tipo) && (
+              <option value={item.tipo}>{item.tipo}</option>
+            )}
           </select>
           <input value={desc} onChange={e => setDesc(e.target.value)}
             className="flex-1 min-w-40 border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:border-indigo-400"
@@ -362,11 +490,11 @@ function ItemRow({
         {canEdit && (
           <div className="flex gap-0.5">
             <button onClick={() => setEditing(true)} title="Editar item"
-              className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
+              className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
               <Pencil size={14}/>
             </button>
             <button onClick={() => onDelete(item.id)} title="Excluir item"
-              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+              className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors">
               <Trash2 size={14}/>
             </button>
           </div>
@@ -507,6 +635,195 @@ function ModalImportarOrcamento({ proprietarioId, faturaId, onFechar, onLancado 
   );
 }
 
+// ─── Modal — criar um TIPO novo de cobrança (não existe no catálogo) ─────────
+// Aberto pela opção "+ Novo tipo…" do select Tipo. Fica de fora do formulário
+// principal — campos e estado próprios — porque coleta tudo que o lançamento
+// precisa (tipo, nome, quantidade, valor, desconto) numa única tela e lança
+// direto, sem depender do resto do formulário estar preenchido do jeito certo.
+function ModalNovoTipoItem({ faturaId, animalId, tipoInicial, onFechar, onLancado, carregarCatalogo }: {
+  faturaId: number;
+  animalId: string;
+  /** Pré-preenche o Tipo — vem do Tipo já selecionado no formulário quando o
+   *  modal é aberto pelo "+ Novo item…" do Item Fatura (o tipo já é conhecido,
+   *  só falta o nome). Vazio quando aberto pelo "+ Novo tipo…" do próprio
+   *  select Tipo (tipo ainda não existe, digitado do zero). */
+  tipoInicial?: string;
+  onFechar:  () => void;
+  onLancado: () => void;
+  carregarCatalogo: () => void;
+}) {
+  const [tipo,         setTipo]         = useState(tipoInicial ?? '');
+  const [nome,          setNome]         = useState('');
+  const [qtd,           setQtd]          = useState('1');
+  const [valor,         setValor]        = useState('0');
+  const [valorDisplay,  setValorDisplay] = useState('0,00');
+  const [descTipo,      setDescTipo]     = useState<DescontoTipo | ''>('');
+  const [descValor,     setDescValor]    = useState(0);
+  const [descDisplay,   setDescDisplay]  = useState('');
+  const [salvando,      setSalvando]     = useState(false);
+  const [erro,          setErro]         = useState<string | null>(null);
+
+  const formatarValor = (v: number) =>
+    v === 0 ? '' : new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
+
+  const handleValorChange = (raw: string) => {
+    const cents = parseInt(raw.replace(/\D/g, '') || '0', 10);
+    const v = cents / 100;
+    setValor(String(v));
+    setValorDisplay(v === 0 ? '' : formatarValor(v));
+  };
+
+  // Percentual: máscara de centavos igual à do valor, só que em pontos percentuais
+  // (00,00%), travada em 100%. Valor: mesma máscara de moeda (0.000,00).
+  const handleDescValorChange = (raw: string) => {
+    const cents = parseInt(raw.replace(/\D/g, '') || '0', 10);
+    if (descTipo === 'PERCENTUAL') {
+      const v = Math.min(100, cents / 100);
+      setDescValor(v);
+      setDescDisplay(v === 0 ? '' : `${formatarValor(v)}%`);
+    } else {
+      const v = cents / 100;
+      setDescValor(v);
+      setDescDisplay(v === 0 ? '' : formatarValor(v));
+    }
+  };
+
+  const bruto    = Number(valor) * Number(qtd || 1);
+  const desconto = descontoDoItem({
+    valor: Number(valor), quantidade: Number(qtd || 1),
+    descontoTipo: descTipo || null, descontoValor: descValor,
+  });
+
+  const salvar = async () => {
+    if (!tipo.trim()) { setErro('Informe o tipo'); return; }
+    if (!nome.trim()) { setErro('Informe o nome do item'); return; }
+    setErro(null);
+    setSalvando(true);
+    const tipoFinal = tipo.trim().toUpperCase();
+    const desc = nome.trim();
+    // Quantidade 0 = só cadastra o item nos Itens Frequentes, sem lançar cobrança
+    // nenhuma na fatura.
+    const qtdZero = Number(qtd) === 0;
+    try {
+      if (!qtdZero) {
+        await api.post(`/clinica/faturas/${faturaId}/itens`, {
+          tipo:          tipoFinal,
+          descricao:     desc,
+          valor:         Number(valor),
+          quantidade:    Number(qtd),
+          animalId:      animalId ? Number(animalId) : undefined,
+          descontoTipo:  descTipo || null,
+          descontoValor: descTipo ? descValor : 0,
+        });
+      }
+      // Tipo criado na hora — sempre entra nos Itens Frequentes para reuso futuro.
+      // Com quantidade 0 é TUDO que acontece — é o "só cadastre".
+      try {
+        await api.post('/clinica/faturas/catalogo-itens', { tipo: tipoFinal, descricao: desc, valor: 0 });
+        carregarCatalogo();
+      } catch { /* silencioso — não impede o lançamento */ }
+      toast.success(qtdZero ? 'Item cadastrado (sem lançar cobrança)' : 'Item lançado');
+      onLancado();
+    } catch (err) {
+      const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
+      if (!e.isPermissionError) setErro(e.response?.data?.error ?? (qtdZero ? 'Erro ao cadastrar o item' : 'Erro ao lançar o item'));
+    } finally { setSalvando(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-md max-h-[90vh] flex flex-col border border-gray-100">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h3 className="font-bold text-gray-900">{tipoInicial ? 'Novo Item de Cobrança' : 'Novo Tipo de Cobrança'}</h3>
+          <button onClick={onFechar} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-3">
+          <div>
+            <label className="block text-[11px] font-semibold text-gray-500 mb-1">
+              Tipo <span className="text-red-400">*</span>
+            </label>
+            <input value={tipo} onChange={e => setTipo(e.target.value.toUpperCase())}
+              placeholder="Ex.: TRANSPORTE"
+              className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400"/>
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-gray-500 mb-1">
+              Nome <span className="text-red-400">*</span>
+            </label>
+            <input value={nome} onChange={e => setNome(e.target.value)}
+              placeholder="Descreva o item ou cobrança"
+              className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400"/>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[11px] font-semibold text-gray-500 mb-1">Quantidade</label>
+              {/* 0 é válido de propósito: cadastra o item nos Itens Frequentes sem
+                  lançar cobrança na fatura. */}
+              <input type="number" min="0" value={qtd} onChange={e => setQtd(e.target.value)}
+                className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm text-center focus:outline-none focus:border-indigo-400"/>
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-gray-500 mb-1">
+                Valor Unitário
+              </label>
+              <div className="flex items-center border border-gray-300 rounded-xl overflow-hidden focus-within:border-indigo-400">
+                <span className="px-2.5 text-xs text-gray-400 bg-gray-50 border-r border-gray-200 py-2">R$</span>
+                <input type="text" inputMode="decimal" value={valorDisplay} onChange={e => handleValorChange(e.target.value)}
+                  placeholder="0,00" className="flex-1 px-2.5 py-2 text-sm focus:outline-none rounded-r-xl"/>
+              </div>
+            </div>
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-gray-500 mb-1">Desconto</label>
+            <div className="flex gap-1.5">
+              <select value={descTipo}
+                onChange={e => { setDescTipo(e.target.value as DescontoTipo | ''); setDescValor(0); setDescDisplay(''); }}
+                className="border border-gray-300 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-indigo-400 bg-white">
+                <option value="">Não</option>
+                <option value="PERCENTUAL">%</option>
+                <option value="VALOR">R$</option>
+              </select>
+              {descTipo === 'PERCENTUAL' && (
+                <input type="text" inputMode="decimal" value={descDisplay} onChange={e => handleDescValorChange(e.target.value)}
+                  placeholder="00,00%"
+                  className="flex-1 min-w-0 border border-gray-300 rounded-xl px-2.5 py-2 text-sm focus:outline-none focus:border-indigo-400"/>
+              )}
+              {descTipo === 'VALOR' && (
+                <div className="flex-1 min-w-0 flex items-center border border-gray-300 rounded-xl overflow-hidden focus-within:border-indigo-400">
+                  <span className="px-2.5 text-xs text-gray-400 bg-gray-50 border-r border-gray-200 py-2">R$</span>
+                  <input type="text" inputMode="decimal" value={descDisplay} onChange={e => handleDescValorChange(e.target.value)}
+                    placeholder="0,00" className="flex-1 px-2.5 py-2 text-sm focus:outline-none rounded-r-xl"/>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="text-right">
+            <p className="text-[10px] text-gray-400">Total do item</p>
+            <p className="text-sm font-bold text-gray-700">{formatBRL(bruto - desconto)}</p>
+            {desconto > 0 && <p className="text-[10px] text-red-500">−{formatBRL(desconto)}</p>}
+          </div>
+
+          <InlineError message={erro} />
+        </div>
+
+        <div className="flex items-center justify-end gap-3 px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
+          <button onClick={onFechar} disabled={salvando}
+            className="px-4 py-2.5 border border-gray-300 text-gray-600 rounded-xl text-sm font-semibold hover:bg-gray-50 disabled:opacity-50 transition-colors">
+            Cancelar
+          </button>
+          <button onClick={salvar} disabled={salvando}
+            className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-2">
+            {salvando && <Loader2 size={13} className="animate-spin" />}
+            Salvar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Painel direito — detalhe da fatura ──────────────────────────────────────
 
 type MesFatura = { id: number; mesReferencia?: string; status: string };
@@ -584,10 +901,9 @@ function PainelFatura({
   // Um único animal → já vem selecionado por padrão (sem precisar escolher).
   const [novoAnimalId,      setNovoAnimalId]      = useState<string>(prop.animais.length === 1 ? String(prop.animais[0].id) : '');
   const [novoNome,          setNovoNome]          = useState('');
-  const [novoTipo,          setNovoTipo]          = useState<ItemTipo | string>('ASSISTENCIA');
-  // Tipo digitado quando novoTipo === '__NOVO__' (opção "+ Novo tipo…" do select) —
-  // FaturaItem.tipo é VARCHAR(50) livre no backend, então qualquer texto é aceito.
-  const [novoTipoCustom,    setNovoTipoCustom]    = useState('');
+  // '' = placeholder "Escolha um tipo" — nasce assim e volta a ficar assim a
+  // cada lançamento (reset do card ao criar um novo).
+  const [novoTipo,          setNovoTipo]          = useState<ItemTipo | string>('');
   const [novoQty,           setNovoQty]           = useState('1');
   const [novoValor,         setNovoValor]         = useState('0');
   const [novoValorDisplay,  setNovoValorDisplay]  = useState('0,00');
@@ -595,6 +911,12 @@ function PainelFatura({
   const [novoDescValor,     setNovoDescValor]     = useState(0);
   const [novoDescDisplay,   setNovoDescDisplay]   = useState('');
   const [lancando,          setLancando]          = useState(false);
+  // Modal "+ Novo tipo…" (Tipo) / "+ Novo item…" (Item Fatura) — mesma tela nos
+  // dois casos (ModalNovoTipoItem); só muda se o Tipo chega vazio (tipo
+  // desconhecido, digitado do zero) ou pré-preenchido (tipo já escolhido no
+  // formulário, só falta o nome do item).
+  const [novoTipoModalAberto,      setNovoTipoModalAberto]      = useState(false);
+  const [novoTipoModalTipoInicial, setNovoTipoModalTipoInicial] = useState('');
   // Modal de importação dos itens "Outros" aprovados no orçamento
   const [showImportOrc,     setShowImportOrc]     = useState(false);
 
@@ -672,6 +994,46 @@ function PainelFatura({
     ...catalogo.map(c => ({ id: c.id, label: c.descricao, tipo: c.tipo as ItemTipo, descricao: c.descricao, valor: c.valor })),
   ];
 
+  // Item Fatura atrelado ao Tipo, mas só ANTES de um item já estar escolhido:
+  //   sem Tipo ainda (--)                    → mostra TODOS os itens
+  //   Tipo escolhido, NENHUM item ainda      → filtra pelos itens daquele tipo
+  //   Tipo escolhido, item JÁ selecionado    → mostra TODOS de novo
+  // A 3ª linha existe porque escolher um item direto (ex.: "Gasolina") também
+  // preenche o Tipo sozinho (handleCatalogoChange) — sem ela, reabrir o combo
+  // pra trocar de item ficava PRESO ao tipo que acabou de ser preenchido
+  // sozinho, sem um jeito fácil de escolher um item de outro tipo. `indice` é a
+  // posição em `frequentes` — o que `handleCatalogoChange` espera receber.
+  const itensComIndice = frequentes
+    .map((c, indice) => ({ ...c, indice }))
+    .filter(c => (novoTipo && !novoCatIdx) ? c.tipo === novoTipo : true);
+
+  // Em ORDEM ALFABÉTICA pelo nome do item — a formatação com o valor (" — R$ 10,00")
+  // entra DEPOIS de ordenar, senão dois itens quase iguais poderiam trocar de posição
+  // por causa do preço embutido no texto.
+  const itemFaturaOpcoes = itensComIndice
+    .slice()
+    .sort((a, b) => a.label.localeCompare(b.label, 'pt-BR'))
+    .map(c => ({ value: String(c.indice), label: `${c.label}${c.valor ? ` — ${formatBRL(c.valor)}` : ''}` }));
+
+  // Tipos criados na hora pelo "+ Novo tipo…"/"+ Novo item…" (ModalNovoTipoItem)
+  // ficavam sem VOLTA: o select Tipo só tinha as 4 opções fixas, então o tipo
+  // recém-criado nunca mais aparecia para ser reaberto — e o formulário, preso
+  // em ASSISTENCIA por padrão, só oferecia os itens de Assistência daí em diante
+  // (o sintoma "o tipo não salva, entra como Assistência"). Qualquer tipo
+  // distinto vindo do catálogo entra como opção extra no select.
+  const tiposExtras = Array.from(new Set(
+    catalogo.map(c => c.tipo).filter(t => t && !TIPOS_FIXOS.includes(t))
+  ));
+
+  // Tipo também em ordem alfabética pelo rótulo (não pelo código interno).
+  const tipoOpcoes = [
+    { value: 'ASSISTENCIA',  label: 'Assistência' },
+    { value: 'TRANSPORTE',   label: 'Transporte' },
+    { value: 'MEDICAMENTO',  label: 'Medicamento' },
+    { value: 'PROCEDIMENTO', label: 'Procedimento' },
+    ...tiposExtras.map(t => ({ value: t, label: capitalizarTipo(t) })),
+  ].sort((a, b) => a.label.localeCompare(b.label, 'pt-BR'));
+
   const handleCatalogoChange = (idx: string) => {
     setNovoCatIdx(idx);
     if (idx === '') { setNovoNome(''); return; }
@@ -712,29 +1074,35 @@ function PainelFatura({
   const handleLancar = async () => {
     if (!podeLancar) { semPermissao('lançar cobrança na fatura'); return; }
     if (!fatura) return;
+    if (!novoTipo) { setErroInline('Selecione o tipo'); return; }
     if (!novoNome.trim()) { setErroInline('Informe a descrição do item'); return; }
-    if (novoTipo === '__NOVO__' && !novoTipoCustom.trim()) { setErroInline('Informe o novo tipo'); return; }
-    const tipoFinal = novoTipo === '__NOVO__' ? novoTipoCustom.trim() : novoTipo;
+    const tipoFinal = novoTipo;
+    const desc      = novoNome.trim();
+    // Quantidade 0 = só cadastra o item nos Itens Frequentes, sem lançar cobrança
+    // nenhuma na fatura (nenhum FaturaItem é criado).
+    const qtdZero = Number(novoQty) === 0;
     setLancando(true);
     try {
-      const r = await api.post(`/clinica/faturas/${fatura.id}/itens`, {
-        tipo:          tipoFinal,
-        descricao:     novoNome.trim(),
-        valor:         Number(novoValor),
-        quantidade:    Number(novoQty),
-        animalId:      novoAnimalId ? Number(novoAnimalId) : undefined,
-        descontoTipo:  novoDescTipo || null,
-        descontoValor: novoDescTipo ? novoDescValor : 0,
-      });
-      setFatura(prev => prev ? {
-        ...prev,
-        total: r.data.totalFatura,
-        itens: [...prev.itens, r.data.dados],
-      } : prev);
+      if (!qtdZero) {
+        const r = await api.post(`/clinica/faturas/${fatura.id}/itens`, {
+          tipo:          tipoFinal,
+          descricao:     desc,
+          valor:         Number(novoValor),
+          quantidade:    Number(novoQty),
+          animalId:      novoAnimalId ? Number(novoAnimalId) : undefined,
+          descontoTipo:  novoDescTipo || null,
+          descontoValor: novoDescTipo ? novoDescValor : 0,
+        });
+        setFatura(prev => prev ? {
+          ...prev,
+          total: r.data.totalFatura,
+          itens: [...prev.itens, r.data.dados],
+        } : prev);
+      }
 
       // Item digitado manualmente (não veio dos frequentes) → adiciona automaticamente
-      // aos Itens Frequentes para reuso. Ignora se já existir descrição igual.
-      const desc = novoNome.trim();
+      // aos Itens Frequentes para reuso. Com quantidade 0 é TUDO que acontece — é o
+      // "só cadastre". Ignora se já existir descrição igual.
       const jaExiste = frequentes.some(f => f.descricao.trim().toLowerCase() === desc.toLowerCase());
       if (!novoCatIdx && desc && !jaExiste) {
         try {
@@ -744,13 +1112,14 @@ function PainelFatura({
         } catch { /* silencioso — não impede o lançamento */ }
       }
 
+      // Reset do card ao lançar um novo — Tipo volta ao placeholder "Escolha um tipo".
+      setNovoTipo('');
       setNovoNome(''); setNovoCatIdx('');
       setNovoAnimalId(prop.animais.length === 1 ? String(prop.animais[0].id) : '');
       setNovoQty('1'); setNovoValor('0'); setNovoValorDisplay('0,00');
       setNovoDescTipo(''); setNovoDescValor(0); setNovoDescDisplay('');
-      setNovoTipoCustom('');
-      toast.success('Item lançado');
-    } catch { setErroInline('Erro ao lançar item'); }
+      toast.success(qtdZero ? 'Item cadastrado (sem lançar cobrança)' : 'Item lançado');
+    } catch { setErroInline(qtdZero ? 'Erro ao cadastrar item' : 'Erro ao lançar item'); }
     finally { setLancando(false); }
   };
 
@@ -896,6 +1265,18 @@ function PainelFatura({
           faturaId={fatura.id}
           onFechar={() => setShowImportOrc(false)}
           onLancado={() => { setShowImportOrc(false); carregar(); }}
+        />
+      )}
+
+      {/* Modal — "+ Novo tipo…" no select Tipo */}
+      {novoTipoModalAberto && fatura && (
+        <ModalNovoTipoItem
+          faturaId={fatura.id}
+          animalId={novoAnimalId}
+          tipoInicial={novoTipoModalTipoInicial}
+          onFechar={() => setNovoTipoModalAberto(false)}
+          onLancado={() => { setNovoTipoModalAberto(false); carregar(); }}
+          carregarCatalogo={carregarCatalogo}
         />
       )}
 
@@ -1062,74 +1443,77 @@ function PainelFatura({
                 </button>
               )}
             </div>
-            <div className="mb-3">
-              <label className="block text-[11px] font-semibold text-gray-500 mb-1">
-                Itens Frequentes <span className="text-gray-400 font-normal">(atalho — opcional)</span>
-              </label>
-              <select value={novoCatIdx} onChange={e => handleCatalogoChange(e.target.value)}
-                className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 bg-white">
-                <option value="">— Escolha um item —</option>
-                {frequentes.map((c, i) => (
-                  <option key={i} value={i}>{c.label}{c.valor ? ` — ${formatBRL(c.valor)}` : ''}</option>
-                ))}
-              </select>
-            </div>
-            {/* Tipo + Descrição — lançamento DIRETO (não precisa salvar como frequente antes) */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+            {/* Tipo + Item Fatura (+ Animal, só com mais de 1 paciente na fatura) —
+                lançamento DIRETO (não precisa salvar como frequente antes). Os
+                dois são o DropdownAbaixo (não <select> nativo — abre sempre para
+                baixo, um <select> deixa o navegador decidir a direção) com as
+                opções em ordem alfabética. Escolher um item no atalho seleciona
+                o Tipo dele (handleCatalogoChange); Item Fatura mostra TODOS os
+                itens, sem filtrar pelo Tipo. "+ Novo tipo…"/"+ Novo item…" abrem
+                o ModalNovoTipoItem. Com 1 único paciente o animal já está fixado
+                (mostrado acima, no card do proprietário) — não repete aqui. */}
+            <div className={`grid grid-cols-1 sm:grid-cols-2 ${prop.animais.length > 1 ? 'lg:grid-cols-3' : ''} gap-3 mb-3`}>
               <div>
                 <label className="block text-[11px] font-semibold text-gray-500 mb-1">Tipo</label>
-                <select value={novoTipo} onChange={e => { setNovoTipo(e.target.value); if (e.target.value !== '__NOVO__') setNovoTipoCustom(''); }}
-                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 bg-white">
-                  <option value="ASSISTENCIA">Assistência</option>
-                  <option value="MEDICAMENTO">Medicamento</option>
-                  <option value="PROCEDIMENTO">Procedimento</option>
-                  <option value="__NOVO__">+ Novo tipo…</option>
-                </select>
-                {novoTipo === '__NOVO__' && (
-                  <input value={novoTipoCustom} onChange={e => setNovoTipoCustom(e.target.value.toUpperCase())}
-                    placeholder="Ex.: TRANSPORTE"
-                    className="w-full mt-1.5 border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400"/>
-                )}
+                <DropdownAbaixo
+                  value={novoTipo}
+                  options={tipoOpcoes}
+                  placeholder="--"
+                  actionLabel="+ Novo tipo…"
+                  onChange={val => { setNovoTipo(val); setNovoCatIdx(''); }}
+                  onAction={() => {
+                    if (!podeLancar) { semPermissao('lançar cobrança na fatura'); return; }
+                    setNovoTipoModalTipoInicial(''); // tipo desconhecido — digitado do zero
+                    setNovoTipoModalAberto(true);
+                  }}
+                />
               </div>
-              <div className="col-span-2">
+              <div>
                 <label className="block text-[11px] font-semibold text-gray-500 mb-1">
-                  Descrição <span className="text-red-400">*</span>
+                  Item Fatura <span className="text-red-400">*</span>
                 </label>
-                <input value={novoNome} onChange={e => { setNovoNome(e.target.value); setNovoCatIdx(''); }}
-                  placeholder="Descreva o item ou cobrança"
-                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400"/>
+                <DropdownAbaixo
+                  value={novoCatIdx}
+                  options={itemFaturaOpcoes}
+                  placeholder="--"
+                  actionLabel="+ Novo item…"
+                  onChange={handleCatalogoChange}
+                  onAction={() => {
+                    if (!podeLancar) { semPermissao('lançar cobrança na fatura'); return; }
+                    setNovoTipoModalTipoInicial(novoTipo); // tipo já escolhido — só falta o nome
+                    setNovoTipoModalAberto(true);
+                  }}
+                />
               </div>
+              {/* Só aparece com MAIS de um paciente nesta fatura — com um único, o
+                  card do proprietário já deixa claro de quem é a fatura. */}
+              {prop.animais.length > 1 && (
+                <div>
+                  <label className="block text-[11px] font-semibold text-gray-500 mb-1">Animal</label>
+                  <select value={novoAnimalId} onChange={e => setNovoAnimalId(e.target.value)}
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 bg-white">
+                    <option value="">— Geral (sem animal) —</option>
+                    {prop.animais.map(a => (
+                      <option key={a.id} value={a.id}>{a.nome}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
 
-            {/* Animal — com 1 animal já vem selecionado; com vários, escolher (opcional) */}
-            {prop.animais.length === 1 ? (
-              <p className="text-[11px] text-gray-500 mb-3">
-                Animal: <span className="font-semibold text-gray-700">{prop.animais[0].nome}</span>
-              </p>
-            ) : prop.animais.length > 1 ? (
-              <div className="mb-3">
-                <label className="block text-[11px] font-semibold text-gray-500 mb-1">Animal</label>
-                <select value={novoAnimalId} onChange={e => setNovoAnimalId(e.target.value)}
-                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 bg-white">
-                  <option value="">— Geral (sem animal) —</option>
-                  {prop.animais.map(a => (
-                    <option key={a.id} value={a.id}>{a.nome}</option>
-                  ))}
-                </select>
-              </div>
-            ) : null}
-
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 items-end">
-              {/* Quantidade */}
+              {/* Quantidade — 0 é válido de propósito: cadastra o item nos Itens
+                  Frequentes sem lançar cobrança na fatura. */}
               <div>
                 <label className="block text-[11px] font-semibold text-gray-500 mb-1">Quantidade</label>
-                <input type="number" min="1" value={novoQty} onChange={e => setNovoQty(e.target.value)}
+                <input type="number" min="0" value={novoQty} onChange={e => setNovoQty(e.target.value)}
                   className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm text-center focus:outline-none focus:border-indigo-400"/>
               </div>
-              {/* Valor */}
+              {/* Valor — opcional (o único obrigatório junto de Quantidade é o próprio
+                  item/tipo escolhido acima; valor 0 é uma cobrança válida) */}
               <div>
                 <label className="block text-[11px] font-semibold text-gray-500 mb-1">
-                  Valor Unitário <span className="text-red-400">*</span>
+                  Valor Unitário
                 </label>
                 <div className="flex items-center border border-gray-300 rounded-xl overflow-hidden focus-within:border-indigo-400">
                   <span className="px-2.5 text-xs text-gray-400 bg-gray-50 border-r border-gray-200 py-2">R$</span>
@@ -1169,13 +1553,13 @@ function PainelFatura({
                   <p className="text-[10px] text-red-500">−{formatBRL(novoDesconto)}</p>
                 )}
               </div>
-              {/* Botão */}
+              {/* Botão — quantidade 0 só cadastra o item, sem lançar cobrança */}
               <button
                 onClick={handleLancar}
-                disabled={lancando || !novoNome.trim()}
+                disabled={lancando || !novoTipo || !novoNome.trim()}
                 className="flex items-center justify-center gap-2 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold rounded-xl transition-colors">
                 {lancando ? <Loader2 size={14} className="animate-spin"/> : null}
-                Lançar Cobrança
+                {Number(novoQty) === 0 ? 'Cadastrar Item' : 'Lançar Cobrança'}
               </button>
             </div>
           </div>
@@ -1205,7 +1589,15 @@ function CardProprietario({
           {prop.fullName[0]?.toUpperCase()}
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-900 truncate">{prop.fullName}</p>
+          <div className="flex items-center gap-1.5">
+            <p className="text-sm font-semibold text-gray-900 truncate">{prop.fullName}</p>
+            {/* Proprietário inativado que só aparece aqui por causa de uma fatura
+                pendente (ver FaturaController.listarProprietarios) — sem o selo,
+                pareceria bug ele estar na lista sem nenhum animal ativo. */}
+            {prop.ativo === false && (
+              <span className="flex-shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-600">Inativo</span>
+            )}
+          </div>
           <p className="text-[10px] text-gray-400 truncate">
             {prop.animais.map(a => a.nome).join(', ') || 'Sem animais'}
           </p>

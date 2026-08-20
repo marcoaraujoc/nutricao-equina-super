@@ -11,6 +11,8 @@ import {
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { gerarHtmlDieta, type PrintAnimal, type PrintPlan, type PrintItem, type PrintUser } from '../utils/Dietaprint';
+import { htmlParaPdfBlob } from '../utils/gerarPdf';
+import { imprimirHtml } from '../utils/print/imprimirHtml';
 import InlineError from './InlineError';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -37,55 +39,15 @@ export interface DietaAcoesBarProps {
   podeExportar?:     boolean;
 }
 
-// ─── Helper: gerar PDF como Blob via iframe ───────────────────────────────────
+// ─── Helper: gerar PDF como Blob (utils/gerarPdf.ts — compartilhado com toda a aplicação) ──
 
-async function gerarPdfBlob(
+function gerarPdfBlob(
   animal: PrintAnimal,
   plano:  PrintPlan,
   itens:  PrintItem[],
   user:   PrintUser | null,
 ): Promise<Blob> {
-  const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([
-    import('jspdf'),
-    import('html2canvas'),
-  ]);
-
-  const html = gerarHtmlDieta(animal, plano, itens, user);
-
-  const iframe = document.createElement('iframe');
-  Object.assign(iframe.style, {
-    position: 'fixed', top: '-9999px', left: '-9999px',
-    width: '794px', height: '1px', border: 'none', visibility: 'hidden',
-  });
-  document.body.appendChild(iframe);
-
-  try {
-    const doc = iframe.contentDocument!;
-    doc.open(); doc.write(html); doc.close();
-    await new Promise(r => setTimeout(r, 900));
-
-    const body = doc.body;
-    iframe.style.height = `${body.scrollHeight}px`;
-
-    const canvas = await html2canvas(body, {
-      scale: 2, useCORS: true, logging: false,
-      width: 794, windowWidth: 794, scrollX: 0, scrollY: 0,
-    });
-
-    const imgW = 210, pageH = 297;
-    const imgH = imgW * (canvas.height / canvas.width);
-    const pdf  = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-
-    let posY = 0;
-    while (posY < imgH) {
-      if (posY > 0) pdf.addPage();
-      pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, -posY, imgW, imgH);
-      posY += pageH;
-    }
-    return pdf.output('blob');
-  } finally {
-    document.body.removeChild(iframe);
-  }
+  return htmlParaPdfBlob(gerarHtmlDieta(animal, plano, itens, user));
 }
 
 // ─── Helper: blob → base64 ────────────────────────────────────────────────────
@@ -276,20 +238,7 @@ export default function DietaAcoesBar({
   // ── Imprimir ────────────────────────────────────────────────────────────
 
   const imprimir = () => {
-    const html = gerarHtmlDieta(animal, plano, itens, user);
-    const iframe = document.createElement('iframe');
-    Object.assign(iframe.style, {
-      position: 'fixed', top: '-9999px', left: '-9999px',
-      width: '794px', height: '0px', border: 'none', visibility: 'hidden',
-    });
-    document.body.appendChild(iframe);
-    const doc = iframe.contentDocument!;
-    doc.open(); doc.write(html); doc.close();
-    setTimeout(() => {
-      iframe.contentWindow!.focus();
-      iframe.contentWindow!.print();
-      setTimeout(() => document.body.removeChild(iframe), 1000);
-    }, 500);
+    imprimirHtml(gerarHtmlDieta(animal, plano, itens, user));
   };
 
   // ── Exportar PDF ────────────────────────────────────────────────────────

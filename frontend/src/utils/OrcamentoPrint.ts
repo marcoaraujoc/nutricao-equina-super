@@ -2,6 +2,8 @@
 // Utilitário de impressão para Orçamento — segue o padrão de EvolucaoPrint.ts
 // (iframe oculto + print, sem abrir aba nova e sem depender de popup blocker).
 
+import { imprimirHtml } from './print/imprimirHtml';
+
 export interface PrintOrcamentoItem {
   tipo:          string;
   descricao:     string;
@@ -397,25 +399,5 @@ export const nomeArquivoOrcamento = (orc: PrintOrcamento) =>
   `orcamento-${orc.numeroFormatado}-${orc.proprietario.fullName.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').toLowerCase()}.pdf`;
 
 export function imprimirOrcamento(orc: PrintOrcamento): void {
-  const iframe = document.createElement('iframe');
-  Object.assign(iframe.style, {
-    position: 'fixed', top: '-9999px', left: '-9999px',
-    width: '0', height: '0', border: 'none',
-  });
-  document.body.appendChild(iframe);
-
-  const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
-  if (!doc) { document.body.removeChild(iframe); return; }
-
-  doc.open();
-  doc.write(gerarHtmlOrcamento(orc));
-  doc.close();
-
-  setTimeout(() => {
-    iframe.contentWindow?.focus();
-    iframe.contentWindow?.print();
-    setTimeout(() => {
-      if (document.body.contains(iframe)) document.body.removeChild(iframe);
-    }, 500);
-  }, 250);
+  imprimirHtml(gerarHtmlOrcamento(orc));
 }

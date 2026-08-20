@@ -225,14 +225,23 @@ const COMBO_INCLUDE = {
   },
 };
 
-// GET /api/procedimentos/cadastro/combos — combos ativos da empresa ativa
+// GET /api/procedimentos/cadastro/combos?ativo=all|true|false — combos da empresa
+// ativa. `ativo` default 'true': os consumidores clínicos (Orçamento, Prescrição)
+// não mandam o parâmetro, então continuam vendo só combos ativos; só a tela de
+// Cadastro > Procedimentos manda `all`/`false` para gerir os inativados.
 const listarCombos = async (req, res) => {
   try {
     if (!req.empresaId) return res.json({ dados: [] });
+    const { ativo } = req.query;
+    const where = { empresaId: req.empresaId };
+    if (ativo === 'all') { /* sem filtro */ }
+    else if (ativo !== undefined) where.ativo = ativo === 'true';
+    else where.ativo = true;
+
     let combos = await prisma.procedimentoCombo.findMany({
-      where:   { empresaId: req.empresaId, ativo: true },
+      where,
       include: COMBO_INCLUDE,
-      orderBy: { nome: 'asc' },
+      orderBy: [{ ativo: 'desc' }, { nome: 'asc' }],
     });
 
     // Só combos cujos itens são TODOS de especialidades que a empresa atende.
@@ -353,32 +362,41 @@ const atualizarCombo = async (req, res) => {
   }
 };
 
-// DELETE /api/procedimentos/cadastro/combos/:id — GESTOR; motivo obrigatório (auditoria)
-const excluirCombo = async (req, res) => {
+// PATCH /api/procedimentos/cadastro/combos/:id/toggle — GESTOR; motivo obrigatório
+// (auditoria). Alterna ativo↔inativo — combo inativo some de Orçamento/Prescrição
+// (listarCombos filtra ativo:true por padrão) mas continua alcançável nesta tela
+// pela aba Inativos/Todos, com o botão revertendo a ação.
+const toggleCombo = async (req, res) => {
   try {
     const id     = Number(req.params.id);
     const motivo = req.body?.motivo?.trim();
-    if (!motivo) return res.status(400).json({ error: 'É obrigatório informar o motivo da exclusão' });
+    if (!motivo) return res.status(400).json({ error: 'É obrigatório informar o motivo' });
     if (!(await isGestorDaEmpresa(req.user.id, req.empresaId))) {
-      return res.status(403).json({ error: 'Somente o gestor da empresa exclui combos.' });
+      return res.status(403).json({ error: 'Somente o gestor da empresa altera o status de combos.' });
     }
-    const combo = await prisma.procedimentoCombo.findFirst({ where: { id, empresaId: req.empresaId, ativo: true } });
+    const combo = await prisma.procedimentoCombo.findFirst({ where: { id, empresaId: req.empresaId } });
     if (!combo) return res.status(404).json({ error: 'Combo não encontrado.' });
 
-    await prisma.$transaction(async (tx) => {
-      await tx.procedimentoCombo.update({ where: { id }, data: { ativo: false } });
+    const vaiInativar = combo.ativo;
+    const atualizado = await prisma.$transaction(async (tx) => {
+      const novo = await tx.procedimentoCombo.update({
+        where:   { id },
+        data:    { ativo: !combo.ativo },
+        include: COMBO_INCLUDE,
+      });
       await registrarAuditoria(tx, req, {
-        categoria:  'EXCLUSAO',
+        categoria:  'ALTERACAO',
         entidade:   'PROCEDIMENTO_COMBO',
         entidadeId: id,
         motivo,
-        detalhes:   `Combo "${combo.nome}" excluído (soft delete)`,
+        detalhes:   `Combo "${combo.nome}" ${vaiInativar ? 'inativado' : 'ativado'}`,
       });
+      return novo;
     });
-    return res.json({ dados: { message: 'Combo excluído.' } });
+    return res.json({ dados: atualizado, mensagem: vaiInativar ? 'Combo inativado.' : 'Combo ativado.' });
   } catch (err) {
-    console.error('ProcedimentoCadastroController.excluirCombo:', err);
-    return res.status(500).json({ error: 'Erro ao excluir combo.' });
+    console.error('ProcedimentoCadastroController.toggleCombo:', err);
+    return res.status(500).json({ error: 'Erro ao alterar status do combo.' });
   }
 };
 
@@ -389,5 +407,5 @@ module.exports = {
   listarCombos,
   criarCombo,
   atualizarCombo,
-  excluirCombo,
+  toggleCombo,
 };

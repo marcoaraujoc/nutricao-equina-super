@@ -7,15 +7,17 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
-import ModalJustificativa from '../components/ModalJustificativa';
 import {
-  AlertTriangle, Plus, Pencil, Trash2,
+  AlertTriangle, Plus, Pencil,
   Search, RefreshCw, X, Syringe, Calendar,
   ChevronDown, FlaskConical, Eye, ArrowUpDown,
+  ToggleLeft, ToggleRight,
 } from 'lucide-react';
 import { formatDate } from '../utils/dateUtils';
 import InlineError from '../components/InlineError';
 import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
+import ModalJustificativa from '../components/ModalJustificativa';
+import JustificativaCancelamento from '../components/JustificativaCancelamento';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -37,6 +39,8 @@ interface LoteVacina {
   validade:        string;
   qtdTotal:        number;
   qtdDisponivel:          number;
+  estoqueMinimo:          number;
+  estoqueAlarmante:       number;
   qtdFrascos:             number;
   dosesPorFrasco:         number;
   validadeHoras:          number | null;
@@ -48,6 +52,12 @@ interface LoteVacina {
   createdAt:       string;
   vacina:          { id: number; nome: string; fabricante: string | null; via: string } | null;
   medicamentoCat:  MedCatItem | null;
+  // Trilha de ativação/inativação (quem fez, quando) — ver lib/cadastroAtivacao.js
+  ativoEm?:        string | null;
+  ativoPorNome?:   string | null;
+  inativoEm?:      string | null;
+  inativoPorNome?: string | null;
+  inativoMotivo?:  string | null;
 }
 
 interface Meta {
@@ -55,9 +65,11 @@ interface Meta {
   totalVencidos: number;
   totalVencendo: number;
   totalDoses:    number;
+  totalAbaixoMinimo:    number;
+  totalAbaixoAlarmante: number;
 }
 
-type FiltroTab = 'todas' | 'ativas' | 'inativas' | 'vencidas' | 'vencendo';
+type FiltroTab = 'todos' | 'ativos' | 'inativos' | 'critico' | 'alarmante' | 'vencido' | 'vencendo';
 
 const DOSES_POR_FRASCO_OPTS = [1, 2, 5, 10, 20, 50, 100];
 
@@ -67,6 +79,8 @@ const FORM_VAZIO = {
   validade:               '',
   qtdFrascos:             1,
   dosesPorFrasco:         1,
+  estoqueMinimo:          0,
+  estoqueAlarmante:       0,
   validadeHoras:          '' as number | '',
   validadeDias:           0,
   valorUnitario:          '' as number | '',
@@ -81,7 +95,9 @@ export default function EstoqueVacina() {
   const { podeExecutar, isGestor, loading: loadingPerm } = usePermissoes();
   const podeCriar   = isGestor || podeExecutar('vacina.estoque.criar');
   const podeEditar  = isGestor || podeExecutar('vacina.estoque.editar');
-  const podeDeletar = isGestor || podeExecutar('vacina.estoque.deletar');
+  // Mesma permissão que antes gateava a exclusão passou a gatear o toggle
+  // ativar/inativar (mesma regra de /cadastro/fornecedores — ver EstoqueVacinaController.toggle).
+  const podeAtivar  = isGestor || podeExecutar('vacina.estoque.deletar');
   const podeAjustar = isGestor || podeExecutar('vacina.estoque.ajustar');
   const semPermissao = (acao: string) =>
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
@@ -89,17 +105,16 @@ export default function EstoqueVacina() {
   const [lotes,        setLotes]        = useState<LoteVacina[]>([]);
   const [fabricantes,  setFabricantes]  = useState<string[]>([]);
   const [vacinas,      setVacinas]      = useState<MedCatItem[]>([]);
-  const [meta,         setMeta]         = useState<Meta>({ totalLotes: 0, totalVencidos: 0, totalVencendo: 0, totalDoses: 0 });
+  const [meta,         setMeta]         = useState<Meta>({ totalLotes: 0, totalVencidos: 0, totalVencendo: 0, totalDoses: 0, totalAbaixoMinimo: 0, totalAbaixoAlarmante: 0 });
   const [loading,      setLoading]      = useState(false);
   const [busca,        setBusca]        = useState('');
-  const [filtroTab,    setFiltroTab]    = useState<FiltroTab>('todas');
+  const [filtroTab,    setFiltroTab]    = useState<FiltroTab>('todos');
 
   const [form,              setForm]              = useState({ ...FORM_VAZIO });
   const [fabricanteSel,     setFabricanteSel]     = useState('');
   const [editandoId,        setEditandoId]        = useState<number | null>(null);
   const [salvando,          setSalvando]          = useState(false);
   const [modalFormAberto,   setModalFormAberto]   = useState(false);
-  const [confirmExcluir,    setConfirmExcluir]    = useState<LoteVacina | null>(null);
   const [repassadoEditado,  setRepassadoEditado]  = useState(false);
   const [loteView,          setLoteView]          = useState<LoteVacina | null>(null);
 
@@ -207,7 +222,7 @@ export default function EstoqueVacina() {
 
       if (!lotesRes.data) return;
       setLotes(lotesRes.data.dados ?? []);
-      setMeta(lotesRes.data.meta ?? { totalLotes: 0, totalVencidos: 0, totalVencendo: 0, totalDoses: 0 });
+      setMeta(lotesRes.data.meta ?? { totalLotes: 0, totalVencidos: 0, totalVencendo: 0, totalDoses: 0, totalAbaixoMinimo: 0, totalAbaixoAlarmante: 0 });
       if (fabRes.data) setFabricantes(fabRes.data.dados ?? []);
     } catch { setErroInline('Erro ao carregar estoque de vacinas.'); }
     finally { setLoading(false); }
@@ -237,28 +252,18 @@ export default function EstoqueVacina() {
   const em7Date  = (() => { const d = new Date(hojeDate); d.setDate(d.getDate() + 7); return d; })();
 
   const lotesFiltrados = (() => {
-    if (filtroTab === 'ativas')   return lotes.filter(l => l.ativo && new Date(l.validade) >= hojeDate);
-    if (filtroTab === 'inativas') return lotes.filter(l => !l.ativo);
-    if (filtroTab === 'vencidas') return lotes.filter(l => l.ativo && new Date(l.validade) < hojeDate);
+    if (filtroTab === 'ativos')   return lotes.filter(l => l.ativo && new Date(l.validade) >= hojeDate);
+    if (filtroTab === 'inativos') return lotes.filter(l => !l.ativo);
+    if (filtroTab === 'critico')  return lotes.filter(l => l.ativo && l.qtdDisponivel <= l.estoqueMinimo);
+    if (filtroTab === 'alarmante') return lotes.filter(l => l.ativo && l.qtdDisponivel <= l.estoqueAlarmante && l.qtdDisponivel > l.estoqueMinimo);
+    if (filtroTab === 'vencido')  return lotes.filter(l => l.ativo && new Date(l.validade) < hojeDate);
     if (filtroTab === 'vencendo') return lotes.filter(l => {
       if (!l.ativo) return false;
       const v = new Date(l.validade); v.setHours(0, 0, 0, 0);
       return v >= hojeDate && v <= em7Date;
     });
-    return lotes; // todas
+    return lotes; // todos
   })();
-
-  const counts: Record<FiltroTab, number> = {
-    todas:    lotes.length,
-    ativas:   lotes.filter(l => l.ativo && new Date(l.validade) >= hojeDate).length,
-    inativas: lotes.filter(l => !l.ativo).length,
-    vencidas: lotes.filter(l => l.ativo && new Date(l.validade) < hojeDate).length,
-    vencendo: lotes.filter(l => {
-      if (!l.ativo) return false;
-      const v = new Date(l.validade); v.setHours(0, 0, 0, 0);
-      return v >= hojeDate && v <= em7Date;
-    }).length,
-  };
 
   const vacinasFiltradas = buscaVac.trim().length === 0
     ? vacinas
@@ -290,6 +295,14 @@ export default function EstoqueVacina() {
     return 'ok';
   };
 
+  // Nível de doses disponíveis vs. os limites do próprio lote (mesma lógica de
+  // EstoqueController.nivelEstoque — mínimo = 🔴 crítico, alarmante = 🟡 alarmante)
+  const nivelEstoqueLote = (l: LoteVacina) => {
+    if (l.qtdDisponivel <= l.estoqueMinimo)    return 'critico';
+    if (l.estoqueAlarmante > 0 && l.qtdDisponivel <= l.estoqueAlarmante) return 'alarmante';
+    return 'ok';
+  };
+
   // ── Form handlers ─────────────────────────────────────────────────────────
 
   const preencherEdicao = (l: LoteVacina) => {
@@ -303,6 +316,8 @@ export default function EstoqueVacina() {
       validade:               isoValidade,
       qtdFrascos:             l.qtdFrascos,
       dosesPorFrasco:         l.dosesPorFrasco,
+      estoqueMinimo:          l.estoqueMinimo,
+      estoqueAlarmante:       l.estoqueAlarmante,
       validadeHoras:          l.validadeHoras ?? '',
       validadeDias:           l.validadeDias,
       valorUnitario:          l.valorUnitario ?? '',
@@ -335,10 +350,12 @@ export default function EstoqueVacina() {
     if (!editandoId && !podeCriar) { semPermissao('criar entrada de vacina'); return; }
 
     if (!form.medicamentoCatId) return setErroAcao({ mensagem: 'Selecione a vacina.', campos: ['medicamentoCatId'] });
-    if (!editandoId && !form.validade) return setErroAcao({ mensagem: 'Informe a validade do lote.', campos: ['validade'] });
+    if (!form.lote.trim()) return setErroAcao({ mensagem: 'Informe o lote fabricante.', campos: ['lote'] });
+    if (!form.validade) return setErroAcao({ mensagem: 'Informe a validade do lote.', campos: ['validade'] });
     if (form.validade && !editandoId && form.validade < hoje) return setErroAcao({ mensagem: 'Validade não pode ser anterior à data de hoje.', campos: ['validade'] });
     if (form.dataRecebimento && form.dataRecebimento > hoje) return setErroAcao({ mensagem: 'Data de recebimento não pode ser futura.', campos: ['dataRecebimento'] });
     if (Number(form.qtdFrascos) <= 0 && !editandoId) return setErroAcao({ mensagem: 'Quantidade de frascos deve ser maior que zero.', campos: ['qtdFrascos'] });
+    if (form.estoqueMinimo < 0 || form.estoqueAlarmante < 0) return setErroAcao({ mensagem: 'Quantidades não podem ser negativas.', campos: ['estoqueMinimo','estoqueAlarmante'] });
 
     setSalvando(true);
     try {
@@ -348,6 +365,8 @@ export default function EstoqueVacina() {
         validade:               form.validade || null,
         qtdFrascos:             Number(form.qtdFrascos),
         dosesPorFrasco:         Number(form.dosesPorFrasco) || 1,
+        estoqueMinimo:          Number(form.estoqueMinimo)    || 0,
+        estoqueAlarmante:       Number(form.estoqueAlarmante) || 0,
         validadeHoras:          form.validadeHoras !== '' ? Number(form.validadeHoras) : null,
         validadeDias:           Number(form.validadeDias) || 0,
         valorUnitario:          form.valorUnitario !== '' ? Number(form.valorUnitario) : null,
@@ -371,17 +390,30 @@ export default function EstoqueVacina() {
     } finally { setSalvando(false); }
   };
 
-  const confirmarExcluir = async (motivo: string) => {
-    if (!confirmExcluir) return;
-    if (!podeDeletar) { semPermissao('inativar lote de vacina'); return; }
+  // Ativar/Inativar — mesma regra de /cadastro/fornecedores: um clique alterna
+  // o estado; inativar exige justificativa (ModalJustificativa), ativar segue direto.
+  const [inativandoLote, setInativandoLote] = useState<LoteVacina | null>(null);
+  const [togglingAtivo,  setTogglingAtivo]  = useState(false);
+
+  const handleToggle = (lote: LoteVacina) => {
+    setErroInline(null);
+    if (!podeAtivar) { semPermissao('alternar status do lote'); return; }
+    if (lote.ativo) { setInativandoLote(lote); return; }
+    confirmarToggle(lote);
+  };
+
+  const confirmarToggle = async (lote: LoteVacina, motivo?: string) => {
+    setTogglingAtivo(true);
     try {
-      await api.delete(`/vacinas/estoque/${confirmExcluir.id}`, { data: { motivo } });
-      toast.success('Lote inativado.');
-      setConfirmExcluir(null);
+      await api.patch(`/vacinas/estoque/${lote.id}/toggle`, motivo ? { motivo } : undefined);
+      toast.success(lote.ativo ? 'Lote inativado.' : 'Lote ativado.');
+      setInativandoLote(null);
       carregarLotes();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroInline(msg ?? 'Erro ao inativar.');
+      setErroInline(msg ?? 'Erro ao alternar status.');
+    } finally {
+      setTogglingAtivo(false);
     }
   };
 
@@ -460,9 +492,11 @@ export default function EstoqueVacina() {
         </div>
 
         {/* Cards resumo */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
           {[
             { label: 'Lotes Ativos',    value: meta.totalLotes,    color: 'text-gray-900',  bg: 'bg-white' },
+            { label: 'Estoque Crítico', value: meta.totalAbaixoMinimo,    color: 'text-red-600',   bg: meta.totalAbaixoMinimo > 0 ? 'bg-red-50' : 'bg-white',     icon: <AlertTriangle size={12} className="text-red-500" /> },
+            { label: 'Alerta Amarelo',  value: meta.totalAbaixoAlarmante, color: 'text-amber-600', bg: meta.totalAbaixoAlarmante > 0 ? 'bg-amber-50' : 'bg-white', icon: <AlertTriangle size={12} className="text-amber-500" /> },
             { label: 'Vencidos',        value: meta.totalVencidos, color: 'text-red-600',   bg: meta.totalVencidos > 0 ? 'bg-red-50' : 'bg-white',   icon: <AlertTriangle size={12} className="text-red-500" /> },
             { label: 'Vencendo (7d)',   value: meta.totalVencendo, color: 'text-amber-600', bg: meta.totalVencendo > 0 ? 'bg-amber-50' : 'bg-white', icon: <Calendar size={12} className="text-amber-500" /> },
             { label: 'Doses Disponíveis', value: meta.totalDoses,  color: 'text-teal-700',  bg: 'bg-white', icon: <FlaskConical size={12} className="text-teal-500" /> },
@@ -511,11 +545,13 @@ export default function EstoqueVacina() {
 
           <div className="flex flex-wrap gap-2 mb-4">
             {([
-              ['todas',    'Todas',          'teal'],
-              ['ativas',   'Ativa',          'teal'],
-              ['inativas', 'Inativa',        'gray'],
-              ['vencidas', '🔴 Vencida',     'red'],
-              ['vencendo', '🟡 Vencendo',    'amber'],
+              ['todos',     'Todos',          'teal'],
+              ['ativos',    'Ativos',         'teal'],
+              ['inativos',  'Inativos',       'gray'],
+              ['critico',   '🔴 Crítico',     'red'],
+              ['alarmante', '🟡 Alarmante',   'amber'],
+              ['vencido',   '🔴 Vencido',     'red'],
+              ['vencendo',  '🟡 Vencendo',    'amber'],
             ] as [FiltroTab, string, string][]).map(([key, label, color]) => {
               const activeClass = color === 'red'   ? 'bg-red-600 text-white border-red-600'
                                 : color === 'amber' ? 'bg-amber-500 text-white border-amber-500'
@@ -528,7 +564,7 @@ export default function EstoqueVacina() {
                       ? activeClass
                       : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
                   }`}>
-                  {label} <span className="opacity-70">{counts[key]}</span>
+                  {label}
                 </button>
               );
             })}
@@ -548,15 +584,32 @@ export default function EstoqueVacina() {
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Vacina</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Doses</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                      {filtroTab === 'ativos' || filtroTab === 'critico' || filtroTab === 'alarmante' || filtroTab === 'vencido' || filtroTab === 'vencendo' ? (
+                        <>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Criado em</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado em</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado por</th>
+                        </>
+                      ) : filtroTab === 'inativos' ? (
+                        <>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado em</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado por</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
+                        </>
+                      ) : null}
                       <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {lotesFiltrados.map((lote) => {
                       const nivel = nivelLote(lote);
+                      const nivelEstoque = nivelEstoqueLote(lote);
                       const statusLabel = !lote.ativo ? 'INATIVO' : nivel === 'vencido' ? 'VENCIDO' : 'ATIVO';
                       const statusClass = !lote.ativo ? 'bg-gray-100 text-gray-500'
                         : nivel === 'vencido' ? 'bg-red-100 text-red-600' : 'bg-teal-100 text-teal-700';
+                      const dosesCls = nivelEstoque === 'critico' ? 'text-red-600'
+                        : nivelEstoque === 'alarmante' ? 'text-amber-600'
+                        : lote.qtdDisponivel === 0 ? 'text-gray-400' : 'text-teal-700';
                       const jaUsado = lote.qtdDisponivel < lote.qtdTotal;
                       return (
                         <tr key={lote.id} className={`hover:bg-gray-50 transition-colors ${!lote.ativo ? 'opacity-60' : ''}`}>
@@ -574,13 +627,26 @@ export default function EstoqueVacina() {
                           </td>
                           <td className="px-4 py-3 text-center whitespace-nowrap">
                             <span className="text-xs">
-                              <span className={`font-bold ${lote.qtdDisponivel === 0 ? 'text-gray-400' : 'text-teal-700'}`}>{lote.qtdDisponivel}</span>
+                              <span className={`font-bold ${dosesCls}`}>{lote.qtdDisponivel}</span>
                               <span className="text-gray-400">/{lote.qtdTotal}</span>
                             </span>
                           </td>
                           <td className="px-4 py-3 text-center">
                             <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${statusClass}`}>{statusLabel}</span>
                           </td>
+                          {filtroTab === 'ativos' || filtroTab === 'critico' || filtroTab === 'alarmante' || filtroTab === 'vencido' || filtroTab === 'vencendo' ? (
+                            <>
+                              <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(lote.createdAt)}</td>
+                              <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(lote.ativoEm ?? lote.createdAt)}</td>
+                              <td className="px-4 py-3 whitespace-nowrap text-gray-600">{lote.ativoPorNome ?? '—'}</td>
+                            </>
+                          ) : filtroTab === 'inativos' ? (
+                            <>
+                              <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(lote.inativoEm)}</td>
+                              <td className="px-4 py-3 whitespace-nowrap text-gray-600">{lote.inativoPorNome ?? '—'}</td>
+                              <td className="px-4 py-3"><JustificativaCancelamento texto={lote.inativoMotivo} /></td>
+                            </>
+                          ) : null}
                           <td className="px-4 py-3 whitespace-nowrap">
                             <div className="flex items-center justify-center gap-1">
                               {jaUsado ? (
@@ -590,14 +656,14 @@ export default function EstoqueVacina() {
                                 </button>
                               ) : podeEditar ? (
                                 <button onClick={() => preencherEdicao(lote)} title="Editar"
-                                  className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50">
+                                  className="p-1.5 rounded-lg border border-orange-200 text-orange-500 hover:bg-orange-50">
                                   <Pencil size={13} />
                                 </button>
                               ) : null}
-                              {podeDeletar && (
-                                <button onClick={() => setConfirmExcluir(lote)} title="Inativar"
-                                  className="p-1.5 rounded-lg border border-red-200 text-red-400 hover:bg-red-50">
-                                  <Trash2 size={13} />
+                              {podeAtivar && (
+                                <button onClick={() => handleToggle(lote)} title={lote.ativo ? 'Inativar' : 'Ativar'}
+                                  className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50">
+                                  {lote.ativo ? <ToggleRight size={13} className="text-blue-600" /> : <ToggleLeft size={13} className="text-blue-600" />}
                                 </button>
                               )}
                             </div>
@@ -613,9 +679,13 @@ export default function EstoqueVacina() {
               <div className="md:hidden divide-y divide-gray-50">
                 {lotesFiltrados.map((lote) => {
                   const nivel = nivelLote(lote);
+                  const nivelEstoque = nivelEstoqueLote(lote);
                   const statusLabel = !lote.ativo ? 'INATIVO' : nivel === 'vencido' ? 'VENCIDO' : 'ATIVO';
                   const statusClass = !lote.ativo ? 'bg-gray-100 text-gray-500'
                     : nivel === 'vencido' ? 'bg-red-100 text-red-600' : 'bg-teal-100 text-teal-700';
+                  const dosesCls = nivelEstoque === 'critico' ? 'text-red-600'
+                    : nivelEstoque === 'alarmante' ? 'text-amber-600'
+                    : lote.qtdDisponivel === 0 ? 'text-gray-400' : 'text-teal-700';
                   const jaUsado = lote.qtdDisponivel < lote.qtdTotal;
                   return (
                     <div key={lote.id} className={`px-4 py-3 ${!lote.ativo ? 'opacity-60' : ''}`}>
@@ -625,7 +695,7 @@ export default function EstoqueVacina() {
                           <span className="truncate">{lote.medicamentoCat?.nome ?? lote.vacina?.nome ?? '—'}</span>
                         </span>
                         <span className="text-xs flex-shrink-0">
-                          <span className={`font-bold ${lote.qtdDisponivel === 0 ? 'text-gray-400' : 'text-teal-700'}`}>{lote.qtdDisponivel}</span>
+                          <span className={`font-bold ${dosesCls}`}>{lote.qtdDisponivel}</span>
                           <span className="text-gray-400">/{lote.qtdTotal} doses</span>
                         </span>
                       </div>
@@ -633,6 +703,17 @@ export default function EstoqueVacina() {
                         Lote {lote.lote} · {statusValidade(lote.validade)}
                         <span className={`ml-1.5 inline-flex px-1.5 py-0.5 rounded-full text-[10px] font-bold ${statusClass}`}>{statusLabel}</span>
                       </p>
+                      {!lote.ativo && lote.inativoEm && (
+                        <p className="text-[10px] text-gray-400 mt-0.5">
+                          Inativado em {formatDate(lote.inativoEm)}{lote.inativoPorNome ? ` por ${lote.inativoPorNome}` : ''}
+                          {lote.inativoMotivo ? <> — <JustificativaCancelamento texto={lote.inativoMotivo} className="inline" /></> : ''}
+                        </p>
+                      )}
+                      {lote.ativo && lote.ativoPorNome && (
+                        <p className="text-[10px] text-gray-400 mt-0.5">
+                          Ativado em {formatDate(lote.ativoEm ?? lote.createdAt)} por {lote.ativoPorNome}
+                        </p>
+                      )}
                       <div className="flex flex-wrap gap-2 mt-2">
                         {jaUsado ? (
                           <button onClick={() => setLoteView(lote)}
@@ -641,14 +722,15 @@ export default function EstoqueVacina() {
                           </button>
                         ) : podeEditar ? (
                           <button onClick={() => preencherEdicao(lote)}
-                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-teal-600 rounded-lg text-xs hover:bg-teal-50 transition-colors">
+                            className="flex items-center gap-1 px-2.5 py-1 border border-orange-200 text-orange-600 rounded-lg text-xs hover:bg-orange-50 transition-colors">
                             <Pencil size={11} /> Editar
                           </button>
                         ) : null}
-                        {podeDeletar && (
-                          <button onClick={() => setConfirmExcluir(lote)}
-                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
-                            <Trash2 size={11} /> Inativar
+                        {podeAtivar && (
+                          <button onClick={() => handleToggle(lote)}
+                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
+                            {lote.ativo ? <ToggleRight size={11} className="text-blue-600" /> : <ToggleLeft size={11} className="text-blue-600" />}
+                            {lote.ativo ? 'Inativar' : 'Ativar'}
                           </button>
                         )}
                       </div>
@@ -760,7 +842,7 @@ export default function EstoqueVacina() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Lote Fabricante
+                    Lote Fabricante <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
@@ -792,7 +874,7 @@ export default function EstoqueVacina() {
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Validade Lote
+                    Validade Lote <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
@@ -867,6 +949,28 @@ export default function EstoqueVacina() {
                 </div>
               </div>
 
+              {/* ── Mínimo + Alarmante (doses) — dispara 🔴 Crítico / 🟡 Alarmante ── */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                    Mínimo <span className="text-gray-400 font-normal">(doses)</span>
+                  </label>
+                  <input type="number" min={0} value={form.estoqueMinimo === 0 ? '' : form.estoqueMinimo}
+                    onChange={(e) => setForm((f) => ({ ...f, estoqueMinimo: e.target.value === '' ? 0 : Number(e.target.value) }))}
+                    placeholder="0"
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                    Alarmante <span className="text-gray-400 font-normal">(doses)</span>
+                  </label>
+                  <input type="number" min={0} value={form.estoqueAlarmante === 0 ? '' : form.estoqueAlarmante}
+                    onChange={(e) => setForm((f) => ({ ...f, estoqueAlarmante: e.target.value === '' ? 0 : Number(e.target.value) }))}
+                    placeholder="0"
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500" />
+                </div>
+              </div>
+
               {/* Valor unitário comprado + repassado */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -893,33 +997,17 @@ export default function EstoqueVacina() {
                 </div>
               </div>
 
-              {/* Status */}
-              {editandoId && (
-                <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-                  <p className="text-[10px] font-semibold text-gray-500 mb-2">Status</p>
-                  <div className="flex gap-1">
-                    {['Inativo', 'Ativo'].map(opt => (
-                      <button key={opt}
-                        onClick={() => setForm(f => ({ ...f, ativo: opt === 'Ativo' }))}
-                        className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                          (opt === 'Ativo') === form.ativo
-                            ? 'bg-teal-600 text-white'
-                            : 'bg-white border border-gray-300 text-gray-600 hover:bg-gray-100'
-                        }`}>{opt}</button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
               <ErroAcao erro={erroAcao} className="mb-2" />
-              <div className="flex gap-2">
-                <button onClick={salvar} disabled={salvando}
-                  className="flex-1 bg-teal-600 hover:bg-teal-700 text-white py-2.5 rounded-xl text-sm font-semibold disabled:opacity-60">
-                  {salvando ? 'Salvando...' : editandoId ? 'Salvar Alterações' : 'Registrar Entrada'}
-                </button>
+              {/* Rodapé no padrão da aplicação: Cancelar + ação principal, mesmo
+                  tamanho das demais telas, alinhados à direita. */}
+              <div className="flex items-center justify-end gap-3">
                 <button onClick={limparForm}
-                  className="px-4 border border-gray-300 text-gray-600 rounded-xl text-sm hover:bg-gray-50">
+                  className="px-4 py-2.5 border border-gray-300 text-gray-600 rounded-xl text-sm font-semibold hover:bg-gray-50 transition-colors">
                   Cancelar
+                </button>
+                <button onClick={salvar} disabled={salvando}
+                  className="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white rounded-xl text-sm font-semibold transition-colors">
+                  {salvando ? 'Salvando...' : 'Salvar'}
                 </button>
               </div>
             </div>
@@ -974,6 +1062,14 @@ export default function EstoqueVacina() {
                 <div>
                   <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Doses Disponíveis</p>
                   <p className={`font-bold ${loteView.qtdDisponivel === 0 ? 'text-red-600' : 'text-teal-700'}`}>{loteView.qtdDisponivel}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Est. Mínimo</p>
+                  <p className="text-gray-700">{loteView.estoqueMinimo}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Est. Alarmante</p>
+                  <p className="text-gray-700">{loteView.estoqueAlarmante}</p>
                 </div>
                 {loteView.valorUnitario != null && (
                   <div>
@@ -1160,14 +1256,14 @@ export default function EstoqueVacina() {
                 );
               })()}
 
-              <div className="flex gap-2">
-                <button onClick={confirmarAjuste} disabled={ajustando || !loteAjuste}
-                  className="flex-1 bg-teal-600 hover:bg-teal-700 text-white py-2.5 rounded-xl text-sm font-semibold disabled:opacity-60">
-                  {ajustando ? 'Ajustando...' : 'Confirmar Ajuste'}
-                </button>
+              <div className="flex items-center justify-end gap-3">
                 <button onClick={fecharAjuste}
-                  className="px-4 border border-gray-300 text-gray-600 rounded-xl text-sm hover:bg-gray-50">
+                  className="px-4 py-2.5 border border-gray-300 text-gray-600 rounded-xl text-sm font-semibold hover:bg-gray-50 transition-colors">
                   Cancelar
+                </button>
+                <button onClick={confirmarAjuste} disabled={ajustando || !loteAjuste}
+                  className="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white rounded-xl text-sm font-semibold transition-colors">
+                  {ajustando ? 'Ajustando...' : 'Confirmar Ajuste'}
                 </button>
               </div>
             </div>
@@ -1175,16 +1271,14 @@ export default function EstoqueVacina() {
         </>
       )}
 
-      {/* ── Modal: confirmar inativação ──────────────────────────────────── */}
       <ModalJustificativa
-        aberto={!!confirmExcluir}
+        aberto={!!inativandoLote}
         titulo="Inativar lote?"
-        descricao={confirmExcluir
-          ? `${confirmExcluir.medicamentoCat?.nome ?? confirmExcluir.vacina?.nome ?? '—'} — Lote ${confirmExcluir.lote} · ${confirmExcluir.qtdDisponivel} doses disponíveis`
-          : undefined}
+        descricao={inativandoLote ? `Lote ${inativandoLote.lote} deixa de aparecer como ativo.` : undefined}
         acaoLabel="Inativar"
-        onConfirmar={confirmarExcluir}
-        onFechar={() => setConfirmExcluir(null)}
+        processando={togglingAtivo}
+        onConfirmar={(motivo) => { if (inativandoLote) confirmarToggle(inativandoLote, motivo); }}
+        onFechar={() => setInativandoLote(null)}
       />
     </PageContainer>
   );

@@ -10,6 +10,7 @@ const { garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa } = require(
 const { registrarAuditoria, registrarAlteracao, registrarTransferencia, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 const { animalEstaInativo } = require('../lib/animalInativo');
+const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const {
   DOSES_POR_DIA, elegivelParaFluxoNovo, dosesTotaisEsperadas, primeiraDoseEsperada,
   calcularProximaDose, classificarExecucao, diferencaEmMinutos,
@@ -704,6 +705,9 @@ const criar = async (req, res) => {
     const veterinarioId = req.user.id;
 
     if (!animalId) return res.status(400).json({ error: 'animalId é obrigatório.' });
+    if (await animalFoiExcluido(animalId)) {
+      return res.status(400).json({ error: 'Paciente inativado — reative-o na tela de Pacientes antes de registrar algo novo.', code: 'PACIENTE_EXCLUIDO' });
+    }
     if (await animalEstaInativo(animalId)) {
       return res.status(400).json({ error: MSG_PACIENTE_INATIVO, code: 'PACIENTE_INATIVO' });
     }
@@ -726,9 +730,18 @@ const criar = async (req, res) => {
     // Valida que a evolução existe e pertence ao animal
     const evolucao = await prisma.evolucaoClinica.findFirst({
       where:  { id: Number(evolucaoId), animalId: Number(animalId), ativo: true },
-      select: { id: true },
+      select: { id: true, veterinarioId: true },
     });
     if (!evolucao) return res.status(400).json({ error: 'Evolução não encontrada para este animal.', code: 'EVOLUCAO_NOT_FOUND' });
+
+    // Autoria: prescrever dentro do atendimento de outro profissional é operar um
+    // documento que não é seu — mesma regra de adicionarItem/atualizarItem/etc.,
+    // só que aqui é ANTES do registro existir (nenhum `podeOperarRegistro` protegia
+    // o `criar`). Quem não conduz a evolução (não criou nem assumiu) só prescreve
+    // depois de assumi-la — nunca "por tabela", só porque tem acesso ao animal.
+    if (!podeOperarRegistro(req, evolucao.veterinarioId)) {
+      return res.status(403).json({ error: 'Só é possível prescrever dentro de uma evolução sua. Assuma o atendimento antes de prescrever.' });
+    }
 
     // Resolve o flag `controlado` de cada medicamento do catálogo (1 query)
     const catIds = [...new Set(
@@ -921,6 +934,9 @@ const adicionarItem = async (req, res) => {
     // Autoria: incluir item na prescrição de outro é alterar o documento clínico dele.
     if (!podeOperarRegistro(req, grupo.veterinarioId)) {
       return res.status(403).json({ error: 'Seu nível de permissão só permite alterar prescrições criadas por você.' });
+    }
+    if (await animalFoiExcluido(grupo.animalId)) {
+      return res.status(400).json({ error: 'Paciente inativado — reative-o na tela de Pacientes antes de registrar algo novo.', code: 'PACIENTE_EXCLUIDO' });
     }
     if (await animalEstaInativo(grupo.animalId)) {
       return res.status(400).json({ error: MSG_PACIENTE_INATIVO, code: 'PACIENTE_INATIVO' });
@@ -1590,6 +1606,15 @@ function executadoHojeItem(item, hojeStr) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` === hojeStr;
 }
 
+// Data LOCAL (YYYY-MM-DD) de um instante qualquer — mesma regra de `hojeLocalStr`/
+// `executadoHojeItem`: NUNCA `toISOString()` aqui, que dá a data em UTC e já vira o
+// dia seguinte a partir das 21h no horário de Brasília.
+function dataLocalStr(d) {
+  const dt = new Date(d);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+}
+
 // Descrição do item na fatura — mesma forma no lançamento da finalização e na execução
 function descricaoItemFatura(item, atendNum) {
   const dose = item.dosagem
@@ -1602,18 +1627,25 @@ function descricaoItemFatura(item, atendNum) {
 // Valor de um item PROCEDIMENTO na fatura, resolvido pelo NOME (o item guarda só o
 // nome): combo da empresa > valor da empresa p/ o procedimento (Cadastro >
 // Procedimentos) > valorVenda do catálogo > 0.
+//
+// ⚠️ NÃO filtra por `ativo` — de propósito. Isto resolve o preço de algo que a
+// pessoa JÁ ESCOLHEU ao prescrever (o item só guarda o nome, sem FK para o combo/
+// procedimento de origem); se o combo/procedimento for inativado ENTRE a
+// prescrição e a finalização/execução, o item não pode nascer com valor 0 só
+// porque saiu do catálogo ativo. Oferecer a opção para prescrição NOVA é outro
+// código (`listarCombos`/`listarComValores`, que filtram `ativo:true`).
 async function resolverValorProcedimento(tx, empresaId, nome) {
   const n = (nome ?? '').trim();
   if (!n) return 0;
   if (empresaId) {
     const combo = await tx.procedimentoCombo.findFirst({
-      where:  { empresaId, ativo: true, nome: { equals: n, mode: 'insensitive' } },
+      where:  { empresaId, nome: { equals: n, mode: 'insensitive' } },
       select: { valor: true },
     });
     if (combo) return combo.valor ?? 0;
   }
   const proc = await tx.procedimentoVeterinario.findFirst({
-    where:  { nome: { equals: n, mode: 'insensitive' }, ativo: true },
+    where:  { nome: { equals: n, mode: 'insensitive' } },
     select: { id: true, valorVenda: true },
   });
   if (!proc) return 0;
@@ -1704,6 +1736,13 @@ const executar = async (req, res) => {
     if (!confirmarHorario) {
       for (const item of itensHoje) {
         if (!elegivelParaFluxoNovo(item)) continue;
+        // 1ª execução de item SEM Hora Início: não existe base real ainda — é
+        // ESTA execução que vai fixar o horário-base para as seguintes
+        // (`proximaDoseEm = calcularProximaDose(agora, frequencia)`, abaixo).
+        // `previsto` aqui seria só a meia-noite de `dataInicio` (mera âncora de
+        // CALENDÁRIO), e cobrar confirmação de "atraso" contra um horário que
+        // ninguém escolheu não faz sentido — Hora Início nunca é impeditivo.
+        if (!item.horaInicio && (item.dosesExecutadas ?? 0) === 0) continue;
         const previsto      = horarioPrevistoDoItem(item);
         const classificacao = classificarExecucao(agora, previsto);
         if (classificacao !== 'NO_HORARIO') {
@@ -1908,9 +1947,39 @@ const executar = async (req, res) => {
   }
 };
 
+// Item PENDENTE no dia informado — é o que decide se ele (e o grupo) aparece na
+// fila de execução daquele dia.
+//   LEGADO (sem horaInicio)      → `janelaDoItem`: qualquer dia dentro de
+//     [dataInicio, dataInicio+duracaoDias) — o dia inteiro é uma dose só.
+//   ELEGÍVEL (rolling schedule)  → 🔴 NUNCA usar `janelaDoItem` aqui: ela cobre a
+//     janela do CURSO INTEIRO (ex.: 28 dias de "1x/semana × 4"), então usá-la
+//     faria o item aparecer TODO santo dia da janela, não só nas 4 datas certas
+//     — era exatamente esse o bug relatado ("agendado todos os dias"). O item SÓ
+//     está pendente quando hoje é EXATAMENTE a data da próxima dose esperada
+//     (`horarioPrevistoDoItem`) — nunca antes, e 🔴 NUNCA depois: regra de
+//     produto explícita (2026-08-18) — "mesmo sem executar não pode mostrar em
+//     outros dias". Dose perdida NÃO fica "atrasada, mas ainda pendente": some da
+//     fila no dia seguinte e é cancelada pelo cron `cancelar_doses_prescricao_
+//     perdidas` (`prescricaoCronService.js`). "A execução seguinte fica presa
+//     esperando a anterior" é o ÚNICO atraso tolerado — e ele é automático: sem
+//     a anterior, `proximaDoseEm` da seguinte nem existe ainda (rolling schedule).
+//     Executado HOJE continua "pendente" nesta função de propósito — alimenta o
+//     card "Histórico — executadas hoje" do front (que lê do MESMO resultado
+//     desta rota); doses restantes em 0 (curso completo) tiram o item da fila.
+function itemPendenteNoDia(item, hojeStr) {
+  if (elegivelParaFluxoNovo(item)) {
+    if (executadoHojeItem(item, hojeStr)) return true;
+    if ((item.dosesExecutadas ?? 0) >= dosesTotaisEsperadas(item)) return false;
+    return dataLocalStr(horarioPrevistoDoItem(item)) === hojeStr;
+  }
+  return janelaDoItem(item, hojeStr).dentro;
+}
+
 // ─── Listar para execução ─────────────────────────────────────────────────────
 // Retorna grupos FINALIZADO cujo janela de tratamento inclui hoje.
-// Filtro de data usa dataInicio + duracaoDias dos itens (não updatedAt).
+// Filtro de data usa dataInicio + duracaoDias dos itens (não updatedAt) — exceto
+// para itens elegíveis ao rolling schedule, que usam `itemPendenteNoDia` (a data
+// REAL da próxima dose, não a janela do curso inteiro).
 
 const listarParaExecucao = async (req, res) => {
   try {
@@ -1999,11 +2068,13 @@ const listarParaExecucao = async (req, res) => {
       : hojeLocalStr();
     const hoje    = new Date(hojeStr + 'T00:00:00Z'); // meia-noite UTC
 
-    // Mantém apenas grupos onde pelo menos um item cobre hoje.
+    // Mantém apenas grupos onde pelo menos um item está PENDENTE hoje — cada item
+    // decide pela sua própria regra (`itemPendenteNoDia`: janela do dia p/ legado,
+    // data real da próxima dose p/ rolling schedule).
     // CANCELADO só aparece quando teve execução (cancelada no meio do tratamento) —
     // canceladas antes de qualquer execução não pertencem à tela de execução.
     const dentroJanela = grupos.filter(g =>
-      g.itens.some(item => janelaDoItem(item, hojeStr).dentro) &&
+      g.itens.some(item => itemPendenteNoDia(item, hojeStr)) &&
       (g.status !== 'CANCELADO' || g.itens.some(i => i.executadoEm))
     );
 
@@ -2060,4 +2131,10 @@ module.exports = {
   reabrirParaEdicao,
   executar,
   listarParaExecucao,
+  // Reusados por `prescricaoCronService.js` (cancelamento automático de dose
+  // perdida) — mesmas funções que `removerItem` usa para cancelar UM item sem
+  // deixar reserva de estoque órfã para os demais itens do grupo.
+  criarReservas,
+  liberarReservas,
+  anexarAplicadaProprietario,
 };

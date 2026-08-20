@@ -29,7 +29,7 @@ router.put('/cadastro/valor/:procedimentoId', authenticate, checkPermission('cad
 router.get('/cadastro/combos',              authenticate, cadastro.listarCombos);
 router.post('/cadastro/combos',             authenticate, checkPermission('cadastro.procedimento.criar',   'PROPRIO'), cadastro.criarCombo);
 router.put('/cadastro/combos/:id',          authenticate, checkPermission('cadastro.procedimento.editar',  'PROPRIO'), cadastro.atualizarCombo);
-router.delete('/cadastro/combos/:id',       authenticate, checkPermission('cadastro.procedimento.deletar', 'PROPRIO'), cadastro.excluirCombo);
+router.patch('/cadastro/combos/:id/toggle', authenticate, checkPermission('cadastro.procedimento.deletar', 'PROPRIO'), cadastro.toggleCombo);
 
 router.get('/',    authenticate, ctrl.listar);
 router.get('/:id', authenticate, ctrl.obterPorId);

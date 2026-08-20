@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Pencil, Ban, CheckCircle2, X, Loader2,
   ChevronLeft, ChevronRight, ChevronDown, Pill, Activity,
-  Clock, Calendar, Search, FileText, Eye, Printer, Lock, MessageCircle, Mail, Receipt,
+  Clock, Search, FileText, Eye, Printer, Lock, MessageCircle, Mail, Receipt,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
@@ -18,6 +18,7 @@ import ConfirmModal from '../components/ConfirmModal';
 import ImportarOrcamentoModal, { type OrcamentoItemImport, marcarOrcamentoImportado } from '../components/ImportarOrcamentoModal';
 import InlineError from '../components/InlineError';
 import ErroAcao, { classeErro, type ErroAcaoDados } from '../components/ErroAcao';
+import JustificativaCancelamento from '../components/JustificativaCancelamento';
 
 
 
@@ -76,8 +77,17 @@ interface PrescricaoGrupo {
   veterinario: { id: number; fullName: string };
   status: StatusGrupo;
   createdAt: string;
+  finalizadoEm?: string | null;
+  executadoEm?: string | null;
   itens: ItemGrupo[];
+  // Justificativa do cancelamento — preenchida em CANCELADO e CANCELADO_PARCIALMENTE.
+  motivoCancelamento?: string | null;
 }
+
+// "Data Fim" da prescrição: a EXECUÇÃO é o fim de verdade (dose aplicada); sem ela, a
+// FINALIZAÇÃO (RASCUNHO virou documento ativo) é o melhor "fim" disponível. Rascunho
+// (SALVO) não tem nenhum dos dois — a coluna mostra "—".
+const dataFimGrupo = (g: PrescricaoGrupo) => g.executadoEm ?? g.finalizadoEm ?? null;
 
 interface FormItem {
   tipo:               TipoItem;
@@ -109,6 +119,12 @@ interface Props {
   animal?:            PrintAnimalPrescricao | null;
   onFaturaAtualizada: () => void;
   evolucaoId?:        number;
+  /** Evolução ativa existe, mas pertence a OUTRO profissional (não assumida por
+   *  mim, e eu não sou gestor) — bloqueia a CRIAÇÃO de prescrição nela. Mesma
+   *  premissa de autoria de editar/finalizar (CLAUDE.md 28-c), só que aplicada
+   *  ANTES do documento existir: o backend já recusa com 403, isto só evita o
+   *  formulário inteiro para depois falhar. */
+  evolucaoDeOutro?:   boolean;
   atendimentoNumero?: string;
   onSalvo?:           () => void;
   openItemId?:        number;
@@ -137,6 +153,24 @@ const POSOLOGIAS = [
   { value: '1x30dias',     label: '1x a cada 30 dias' },
   { value: '1x90dias',     label: '1x a cada 90 dias' },
 ] as const;
+
+// Frequências "1x a cada N dias" — o vet pensa em QUANTAS VEZES aplicar, não em
+// quantos dias o tratamento dura; o campo de duração vira "Qtd. de Vezes" para
+// essas frequências (ver `duracaoDias` no formulário). O agendamento real das
+// datas é o rolling schedule do backend (lib/agendaDoses.js#calcularProximaDose):
+// cada dose prevista = a última EXECUTADA + este intervalo — aqui só convertemos
+// "quantas vezes" ↔ "quantos dias" para preencher `duracaoDias` (Int NOT NULL),
+// que é quem decide QUANTAS doses o curso tem (`dosesTotaisEsperadas`).
+const INTERVALO_DIAS: Record<string, number> = {
+  '1x2dias': 2, '1x3dias': 3, '1xSemana': 7,
+  '1x21dias': 21, '1x30dias': 30, '1x90dias': 90,
+};
+
+// Rótulo do campo por frequência — "1x por semana" fala em SEMANAS (1 dose por
+// semana, então nº de semanas == nº de vezes); as demais usam o genérico "vezes".
+const QTD_LABEL: Record<string, string> = {
+  '1xSemana': 'QTD. SEMANAS',
+};
 
 const VIAS     = ['Oral', 'Endovenosa', 'Intramuscular', 'Subcutânea', 'Tópica', 'Retal', 'Nasal', 'Oftálmica'];
 const UNIDADES = ['cápsula', 'comprimido', 'g', 'gota', 'L', 'mcg', 'mg', 'mL', 'UI'];
@@ -728,8 +762,12 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     // tem fim previsto (encerra-se cancelando a prescrição). Ver DIAS_USO_CONTINUO.
     if (form.frequencia !== 'agora' && form.frequencia !== 'continuo'
         && (!form.duracaoDias || Number(form.duracaoDias) < 1)) {
-      setErroInline('Duração (dias) é obrigatória', ['duracaoDias']); return false;
+      setErroInline(INTERVALO_DIAS[form.frequencia] ? 'Qtd. de Vezes é obrigatória' : 'Duração (dias) é obrigatória', ['duracaoDias']);
+      return false;
     }
+    // Hora Início NUNCA é impeditivo em "1x a cada N dias" (backend já agenda
+    // certo sem ela — lib/agendaDoses.js#elegivelParaFluxoNovo): o horário só se
+    // fixa DEPOIS da 1ª execução, que vira a base das seguintes.
     if (!form.dataInicio.trim()) {
       setErroInline('Data de início é obrigatória', ['dataInicio']); return false;
     }
@@ -1088,6 +1126,8 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   // Uso contínuo não tem fim previsto — a duração vira OPCIONAL (mas segue editável,
   // diferente da dose única, que é sempre 1 dia).
   const isUsoContinuo   = form.frequencia === 'continuo';
+  // "1x a cada N dias": o campo de duração vira "Qtd. de Vezes" — ver INTERVALO_DIAS.
+  const intervaloDias   = INTERVALO_DIAS[form.frequencia] ?? null;
   const medCatalogo     = form.medicamentoCatId
     ? medicamentos.find(m => m.id === form.medicamentoCatId) ?? null
     : null;
@@ -1104,7 +1144,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   // O rodapé só existe se algum botão dele for renderizar (ver o bloco Footer)
   const mostraRodape  =
     (isCreate && !!savedGrupos)                                                    // estado "recém-salvo"
-    || ((grupo?.status === 'FINALIZADO' || grupo?.status === 'EXECUTADO') && podeImprimir)
+    || (grupo != null && ['FINALIZADO', 'EXECUTADO', 'CANCELADO', 'CANCELADO_PARCIALMENTE'].includes(grupo.status) && podeImprimir)
     || (!isCreate && canEdit && !isReadOnly && !showItemForm)                      // "Inserir" (abre o form)
     || !isInline                                                                   // "Fechar/Cancelar" do modal
     || (!showItemForm && (canEdit || canFinalizarCancelar) && !isReadOnly);         // "Finalizar"
@@ -1432,10 +1472,13 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                   </>
                 )}
 
-                {/* Frequência + Hora + Duração + Data Início */}
-                <div className="grid grid-cols-2 sm:grid-cols-8 gap-3">
-                  <div className="col-span-2 sm:col-span-3">
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">FREQUÊNCIA *</label>
+                {/* Frequência + Hora + Duração + Data Início
+                    Larguras via fr (não col-span inteiro): Hora Início pediu +30% e Qtd
+                    pediu redução — em grid-cols-8 (inteiros) essas frações não cabem, daí
+                    o grid-template-columns explícito só no breakpoint sm+. */}
+                <div className="grid grid-cols-2 sm:grid-cols-[3fr_1.3fr_1.3fr_2fr] gap-3">
+                  <div className="col-span-2 sm:col-span-1">
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 whitespace-nowrap">FREQUÊNCIA *</label>
                     <select value={form.frequencia}
                       onChange={e => {
                         const v = e.target.value;
@@ -1448,22 +1491,34 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                       {POSOLOGIAS.map(p => <option key={p.value} value={p.value} className="text-gray-900">{p.label}</option>)}
                     </select>
                   </div>
-                  <div className="sm:col-span-1">
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 flex items-center gap-1"><Clock size={9} /> HORA INÍCIO</label>
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 whitespace-nowrap">
+                      HORA INÍCIO
+                    </label>
                     <input type="time" value={form.horaInicio} onChange={e => set('horaInicio', e.target.value)}
-                      className="w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500" />
+                      className={classeErro(erroAcao, 'horaInicio', 'w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500')} />
                   </div>
-                  <div className="sm:col-span-2">
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DURAÇÃO (DIAS){!isDoseUnica && !isUsoContinuo && ' *'}</label>
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 whitespace-nowrap">
+                      {intervaloDias ? QTD_LABEL[form.frequencia] ?? 'QTD. DE VEZES' : 'DURAÇÃO (DIAS)'}{!isDoseUnica && !isUsoContinuo && ' *'}
+                    </label>
                     <input type="number" min="1"
-                      value={isDoseUnica ? '' : form.duracaoDias}
+                      value={
+                        isDoseUnica ? ''
+                        : intervaloDias ? (form.duracaoDias === '' ? '' : Math.max(1, Math.round(Number(form.duracaoDias) / intervaloDias)))
+                        : form.duracaoDias
+                      }
                       disabled={isDoseUnica}
-                      onChange={e => set('duracaoDias', e.target.value === '' ? '' : Number(e.target.value))}
-                      placeholder={isDoseUnica ? 'Dose única' : isUsoContinuo ? 'Opcional' : 'Ex: 7'}
+                      onChange={e => {
+                        if (e.target.value === '') { set('duracaoDias', ''); return; }
+                        const n = Number(e.target.value);
+                        set('duracaoDias', intervaloDias ? n * intervaloDias : n);
+                      }}
+                      placeholder={isDoseUnica ? 'Dose única' : isUsoContinuo ? 'Opcional' : intervaloDias ? 'Ex: 5' : 'Ex: 7'}
                       className={classeErro(erroAcao, 'duracaoDias', `w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500 ${isDoseUnica ? 'bg-gray-50 text-gray-400 cursor-not-allowed placeholder:text-gray-400' : ''}`)} />
                   </div>
-                  <div className="col-span-2 sm:col-span-2">
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">DATA INÍCIO</label>
+                  <div className="col-span-2 sm:col-span-1">
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 whitespace-nowrap">DATA INÍCIO</label>
                     <DateInput
                       value={form.dataInicio}
                       onChange={v => set('dataInicio', v)}
@@ -1679,8 +1734,8 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
               </>
             ) : (
               <>
-                {/* Imprimir — FINALIZADO ou EXECUTADO */}
-                {(grupo?.status === 'FINALIZADO' || grupo?.status === 'EXECUTADO') && podeImprimir && (
+                {/* Imprimir — FINALIZADO, EXECUTADO ou já CANCELADO (o registro impresso continua útil) */}
+                {grupo != null && ['FINALIZADO', 'EXECUTADO', 'CANCELADO', 'CANCELADO_PARCIALMENTE'].includes(grupo.status) && podeImprimir && (
                   <button onClick={() => imprimirPrescricao(grupo!, animal)}
                     className="flex items-center gap-1.5 px-4 py-2 border border-blue-200 text-blue-600 hover:bg-blue-50 rounded-xl text-sm transition-colors">
                     <Printer size={14} /> Imprimir
@@ -1787,7 +1842,15 @@ function ItemRow({
   const podeRemover = canRemove ?? canEdit;
   const isMed  = tipo === 'MEDICAMENTO';
   const isDoseUnicaRow = frequencia === 'agora';
-  const dtFim  = !isDoseUnicaRow && dataInicio && duracaoDias ? calcDataFim(dataInicio, duracaoDias) : '';
+  // "1x a cada N dias": a duração é guardada em DIAS (para `dosesTotaisEsperadas`
+  // no backend arredondar certo), mas aqui exibimos em VEZES — e o "Fim" é a data
+  // da ÚLTIMA dose (início + (vezes-1)×intervalo), não início+duracaoDias-1, que
+  // sobraria alguns dias além do curso real (duracaoDias = vezes×intervalo).
+  const intervaloRow = INTERVALO_DIAS[frequencia] ?? null;
+  const vezesRow = intervaloRow && duracaoDias ? Math.max(1, Math.round(Number(duracaoDias) / intervaloRow)) : null;
+  const dtFim  = !isDoseUnicaRow && dataInicio && duracaoDias
+    ? calcDataFim(dataInicio, intervaloRow && vezesRow ? (vezesRow - 1) * intervaloRow + 1 : duracaoDias)
+    : '';
   const dtIni  = dataInicio ? formatarData(dataInicio) : '';
 
   return (
@@ -1841,7 +1904,11 @@ function ItemRow({
         {isMed && via    && <InfoChip label="Via:" value={via} />}
         <InfoChip label="Freq:" value={labelPosologia(frequencia)} />
         {horaInicio      && <InfoChip label="Hora:" value={horaInicio} />}
-        {!isDoseUnicaRow && duracaoDias && <InfoChip label="Dur:" value={`${duracaoDias}d`} />}
+        {!isDoseUnicaRow && duracaoDias && (
+          intervaloRow
+            ? <InfoChip label="Qtd:" value={`${vezesRow}x`} />
+            : <InfoChip label="Dur:" value={`${duracaoDias}d`} />
+        )}
         {dtIni           && <InfoChip label="Início:" value={dtIni} />}
         {dtFim           && <InfoChip label="Fim:" value={dtFim} />}
         {observacao      && <InfoChip label="Obs:" value={observacao} />}
@@ -1919,7 +1986,7 @@ function CancelarModal({
 
 // ─── SubModuloPrescricao ──────────────────────────────────────────────────────
 
-export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualizada, evolucaoId, onSalvo, openItemId, onViewConsumed, editItemId, onEditConsumed }: Props) {
+export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualizada, evolucaoId, evolucaoDeOutro, onSalvo, openItemId, onViewConsumed, editItemId, onEditConsumed }: Props) {
   const { user } = useAuth();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
@@ -2130,6 +2197,10 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   // prescrições já existentes (e os modais de visualização/edição, abaixo)
   // ficam sempre visíveis, do mesmo jeito que Evolução e Exames já fazem.
   const semEvolucaoAtiva = !evolucaoId;
+  // Evolução existe, mas é de OUTRO profissional (não assumida) — mesma regra
+  // que o backend já aplica em PrescricaoGrupoController.criar; aqui só evita o
+  // formulário inteiro preenchido pra falhar com 403 no fim.
+  const bloqueadaPorAutoria = !semEvolucaoAtiva && !!evolucaoDeOutro;
 
   // Guard de acesso à página — mesmo padrão de Evolução/Vacina/Exames
   if (!loadingPerms && !isGestor && !podeExecutar('atendimento.prescricoes.ler')) {
@@ -2220,6 +2291,14 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
               Inicie uma evolução na aba Evolução para registrar prescrições neste atendimento.
             </p>
           </div>
+        ) : bloqueadaPorAutoria ? (
+          <div className="flex flex-col items-center justify-center py-12 text-gray-400 px-4 border-b border-gray-100">
+            <FileText size={28} className="mb-2 text-gray-200" />
+            <p className="font-medium text-sm text-gray-500">Evolução de outro profissional</p>
+            <p className="text-xs mt-1 text-center max-w-xs">
+              Você só pode prescrever dentro de um atendimento seu. Assuma esta evolução na aba Evolução para registrar prescrições aqui.
+            </p>
+          </div>
         ) : (
           <GrupoModal
             key={inlineFormKey}
@@ -2291,14 +2370,14 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-100">
-              <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Nº Prescrição</th>
-              <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-              <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipo / Itens</th>
-              <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Veterinário</th>
-              <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                <span className="flex items-center justify-center gap-1"><Calendar size={11} /> Data</span>
-              </th>
-              <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nº</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide leading-tight">Data<br />Início</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide leading-tight">Data<br />Fim</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Tipo / Itens</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Responsável</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
@@ -2319,10 +2398,13 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                       #{g.numeroFormatado}
                     </button>
                   </td>
-                  <td className="px-4 py-3 text-center">
-                    <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_GRUPO[g.status].cls}`}>
-                      {STATUS_GRUPO[g.status].label}
-                    </span>
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    <p className="text-xs text-gray-700">{formatarData(g.createdAt)}</p>
+                  </td>
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    <p className="text-xs text-gray-700">
+                      {dataFimGrupo(g) ? formatarData(dataFimGrupo(g)!) : <span className="text-gray-300">—</span>}
+                    </p>
                   </td>
                   <td className="px-4 py-3 text-center">
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${CATEGORIA_BADGE[categoriaGrupo(g)]}`}>
@@ -2347,31 +2429,50 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                   <td className="px-4 py-3 text-center">
                     <p className="text-xs font-medium text-gray-800 whitespace-nowrap">{g.veterinario.fullName}</p>
                   </td>
-                  <td className="px-4 py-3 text-center whitespace-nowrap">
-                    <p className="text-xs text-gray-700">{formatarData(g.createdAt)}</p>
+                  <td className="px-4 py-3 text-center">
+                    <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_GRUPO[g.status].cls}`}>
+                      {STATUS_GRUPO[g.status].label}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {(g.status === 'CANCELADO' || g.status === 'CANCELADO_PARCIALMENTE')
+                      ? <JustificativaCancelamento texto={g.motivoCancelamento} className="block max-w-[220px]" />
+                      : <span className="text-gray-300">—</span>}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap">
                     <div className="flex items-center justify-center gap-1">
-                      <button onClick={() => abrirVisualizacao(g)} title="Visualizar"
-                        className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
-                        <Eye size={13} />
-                      </button>
                       {editavel && (
                         <button onClick={() => handleAlterar(g)} title="Alterar"
                           className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
                           <Pencil size={13} />
                         </button>
                       )}
+                      <button onClick={() => abrirVisualizacao(g)} title="Visualizar"
+                        className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
+                        <Eye size={13} />
+                      </button>
                       {podeFinalizarDireto && canFinalizarCancelar && (
                         <button onClick={() => handleFinalizarDireto(g.id)} title="Finalizar prescrição"
                           className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                           <CheckCircle2 size={13} />
                         </button>
                       )}
-                      {(g.status === 'FINALIZADO' || g.status === 'EXECUTADO') && podeImprimir && (
+                      {['FINALIZADO', 'EXECUTADO', 'CANCELADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && podeImprimir && (
                         <button onClick={() => imprimirPrescricao(g, animal)} title="Imprimir prescrição"
                           className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
                           <Printer size={13} />
+                        </button>
+                      )}
+                      {podeImprimir && (
+                        <button onClick={() => abrirWhatsApp(montarTextoPrescricao(g))} title="Enviar por WhatsApp"
+                          className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors">
+                          <MessageCircle size={13} />
+                        </button>
+                      )}
+                      {podeImprimir && (
+                        <button onClick={() => abrirEmail(`Prescrição ${g.numeroFormatado}`, montarTextoPrescricao(g))} title="Enviar por e-mail"
+                          className="p-1.5 text-blue-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                          <Mail size={13} />
                         </button>
                       )}
                       {cancelavel && (
@@ -2419,15 +2520,27 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
             </div>
             <p className="text-xs text-gray-500">{g.veterinario.fullName} • {g.itens.length} item{g.itens.length !== 1 ? 'ns' : ''}</p>
             <p className="text-[11px] text-gray-400 mt-0.5">{formatarData(g.createdAt)}</p>
+            {(g.status === 'CANCELADO' || g.status === 'CANCELADO_PARCIALMENTE') && g.motivoCancelamento && (
+              <p className="text-[11px] text-gray-400 mt-0.5">
+                Justificativa:{' '}
+                <JustificativaCancelamento texto={g.motivoCancelamento} className="inline-block align-bottom max-w-[70vw]" />
+              </p>
+            )}
             <div className="flex flex-wrap gap-2 mt-2">
-              <button onClick={() => abrirVisualizacao(g)}
-                className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
-                <Eye size={11} /> Visualizar
-              </button>
               {editavelMobile && (
                 <button onClick={() => handleAlterar(g)}
                   className="flex items-center gap-1 px-2.5 py-1 border border-orange-200 text-orange-600 rounded-lg text-xs hover:bg-orange-50 transition-colors">
                   <Pencil size={11} /> Alterar
+                </button>
+              )}
+              <button onClick={() => abrirVisualizacao(g)}
+                className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
+                <Eye size={11} /> Visualizar
+              </button>
+              {['FINALIZADO', 'EXECUTADO', 'CANCELADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && podeImprimir && (
+                <button onClick={() => imprimirPrescricao(g, animal)}
+                  className="flex items-center gap-1 px-2.5 py-1 border border-blue-200 text-blue-600 rounded-lg text-xs hover:bg-blue-50 transition-colors">
+                  <Printer size={11} /> Imprimir
                 </button>
               )}
               {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
@@ -2441,12 +2554,6 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                 <button onClick={() => abrirEmail(`Prescrição ${g.numeroFormatado}`, montarTextoPrescricao(g))}
                   className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
                   <Mail size={11} /> E-mail
-                </button>
-              )}
-              {(g.status === 'FINALIZADO' || g.status === 'EXECUTADO') && podeImprimir && (
-                <button onClick={() => imprimirPrescricao(g, animal)}
-                  className="flex items-center gap-1 px-2.5 py-1 border border-blue-200 text-blue-600 rounded-lg text-xs hover:bg-blue-50 transition-colors">
-                  <Printer size={11} /> Imprimir
                 </button>
               )}
               {['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && canFinalizarCancelar && (isGestor || eProprioAutorMobile) && (

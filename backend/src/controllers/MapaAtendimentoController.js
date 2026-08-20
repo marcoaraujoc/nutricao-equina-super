@@ -2,6 +2,7 @@
 // Dados agregados para o Mapa de Atendimento (tela principal).
 
 const prisma = require('../lib/prisma').default;
+const { animalVisivelNaEmpresa } = require('../lib/visibilidade');
 
 const ANIMAL_SELECT = {
   id:            true,
@@ -68,7 +69,9 @@ const MapaAtendimentoController = {
       // não é ADMIN e não tem empresa não tem mapa; `-1` não casa com empresa nenhuma.
       // O PROPRIETARIO é a exceção: o recorte dele é o próprio dono do animal, e ele
       // pode não ter empresa resolvida.
-      const whereAnimalBase = { ativo: true };
+      // `animalVisivelNaEmpresa` também exclui o animal cujo dono foi inativado
+      // NESTA empresa — `ativo:true` sozinho deixava esse caso passar.
+      const whereAnimalBase = { ...animalVisivelNaEmpresa(empresaId) };
       if (!isAdmin && userType !== 'PROPRIETARIO') {
         whereAnimalBase.empresaId = empresaId ? Number(empresaId) : -1;
         if (equipeId) whereAnimalBase.equipeId = Number(equipeId);
@@ -211,12 +214,16 @@ const MapaAtendimentoController = {
       // ── KPIs ──────────────────────────────────────────────────────────
       // EM_ANDAMENTO conta como pendente (ainda não concluído); FINALIZADO conta
       // como concluído (equivalente a CONCLUIDO, mas veio do fluxo de evolução clínica).
-      const porStatus = { AGENDADO: 0, EM_ANDAMENTO: 0, CONCLUIDO: 0, FINALIZADO: 0, CANCELADO: 0, ATRASADA: 0 };
+      // CANCELADO_AUTOMATICAMENTE soma com CANCELADO no KPI — para este painel as duas
+      // são "não aconteceu"; a distinção entre desistência humana e rotina noturna fica
+      // para a Auditoria.
+      const porStatus = { AGENDADO: 0, EM_ANDAMENTO: 0, CONCLUIDO: 0, FINALIZADO: 0, CANCELADO: 0, CANCELADO_AUTOMATICAMENTE: 0, ATRASADA: 0 };
       for (const ag of agendamentos) porStatus[ag.status] = (porStatus[ag.status] ?? 0) + 1;
       // ATRASADA ainda não ocorreu (é uma variante de AGENDADO) — conta como pendente.
       const agendadoTotal  = porStatus.AGENDADO + porStatus.EM_ANDAMENTO + porStatus.ATRASADA;
       const concluidoTotal = porStatus.CONCLUIDO + porStatus.FINALIZADO;
-      const totalAgend   = agendadoTotal + concluidoTotal + porStatus.CANCELADO;
+      const canceladoTotal = porStatus.CANCELADO + porStatus.CANCELADO_AUTOMATICAMENTE;
+      const totalAgend   = agendadoTotal + concluidoTotal + canceladoTotal;
       const totalValidos = agendadoTotal + concluidoTotal;
       const progressoConsultas = totalValidos > 0 ? Math.round((concluidoTotal / totalValidos) * 100) : 0;
 
@@ -406,7 +413,7 @@ const MapaAtendimentoController = {
           consultasClinicas: {
             agendado:  agendadoTotal,
             concluido: concluidoTotal,
-            cancelado: porStatus.CANCELADO,
+            cancelado: canceladoTotal,
             total:     totalAgend,
             progresso: progressoConsultas,
           },

@@ -2101,7 +2101,7 @@ const EquipeController = {
     try {
       const { id } = req.params;
       const { cargo, phone, senha, fullName, email, ativo, cep, endereco, complemento, bairro, cidade, estado, especialidadeIds,
-              tipoPagamento, formaPagamento, valorPagamento, acessoSistema } = req.body;
+              tipoPagamento, formaPagamento, valorPagamento, acessoSistema, restringirPorLocal } = req.body;
 
       const membro = await prisma.membroEquipe.findUnique({
         where:   { id: Number(id) },
@@ -2172,7 +2172,14 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'Informe se o membro terá acesso ao sistema.' });
       }
 
-      if (cargo) await prisma.membroEquipe.update({ where: { id: Number(id) }, data: { cargo } });
+      // "Atender somente no local de trabalho" — só grava quando a tela envia o campo
+      // (checkbox), senão um PATCH parcial de outra tela (ex.: toggle de ativo) o apagaria.
+      const dadosMembro = {};
+      if (cargo) dadosMembro.cargo = cargo;
+      if (typeof restringirPorLocal === 'boolean') dadosMembro.restringirPorLocal = restringirPorLocal;
+      if (Object.keys(dadosMembro).length > 0) {
+        await prisma.membroEquipe.update({ where: { id: Number(id) }, data: dadosMembro });
+      }
 
       // Expediente de trabalho do profissional (dias/horários) — via SQL raw
       const expediente = parseExpedienteTrabalho(req.body);
@@ -2371,13 +2378,20 @@ const EquipeController = {
   toggleMembro: async (req, res) => {
     try {
       const { id }  = req.params;
+      const { motivo } = req.body ?? {};
       const membro  = await prisma.membroEquipe.findUnique({ where: { id: Number(id) }, include: { user: true } });
       if (!membro) return res.status(404).json({ sucesso: false, mensagem: 'Membro não encontrado' });
 
       const vaiInativar = membro.user.ativo;
 
+      // Justificativa obrigatória só para INATIVAR (ativar não pede motivo) —
+      // mesmo padrão de Fornecedor/Prestador/Tratador/Proprietário.
+      if (vaiInativar && !motivo?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da inativação' });
+      }
+
       if (vaiInativar) {
-        await registrarInativacao(prisma, membro.userId, req.user.id);
+        await registrarInativacao(prisma, membro.userId, req.user.id, motivo.trim());
       } else {
         await registrarAtivacao(prisma, membro.userId, req.user.id);
       }
@@ -2388,6 +2402,7 @@ const EquipeController = {
         categoria: 'ALTERACAO',
         entidade:  'USUARIO',
         entidadeId: membro.userId,
+        motivo:    vaiInativar ? motivo.trim() : null,
         detalhes:  `${req.user.fullName ?? req.user.email} ${vaiInativar ? 'inativou' : 'ativou'} o usuário ${membro.user.fullName}`,
       });
 
@@ -2599,7 +2614,7 @@ const EquipeController = {
     try {
       const vetUserId        = req.user.id;
       const { email: emailRaw, cargo, fullName, phone, cep, endereco, complemento, bairro, cidade, estado, fornecedorId, tipoServico, especialidadeIds, equipeId: equipeIdBody,
-              tipoPagamento, formaPagamento, valorPagamento, acessoSistema } = req.body;
+              tipoPagamento, formaPagamento, valorPagamento, acessoSistema, restringirPorLocal } = req.body;
       const email = (emailRaw ?? '').trim().toLowerCase();
 
       if (!email || !cargo) {
@@ -2758,6 +2773,10 @@ const EquipeController = {
         });
         usuarioCriado = true;
         usuarioCriadoId = usuario.id;
+        // Usuário nasce ativo=true (default do schema): grava a trilha de ativação
+        // também na CRIAÇÃO, senão "Ativado em/por" (Equipe.tsx) fica vazio até
+        // alguém desativar e reativar — quem incluiu o membro não aparecia ali.
+        await registrarAtivacao(prisma, usuario.id, req.user.id);
       } else if (!usuario.fullName?.trim() || !usuario.phone?.trim()) {
         // Usuário pré-existente sem cadastro completo: preenche nome/telefone informados
         usuario = await prisma.user.update({
@@ -2777,8 +2796,10 @@ const EquipeController = {
       });
 
       // Adicionar à equipe diretamente
+      // "Atender somente no local de trabalho" (checkbox) — false por padrão (atende em
+      // qualquer local, comportamento de sempre). Ver lib/animalScope.js.
       const novoMembro = await prisma.membroEquipe.create({
-        data: { equipeId: equipe.id, userId: usuario.id, cargo },
+        data: { equipeId: equipe.id, userId: usuario.id, cargo, restringirPorLocal: restringirPorLocal === true },
       });
       membroCriadoId = novoMembro.id;
       membroUserId   = usuario.id;
