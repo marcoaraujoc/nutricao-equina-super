@@ -32,6 +32,9 @@ router.post('/grupos/:id/cancelar-plantao', authenticate, checkPermission('enfer
 router.delete('/grupos/:id/itens/:itemId/cancelar-plantao', authenticate, checkPermission('enfermagem.prescricao.deletar', 'PROPRIO'), PrescricaoGrupoController.removerItem);
 router.post('/grupos/:id/reabrir',        authenticate, checkPermission('atendimento.prescricoes.editar',  'PROPRIO'), PrescricaoGrupoController.reabrirParaEdicao);
 router.post('/grupos/:id/executar',       authenticate, checkPermission('atendimento.prescricoes.editar',  'PROPRIO'), PrescricaoGrupoController.executar);
+// Ajustar Hora Início logo após a 1ª execução (dose atrasada/antecipada confirmada) —
+// mesma permissão do executar, é o mesmo momento/tela que dispara a pergunta.
+router.patch('/grupos/:id/itens/:itemId/hora-inicio', authenticate, checkPermission('atendimento.prescricoes.editar', 'PROPRIO'), PrescricaoGrupoController.atualizarHoraInicioPosExecucao);
 
 // ── Legacy (individual items — backward compat) ───────────────────────────────
 router.post('/finalizar/:animalId', authenticate, checkPermission('atendimento.prescricoes.finalizar', 'PROPRIO'), PrescricaoController.finalizarTodas);

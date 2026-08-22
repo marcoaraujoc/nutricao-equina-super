@@ -74,6 +74,7 @@ interface PrescricaoGrupo {
   numeroFormatado: string;
   animalId: number;
   veterinarioId: number;
+  evolucaoId?: number | null;
   veterinario: { id: number; fullName: string };
   status: StatusGrupo;
   createdAt: string;
@@ -142,7 +143,6 @@ const POSOLOGIAS = [
   { value: '6em6h',        label: '6 em 6H'           },
   { value: '4em4h',        label: '4 em 4H'           },
   { value: '1em1h',        label: '1 em 1H'           },
-  { value: 'continuo',     label: 'Contínuo'           },
   { value: 'agora',        label: 'Agora (dose única)' },
   { value: 'seNecessario', label: 'Se necessário'      },
   { value: 'SOS',          label: 'SOS'                },
@@ -153,6 +153,12 @@ const POSOLOGIAS = [
   { value: '1x30dias',     label: '1x a cada 30 dias' },
   { value: '1x90dias',     label: '1x a cada 90 dias' },
 ] as const;
+
+// "Contínuo" foi REMOVIDO das opções — não tinha fim previsto e escondia a
+// execução real das doses (uma prescrição "contínua" nunca migrava para o
+// Histórico sozinha). Mantido só para EXIBIR o rótulo certo em prescrição
+// ANTIGA que ainda usa o valor — nunca mais oferecido no formulário.
+const POSOLOGIA_LABEL_LEGADO: Record<string, string> = { continuo: 'Contínuo' };
 
 // Frequências "1x a cada N dias" — o vet pensa em QUANTAS VEZES aplicar, não em
 // quantos dias o tratamento dura; o campo de duração vira "Qtd. de Vezes" para
@@ -165,6 +171,20 @@ const INTERVALO_DIAS: Record<string, number> = {
   '1x2dias': 2, '1x3dias': 3, '1xSemana': 7,
   '1x21dias': 21, '1x30dias': 30, '1x90dias': 90,
 };
+
+// Frequências SEM horário fixo — nunca exigem Hora Início (espelha
+// FREQUENCIAS_SEM_HORARIO em backend/src/lib/agendaDoses.js).
+const FREQUENCIAS_SEM_HORARIO = new Set(['agora', 'SOS', 'seNecessario']);
+
+// Hora Início é obrigatória para toda frequência com horário fixo do próprio
+// dia (1xDia..1em1h) — sem ela o item cai no fluxo LEGADO de execução, que
+// trata UMA execução como "o dia inteiro coberto", mesmo quando a frequência
+// implica várias doses no mesmo dia (ex.: "4 em 4 horas" virando EXECUTADO já
+// na 1ª dose, sem agendar as 5 seguintes). Espelha
+// backend/src/lib/agendaDoses.js#precisaHoraInicio — "1x a cada N dias"
+// (INTERVALO_DIAS) nunca exige: a cadência é o que importa, não a hora do dia.
+const precisaHoraInicio = (frequencia: string): boolean =>
+  !!frequencia && !FREQUENCIAS_SEM_HORARIO.has(frequencia) && !INTERVALO_DIAS[frequencia];
 
 // Rótulo do campo por frequência — "1x por semana" fala em SEMANAS (1 dose por
 // semana, então nº de semanas == nº de vezes); as demais usam o genérico "vezes".
@@ -225,7 +245,7 @@ const FORM_VAZIO = (): FormItem => ({
   observacao: '', medicamentoCliente: false, aplicadaPeloProprietario: false,
 });
 
-const labelPosologia = (v: string) => POSOLOGIAS.find(p => p.value === v)?.label ?? v;
+const labelPosologia = (v: string) => POSOLOGIAS.find(p => p.value === v)?.label ?? POSOLOGIA_LABEL_LEGADO[v] ?? v;
 
 /**
  * Horizonte gravado quando o vet escolhe USO CONTÍNUO e não informa a duração.
@@ -480,6 +500,15 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const [saving,           setSaving]           = useState(false);
   const [finalizing,       setFinalizing]       = useState(false);
   const [alertaEstoque,    setAlertaEstoque]    = useState<AlertaEstoque[] | null>(null);
+  // Medicamento/procedimento já prescrito em OUTRA prescrição desta MESMA evolução —
+  // aviso, nunca bloqueio (pedido explícito). `itensEvolucao` é o snapshot dos itens
+  // ativos (não cancelados) de outros grupos da evolução, carregado uma vez ao abrir
+  // o formulário; `duplicataPendente` guarda a Promise em aberto enquanto o usuário
+  // decide, para `handleAdicionarMais` poder aguardar a resposta antes de prosseguir.
+  const [itensEvolucao,    setItensEvolucao]    = useState<{ tipo: TipoItem; nome: string }[]>([]);
+  const [duplicataPendente, setDuplicataPendente] = useState<{
+    tipo: TipoItem; nome: string; resolve: (ok: boolean) => void;
+  } | null>(null);
   // Itens de tipos diferentes viram prescrições separadas (Controlado/Normal/
   // Procedimento) — por isso é um array. Uma única categoria = 1 prescrição.
   const [savedGrupos,      setSavedGrupos]      = useState<{ id: number; numeroFormatado: string }[] | null>(null);
@@ -758,16 +787,28 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     if (!form.frequencia.trim()) {
       setErroInline('Frequência é obrigatória', ['frequencia']); return false;
     }
-    // Dose única ("Agora") e USO CONTÍNUO não exigem duração em dias — o contínuo não
-    // tem fim previsto (encerra-se cancelando a prescrição). Ver DIAS_USO_CONTINUO.
+    // Dose única ("Agora") não exige duração em dias — é sempre 1.
+    // "Contínuo" (legado, não mais oferecido no formulário — ver
+    // POSOLOGIA_LABEL_LEGADO) segue isento aqui pelo mesmo motivo de sempre:
+    // não tinha fim previsto e a edição de um item antigo já chega com
+    // `duracaoDias` preenchido (ver `carregarItemParaEdicao`), então a exceção
+    // nunca precisa segurar nada na prática.
     if (form.frequencia !== 'agora' && form.frequencia !== 'continuo'
         && (!form.duracaoDias || Number(form.duracaoDias) < 1)) {
       setErroInline(INTERVALO_DIAS[form.frequencia] ? 'Qtd. de Vezes é obrigatória' : 'Duração (dias) é obrigatória', ['duracaoDias']);
       return false;
     }
-    // Hora Início NUNCA é impeditivo em "1x a cada N dias" (backend já agenda
-    // certo sem ela — lib/agendaDoses.js#elegivelParaFluxoNovo): o horário só se
-    // fixa DEPOIS da 1ª execução, que vira a base das seguintes.
+    // Hora Início é OBRIGATÓRIA para toda frequência com horário fixo do próprio
+    // dia (1xDia..1em1h) — sem ela o item cai no fluxo LEGADO de execução, que
+    // trata UMA execução como "o dia inteiro coberto" mesmo quando a frequência
+    // implica várias doses no mesmo dia (era o bug de "4 em 4 horas" virando
+    // Executado já na 1ª dose). NUNCA é impeditivo em "1x a cada N dias" (backend
+    // já agenda certo sem ela — lib/agendaDoses.js#elegivelParaFluxoNovo): o
+    // horário só se fixa DEPOIS da 1ª execução, que vira a base das seguintes.
+    if (precisaHoraInicio(form.frequencia) && !form.horaInicio.trim()) {
+      setErroInline('Hora Início é obrigatória para esta frequência', ['horaInicio']);
+      return false;
+    }
     if (!form.dataInicio.trim()) {
       setErroInline('Data de início é obrigatória', ['dataInicio']); return false;
     }
@@ -788,10 +829,43 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
   const formEstaVazio = () => !form.medicamento.trim();
 
+  // Itens (medicamento/procedimento) já prescritos em OUTRAS prescrições desta
+  // MESMA evolução — carrega uma vez ao abrir o formulário. `limit` alto para não
+  // depender da paginação da lista visível (10 por página); exclui o próprio grupo
+  // (senão o item que já está NESTE documento se auto-denunciaria) e prescrições
+  // CANCELADAS (item cancelado não é "já prescrito" — decisão do pedido).
+  useEffect(() => {
+    if (!evolucaoId || isReadOnly) { setItensEvolucao([]); return; }
+    let cancelado = false;
+    api.get(`/clinica/prescricoes/grupos/animal/${animalId}?limit=500`)
+      .then(res => {
+        if (cancelado) return;
+        const todos: PrescricaoGrupo[] = res.data?.dados ?? [];
+        const itens = todos
+          .filter(g => g.evolucaoId === evolucaoId && g.status !== 'CANCELADO' && g.id !== grupo?.id)
+          .flatMap(g => g.itens.map(it => ({ tipo: it.tipo, nome: it.medicamento })));
+        setItensEvolucao(itens);
+      })
+      .catch(() => {});
+    return () => { cancelado = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [evolucaoId, animalId, grupo?.id, isReadOnly]);
+
+  // Pergunta (não bloqueia) antes de inserir um item já prescrito em OUTRO
+  // documento desta evolução — resolve na hora (sem duplicata) ou só depois que o
+  // usuário decidir no ConfirmModal (ver render no fim do componente).
+  const confirmarDuplicataSeNecessario = (tipo: TipoItem, nome: string): Promise<boolean> => {
+    const nomeNorm = nome.trim().toLowerCase();
+    const dup = itensEvolucao.find(it => it.tipo === tipo && it.nome.trim().toLowerCase() === nomeNorm);
+    if (!dup) return Promise.resolve(true);
+    return new Promise(resolve => setDuplicataPendente({ tipo, nome, resolve }));
+  };
+
   // ── Adicionar / atualizar item ──────────────────────────────────────────────
 
   const handleAdicionarMais = async (): Promise<boolean> => {
     if (!validarForm()) return false;
+    if (!(await confirmarDuplicataSeNecessario(form.tipo, form.medicamento))) return false;
 
     if (isCreate) {
       if (editingLocalIdx !== null) {
@@ -1493,7 +1567,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 whitespace-nowrap">
-                      HORA INÍCIO
+                      HORA INÍCIO{precisaHoraInicio(form.frequencia) && ' *'}
                     </label>
                     <input type="time" value={form.horaInicio} onChange={e => set('horaInicio', e.target.value)}
                       className={classeErro(erroAcao, 'horaInicio', 'w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500')} />
@@ -1791,6 +1865,24 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         onConfirmar={(motivo) => { if (removendoItemId !== null) handleRemoverServer(removendoItemId, motivo); }}
         onFechar={() => setRemovendoItemId(null)}
       />
+      {duplicataPendente && (
+        <ConfirmModal
+          open
+          variante="aviso"
+          titulo={`${duplicataPendente.tipo === 'MEDICAMENTO' ? 'Medicamento' : 'Procedimento'} já prescrito nesta evolução`}
+          mensagem={
+            <>
+              O {duplicataPendente.tipo === 'MEDICAMENTO' ? 'medicamento' : 'procedimento'}{' '}
+              <strong>{duplicataPendente.nome}</strong> já foi prescrito nesta evolução (em outra
+              prescrição). Deseja continuar mesmo assim?
+            </>
+          }
+          labelConfirmar="Continuar mesmo assim"
+          labelCancelar="Cancelar"
+          onConfirmar={() => { duplicataPendente.resolve(true); setDuplicataPendente(null); }}
+          onCancelar={() => { duplicataPendente.resolve(false); setDuplicataPendente(null); }}
+        />
+      )}
     </div>
   );
 }

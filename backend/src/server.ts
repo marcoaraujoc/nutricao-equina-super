@@ -483,11 +483,18 @@ async function comAlerta(nome: string, fn: () => Promise<ResultadoCron>) {
 
 registrarJob('crmv_sync', {
   nome: 'Sincronização CRMV (SISCAD)',
-  exprPadrao: '0 23 * * *', // diariamente às 23:00
+  // Diariamente às 07:00 — a varredura agora é por NÚMERO de inscrição (1..25000 por
+  // UF, ver crmvScraperService.js), não mais por nome; a 400ms/chamada isso leva
+  // horas (RJ sozinho ≈ 2h45), por isso cedo, pra terminar antes do expediente
+  // (decisão de 2026-08-20; era 23:00 na versão por nome, bem mais rápida).
+  exprPadrao: '0 7 * * *',
   fn: () => comAlerta('Sincronização CRMV (SISCAD)', async () => {
-    logger.info('[CRMV-Cron] Iniciando sincronização diária do SISCAD...');
-    await executarScraping();
-    return { ok: true, notificar: true, resumo: 'Sincronização diária do índice CRMV (SISCAD) concluída com sucesso.' };
+    logger.info('[CRMV-Cron] Iniciando varredura diária do SISCAD...');
+    const resultado = await executarScraping();
+    if (resultado.erro) return { ok: false, erro: resultado.erro };
+    // O resumo TRAZ A DIFERENÇA (quem entrou/saiu/mudou) — não só um texto fixo de
+    // "concluído com sucesso": é o pedido explícito do job (2026-08-20).
+    return { ok: true, notificar: true, resumo: resultado.resumoHtml || 'Varredura diária do índice CRMV (SISCAD) concluída — nenhuma diferença.' };
   }),
 });
 

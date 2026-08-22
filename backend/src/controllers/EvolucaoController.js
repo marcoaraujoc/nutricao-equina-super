@@ -378,16 +378,24 @@ const EvolucaoController = {
         });
       }
 
-      // Título via IA gerado ANTES de criar e gravado na MESMA escrita (não um PATCH
-      // separado depois) — assim a evolução já nasce com título, sem depender de uma
-      // segunda chamada à IA no frontend. `acoes` (sugestões de encaminhamento) volta
-      // na resposta para o modal do frontend, sem persistir aqui.
+      // Título via IA: só BLOQUEIA a resposta quando a evolução já nasce FINALIZADA
+      // (fluxo "Iniciar e já Finalizar" do handleFinalizar) — é o único caso em que o
+      // frontend usa `acoes` (sugestões de encaminhamento) na mesma resposta, para
+      // abrir o modal na hora. Nascer EM_ANDAMENTO (o "Salvar" do rascunho, chamado a
+      // cada edição) NÃO espera a IA: a chamada ao Gemini é uma requisição de rede
+      // com latência variável (medido em produção: de <1s a mais de 1 minuto, conta
+      // compartilhada entre tenants) e o rascunho não lê `acoesIA` nem precisa do
+      // título pronto na hora — ele chega depois (ver bloco `setImmediate` abaixo).
+      const bloquearPorAcoesIA = status === 'FINALIZADA';
+
       let tituloIA = null;
       let acoesIA  = [];
-      const resultadoIA = await interpretarEvolucao(texto.trim(), userId, Number(animalId), req.empresaId ?? null).catch(() => null);
-      if (resultadoIA) {
-        tituloIA = resultadoIA.titulo?.trim()?.substring(0, 255) || null;
-        acoesIA  = resultadoIA.acoes ?? [];
+      if (bloquearPorAcoesIA) {
+        const resultadoIA = await interpretarEvolucao(texto.trim(), userId, Number(animalId), req.empresaId ?? null).catch(() => null);
+        if (resultadoIA) {
+          tituloIA = resultadoIA.titulo?.trim()?.substring(0, 255) || null;
+          acoesIA  = resultadoIA.acoes ?? [];
+        }
       }
 
       const evolucao = await prisma.$transaction(async (tx) => {
@@ -482,6 +490,25 @@ const EvolucaoController = {
         });
       }
 
+      // Título em segundo plano quando não bloqueamos a resposta por ele: não atrasa
+      // o "Salvar" nem falha a criação se o Gemini estiver lento/fora do ar — falha
+      // silenciosa, o registro já foi criado e o título é conveniência, não requisito.
+      if (!bloquearPorAcoesIA) {
+        const evolucaoId = evolucao.id;
+        setImmediate(async () => {
+          try {
+            const resultadoIA = await interpretarEvolucao(texto.trim(), userId, Number(animalId), req.empresaId ?? null).catch(() => null);
+            const tituloAssincrono = resultadoIA?.titulo?.trim()?.substring(0, 255) || null;
+            if (tituloAssincrono) {
+              await prisma.evolucaoClinica.update({
+                where: { id: evolucaoId },
+                data:  { titulo: tituloAssincrono },
+              });
+            }
+          } catch { /* silencioso — título é conveniência, não bloqueia o atendimento */ }
+        });
+      }
+
       res.status(201).json({
         sucesso: true,
         dados: {
@@ -558,15 +585,21 @@ const EvolucaoController = {
       const textoMudou   = texto != null && texto.trim() !== existente.texto;
       const textoEfetivo = texto?.trim() ?? existente.texto;
 
-      // Título via IA gerado ANTES de salvar e gravado na MESMA escrita. Regera quando
-      // ainda não há título OU quando o TEXTO da evolução mudou — assim editar o
-      // conteúdo atualiza o título para refletir a nova evolução. Se o texto não mudou,
-      // não reprocessa (evita gasto de IA a cada "Salvar" de um rascunho já titulado).
-      // Falha/retorno vazio da IA mantém o título anterior (nunca zera um já existente).
-      // `acoes` (sugestões de encaminhamento) volta na resposta, sem persistir aqui.
+      // Título via IA: regera quando ainda não há título OU quando o TEXTO mudou. Se o
+      // texto não mudou, não reprocessa (evita gasto de IA a cada "Salvar" de um
+      // rascunho já titulado). Falha/retorno vazio da IA mantém o título anterior
+      // (nunca zera um já existente).
+      //
+      // Só BLOQUEIA a resposta pela IA quando esta edição está FINALIZANDO a evolução
+      // — mesmo critério do `criar`: é o único momento em que o frontend lê `acoesIA`
+      // (modal de sugestão de encaminhamento). Edição comum do rascunho (texto sendo
+      // reescrito, "Salvar" chamado várias vezes ao longo do atendimento) nunca espera
+      // o Gemini — o título chega depois, em segundo plano (ver bloco após a resposta).
+      const precisaTitulo = (!existente.titulo?.trim() || textoMudou) && Boolean(textoEfetivo?.trim());
+
       let tituloParaSalvar = existente.titulo;
       let acoesIA = [];
-      if ((!existente.titulo?.trim() || textoMudou) && textoEfetivo?.trim()) {
+      if (precisaTitulo && vaiFinalizar) {
         const resultadoIA = await interpretarEvolucao(textoEfetivo, userId, existente.animalId, req.empresaId ?? null).catch(() => null);
         if (resultadoIA) {
           tituloParaSalvar = resultadoIA.titulo?.trim()?.substring(0, 255) || existente.titulo;
@@ -670,6 +703,24 @@ const EvolucaoController = {
       );
 
       res.json({ sucesso: true, dados: atualizada, acoesIA });
+
+      // Título em segundo plano quando o texto mudou fora do fluxo de finalização —
+      // não atrasa o "Salvar" do rascunho nem falha a edição se o Gemini estiver
+      // lento/fora do ar. Falha silenciosa: título é conveniência, não requisito.
+      if (precisaTitulo && !vaiFinalizar) {
+        setImmediate(async () => {
+          try {
+            const resultadoIA = await interpretarEvolucao(textoEfetivo, userId, existente.animalId, req.empresaId ?? null).catch(() => null);
+            const tituloAssincrono = resultadoIA?.titulo?.trim()?.substring(0, 255) || null;
+            if (tituloAssincrono) {
+              await prisma.evolucaoClinica.update({
+                where: { id: Number(id) },
+                data:  { titulo: tituloAssincrono },
+              });
+            }
+          } catch { /* silencioso — título é conveniência, não bloqueia o atendimento */ }
+        });
+      }
 
       // Ao FINALIZAR a evolução, lança os exames dela na fatura com VALOR ZERADO
       // (idempotente — o financeiro define o preço depois). Fire-and-forget: não

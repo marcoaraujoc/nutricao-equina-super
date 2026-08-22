@@ -40,6 +40,10 @@ export interface ItemExecucao {
   dataInicio:      string;
   diaAtual:        number;
   executadoEm?:    string | null; // última execução do item (atualizado a cada dose)
+  // Quem aplicou a ÚLTIMA dose deste item — existe mesmo quando o GRUPO inteiro
+  // ainda não chegou a EXECUTADO (grupo.executadoPor só é gravado quando TODOS os
+  // itens terminam). Ver `executorDeTipo`.
+  executadoPorDose?: { id: number; fullName: string } | null;
   // Execução por DOSE individual (null = item fora do fluxo novo — sem horaInicio
   // definido, ou frequência agora/SOS/seNecessario; mantém o comportamento antigo).
   dosesExecutadas?:      number | null;
@@ -526,6 +530,14 @@ export function ModalExecucao({
   const [confirmacao, setConfirmacao] = useState<{
     item: ItemExecucao; slots: string[]; previsto: string; agora: string; classificacao: string;
   } | null>(null);
+  // Pergunta feita só logo após a 1ª execução, quando o horário real divergiu do
+  // `horaInicio` prescrito: quer atualizar a referência para as próximas doses?
+  // (O agendamento em si — `proximaDoseEm` — já segue o horário real por conta
+  // própria, sempre; isto só corrige o CAMPO exibido em chip/impressão.)
+  const [ajusteHorario, setAjusteHorario] = useState<{
+    item: ItemExecucao; horaAnterior: string; horaNova: string; fecharAoConcluir: boolean;
+  } | null>(null);
+  const [salvandoAjusteHorario, setSalvandoAjusteHorario] = useState(false);
 
   // Item já executado HOJE no backend (fonte de verdade — cobre itens sem horários
   // gerados e reaberturas em que o mapa local não registrou a execução).
@@ -614,11 +626,16 @@ export function ModalExecucao({
   // (antecipada/atrasada) na tela de aviso — nunca bloqueia, só confirma.
   const handleExecutarItem = async (item: ItemExecucao, slots: string[], confirmarHorario = false) => {
     if (salvando) return;
+    // A pergunta de ajuste de horário (ver `ajusteHorario`) só faz sentido quando
+    // esta chamada é a 1ª dose do item — captura ANTES do POST, porque o `item`
+    // (mesma referência ao longo dos reenvios de CONFIRMACAO_NECESSARIA) ainda
+    // reflete o estado de ANTES desta execução.
+    const foiPrimeiraDose = (item.dosesExecutadas ?? 0) === 0;
     setSalvando(true);
     setExecItemId(item.id);
     setErroEstoque([]);
     try {
-      await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, {
+      const res = await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, {
         itemIds: [item.id],
         ...(confirmarHorario ? { confirmarHorario: true } : {}),
       });
@@ -631,14 +648,32 @@ export function ModalExecucao({
       }
       setConfirmacao(null);
       toast.success(`${item.medicamento} — executado e lançado na fatura`);
+
+      // 1ª dose executada num horário DIFERENTE do `horaInicio` prescrito: pergunta
+      // se atualiza a referência para as próximas — o AGENDAMENTO em si já segue o
+      // horário real por conta própria (`calcularProximaDose`, backend), sempre;
+      // isto só corrige o que fica exibido em chip/impressão.
+      const itemAtualizado: ItemExecucao | undefined = res.data?.dados?.itens?.find(
+        (i: ItemExecucao) => i.id === item.id,
+      );
+      const horaNova = itemAtualizado?.executadoEm
+        ? new Date(itemAtualizado.executadoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+        : null;
+      const perguntarHorario = foiPrimeiraDose && !!item.horaInicio && !!horaNova && horaNova !== item.horaInicio;
+
       // Execução é POR ITEM: mantém o modal aberto para executar os demais. Só fecha
-      // quando TODOS os itens do dia já estão executados (este + os demais já feitos).
+      // quando TODOS os itens do dia já estão executados (este + os demais já feitos)
+      // E não há pergunta de horário pendente (senão ela fecharia com o modal).
       const todosExecutados = itensComInfo.every(x =>
         x.item.id === item.id
           ? (item.dosesTotaisEsperadas != null ? dosesFeitas(item) + 1 >= item.dosesTotaisEsperadas : true)
           : x.activeDone,
       );
-      if (todosExecutados) { markDoneToday(grupo.id); onClose(); }
+      if (perguntarHorario) {
+        setAjusteHorario({ item, horaAnterior: item.horaInicio!, horaNova: horaNova!, fecharAoConcluir: todosExecutados });
+      } else if (todosExecutados) {
+        markDoneToday(grupo.id); onClose();
+      }
     } catch (err: unknown) {
       const e = err as { response?: { status?: number; data?: {
         erro?: string; previsto?: string; agora?: string; classificacao?: string;
@@ -656,6 +691,33 @@ export function ModalExecucao({
     } finally {
       setSalvando(false);
       setExecItemId(null);
+    }
+  };
+
+  // Resolve a pergunta "atualizar o horário para as próximas execuções?" (ver
+  // `ajusteHorario`). A execução da dose JÁ aconteceu — isto só ajusta a
+  // referência (`horaInicio`) exibida em chip/impressão, então falha aqui não
+  // desfaz nem bloqueia nada, só avisa e segue o fluxo normal do modal.
+  const fecharAposAjusteHorario = () => {
+    const fechar = ajusteHorario?.fecharAoConcluir;
+    setAjusteHorario(null);
+    if (fechar) { markDoneToday(grupo.id); onClose(); }
+  };
+
+  const handleConfirmarAjusteHorario = async () => {
+    if (!ajusteHorario) return;
+    setSalvandoAjusteHorario(true);
+    try {
+      await api.patch(
+        `/clinica/prescricoes/grupos/${grupo.id}/itens/${ajusteHorario.item.id}/hora-inicio`,
+        { horaInicio: ajusteHorario.horaNova },
+      );
+      toast.success('Horário atualizado para as próximas execuções');
+    } catch {
+      toast.error('Não foi possível atualizar o horário — a execução já foi registrada normalmente.');
+    } finally {
+      setSalvandoAjusteHorario(false);
+      fecharAposAjusteHorario();
     }
   };
 
@@ -1039,6 +1101,29 @@ export function ModalExecucao({
       onConfirmar={() => { if (confirmacao) handleExecutarItem(confirmacao.item, confirmacao.slots, true); }}
       onCancelar={() => setConfirmacao(null)}
     />
+
+    {/* 1ª dose executada fora do horário prescrito (a antecipada/atrasada acima já
+        foi confirmada — a dose ACONTECEU) — pergunta se atualiza a REFERÊNCIA de
+        horário para as próximas execuções. As próximas doses já seguem o horário
+        real de qualquer forma (rolling schedule); isto só corrige o que fica
+        exibido em chip/impressão daqui pra frente. */}
+    <ConfirmModal
+      open={!!ajusteHorario}
+      variante="info"
+      titulo="Atualizar horário da prescrição?"
+      mensagem={ajusteHorario && (
+        <>
+          A 1ª dose de <strong>{ajusteHorario.item.medicamento}</strong> foi executada às{' '}
+          <strong>{ajusteHorario.horaNova}</strong>, diferente do horário prescrito
+          (<strong>{ajusteHorario.horaAnterior}</strong>). Deseja atualizar o horário de início
+          para <strong>{ajusteHorario.horaNova}</strong> nas próximas execuções?
+        </>
+      )}
+      labelConfirmar={salvandoAjusteHorario ? 'Atualizando…' : 'Atualizar horário'}
+      labelCancelar="Manter horário original"
+      onConfirmar={handleConfirmarAjusteHorario}
+      onCancelar={fecharAposAjusteHorario}
+    />
     </>
   );
 }
@@ -1349,6 +1434,10 @@ function LinhaGrupo({
   soVisualizacao,
   executada = false,
   horaExecucao = null,
+  // Sem override explícito, cai no executor do DOCUMENTO inteiro (comportamento de
+  // sempre) — quem precisa do executor POR TIPO passa `executorDeTipo(g, tipo)`,
+  // mesmo padrão de `horaExecucao`.
+  executorNome = g.executadoPor?.fullName ?? null,
 }: {
   g: GrupoExecucao;
   onExecutar: () => void;
@@ -1363,6 +1452,7 @@ function LinhaGrupo({
   soVisualizacao: boolean;
   executada?: boolean;
   horaExecucao?: string | null;
+  executorNome?: string | null;
 }) {
   const navigate = useNavigate();
 
@@ -1374,7 +1464,7 @@ function LinhaGrupo({
       onNumero={() => navigate(`/clinica/prescricao/${g.animal.id}`)}
       tituloNumero="Ir para a prescrição original"
       veterinarioNome={g.veterinario.fullName}
-      executorNome={g.executadoPor?.fullName ?? null}
+      executorNome={executorNome}
     >
       <div className="flex items-center gap-1.5 flex-shrink-0">
         {g.status === 'CANCELADO' && (
@@ -1733,6 +1823,27 @@ export default function ExecucaoPrescricao() {
     return `${String(ultima.getHours()).padStart(2, '0')}:${String(ultima.getMinutes()).padStart(2, '0')}`;
   };
 
+  // Executor da dose mais recente ENTRE OS ITENS DO TIPO daquele card — mesmo motivo
+  // do `horaExecucaoDeTipo` acima: `g.executadoPor` só é gravado quando o DOCUMENTO
+  // inteiro termina (todos os itens, dos dois tipos), mas o card do Histórico decide
+  // por TIPO/dia. Sem isto, um grupo com medicamento pronto e procedimento ainda
+  // pendente (ou vice-versa) descia para o Histórico daquele tipo sem dizer quem
+  // aplicou a dose — o grupo nunca chega a `EXECUTADO` nesse caso.
+  const executorDeTipo = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO'): string | null => {
+    const ultimoItem = g.itens
+      .filter(i => i.tipo === tipo && i.executadoEm)
+      .sort((a, b) => new Date(b.executadoEm!).getTime() - new Date(a.executadoEm!).getTime())[0];
+    // Item do fluxo por dose (elegível/rolling) tem o executor exato daquela dose —
+    // é o caso que faltava (documento ainda não chegou a EXECUTADO como um todo).
+    if (ultimoItem?.executadoPorDose) return ultimoItem.executadoPorDose.fullName;
+    // Legado (sem fluxo por dose): só existe registro de executor quando o
+    // DOCUMENTO inteiro termina — mesmo dado que `g.executadoPor` já guardava.
+    // Sem isso, item legado num grupo ainda parcial voltaria a ficar sem nome,
+    // mas NUNCA pior do que já estava (não há de onde tirar esse dado).
+    if (g.status === 'EXECUTADO') return g.executadoPor?.fullName ?? null;
+    return null;
+  };
+
   // Canceladas: sempre na lista "a executar", com badge "Cancelada" e execução
   // bloqueada — nunca vão para o Histórico (não foram feitas, foram desistidas).
   //
@@ -1752,11 +1863,12 @@ export default function ExecucaoPrescricao() {
     g.status !== 'CANCELADO' && grupoTemTipo(g, 'MEDICAMENTO') && tipoConcluidoEm(g, 'MEDICAMENTO'));
   const historicoProcedimentosBase = grupos.filter(g =>
     g.status !== 'CANCELADO' && grupoTemTipo(g, 'PROCEDIMENTO') && tipoConcluidoEm(g, 'PROCEDIMENTO'));
-  // Cancelada só chega até aqui quando teve alguma execução (a própria
-  // `listarParaExecucao` já descarta a cancelada sem execução nenhuma — nunca fez
-  // parte do plantão). Ela segue aparecendo TAMBÉM na fila "a executar" (com a
-  // execução bloqueada, ver `tipoPendenteEm` acima) — a aba "Cancelado" aqui é só
-  // outra VISTA das mesmas, para conferência/auditoria sem precisar rolar a fila.
+  // Cancelada chega até aqui pela DATA EM QUE FOI CANCELADA (`listarParaExecucao`
+  // filtra por `updatedAt` local === data selecionada, não pela janela/próxima
+  // dose do item — é registro de auditoria, não pendência do dia). Ela segue
+  // aparecendo TAMBÉM na fila "a executar" (com a execução bloqueada, ver
+  // `tipoPendenteEm` acima) — a aba "Cancelado" aqui é só outra VISTA da mesma,
+  // para conferência/auditoria sem precisar rolar a fila.
   const canceladosMedicamentosBase = grupos.filter(g =>
     g.status === 'CANCELADO' && grupoTemTipo(g, 'MEDICAMENTO'));
   const canceladosProcedimentosBase = grupos.filter(g =>
@@ -1828,6 +1940,7 @@ export default function ExecucaoPrescricao() {
       soVisualizacao
       executada
       horaExecucao={horaExecucaoDeTipo(g, tipo)}
+      executorNome={executorDeTipo(g, tipo)}
     />
   );
 

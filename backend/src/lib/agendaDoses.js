@@ -70,6 +70,20 @@ function elegivelParaFluxoNovo(item) {
   return true;
 }
 
+/**
+ * Mesma condição de `elegivelParaFluxoNovo`, mas por FREQUÊNCIA (sem precisar
+ * de um item inteiro já montado) — para VALIDAR o formulário/payload antes de
+ * gravar. Sem isto, uma frequência intra-dia (12em12h..1em1h) ou 1xDia salva
+ * sem `horaInicio` cai no fluxo LEGADO de execução (`janelaDoItem`), que
+ * trata UMA execução como "o dia inteiro coberto" — mesmo quando a frequência
+ * implica várias doses naquele mesmo dia. Foi assim que "4 em 4 horas por 1
+ * dia" virou EXECUTADO já na primeira dose, sem agendar as 5 seguintes.
+ */
+function precisaHoraInicio(frequencia) {
+  if (!frequencia || FREQUENCIAS_SEM_HORARIO.has(frequencia)) return false;
+  return !ehIntervaloMultiDia(frequencia);
+}
+
 // Total de doses esperadas no curso inteiro (dosesPorDia × duracaoDias).
 function dosesTotaisEsperadas(item) {
   const dosesPorDia = DOSES_POR_DIA[item.frequencia] ?? 1;
@@ -133,6 +147,7 @@ module.exports = {
   intervaloEmMs,
   ehIntervaloMultiDia,
   elegivelParaFluxoNovo,
+  precisaHoraInicio,
   dosesTotaisEsperadas,
   primeiraDoseEsperada,
   calcularProximaDose,

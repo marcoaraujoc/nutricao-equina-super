@@ -197,6 +197,50 @@ async function notificarTransferencia({ req, paraVetId, deVetId, itens, modo = '
   });
 }
 
+/**
+ * Avisa TODOS os gestores da empresa (e-mail + WhatsApp) quando um atendimento é
+ * assumido FORA do expediente configurado do profissional — o assumir não bloqueia
+ * mais por horário (ver `assumir`), então isto é o que substitui o bloqueio: o
+ * atendimento acontece, e quem gerencia a equipe fica sabendo. Fire-and-forget,
+ * mesmo padrão de `notificarTransferencia` — falha de notificação nunca derruba
+ * a operação clínica.
+ */
+async function notificarGestoresForaExpediente({ req, empresaId, quemAssumiuNome, animalNome, dataHora }) {
+  if (!empresaId) return;
+  setImmediate(async () => {
+    try {
+      const gestores = await prisma.membroEquipe.findMany({
+        where:   { equipe: { empresaId: Number(empresaId) }, cargo: 'GESTOR' },
+        include: { user: { select: { id: true, email: true, fullName: true, phone: true } } },
+      });
+      for (const gestor of gestores) {
+        const dest = gestor.user;
+        if (!dest) continue;
+
+        if (dest.email) {
+          emailService.enviarAlertaAssumidoForaExpediente({
+            paraEmail: dest.email, paraNome: dest.fullName,
+            quemAssumiuNome, animalNome, dataHora,
+          }).catch(() => {});
+        }
+
+        if (dest.phone) {
+          const fmtData = (dh) => new Date(dh).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' });
+          const fmtHora = (dh) => new Date(dh).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+          const msg = [
+            `🐴 *S2Vet — Atendimento assumido fora do expediente*`,
+            `⚠️ ${quemAssumiuNome ?? 'Um profissional'} assumiu o atendimento de *${animalNome ?? 'paciente'}* fora do horário configurado.`,
+            `📅 ${fmtData(dataHora)} às ${fmtHora(dataHora)}`,
+          ].join('\n');
+          whatsappService.sendMessage({ empresaId: Number(empresaId), equipeId: req.equipeId }, dest.phone, msg)
+            .then(envio => { if (!envio?.sucesso) return whatsappService.sendWhatsApp(dest.phone, msg).catch(() => {}); })
+            .catch(() => {});
+        }
+      }
+    } catch { /* silencioso — alerta não bloqueia o atendimento assumido */ }
+  });
+}
+
 // Dia da semana (0=Dom…6=Sáb) e HH:MM de um instante, sempre no fuso de Brasília —
 // independe do timezone do processo Node (mesma lógica de dateUtils.ts no frontend).
 function diaEHoraBrasilia(data) {
@@ -1135,6 +1179,12 @@ const AgendamentoController = {
   // agenda — o mesmo caso que a evolução resolve sem problema, e que é justamente
   // quando assumir importa (o colega começou e precisou sair). O arrasto abaixo já
   // move a evolução aberta e tudo que está sob ela.
+  //
+  // 🔴 NÃO bloqueia por expediente do profissional que assume (`dentroDoExpediente`
+  // só INFORMA, via `foraExpediente` na resposta) — atendimento emergencial acontece
+  // a qualquer hora, e travar o assumir por horário impedia justamente esse caso.
+  // Continua bloqueando por CONFLITO de agenda (`conflitoDeAgenda`): duas consultas
+  // ao mesmo tempo para a mesma pessoa não é uma questão de expediente, é impossível.
   assumir: async (req, res) => {
     try {
       const item = await prisma.agendamentoClinico.findUnique({
@@ -1165,9 +1215,12 @@ const AgendamentoController = {
           code:  'PROFISSIONAL_OCUPADO',
         });
       }
-      if (!(await dentroDoExpediente(req.user.id, item.dataHora, req))) {
-        return res.status(409).json({ error: 'Horário fora do seu expediente.', code: 'FORA_EXPEDIENTE' });
-      }
+      // 🔴 NÃO bloqueia mais por expediente (2026-09-XX) — atendimento emergencial
+      // pode acontecer a qualquer hora, e travar o "assumir" por horário impedia
+      // justamente o caso em que ele mais importa. Em vez de recusar, segue e avisa
+      // TODOS os gestores da empresa (e-mail + WhatsApp — ver `notificarGestoresForaExpediente`
+      // logo abaixo, depois da transação) para que decidam se precisa de alguma ação.
+      const foraExpediente = !(await dentroDoExpediente(req.user.id, item.dataHora, req));
 
       // Assumir a AGENDA arrasta o ATENDIMENTO junto: se o agendamento já foi
       // iniciado, existe evolução vinculada com o vet anterior. Mover só o
@@ -1211,7 +1264,19 @@ const AgendamentoController = {
         });
       }
 
-      res.json({ dados: atualizado });
+      // Fora do expediente: não bloqueou, mas os gestores são avisados (ver
+      // `notificarGestoresForaExpediente`). `foraExpediente` na resposta é o que
+      // liga o alerta na tela de quem assumiu.
+      if (foraExpediente) {
+        notificarGestoresForaExpediente({
+          req, empresaId: req.empresaId,
+          quemAssumiuNome: req.user.fullName ?? null,
+          animalNome:      item.animal?.nome ?? null,
+          dataHora:        item.dataHora,
+        });
+      }
+
+      res.json({ dados: atualizado, foraExpediente });
     } catch (err) {
       console.error('Erro ao assumir agendamento:', err);
       res.status(500).json({ error: 'Erro ao assumir agendamento' });

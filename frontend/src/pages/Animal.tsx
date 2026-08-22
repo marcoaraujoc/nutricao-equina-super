@@ -45,6 +45,7 @@ interface FormData {
   pelagem:            string;
   altura:             string;
   registroPassaporte: string;
+  numeroChip:         string;
   finalidades:        string[];
   seguradora:         string;
 }
@@ -94,6 +95,7 @@ interface AnimalEncontrado {
   pelagem?:            string | null;
   altura?:             string | null;
   registroPassaporte?: string | null;
+  numeroChip?:         string | null;
   finalidade?:         string | null;
   seguradora?:         string | null;
   // Fase 3 do multi-tenancy: uma pergunta só — este animal já é DESTA empresa?
@@ -287,7 +289,7 @@ const Animal = () => {
     dataNascimento: '', idadeAnos: '', sexo: '',
     categoriaAnimal: '', tipoExercicio: '',
     localizacaoId: null, tratadorId: null, baia: '',
-    pelagem: '', altura: '', registroPassaporte: '', finalidades: [],
+    pelagem: '', altura: '', registroPassaporte: '', numeroChip: '', finalidades: [],
     seguradora: '',
   });
 
@@ -533,6 +535,7 @@ const Animal = () => {
             pelagem:           a.pelagem            ?? '',
             altura:            a.altura             ?? '',
             registroPassaporte: a.registroPassaporte ?? '',
+            numeroChip:        a.numeroChip          ?? '',
             finalidades:       a.finalidade ? a.finalidade.split('|') : [],
             seguradora:        a.seguradora ?? '',
           });
@@ -849,6 +852,7 @@ const Animal = () => {
         pelagem:            formData.pelagem.trim()            || null,
         altura:             formData.altura.trim()             || null,
         registroPassaporte: formData.registroPassaporte.trim() || null,
+        numeroChip:         formData.numeroChip.trim()         || null,
         finalidade:         formData.finalidades.length > 0 ? formData.finalidades.join('|') : null,
         seguradora:         formData.seguradora.trim() || null,
         // Animal já existente (sem vet ou com vet de outra equipe) → NOVO registro
@@ -1375,6 +1379,16 @@ const Animal = () => {
                   placeholder="Número do registro ou passaporte"
                   value={formData.registroPassaporte}
                   onChange={e => setFormData(p => ({ ...p, registroPassaporte: e.target.value }))}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Número do Chip</label>
+                <input
+                  type="text"
+                  placeholder="Número do microchip"
+                  value={formData.numeroChip}
+                  onChange={e => setFormData(p => ({ ...p, numeroChip: e.target.value }))}
                   className={inputClass}
                 />
               </div>

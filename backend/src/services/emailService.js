@@ -887,6 +887,63 @@ const emailService = {
     console.log(`[emailService] Evolução (${modo}) → ${paraEmail}`);
   },
 
+  // ── Alerta ao(s) GESTOR(ES): atendimento assumido FORA do expediente ──────
+  // Assumir nunca é mais bloqueado por expediente (atendimento emergencial pode
+  // acontecer a qualquer hora) — em vez de recusar, o sistema avisa quem gerencia
+  // a equipe, para decidir se aquilo é normal ou precisa de alguma ação.
+  async enviarAlertaAssumidoForaExpediente({
+    paraEmail, paraNome, quemAssumiuNome, animalNome, dataHora,
+  }) {
+    if (!podeEnviar() || !paraEmail) return;
+    const appUrl = process.env.APP_URL || 'http://localhost:5173';
+    const quando = dataHora
+      ? new Date(dataHora).toLocaleString('pt-BR', {
+          weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric',
+          hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo',
+        })
+      : null;
+    const paciente = animalNome ?? 'Paciente';
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      paraEmail,
+      subject: `[S2Vet] Atendimento assumido fora do expediente — ${paciente}`,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#d97706;padding:24px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:22px;font-weight:700;">🐴 S2Vet</h1>
+            <p style="color:#fef3c7;margin:4px 0 0;font-size:13px;">Alerta de Atendimento Emergencial</p>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <h2 style="color:#111827;margin-top:0;">⚠️ Atendimento assumido fora do expediente</h2>
+            <p style="color:#374151;">
+              Olá, <strong>${paraNome ?? 'gestor(a)'}</strong>! <strong>${quemAssumiuNome ?? 'Um profissional'}</strong>
+              assumiu o atendimento abaixo fora do horário de expediente configurado — permitido
+              porque um atendimento emergencial pode acontecer a qualquer hora, mas fica aqui o aviso.
+            </p>
+
+            <div style="background:white;border:2px solid #fde68a;border-radius:12px;padding:20px;margin:24px 0;">
+              <p style="margin:0;color:#111827;font-weight:700;font-size:15px;">${paciente}</p>
+              <p style="margin:6px 0 0;color:#374151;font-size:13px;">🙋 Assumido por: ${quemAssumiuNome ?? '—'}</p>
+              ${quando ? `<p style="margin:6px 0 0;color:#6b7280;font-size:13px;">📅 ${quando}</p>` : ''}
+            </div>
+
+            <div style="text-align:center;margin:20px 0;">
+              <a href="${appUrl}" style="background:#059669;color:white;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;display:inline-block;">
+                Abrir o S2Vet
+              </a>
+            </div>
+
+            <p style="color:#9ca3af;font-size:11px;border-top:1px solid #e5e7eb;padding-top:16px;margin-bottom:0;">
+              Alerta automático do S2Vet — enviado a todos os gestores da equipe.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`[emailService] Alerta fora de expediente → ${paraEmail}`);
+  },
+
   // ── Lembrete 1 dia antes ao proprietário ──────────────────────────────────
   async enviarLembreteDiaAnteriorProprietario({ proprietarioEmail, proprietarioNome, animalNome, vetNome, vetPhone, dataHora, appUrl: appUrlParam }) {
     if (!podeEnviar()) return;

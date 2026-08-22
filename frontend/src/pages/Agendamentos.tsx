@@ -1798,14 +1798,21 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   }
 
   // Assumir para si o atendimento de outro veterinário da equipe. O profissional que
-  // estava com ele é avisado por e-mail e WhatsApp (notificação do backend).
+  // estava com ele é avisado por e-mail e WhatsApp (notificação do backend). Não há
+  // mais bloqueio por expediente — fora do horário configurado, o backend deixa
+  // assumir (atendimento emergencial) e devolve `foraExpediente: true`, avisando
+  // TAMBÉM os gestores da empresa por e-mail/WhatsApp; aqui só ecoa isso num toast.
   const [assumindoId, setAssumindoId] = useState<number | null>(null);
   async function handleAssumir(ag: AgendamentoGlobal) {
     setErroLista(null);
     setAssumindoId(ag.id);
     try {
-      await api.patch(`/clinica/agendamentos/${ag.id}/assumir`);
-      toast.success(`Atendimento de ${ag.animal?.nome ?? 'paciente'} assumido`);
+      const res = await api.patch(`/clinica/agendamentos/${ag.id}/assumir`);
+      if (res.data?.foraExpediente) {
+        toast(`Atendimento de ${ag.animal?.nome ?? 'paciente'} assumido fora do seu expediente — os gestores foram avisados.`, { icon: '⚠️', duration: 6000 });
+      } else {
+        toast.success(`Atendimento de ${ag.animal?.nome ?? 'paciente'} assumido`);
+      }
       fetchAgendamentos(selectedDate);
       setMesCarregado('');
     } catch (err) { setErroLista(msgErroAgenda(err, 'Erro ao assumir o atendimento')); }

@@ -1,5 +1,81 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-08-21 (Nova rota PÚBLICA "/" — página institucional, para
+#   quem NÃO está logado (pedido explícito do usuário). Antes não existia
+#   nenhuma página pública: qualquer acesso, inclusive "/", caía direto em
+#   `/login` via `ProtectedRoute`. Origem do conteúdo: um rascunho visual feito
+#   à parte no Lovable, na pasta `Página Principal/` do repositório — MAS aquele
+#   projeto usa um stack incompatível com o resto do sistema (TanStack Start,
+#   Tailwind v4, build próprio) e nunca esteve "ligado" ao `frontend/`. Decisão:
+#   reconstruir o MESMO visual (textos, fotos, animações) com o stack que o
+#   `frontend/` já usa (React 18 + react-router-dom + Tailwind v3), em vez de
+#   tentar aproveitar aquela pasta como está — mesma lógica de não deixar
+#   projeto duplicado/órfão no repositório (§3). `Página Principal/` fica
+#   pendente de remoção após validação visual do usuário — NÃO apagar sem
+#   confirmação, já está versionada no histórico do Git.
+#   `App.tsx`: o bloco protegido de sempre (ProtectedRoute + shell + Routes
+#   internas) foi extraído para `ProtectedApp()`; novo `RootGate()` decide, só
+#   para o path exato "/", entre a página institucional (`pages/Home.tsx`, sem
+#   usuário) e `ProtectedApp` (com usuário — mesmo comportamento de hoje, "/"
+#   interna continua sendo o Dashboard). React Router prioriza rota exata
+#   ("/") sobre curinga ("/*"), então nenhuma rota interna existente foi
+#   tocada. `Home.tsx` é composta por componentes pequenos em
+#   `components/home/` (Nav/Hero/Marquee/Features/Workflow/Differentiators/
+#   ClosingCTA/Footer/Reveal) — mesma divisão de seções do rascunho, só
+#   quebrada em arquivos por causa da regra de não escrever componente com
+#   +300 linhas (§10). Nav/Footer usam `<BrandS2Vet />` (a logomarca oficial
+#   já servida por `/api/marca`) em vez do logo provisório "VetMind" do
+#   rascunho — link "Entrar" leva para `/login` sem nenhuma mudança nele.
+#   Como o app usa `HashRouter` (rotas em `/#/caminho`), as âncoras internas do
+#   rascunho (`href="#recursos"`) foram trocadas por um clique com
+#   `scrollIntoView` (`components/home/scrollToSection.ts`) — âncora comum
+#   entraria em conflito com o roteamento por hash. Cores da página
+#   (`cream`/`forest`/`ink`/`sage`/`hairline`, valores oklch) e a fonte de
+#   título ("Instrument Serif", via Google Fonts em `index.html`) foram
+#   adicionadas como tokens NOVOS em `tailwind.config.js` — não tocam em
+#   nenhuma cor/fonte já usada no resto do sistema. Nova dependência:
+#   `motion` (mesma biblioteca que o rascunho já importava). Fotos do rascunho
+#   copiadas para `frontend/src/assets/home/` tal como estão (decisão do
+#   usuário: reaproveitar o banco de imagens agora, trocar por fotos reais da
+#   S2Vet depois — é só substituir esses 4 arquivos). E-mail de contato do
+#   `ClosingCTA` é um placeholder (`contato@s2vet.com.br`) até ter o endereço
+#   real. Build (`tsc -b` + `vite build`) validado sem erros; verificação
+#   visual em navegador ainda PENDENTE — sem ferramenta de browser disponível
+#   nesta sessão para confirmar.
+# Atualizado em: 2026-08-20 (CRMV: a sincronização diária TROCOU de estratégia —
+#   era busca recursiva por PREFIXO DE NOME (teto real do servidor de 20
+#   resultados/resposta, profundidade de refino limitada, nomes comuns em
+#   português ficavam fora do índice mesmo com sync "bem-sucedido"); agora é
+#   VARREDURA SEQUENCIAL POR NÚMERO de inscrição (1..25000 por UF — hoje só RJ,
+#   `MAX_POR_UF` em `crmvScraperService.js`), confirmado ao vivo contra o SISCAD:
+#   `filtro_procurar=2` (Inscrição) + `filtro_tp_texto=1` (Idêntico) = busca EXATA,
+#   sempre 0 ou 1 resultado, sem truncamento. Só entra no índice quem está
+#   `atuante` (ativo) — "traga todos os veterinários ativos" era o pedido. Número
+#   de inscrição é sequencial e pode ser REAPROVEITADO (decisão do usuário), por
+#   isso a varredura é EXAUSTIVA todo dia, não incremental por delta de números.
+#   🔴 REVERTE a política de privacidade anterior: `CrmvValido` guardava só
+#   SHA-256(número+UF) ("nunca em claro"); agora guarda NOME + NÚMERO EM CLARO —
+#   sem isso não dá pra reportar QUEM mudou no diff diário, que é o pedido
+#   explícito do job. Confirmado explicitamente com o usuário antes de mudar.
+#   `diffECommitUF` continua incremental por UF (insere o que é novo, remove o
+#   que sumiu/inativou, atualiza nome/classe de quem mudou) — só que agora o
+#   e-mail de monitoração (`comAlerta`/`reportarCron`) LISTA os nomes (capado em
+#   30 por seção, `LIMITE_LISTA_EMAIL`), não só a contagem. Cron `crmv_sync`
+#   passou de `0 23 * * *` para `0 7 * * *` (a varredura por número é bem mais
+#   lenta que por nome — RJ sozinho ≈ 2h45 a 400ms/chamada — cedo pra terminar
+#   antes do expediente); o valor já estava `0 07 * * *` no `CronAgenda` deste
+#   ambiente (alguém já tinha ajustado por fora), só o `exprPadrao` do código
+#   (usado só pra semear ambiente novo) estava desatualizado.
+#   🔴 Migration GERADA (`20260904000000_crmv_indice_por_numero` — TRUNCATE +
+#   troca de `hash` por `numero`/`nome`/`classe`/`dataInscricao`/`updatedAt` +
+#   `@@unique([numero, uf])`), NÃO aplicada — as linhas antigas (só hash) são
+#   IRREVERSÍVEIS pro formato novo, então a migration esvazia a tabela; é
+#   índice/cache do SISCAD, nunca fonte de verdade, o próximo scraping repovoa.
+#   Confirmar `npx prisma migrate deploy` + `npx prisma generate` antes de usar.
+#   `crmvService.validarCRMV` trocou o lookup por hash por
+#   `findUnique({ numero_uf: { numero, uf } })` — mesmo contrato de saída
+#   (`{valido, uf}` / `{valido:null, motivo:'estado_nao_sincronizado'}` / etc.),
+#   nenhum consumidor (`UserController`, `routes/crmv.js`) mudou.)
 # Atualizado em: 2026-09-02 (Orçamento de VACINA passou a capturar TIPO DOSE
 #   e VIA APLICAÇÃO — mesmos dois campos obrigatórios da tela de Vacina
 #   (SubModuloVacina). Antes o orçamento só guardava vacina+quantidade(doses);
@@ -3864,6 +3940,7 @@ POST   /lancar-na-fatura                 → { faturaId, itemIds } cria FaturaIt
 
 | Arquivo | Rota / Propósito |
 |---|---|
+| `Home.tsx` | `/` — página institucional PÚBLICA (só para quem não está logado; `RootGate` em `App.tsx` decide). Composta por `components/home/*` |
 | `Login.tsx` | `/login` — autenticação email/senha + Google |
 | `Register.tsx` | `/register` — cadastro de usuário |
 | `CadastroPessoal.tsx` | `/cadastro-pessoal` — onboarding pós-registro |

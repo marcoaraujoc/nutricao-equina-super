@@ -1,6 +1,5 @@
 'use strict';
 
-const crypto       = require('crypto');
 const prisma       = require('../lib/prisma').default;
 const logger       = require('../lib/logger');
 const emailService = require('./emailService');
@@ -11,29 +10,24 @@ const { getConfig: getConfigAlerta, getEmailsAlerta } = require('../lib/cronAler
 
 const CRMV_REGEX = /^(\d{1,6})\/(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/i;
 
-function hashCrmv(numero, uf) {
-  const n = String(numero).replace(/\D/g, '').padStart(6, '0');
-  return crypto.createHash('sha256').update(`${n}${uf.toUpperCase()}`).digest('hex');
-}
-
 async function validarCRMV(crmv) {
   const match = (crmv ?? '').trim().toUpperCase().match(CRMV_REGEX);
   if (!match) return { valido: false, motivo: 'formato_invalido' };
 
-  const [, numero, uf] = match;
+  const [, numeroStr, uf] = match;
+  const numero = Number(numeroStr);
 
-  // Rollout por UF (ver crmvScraperService.js): enquanto o índice não tiver NENHUM
-  // registro daquele estado (nunca sincronizado, ou ainda fora de UFS), não dá pra
-  // afirmar nada — devolve "desconhecido" em vez de "não encontrado", pra não travar
-  // o cadastro de um veterinário legítimo só porque o estado dele ainda não foi
-  // sincronizado. Checagem é POR UF, não pelo total geral do índice.
+  // Rollout por UF (ver crmvScraperService.js#MAX_POR_UF): enquanto o índice não
+  // tiver NENHUM registro daquele estado (nunca varrido, ou ainda fora do piloto),
+  // não dá pra afirmar nada — devolve "desconhecido" em vez de "não encontrado",
+  // pra não travar o cadastro de um veterinário legítimo só porque o estado dele
+  // ainda não foi varrido. Checagem é POR UF, não pelo total geral do índice.
   const totalDoEstado = await prisma.crmvValido.count({ where: { uf } });
   if (totalDoEstado === 0) {
     return { valido: null, motivo: 'estado_nao_sincronizado' };
   }
 
-  const hash      = hashCrmv(numero, uf);
-  const encontrado = await prisma.crmvValido.findUnique({ where: { hash } });
+  const encontrado = await prisma.crmvValido.findUnique({ where: { numero_uf: { numero, uf } } });
 
   return encontrado
     ? { valido: true,  uf }
@@ -89,4 +83,4 @@ async function statusIndice() {
   };
 }
 
-module.exports = { validarCRMV, hashCrmv, statusIndice, notificarAdminSeNaoEncontrado };
+module.exports = { validarCRMV, statusIndice, notificarAdminSeNaoEncontrado };

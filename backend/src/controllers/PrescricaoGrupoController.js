@@ -12,9 +12,15 @@ const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 const { animalEstaInativo } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const {
-  DOSES_POR_DIA, elegivelParaFluxoNovo, dosesTotaisEsperadas, primeiraDoseEsperada,
+  DOSES_POR_DIA, elegivelParaFluxoNovo, precisaHoraInicio, dosesTotaisEsperadas, primeiraDoseEsperada,
   calcularProximaDose, classificarExecucao, diferencaEmMinutos,
 } = require('../lib/agendaDoses');
+
+// Frequências "conforme necessário" — sem agenda prevista, então não pertencem
+// à fila de execução do plantão (ninguém "deve" aplicar uma dose que só
+// acontece se/quando for preciso). Some só da LISTAGEM: o item continua
+// existindo no documento e pode ser editado/cancelado como qualquer outro.
+const FREQUENCIAS_FORA_DA_EXECUCAO = new Set(['seNecessario', 'SOS']);
 
 const MSG_PACIENTE_INATIVO = 'Paciente inativo — reative com o gestor antes de registrar algo novo.';
 
@@ -727,6 +733,20 @@ const criar = async (req, res) => {
       });
     }
 
+    // Frequência intra-dia (12/12h..1em1h) ou 1x ao dia sem Hora Início cai no
+    // fluxo LEGADO de execução — que trata UMA execução como "o dia inteiro
+    // coberto", mesmo quando a frequência implica várias doses naquele mesmo
+    // dia (ver lib/agendaDoses.js#precisaHoraInicio).
+    const semHoraInicio = itens.find(
+      i => precisaHoraInicio(i.frequencia) && !String(i.horaInicio ?? '').trim(),
+    );
+    if (semHoraInicio) {
+      return res.status(400).json({
+        error: `Informe a Hora Início de "${semHoraInicio.medicamento ?? 'item'}" para esta frequência.`,
+        code:  'HORA_INICIO_OBRIGATORIA',
+      });
+    }
+
     // Valida que a evolução existe e pertence ao animal
     const evolucao = await prisma.evolucaoClinica.findFirst({
       where:  { id: Number(evolucaoId), animalId: Number(animalId), ativo: true },
@@ -945,6 +965,9 @@ const adicionarItem = async (req, res) => {
     const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente, aplicadaPeloProprietario } = req.body;
 
     if (!medicamento) return res.status(400).json({ error: 'Campo medicamento é obrigatório.' });
+    if (precisaHoraInicio(frequencia) && !String(horaInicio ?? '').trim()) {
+      return res.status(400).json({ error: 'Informe a Hora Início para esta frequência.', code: 'HORA_INICIO_OBRIGATORIA' });
+    }
 
     // Split na edição: se o item é de categoria diferente de um grupo homogêneo,
     // vai para uma prescrição irmã (ou nova) da categoria correta.
@@ -1065,6 +1088,9 @@ const atualizarItem = async (req, res) => {
         dataInicio: data.dataInicio ?? item.dataInicio,
         frequencia: data.frequencia !== undefined ? data.frequencia : item.frequencia,
       };
+      if (precisaHoraInicio(itemFinal.frequencia) && !String(itemFinal.horaInicio ?? '').trim()) {
+        return res.status(400).json({ error: 'Informe a Hora Início para esta frequência.', code: 'HORA_INICIO_OBRIGATORIA' });
+      }
       data.proximaDoseEm = elegivelParaFluxoNovo(itemFinal) ? primeiraDoseEsperada(itemFinal) : null;
     }
     // Editar NÃO transfere a autoria (2026-08-04): quem chegou até aqui é o próprio dono
@@ -1947,6 +1973,61 @@ const executar = async (req, res) => {
   }
 };
 
+// ─── Ajustar Hora Início após a 1ª execução ───────────────────────────────────
+// PATCH /clinica/prescricoes/grupos/:id/itens/:itemId/hora-inicio
+//
+// A 1ª dose de um item elegível ao rolling schedule pode acontecer fora do
+// `horaInicio` prescrito (dose atrasada/antecipada, confirmada via
+// CONFIRMACAO_NECESSARIA em `executar`) — isso já NÃO atrasa nem antecipa as
+// doses SEGUINTES: `calcularProximaDose` sempre parte do horário REAL da última
+// execução, nunca de `horaInicio`. O que fica desatualizado é só o CAMPO
+// `horaInicio` em si — referência/exibição (chip, impressão) que continua
+// mostrando o horário originalmente prescrito, agora divergente do que
+// realmente está acontecendo. Este endpoint corrige só essa referência, quando
+// o usuário confirma a pergunta feita pelo front logo após a 1ª execução.
+const atualizarHoraInicioPosExecucao = async (req, res) => {
+  try {
+    const grupoId = Number(req.params.id);
+    const itemId  = Number(req.params.itemId);
+    const { horaInicio } = req.body;
+
+    if (!horaInicio || !/^\d{2}:\d{2}$/.test(String(horaInicio))) {
+      return res.status(400).json({ error: 'Informe o horário no formato HH:MM.' });
+    }
+
+    const item = await prisma.prescricao.findUnique({ where: { id: itemId }, include: { grupo: true } });
+    if (!item || item.grupoId !== grupoId) {
+      return res.status(404).json({ error: 'Item não encontrado.' });
+    }
+    if (!podeOperarRegistro(req, item.grupo?.veterinarioId ?? item.veterinarioId)) {
+      return res.status(403).json({ error: 'Seu nível de permissão só permite alterar prescrições criadas por você.' });
+    }
+    // Só logo após a 1ª execução — é o único momento em que a pergunta "atualizar o
+    // horário?" faz sentido (ver comentário acima). Depois disso o horário real de
+    // cada dose já está gravado nos registros de execução; mudar `horaInicio` aqui
+    // não teria mais relação com "a próxima dose vai mudar de horário" nenhuma.
+    if ((item.dosesExecutadas ?? 0) !== 1) {
+      return res.status(400).json({ error: 'Só é possível ajustar o horário logo após a primeira execução.', code: 'FORA_DA_JANELA' });
+    }
+
+    const horaAnterior = item.horaInicio;
+    const atualizado = await prisma.$transaction(async (tx) => {
+      const upd = await tx.prescricao.update({ where: { id: itemId }, data: { horaInicio } });
+      await registrarAlteracao(tx, req, {
+        entidade:    'PRESCRICAO', entidadeId: grupoId, animalId: item.animalId,
+        donoAtualId: item.grupo?.veterinarioId ?? item.veterinarioId,
+        campos:      { [`item.horaInicio`]: { de: horaAnterior, para: horaInicio } },
+      });
+      return upd;
+    });
+
+    return res.json({ dados: atualizado });
+  } catch (err) {
+    console.error('PrescricaoGrupoController.atualizarHoraInicioPosExecucao:', err);
+    return res.status(500).json({ error: 'Erro ao atualizar o horário.' });
+  }
+};
+
 // Item PENDENTE no dia informado — é o que decide se ele (e o grupo) aparece na
 // fila de execução daquele dia.
 //   LEGADO (sem horaInicio)      → `janelaDoItem`: qualquer dia dentro de
@@ -2046,7 +2127,20 @@ const listarParaExecucao = async (req, res) => {
         },
         itens: {
           where:   { ativo: true },
-          include: { medicamentoCat: { select: { id: true, nome: true } } },
+          include: {
+            medicamentoCat: { select: { id: true, nome: true } },
+            // Executor da dose — existe por ITEM mesmo quando o GRUPO inteiro ainda
+            // não chegou a EXECUTADO (grupo.executadoPor só é gravado quando TODOS
+            // os itens terminam). Sem isto, um grupo com medicamento pronto e
+            // procedimento ainda pendente (ou vice-versa) mostrava a dose já feita
+            // no Histórico do dia sem dizer quem a aplicou. `take: 1` + orderBy
+            // desc = a dose mais recente deste item.
+            execucoesDose: {
+              select:  { executadoPor: { select: { id: true, fullName: true } } },
+              orderBy: { horarioExecutado: 'desc' },
+              take: 1,
+            },
+          },
           orderBy: { id: 'asc' },
         },
       },
@@ -2058,8 +2152,14 @@ const listarParaExecucao = async (req, res) => {
     // pomada que o tratador passa (sai). Grupo que ficou sem nenhum item some da tela;
     // como FaturaItem e baixa de estoque só nascem na EXECUÇÃO, não aparecer aqui é o
     // que garante que esse item nunca seja cobrado nem debitado.
+    // "Se necessário"/"SOS" também saem da fila pelo mesmo corte por item — não têm
+    // agenda prevista (ver FREQUENCIAS_FORA_DA_EXECUCAO), então não pertencem à lista
+    // de pendências do plantão.
     const grupos = (await anexarFlagEmGrupos(prisma, gruposCrus))
-      .map(g => ({ ...g, itens: g.itens.filter(i => !i.aplicadaPeloProprietario) }))
+      .map(g => ({
+        ...g,
+        itens: g.itens.filter(i => !i.aplicadaPeloProprietario && !FREQUENCIAS_FORA_DA_EXECUCAO.has(i.frequencia)),
+      }))
       .filter(g => g.itens.length > 0);
 
     // Data de referência — usa param ?data=YYYY-MM-DD ou hoje
@@ -2071,11 +2171,17 @@ const listarParaExecucao = async (req, res) => {
     // Mantém apenas grupos onde pelo menos um item está PENDENTE hoje — cada item
     // decide pela sua própria regra (`itemPendenteNoDia`: janela do dia p/ legado,
     // data real da próxima dose p/ rolling schedule).
-    // CANCELADO só aparece quando teve execução (cancelada no meio do tratamento) —
-    // canceladas antes de qualquer execução não pertencem à tela de execução.
+    // 🔴 CANCELADO é registro de AUDITORIA, não pendência do dia — aparece na aba
+    // "Cancelado" pela DATA EM QUE FOI CANCELADO (`updatedAt` local), nunca pela
+    // janela/próxima dose do item. Antes exigia `algum item executado`, mas o único
+    // caminho de cancelamento hoje alcançável pela tela (`cancelar`/`cancelar-plantao`)
+    // RECUSA cancelar se houve qualquer execução — ou seja, essa condição nunca era
+    // satisfeita e a aba "Cancelado" da Execução de Prescrição nunca tinha o que
+    // mostrar, mesmo para uma prescrição cancelada minutos antes.
     const dentroJanela = grupos.filter(g =>
-      g.itens.some(item => itemPendenteNoDia(item, hojeStr)) &&
-      (g.status !== 'CANCELADO' || g.itens.some(i => i.executadoEm))
+      g.status === 'CANCELADO'
+        ? dataLocalStr(g.updatedAt) === hojeStr
+        : g.itens.some(item => itemPendenteNoDia(item, hojeStr))
     );
 
     // Filtro de busca textual (nome animal, baia, nº prescrição, vet)
@@ -2101,12 +2207,15 @@ const listarParaExecucao = async (req, res) => {
         const inicio    = new Date(inicioStr + 'T00:00:00Z');
         const diaAtual  = Math.floor((hoje.getTime() - inicio.getTime()) / (1000 * 60 * 60 * 24)) + 1;
         const elegivel  = elegivelParaFluxoNovo(item);
+        const { execucoesDose, ...itemSemDoses } = item;
         return {
-          ...item,
+          ...itemSemDoses,
           diaAtual,
           dosesExecutadas:      elegivel ? (item.dosesExecutadas ?? 0) : null,
           dosesTotaisEsperadas: elegivel ? dosesTotaisEsperadas(item) : null,
           proximaDoseEm:        elegivel ? horarioPrevistoDoItem(item) : null,
+          // Ver comentário no `include.itens.execucoesDose` acima.
+          executadoPorDose: execucoesDose?.[0]?.executadoPor ?? null,
         };
       }),
     }));
@@ -2130,6 +2239,7 @@ module.exports = {
   cancelarNaExecucao,
   reabrirParaEdicao,
   executar,
+  atualizarHoraInicioPosExecucao,
   listarParaExecucao,
   // Reusados por `prescricaoCronService.js` (cancelamento automático de dose
   // perdida) — mesmas funções que `removerItem` usa para cancelar UM item sem

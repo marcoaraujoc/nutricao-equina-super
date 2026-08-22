@@ -160,7 +160,6 @@ const POSOLOGIAS: { value: string; label: string }[] = [
   { value: '6em6h',        label: '6 em 6H'            },
   { value: '4em4h',        label: '4 em 4H'            },
   { value: '1em1h',        label: '1 em 1H'            },
-  { value: 'continuo',     label: 'Contínuo'           },
   { value: 'agora',        label: 'Agora (dose única)' },
   { value: 'seNecessario', label: 'Se necessário'      },
   { value: 'SOS',          label: 'SOS'                },

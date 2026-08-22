@@ -124,6 +124,25 @@ async function acharOcupanteDaBaia(req, { baia, localizacaoId, local, ignorarId 
   });
 }
 
+// Passaporte/registro único por EMPRESA (clínica). Ao contrário da baia
+// (acharOcupanteDaBaia, que usa buildAnimalScopeWhere — o que o VET VÊ, inclusive de
+// outras empresas), aqui o escopo é sempre `empresaId` cru: a regra é "dentro da mesma
+// clínica", não "dentro do que o usuário enxerga". Ignora animal com ativo:false —
+// exclusão lógica (CLAUDE.md §5) libera o passaporte para reuso na mesma empresa.
+async function acharAnimalComMesmoPassaporte({ empresaId, registroPassaporte, ignorarId }) {
+  const valor = String(registroPassaporte ?? '').trim();
+  if (!valor || !empresaId) return null;
+  return prisma.animal.findFirst({
+    where: {
+      empresaId: Number(empresaId),
+      ativo:     true,
+      registroPassaporte: { equals: valor, mode: 'insensitive' },
+      ...(ignorarId && !isNaN(ignorarId) ? { id: { not: Number(ignorarId) } } : {}),
+    },
+    select: { id: true, nome: true },
+  });
+}
+
 class AnimalController {
 
   // ── GET /api/animais/buscar-por-nome?nome=X ──────────────────────────────
@@ -235,6 +254,7 @@ class AnimalController {
           pelagem:         animal.pelagem         ?? null,
           altura:          animal.altura          ?? null,
           registroPassaporte: animal.registroPassaporte ?? null,
+          numeroChip:      animal.numeroChip      ?? null,
         };
 
         // CADASTRO OPERACIONAL: o que descreve como AQUELA clínica trata o animal.
@@ -411,7 +431,7 @@ class AnimalController {
       nome, especieId, racaId, peso, dataNascimento, idadeAnos, sexo,
       categoriaAnimal, tipoExercicio, veterinarioNome, veterinarioClinica,
       proprietarioId, veterinarioUserId, local, baia, localizacaoId, tratadorId,
-      pelagem, altura, registroPassaporte, finalidade, seguradora,
+      pelagem, altura, registroPassaporte, numeroChip, finalidade, seguradora,
     } = req.body;
 
     if (!nome?.trim())                    return res.status(400).json({ sucesso: false, mensagem: 'Nome do animal é obrigatório' });
@@ -596,6 +616,20 @@ class AnimalController {
         });
       }
 
+      // Passaporte/registro único por empresa — ver acharAnimalComMesmoPassaporte.
+      if (registroPassaporte?.trim()) {
+        const duplicata = await acharAnimalComMesmoPassaporte({
+          empresaId: vetEmpresaId,
+          registroPassaporte,
+        });
+        if (duplicata) {
+          return res.status(409).json({
+            sucesso:  false,
+            mensagem: `O registro/passaporte "${registroPassaporte.trim()}" já está cadastrado para ${duplicata.nome} nesta clínica`,
+          });
+        }
+      }
+
       const animal = await prisma.animal.create({
         data: {
           nome:            nome.trim(),
@@ -614,6 +648,7 @@ class AnimalController {
           pelagem:            pelagem?.trim()            || null,
           altura:             altura?.trim()             || null,
           registroPassaporte: registroPassaporte?.trim() || null,
+          numeroChip:         numeroChip?.trim()         || null,
           finalidade:         finalidade?.trim()         || null,
           seguradora:         seguradora?.trim()         || null,
           photoUrl,
@@ -716,7 +751,7 @@ class AnimalController {
       nome, especieId, racaId, peso, dataNascimento, idadeAnos, sexo,
       categoriaAnimal, tipoExercicio, veterinarioNome, veterinarioClinica,
       veterinarioUserId, local, baia, localizacaoId, tratadorId,
-      pelagem, altura, registroPassaporte, finalidade, seguradora,
+      pelagem, altura, registroPassaporte, numeroChip, finalidade, seguradora,
       removerFoto,
     } = req.body;
 
@@ -774,6 +809,21 @@ class AnimalController {
         if (ocupante) {
           const localLabel = localNorm ? ` (${localNorm})` : '';
           return res.status(409).json({ sucesso: false, mensagem: `A baia "${baia.trim()}"${localLabel} já está ocupada por ${ocupante.nome}` });
+        }
+      }
+
+      // Passaporte/registro único por empresa — ver acharAnimalComMesmoPassaporte.
+      if (registroPassaporte?.trim()) {
+        const duplicata = await acharAnimalComMesmoPassaporte({
+          empresaId: animalAtual?.empresaId,
+          registroPassaporte,
+          ignorarId: animalId,
+        });
+        if (duplicata) {
+          return res.status(409).json({
+            sucesso:  false,
+            mensagem: `O registro/passaporte "${registroPassaporte.trim()}" já está cadastrado para ${duplicata.nome} nesta clínica`,
+          });
         }
       }
 
@@ -842,6 +892,7 @@ class AnimalController {
           pelagem:            pelagem?.trim()            ?? null,
           altura:             altura?.trim()             ?? null,
           registroPassaporte: registroPassaporte?.trim() ?? null,
+          numeroChip:         numeroChip?.trim()         ?? null,
           finalidade:         finalidade?.trim()         ?? null,
           seguradora:         seguradora?.trim()         ?? null,
           especieId: Number(especieId),

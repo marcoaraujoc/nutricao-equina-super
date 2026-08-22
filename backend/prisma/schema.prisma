@@ -190,6 +190,7 @@ model Animal {
   pelagem            String?   @db.VarChar(100)
   altura             String?   @db.VarChar(50)
   registroPassaporte String?   @db.VarChar(100) @map("registro_passaporte")
+  numeroChip         String?   @db.VarChar(50)  @map("numero_chip")
   finalidade         String?   @db.VarChar(100)
   seguradora         String?   @db.VarChar(150)
 
@@ -2194,14 +2195,22 @@ model PermissaoProprietario {
 // ÍNDICE CRMV (scraping diário do SISCAD/CFMV)
 // =============================================================================
 
-// Armazena SHA-256(numero_6digits + UF) de cada CRMV ativo encontrado no SISCAD.
-// Nunca armazena o número em claro — apenas hash unidirecional.
+// Veterinários ATIVOS encontrados no SISCAD — varredura SEQUENCIAL do NÚMERO de
+// inscrição (não mais busca por nome, ver crmvScraperService.js). Guardado EM CLARO
+// (nome + número) de propósito: reverte a política anterior ("nunca em claro", só
+// hash) — sem o nome em claro não dá pra reportar QUEM mudou no diff diário, que é
+// o pedido explícito do job (decisão de 2026-08-20).
 model CrmvValido {
-  id        Int      @id @default(autoincrement())
-  hash      String   @unique @db.VarChar(64)
-  uf        String   @db.VarChar(2)
-  createdAt DateTime @default(now())
+  id            Int       @id @default(autoincrement())
+  numero        Int
+  uf            String    @db.VarChar(2)
+  nome          String    @db.VarChar(200)
+  classe        String?   @db.VarChar(10)
+  dataInscricao DateTime? @db.Date
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
+  @@unique([numero, uf])
   @@index([uf])
   @@map("tb_crmv_validos")
   @@schema("schs2vet")

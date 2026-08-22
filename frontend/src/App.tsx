@@ -2,7 +2,7 @@
 
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
-import { AuthProvider } from './contexts/AuthContext';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Sidebar from './components/Sidebar';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -14,6 +14,7 @@ import AceitarConviteEquipe   from './pages/AceitarConviteEquipe';
 // Pages — Gerais
 import Login                from './pages/Login';
 import Register             from './pages/Register';
+import Home                 from './pages/Home';
 import Dashboard            from './pages/Dashboard';
 import CadastroPessoal      from './pages/CadastroPessoal';
 import ResetPassword        from './pages/ResetPassword';
@@ -109,38 +110,16 @@ import { useDraggableModals } from './hooks/useDraggableModals';
 import AppHeader from './components/AppHeader';
 import AppFooter from './components/AppFooter';
 
-function App() {
-  // Modais arrastáveis no desktop (delegação global — vale para toda a aplicação)
-  useDraggableModals();
+// ── Shell protegido — o sistema de sempre (header + sidebar + conteúdo + rodapé) ──
+// Extraído para ser reaproveitado tanto por "/*" (qualquer rota interna) quanto
+// pelo RootGate, quando "/" é acessado por quem JÁ está logado — nos dois casos
+// é o MESMO shell, com a MESMA `Routes` interna decidindo a tela (inclusive a
+// "/" interna, que continua sendo o Dashboard).
+function ProtectedApp() {
   return (
-    <AuthProvider>
-      <EmpresaProvider>
-      <PeriodoProvider>
-      <SelectedAnimalProvider>
-        <Router>
-          <Toaster
-            position="top-right"
-            toastOptions={{
-              duration: 4000,
-              style: { borderRadius: '12px', fontSize: '14px' },
-              success: { style: { background: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0' } },
-              error:   { style: { background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' } },
-            }}
-          />
-          <Routes>
-
-            {/* ── Rotas públicas — scroll livre, sem sidebar ──────────────── */}
-            <Route path="/login"          element={<Login />} />
-            <Route path="/register"       element={<Register />} />
-            <Route path="/reset-password" element={<ResetPassword />} />
-
-            {/* ── Rotas protegidas — layout travado na viewport ────────────── */}
-            <Route
-              path="/*"
-              element={
-                <ProtectedRoute>
-                  <ErrorBoundary>
-                    <MobileMenuProvider>
+    <ProtectedRoute>
+      <ErrorBoundary>
+        <MobileMenuProvider>
                     {/*
                       Shell principal, em COLUNA: header global no topo, corpo
                       (sidebar + conteúdo) no meio e rodapé global embaixo.
@@ -324,11 +303,59 @@ function App() {
                       <AppFooter />
 
                     </div>
-                    </MobileMenuProvider>
-                  </ErrorBoundary>
-                </ProtectedRoute>
-              }
-            />
+        </MobileMenuProvider>
+      </ErrorBoundary>
+    </ProtectedRoute>
+  );
+}
+
+// ── Portão da rota "/" ───────────────────────────────────────────────────────
+// "/" é a ÚNICA rota que se comporta diferente para quem não está logado: em vez
+// de cair na tela de login (como qualquer outra rota interna faria via
+// ProtectedRoute), mostra a página institucional pública. Quem já está logado
+// continua caindo direto no sistema — ProtectedApp, o MESMO shell de sempre.
+// Sem usuário e sem loading → Home (pública, sem Sidebar/AppHeader).
+function RootGate() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return <div className="min-h-screen bg-gray-950 flex items-center justify-center text-white">Carregando...</div>;
+  }
+
+  return user ? <ProtectedApp /> : <Home />;
+}
+
+function App() {
+  // Modais arrastáveis no desktop (delegação global — vale para toda a aplicação)
+  useDraggableModals();
+  return (
+    <AuthProvider>
+      <EmpresaProvider>
+      <PeriodoProvider>
+      <SelectedAnimalProvider>
+        <Router>
+          <Toaster
+            position="top-right"
+            toastOptions={{
+              duration: 4000,
+              style: { borderRadius: '12px', fontSize: '14px' },
+              success: { style: { background: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0' } },
+              error:   { style: { background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' } },
+            }}
+          />
+          <Routes>
+
+            {/* ── Rotas públicas — scroll livre, sem sidebar ──────────────── */}
+            {/* "/" precisa vir ANTES de "/*" só por organização — o React Router já
+                prioriza a rota exata sobre a curinga, então a ordem não afeta o
+                resultado, mas mantém as duas rotas públicas "especiais" juntas. */}
+            <Route path="/"                element={<RootGate />} />
+            <Route path="/login"          element={<Login />} />
+            <Route path="/register"       element={<Register />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
+
+            {/* ── Rotas protegidas — layout travado na viewport ────────────── */}
+            <Route path="/*" element={<ProtectedApp />} />
           </Routes>
         </Router>
       </SelectedAnimalProvider>

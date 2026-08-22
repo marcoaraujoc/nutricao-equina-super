@@ -2,22 +2,20 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  FlaskConical, Scan, Ban, Eye, Loader2, X,
+  FlaskConical, Scan, Ban, Eye, Loader2, X, Pencil,
   ChevronLeft, ChevronRight, FileText, Check, Plus,
-  // CheckSquare = FINALIZAR (mesmo ícone da Evolução Clínica). CheckCircle2 fica
-  // reservado aos BADGES de status, para os dois não se confundirem na mesma tela.
-  ChevronDown, Printer, Mail, MessageCircle, CheckCircle2, CheckSquare, Clock,
+  ChevronDown, Printer, Mail, MessageCircle, CheckCircle2, Clock,
 } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import ModalJustificativa from '../components/ModalJustificativa';
+import ConfirmModal from '../components/ConfirmModal';
 import DateInput from '../components/DateInput';
 import type { AnimalInfo } from './SubModuloEvolucao';
 import { imprimirExame as imprimirExameUtil } from '../utils/ExamePrint';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
-import { temResultadoExame } from '../utils/exameClinico';
 import InlineError from '../components/InlineError';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import LaudoTexto from '../components/LaudoTexto';
@@ -102,6 +100,7 @@ interface ExameClinico {
   descricao:       string;
   status:          string;
   ativo:           boolean;
+  evolucaoId?:     number | null;
   observacao:      string | null;
   qtdAmostra:      number | null;
   dataSolicitacao: string;
@@ -146,6 +145,16 @@ function parseExtra(obs: string | null): ExtraInfo {
   catch { return { laboratorio: null, dataHoraColeta: null, tipoAmostra: null, indicacaoClinica: null, obs }; }
 }
 
+// Nomes INDIVIDUAIS dos exames de um registro do histórico — usa os grupos
+// estruturados (multi-lab) quando existem, senão cai no split da `descricao`
+// (mesmo fallback que `ViewModal` já usa para o registro "simples").
+function nomesExamesDoRegistro(ex: ExameClinico): string[] {
+  const extra  = parseExtra(ex.observacao);
+  const grupos = (extra.grupos ?? []).filter(g => g.exames && g.exames.length > 0);
+  if (grupos.length > 0) return grupos.flatMap(g => g.exames ?? []);
+  return ex.descricao.split(', ').filter(Boolean);
+}
+
 // ─── ViewModal ────────────────────────────────────────────────────────────────
 
 const TIPOS_META: Record<TipoExame, { badge: string }> = {
@@ -166,52 +175,39 @@ function getStatusExame(ex: ExameClinico): StatusExameUI {
   return ex.status === 'CONCLUIDO' ? 'FINALIZADA' : 'SALVA';
 }
 
-// `temResultadoExame` vive em utils/exameClinico.ts — compartilhada com o painel da
-// tela de Resultado de Exame, que precisa do MESMO critério para o rótulo
-// "Finalizado sem Resultado".
-
 const FILTROS_EXAME: { key: FiltroStatusExame; label: string }[] = [
   { key: 'todos',      label: 'Todos'       },
-  { key: 'SALVA',      label: 'Salvas'      },
-  { key: 'FINALIZADA', label: 'Finalizadas' },
+  { key: 'SALVA',      label: 'Solicitados' },
+  { key: 'FINALIZADA', label: 'Finalizados' },
   { key: 'REALIZADA',  label: 'Realizados'  },
-  { key: 'CANCELADA',  label: 'Canceladas'  },
+  { key: 'CANCELADA',  label: 'Cancelados'  },
 ];
 
-function StatusExameBadge({ status, semResultado = false }: { status: StatusExameUI; semResultado?: boolean }) {
+function StatusExameBadge({ status }: { status: StatusExameUI }) {
   if (status === 'CANCELADA') {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-600">
-        <Ban size={9} /> CANCELADA
+        <Ban size={9} /> CANCELADO
       </span>
     );
   }
   if (status === 'REALIZADA') {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-teal-100 text-teal-700">
-        <CheckCircle2 size={9} /> REALIZADA
+        <CheckCircle2 size={9} /> REALIZADO
       </span>
     );
   }
   if (status === 'FINALIZADA') {
-    // Encerrado sem que resultado nenhum tenha chegado — é informação clínica, não
-    // detalhe de tela: quem lê o histórico precisa saber que aquele pedido morreu vazio.
-    if (semResultado) {
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-600">
-          <CheckCircle2 size={9} /> FINALIZADO SEM RESULTADO
-        </span>
-      );
-    }
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">
-        <CheckCircle2 size={9} /> FINALIZADA
+        <CheckCircle2 size={9} /> FINALIZADO
       </span>
     );
   }
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">
-      <Clock size={9} /> SALVA
+      <Clock size={9} /> SOLICITADO
     </span>
   );
 }
@@ -259,7 +255,7 @@ function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void })
             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${tipoMeta?.badge ?? 'bg-gray-100 text-gray-600'}`}>
               {ex.tipo}
             </span>
-            <StatusExameBadge status={getStatusExame(ex)} semResultado={!temResultadoExame(ex)} />
+            <StatusExameBadge status={getStatusExame(ex)} />
             <span className="text-xs text-gray-400 ml-auto">{formatDate(ex.dataSolicitacao)}</span>
           </div>
 
@@ -438,6 +434,164 @@ function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void })
   );
 }
 
+// ─── EditExameModal ───────────────────────────────────────────────────────────
+// "Alterar" do PEDIDO — mesma lógica da Prescrição (ícone laranja, abre em cima do
+// registro existente). Diferente da Prescrição, aqui não há um componente de
+// criação reaproveitável: o formulário de criar monta vários grupos por
+// laboratório num único POST em lote, mas o PUT /clinica/exames/:id
+// (ExameClinicoController.atualizar) só edita OS CAMPOS PLANOS de UM registro
+// (descricao/laboratorio/tipoAmostra/indicacaoClinica/observacao/dataSolicitacao/
+// qtdAmostra) — por isso o formulário de edição é deliberadamente mais simples
+// que o de criação, mapeado 1:1 no que o backend aceita.
+function EditExameModal({ ex, onFechar, onSalvo }: { ex: ExameClinico; onFechar: () => void; onSalvo: () => void }) {
+  const extra = parseExtra(ex.observacao);
+  const isImagem = ex.tipo === 'Imagem';
+
+  const [descricao,        setDescricao]        = useState(ex.descricao);
+  const [laboratorio,      setLaboratorio]      = useState(extra.laboratorio ?? '');
+  const [tipoAmostra,      setTipoAmostra]      = useState(extra.tipoAmostra ?? '');
+  const [indicacaoClinica, setIndicacaoClinica] = useState(extra.indicacaoClinica ?? '');
+  const [obsForm,          setObsForm]          = useState(extra.obs ?? '');
+  const [dataSolicitacao,  setDataSolicitacao]  = useState(ex.dataSolicitacao.slice(0, 10));
+  const [qtdAmostra,       setQtdAmostra]       = useState(ex.qtdAmostra != null ? String(ex.qtdAmostra) : '');
+  const [salvando, setSalvando] = useState(false);
+  const [erro,     setErro]     = useState<string | null>(null);
+
+  const handleSalvar = async () => {
+    if (!descricao.trim()) { setErro('Descrição é obrigatória.'); return; }
+    setSalvando(true);
+    setErro(null);
+    try {
+      await api.put(`/clinica/exames/${ex.id}`, {
+        descricao:        descricao.trim(),
+        laboratorio:      laboratorio.trim()      || null,
+        tipoAmostra:      tipoAmostra.trim()      || null,
+        indicacaoClinica: indicacaoClinica.trim() || null,
+        observacao:       obsForm.trim()          || null,
+        dataSolicitacao,
+        qtdAmostra: qtdAmostra ? Number(qtdAmostra) : null,
+      });
+      toast.success('Exame atualizado');
+      onSalvo();
+      onFechar();
+    } catch (err: unknown) {
+      const data = (err as { response?: { data?: { error?: string; mensagem?: string } } })?.response?.data;
+      setErro(data?.mensagem ?? data?.error ?? 'Erro ao atualizar exame');
+    } finally { setSalvando(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-lg border border-gray-100">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <Pencil size={16} className="text-orange-500" />
+            <h3 className="font-bold text-gray-900">Alterar Exame</h3>
+          </div>
+          <button onClick={onFechar} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        </div>
+
+        <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Descrição *</label>
+            <input
+              type="text"
+              value={descricao}
+              onChange={e => setDescricao(e.target.value)}
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-orange-500"
+            />
+          </div>
+
+          {!isImagem && (
+            <div className="flex flex-wrap gap-2">
+              <div className="flex-1 min-w-[160px]">
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Laboratório</label>
+                <input
+                  type="text"
+                  value={laboratorio}
+                  onChange={e => setLaboratorio(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-orange-500"
+                />
+              </div>
+              <div className="flex-1 min-w-[160px]">
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Tipo de Amostra</label>
+                <input
+                  type="text"
+                  value={tipoAmostra}
+                  onChange={e => setTipoAmostra(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-orange-500"
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            <div className="flex-1 min-w-[140px]">
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Data da Solicitação</label>
+              <DateInput
+                value={dataSolicitacao}
+                onChange={setDataSolicitacao}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus-within:border-orange-500"
+              />
+            </div>
+            <div className="w-28">
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
+                {isImagem ? 'Qtd. Imagens' : 'Qtd. Amostras'}
+              </label>
+              <input
+                type="number"
+                min={1}
+                value={qtdAmostra}
+                onChange={e => setQtdAmostra(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-orange-500"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Indicação Clínica</label>
+            <input
+              type="text"
+              value={indicacaoClinica}
+              onChange={e => setIndicacaoClinica(e.target.value)}
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-orange-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Preparo / Observação</label>
+            <textarea
+              rows={2}
+              value={obsForm}
+              onChange={e => setObsForm(e.target.value)}
+              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-orange-500 resize-none"
+            />
+          </div>
+
+          <InlineError message={erro} />
+        </div>
+
+        <div className="px-5 pb-5 pt-2 border-t border-gray-100 flex gap-2">
+          <button
+            onClick={onFechar}
+            disabled={salvando}
+            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={handleSalvar}
+            disabled={salvando}
+            className="flex-1 py-2.5 bg-orange-500 hover:bg-orange-600 rounded-xl text-sm text-white font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+          >
+            {salvando ? <Loader2 size={14} className="animate-spin" /> : <Pencil size={14} />} Salvar Alterações
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── PendingGroupCard ─────────────────────────────────────────────────────────
 
 function PendingGroupCard({ group, onRemove }: { group: PendingExamGroup; onRemove: () => void }) {
@@ -545,8 +699,11 @@ export default function SubModuloExames({
   const [loadingHist,  setLoadingHist]  = useState(true);
   const [saving,       setSaving]       = useState(false);
   const [viewingEx,    setViewingEx]    = useState<ExameClinico | null>(null);
+  const [editingEx,    setEditingEx]    = useState<ExameClinico | null>(null);
+  const [duplicataPendente, setDuplicataPendente] = useState<{
+    nomes: string[]; resolve: (ok: boolean) => void;
+  } | null>(null);
   const [confirmId,    setConfirmId]    = useState<number | null>(null);
-  const [finalizandoId, setFinalizandoId] = useState<number | null>(null);
   const [filtroStatus, setFiltroStatus] = useState<FiltroStatusExame>('todos');
   // Visualização vinda do Histórico de Evolução Clínica: popula os campos do
   // formulário da página em SOMENTE LEITURA (sem abrir popup).
@@ -568,17 +725,21 @@ export default function SubModuloExames({
   );
 
   const podeCriar     = isGestor || podeExecutar('atendimento.exames.criar');
+  const podeEditar    = isGestor || podeExecutar('atendimento.exames.editar');
   const podeDeletar   = isGestor || podeExecutar('atendimento.exames.deletar');
-  const podeFinalizar = isGestor || podeExecutar('atendimento.exames.finalizar');
   // Imprimir a requisição e compartilhá-la (WhatsApp/e-mail) são a mesma coisa:
   // conteúdo saindo do sistema. Quem só tem VER não faz nenhum dos três.
   const podeImprimir  = isGestor || podeExecutar('atendimento.exames.imprimir');
-  // Só o gestor finaliza/exclui exame de outro; os demais só os que solicitaram.
+  // Só o gestor exclui exame de outro; os demais só os que solicitaram.
   const meuExame        = (ex: ExameClinico) => isGestor || ex.veterinario?.id === user?.id;
-  const podeFinalizarEx = (ex: ExameClinico) => podeFinalizar && meuExame(ex);
   // Cancelar o PEDIDO seguia só o slug, sem autoria — o backend (`podeOperarRegistro`)
   // recusa, então o botão aparecia para dar 403 no clique.
   const podeCancelarEx  = (ex: ExameClinico) => podeDeletar && meuExame(ex);
+  // "Alterar" — mesma lógica da Prescrição: só o pedido ainda ABERTO (SALVA) pode ser
+  // editado, e só quem criou (ou o gestor). "Compra" nunca entra aqui — não nasce
+  // nesta tela (ver pages/ExameCompra.tsx) e sua `observacao` tem outro formato.
+  const podeEditarEx = (ex: ExameClinico) =>
+    podeEditar && meuExame(ex) && ex.ativo && ex.tipo !== 'Compra' && getStatusExame(ex) === 'SALVA';
   // O PEDIDO de exame (Laboratorial e Imagem) é controlado APENAS por
   // `atendimento.exames.*` — mesmo padrão de evolução/prescrição/vacina/encaminhamento.
   // Os slugs `exames.laboratorial.*` / `exames.imagem.*` pertencem a outro fluxo
@@ -915,6 +1076,29 @@ export default function SubModuloExames({
     );
   }, [pendingGroups, laboratorioNomeSalvo]);
 
+  // Exames já solicitados NESTA MESMA EVOLUÇÃO (em outro pedido, ativo/não
+  // cancelado) — aviso, nunca bloqueio (pedido explícito). `historico` já é
+  // completo/sem paginação para o animal (ver carregarHistorico), então não
+  // precisa de uma busca nova: só filtra por evolucaoId + ativo.
+  const examesNaEvolucao = useMemo(() => {
+    if (!evolucaoId) return new Set<string>();
+    return new Set(
+      historico
+        .filter(ex => ex.evolucaoId === evolucaoId && ex.ativo)
+        .flatMap(nomesExamesDoRegistro)
+        .map(n => n.trim().toLowerCase())
+    );
+  }, [historico, evolucaoId]);
+
+  // Pergunta (não bloqueia) antes de inserir exame(s) já solicitados em OUTRO
+  // pedido desta evolução — resolve na hora (sem duplicata) ou só depois que o
+  // usuário decidir no ConfirmModal (ver render no fim do componente).
+  const confirmarDuplicataSeNecessario = (nomes: string[]): Promise<boolean> => {
+    const repetidos = nomes.filter(n => examesNaEvolucao.has(n.trim().toLowerCase()));
+    if (repetidos.length === 0) return Promise.resolve(true);
+    return new Promise(resolve => setDuplicataPendente({ nomes: repetidos, resolve }));
+  };
+
   const validateCurrentForm = (): boolean => {
     if (examesEfetivos.length === 0)                               { setErroInline('Selecione ao menos um exame'); return false; }
     if (mainTab === 'laboratorial' && !laboratorioNomeSalvo.trim()) { setErroInline('Selecione o laboratório de destino'); return false; }
@@ -992,11 +1176,12 @@ export default function SubModuloExames({
     setDataSolicitacao(hoje());
   };
 
-  const handleInserir = () => {
+  const handleInserir = async () => {
     if (!podeCriar)  { semPermissao('registrar exames'); return; }
     if (!evolucaoId) { setErroInline('Inicie uma evolução antes de registrar um exame.'); return; }
     if (evolucaoDeOutro) { setErroInline('Esta evolução pertence a outro profissional — assuma-a na aba Evolução antes de pedir exames.'); return; }
     if (!validateCurrentForm()) return;
+    if (!(await confirmarDuplicataSeNecessario(examesEfetivos))) return;
     setPendingGroups(prev => [...prev, buildCurrentGroup()]);
     resetCurrentForm();
   };
@@ -1093,20 +1278,6 @@ export default function SubModuloExames({
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       setErroInline(msg ?? 'Erro ao remover');
     }
-  };
-
-  const handleFinalizarExame = async (ex: ExameClinico) => {
-    if (!podeFinalizarEx(ex)) { semPermissao('finalizar exame'); return; }
-    setFinalizandoId(ex.id);
-    try {
-      await api.patch(`/clinica/exames/${ex.id}/finalizar`);
-      toast.success('Exame finalizado');
-      carregarHistorico();
-      onSalvo?.();
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroInline(msg ?? 'Erro ao finalizar exame');
-    } finally { setFinalizandoId(null); }
   };
 
   const imprimirExame = (ex: ExameClinico) => {
@@ -1840,7 +2011,7 @@ export default function SubModuloExames({
                       />
                     </div>
 
-                    {/* Botões Inserir / Finalizar — mesmo padrão da Prescrição */}
+                    {/* Botões Inserir / Solicitar — mesmo padrão da Prescrição */}
                     <div className="flex justify-end gap-2">
                       <button
                         onClick={handleInserir}
@@ -1855,7 +2026,7 @@ export default function SubModuloExames({
                         className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5"
                       >
                         {saving ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
-                        Finalizar
+                        Solicitar
                       </button>
                     </div>
                   </div>
@@ -1871,7 +2042,7 @@ export default function SubModuloExames({
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className="px-2.5 py-0.5 bg-amber-100 text-amber-700 text-xs font-semibold rounded-full border border-amber-200">
-                {pendingGroups.length} grupo{pendingGroups.length !== 1 ? 's' : ''} inserido{pendingGroups.length !== 1 ? 's' : ''} — clique em Finalizar para concluir
+                {pendingGroups.length} grupo{pendingGroups.length !== 1 ? 's' : ''} inserido{pendingGroups.length !== 1 ? 's' : ''} — clique em Solicitar para concluir
               </span>
             </div>
             <button
@@ -1962,10 +2133,11 @@ export default function SubModuloExames({
               return (
                 <div key={ex.id} className={`px-4 py-3 ${!ex.ativo ? 'opacity-60' : ''}`}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-bold text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded-full border border-gray-200 flex-shrink-0">
+                    <button onClick={() => setViewingEx(ex)}
+                      className="text-[11px] font-bold text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded-full border border-gray-200 flex-shrink-0 hover:bg-gray-200 hover:text-gray-800 transition-colors">
                       {fmtNumero(ex.numero)}
-                    </span>
-                    <StatusExameBadge status={getStatusExame(ex)} semResultado={!temResultadoExame(ex)} />
+                    </button>
+                    <StatusExameBadge status={getStatusExame(ex)} />
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
@@ -1994,16 +2166,16 @@ export default function SubModuloExames({
                   )}
 
                   <div className="flex flex-wrap gap-2 mt-2">
+                    {podeEditarEx(ex) && (
+                      <button onClick={() => setEditingEx(ex)}
+                        className="flex items-center gap-1 px-2.5 py-1 border border-orange-200 text-orange-600 rounded-lg text-xs hover:bg-orange-50 transition-colors">
+                        <Pencil size={11} /> Alterar
+                      </button>
+                    )}
                     <button onClick={() => setViewingEx(ex)}
                       className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
                       <Eye size={11} /> Ver
                     </button>
-                    {getStatusExame(ex) === 'SALVA' && podeFinalizarEx(ex) && (
-                      <button onClick={() => handleFinalizarExame(ex)} disabled={finalizandoId === ex.id}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors disabled:opacity-50">
-                        {finalizandoId === ex.id ? <Loader2 size={11} className="animate-spin" /> : <CheckSquare size={11} />} Finalizar
-                      </button>
-                    )}
                     {podeImprimir && (
                       <button onClick={() => imprimirExame(ex)}
                         className="flex items-center gap-1 px-2.5 py-1 border border-blue-200 text-blue-600 rounded-lg text-xs hover:bg-blue-50 transition-colors">
@@ -2062,9 +2234,10 @@ export default function SubModuloExames({
                   return (
                     <tr key={ex.id} className={`hover:bg-gray-50/60 transition-colors ${!ex.ativo ? 'opacity-60' : ''}`}>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <span className="text-xs font-bold text-gray-600 bg-gray-100 px-2 py-1 rounded-lg border border-gray-200">
+                        <button onClick={() => setViewingEx(ex)}
+                          className="text-xs font-bold text-gray-600 bg-gray-100 px-2 py-1 rounded-lg border border-gray-200 hover:bg-gray-200 hover:text-gray-800 transition-colors">
                           {fmtNumero(ex.numero)}
-                        </span>
+                        </button>
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-700 whitespace-nowrap">
                         {formatDate(ex.dataSolicitacao)}
@@ -2098,7 +2271,7 @@ export default function SubModuloExames({
                         {ex.veterinario?.fullName ?? <span className="text-gray-300">—</span>}
                       </td>
                       <td className="px-4 py-3">
-                        <StatusExameBadge status={getStatusExame(ex)} semResultado={!temResultadoExame(ex)} />
+                        <StatusExameBadge status={getStatusExame(ex)} />
                       </td>
                       <td className="px-4 py-3">
                         {!ex.ativo
@@ -2107,16 +2280,16 @@ export default function SubModuloExames({
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
+                          {podeEditarEx(ex) && (
+                            <button onClick={() => setEditingEx(ex)} title="Alterar"
+                              className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
+                              <Pencil size={14} />
+                            </button>
+                          )}
                           <button onClick={() => setViewingEx(ex)} title="Ver detalhes"
                             className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                             <Eye size={14} />
                           </button>
-                          {getStatusExame(ex) === 'SALVA' && podeFinalizarEx(ex) && (
-                            <button onClick={() => handleFinalizarExame(ex)} disabled={finalizandoId === ex.id} title="Finalizar"
-                              className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
-                              {finalizandoId === ex.id ? <Loader2 size={14} className="animate-spin" /> : <CheckSquare size={14} />}
-                            </button>
-                          )}
                           {podeImprimir && (
                             <button onClick={() => imprimirExame(ex)} title="Imprimir requisição"
                               className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
@@ -2137,7 +2310,7 @@ export default function SubModuloExames({
                           )}
                           {podeCancelarEx(ex) && ex.ativo && (
                             <button onClick={() => handleExcluirSolicitado(ex.id)} title="Cancelar exame"
-                              className="p-1.5 text-red-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                              className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
                               <Ban size={14} />
                             </button>
                           )}
@@ -2170,6 +2343,13 @@ export default function SubModuloExames({
       )}
 
       {viewingEx && <ViewModal ex={viewingEx} onFechar={() => setViewingEx(null)} />}
+      {editingEx && (
+        <EditExameModal
+          ex={editingEx}
+          onFechar={() => setEditingEx(null)}
+          onSalvo={() => { carregarHistorico(); onSalvo?.(); }}
+        />
+      )}
 
       <ModalJustificativa
         aberto={confirmId != null}
@@ -2179,6 +2359,28 @@ export default function SubModuloExames({
         onConfirmar={handleExcluirConfirmado}
         onFechar={() => setConfirmId(null)}
       />
+
+      {duplicataPendente && (
+        <ConfirmModal
+          open
+          variante="aviso"
+          titulo="Exame já solicitado nesta evolução"
+          mensagem={
+            <>
+              {duplicataPendente.nomes.length === 1 ? (
+                <>O exame <strong>{duplicataPendente.nomes[0]}</strong> já foi solicitado nesta evolução (em outro pedido).</>
+              ) : (
+                <>Os exames <strong>{duplicataPendente.nomes.join(', ')}</strong> já foram solicitados nesta evolução (em outro pedido).</>
+              )}
+              {' '}Deseja continuar mesmo assim?
+            </>
+          }
+          labelConfirmar="Continuar mesmo assim"
+          labelCancelar="Cancelar"
+          onConfirmar={() => { duplicataPendente.resolve(true); setDuplicataPendente(null); }}
+          onCancelar={() => { duplicataPendente.resolve(false); setDuplicataPendente(null); }}
+        />
+      )}
     </>
   );
 }

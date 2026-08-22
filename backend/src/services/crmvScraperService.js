@@ -1,78 +1,68 @@
 'use strict';
 
-// Scraper diário do SISCAD/CFMV usando Puppeteer.
-// Estratégia: busca recursiva por PREFIXO do nome (modo "Iniciado com" da própria
-// busca do site — filtro_tp_texto=3). Cada resposta devolve NO MÁXIMO 20 registros
-// (limite real do servidor, empírico — não é configurável nem documentado). Prefixo
-// que vier com 20 (cheio = truncado) é refinado acrescentando mais um caractere (A → AB →
-// ABC...), até ficar abaixo de 20 ou até PROFUNDIDADE_MAXIMA.
-// 🔴 CORRIGIDO em 2026 (caso real: "Laura Sereno..."/"Laura Maria do Rego Barros
-// Noronha" ficaram fora do índice mesmo com o RJ "sincronizado com sucesso"):
-// - O alfabeto de refinamento (`LETRAS`) inclui o ESPAÇO, não só A-Z. O nome no
-//   SISCAD é "PRIMEIRO SEGUNDO TERCEIRO..." — depois de um primeiro nome comum
-//   (Laura, Maria, Marina...) o próximo caractere de verdade é um espaço, nunca
-//   outra letra colada. Sem o espaço no alfabeto, nenhum refino além do primeiro
-//   nome jamais era tentado — "LAUR" ficava cheio (20/20, só "LAURA A..." até
-//   "LAURA I...") e o robô desistia daquele ramo pra sempre, mesmo que o site
-//   tivesse a resposta certa em "LAURA M" (testado ao vivo: 10 resultados, já
-//   abaixo do limite).
-// - `PROFUNDIDADE_MAXIMA` subiu de 4 para 8 para alcançar espaço + a 1ª letra do
-//   nome seguinte nesses casos (ex.: "LAURA M" tem 7 caracteres).
-// Nomes/sobrenomes muito comuns em português (DA, MA, SA, MARIA...) ainda podem
-// estar cheios na profundidade máxima — nesse caso o excedente fica de fora do
-// índice e um warning é logado; é uma escolha deliberada para não deixar o robô
-// raspando por horas/gerando volume alto de tráfego no site do governo (ver
-// decisão de 2026-08-18 abaixo). O aumento de profundidade só gera chamadas EXTRAS
-// nos ramos que já estavam cheios (o próprio ponto cego) — um ramo que não está
-// cheio termina a recursão na mesma hora de sempre, então o custo adicional é
-// concentrado exatamente onde havia buraco de cobertura, não espalhado por todo o
-// estado.
-// `crmvService.js#validarCRMV` NUNCA bloqueia o cadastro por conta desse buraco —
-// ver a nota de "não bloquear" em `crmvService.js`. Os CRMVs são armazenados como
-// SHA-256(numero_6digits + UF) — nunca em claro.
+// Scraper diário do SISCAD/CFMV — varredura SEQUENCIAL por NÚMERO de inscrição.
+// (Reescrito em 2026-08-20 — substituiu a varredura recursiva por PREFIXO DE NOME
+// que existia antes. Ver o histórico dessa versão anterior no git log, se precisar
+// resgatar a lógica de busca por nome/prefixo.)
 //
-// Rollout por REGIONALIDADE (decisão de 2026-08-18): UFS hoje cobre só o RJ, como
-// piloto — trazer o Brasil inteiro nessa profundidade de busca geraria dezenas de
-// milhares de chamadas por execução (SP sozinho já explodiu o teste). Expandir estado
-// por estado conforme for validado. `crmvService.js#validarCRMV` NÃO bloqueia CRMV de
-// UF ainda fora de `UFS`/sem dado no índice — só a UF que já tem cobertura é validada
-// de fato; as demais devolvem `valido: null` (desconhecido, não nega acesso).
+// POR QUÊ a mudança: a busca por nome tinha um teto REAL do servidor (20 registros
+// por resposta, LIMITE_SERVIDOR) e uma profundidade máxima de refino de prefixo (8
+// caracteres) — nomes/sobrenomes muito comuns em português (Maria, Da Silva...)
+// ficavam de fora do índice mesmo com a sincronização "bem-sucedida". A varredura
+// por INSCRIÇÃO não tem esse problema: cada número é uma busca EXATA
+// (filtro_procurar=2 "Inscrição" + filtro_tp_texto=1 "Idêntico"), sempre 0 ou 1
+// resultado — sem truncamento e sem necessidade de refino recursivo.
 //
-// Persistência: INCREMENTAL por UF — ao terminar de raspar um estado, o hash recém-
-// coletado é comparado com o que já existe no banco PARA AQUELE ESTADO (nunca full
-// delete+reinsert). O que é novo entra, o que sumiu é removido, e o resultado já fica
-// commitado antes de passar para o próximo estado — se o processo cair no meio, os
-// estados já processados não se perdem e a próxima execução só refaz a diferença.
+// O número de inscrição é SEQUENCIAL e, segundo o usuário, às vezes REAPROVEITADO
+// (pedido de 2026-08-20) — por isso a varredura é EXAUSTIVA (1..MAX_POR_UF) a cada
+// execução, não incremental por delta de números: um número que era de um
+// veterinário inativo ontem pode ter sido reatribuído hoje.
+//
+// GUARDADO EM CLARO (nome + número) — reverte a política anterior da tabela
+// ("nunca em claro", só hash SHA-256). Decisão de 2026-08-20: sem o nome em claro
+// não dá pra reportar QUEM mudou no diff diário, que é o pedido explícito (ver
+// `diffECommitUF`/`formatarLista` abaixo). Só entra no índice quem está `atuante`
+// (ativo) no SISCAD — "traga todos os veterinários ativos".
+//
+// Rollout por REGIONALIDADE (mantido da versão anterior): MAX_POR_UF hoje cobre só
+// o RJ, como piloto — cada estado tem a PRÓPRIA numeração (o "10000" do RJ não é o
+// "10000" de SP), por isso o teto é por UF, nunca um valor global único. RJ hoje
+// vai até ~23700; 25000 é a folga pedida pelo usuário para uma eventual ordem não
+// estritamente sequencial. Expandir para outro estado = acrescentar uma entrada em
+// MAX_POR_UF com o teto daquele estado.
+// `crmvService.js#validarCRMV` NÃO bloqueia CRMV de UF ainda fora de MAX_POR_UF/sem
+// dado no índice — só a UF que já tem cobertura é validada de fato; as demais
+// devolvem `valido: null` (desconhecido, não nega acesso).
+//
+// Persistência: INCREMENTAL por UF — ao terminar de varrer um estado, o resultado
+// fresco é comparado com o que já está no banco PARA AQUELE ESTADO (nunca full
+// delete+reinsert). O que é novo entra, o que sumiu/ficou inativo é removido, o que
+// mudou de nome/classe é atualizado, e o resultado já fica commitado antes de
+// passar para o próximo estado — se o processo cair no meio, os estados já
+// processados não se perdem e a próxima execução só refaz a diferença.
 
 const puppeteer = require('puppeteer');
-const crypto    = require('crypto');
 const prisma    = require('../lib/prisma').default;
 const logger    = require('../lib/logger');
 
 // Piloto: só RJ por enquanto — ver nota de regionalidade acima.
-const UFS = ['RJ'];
+const MAX_POR_UF = { RJ: 25000 };
+const UFS        = Object.keys(MAX_POR_UF);
 
-// 27 caracteres: A-Z + ESPAÇO — o espaço é o que separa nome/sobrenome no SISCAD,
-// e sem ele o refino nunca desce além do primeiro nome comum (ver nota acima).
-const LETRAS             = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ '.split('');
-const SISCAD_URL         = 'https://siscad.cfmv.gov.br/paginas/busca';
-const RECAPTCHA_KEY      = '6LeGZxEdAAAAAE6maxxCGJuYLzDhFh2fW4tBRHc9';
-const LIMITE_SERVIDOR    = 20;   // limite REAL do servidor (medido empiricamente — não é 98)
-const PROFUNDIDADE_MAXIMA = 8;   // não refina prefixo além de 8 caracteres (era 4 — ver nota acima)
-const DELAY_ENTRE_CALLS  = 400;  // ms entre chamadas para evitar throttling
-const TIPO_SUCESSO_API   = 'sucess'; // sic — a API do SISCAD devolve "sucess" (sem o 2º "s"), não "success"
-const FILTRO_TP_INICIADO_COM = 3; // filtro_tp_texto=3 ("Iniciado com") — particiona MUITO
-                                   // melhor que "Contendo todo o texto" (valor 2, usado antes):
-                                   // "AZ" contendo-em-qualquer-lugar já vem cheio (20/20);
-                                   // "AZ" começando-com vem com só 3 — convergência bem mais rápida
-const FILTRO_PROCURAR_NOME   = 1; // filtro_procurar=1 ("Nome")
+const SISCAD_URL        = 'https://siscad.cfmv.gov.br/paginas/busca';
+const RECAPTCHA_KEY     = '6LeGZxEdAAAAAE6maxxCGJuYLzDhFh2fW4tBRHc9';
+const DELAY_ENTRE_CALLS = 400;  // ms entre chamadas para evitar throttling — mesmo valor de antes
+const TIPO_SUCESSO_API  = 'sucess'; // sic — a API do SISCAD devolve "sucess" (sem o 2º "s"), não "success"
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// filtro_procurar=2 ("Inscrição") + filtro_tp_texto=1 ("Idêntico") — confirmado ao
+// vivo contra o SISCAD (2026-08-20): busca EXATA por número, sempre 0 ou 1 resultado.
+const FILTRO_TP_IDENTICO        = 1;
+const FILTRO_PROCURAR_INSCRICAO = 2;
 
-function hashCrmv(numero, uf) {
-  const n = String(numero).replace(/\D/g, '').padStart(6, '0');
-  return crypto.createHash('sha256').update(`${n}${uf.toUpperCase()}`).digest('hex');
-}
+// Cap de linhas listadas por seção no e-mail do diff — sem isso, a 1ª execução
+// desta versão nova (em que TUDO é "novo", ~23 mil linhas) geraria um e-mail
+// inviável. O TOTAL sempre aparece no cabeçalho da seção, só a listagem é capada.
+const LIMITE_LISTA_EMAIL = 30;
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -90,12 +80,12 @@ async function obterToken(page) {
   );
 }
 
-// ── Chamada à API do SISCAD (via browser context) ─────────────────────────────
+// ── Chamada à API do SISCAD (via browser context) — busca EXATA por número ────
 
-async function buscarPorFiltro(page, filtroTexto, uf) {
+async function buscarPorNumero(page, numero, uf) {
   try {
     const token = await obterToken(page);
-    const url = `/pf/consultaInscricao/${encodeURIComponent(filtroTexto)}/${FILTRO_TP_INICIADO_COM}/${FILTRO_PROCURAR_NOME}/${uf}/${token}`;
+    const url = `/pf/consultaInscricao/${numero}/${FILTRO_TP_IDENTICO}/${FILTRO_PROCURAR_INSCRICAO}/${uf}/${token}`;
 
     const resp = await page.evaluate(async (u) => {
       const r = await fetch(u, {
@@ -109,115 +99,118 @@ async function buscarPorFiltro(page, filtroTexto, uf) {
 
     return resp;
   } catch (err) {
-    logger.warn(`[CRMV-Scraper] Erro na busca filtro="${filtroTexto}" uf="${uf}": ${err.message}`);
+    logger.warn(`[CRMV-Scraper] Erro na busca número=${numero} uf=${uf}: ${err.message}`);
     return { type: 'error', data: [] };
   }
 }
 
-// ── Extração de hashes da resposta da API ──────────────────────────────────────
-
-function extrairHashes(resp, uf) {
+// ── Extração do registro (se ATIVO) ────────────────────────────────────────────
+// "traga todos os veterinários ativos" — número sem resultado (não cadastrado) ou
+// com `atuante !== true` (cancelado/suspenso/etc.) simplesmente não entra no índice.
+function extrairRegistroAtivo(resp, numero, uf) {
   if (resp?.type !== TIPO_SUCESSO_API || !Array.isArray(resp.data) || resp.data.length === 0) {
-    return [];
+    return null;
   }
+  const row = resp.data[0];
+  if (row.atuante !== true) return null;
 
-  return resp.data
-    .map(row => {
-      // Tentativa de múltiplos nomes de campo — ajuste após o primeiro run pelo log
-      const num =
-        row.pf_inscricao        ??
-        row.pf_numero_inscricao ??
-        row.pf_crmv             ??
-        row.inscricao           ??
-        row.numero              ??
-        null;
-      if (!num) return null;
-      return hashCrmv(String(num), uf);
-    })
-    .filter(Boolean);
+  return {
+    numero,
+    uf,
+    nome:          String(row.nome_preferencial ?? '').trim(),
+    classe:        row.pf_classe ? String(row.pf_classe) : null,
+    dataInscricao: row.dt_inscricao ? new Date(row.dt_inscricao) : null,
+  };
 }
 
-// ── Busca recursiva por prefixo ─────────────────────────────────────────────────
-// Refina o prefixo (A → AB → ABC...) enquanto a resposta vier cheia (== LIMITE_SERVIDOR)
-// e ainda houver profundidade disponível. Resposta abaixo do limite = capturou tudo
-// daquele prefixo, não precisa refinar mais.
-async function buscarRecursivo(page, prefixo, uf, hashesAcumulados) {
-  const resp = await buscarPorFiltro(page, prefixo, uf);
-  await sleep(DELAY_ENTRE_CALLS);
+// ── Varredura sequencial de uma UF ─────────────────────────────────────────────
 
-  if (resp?.type !== TIPO_SUCESSO_API || !Array.isArray(resp.data)) return;
+async function varrerUF(page, uf) {
+  const max = MAX_POR_UF[uf];
+  const ativos = [];
 
-  extrairHashes(resp, uf).forEach(h => hashesAcumulados.add(h));
+  for (let numero = 1; numero <= max; numero++) {
+    const resp = await buscarPorNumero(page, numero, uf);
+    await sleep(DELAY_ENTRE_CALLS);
 
-  if (resp.data.length < LIMITE_SERVIDOR) return; // não truncado, terminou este ramo
-
-  if (prefixo.length >= PROFUNDIDADE_MAXIMA) {
-    logger.warn(`[CRMV-Scraper] UF=${uf} prefixo="${prefixo}" ainda cheio (${resp.data.length}) na profundidade máxima (${PROFUNDIDADE_MAXIMA}) — parte do resultado pode ficar de fora do índice`);
-    return;
+    const registro = extrairRegistroAtivo(resp, numero, uf);
+    if (registro) ativos.push(registro);
   }
 
-  for (const letra of LETRAS) {
-    await buscarRecursivo(page, prefixo + letra, uf, hashesAcumulados);
-  }
-}
-
-// ── Scraping de uma UF ────────────────────────────────────────────────────────
-
-async function scraperUF(page, uf) {
-  const hashes = new Set();
-
-  for (const letra of LETRAS) {
-    await buscarRecursivo(page, letra, uf, hashes);
-  }
-
-  logger.info(`[CRMV-Scraper] UF=${uf} concluída: ${hashes.size} CRMVs`);
-  return [...hashes];
+  logger.info(`[CRMV-Scraper] UF=${uf} varredura concluída: ${ativos.length} ativos em ${max} números`);
+  return ativos;
 }
 
 // ── Diff e commit de uma UF ─────────────────────────────────────────────────────
-// Compara o hash fresco (recém-raspado) com o que já está no banco PARA AQUELE
-// ESTADO e aplica só a diferença (insere o que é novo, remove o que sumiu).
-async function diffECommitUF(uf, hashesFrescos) {
-  const existentes = await prisma.crmvValido.findMany({ where: { uf }, select: { hash: true } });
-  const setExistente = new Set(existentes.map(e => e.hash));
-  const setFresco = new Set(hashesFrescos);
+// Compara os ativos frescos (recém-varridos) com o que já está no banco PARA
+// AQUELE ESTADO e aplica só a diferença — novo entra, sumido/inativado sai, e quem
+// mudou de nome/classe (correção de cadastro, por ex.) é atualizado no lugar.
+async function diffECommitUF(uf, frescos) {
+  const existentes       = await prisma.crmvValido.findMany({ where: { uf } });
+  const existentePorNum  = new Map(existentes.map(e => [e.numero, e]));
+  const frescoPorNumero  = new Map(frescos.map(f => [f.numero, f]));
 
   // Guarda de segurança: resultado vazio quando já havia dados é sinal de falha na
-  // raspagem (bloqueio temporário, reCAPTCHA rejeitado, etc.), não de que o estado
-  // ficou sem nenhum CRMV. Sem essa guarda, uma falha silenciosa apagaria o estado
-  // inteiro — exatamente o tipo de bug que motivou essa correção.
-  if (setFresco.size === 0 && setExistente.size > 0) {
-    logger.warn(`[CRMV-Scraper] UF=${uf} voltou vazio mas já havia ${setExistente.size} registros — ignorando (provável falha de raspagem, não removendo nada)`);
-    return { adicionados: 0, removidos: 0 };
+  // varredura (bloqueio temporário, reCAPTCHA rejeitado em massa, etc.), não de que
+  // o estado ficou sem nenhum veterinário ativo. Sem essa guarda, uma falha
+  // silenciosa apagaria o estado inteiro do índice.
+  if (frescoPorNumero.size === 0 && existentePorNum.size > 0) {
+    logger.warn(`[CRMV-Scraper] UF=${uf} voltou vazio mas já havia ${existentePorNum.size} registros — ignorando (provável falha de varredura, não removendo nada)`);
+    return { adicionados: [], removidos: [], atualizados: [] };
   }
 
-  const paraInserir = [...setFresco].filter(h => !setExistente.has(h));
-  const paraRemover = [...setExistente].filter(h => !setFresco.has(h));
+  const adicionados = [];
+  const atualizados  = [];
+  for (const [numero, fresco] of frescoPorNumero) {
+    const existente = existentePorNum.get(numero);
+    if (!existente) { adicionados.push(fresco); continue; }
+    if (existente.nome !== fresco.nome || existente.classe !== fresco.classe) {
+      atualizados.push({ antes: existente, depois: fresco });
+    }
+  }
+  const removidos = [...existentePorNum.values()].filter(e => !frescoPorNumero.has(e.numero));
 
-  if (paraInserir.length === 0 && paraRemover.length === 0) {
-    return { adicionados: 0, removidos: 0 };
+  if (adicionados.length === 0 && removidos.length === 0 && atualizados.length === 0) {
+    return { adicionados: [], removidos: [], atualizados: [] };
   }
 
   await prisma.$transaction(async (tx) => {
-    if (paraInserir.length > 0) {
+    if (adicionados.length > 0) {
       await tx.crmvValido.createMany({
-        data: paraInserir.map(hash => ({ hash, uf })),
+        data: adicionados.map(({ numero, uf: ufItem, nome, classe, dataInscricao }) => ({ numero, uf: ufItem, nome, classe, dataInscricao })),
         skipDuplicates: true,
       });
     }
-    if (paraRemover.length > 0) {
-      await tx.crmvValido.deleteMany({ where: { uf, hash: { in: paraRemover } } });
+    if (removidos.length > 0) {
+      await tx.crmvValido.deleteMany({ where: { uf, numero: { in: removidos.map(r => r.numero) } } });
+    }
+    for (const { depois } of atualizados) {
+      await tx.crmvValido.update({
+        where: { numero_uf: { numero: depois.numero, uf } },
+        data:  { nome: depois.nome, classe: depois.classe, dataInscricao: depois.dataInscricao },
+      });
     }
   });
 
-  return { adicionados: paraInserir.length, removidos: paraRemover.length };
+  return { adicionados, removidos, atualizados };
+}
+
+// ── Formatação do diff para o e-mail de monitoração ───────────────────────────
+
+function formatarLista(titulo, itens, linha) {
+  if (itens.length === 0) return '';
+  const visiveis = itens.slice(0, LIMITE_LISTA_EMAIL).map(linha).join('<br>');
+  const resto = itens.length > LIMITE_LISTA_EMAIL
+    ? `<br>… e mais ${itens.length - LIMITE_LISTA_EMAIL}`
+    : '';
+  return `<br><br><strong>${titulo} (${itens.length}):</strong><br>${visiveis}${resto}`;
 }
 
 // ── Execução principal ────────────────────────────────────────────────────────
 
 async function executarScraping() {
   const inicio = Date.now();
-  logger.info('[CRMV-Scraper] Iniciando sincronização diária do SISCAD/CFMV...');
+  logger.info('[CRMV-Scraper] Iniciando varredura diária por número de inscrição (SISCAD/CFMV)...');
 
   const browser = await puppeteer.launch({
     headless: 'new',
@@ -229,10 +222,11 @@ async function executarScraping() {
     ],
   });
 
-  let totalInseridos = 0;
+  let totalRegistros   = 0;
   let totalAdicionados = 0;
-  let totalRemovidos = 0;
-  let erroMsg = null;
+  let totalRemovidos   = 0;
+  let erroMsg          = null;
+  let resumoHtml       = '';
 
   try {
     const page = await browser.newPage();
@@ -258,24 +252,30 @@ async function executarScraping() {
       if (pfInput) pfInput.click();
     });
 
-    // Para cada UF: raspa e já commita a diferença antes de seguir para a próxima —
-    // nunca acumula tudo em memória para gravar só no final.
+    // Para cada UF: varre por número e já commita a diferença antes de seguir para
+    // a próxima — nunca acumula tudo em memória para gravar só no final.
     for (const uf of UFS) {
       try {
-        const hashes = await scraperUF(page, uf);
-        const { adicionados, removidos } = await diffECommitUF(uf, hashes);
-        totalAdicionados += adicionados;
-        totalRemovidos   += removidos;
-        if (adicionados > 0 || removidos > 0) {
-          logger.info(`[CRMV-Scraper] UF=${uf} sincronizada: +${adicionados} -${removidos}`);
+        const ativos = await varrerUF(page, uf);
+        const { adicionados, removidos, atualizados } = await diffECommitUF(uf, ativos);
+        totalAdicionados += adicionados.length;
+        totalRemovidos   += removidos.length;
+        if (adicionados.length > 0 || removidos.length > 0 || atualizados.length > 0) {
+          logger.info(`[CRMV-Scraper] UF=${uf} sincronizada: +${adicionados.length} -${removidos.length} ~${atualizados.length}`);
         }
+        resumoHtml +=
+          `<strong>${uf}:</strong> ${ativos.length} veterinários ativos (${MAX_POR_UF[uf]} números varridos)` +
+          formatarLista('Novos ativos', adicionados, r => `${r.numero}/${uf} — ${r.nome}`) +
+          formatarLista('Deixaram de aparecer como ativos', removidos, r => `${r.numero}/${uf} — ${r.nome}`) +
+          formatarLista('Nome/classe atualizados', atualizados, ({ antes, depois }) => `${depois.numero}/${uf} — ${antes.nome} → ${depois.nome}`);
       } catch (err) {
         logger.error(`[CRMV-Scraper] Erro UF=${uf}: ${err.message}`);
+        resumoHtml += `<br><br><strong>${uf}: falhou</strong> — ${err.message}`;
       }
     }
 
-    totalInseridos = await prisma.crmvValido.count();
-    logger.info(`[CRMV-Scraper] Concluído: ${totalInseridos} CRMVs no total (+${totalAdicionados} -${totalRemovidos} nesta execução) em ${Math.round((Date.now() - inicio) / 1000)}s`);
+    totalRegistros = await prisma.crmvValido.count();
+    logger.info(`[CRMV-Scraper] Concluído: ${totalRegistros} veterinários ativos no índice (+${totalAdicionados} -${totalRemovidos}) em ${Math.round((Date.now() - inicio) / 1000)}s`);
 
   } catch (err) {
     erroMsg = err.message;
@@ -289,7 +289,7 @@ async function executarScraping() {
 
     await prisma.crmvSyncLog.create({
       data: {
-        totalRegistros:   totalInseridos,
+        totalRegistros,
         totalAdicionados,
         totalRemovidos,
         duracao:          Math.round((Date.now() - inicio) / 1000),
@@ -299,7 +299,7 @@ async function executarScraping() {
     });
   }
 
-  return { totalInseridos, totalAdicionados, totalRemovidos, erro: erroMsg };
+  return { totalRegistros, totalAdicionados, totalRemovidos, erro: erroMsg, resumoHtml };
 }
 
 module.exports = { executarScraping };
