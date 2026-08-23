@@ -214,6 +214,55 @@ export function itemPendenteEm(
   return dentroJanela && dataLocalDe(item.executadoEm) !== data;
 }
 
+// Mesmo intervalo do backend (lib/agendaDoses.js#intervaloEmMs) — para
+// encadear a prévia de dias futuros abaixo. Módulo (não local a um componente)
+// porque tanto a lista principal quanto `ModalExecucao` precisam dela.
+const HORA_MS = 60 * 60 * 1000;
+function intervaloEmMs(frequencia: string): number {
+  const dosesPorDia = DOSES_POR_DIA[frequencia] ?? 0;
+  return dosesPorDia ? (24 * HORA_MS) / dosesPorDia : 24 * HORA_MS;
+}
+
+/**
+ * PRÉVIA de dias FUTUROS — responde "há dose prevista nesse dia?" projetando as
+ * doses RESTANTES a partir do horário REAL já conhecido (`item.proximaDoseEm`),
+ * encadeando o mesmo intervalo que o rolling schedule real usa
+ * (`calcularProximaDose` no backend). `itemPendenteEm` sozinha nunca acha nada
+ * num dia futuro: o rolling schedule só sabe o PRÓXIMO horário, não os seguintes.
+ *
+ * 🔴 Regra de produto: "o horário BASE é o da PRIMEIRA execução — ela define o
+ * horário das demais." Por isso a prévia parte de `proximaDoseEm` (que já É o
+ * horário real, uma vez executada a 1ª dose — ou a 1ª dose teórica, antes dela)
+ * e NUNCA recalcula a partir de `dataInicio`/`horaInicio` originais. Uma 1ª
+ * dose atrasada/antecipada desloca a prévia inteira junto, do mesmo jeito que
+ * já acontece com o agendamento real.
+ *
+ * ⚠️ Só decide SE O ITEM APARECE ao navegar o calendário/filtro de data para um
+ * dia futuro — usada tanto pela lista (`itemPendenteHoje`) quanto por
+ * `ModalExecucao` (`itemDevidoHoje`), que sem isto perguntava só por HOJE
+ * (`localToday()` fixo) e mostrava "Nenhum item ativo" ao abrir um item cujo
+ * curso ainda não chegou na data visualizada. Nunca usada para calcular
+ * horário exibível nem para permitir execução fora de hoje (isso continua
+ * sendo só `proximaDoseEm` em si, com o gate de `dataSel === hoje`).
+ */
+export function itemPrevistoParaDataFutura(
+  item: Pick<ItemExecucao, 'dosesExecutadas' | 'dosesTotaisEsperadas' | 'proximaDoseEm' | 'frequencia'>,
+  data: string,
+): boolean {
+  const total = item.dosesTotaisEsperadas;
+  if (total == null) return false;
+  const jaFeitas = item.dosesExecutadas ?? 0;
+  if (jaFeitas >= total) return false;
+  if (!item.proximaDoseEm) return false;
+
+  let previsto = new Date(item.proximaDoseEm);
+  for (let n = jaFeitas; n < total; n++) {
+    if (dataLocalDe(previsto.toISOString()) === data) return true;
+    previsto = new Date(previsto.getTime() + intervaloEmMs(item.frequencia));
+  }
+  return false;
+}
+
 const execKey      = (grupoId: number) => `s2vet_exec_${grupoId}_${localToday()}`;
 const doneTodayKey = (grupoId: number) => `s2vet_done_${grupoId}_${localToday()}`;
 
@@ -496,6 +545,7 @@ export function ModalExecucao({
   soVisualizacao = false,
   podeCancelar = false,
   tipoFiltro = null,
+  dataRef = localToday(),
 }: {
   grupo:           GrupoExecucao;
   onClose:         () => void;
@@ -508,6 +558,13 @@ export function ModalExecucao({
    *  QUALQUER um dos dois cards mostrava TODOS os itens do grupo, dos dois tipos —
    *  e "Executar Todos" chegava a debitar/faturar o tipo que não devia estar ali. */
   tipoFiltro?:     'MEDICAMENTO' | 'PROCEDIMENTO' | null;
+  /** Data que o modal está EXIBINDO (calendário/filtro do chamador) — default hoje,
+   *  para quem nunca navega data (Painel Principal). Sem isto, "Itens do Dia"
+   *  perguntava sempre por HOJE mesmo abrindo um item de um dia FUTURO (a prévia da
+   *  Execução de Prescrição) ou PASSADO (Histórico/Mapa de Atendimento): o item ainda
+   *  não devido/já dado noutro dia sumia e o modal mostrava "Nenhum item ativo para
+   *  hoje" — vazio — mesmo com a prescrição bem viva. */
+  dataRef?:        string;
 }) {
   const [execMap,     setExecMap]     = useState<ExecMap>(() => getExecMap(grupo.id));
   const [salvando,    setSalvando]    = useState(false);
@@ -539,31 +596,39 @@ export function ModalExecucao({
   } | null>(null);
   const [salvandoAjusteHorario, setSalvandoAjusteHorario] = useState(false);
 
-  // Item já executado HOJE no backend (fonte de verdade — cobre itens sem horários
-  // gerados e reaberturas em que o mapa local não registrou a execução).
-  const executadoHojeFront = (item: ItemExecucao): boolean => {
-    if (!item.executadoEm) return false;
-    const d = new Date(item.executadoEm);
-    const h = new Date();
-    return d.getFullYear() === h.getFullYear() && d.getMonth() === h.getMonth() && d.getDate() === h.getDate();
-  };
+  // Item já executado NA DATA EXIBIDA pelo modal (`dataRef`) — fonte de verdade
+  // no backend (cobre itens sem horários gerados e reaberturas em que o mapa
+  // local não registrou a execução).
+  //
+  // 🔴 Era fixo em "hoje real" (`new Date()`) — o modal, aberto a partir de um
+  // item de outra data (a prévia futura da Execução de Prescrição, ou o
+  // Histórico/Mapa de Atendimento navegando pro passado), perguntava sempre
+  // pelo dia ERRADO. `dataRef` é a data que o CHAMADOR está exibindo.
+  const executadoHojeFront = (item: ItemExecucao): boolean =>
+    dataLocalDe(item.executadoEm) === dataRef;
 
-  // Item está DEVIDO hoje — decide quem entra no modal.
+  // Item está DEVIDO na data exibida (`dataRef`) — decide quem entra no modal.
   //   ELEGÍVEL (rolling schedule) → 🔴 NUNCA usar `diaAtual <= duracaoDias`: essa é
   //     a janela do CURSO INTEIRO (28 dias de "1x/semana × 4"), então valeria TODO
   //     santo dia da janela, não só nas 4 datas certas — era exatamente esse o bug
-  //     reportado. 🔴 Regra de produto (2026-08-18): devido SÓ quando hoje é
-  //     EXATAMENTE `proximaDoseEm` — nunca antes, e NUNCA depois (dose perdida não
-  //     fica "atrasada, ainda pendente": some no dia seguinte, cancelada pelo cron
-  //     `cancelar_doses_prescricao_perdidas`). Executado HOJE continua aparecendo
-  //     (alimenta o Histórico do dia).
-  //   LEGADO (sem horaInicio) → mantém a janela do curso inteiro, como sempre foi.
+  //     reportado. 🔴 Regra de produto (2026-08-18): devido SÓ quando a data
+  //     exibida é EXATAMENTE `proximaDoseEm` — nunca antes, e NUNCA depois (dose
+  //     perdida não fica "atrasada, ainda pendente": some no dia seguinte, cancelada
+  //     pelo cron `cancelar_doses_prescricao_perdidas`). Executado NA DATA continua
+  //     aparecendo (alimenta o Histórico do dia).
+  //   🔴 `dataRef` FUTURA (além de hoje): `proximaDoseEm` sozinho só conhece a
+  //     PRÓXIMA dose real — cai na mesma prévia teórica da lista
+  //     (`itemPrevistoParaDataFutura`), sem ela o modal de um item da prévia
+  //     futura mostrava "Nenhum item ativo" (vazio) mesmo tendo curso pela frente.
+  //   LEGADO (sem horaInicio) → mantém a janela do curso inteiro, como sempre foi
+  //     (`diaAtual` já vem do backend relativo à data exibida, não a hoje real).
   const itemDevidoHoje = (i: ItemExecucao): boolean => {
     if (i.dosesTotaisEsperadas != null) {
       if (executadoHojeFront(i)) return true;
       if ((i.dosesExecutadas ?? 0) >= i.dosesTotaisEsperadas) return false;
+      if (dataRef > localToday()) return itemPrevistoParaDataFutura(i, dataRef);
       if (!i.proximaDoseEm) return false;
-      return dataLocalDe(i.proximaDoseEm) === localToday();
+      return dataLocalDe(i.proximaDoseEm) === dataRef;
     }
     return i.diaAtual >= 1 && i.diaAtual <= i.duracaoDias;
   };
@@ -825,7 +890,7 @@ export function ModalExecucao({
 
           {itensComInfo.length === 0 && (
             <p className="text-center py-8 text-sm text-gray-400">
-              Nenhum item ativo para hoje.
+              Nenhum item ativo {dataRef === localToday() ? 'para hoje' : `para ${formatDateShort(dataRef)}`}.
             </p>
           )}
 
@@ -1737,8 +1802,10 @@ export default function ExecucaoPrescricao() {
         );
       }) : () => true);
 
-  // Item ainda a executar na data selecionada — fonte única com o Painel Principal.
-  const itemPendenteHoje = (item: ItemExecucao): boolean => itemPendenteEm(item, dataSel);
+  // Item ainda a executar na data selecionada — fonte única com o Painel Principal
+  // (para hoje/passado); data futura cai na prévia teórica acima.
+  const itemPendenteHoje = (item: ItemExecucao): boolean =>
+    dataSel > localToday() ? itemPrevistoParaDataFutura(item, dataSel) : itemPendenteEm(item, dataSel);
 
   // Item executado NA DATA VISUALIZADA — alimenta o Histórico daquele dia.
   const itemExecutadoNaData = (item: ItemExecucao): boolean =>
@@ -1787,8 +1854,24 @@ export default function ExecucaoPrescricao() {
   // ("some(itemPendenteHoje)" nunca ficava falso) e o card correspondente nunca
   // migrava para o Histórico, mesmo com a dose de hoje já dada. "Ainda precisa
   // ação" exclui explicitamente o que já foi resolvido NESTA data.
+  //
+  // 🔴 BUG (corrigido): o `!itemExecutadoNaData(i)` acima só faz sentido para item
+  // LEGADO (`dosesTotaisEsperadas == null`), cuja pendência (`janelaDoItem`) é o
+  // DIA INTEIRO e por isso não sabe, sozinha, que a execução de hoje já resolveu o
+  // dia. Para item ELEGÍVEL ao rolling schedule (12em12h..1em1h, várias doses no
+  // MESMO dia) essa guarda quebra tudo: `item.executadoEm` é a data da ÚLTIMA
+  // execução, então dar a 1ª dose de 6 ("12 em 12h × 3 dias") já marca
+  // `itemExecutadoNaData=true` pelo resto do dia — e a 2ª dose, ainda pendente
+  // (`proximaDoseEm` = hoje à noite, `itemPendenteHoje` já retornaria `true`
+  // sozinho), era descartada aqui e o item sumia da fila de "a executar" e ia
+  // pro Histórico como se o dia inteiro já tivesse sido dado. `itemPendenteHoje`
+  // (via `itemPendenteEm`) JÁ decide sozinha se ainda falta dose HOJE nesse caso
+  // (olha `dosesExecutadas`/`dosesTotaisEsperadas`/`proximaDoseEm`, não a mera
+  // presença de uma execução anterior) — não precisa do `!itemExecutadoNaData`.
   const itemAindaPrecisaAcaoHoje = (i: ItemExecucao): boolean =>
-    !itemExecutadoNaData(i) && itemPendenteHoje(i);
+    i.dosesTotaisEsperadas != null
+      ? itemPendenteHoje(i)
+      : !itemExecutadoNaData(i) && itemPendenteHoje(i);
 
   const tipoConcluidoEm = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO'): boolean => {
     const itensDoTipo = g.itens.filter(i => i.tipo === tipo);
@@ -2333,6 +2416,7 @@ export default function ExecucaoPrescricao() {
         <ModalExecucao
           grupo={modal}
           tipoFiltro={modalTipo}
+          dataRef={dataSel}
           onClose={() => { setModal(null); setModalTipo(null); carregar(); }}
           soVisualizacao={modalVer || !isHoje || modal.status === 'CANCELADO'
             || (modalTipo ? tipoConcluidoEm(modal, modalTipo) : foiExecutadoHoje(modal))}

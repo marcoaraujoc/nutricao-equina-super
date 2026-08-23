@@ -64,6 +64,12 @@ const DocumentoCompartilharController = {
     if (!html || !nomeArquivo) {
       return res.status(400).json({ sucesso: false, error: 'html e nomeArquivo são obrigatórios.' });
     }
+    // Checagem RÁPIDA antes do Puppeteer — sem SMTP configurado não há como
+    // enviar, e gerar o PDF à toa custa segundos (mesmo motivo do lado do
+    // WhatsApp — ver documentoWhatsappService.js).
+    if (!emailService.estaConfigurado()) {
+      return res.status(200).json({ sucesso: false, error: 'Envio de e-mail não configurado.', code: 'EMAIL_NAO_CONFIGURADO' });
+    }
 
     let pdfBase64;
     try {
@@ -88,6 +94,30 @@ const DocumentoCompartilharController = {
       }
       logger.error(`[DocumentoCompartilhar] Falha ao enviar e-mail: ${err.message}`);
       return res.status(500).json({ sucesso: false, error: 'Erro ao enviar o e-mail.' });
+    }
+  },
+
+  /**
+   * POST /api/documentos/pdf
+   * Body: { html, nomeArquivo? }
+   * Só GERA o PDF (mesmo pipeline do Puppeteer usado no envio real — texto
+   * selecionável, paginação nativa do Chrome via `page.pdf()`) e devolve o
+   * binário. Usado pelo fallback manual do front (utils/compartilharPdf.ts)
+   * quando não há envio real disponível: preferir SEMPRE este caminho a gerar o
+   * PDF por captura de tela no navegador, que é mais frágil.
+   */
+  async pdf(req, res) {
+    const { html, nomeArquivo } = req.body;
+    if (!html) return res.status(400).json({ error: 'html é obrigatório.' });
+
+    try {
+      const pdf = await htmlParaPdf(html);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${String(nomeArquivo || 'documento.pdf').replace(/[^\w.-]/g, '_')}"`);
+      return res.send(pdf);
+    } catch (err) {
+      logger.error(`[DocumentoCompartilhar] Falha ao gerar PDF avulso (${nomeArquivo}): ${err.message}`);
+      return res.status(500).json({ error: 'Erro ao gerar o PDF.' });
     }
   },
 };

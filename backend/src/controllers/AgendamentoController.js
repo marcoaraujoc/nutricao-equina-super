@@ -4,6 +4,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal }                   = require('../lib/animalAccess');
+const { corteDePropriedade }                      = require('../lib/animalPropriedadeCorte');
 // Escopo de DADOS de animal (base × convidado × prestador) — fonte única, ver §5
 const { buildAnimalScopeWhere }                   = require('../lib/animalScope');
 const { filhoDeAnimalVisivel, animalVisivelNaEmpresa } = require('../lib/visibilidade');
@@ -462,7 +463,14 @@ const AgendamentoController = {
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
-      const where = { animalId, ativo: true };
+      // Transferência de Propriedade — o PROPRIETÁRIO atual só vê agendamentos com
+      // `dataHora` a partir de `propriedadeDesde` (some do histórico anterior à posse
+      // dele; agendamento futuro naturalmente já cai depois da transferência).
+      // GESTOR/VET/ADMIN veem tudo.
+      const animalCorte = await prisma.animal.findUnique({ where: { id: animalId }, select: { propriedadeDesde: true } });
+      const corte = corteDePropriedade(req, animalCorte);
+
+      const where = { animalId, ativo: true, ...(corte ? { dataHora: { gte: corte } } : {}) };
       if (req.query.futuros === '1') {
         // Futuros AGENDADOS + todos os CANCELADOS (para histórico/relatórios)
         const hoje = new Date(); hoje.setHours(0, 0, 0, 0);

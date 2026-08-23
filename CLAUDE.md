@@ -1,5 +1,40 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-08-22 (Auditoria ganhou a categoria ACESSO_NEGADO — tentativa
+#   BLOQUEADA de acesso, não só ação bem-sucedida. Pedido do usuário: "tentativas de
+#   acesso não autorizados (aplicação, funcionalidades, animais) não estão aparecendo
+#   na auditoria do ADMIN" — e de fato não apareciam: `registrarAuditoria`
+#   (lib/auditoria.js) só era chamado por controllers em EXCLUSAO/CANCELAMENTO/etc,
+#   nunca nos `res.status(403)` de `checkPermission`/`verificarAcessoAnimal`/login, e
+#   um 403 nunca deixava rastro. Novo helper `registrarAcessoNegado(req, {motivo,
+#   entidade, entidadeId?, animalId?, emailTentativa?})` — fire-and-forget (nunca
+#   lança, não atrasa a resposta 401/403) e roda em ESCOPO DE PLATAFORMA
+#   (`comEscopoPlataforma`, mesmo motivo do `registrarAcesso` de LOGIN/LOGOUT): a
+#   tentativa pode acontecer ANTES do tenant resolvido (login) ou ser justamente FORA
+#   do tenant do usuário — escrever com o escopo dele mesmo esconderia a tentativa da
+#   auditoria da empresa visada. `empresaId` é gravado como DADO, não como escopo.
+#   Instrumentado em 3 chokepoints (cobre "aplicação/funcionalidades/animais" sem
+#   tocar dezenas de controllers):
+#   1. `permissao.middleware.js#checkPermission`/`verificarComoProprietario`/
+#      `checkPermissaoProprietario` — NEGADO explícito, nível insuficiente, sem
+#      equipe ativa, funcionalidade de proprietário não habilitada (entidade MODULO).
+#   2. `animalAcesso.middleware.js#exigirAcessoAnimal`/`garantirAcessoAnimal` — 403 de
+#      paciente fora do escopo (entidade ANIMAL, com animalId).
+#   3. `auth/UserController.js#login`/`verificar2fa` — e-mail inexistente, senha
+#      incorreta, conta desativada, acesso ao sistema revogado pelo gestor, código 2FA
+#      inválido/expirado (entidade LOGIN, com `emailTentativa` quando ainda não há
+#      usuário resolvido).
+#   `podeOperarRegistro` (mesmo arquivo) também loga sozinho quando devolve `false` —
+#   é usado como guard SÍNCRONO em ~19 call sites (`if (!podeOperarRegistro(req, x))
+#   return res.status(403)...`), então centralizar ali (chamada fire-and-forget, sem
+#   `await`) evita instrumentar cada controller (entidade REGISTRO_CLINICO).
+#   Sem migration: `AuditLog.categoria`/`.entidade` já são `String?` livres — só
+#   precisou entrar na lista `CATEGORIAS` de `lib/auditoria.js`. Front
+#   (`AuditoriaGeral.tsx`): badge próprio (rose, ícone `ShieldAlert`), aba de filtro
+#   "Acesso negado" e `ENTIDADE_LABEL` para LOGIN/MODULO/REGISTRO_CLINICO (ANIMAL já
+#   existia). PENDENTE: falhas de reenvio de 2FA (`mfa.reenviarCodigo`) e o
+#   Google OAuth (`GoogleController`) ainda não passam por `registrarAcessoNegado` —
+#   mesmo padrão de `login`, aplicar quando forem tocados.
 # Atualizado em: 2026-08-21 (Nova rota PÚBLICA "/" — página institucional, para
 #   quem NÃO está logado (pedido explícito do usuário). Antes não existia
 #   nenhuma página pública: qualquer acesso, inclusive "/", caía direto em

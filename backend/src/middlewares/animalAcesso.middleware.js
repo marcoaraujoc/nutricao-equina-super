@@ -19,6 +19,7 @@
 'use strict';
 
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { registrarAcessoNegado } = require('../lib/auditoria');
 
 /**
  * @param {object}  [opts]
@@ -53,7 +54,14 @@ function exigirAcessoAnimal(opts = {}) {
       });
 
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
-      if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+      if (!acesso) {
+        await registrarAcessoNegado(req, {
+          motivo:   'Acesso não autorizado a paciente (fora do escopo do usuário)',
+          entidade: 'ANIMAL',
+          animalId,
+        });
+        return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+      }
 
       // Deixa o id já normalizado para o handler não reconverter.
       req.animalIdAcessivel = animalId;
@@ -84,6 +92,11 @@ async function garantirAcessoAnimal(req, res, animalId) {
     return false;
   }
   if (!acesso) {
+    await registrarAcessoNegado(req, {
+      motivo:   'Acesso não autorizado a paciente (fora do escopo do usuário)',
+      entidade: 'ANIMAL',
+      animalId: Number(animalId),
+    });
     res.status(403).json({ error: 'Acesso não autorizado a este animal' });
     return false;
   }

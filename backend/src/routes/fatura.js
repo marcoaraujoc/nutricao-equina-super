@@ -22,6 +22,12 @@ router.post('/:faturaId/itens',  authenticate, checkPermission('financeiro.fatur
 router.put('/itens/:itemId',     authenticate, checkPermission('financeiro.faturas.editar', 'PROPRIO'), Ctrl.atualizarItem);
 router.delete('/itens/:itemId',  authenticate, checkPermission('financeiro.faturas.editar', 'EQUIPE'),  Ctrl.removerItem);
 
+// Link público (WhatsApp/e-mail) — reusa o slug de WhatsApp para os dois
+// canais: "compartilhar a fatura para fora da clínica" é a mesma ação, e não
+// existe slug próprio de e-mail no catálogo de permissões.
+router.post('/:faturaId/enviar-whatsapp', authenticate, checkPermission('financeiro.faturas.whatsapp', 'PROPRIO'), Ctrl.enviarLinkWhatsapp);
+router.post('/:faturaId/enviar-email',    authenticate, checkPermission('financeiro.faturas.whatsapp', 'PROPRIO'), Ctrl.enviarLinkEmail);
+
 // Fechamento em lote — fecha todas as faturas ABERTAS de um mês (IDs no body)
 router.post('/fechar-lote', authenticate, checkPermission('financeiro.faturas.fechar', 'EQUIPE'), Ctrl.fecharFaturasLote);
 

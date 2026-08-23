@@ -22,7 +22,15 @@ const { comEscopoPlataforma } = require('./prismaTenant');
 // EXECUCAO       → execução de UMA dose de prescrição (paciente, medicamento, horário
 //                  previsto x executado, quem executou) — toda dose é auditada, não só
 //                  as fora do horário (ver PrescricaoGrupoController.executar).
-const CATEGORIAS = ['EXCLUSAO', 'CANCELAMENTO', 'AJUSTE', 'CONFIGURACAO', 'TRANSFERENCIA', 'ALTERACAO', 'CRIACAO', 'EXECUCAO'];
+// ACESSO_NEGADO  → TENTATIVA bloqueada — login com senha errada/conta sem acesso, rota
+//                  de módulo sem permissão (checkPermission/checkPermissaoProprietario)
+//                  ou paciente fora do escopo (exigirAcessoAnimal/garantirAcessoAnimal).
+//                  Até 2026-08-22 só ação BEM-SUCEDIDA deixava rastro — um 403 nunca
+//                  era gravado, e o ADMIN não tinha como ver quem tentou o quê.
+// EXPORTACAO     → extração em massa de dado clínico (Administração > Exportação) —
+//                  quem/quando/quantos pacientes, sem duplicar aqui a lista de nomes
+//                  já gravada em `motivo` pelo controller.
+const CATEGORIAS = ['EXCLUSAO', 'CANCELAMENTO', 'AJUSTE', 'CONFIGURACAO', 'TRANSFERENCIA', 'ALTERACAO', 'CRIACAO', 'EXECUCAO', 'ACESSO_NEGADO', 'EXPORTACAO'];
 
 /**
  * Extrai o IP de origem do request de forma consistente com o `trust proxy`
@@ -125,6 +133,51 @@ async function registrarAcesso(req, user, action) {
     ));
   } catch (err) {
     console.warn(`[auditoria] falha ao registrar ${action} do usuário ${user.id}:`, err.message);
+  }
+}
+
+/**
+ * Registra uma TENTATIVA DE ACESSO NÃO AUTORIZADA — módulo/funcionalidade sem
+ * permissão, paciente fora do escopo, ou login/2FA recusado.
+ *
+ * Fire-and-forget (nunca lança — o caller já está no meio de devolver 401/403/404 e
+ * não pode ter essa resposta atrasada nem derrubada por falha de auditoria) e roda em
+ * ESCOPO DE PLATAFORMA de propósito: a tentativa pode acontecer ANTES de o tenant
+ * estar resolvido (login, antes de `authenticate`) ou ser justamente FORA do tenant
+ * a que o usuário pertence — escrever com o escopo carimbado do PRÓPRIO usuário
+ * esconderia a tentativa da auditoria da empresa visada (`app_empresa_id()` dela
+ * nunca bateria com a do atacante). `empresaId` é gravado só como DADO (coluna) —
+ * é o que permite ao gestor daquela empresa ver "alguém tentou acessar X aqui".
+ *
+ * @param {object} req     request (pode ser pré-autenticação — sem req.user)
+ * @param {object} dados   { motivo, entidade?, entidadeId?, animalId?, emailTentativa? }
+ *   `entidade` categoriza o alvo: 'LOGIN' | 'MODULO' | 'ANIMAL' (default 'ACESSO').
+ *   `emailTentativa` — e-mail digitado no login, quando ainda não há usuário resolvido.
+ */
+async function registrarAcessoNegado(req, { motivo, entidade = 'ACESSO', entidadeId = null, animalId = null, emailTentativa = null }) {
+  try {
+    const detalhes = [`rota: ${req?.method ?? '?'} ${req?.originalUrl || req?.url || '?'}`];
+    if (emailTentativa && !req?.user?.email) detalhes.push(`email tentado: ${emailTentativa}`);
+
+    await comEscopoPlataforma(() => prisma.$executeRawUnsafe(
+      `INSERT INTO schs2vet.tb_audit_logs
+         ("userId", "userName", "email", "action", "empresaId", "categoria", "entidade", "entidadeId", "animalId", "motivo", "detalhes", "ip")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      req?.user?.id ?? null,
+      req?.user?.fullName ?? '',
+      req?.user?.email ?? emailTentativa ?? '',
+      `ACESSO_NEGADO ${entidade}`,
+      req?.empresaId ?? null,
+      'ACESSO_NEGADO',
+      entidade,
+      entidadeId != null ? Number(entidadeId) : null,
+      animalId   != null ? Number(animalId)   : null,
+      motivo?.trim() || null,
+      detalhes.join(' | '),
+      ipDoRequest(req),
+    ));
+  } catch (err) {
+    console.warn('[auditoria] falha ao registrar ACESSO_NEGADO:', err.message);
   }
 }
 
@@ -232,6 +285,29 @@ async function registrarAlteracao(client, req, { entidade, entidadeId, animalId 
 }
 
 /**
+ * Registra a TRANSFERÊNCIA DE PROPRIEDADE de um animal — quem transferiu, quando,
+ * o motivo (Doação/Venda/Aluguel) e quem era o proprietário anterior/novo. Mesmo
+ * espírito de `registrarTransferencia`, com o texto certo para o domínio (é o
+ * DONO do animal que muda, não o condutor de um atendimento).
+ *
+ * @param {object} dados { animalId, deProprietarioId, paraProprietarioId, motivo }
+ */
+async function registrarTransferenciaPropriedade(client, req, { animalId, deProprietarioId, paraProprietarioId, motivo }) {
+  const [de, para] = await Promise.all([
+    nomeDoUsuario(client, deProprietarioId),
+    nomeDoUsuario(client, paraProprietarioId),
+  ]);
+  await registrarAuditoria(client, req, {
+    categoria: 'TRANSFERENCIA',
+    entidade:  'ANIMAL_PROPRIEDADE',
+    entidadeId: animalId,
+    animalId,
+    motivo,
+    detalhes: `proprietário anterior: ${de} → novo proprietário: ${para}`,
+  });
+}
+
+/**
  * Nome legível de uma localização para o texto da auditoria — mesmo espírito de
  * `nomeDoUsuario`: a auditoria não exibe id cru (decisão de 2026-08-04, ver CLAUDE.md
  * §12 "Nenhuma referência NUMÉRICA na tela de auditoria").
@@ -253,7 +329,9 @@ async function nomeLocalizacao(client, localizacaoId) {
 module.exports = {
   registrarAuditoria,
   registrarAcesso,
+  registrarAcessoNegado,
   registrarTransferencia,
+  registrarTransferenciaPropriedade,
   registrarAlteracao,
   nomeDoUsuario,
   nomeLocalizacao,

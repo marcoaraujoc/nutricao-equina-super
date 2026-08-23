@@ -100,6 +100,17 @@ async function enviarDocumentoWhatsApp({
   const para = foneIntl(telefone);
   if (!para) return { sucesso: false, erro: 'TELEFONE_AUSENTE' };
 
+  const provider = getWhatsAppProvider();
+
+  // Checagem RÁPIDA antes do Puppeteer — ver WhatsAppProvider#estaProntoParaEnviar.
+  // Sem ela, toda clínica sem instância conectada pagava o custo de gerar o PDF
+  // (segundos) só para o envio falhar em seguida por outro motivo — e esse atraso
+  // extra, somado ao do fallback manual do front, arriscava perder o gesto do
+  // usuário que abriria o WhatsApp (window.open silenciosamente bloqueado).
+  if (!(await provider.estaProntoParaEnviar({ empresaId, equipeId }))) {
+    return { sucesso: false, erro: 'PROVIDER_INDISPONIVEL' };
+  }
+
   let base64;
   try {
     const pdf = await htmlParaPdf(html);
@@ -109,7 +120,7 @@ async function enviarDocumentoWhatsApp({
     return { sucesso: false, erro: 'ERRO_PDF' };
   }
 
-  return getWhatsAppProvider().enviarDocumento({
+  return provider.enviarDocumento({
     para,
     arquivo: { base64, nome: nomeArquivo },
     legenda,

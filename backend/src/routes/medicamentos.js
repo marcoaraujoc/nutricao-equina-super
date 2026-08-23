@@ -20,6 +20,10 @@ const requireAdmin = (req, res, next) => {
 router.get('/vacinas',          authenticate, MedicamentoController.listarVacinas);
 router.get('/especies',         authenticate, MedicamentoController.listarEspecies);
 router.get('/para-atendimento', authenticate, MedicamentoController.paraAtendimento);
+// Cadastro PRIVADO da empresa, direto da tela de atendimento (Prescrição/Vacina) —
+// qualquer usuário autenticado cadastra o PRÓPRIO item da empresa; não é o catálogo
+// GLOBAL (esse continua exigindo requireAdmin, abaixo).
+router.post('/garantir',        authenticate, MedicamentoController.garantirCatalogoManual);
 
 router.get('/',       authenticate, MedicamentoController.listar);
 router.get('/:id',    authenticate, MedicamentoController.obterPorId);

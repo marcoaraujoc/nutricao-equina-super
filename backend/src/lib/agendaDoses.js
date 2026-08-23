@@ -142,6 +142,57 @@ function diferencaEmMinutos(agora, previsto) {
   return Math.round((new Date(agora).getTime() - new Date(previsto).getTime()) / 60000);
 }
 
+// Horário previsto de UMA dose: se já houve dose(s) antes, é o rolling schedule
+// JÁ PERSISTIDO (`proximaDoseEm` — calculado a partir do horário REAL da última
+// execução); sem nenhuma dose ainda, é a 1ª dose esperada (teórica, de
+// `dataInicio`/`horaInicio`). Fonte ÚNICA — movida para cá (era local ao
+// controller) porque a prévia de dias futuros abaixo precisa dela também, e
+// duas cópias divergiriam na primeira correção.
+function horarioPrevistoDoItem(item) {
+  return (item.dosesExecutadas ?? 0) > 0 && item.proximaDoseEm
+    ? item.proximaDoseEm
+    : primeiraDoseEsperada(item);
+}
+
+// Data (YYYY-MM-DD, fuso LOCAL) de um instante qualquer.
+function dataLocalDe(d) {
+  const dt = new Date(d);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+}
+
+/**
+ * PRÉVIA de dias FUTUROS — responde "há dose prevista nesse dia?" projetando
+ * as doses RESTANTES a partir do horário REAL já conhecido (`proximaDoseEm` —
+ * ver `horarioPrevistoDoItem`), encadeando `calcularProximaDose` pra frente.
+ *
+ * 🔴 Regra de produto: "o horário BASE é o da PRIMEIRA execução — ela define o
+ * horário das demais." Por isso a prévia NUNCA reconta a partir de
+ * `dataInicio`/`horaInicio` originais: parte de `horarioPrevistoDoItem`, que já
+ * é o horário REAL (pós 1ª execução) ou a 1ª dose teórica (antes dela) — exatamente
+ * a mesma âncora que o rolling schedule de verdade usa. Uma 1ª dose
+ * atrasada/antecipada desloca a prévia inteira junto, como já acontece com o
+ * agendamento real — nunca um grid fixo recalculado do zero.
+ *
+ * ⚠️ Só serve para DECIDIR SE O ITEM APARECE ao navegar o calendário da
+ * Execução de Prescrição para um dia futuro — nunca para calcular horário
+ * exibível nem para permitir execução fora de hoje (isso continua sendo só
+ * `proximaDoseEm` em si, com o gate de `dataSel === hoje` no front).
+ */
+function itemPrevistoParaDataFutura(item, dataStr) {
+  if (!elegivelParaFluxoNovo(item)) return false;
+  const totalDoses = dosesTotaisEsperadas(item);
+  const jaFeitas    = item.dosesExecutadas ?? 0;
+  if (jaFeitas >= totalDoses) return false;
+
+  let previsto = horarioPrevistoDoItem(item);
+  for (let n = jaFeitas; n < totalDoses; n++) {
+    if (dataLocalDe(previsto) === dataStr) return true;
+    previsto = calcularProximaDose(previsto, item.frequencia);
+  }
+  return false;
+}
+
 module.exports = {
   DOSES_POR_DIA,
   intervaloEmMs,
@@ -153,4 +204,7 @@ module.exports = {
   calcularProximaDose,
   classificarExecucao,
   diferencaEmMinutos,
+  horarioPrevistoDoItem,
+  dataLocalDe,
+  itemPrevistoParaDataFutura,
 };

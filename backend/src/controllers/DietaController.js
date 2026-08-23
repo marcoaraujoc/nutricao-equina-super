@@ -1,4 +1,5 @@
 const prisma = require('../lib/prisma').default;
+const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 const { registrarAuditoria } = require('../lib/auditoria');
 // ISOLAMENTO ENTRE EMPRESAS: `checkPermission` na rota diz SE a pessoa lê/edita dieta,
 // nunca SOBRE QUAL paciente. Nas rotas com :animalId o guard é middleware; aqui, nas
@@ -19,7 +20,12 @@ const PlanoDietaController = {
     const { ativo } = req.query; // ?ativo=true|false (opcional)
 
     try {
-      const where = { animalId: Number(animalId) };
+      // Transferência de Propriedade — o PROPRIETÁRIO atual só vê planos criados a
+      // partir de `propriedadeDesde`; GESTOR/VET/ADMIN veem tudo.
+      const animalCorte = await prisma.animal.findUnique({ where: { id: Number(animalId) }, select: { propriedadeDesde: true } });
+      const corte = corteDePropriedade(req, animalCorte);
+
+      const where = { animalId: Number(animalId), ...(corte ? { dataCriacao: { gte: corte } } : {}) };
       if (ativo !== undefined) where.ativo = ativo === 'true';
 
       const planos = await prisma.planoDieta.findMany({
@@ -187,8 +193,13 @@ const DietaItemController = {
   listarPorAnimal: async (req, res) => {
     const { animalId } = req.params;
     try {
+      // Transferência de Propriedade — o PROPRIETÁRIO atual só vê itens criados a
+      // partir de `propriedadeDesde`; GESTOR/VET/ADMIN veem tudo.
+      const animalCorte = await prisma.animal.findUnique({ where: { id: Number(animalId) }, select: { propriedadeDesde: true } });
+      const corte = corteDePropriedade(req, animalCorte);
+
       const dietas = await prisma.dieta.findMany({
-        where: { animalId: Number(animalId) },
+        where: { animalId: Number(animalId), ...(corte ? { dataCriacao: { gte: corte } } : {}) },
         include: {
           alimento: true,
           animal: {

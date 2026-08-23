@@ -35,14 +35,29 @@ const SELECT_PROPRIETARIO = {
 
 // Proprietário pertence ao escopo (empresa + equipes do contexto):
 // - animal ativo numa equipe do escopo, OU animal legado sem equipe na empresa,
-// - OU cadastrado direto numa equipe do escopo / legado sem equipe na empresa.
+// - OU cadastrado direto numa equipe do escopo / legado sem equipe na empresa,
+// - OU tem `ProprietarioPerfil` NESTA empresa (cadastro de cliente aqui).
 // equipeScope null = sem restrição por equipe (dono da empresa sem MembroEquipe).
+//
+// ⚠️ O `ProprietarioPerfil` entra SEM condição de equipe — o model não tem
+// `equipeId` (é por EMPRESA, não por equipe; mesmo critério que
+// `whereEhClienteDaEmpresa` já usa para a MESMA tabela). Sem este ramo, o cliente
+// cujo ÚNICO animal na empresa foi inativado (ou removido via `removerDaEmpresa`)
+// desaparecia da consulta INTEIRA — não só da aba "Ativos": o `AND` com
+// `whereEhClienteDaEmpresa` (que reconhece o `ProprietarioPerfil`) descartava a
+// linha antes mesmo de o filtro de `ativo` decidir a aba. O cadastro existia,
+// corretamente marcado como inativo (`ProprietarioPerfil.ativo=false`,
+// `inativoEm`/`inativoPorId` preenchidos), mas nunca chegava a aparecer em
+// nenhuma das duas abas (Ativos/Inativos) — bug encontrado ao investigar por que
+// um proprietário aparecia no Faturamento (que tem esse fallback via fatura
+// pendente) mas sumia do Cadastro de Proprietários (que não tinha nenhum).
 function whereProprietarioNoEscopo(empresaId, equipeScope) {
   if (!equipeScope) {
     return {
       OR: [
         { animais: { some: { empresaId, ativo: true } } },
         { empresaId },
+        { proprietarioPerfis: { some: { empresaId } } },
       ],
     };
   }
@@ -52,6 +67,7 @@ function whereProprietarioNoEscopo(empresaId, equipeScope) {
       { animais: { some: { ativo: true, empresaId, equipeId: null } } },
       { empresaId, equipeId: { in: equipeScope } },
       { empresaId, equipeId: null },
+      { proprietarioPerfis: { some: { empresaId } } },
     ],
   };
 }

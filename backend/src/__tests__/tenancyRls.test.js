@@ -46,6 +46,33 @@ const TENANT_PLANE = [
   // AGUARDANDO_RLS ainda). Nasceu direto com RLS: TENANT VIA PAI (tb_lotes_vacina, que
   // tem empresa_id DIRETO) — migration 20260830000000_reserva_estoque_vacina.
   'tb_reservas_estoque_vacina',
+  // ✅ 2026-08-20 — dose executada da prescrição (rolling schedule). TENANT VIA PAI
+  // (tb_prescricao_grupos) e já nasceu no padrão FAIL-CLOSED da fase 7c
+  // (`app_plataforma() OR EXISTS(...)`) — migration 20260820000000_prescricao_execucao_dose.
+  'tb_prescricao_execucoes_dose',
+  // ✅ 2026-08-25 — catálogo de tipo de serviço (Fornecedor/Prestador). TENANT DIRETO,
+  // padrão fail-closed — migration 20260825000000_fornecedor_prestador_ativacao_catalogo.
+  'tb_catalogo_tipo_servico',
+  // ✅ 2026-09-06 RESOLVIDA — as migrations de 2026-08-19/21/22 tinham nascido no
+  // padrão ANTIGO da fase 6 (`app_empresa_id() IS NULL OR …`, fail-OPEN: sem
+  // contexto de tenant, `tb_prestadores` devolvia 1 linha e `tb_animal_historico`
+  // devolvia 7). Migration 20260906000000_fix_rls_fail_open_prestadores trocou as
+  // três para o padrão fail-closed (`app_plataforma() OR (...)`), aplicada e
+  // reconfirmada ao vivo (0 linhas sem contexto).
+  'tb_animal_historico', 'tb_prestadores', 'tb_prestador_locais_trabalho',
+  // ✅ 2026-09-07 — vínculo de espécie/via do medicamento/vacina PRIVADO da empresa
+  // (garantirMedicamentoDaEmpresa/vincularEspecie, lib/catalogoManual.js).
+  // TENANT VIA PAI (tb_medicamentos), mas o pai é CATÁLOGO MISTO — a policy foi
+  // escrita à mão (fora do gerador padrão) para preservar a leitura do catálogo
+  // GLOBAL: USING casa "empresa própria OU pai global (empresa_id IS NULL)", WITH
+  // CHECK só permite escrever no que é da própria empresa. Migration
+  // 20260907000000_rls_medicamento_especies_vias.
+  'tb_medicamento_especies', 'tb_medicamento_vias',
+  // ✅ 2026-09-08 — janelas de POSSE do animal (Transferência de Propriedade).
+  // TENANT DIRETO (empresa_id na própria linha, mesmo padrão de tb_prestadores/
+  // tb_fornecedores), já nasceu no padrão fail-closed (`app_plataforma() OR (...)`).
+  // Migration 20260908000000_transferencia_propriedade_animal.
+  'tb_animal_proprietario_historico',
 ];
 
 // ─── AGUARDANDO RLS — são de tenant, ainda sem policy ─────────────────────────
@@ -115,9 +142,11 @@ const SEM_RLS = [
   'tb_audit_logs',
 
   // CATÁLOGO GLOBAL PURO — ninguém cria linha própria
+  // ⚠️ `tb_medicamento_especies`/`tb_medicamento_vias` SAÍRAM daqui em 2026-09-07 —
+  // ver TENANT_PLANE acima ("ninguém cria linha própria" deixou de valer).
   'tb_alimentos', 'tb_crmv_sync_log', 'tb_crmv_validos', 'tb_especialidades',
-  'tb_especies', 'tb_exigencias_nrc', 'tb_laboratorios', 'tb_medicamento_especies',
-  'tb_medicamento_vias', 'tb_nutrientes', 'tb_racas', 'tb_regioes_anatomicas_equino',
+  'tb_especies', 'tb_exigencias_nrc', 'tb_laboratorios',
+  'tb_nutrientes', 'tb_racas', 'tb_regioes_anatomicas_equino',
   // D8: referência técnica (composição nutricional por espécie), igual para todas
   'tb_composicao_alimento',
 ];

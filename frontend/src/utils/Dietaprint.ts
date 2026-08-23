@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura } from './print/PrintShell';
+import { resolverUrlAbsoluta } from './printUrl';
 
 export interface PrintAnimal {
   nome: string;
@@ -179,6 +180,12 @@ const PRINT_CSS = `
     width: 78pt; height: 78pt; border-radius: 6pt;
     object-fit: cover; flex-shrink: 0; border: 0.5pt solid #e5e7eb;
   }
+  .animal-photo-empty {
+    width: 78pt; height: 78pt; border-radius: 6pt; flex-shrink: 0;
+    border: 0.5pt solid #e5e7eb; background: #f3f4f6;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26pt;
+  }
   .animal-info { flex: 1; display: flex; flex-direction: column; justify-content: space-between; }
   .animal-top    { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8pt; }
   .animal-bottom { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8pt; margin-top: 8pt; padding-top: 8pt; border-top: 0.5pt solid #e5e7eb; }
@@ -245,7 +252,7 @@ export function gerarHtmlDieta(
   itens: PrintItem[],
   user: PrintUser | null,
 ): string {
-  const fotoUrl     = animal?.photoUrl ?? 'https://picsum.photos/id/1015/400/400';
+  const fotoUrl     = resolverUrlAbsoluta(animal?.photoUrl);
   const totalItens  = itens.length;
   const groupedHTML = buildGroupedHTML(itens);
 
@@ -262,7 +269,9 @@ export function gerarHtmlDieta(
 
   <div class="sec-title">Dados do Animal</div>
   <div class="animal-card">
-    <img class="animal-photo" src="${fotoUrl}" alt="${animal?.nome ?? 'Animal'}">
+    ${fotoUrl
+      ? `<img class="animal-photo" src="${fotoUrl}" alt="${animal?.nome ?? 'Animal'}">`
+      : `<div class="animal-photo-empty">🐴</div>`}
     <div class="animal-info">
       <div class="animal-top">
         <div>

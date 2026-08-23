@@ -10,11 +10,14 @@ import {
   Search, ChevronDown, Loader2, CalendarClock,
   Clock, User as UserIcon, X, Check, Ban,
   Pill, Syringe, FlaskConical, Send, FileText, ExternalLink,
-  Scan, Activity, Building2,
+  Scan, Activity, Building2, ArrowLeftRight,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import ModalJustificativa from '../components/ModalJustificativa';
+import ProprietarioFormModal from '../components/ProprietarioFormModal';
+import { usePermissoes } from '../hooks/usePermissoes';
+import { useAuth } from '../contexts/AuthContext';
 import InlineError from '../components/InlineError';
 import MemoriaClinicaPanel from '../components/MemoriaClinicaPanel';
 import type { MemoriaClinica } from '../components/MemoriaClinicaPanel';
@@ -60,6 +63,9 @@ interface AnimalData {
   especie?:          { nome: string } | null;
   user?:             { fullName: string; email: string } | null;
   solicitacoes?:     Solicitacao[];
+  // Exclusão lógica — paciente inativado some das telas normais. Ausente
+  // (undefined) é tratado como ativo, nunca como bloqueio de transferência.
+  ativo?:            boolean;
   // Paciente INATIVO — somente leitura (diferente de exclusão lógica: continua
   // aparecendo, só não aceita registro novo nem edição do cadastro).
   inativo?:          boolean;
@@ -903,6 +909,10 @@ const ENDPOINT: Record<OrigemEvento, (id: number) => string> = {
 const AnimalDetail = () => {
   const { id }   = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { isGestor } = usePermissoes();
+  const { user } = useAuth();
+  const podeTransferirPropriedade = isGestor || user?.userType === 'ADMIN';
+  const [showTransferencia, setShowTransferencia] = useState(false);
   const [animal,       setAnimal]       = useState<AnimalData | null>(null);
   // Paciente existe, mas é de OUTRA empresa/equipe que não a do contexto ativo
   const [foraDoContexto, setForaDoContexto] = useState(false);
@@ -1134,7 +1144,17 @@ const AnimalDetail = () => {
           <span className="text-[22px] leading-none">{emojiEspecie(animal.especie?.nome)}</span>
           Detalhamento do Animal
         </h1>
-        {/* Tela somente de visualização — criação de agendamento fica na Agenda */}
+        {/* Tela somente de visualização — criação de agendamento fica na Agenda.
+            Transferência de Propriedade é a exceção: ação de GESTOR/ADMIN, regra
+            basal (mesma família de "só o gestor transfere agenda", CLAUDE.md §12
+            28-b/28-c) — não some por falta de registro, some por falta de cargo. */}
+        {podeTransferirPropriedade && animal.ativo !== false && !animal.inativo && (
+          <button
+            onClick={() => setShowTransferencia(true)}
+            className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-xl text-sm font-semibold transition-colors flex-shrink-0">
+            <ArrowLeftRight size={14} /> Transferência de Propriedade
+          </button>
+        )}
       </div>
 
       {animal.inativo && (
@@ -1246,6 +1266,19 @@ const AnimalDetail = () => {
         onConfirmar={(motivo) => { if (cancelandoAgId !== null) handleCancelarAg(cancelandoAgId, motivo); }}
         onFechar={() => setCancelandoAgId(null)}
       />
+
+      {showTransferencia && id && (
+        <ProprietarioFormModal
+          modoTransferencia={{
+            animalId: Number(id),
+            onConcluido: (animalAtualizado) => {
+              // O toast de sucesso já é disparado pelo próprio modal.
+              setAnimal(animalAtualizado as AnimalData);
+            },
+          }}
+          onClose={() => setShowTransferencia(false)}
+        />
+      )}
     </div>
     </PageContainer>
   );

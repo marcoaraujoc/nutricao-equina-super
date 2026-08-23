@@ -102,10 +102,20 @@ export function useConfiguracaoOperacional() {
   const [waDisponivel, setWaDisponivel] = useState(true);
   const [waQr,         setWaQr]         = useState<string | null>(null);
   const [waAcao,       setWaAcao]       = useState(false);
-  const waPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const waPollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const waTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Cada tentativa de conectar/reconectar tem um "token" próprio — invalida a
+  // resposta de uma chamada anterior (ou o tique do poll dela) quando o timeout
+  // de 30s já a desistiu, senão o QR/poll dela reviveria por cima do estado
+  // "tempo esgotado" que acabou de ser mostrado.
+  const waTokenRef = useRef(0);
 
   const pararPollWa = useCallback(() => {
     if (waPollRef.current) { clearInterval(waPollRef.current); waPollRef.current = null; }
+  }, []);
+
+  const pararTimeoutWa = useCallback(() => {
+    if (waTimeoutRef.current) { clearTimeout(waTimeoutRef.current); waTimeoutRef.current = null; }
   }, []);
 
   const carregarWaStatus = useCallback(async () => {
@@ -117,14 +127,43 @@ export function useConfiguracaoOperacional() {
     } catch { setWaDisponivel(false); setWaStatus('DESCONECTADO'); }
   }, []);
 
-  useEffect(() => { carregarWaStatus(); return pararPollWa; }, [carregarWaStatus, pararPollWa]);
+  useEffect(() => {
+    carregarWaStatus();
+    return () => { pararPollWa(); pararTimeoutWa(); };
+  }, [carregarWaStatus, pararPollWa, pararTimeoutWa]);
+
+  // Tempo máximo esperando a leitura do QR Code (ou a própria resposta do
+  // "Conectar"). Sem isso, quando a Evolution API está fora do ar, o backend
+  // mantém o último status PERSISTIDO (`obterStatus` engole o erro — ver
+  // `whatsappService.js`) e a tela fica presa em "Aguardando leitura…" para
+  // sempre, mesmo que a Evolution suba de novo bem depois. 30s é tempo de
+  // sobra para ler um QR — se estourar, é falha de conexão, não demora do
+  // usuário.
+  const WA_CONECTAR_TIMEOUT_MS = 30000;
 
   const handleWaConectar = useCallback(async (reconectar = false) => {
+    pararPollWa();
+    pararTimeoutWa();
+    const meuToken = ++waTokenRef.current;
+
     setWaAcao(true);
     setErroAcao(null); // uma tentativa nova limpa o erro da anterior — senão a luz
                         // fica presa em vermelho mesmo depois de um sucesso.
+
+    waTimeoutRef.current = setTimeout(() => {
+      if (waTokenRef.current !== meuToken) return; // já foi superado por outra tentativa
+      pararPollWa();
+      setWaQr(null);
+      setWaStatus('DESCONECTADO');
+      setWaAcao(false);
+      setErroAcao({
+        mensagem: 'Tempo esgotado aguardando a leitura do QR Code (30s). Verifique se o serviço de WhatsApp está disponível e tente novamente.',
+      });
+    }, WA_CONECTAR_TIMEOUT_MS);
+
     try {
       const res   = await api.post(`/equipes/whatsapp/${reconectar ? 'reconectar' : 'conectar'}`);
+      if (waTokenRef.current !== meuToken) return; // timeout já disparou — resposta tardia ignorada
       const dados = res.data?.dados;
       setWaStatus(dados?.status ?? 'DESCONECTADO');
       if (dados?.qrcodeBase64) {
@@ -133,22 +172,33 @@ export function useConfiguracaoOperacional() {
         waPollRef.current = setInterval(async () => {
           try {
             const s  = await api.get('/equipes/whatsapp/status');
+            if (waTokenRef.current !== meuToken) return;
             const st = s.data?.dados?.status;
             if (st) setWaStatus(st);
-            if (st === 'CONECTADO') { pararPollWa(); setWaQr(null); toast.success('WhatsApp conectado'); }
+            if (st === 'CONECTADO') {
+              pararPollWa(); pararTimeoutWa(); setWaQr(null); toast.success('WhatsApp conectado');
+            }
           } catch { /* silencioso */ }
         }, 4000);
       } else if (dados?.status === 'CONECTADO') {
+        pararTimeoutWa();
         setWaQr(null);
         toast.success('WhatsApp conectado');
       }
     } catch (err) {
+      if (waTokenRef.current !== meuToken) return;
+      pararTimeoutWa();
       const e = err as { response?: { data?: { mensagem?: string } } };
       setErroAcao({ mensagem: e.response?.data?.mensagem ?? 'Falha ao conectar o WhatsApp' });
-    } finally { setWaAcao(false); }
-  }, [pararPollWa]);
+    } finally {
+      if (waTokenRef.current === meuToken) setWaAcao(false);
+    }
+  }, [pararPollWa, pararTimeoutWa]);
 
   const handleWaDesconectar = useCallback(async () => {
+    pararPollWa();
+    pararTimeoutWa();
+    waTokenRef.current++; // invalida qualquer tentativa de conectar ainda em voo
     setWaAcao(true);
     setErroAcao(null); // idem — não deixa o erro de uma tentativa anterior sobreviver
     try {
@@ -159,7 +209,7 @@ export function useConfiguracaoOperacional() {
       const e = err as { response?: { data?: { mensagem?: string } } };
       setErroAcao({ mensagem: e.response?.data?.mensagem ?? 'Falha ao desconectar' });
     } finally { setWaAcao(false); }
-  }, [pararPollWa]);
+  }, [pararPollWa, pararTimeoutWa]);
 
   /** Botão ÚNICO: conecta se está desconectado, desconecta se está conectado. */
   const handleWaToggle = useCallback(() => {

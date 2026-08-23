@@ -6,6 +6,7 @@
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
+const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
 const { registrarAuditoria, registrarAlteracao, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
@@ -64,7 +65,12 @@ const EncaminhamentoController = {
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
-      const where = { animalId: Number(animalId), ativo: true };
+      // Transferência de Propriedade — o PROPRIETÁRIO atual só vê o que foi
+      // encaminhado a partir de `propriedadeDesde`; GESTOR/VET/ADMIN veem tudo.
+      const animalCorte = await prisma.animal.findUnique({ where: { id: Number(animalId) }, select: { propriedadeDesde: true } });
+      const corte = corteDePropriedade(req, animalCorte);
+
+      const where = { animalId: Number(animalId), ativo: true, ...(corte ? { dataEncaminhamento: { gte: corte } } : {}) };
       if (status && status !== 'TODOS') where.status = status;
       // Segregação multi-clínica: cada empresa vê só os próprios encaminhamentos
       where.AND = [escopoFilhoEvolucaoWhere(req)];

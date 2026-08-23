@@ -4,6 +4,7 @@
 const prisma                  = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
+const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 const { lancarExameNaFatura, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
 const { registrarAuditoria, registrarAlteracao, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro, getNivelEfetivo, NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
@@ -160,10 +161,15 @@ const ExameClinicoController = {
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
 
+      // Transferência de Propriedade — o PROPRIETÁRIO atual só vê o que foi
+      // solicitado a partir de `propriedadeDesde`; GESTOR/VET/ADMIN veem tudo.
+      const animalCorte = await prisma.animal.findUnique({ where: { id: animalId }, select: { propriedadeDesde: true } });
+      const corte = corteDePropriedade(req, animalCorte);
+
       // Histórico completo (ativos E inativados) — o front filtra por status
       // (SALVA/FINALIZADA/INATIVA) e pagina no cliente, mesmo padrão da tela de Vacina.
       // Segregação multi-clínica: cada empresa vê só os próprios exames do animal.
-      const where = { animalId, AND: [escopoFilhoEvolucaoWhere(req)] };
+      const where = { animalId, AND: [escopoFilhoEvolucaoWhere(req)], ...(corte ? { dataSolicitacao: { gte: corte } } : {}) };
       const itens = await prisma.exameClinico.findMany({
         where,
         include: INCLUDE,

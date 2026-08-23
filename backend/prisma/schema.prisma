@@ -93,6 +93,7 @@ model User {
   examesClinicos       ExameClinico[]         @relation("ExameClinicoVeterinario")
   faturaItens          FaturaItem[]           @relation("FaturaItemVet")
   faturas              Fatura[]               @relation("FaturaProprietario")
+  faturaLinksPublicos  FaturaLinkPublico[]    @relation("FaturaLinkProprietario")
   aiUsageLogs          AiUsageLog[]
   vetPerfil            VetPerfil?
   especialidades       UsuarioEspecialidade[]
@@ -118,6 +119,8 @@ model User {
   orcamentos               Orcamento[]             @relation("OrcamentoProprietario")
   orcamentosCriados        Orcamento[]             @relation("OrcamentoCriadoPor")
   animalHistoricoRegistrado AnimalHistorico[]      @relation("AnimalHistoricoCriadoPor")
+  animalPropHistComoProprietario AnimalProprietarioHistorico[] @relation("AnimalPropHistProprietario")
+  animalPropHistCriados          AnimalProprietarioHistorico[] @relation("AnimalPropHistCriadoPor")
   ativoPor                 User?                   @relation("UserAtivoPor",   fields: [ativoPorId],   references: [id], onDelete: SetNull)
   inativoPor               User?                   @relation("UserInativoPor", fields: [inativoPorId], references: [id], onDelete: SetNull)
   usuariosQueAtivou        User[]                  @relation("UserAtivoPor")
@@ -194,6 +197,15 @@ model Animal {
   finalidade         String?   @db.VarChar(100)
   seguradora         String?   @db.VarChar(150)
 
+  // TRANSFERÊNCIA DE PROPRIEDADE — `propriedadeDesde` é uma CÓPIA RÁPIDA da
+  // `dataInicio` da janela ABERTA (dataFim=null) em `AnimalProprietarioHistorico`,
+  // mantida em sincronia nos dois únicos pontos que escrevem (criação do animal e
+  // `lib/transferenciaPropriedadeAnimal.js`, sempre na mesma transaction). Existe só
+  // para evitar uma consulta extra em cada endpoint que precisa saber "desde quando
+  // o dono ATUAL é dono" — a tabela de histórico continua sendo a fonte de verdade
+  // (é dela que a exportação por dono ANTERIOR lê as janelas fechadas).
+  propriedadeDesde DateTime @default(now()) @map("propriedade_desde")
+
   // Paciente INATIVO — somente leitura: bloqueia criação/edição de qualquer registro
   // clínico ligado a ele (evolução, prescrição, vacina, exame, encaminhamento,
   // agendamento, dieta) e a edição do próprio cadastro. DIFERENTE de `ativo` (exclusão
@@ -236,6 +248,7 @@ model Animal {
   exameImagens    ExameImagemAnexo[]     @relation("AnimalExameImagens")
   orcamentoItens  OrcamentoItem[]        @relation("OrcamentoItemAnimal")
   historico       AnimalHistorico[]      @relation("AnimalHistoricoAnimal")
+  historicoPropriedade AnimalProprietarioHistorico[]
 
   @@index([especieId])
   @@index([racaId])
@@ -324,6 +337,7 @@ model Dieta {
   @@index([animalId])
   @@index([criadopor])
   @@index([modificadopor])
+  @@index([planoDietaId])
   @@map("tb_dieta")
   @@schema("schs2vet")
 }
@@ -477,6 +491,7 @@ model ExameClinico {
 
   @@index([animalId])
   @@index([evolucaoId])
+  @@index([veterinarioId])
   @@map("tb_exames_clinicos")
   @@schema("schs2vet")
 }
@@ -547,6 +562,36 @@ model AnimalHistorico {
   @@schema("schs2vet")
 }
 
+// Janelas de POSSE do animal — uma linha por período contínuo de propriedade. A
+// janela ABERTA (dataFim=null) é sempre o dono ATUAL; ela é o que a Transferência de
+// Propriedade fecha (grava motivoTransferencia) ao mesmo tempo que abre a próxima.
+// Fonte de verdade para "quem foi dono, e entre quando e quando" — é dela que a
+// Exportação lê a janela exata de um proprietário ANTERIOR (nunca antes de ele se
+// tornar dono, nunca depois de deixar de ser). `Animal.propriedadeDesde` é só uma
+// cópia rápida de `dataInicio` da janela aberta, para não repetir esta consulta em
+// toda tela — ver comentário no model Animal. Migration <PENDENTE> — GERADA, NÃO
+// aplicada (ver o próprio arquivo de migration para o backfill obrigatório).
+model AnimalProprietarioHistorico {
+  id                  Int       @id @default(autoincrement())
+  animalId            Int       @map("animal_id")
+  proprietarioId      Int       @map("proprietario_id")
+  dataInicio          DateTime  @default(now()) @map("data_inicio")
+  dataFim             DateTime? @map("data_fim")                        // null = janela ATUAL (dono corrente)
+  motivoTransferencia String?   @db.VarChar(20) @map("motivo_transferencia") // DOACAO|VENDA|ALUGUEL — motivo que ENCERROU esta janela
+  empresaId           Int       @map("empresa_id")
+  criadoPorId         Int?      @map("criado_por_id")
+
+  animal       Animal  @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  proprietario User    @relation("AnimalPropHistProprietario", fields: [proprietarioId], references: [id], onDelete: Cascade)
+  empresa      Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  criadoPor    User?   @relation("AnimalPropHistCriadoPor", fields: [criadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([animalId, dataFim])
+  @@index([proprietarioId])
+  @@map("tb_animal_proprietario_historico")
+  @@schema("schs2vet")
+}
+
 // =============================================================================
 // CLÍNICA — EVOLUÇÕES, PRESCRIÇÕES, VACINAS, ENCAMINHAMENTOS
 // =============================================================================
@@ -591,6 +636,7 @@ model EvolucaoClinica {
   @@index([animalId, especialidade, dataInicio])
   @@index([empresaId])
   @@index([equipeId])
+  @@index([veterinarioId])
   @@map("tb_evolucoes_clinicas")
   @@schema("schs2vet")
 }
@@ -606,6 +652,7 @@ model EvolucaoMidia {
 
   evolucao   EvolucaoClinica @relation(fields: [evolucaoId], references: [id], onDelete: Cascade)
 
+  @@index([evolucaoId])
   @@map("tb_evolucao_midias")
   @@schema("schs2vet")
 }
@@ -740,6 +787,8 @@ model PrescricaoGrupo {
   @@index([veterinarioId])
   @@index([status])
   @@index([evolucaoId])
+  @@index([finalizadoPorId])
+  @@index([executadoPorId])
   @@map("tb_prescricao_grupos")
   @@schema("schs2vet")
 }
@@ -884,6 +933,8 @@ model VacinaClinica {
   @@index([animalId])
   @@index([vacinaId])
   @@index([evolucaoId])
+  @@index([veterinarioId])
+  @@index([loteId])
   @@map("tb_vacinas_clinicas")
   @@schema("schs2vet")
 }
@@ -940,6 +991,8 @@ model AgendamentoClinico {
   @@index([equipeId, dataHora])
   @@index([especialidadeId])
   @@index([assumidoDeId])
+  @@index([veterinarioId])
+  @@index([criadoPorId])
   @@map("tb_agendamentos_clinicos")
   @@schema("schs2vet")
 }
@@ -969,6 +1022,8 @@ model EncaminhamentoClinico {
 
   @@index([prestadorId])
   @@index([evolucaoId])
+  @@index([animalId])
+  @@index([veterinarioId])
   @@map("tb_encaminhamentos_clinicos")
   @@schema("schs2vet")
 }
@@ -1030,10 +1085,53 @@ model Fatura {
   animal       Animal? @relation("AnimalFaturas",      fields: [animalId],       references: [id])
   proprietario User?   @relation("FaturaProprietario", fields: [proprietarioId], references: [id], onDelete: SetNull)
 
+  linksPublicos FaturaLinkPublico[]
+
   @@index([proprietarioId, status])
   @@index([empresaId])
   @@index([proprietarioId, empresaId, status])
+  @@index([animalId])
   @@map("tb_faturas")
+  @@schema("schs2vet")
+}
+
+/// Link de acesso PÚBLICO a um PDF de fatura já gerado (envio por WhatsApp/e-mail
+/// em vez do anexo — ver `lib/faturaLinkPublico.js`). O PDF em si mora em
+/// `MidiaArquivo` (mesmo storage de qualquer outro arquivo — `midiaChave` é a
+/// chave lá); esta tabela só guarda o TOKEN de acesso e a validade do link.
+///
+/// `token` é o ÚNICO identificador na URL pública (`/#/fatura/:token`) — de
+/// propósito sem `faturaId`/`proprietarioId` na rota, para não dar a quem tem
+/// o link nenhuma pista para adivinhar o link de OUTRO proprietário trocando
+/// um caractere. É uma capability URL "pura" (decisão do usuário em
+/// 2026-09-11, revertendo a camada de código de acesso que existiu por um
+/// instante): sem segundo fator, então o TOKEN é que precisa segurar toda a
+/// segurança — 64 caracteres sorteados de um alfabeto de 64 símbolos
+/// (`A-Za-z0-9-_`, o alfabeto base64url — `crypto.randomBytes(48).
+/// toString('base64url')`, ver lib/faturaLinkPublico.js) são 384 bits de
+/// entropia, inviável de adivinhar por força bruta. `@unique` é a garantia
+/// de "nunca um igual ao outro"; `criarLink` ainda re-sorteia e tenta de novo
+/// no caso (virtualmente impossível) de colisão.
+model FaturaLinkPublico {
+  id             Int      @id @default(autoincrement())
+  faturaId       Int      @map("fatura_id")
+  // Cópia do tenant da fatura NA CRIAÇÃO do link — reforço de isolamento: a
+  // leitura pública (sem sessão, sem req.empresaId) resolve o escopo de RLS
+  // por `comEscopoPlataforma`, e esta coluna é o que a policy compara.
+  empresaId      Int      @map("empresa_id")
+  proprietarioId Int      @map("proprietario_id")
+  token          String   @unique @db.VarChar(64)
+  midiaChave     String   @db.VarChar(64) @map("midia_chave")
+  expiraEm       DateTime @map("expira_em")
+  criadoPorId    Int?     @map("criado_por_id")
+  criadoEm       DateTime @default(now()) @map("criado_em")
+
+  fatura       Fatura @relation(fields: [faturaId], references: [id], onDelete: Cascade)
+  proprietario User   @relation("FaturaLinkProprietario", fields: [proprietarioId], references: [id], onDelete: Cascade)
+
+  @@index([faturaId])
+  @@index([expiraEm])
+  @@map("tb_fatura_links_publicos")
   @@schema("schs2vet")
 }
 
@@ -1070,6 +1168,8 @@ model FaturaItem {
   @@index([vacinaClinicaId])
   @@index([encaminhamentoClinicoId])
   @@index([orcamentoItemId])
+  @@index([faturaId])
+  @@index([animalId])
 
   @@map("tb_fatura_itens")
   @@schema("schs2vet")
@@ -1626,6 +1726,7 @@ model Empresa {
   especialidadesMembros UsuarioEspecialidade[] @relation("UsuarioEspecialidadeEmpresa")
   equipes         Equipe[]
   animais         Animal[]         @relation("EmpresaAnimais")
+  animalProprietarioHistorico AnimalProprietarioHistorico[]
   estoques    EstoqueClinica[] @relation("EmpresaEstoque")
   loteVacinas LoteVacina[]     @relation("LoteVacinaEmpresa")
   configuracoes   EmpresaConfiguracao[]
@@ -2008,6 +2109,7 @@ model MembroEquipe {
   locaisTrabalho MembroLocalTrabalho[]
 
   @@unique([equipeId, userId])
+  @@index([userId])
   @@map("tb_membros_equipe")
   @@schema("schs2vet")
 }
@@ -2059,6 +2161,7 @@ model ConviteEquipe {
 
   equipe Equipe @relation(fields: [equipeId], references: [id], onDelete: Cascade)
 
+  @@index([equipeId])
   @@map("tb_convites_equipe")
   @@schema("schs2vet")
 }

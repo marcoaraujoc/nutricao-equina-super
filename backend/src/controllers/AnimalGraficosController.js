@@ -9,6 +9,7 @@
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
+const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 
 async function checarAcesso(req, animalId) {
   return verificarAcessoAnimal({
@@ -16,13 +17,21 @@ async function checarAcesso(req, animalId) {
   });
 }
 
-function janelaData(req, campo) {
+// `corteMin` (Transferência de Propriedade) nunca é afrouxado por um `inicio`
+// mais antigo que o proprietário atual não pode ver — o corte sempre vence.
+function janelaData(req, campo, corteMin) {
   const { inicio, fim } = req.query;
-  if (!inicio && !fim) return undefined;
   const where = {};
   if (inicio) where.gte = new Date(inicio);
   if (fim)    where.lte = new Date(`${fim}T23:59:59`);
+  if (corteMin && (!where.gte || corteMin > where.gte)) where.gte = corteMin;
+  if (Object.keys(where).length === 0) return undefined;
   return { [campo]: where };
+}
+
+async function corteDoAnimal(req, animalId) {
+  const animal = await prisma.animal.findUnique({ where: { id: animalId }, select: { propriedadeDesde: true } });
+  return corteDePropriedade(req, animal);
 }
 
 const AnimalGraficosController = {
@@ -38,7 +47,8 @@ const AnimalGraficosController = {
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
 
-      const where = { animalId, peso: { not: null }, ...(janelaData(req, 'registradoEm') ?? {}) };
+      const corte = await corteDoAnimal(req, animalId);
+      const where = { animalId, peso: { not: null }, ...(janelaData(req, 'registradoEm', corte) ?? {}) };
       const pontos = await prisma.animalHistorico.findMany({
         where,
         select: { peso: true, registradoEm: true },
@@ -61,8 +71,9 @@ const AnimalGraficosController = {
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
 
+      const corte = await corteDoAnimal(req, animalId);
       const pontos = await prisma.animalHistorico.findMany({
-        where: { animalId },
+        where: { animalId, ...(corte ? { registradoEm: { gte: corte } } : {}) },
         select: {
           registradoEm: true, local: true, baia: true,
           localizacao: { select: { id: true, nome: true } },
@@ -118,9 +129,10 @@ const AnimalGraficosController = {
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
 
+      const corte = await corteDoAnimal(req, animalId);
       const whereExame = {
         animalId, ativo: true, AND: [escopoFilhoEvolucaoWhere(req)],
-        ...(janelaData(req, 'dataResultado') ?? {}),
+        ...(janelaData(req, 'dataResultado', corte) ?? {}),
       };
       const itens = await prisma.exameClinicoResultadoItem.findMany({
         where:  { parametro, exame: whereExame },

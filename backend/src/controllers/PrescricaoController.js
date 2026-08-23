@@ -1,6 +1,7 @@
 // backend/src/controllers/PrescricaoController.js
 
 const prisma = require('../lib/prisma').default;
+const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { registrarAuditoria } = require('../lib/auditoria');
 const { recalcularTotal } = require('../lib/faturaUtils');
@@ -58,7 +59,12 @@ const PrescricaoController = {
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
 
-      const where = { animalId: Number(animalId), ativo: true };
+      // Transferência de Propriedade — o PROPRIETÁRIO atual só vê itens com
+      // `dataInicio` a partir de `propriedadeDesde`; GESTOR/VET/ADMIN veem tudo.
+      const animalCorte = await prisma.animal.findUnique({ where: { id: Number(animalId) }, select: { propriedadeDesde: true } });
+      const corte = corteDePropriedade(req, animalCorte);
+
+      const where = { animalId: Number(animalId), ativo: true, ...(corte ? { dataInicio: { gte: corte } } : {}) };
       if (tipo && tipo !== 'TODOS') where.tipo = tipo;
       if (status) where.status = status;
       if (busca) where.medicamento = { contains: busca };

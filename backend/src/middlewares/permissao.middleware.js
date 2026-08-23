@@ -21,6 +21,7 @@ const { PERMISSOES_PADRAO } = require('../seeds/002_permissoes_padrao.seed');
 // (lib/tipoContexto.js), reusado aqui para a regra "mais de um papel na mesma
 // empresa soma permissões" (ver `ajusteperfil` na memória).
 const { resolverComoCliente } = require('../lib/tipoContexto');
+const { registrarAcessoNegado } = require('../lib/auditoria');
 
 const NIVEL_ORDINAL = {
   NENHUM:  0,
@@ -200,6 +201,10 @@ async function verificarComoProprietario(req, res, next, moduloSlug, nivelMinimo
   const nivelAtual = await getNivelPermissaoProprietario(req.user.id, moduloSlug, req.empresaId);
 
   if (nivelAtual === 'NEGADO') {
+    await registrarAcessoNegado(req, {
+      motivo:   `Bloqueio explícito (NEGADO) para ${moduloSlug} — perfil PROPRIETARIO`,
+      entidade: 'MODULO',
+    });
     return res.status(403).json({
       error:  'Acesso negado pelo administrador da equipe.',
       modulo: moduloSlug,
@@ -210,6 +215,10 @@ async function verificarComoProprietario(req, res, next, moduloSlug, nivelMinimo
   const ordinalMinimo = NIVEL_ORDINAL[nivelMinimo] ?? 0;
 
   if (ordinalAtual < ordinalMinimo) {
+    await registrarAcessoNegado(req, {
+      motivo:   `Nível insuficiente para ${moduloSlug} — perfil PROPRIETARIO (requerido ${nivelMinimo}, atual ${nivelAtual})`,
+      entidade: 'MODULO',
+    });
     return res.status(403).json({
       error:  `Permissão insuficiente. Requerido: ${nivelMinimo}. Atual: ${nivelAtual}.`,
       modulo: moduloSlug,
@@ -292,6 +301,12 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
           }
 
           if (nivelAtual === 'NEGADO') {
+            req.equipeId    = equipeId;
+            req.membroCargo = membro.cargo;
+            await registrarAcessoNegado(req, {
+              motivo:   `Bloqueio explícito (NEGADO) para ${moduloSlug} — cargo ${membro.cargo}`,
+              entidade: 'MODULO',
+            });
             return res.status(403).json({
               error:  'Acesso negado pelo administrador da equipe.',
               modulo: moduloSlug,
@@ -302,6 +317,12 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
           const ordinalMinimo = NIVEL_ORDINAL[nivelMinimo] ?? 0;
 
           if (ordinalAtual < ordinalMinimo) {
+            req.equipeId    = equipeId;
+            req.membroCargo = membro.cargo;
+            await registrarAcessoNegado(req, {
+              motivo:   `Nível insuficiente para ${moduloSlug} — cargo ${membro.cargo} (requerido ${nivelMinimo}, atual ${nivelAtual})`,
+              entidade: 'MODULO',
+            });
             return res.status(403).json({
               error:  `Permissão insuficiente. Requerido: ${nivelMinimo}. Atual: ${nivelAtual}.`,
               modulo: moduloSlug,
@@ -359,6 +380,10 @@ function checkPermission(moduloSlug, nivelMinimo = 'LEITURA') {
         return verificarComoProprietario(req, res, next, moduloSlug, nivelMinimo);
       }
 
+      await registrarAcessoNegado(req, {
+        motivo:   `Nenhuma equipe ativa para ${moduloSlug}`,
+        entidade: 'MODULO',
+      });
       return res.status(403).json({
         error: 'Nenhuma equipe ativa encontrada. Associe-se a uma equipe.',
       });
@@ -379,6 +404,10 @@ function checkPermissaoProprietario(funcionalidade) {
   return async (req, res, next) => {
     try {
       if (!req.user || req.user.userType !== 'PROPRIETARIO') {
+        await registrarAcessoNegado(req, {
+          motivo:   `Rota exclusiva para proprietários — funcionalidade "${funcionalidade}"`,
+          entidade: 'MODULO',
+        });
         return res.status(403).json({ error: 'Rota exclusiva para proprietários.' });
       }
 
@@ -392,6 +421,10 @@ function checkPermissaoProprietario(funcionalidade) {
       });
 
       if (!permissao) {
+        await registrarAcessoNegado(req, {
+          motivo:   `Funcionalidade "${funcionalidade}" não habilitada pelo veterinário`,
+          entidade: 'MODULO',
+        });
         return res.status(403).json({
           error: `Funcionalidade "${funcionalidade}" não habilitada pelo seu veterinário.`,
         });
@@ -444,10 +477,33 @@ function ehGestorNoContexto(req) {
  *                               dono definido → só o gestor opera.
  */
 function podeOperarRegistro(req, autorId) {
-  if ((NIVEL_ORDINAL[req?.permissaoNivel] ?? 0) < NIVEL_ORDINAL.PROPRIO) return false;
+  if ((NIVEL_ORDINAL[req?.permissaoNivel] ?? 0) < NIVEL_ORDINAL.PROPRIO) {
+    registrarAcessoNegado(req, {
+      motivo:   'Nível insuficiente para operar registro clínico',
+      entidade: 'REGISTRO_CLINICO',
+    });
+    return false;
+  }
   if (ehGestorNoContexto(req)) return true;
-  if (autorId == null) return false;
-  return Number(autorId) === Number(req?.user?.id);
+  if (autorId == null) {
+    registrarAcessoNegado(req, {
+      motivo:   'Registro clínico sem autor definido — só o gestor opera',
+      entidade: 'REGISTRO_CLINICO',
+    });
+    return false;
+  }
+  const autorizado = Number(autorId) === Number(req?.user?.id);
+  if (!autorizado) {
+    // Fire-and-forget: `podeOperarRegistro` é usado como guard SÍNCRONO em ~19 call
+    // sites (`if (!podeOperarRegistro(req, x)) return res.status(403)...`) — centralizar
+    // aqui evita instrumentar cada controller individualmente. `registrarAcessoNegado`
+    // já engole a própria falha (nunca lança), então não precisa de `await`/`.catch`.
+    registrarAcessoNegado(req, {
+      motivo:   `Tentativa de operar registro clínico de outro profissional (autor ${autorId})`,
+      entidade: 'REGISTRO_CLINICO',
+    });
+  }
+  return autorizado;
 }
 
 /**

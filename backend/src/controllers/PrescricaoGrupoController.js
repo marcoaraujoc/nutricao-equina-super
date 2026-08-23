@@ -3,6 +3,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { escopoPrescricaoGrupoWhere } = require('../lib/clinicalScope');
+const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 const { buildAnimalScopeWhere } = require('../lib/animalScope');
 const { ANIMAL_VISIVEL } = require('../lib/visibilidade');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem, recalcularTotal } = require('../lib/faturaUtils');
@@ -13,7 +14,8 @@ const { animalEstaInativo } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const {
   DOSES_POR_DIA, elegivelParaFluxoNovo, precisaHoraInicio, dosesTotaisEsperadas, primeiraDoseEsperada,
-  calcularProximaDose, classificarExecucao, diferencaEmMinutos,
+  calcularProximaDose, classificarExecucao, diferencaEmMinutos, itemPrevistoParaDataFutura,
+  horarioPrevistoDoItem,
 } = require('../lib/agendaDoses');
 
 // Frequências "conforme necessário" — sem agenda prevista, então não pertencem
@@ -532,8 +534,13 @@ const listarPorAnimal = async (req, res) => {
     const { animalId } = req.params;
     const { page = 1, limit = 20, status } = req.query;
 
+    // Transferência de Propriedade — o PROPRIETÁRIO atual só vê o que foi criado a
+    // partir de `propriedadeDesde`; GESTOR/VET/ADMIN (corte null) veem tudo.
+    const animalCorte = await prisma.animal.findUnique({ where: { id: Number(animalId) }, select: { propriedadeDesde: true } });
+    const corte = corteDePropriedade(req, animalCorte);
+
     // Segregação multi-clínica: cada empresa vê só as próprias prescrições do animal
-    const whereBase = { animalId: Number(animalId), AND: [escopoPrescricaoGrupoWhere(req)] };
+    const whereBase = { animalId: Number(animalId), AND: [escopoPrescricaoGrupoWhere(req)], ...(corte ? { createdAt: { gte: corte } } : {}) };
     const where = status ? { ...whereBase, status } : whereBase;
 
     const [grupos, total] = await Promise.all([
@@ -705,6 +712,42 @@ function categoriaPara({ tipo, medicamentoCatId }, controladoDe) {
   return controladoDe(medicamentoCatId) ? 'CONTROLADO' : 'GERAL';
 }
 
+/**
+ * Resolve o `medicamentoCatId` de um item digitado à mão (sem id de catálogo).
+ * FONTE ÚNICA do fallback de `lib/catalogoManual.js` — usada por `criar`,
+ * `adicionarItem` e `atualizarItem`, que são os três pontos onde um item de
+ * prescrição nasce ou muda de nome. Sem isto, incluir/editar um item numa
+ * prescrição já SALVA (os dois últimos) silenciosamente perdia o item no limbo:
+ * salvava com `medicamentoCatId: null` e nunca virava um item reutilizável do
+ * catálogo da empresa — só `criar` (a primeira gravação) tinha o fallback.
+ *
+ * MEDICAMENTO ganha o id retornado (é FK real na prescrição). PROCEDIMENTO não
+ * tem essa coluna — é guardado só pelo nome — mas a chamada ainda GARANTE a
+ * entrada no catálogo da empresa, para reaparecer em buscas futuras (Orçamento,
+ * outra prescrição). Sem nome nenhum, não faz nada e devolve o id já recebido.
+ *
+ * @param {object} tx        transaction em curso
+ * @param {object} item      { tipo, medicamento, medicamentoCatId, unidade }
+ * @param {number|null} empresaId
+ * @param {{ especieId?: number|null, especie?: { nome?: string|null } }|null} animal
+ * @returns {Promise<number|null>}
+ */
+async function resolverCatalogoDoItem(tx, { tipo, medicamento, medicamentoCatId, unidade }, empresaId, animal) {
+  const catId = medicamentoCatId ? Number(medicamentoCatId) : null;
+  const nome  = String(medicamento ?? '').trim();
+  if (catId || !nome) return catId;
+
+  if ((tipo ?? 'MEDICAMENTO') === 'PROCEDIMENTO') {
+    await garantirProcedimentoDaEmpresa(tx, {
+      nome, especieNome: animal?.especie?.nome ?? null,
+    }, empresaId);
+    return null; // procedimento não tem FK — segue guardado só pelo nome
+  }
+  return garantirMedicamentoDaEmpresa(tx, {
+    nome, unidade, especieIds: animal?.especieId ? [animal.especieId] : [],
+  }, empresaId);
+}
+
 const criar = async (req, res) => {
   try {
     const { animalId, empresaId, evolucaoId, itens = [] } = req.body;
@@ -819,19 +862,10 @@ const criar = async (req, res) => {
           const chaveCatalogo = `${tipoItem}|${nomeItem.toLowerCase()}`;
           if (!medicamentoCatId && nomeItem) {
             if (!cacheCatalogo.has(chaveCatalogo)) {
-              cacheCatalogo.set(chaveCatalogo, tipoItem === 'PROCEDIMENTO'
-                ? await garantirProcedimentoDaEmpresa(tx, {
-                    nome:        nomeItem,
-                    especieNome: animalDaPrescricao?.especie?.nome ?? null,
-                  }, empresaDoGrupo)
-                : await garantirMedicamentoDaEmpresa(tx, {
-                    nome:       nomeItem,
-                    unidade:    item.unidade,
-                    especieIds: animalDaPrescricao?.especieId ? [animalDaPrescricao.especieId] : [],
-                  }, empresaDoGrupo));
+              cacheCatalogo.set(chaveCatalogo,
+                await resolverCatalogoDoItem(tx, item, empresaDoGrupo, animalDaPrescricao));
             }
-            // Só o medicamento tem FK na prescrição; o procedimento é guardado pelo nome
-            if (tipoItem !== 'PROCEDIMENTO') medicamentoCatId = cacheCatalogo.get(chaveCatalogo);
+            medicamentoCatId = cacheCatalogo.get(chaveCatalogo);
           }
 
           const dadosItem = {
@@ -989,11 +1023,21 @@ const adicionarItem = async (req, res) => {
         destinoId = destinoInfo.id;
       }
 
+      // Item fora do catálogo (digitado à mão) → mesmo fallback do `criar`: cadastra
+      // (ou reaproveita) a entrada PRIVADA da empresa. Sem isto, incluir um item novo
+      // numa prescrição já SALVA nunca o deixava reutilizável nem rastreável.
+      const animalDoItem = await tx.animal.findUnique({
+        where:  { id: grupo.animalId },
+        select: { especieId: true, especie: { select: { nome: true } } },
+      });
+      const medicamentoCatIdFinal = await resolverCatalogoDoItem(
+        tx, { tipo, medicamento, medicamentoCatId, unidade }, grupo.empresaId, animalDoItem);
+
       const dadosNovoItem = {
         animalId:          grupo.animalId,
         veterinarioId,
         grupoId:           destinoId,
-        medicamentoCatId:  medicamentoCatId ? Number(medicamentoCatId) : null,
+        medicamentoCatId:  medicamentoCatIdFinal,
         tipo:              tipo              ?? 'MEDICAMENTO',
         medicamento:       String(medicamento),
         dosagem:           dosagem           ?? null,
@@ -1068,7 +1112,6 @@ const atualizarItem = async (req, res) => {
     const data = {};
     if (tipo               !== undefined) data.tipo              = tipo;
     if (medicamento        !== undefined) data.medicamento       = String(medicamento);
-    if (medicamentoCatId   !== undefined) data.medicamentoCatId  = medicamentoCatId ? Number(medicamentoCatId) : null;
     if (dosagem            !== undefined) data.dosagem           = dosagem;
     if (unidade            !== undefined) data.unidade           = unidade;
     if (via                !== undefined) data.via               = via;
@@ -1127,6 +1170,28 @@ const atualizarItem = async (req, res) => {
         });
         data.grupoId = destinoInfo.id;
         await tx.prescricaoGrupo.update({ where: { id: destinoInfo.id }, data: { veterinarioId: donoDoDocumento } });
+      }
+
+      // Item fora do catálogo (digitado à mão) → mesmo fallback do `criar`/
+      // `adicionarItem`. Só entra quando o nome ou o id do catálogo estão sendo
+      // tocados por esta edição — sem isto, trocar SÓ a dosagem de um item ligado
+      // ao catálogo faria uma consulta e uma resolução desnecessárias.
+      if (medicamento !== undefined || medicamentoCatId !== undefined) {
+        const animalDoItem = await tx.animal.findUnique({
+          where:  { id: item.animalId },
+          select: { especieId: true, especie: { select: { nome: true } } },
+        });
+        data.medicamentoCatId = await resolverCatalogoDoItem(
+          tx,
+          {
+            tipo:             tipoFinal,
+            medicamento:      medicamento !== undefined ? medicamento : item.medicamento,
+            medicamentoCatId,
+            unidade:          data.unidade !== undefined ? data.unidade : item.unidade,
+          },
+          item.grupo?.empresaId ?? null,
+          animalDoItem,
+        );
       }
 
       const updated = await tx.prescricao.update({
@@ -1685,14 +1750,8 @@ async function resolverValorProcedimento(tx, empresaId, nome) {
   return proc.valorVenda ?? 0;
 }
 
-// Horário previsto de UMA dose: se já houve dose(s) antes, é o rolling schedule
-// já persistido (`proximaDoseEm`); sem nenhuma dose ainda, é a 1ª dose esperada.
-// Mesma fórmula em `executar` e no cron de WhatsApp — nunca recalcular à parte.
-function horarioPrevistoDoItem(item) {
-  return (item.dosesExecutadas ?? 0) > 0 && item.proximaDoseEm
-    ? item.proximaDoseEm
-    : primeiraDoseEsperada(item);
-}
+// horarioPrevistoDoItem foi para lib/agendaDoses.js (fonte única) — a prévia de
+// dias futuros (`itemPrevistoParaDataFutura`) também precisa dela.
 
 const CLASSIFICACAO_LABEL = { NO_HORARIO: 'no horário', ANTECIPADA: 'antecipada', ATRASADA: 'atrasada' };
 
@@ -2051,6 +2110,16 @@ function itemPendenteNoDia(item, hojeStr) {
   if (elegivelParaFluxoNovo(item)) {
     if (executadoHojeItem(item, hojeStr)) return true;
     if ((item.dosesExecutadas ?? 0) >= dosesTotaisEsperadas(item)) return false;
+    // Navegando o calendário da Execução de Prescrição para um dia FUTURO (além
+    // de hoje): o rolling schedule real (`proximaDoseEm`) só existe depois da
+    // dose ANTERIOR ser executada de verdade, então ainda não sabe responder
+    // por um dia que nem chegou. Cai na PRÉVIA TEÓRICA do regime (frequência ×
+    // duração) — mesma conta de `utils/posologia.ts#gerarResumoDoses` do front —
+    // só para o item aparecer como PREVISTO; a execução continua bloqueada fora
+    // de hoje (gate no front, `soVisualizacao={!isHoje}`).
+    if (hojeStr > hojeLocalStr()) {
+      return itemPrevistoParaDataFutura(item, hojeStr);
+    }
     return dataLocalStr(horarioPrevistoDoItem(item)) === hojeStr;
   }
   return janelaDoItem(item, hojeStr).dentro;

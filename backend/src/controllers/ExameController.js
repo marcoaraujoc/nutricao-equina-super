@@ -7,6 +7,7 @@ const { registrarAuditoria } = require('../lib/auditoria');
 // alcançado pelo próprio id, então o animal (e com ele o tenant) só é conhecido depois
 // de carregar o registro — nunca excluir/alterar antes de conferir.
 const { garantirAcessoAnimal } = require('../middlewares/animalAcesso.middleware');
+const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 
 // Helper seguro para converter valor (aceita número ou string com vírgula)
 const safeParseFloat = (val) => {
@@ -19,8 +20,13 @@ const safeParseFloat = (val) => {
 exports.getExamesByAnimal = async (req, res) => {
   const { animalId } = req.params;
   try {
+    // Transferência de Propriedade — o PROPRIETÁRIO atual só vê exames a partir de
+    // `propriedadeDesde`; GESTOR/VET/ADMIN veem tudo.
+    const animalCorte = await prisma.animal.findUnique({ where: { id: parseInt(animalId) }, select: { propriedadeDesde: true } });
+    const corte = corteDePropriedade(req, animalCorte);
+
     const exames = await prisma.exameNutricional.findMany({
-      where: { animalId: parseInt(animalId) },
+      where: { animalId: parseInt(animalId), ...(corte ? { dataExame: { gte: corte } } : {}) },
       include: { nutriente: true, animal: true },
       orderBy: { dataExame: 'desc' }
     });

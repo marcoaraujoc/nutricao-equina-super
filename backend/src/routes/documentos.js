@@ -12,5 +12,6 @@ const DocumentoCompartilharController = require('../controllers/DocumentoCompart
 
 router.post('/whatsapp', authenticate, DocumentoCompartilharController.whatsapp);
 router.post('/email',    authenticate, DocumentoCompartilharController.email);
+router.post('/pdf',      authenticate, DocumentoCompartilharController.pdf);
 
 module.exports = router;

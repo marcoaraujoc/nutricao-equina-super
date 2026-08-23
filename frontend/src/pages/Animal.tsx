@@ -71,7 +71,6 @@ interface FormProprietario {
 }
 
 
-
 interface AnimalEncontrado {
   id:               number;
   nome:             string;

@@ -1,7 +1,7 @@
 // frontend/src/pages/SubModuloVacina.tsx — registro clínico de vacinas
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Syringe, Ban, Eye, Loader2, X, ChevronLeft, ChevronRight, ChevronDown, AlertCircle, CheckCircle2, Clock, Printer, MessageCircle, Mail, Receipt, Pencil, Check } from 'lucide-react';
+import { Syringe, Ban, Eye, Loader2, X, ChevronLeft, ChevronRight, ChevronDown, AlertCircle, CheckCircle2, Clock, Printer, MessageCircle, Mail, Receipt, Pencil, Check, Plus } from 'lucide-react';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import api from '../services/api';
 import ImportarOrcamentoModal, { type OrcamentoItemImport, marcarOrcamentoImportado } from '../components/ImportarOrcamentoModal';
@@ -472,6 +472,11 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   // ── Combobox medicamento ───────────────────────────────────────────────────
   const [buscaMed,          setBuscaMed]          = useState('');
   const [dropdownMedAberto, setDropdownMedAberto] = useState(false);
+  // "Cadastrar nova vacina": ao contrário do medicamento da Prescrição (que só
+  // resolve o catálogo ao SALVAR), aqui o id é necessário JÁ no clique — a tela
+  // usa `medicamentoId` na hora para buscar lote/estoque/via. Por isso cria de
+  // verdade (POST /medicamentos/garantir) e entra na lista como qualquer outra.
+  const [criandoVacina,     setCriandoVacina]     = useState(false);
   const comboboxRef = useRef<HTMLDivElement>(null);
   const formRef     = useRef<HTMLDivElement>(null);
 
@@ -692,6 +697,34 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
         m.nome.toLowerCase().includes(buscaMed.toLowerCase()) ||
         m.formaFarmaceutica.toLowerCase().includes(buscaMed.toLowerCase())
       );
+
+  // "Cadastrar nova" só aparece sem correspondência EXATA — evita convidar a criar
+  // duplicata de uma vacina que já está na lista (mesmo critério do medicamento
+  // da Prescrição).
+  const termoBusca = buscaMed.trim();
+  const mostraCriarNovaVacina = termoBusca !== '' &&
+    !catalogo.some(m => m.nome.toLowerCase() === termoBusca.toLowerCase());
+
+  // Cadastra a vacina PRIVADA da empresa (lib/catalogoManual.js) e já a seleciona —
+  // dali em diante ela é só mais um item do catálogo (lote/estoque/via seguem o
+  // fluxo normal; como acabou de nascer, entra sem lote e sem estoque).
+  const criarVacinaLivre = async (nome: string) => {
+    setCriandoVacina(true);
+    setErroForm(null);
+    try {
+      const res = await api.post('/medicamentos/garantir', { nome, tipo: 'vacina', animalId });
+      const novo: MedicamentoCatalogo = res.data?.dados;
+      if (!novo) throw new Error('sem dados');
+      setCatalogo(prev => [novo, ...prev.filter(m => m.id !== novo.id)]);
+      setMedicamentoId(novo.id);
+      setDropdownMedAberto(false);
+      setBuscaMed('');
+    } catch {
+      setErroForm({ mensagem: `Erro ao cadastrar "${nome}" como nova vacina` });
+    } finally {
+      setCriandoVacina(false);
+    }
+  };
 
   // ── Loaders ────────────────────────────────────────────────────────────────
 
@@ -1097,10 +1130,6 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                 <div className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-xs text-gray-400">
                   <Loader2 size={13} className="animate-spin" /> Carregando…
                 </div>
-              ) : catalogo.length === 0 ? (
-                <div className="px-3 py-2.5 border border-amber-200 rounded-xl text-sm text-amber-600 bg-amber-50 text-xs">
-                  Nenhuma vacina cadastrada para esta espécie
-                </div>
               ) : (
                 <div className="relative">
                   <button
@@ -1129,8 +1158,10 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                         />
                       </div>
                       <ul className="max-h-52 overflow-y-auto">
-                        {medsFiltrados.length === 0 ? (
-                          <li className="px-3 py-2 text-xs text-gray-400">Nenhum resultado</li>
+                        {medsFiltrados.length === 0 && !mostraCriarNovaVacina ? (
+                          <li className="px-3 py-2 text-xs text-gray-400">
+                            {catalogo.length === 0 ? 'Nenhuma vacina cadastrada — digite o nome para cadastrar uma nova' : 'Nenhum resultado'}
+                          </li>
                         ) : medsFiltrados.map(m => (
                           <li key={m.id}>
                             <button
@@ -1153,6 +1184,21 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                             </button>
                           </li>
                         ))}
+                        {mostraCriarNovaVacina && (
+                          <li>
+                            <button
+                              type="button"
+                              disabled={criandoVacina}
+                              onClick={() => criarVacinaLivre(termoBusca)}
+                              className="w-full text-left px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 transition-colors flex items-center gap-1.5 font-medium disabled:opacity-60"
+                            >
+                              {criandoVacina
+                                ? <Loader2 size={13} className="flex-shrink-0 animate-spin" />
+                                : <Plus size={13} className="flex-shrink-0" />}
+                              Cadastrar "{termoBusca}" como nova vacina
+                            </button>
+                          </li>
+                        )}
                       </ul>
                     </div>
                   )}

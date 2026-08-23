@@ -23,6 +23,7 @@ const {
   anexarTrilhaEmLista: anexarTrilhaAtivacaoEmLista,
 } = require('../lib/animalAtivacao');
 const { cancelarPendenciasDoAnimal } = require('../lib/cancelamentoPendencias');
+const { transferirPropriedadeAnimal } = require('../lib/transferenciaPropriedadeAnimal');
 
 const prisma = require('../lib/prisma').default;
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
@@ -668,6 +669,18 @@ class AnimalController {
         criadoPorId: req.user?.id ?? null,
       });
 
+      // Janela ABERTA de propriedade — ponto de partida para a Transferência de
+      // Propriedade e para a Exportação por período (ver lib/transferenciaPropriedadeAnimal.js).
+      await prisma.animalProprietarioHistorico.create({
+        data: {
+          animalId:       animal.id,
+          proprietarioId: Number(targetUserId),
+          dataInicio:     animal.dataCadastro,
+          empresaId:      animal.empresaId,
+          criadoPorId:    req.user?.id ?? null,
+        },
+      });
+
       // Animal nasce ativo=true (default do schema): registra a trilha de ativação
       // também na CRIAÇÃO, senão "Ativado em/por" (Pacientes.tsx) fica vazio até
       // alguém desativar e reativar o registro — quem o criou não aparecia ali.
@@ -1106,6 +1119,72 @@ class AnimalController {
 
   // ── POST /api/animais/vincular-vet ───────────────────────────────────────
   // Uso restrito: vínculo direto ACEITO (apenas quando vet cria animal para si mesmo)
+
+  // ── POST /api/animais/:id/transferir-propriedade ─────────────────────────
+  // Troca o DONO de um animal já cadastrado (Doação/Venda/Aluguel). Regra BASAL,
+  // não configurável na Matriz de Perfis — mesma família de "só o gestor
+  // transfere agenda para outro" (CLAUDE.md §12 28-b/28-c): decidir quem passa a
+  // responder pelo animal é decisão de quem coordena a equipe, não uma ação
+  // clínica do dia a dia. `Animal.userId` já é a fonte de verdade de TODOS os
+  // pontos de acesso do proprietário (buildAnimalScopeWhere/verificarAcessoAnimal)
+  // — trocá-lo aqui já faz o dono ANTERIOR perder acesso a tudo nas telas normais,
+  // sem nenhum código extra; o que ele retém é só o direito de exportar o próprio
+  // período (ver ExportacaoController/exportacaoPaciente.js).
+  async transferirPropriedade(req, res) {
+    const animalId = Number(req.params.id);
+    const { motivo, novoProprietario } = req.body;
+
+    if (!ehGestorNoContexto(req)) {
+      return res.status(403).json({ sucesso: false, mensagem: 'Apenas o gestor da equipe pode transferir a propriedade do animal.' });
+    }
+
+    const MOTIVOS_VALIDOS = ['DOACAO', 'VENDA', 'ALUGUEL'];
+    if (!MOTIVOS_VALIDOS.includes(motivo)) {
+      return res.status(400).json({ sucesso: false, mensagem: 'Selecione o motivo da transferência (Doação, Venda ou Aluguel).' });
+    }
+
+    const dados = novoProprietario || {};
+    if (!dados.fullName?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome completo do novo proprietário é obrigatório.' });
+    if (!dados.email?.trim())    return res.status(400).json({ sucesso: false, mensagem: 'E-mail do novo proprietário é obrigatório.' });
+    if (!dados.phone?.trim())    return res.status(400).json({ sucesso: false, mensagem: 'Telefone do novo proprietário é obrigatório.' });
+    const diaVenc = Number(dados.diaVencimentoFatura);
+    if (!Number.isInteger(diaVenc) || diaVenc < 1 || diaVenc > 25) {
+      return res.status(400).json({ sucesso: false, mensagem: 'Dia de vencimento da fatura deve ser um número entre 1 e 25.' });
+    }
+    if (!Array.isArray(dados.localidades) || dados.localidades.length === 0) {
+      return res.status(400).json({ sucesso: false, mensagem: 'Informe ao menos uma localidade atendida pelo novo proprietário.' });
+    }
+
+    try {
+      const animal = await prisma.animal.findUnique({
+        where:  { id: animalId },
+        select: { id: true, nome: true, userId: true, empresaId: true, equipeId: true, ativo: true, inativo: true },
+      });
+      if (!animal)                          return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado.' });
+      if (animal.empresaId !== req.empresaId) return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal.' });
+      if (!animal.ativo)                    return res.status(400).json({ sucesso: false, mensagem: 'Paciente inativo — não é possível transferir a propriedade.' });
+      if (animal.inativo)                   return res.status(400).json({ sucesso: false, mensagem: 'Paciente bloqueado — não é possível transferir a propriedade.' });
+
+      const resultado = await prisma.$transaction((tx) =>
+        transferirPropriedadeAnimal(tx, req, { animal, motivo, novoProprietario: dados }),
+      );
+
+      const empresa = await prisma.empresa.findUnique({ where: { id: animal.empresaId }, select: { nome: true } });
+      emailService.enviarTransferenciaPropriedade({
+        destinatarioEmail: resultado.emailNovoProprietario,
+        destinatarioNome:  resultado.nomeNovoProprietario,
+        nomeAnimal:        animal.nome,
+        criadoPorNome:     req.user?.fullName || 'a equipe',
+        nomeEmpresa:       empresa?.nome || 'a clínica',
+      }).catch(() => { /* fire-and-forget — falha de e-mail nunca derruba a transferência */ });
+
+      const animalAtualizado = await prisma.animal.findUnique({ where: { id: animalId }, include: ANIMAL_INCLUDE });
+      res.json({ sucesso: true, dados: animalAtualizado });
+    } catch (error) {
+      console.error('[AnimalController.transferirPropriedade]', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro interno ao transferir a propriedade do animal.' });
+    }
+  }
 
 }
 

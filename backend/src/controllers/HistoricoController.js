@@ -9,6 +9,7 @@ const { escopoEvolucaoWhere, escopoFilhoEvolucaoWhere, escopoPrescricaoGrupoWher
 const { resumirHistorico } = require('../services/clinicaLLMService');
 const { formatAtendimentoNum } = require('../lib/faturaUtils');
 const { ehGestorNoContexto } = require('../middlewares/permissao.middleware');
+const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 
 // Animal desativado (Animal.ativo=false) só é alcançável pelo gestor/admin — mesma
 // trava de AnimalController.obterPorId. `verificarAcessoAnimal` decide TENANT/
@@ -64,19 +65,25 @@ const HistoricoController = {
       const escopoFilho  = escopoFilhoEvolucaoWhere(req);
       const escopoPresc  = escopoPrescricaoGrupoWhere(req);
 
+      // Transferência de Propriedade — o PROPRIETÁRIO atual só vê o que foi gerado
+      // a partir de `propriedadeDesde` (início da janela de posse dele); GESTOR/VET/
+      // ADMIN (corte null) veem tudo, sem mudança de comportamento.
+      const animalCorte = await prisma.animal.findUnique({ where: { id: animalId }, select: { propriedadeDesde: true } });
+      const corte = corteDePropriedade(req, animalCorte);
+
       const [evolucoes, vacinas, exames, encaminhamentos, grupos] = await Promise.all([
         prisma.evolucaoClinica.findMany({
-          where: { ...whereAtivo, status: { in: ['EM_ANDAMENTO', 'FINALIZADA', 'CONCLUIDO'] }, AND: [escopoEvo], ...(buscando ? { OR: [{ titulo: like }, { especialidade: like }, { texto: like }] } : {}) },
+          where: { ...whereAtivo, status: { in: ['EM_ANDAMENTO', 'FINALIZADA', 'CONCLUIDO'] }, AND: [escopoEvo], ...(corte ? { dataInicio: { gte: corte } } : {}), ...(buscando ? { OR: [{ titulo: like }, { especialidade: like }, { texto: like }] } : {}) },
           select: { id: true, titulo: true, especialidade: true, texto: true, status: true, dataInicio: true, dataFim: true, numero: true, tipoAtendimento: true, veterinario: VET_SELECT },
           orderBy: { dataInicio: 'desc' }, take: limit,
         }),
         prisma.vacinaClinica.findMany({
-          where: { ...whereAtivo, AND: [escopoFilho], ...(buscando ? { OR: [{ nome: like }, { fabricante: like }, { lote: like }, { observacao: like }] } : {}) },
+          where: { ...whereAtivo, AND: [escopoFilho], ...(corte ? { dataAplicacao: { gte: corte } } : {}), ...(buscando ? { OR: [{ nome: like }, { fabricante: like }, { lote: like }, { observacao: like }] } : {}) },
           select: { id: true, nome: true, numero: true, lote: true, fabricante: true, observacao: true, dataAplicacao: true, dataReforco: true, evolucaoId: true, veterinario: VET_SELECT },
           orderBy: { dataAplicacao: 'desc' }, take: limit,
         }),
         prisma.exameClinico.findMany({
-          where: { ...whereAtivo, status: { in: ['SOLICITADO', 'CONCLUIDO'] }, AND: [escopoFilho], ...(buscando ? { OR: [{ descricao: like }, { resultado: like }, { tipo: like }, { observacao: like }] } : {}) },
+          where: { ...whereAtivo, status: { in: ['SOLICITADO', 'CONCLUIDO'] }, AND: [escopoFilho], ...(corte ? { dataSolicitacao: { gte: corte } } : {}), ...(buscando ? { OR: [{ descricao: like }, { resultado: like }, { tipo: like }, { observacao: like }] } : {}) },
           select: { id: true, tipo: true, descricao: true, status: true, resultado: true, dataSolicitacao: true, numero: true, observacao: true, evolucaoId: true, veterinario: VET_SELECT },
           orderBy: { dataSolicitacao: 'desc' }, take: limit,
         }),
@@ -84,12 +91,12 @@ const HistoricoController = {
           // PENDENTE incluído: o encaminhamento deve aparecer no Histórico assim que
           // criado (ao fechar a evolução), não só depois de marcado CONCLUIDO — mesmo
           // padrão de exames (SOLICITADO+CONCLUIDO) e evoluções (EM_ANDAMENTO+FINALIZADA).
-          where: { ...whereAtivo, status: { in: ['PENDENTE', 'CONCLUIDO'] }, AND: [escopoFilho], ...(buscando ? { OR: [{ especialidade: like }, { motivo: like }] } : {}) },
+          where: { ...whereAtivo, status: { in: ['PENDENTE', 'CONCLUIDO'] }, AND: [escopoFilho], ...(corte ? { dataEncaminhamento: { gte: corte } } : {}), ...(buscando ? { OR: [{ especialidade: like }, { motivo: like }] } : {}) },
           select: { id: true, especialidade: true, motivo: true, urgencia: true, status: true, dataEncaminhamento: true, evolucaoId: true, veterinario: VET_SELECT, prestador: VET_SELECT },
           orderBy: { dataEncaminhamento: 'desc' }, take: limit,
         }),
         prisma.prescricaoGrupo.findMany({
-          where: { animalId, status: { in: ['FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE'] }, AND: [escopoPresc], ...(buscando ? { OR: [{ itens: { some: { ativo: true, medicamento: like } } }] } : {}) },
+          where: { animalId, status: { in: ['FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE'] }, AND: [escopoPresc], ...(corte ? { createdAt: { gte: corte } } : {}), ...(buscando ? { OR: [{ itens: { some: { ativo: true, medicamento: like } } }] } : {}) },
           select: {
             id: true, numero: true, status: true, createdAt: true, evolucaoId: true, veterinario: VET_SELECT,
             itens: { where: { ativo: true }, select: { medicamento: true, tipo: true }, take: 20 },

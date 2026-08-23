@@ -7,7 +7,7 @@ const { setAuthCookies } = require('../../lib/authCookies');
 const { normalizeEmail, findUserByEmail } = require('../../lib/email');
 const mfa = require('../../services/mfaService');
 const { podeAcessarSistema } = require('../../lib/usuarioEmpresa');
-const { registrarAcesso } = require('../../lib/auditoria');
+const { registrarAcesso, registrarAcessoNegado } = require('../../lib/auditoria');
 // Duração da sessão e assinatura dos tokens: fonte única em lib/sessionTokens.js
 const { assinarAccessToken, gerarRefreshToken: generateRefreshToken } = require('../../lib/sessionTokens');
 
@@ -124,18 +124,34 @@ class UserController {
       // (enumeração de usuário). Não "melhorar" isso com "usuário não encontrado".
       if (!user) {
         console.log('❌ Usuário não encontrado');
+        await registrarAcessoNegado(req, {
+          motivo: 'Login: e-mail não cadastrado', entidade: 'LOGIN', emailTentativa: email,
+        });
         return res.status(401).json({ error: 'Usuário ou Senha Inválidos' });
       }
 
       if (user.ativo === false) {
+        await registrarAcessoNegado(req, {
+          motivo: 'Login: conta desativada', entidade: 'LOGIN', entidadeId: user.id, emailTentativa: email,
+        });
         return res.status(403).json({ error: 'Conta desativada. Entre em contato com o administrador da equipe.' });
       }
 
       const match = await bcrypt.compare(password, user.passwordHash);
-      if (!match) return res.status(401).json({ error: 'Usuário ou Senha Inválidos' });
+      if (!match) {
+        await registrarAcessoNegado(req, {
+          motivo: 'Login: senha incorreta', entidade: 'LOGIN', entidadeId: user.id, emailTentativa: email,
+        });
+        return res.status(401).json({ error: 'Usuário ou Senha Inválidos' });
+      }
 
       // Antes do 2FA: não faz sentido mandar código a quem não pode entrar.
-      if (await acessoBloqueado(user)) return res.status(403).json({ error: MSG_SEM_ACESSO });
+      if (await acessoBloqueado(user)) {
+        await registrarAcessoNegado(req, {
+          motivo: 'Login: acesso ao sistema desativado pelo gestor', entidade: 'LOGIN', entidadeId: user.id, emailTentativa: email,
+        });
+        return res.status(403).json({ error: MSG_SEM_ACESSO });
+      }
 
       // ── Segundo fator (2FA por e-mail) ───────────────────────────────────
       // Senha correta NÃO abre sessão: cria o desafio e devolve o desafioId.
@@ -183,6 +199,10 @@ class UserController {
           TENTATIVAS_EXCEDIDAS: 'Muitas tentativas. Faça o login novamente.',
           REENVIOS_EXCEDIDOS:   'Limite de reenvios atingido. Faça o login novamente.',
         };
+        await registrarAcessoNegado(req, {
+          motivo:   `2FA: ${r.motivo} (desafio ${desafioId})`,
+          entidade: 'LOGIN',
+        });
         return res.status(401).json({
           error:     MENSAGENS[r.motivo] ?? 'Código inválido.',
           motivo:    r.motivo,
@@ -198,10 +218,19 @@ class UserController {
         },
       });
 
-      if (!user)                return res.status(401).json({ error: 'Código inválido.' });
+      if (!user) {
+        await registrarAcessoNegado(req, { motivo: '2FA: usuário do desafio não encontrado', entidade: 'LOGIN' });
+        return res.status(401).json({ error: 'Código inválido.' });
+      }
       // Revalidado aqui: a conta pode ter sido desativada entre a senha e o código.
-      if (user.ativo === false) return res.status(403).json({ error: 'Conta desativada. Entre em contato com o administrador da equipe.' });
-      if (await acessoBloqueado(user)) return res.status(403).json({ error: MSG_SEM_ACESSO });
+      if (user.ativo === false) {
+        await registrarAcessoNegado(req, { motivo: '2FA: conta desativada', entidade: 'LOGIN', entidadeId: user.id });
+        return res.status(403).json({ error: 'Conta desativada. Entre em contato com o administrador da equipe.' });
+      }
+      if (await acessoBloqueado(user)) {
+        await registrarAcessoNegado(req, { motivo: '2FA: acesso ao sistema desativado pelo gestor', entidade: 'LOGIN', entidadeId: user.id });
+        return res.status(403).json({ error: MSG_SEM_ACESSO });
+      }
 
       console.log('✅ 2FA verificado — login concluído:', user.email);
       res.json(await emitirSessao(req, res, user));

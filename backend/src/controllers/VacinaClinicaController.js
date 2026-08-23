@@ -7,6 +7,8 @@ const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 const { animalEstaInativo } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
+const { garantirMedicamentoDaEmpresa } = require('../lib/catalogoManual');
+const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 
 const INCLUDE_VACINA = {
   veterinario: { select: { id: true, fullName: true } },
@@ -130,10 +132,16 @@ async function consumirReservaVacina(tx, vacinaId) {
 async function listarPorAnimal(req, res) {
   try {
     const { animalId } = req.params;
+
+    // Transferência de Propriedade — o PROPRIETÁRIO atual só vê o que foi aplicado
+    // a partir de `propriedadeDesde`; GESTOR/VET/ADMIN (corte null) veem tudo.
+    const animalCorte = await prisma.animal.findUnique({ where: { id: Number(animalId) }, select: { propriedadeDesde: true } });
+    const corte = corteDePropriedade(req, animalCorte);
+
     // Mostra todas as vacinas (ativas, vencidas e inativas) para histórico completo
     const vacinas = await prisma.vacinaClinica.findMany({
       // Segregação multi-clínica: cada empresa vê só as próprias vacinas do animal
-      where: { animalId: Number(animalId), AND: [escopoFilhoEvolucaoWhere(req)] },
+      where: { animalId: Number(animalId), AND: [escopoFilhoEvolucaoWhere(req)], ...(corte ? { dataAplicacao: { gte: corte } } : {}) },
       include: INCLUDE_VACINA,
       orderBy: { dataAplicacao: 'desc' },
     });
@@ -273,6 +281,21 @@ async function registrar(req, res) {
         fabricanteVacina = vacinaData.fabricante ?? fabricante;
         viaFinal = viaFinal ?? vacinaData.via;
       }
+    } else if (nome?.trim()) {
+      // Vacina DIGITADA À MÃO, sem id de catálogo nem legado — mesmo fallback que
+      // Medicamento/Procedimento já têm na Prescrição (lib/catalogoManual.js):
+      // cadastra (ou reaproveita) uma entrada PRIVADA da empresa com esse nome, e
+      // a vacina passa a ter medicamentoCatId de verdade — sem isso ela nasceria
+      // sem FK, invisível nas buscas futuras e sem rastreio de estoque/lote.
+      const animalDaVacina = await prisma.animal.findUnique({
+        where:  { id: Number(animalId) },
+        select: { especieId: true },
+      });
+      medCatIdFinal = await garantirMedicamentoDaEmpresa(prisma, {
+        nome:       nome.trim(),
+        vacina:     true,
+        especieIds: animalDaVacina?.especieId ? [animalDaVacina.especieId] : [],
+      }, req.empresaId ?? null);
     }
 
     if (!nomeVacina?.trim()) return res.status(400).json({ error: 'Vacina é obrigatória' });

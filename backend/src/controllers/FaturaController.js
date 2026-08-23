@@ -14,17 +14,32 @@ const {
   aplicarPerfil: aplicarPerfilProprietario,
   aplicarPerfilEmLista: aplicarPerfilProprietarioEmLista,
 } = require('../lib/proprietarioPerfil');
+const { htmlParaPdf } = require('../services/documentoWhatsappService');
+const { storage, chaveDaUrl } = require('../storage');
+const { criarLink: criarLinkFaturaPublico } = require('../lib/faturaLinkPublico');
+const whatsappService = require('../services/whatsappService');
+const emailService = require('../services/emailService');
 
 // Aplica à fatura o cadastro que a EMPRESA ATIVA mantém do proprietário
 // (nome, telefone e condição comercial são por empresa — ver lib/proprietarioPerfil).
+// O envio (WhatsApp/e-mail/impressão) usa sempre o contato do PRÓPRIO proprietário —
+// não existe mais a noção de "responsável financeiro" diferente do dono do animal
+// (removida: gerava fatura endereçada a quem não é o titular do débito e nenhuma
+// tela cobria o caso de pagamento parcial que isso exigiria).
 async function comPerfilDaEmpresa(fatura, empresaId) {
-  if (!fatura?.proprietario || !empresaId) return fatura;
-  return { ...fatura, proprietario: await aplicarPerfilProprietario(fatura.proprietario, empresaId) };
+  if (!fatura) return fatura;
+  return fatura.proprietario && empresaId
+    ? { ...fatura, proprietario: await aplicarPerfilProprietario(fatura.proprietario, empresaId) }
+    : fatura;
 }
 
 const ITEM_INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
-  animal:      { select: { id: true, nome: true, especie: { select: { nome: true } }, raca: { select: { nome: true } }, photoUrl: true } },
+  animal:      {
+    select: {
+      id: true, nome: true, especie: { select: { nome: true } }, raca: { select: { nome: true } }, photoUrl: true,
+    },
+  },
 };
 
 const FATURA_INCLUDE = {
@@ -197,6 +212,31 @@ async function adicionarAssistenciaMensal(faturaId, proprietario, veterinarioId 
 // deixaria o financeiro dessas bases sem conserto. Quem tem tenant definido é comparado.
 function faturaForaDoEscopo(fatura, req) {
   return Boolean(req.empresaId && fatura?.empresaId && fatura.empresaId !== Number(req.empresaId));
+}
+
+// Gera o PDF da fatura, salva no storage (`storage.upload()` — hoje bytea no
+// banco; `STORAGE_DRIVER=s3` troca o driver sem tocar aqui, ver CLAUDE.md §8) e
+// cria o link público. Compartilhado por `enviarLinkWhatsapp`/`enviarLinkEmail`
+// para não gerar um PDF (e uma linha em `tb_fatura_links_publicos`) por canal
+// quando o vet manda pelos dois — mas como cada clique é uma ação SEPARADA do
+// usuário, um link novo por envio é aceitável (e mais simples que rastrear se o
+// conteúdo mudou desde o último).
+async function gerarLinkPublicoDaFatura({ fatura, req, html, nomeArquivo }) {
+  const pdf = await htmlParaPdf(html);
+  const url = await storage.upload(
+    { buffer: pdf, mimetype: 'application/pdf', originalname: nomeArquivo, size: pdf.length },
+    'faturas',
+    { empresaId: req.empresaId, criadoPorId: req.user.id },
+  );
+  const midiaChave = chaveDaUrl(url);
+
+  return criarLinkFaturaPublico({
+    faturaId:       fatura.id,
+    empresaId:      req.empresaId,
+    proprietarioId: fatura.proprietarioId,
+    midiaChave,
+    criadoPorId:    req.user.id,
+  });
 }
 
 const FaturaController = {
@@ -613,6 +653,91 @@ const FaturaController = {
     }
   },
 
+  // POST /:faturaId/enviar-whatsapp { html, nomeArquivo, texto, telefone? }
+  //
+  // Gera o PDF (Puppeteer, mesmo pipeline do botão Imprimir), salva no storage
+  // e manda uma mensagem de WhatsApp com o LINK público — nunca mais o PDF
+  // anexado direto. Ver lib/faturaLinkPublico.js para o porquê (o anexo
+  // dependia do Puppeteer + upload terminarem dentro da janela de espera do
+  // navegador do vet; o link desacopla isso — a mensagem em si é só texto).
+  enviarLinkWhatsapp: async (req, res) => {
+    const { faturaId } = req.params;
+    const { html, nomeArquivo, texto, telefone: telefoneBody } = req.body ?? {};
+    if (!html || !nomeArquivo) return res.status(400).json({ error: 'html e nomeArquivo são obrigatórios.' });
+    if (!req.empresaId) return res.status(400).json({ error: 'Sem empresa no contexto.', code: 'SEM_EMPRESA' });
+
+    try {
+      const fatura = await prisma.fatura.findUnique({
+        where:  { id: Number(faturaId) },
+        select: {
+          id: true, empresaId: true, proprietarioId: true,
+          proprietario: { select: { id: true, fullName: true, email: true, phone: true } },
+        },
+      });
+      if (!fatura || faturaForaDoEscopo(fatura, req)) return res.status(404).json({ error: 'Fatura não encontrada' });
+      if (!fatura.proprietario) return res.status(400).json({ error: 'Fatura sem proprietário.' });
+
+      const proprietario = await aplicarPerfilProprietario(fatura.proprietario, req.empresaId);
+      const telefone = (telefoneBody || '').trim() || proprietario.phone;
+      if (!telefone) return res.status(400).json({ error: 'Proprietário sem telefone cadastrado.', code: 'SEM_TELEFONE' });
+
+      const link = await gerarLinkPublicoDaFatura({ fatura, req, html, nomeArquivo });
+
+      const mensagem = [texto, `📄 Abra a fatura pelo link: ${link.url}`].filter(Boolean).join('\n\n');
+      const envio = await whatsappService.sendMessage(
+        { empresaId: req.empresaId, equipeId: req.equipeId ?? null }, telefone, mensagem,
+      );
+
+      return res.json({ dados: { enviado: !!envio?.sucesso, simulado: !!envio?.simulado, url: link.url, telefone } });
+    } catch (err) {
+      console.error('FaturaController.enviarLinkWhatsapp:', err);
+      return res.status(500).json({ error: 'Erro ao enviar a fatura por WhatsApp.' });
+    }
+  },
+
+  // POST /:faturaId/enviar-email { html, nomeArquivo, texto, titulo, email? }
+  // Mesma lógica do WhatsApp: PDF salvo + LINK por e-mail, nunca anexo.
+  enviarLinkEmail: async (req, res) => {
+    const { faturaId } = req.params;
+    const { html, nomeArquivo, texto, titulo, email: emailBody } = req.body ?? {};
+    if (!html || !nomeArquivo) return res.status(400).json({ error: 'html e nomeArquivo são obrigatórios.' });
+    if (!req.empresaId) return res.status(400).json({ error: 'Sem empresa no contexto.', code: 'SEM_EMPRESA' });
+
+    try {
+      const fatura = await prisma.fatura.findUnique({
+        where:  { id: Number(faturaId) },
+        select: {
+          id: true, empresaId: true, proprietarioId: true,
+          proprietario: { select: { id: true, fullName: true, email: true, phone: true } },
+        },
+      });
+      if (!fatura || faturaForaDoEscopo(fatura, req)) return res.status(404).json({ error: 'Fatura não encontrada' });
+      if (!fatura.proprietario) return res.status(400).json({ error: 'Fatura sem proprietário.' });
+
+      const proprietario = await aplicarPerfilProprietario(fatura.proprietario, req.empresaId);
+      const destino = (emailBody || '').trim() || proprietario.email;
+      if (!destino) return res.status(400).json({ error: 'Proprietário sem e-mail cadastrado.', code: 'SEM_EMAIL' });
+
+      const link = await gerarLinkPublicoDaFatura({ fatura, req, html, nomeArquivo });
+
+      if (!emailService.estaConfigurado()) {
+        return res.json({ dados: { enviado: false, url: link.url } });
+      }
+      await emailService.enviarLinkFatura({
+        proprietarioEmail: destino,
+        proprietarioNome:  proprietario.fullName ?? 'Cliente',
+        assunto:            titulo || nomeArquivo,
+        corpo:              texto || '',
+        url:                link.url,
+      });
+
+      return res.json({ dados: { enviado: true, url: link.url } });
+    } catch (err) {
+      console.error('FaturaController.enviarLinkEmail:', err);
+      return res.status(500).json({ error: 'Erro ao enviar a fatura por e-mail.' });
+    }
+  },
+
   // PATCH /:faturaId/fechar
   // Fecha a fatura: adiciona assistência veterinária mensal (se aplicável) e muda status para FECHADA.
   // Idempotente: não duplica o item de assistência se já existir.
@@ -666,7 +791,9 @@ const FaturaController = {
         if (!Number.isInteger(id)) continue;
         const fatura = await prisma.fatura.findUnique({
           where:   { id },
-          include: { proprietario: { select: { id: true, fullName: true, phone: true, email: true, empresaId: true, valorAssistencia: true, mensalista: true } } },
+          include: {
+            proprietario: { select: { id: true, fullName: true, phone: true, email: true, empresaId: true, valorAssistencia: true, mensalista: true } },
+          },
         });
         if (!fatura || fatura.status !== 'ABERTA') continue;
         // Guarda de escopo: a fatura precisa ser DESTA empresa. Antes o teste era pelo

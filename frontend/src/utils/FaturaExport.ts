@@ -3,7 +3,6 @@
 
 import { resolverUrlAbsoluta } from './printUrl';
 import { imprimirHtml } from './print/imprimirHtml';
-import { htmlParaPdfBlob } from './gerarPdf';
 
 const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
@@ -48,9 +47,25 @@ interface FaturaMin {
   proprietario?: { fullName: string; email: string; phone?: string | null } | null;
 }
 
+// Contato a quem a fatura é ENDEREÇADA — sempre o proprietário do animal, que
+// é quem responde pela fatura.
+function contatoDaFatura(fatura: FaturaMin) {
+  return {
+    nome:     fatura.proprietario?.fullName ?? 'Cliente',
+    email:    fatura.proprietario?.email    ?? null,
+    telefone: fatura.proprietario?.phone    ?? null,
+  };
+}
+
 // ─── PDF / Impressão ─────────────────────────────────────────────────────────
 
-export function imprimirFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl?: string | null) {
+// HTML completo da fatura — fonte ÚNICA reutilizada por `imprimirFatura` (janela
+// de impressão do navegador) E pelo envio real por WhatsApp/e-mail
+// (utils/compartilharPdf.ts → backend Puppeteer, mesmo padrão de
+// utils/ExameCompraPrint.ts#gerarHtmlExameCompra). Mudar o layout aqui muda os
+// dois lugares — nunca duplicar este HTML de novo.
+export function gerarHtmlFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl?: string | null): string {
+  const contato   = contatoDaFatura(fatura);
   const animalMap = new Map(animais.map(a => [a.id, a]));
 
   // Agrupa itens por animal
@@ -130,11 +145,11 @@ export function imprimirFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl?
 <body>
   <div class="header">
     <div>
-      <h1>${fatura.proprietario?.fullName ?? 'Cliente'}</h1>
+      <h1>${contato.nome}</h1>
       <div class="sub">Fatura Ref: INV-${String(fatura.id).padStart(3,'0')} · ${formatMes(fatura.mesReferencia)}</div>
       <div class="meta">
-        ${fatura.proprietario?.phone ? `<span>Fone: ${fatura.proprietario.phone}</span>` : ''}
-        ${fatura.proprietario?.email ? `<span>Email: ${fatura.proprietario.email}</span>` : ''}
+        ${contato.telefone ? `<span>Fone: ${contato.telefone}</span>` : ''}
+        ${contato.email ? `<span>Email: ${contato.email}</span>` : ''}
         <span>Status: <span class="status-badge status-${fatura.status}">${fatura.status}</span></span>
       </div>
     </div>
@@ -167,18 +182,23 @@ export function imprimirFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl?
 </body>
 </html>`;
 
-  imprimirHtml(html);
+  return html;
+}
+
+export function imprimirFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl?: string | null) {
+  imprimirHtml(gerarHtmlFatura(fatura, animais, logoUrl));
 }
 
 // ─── CSV ──────────────────────────────────────────────────────────────────────
 
 export function exportarFaturaCSV(fatura: FaturaMin, animais: AnimalMin[]) {
+  const contato   = contatoDaFatura(fatura);
   const animalMap = new Map(animais.map(a => [a.id, a]));
 
   const linhas: string[][] = [
     ['Fatura', `INV-${String(fatura.id).padStart(3,'0')}`],
-    ['Proprietário', fatura.proprietario?.fullName ?? ''],
-    ['Email', fatura.proprietario?.email ?? ''],
+    ['Proprietário', contato.nome],
+    ['Email', contato.email ?? ''],
     ['Mês de Referência', formatMes(fatura.mesReferencia)],
     ['Status', fatura.status],
     [''],
@@ -216,110 +236,3 @@ export function exportarFaturaCSV(fatura: FaturaMin, animais: AnimalMin[]) {
   URL.revokeObjectURL(url);
 }
 
-// ─── WhatsApp — compartilhar PDF ─────────────────────────────────────────────
-
-async function gerarPdfBlob(fatura: FaturaMin, animais: AnimalMin[], logoUrl?: string | null): Promise<Blob> {
-  const inv   = `INV-${String(fatura.id).padStart(3, '0')}`;
-  const nome  = fatura.proprietario?.fullName ?? 'Cliente';
-
-  // Reutiliza a mesma lógica de HTML de imprimirFatura (simplificada)
-  const animalMap = new Map(animais.map(a => [a.id, a]));
-  const grupos = new Map<string, { nome: string; itens: ItemMin[] }>();
-  for (const item of fatura.itens) {
-    const key = String(item.animalId ?? 'outros');
-    const n   = item.animalId
-      ? (animalMap.get(item.animalId)?.nome ?? `Animal #${item.animalId}`)
-      : 'Outros Lançamentos';
-    if (!grupos.has(key)) grupos.set(key, { nome: n, itens: [] });
-    grupos.get(key)!.itens.push(item);
-  }
-
-  const linhasGrupos = [...grupos.values()].map(g => {
-    const subtotal   = g.itens.reduce((s, i) => s + totalItem(i), 0);
-    const linhasItens = g.itens.map(i => `
-      <tr>
-        <td><span class="badge ${i.tipo.toLowerCase()}">${i.tipo}</span></td>
-        <td>${i.descricao}${labelDesconto(i) ? `<br/><small style="color:#dc2626">Desconto ${labelDesconto(i)} (−${brl(descontoItem(i))})</small>` : ''}</td>
-        <td class="center">${i.quantidade}</td>
-        <td class="right">${brl(i.valor)}</td>
-        <td class="right">${brl(totalItem(i))}</td>
-      </tr>`).join('');
-    return `
-      <tr class="group-header">
-        <td colspan="4"><strong>${g.nome}</strong></td>
-        <td class="right">Subtotal: ${brl(subtotal)}</td>
-      </tr>${linhasItens}`;
-  }).join('');
-
-  const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"/>
-  <style>
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:Arial,sans-serif;font-size:11px;color:#1a1a1a;width:794px;padding:24px}
-    .header{background:#166534;color:#fff;padding:16px 20px;border-radius:8px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
-    .header h1{font-size:18px;font-weight:700;margin-bottom:2px}
-    .header .sub{font-size:10px;opacity:.8}
-    .header .meta{margin-top:8px;font-size:10px;opacity:.75;display:flex;gap:20px;flex-wrap:wrap}
-    .brand-logo-box{background:#fff;border-radius:8px;padding:5px 8px;flex-shrink:0}
-    .brand-logo{max-height:28px;max-width:140px;object-fit:contain;display:block}
-    .badge{display:inline-block;padding:1px 7px;border-radius:999px;font-size:9px;font-weight:700;text-transform:uppercase}
-    .badge.assistencia{background:#dbeafe;color:#1d4ed8}
-    .badge.medicamento{background:#ede9fe;color:#6d28d9}
-    .badge.procedimento{background:#d1fae5;color:#065f46}
-    table{width:100%;border-collapse:collapse;margin-bottom:16px}
-    th{background:#f3f4f6;font-size:9px;text-transform:uppercase;padding:6px 8px;text-align:left;border-bottom:2px solid #e5e7eb}
-    td{padding:6px 8px;border-bottom:1px solid #f3f4f6;vertical-align:middle}
-    tr.group-header td{background:#f9fafb;font-size:10px;color:#374151;padding:7px 8px;border-top:2px solid #e5e7eb}
-    .center{text-align:center}.right{text-align:right}
-    .total-box{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}
-    .total-box .label{font-size:11px;color:#374151}
-    .total-box .value{font-size:20px;font-weight:800;color:#dc2626}
-    .footer{margin-top:24px;font-size:9px;color:#9ca3af;border-top:1px solid #e5e7eb;padding-top:8px}
-  </style></head><body>
-  <div class="header">
-    <div>
-      <h1>${nome}</h1>
-      <div class="sub">Fatura Ref: ${inv} · ${formatMes(fatura.mesReferencia)}</div>
-      <div class="meta">
-        ${fatura.proprietario?.phone ? `<span>Fone: ${fatura.proprietario.phone}</span>` : ''}
-        ${fatura.proprietario?.email ? `<span>Email: ${fatura.proprietario.email}</span>` : ''}
-        <span>Status: ${fatura.status}</span>
-      </div>
-    </div>
-    ${resolverUrlAbsoluta(logoUrl) ? `<div class="brand-logo-box"><img class="brand-logo" src="${resolverUrlAbsoluta(logoUrl)}" alt="Logo"></div>` : ''}
-  </div>
-  <table>
-    <thead><tr><th style="width:100px">Tipo</th><th>Descrição</th><th class="center" style="width:50px">Qtd.</th><th class="right" style="width:90px">Valor Unit.</th><th class="right" style="width:100px">Subtotal</th></tr></thead>
-    <tbody>${linhasGrupos}</tbody>
-  </table>
-  <div class="total-box">
-    <span class="label">Valor Total da Fatura Única</span>
-    <span class="value">${brl(fatura.total)}</span>
-  </div>
-  <div class="footer">Emitido em ${new Date().toLocaleString('pt-BR')} · S2Vet</div>
-  </body></html>`;
-
-  return htmlParaPdfBlob(html);
-}
-
-export async function compartilharFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl?: string | null) {
-  const inv      = `INV-${String(fatura.id).padStart(3, '0')}`;
-  const nome     = fatura.proprietario?.fullName?.replace(/\s+/g, '-') ?? 'cliente';
-  const fileName = `fatura-${inv}-${nome}.pdf`;
-
-  const blob = await gerarPdfBlob(fatura, animais, logoUrl);
-  const file = new File([blob], fileName, { type: 'application/pdf' });
-
-  // Web Share API com arquivo (funciona no celular — WhatsApp aparece como opção)
-  if (navigator.canShare?.({ files: [file] })) {
-    await navigator.share({ files: [file], title: `Fatura ${inv}` });
-    return;
-  }
-
-  // Fallback desktop: faz download do PDF
-  const url = URL.createObjectURL(blob);
-  const a   = document.createElement('a');
-  a.href    = url;
-  a.download = fileName;
-  a.click();
-  URL.revokeObjectURL(url);
-}

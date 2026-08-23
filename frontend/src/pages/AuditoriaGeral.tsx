@@ -11,7 +11,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import {
   ScrollText, Search, RefreshCw, ChevronLeft, ChevronRight, Trash2, Ban, ShieldCheck,
-  ArrowLeftRight, PencilLine, PlusCircle, Eye, X, CheckCircle2,
+  ArrowLeftRight, PencilLine, PlusCircle, Eye, X, CheckCircle2, ShieldAlert, FileDown,
 } from 'lucide-react';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -35,10 +35,14 @@ interface LogAuditoria {
 
 interface Meta { total: number; page: number; limit: number; totalPages: number }
 
-type FiltroCategoria = '' | 'EXCLUSAO' | 'CANCELAMENTO' | 'CONFIGURACAO' | 'TRANSFERENCIA' | 'ALTERACAO' | 'CRIACAO' | 'EXECUCAO';
+type FiltroCategoria = '' | 'EXCLUSAO' | 'CANCELAMENTO' | 'CONFIGURACAO' | 'TRANSFERENCIA' | 'ALTERACAO' | 'CRIACAO' | 'EXECUCAO' | 'ACESSO_NEGADO' | 'EXPORTACAO';
 
 const ENTIDADE_LABEL: Record<string, string> = {
   ANIMAL:            'Paciente',
+  LOGIN:             'Login',
+  MODULO:            'Módulo/funcionalidade',
+  MIDIA:             'Mídia/Arquivo',
+  REGISTRO_CLINICO:  'Registro clínico',
   EVOLUCAO:          'Evolução',
   PRESCRICAO:        'Prescrição',
   PRESCRICAO_ITEM:   'Item de prescrição',
@@ -125,6 +129,18 @@ function BadgeCategoria({ categoria }: { categoria: string | null }) {
   if (categoria === 'EXECUCAO') return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-100 text-teal-700">
       <CheckCircle2 size={9} /> EXECUÇÃO
+    </span>
+  );
+  // Tentativa BLOQUEADA — login recusado, módulo sem permissão ou paciente fora do escopo
+  if (categoria === 'ACESSO_NEGADO') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700">
+      <ShieldAlert size={9} /> ACESSO NEGADO
+    </span>
+  );
+  // Extração em massa de prontuário (Administração > Exportação)
+  if (categoria === 'EXPORTACAO') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700">
+      <FileDown size={9} /> EXPORTAÇÃO
     </span>
   );
   return (
@@ -322,14 +338,14 @@ export default function AuditoriaGeral() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Auditoria</h1>
-            <p className="text-sm text-gray-500">Exclusões e cancelamentos com justificativa{isAdmin ? ' — todas as empresas' : ' da empresa ativa'}.</p>
+            <p className="text-sm text-gray-500">Exclusões, cancelamentos e tentativas de acesso negado{isAdmin ? ' — todas as empresas' : ' da empresa ativa'}.</p>
           </div>
         </div>
 
         {/* Filtros */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-3">
           <div className="flex flex-wrap gap-2">
-            {([['', 'Todas'], ['EXCLUSAO', 'Exclusões'], ['CANCELAMENTO', 'Cancelamentos'], ['TRANSFERENCIA', 'Transferências'], ['ALTERACAO', 'Alterações'], ['CRIACAO', 'Criações'], ['EXECUCAO', 'Execuções'], ['CONFIGURACAO', 'Configuração']] as [FiltroCategoria, string][]).map(([key, label]) => (
+            {([['', 'Todas'], ['ACESSO_NEGADO', 'Acesso negado'], ['EXCLUSAO', 'Exclusões'], ['CANCELAMENTO', 'Cancelamentos'], ['TRANSFERENCIA', 'Transferências'], ['ALTERACAO', 'Alterações'], ['CRIACAO', 'Criações'], ['EXECUCAO', 'Execuções'], ['EXPORTACAO', 'Exportações'], ['CONFIGURACAO', 'Configuração']] as [FiltroCategoria, string][]).map(([key, label]) => (
               <button key={key} onClick={() => setCategoria(key)}
                 className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
                   categoria === key

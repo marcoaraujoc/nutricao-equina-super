@@ -18,6 +18,7 @@ import Home                 from './pages/Home';
 import Dashboard            from './pages/Dashboard';
 import CadastroPessoal      from './pages/CadastroPessoal';
 import ResetPassword        from './pages/ResetPassword';
+import FaturaPublica        from './pages/FaturaPublica';
 import CadastroProprietario from './pages/CadastroProprietario';
 import CadastroTratador     from './pages/CadastroTratador';
 import CadastroProcedimento from './pages/CadastroProcedimento';
@@ -58,6 +59,7 @@ import CadastroEmpresa from './pages/CadastroEmpresa';
 import CriacaoGestor  from './pages/CriacaoGestor';
 import EquipeManager  from './pages/EquipeManager';
 import AuditoriaGeral from './pages/AuditoriaGeral';
+import ExportacaoDados from './pages/ExportacaoDados';
 
 // Pages — Relatório
 import RelatorioNutricional from './pages/RelatorioNutricional';
@@ -277,6 +279,8 @@ function ProtectedApp() {
                           <Route path="/configuracao-alertas" element={<ConfiguracaoAlerta />} />
                           <Route path="/monitoracao"          element={<Monitoracao />} />
                           <Route path="/auditoria-geral"  element={<AuditoriaGeral />} />
+                          {/* Administração > Exportação — prontuário completo de paciente(s) em .zip */}
+                          <Route path="/admin/exportacao" element={<ExportacaoDados />} />
 
                           {/* Relatórios gerenciais */}
                           <Route path="/relatorios"             element={<Relatorios />} />
@@ -353,6 +357,7 @@ function App() {
             <Route path="/login"          element={<Login />} />
             <Route path="/register"       element={<Register />} />
             <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/fatura/:token"  element={<FaturaPublica />} />
 
             {/* ── Rotas protegidas — layout travado na viewport ────────────── */}
             <Route path="/*" element={<ProtectedApp />} />

@@ -46,7 +46,18 @@ const CATALOGO_GLOBAL = new Set([
   'tb_crmv_validos', 'tb_crmv_sync_log', 'tb_laboratorios',
   'tb_localizacoes_animal', 'tb_regioes_anatomicas_equino',
   'tb_medicamentos', 'tb_procedimentos', 'tb_vacinas',
-  'tb_medicamento_especies', 'tb_medicamento_vias',
+  // ⚠️ `tb_medicamento_especies`/`tb_medicamento_vias` SAÍRAM daqui em 2026-09-07 —
+  // "ninguém cria linha própria" deixou de ser verdade quando o cadastro manual de
+  // medicamento/vacina direto do atendimento (MedicamentoController.
+  // garantirCatalogoManual) passou a vincular espécie ao item PRIVADO da empresa.
+  // Ganharam RLS (migration 20260907000000), mas o pai (tb_medicamentos) é CATÁLOGO
+  // MISTO — o `CAMINHO_EXPLICITO` padrão geraria `empresa_id = tenant` sem o
+  // `OR IS NULL` e apagaria da leitura o catálogo global inteiro. A policy foi
+  // escrita à mão (fora do gerador) espelhando a MESMA assimetria de
+  // `tb_medicamentos`: USING lê global+próprio, WITH CHECK só escreve o próprio.
+  // Por isso NÃO entram em `CAMINHO_EXPLICITO` — ficariam com um caminho que o
+  // gerador produziria errado; melhor sem caminho nenhum (PENDENTE no relatório
+  // do gerador) do que um caminho que mentiria sobre a forma real da policy.
 
   // ── Resolvidas na FASE 7, olhando o DADO (as 6 que estavam PENDENTE) ────────
   //

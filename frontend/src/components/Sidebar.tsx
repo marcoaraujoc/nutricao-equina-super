@@ -15,7 +15,7 @@ import {
   FileText, Syringe, Microscope, Scan,
   FolderOpen, UserCog, Truck, MapPin, CalendarClock,
   Package, UserPlus, ScrollText, Building2,
-  Bell, Gauge, ListChecks, Receipt, Layers, HardHat,
+  Bell, Gauge, ListChecks, Receipt, Layers, HardHat, FileDown,
 } from 'lucide-react';
 import { usePermissoes } from '../hooks/usePermissoes';
 
@@ -612,6 +612,9 @@ export default function Sidebar() {
                       "Cadastro da Empresa" (acima). */}
                   {isAdmin && navLink('/admin/criacao-gestor', <UserPlus size={20} />, 'Criação de Gestor', isAdminActive('/admin/criacao-gestor'))}
                   {isAdmin && navLink('/admin/empresas', <Building2 size={20} />, 'Empresas', isAdminActive('/admin/empresas'))}
+                  {/* Exportação de prontuário — GESTOR exporta os PRÓPRIOS pacientes (RLS
+                      já escopa a lista); ADMIN alcança conforme o contexto ativo dele. */}
+                  {(isGestor || isAdmin) && navLink('/admin/exportacao', <FileDown size={20} />, 'Exportação', isAdminActive('/admin/exportacao'))}
                   {isAdmin && navLink('/medicamentos', <Pill size={20} />, 'Medicamentos', isAdminActive('/medicamentos'))}
                   {isAdmin && navLink('/monitoracao', <Gauge size={20} />, 'Monitoração', isAdminActive('/monitoracao'))}
                   {isAdmin && navLink('/ai-usage', <Users size={20} />, 'Monitoramento IA', isAdminActive('/ai-usage'))}

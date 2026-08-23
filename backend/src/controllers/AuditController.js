@@ -11,7 +11,7 @@ class AuditController {
   // ADMIN: todos os logs (filtro ?empresaId= opcional).
   // GESTOR/dono de empresa: apenas os logs da empresa ativa (req.empresaId).
   // Demais perfis: 403.
-  // Filtros: ?categoria=EXCLUSAO|CANCELAMENTO|AJUSTE|CONFIGURACAO|TRANSFERENCIA|ALTERACAO,
+  // Filtros: ?categoria=EXCLUSAO|CANCELAMENTO|AJUSTE|CONFIGURACAO|TRANSFERENCIA|ALTERACAO|CRIACAO|EXECUCAO|ACESSO_NEGADO,
   //          ?entidade=, ?busca=, ?dataInicio=, ?dataFim=, ?page=, ?limit=
   async listar(req, res) {
     try {

@@ -18,18 +18,10 @@
 const prisma  = require('../lib/prisma').default;
 const mammoth = require('mammoth');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { registrarAcessoNegado } = require('../lib/auditoria');
+const { enviarArquivo } = require('../lib/midiaEnvio');
 
 const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-
-// Espelha a whitelist que o express.static usava: o que não é mídia reconhecida vai
-// como anexo (Content-Disposition: attachment), neutralizando XSS armazenado por
-// SVG/HTML. A defesa não podia sumir junto com o static.
-const MIME_INLINE = new Set([
-  'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp',
-  'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime',
-  'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/mp4', 'audio/aac', 'audio/ogg',
-  'application/pdf',
-]);
 
 function ehAdminPlataforma(req) {
   return req.user?.role === 'ADMIN' || req.user?.userType === 'ADMIN';
@@ -59,100 +51,8 @@ async function autorizar(req, midia) {
   return midia.criadoPorId != null && Number(midia.criadoPorId) === Number(req.user.id);
 }
 
-// Range: "bytes=INICIO-FIM" (só a primeira faixa; é o que os players usam na prática)
-function parseRange(header, total) {
-  const m = /^bytes=(\d*)-(\d*)$/.exec(String(header ?? '').trim());
-  if (!m) return null;
-  const [, iniStr, fimStr] = m;
-  if (iniStr === '' && fimStr === '') return null;
-
-  let inicio;
-  let fim;
-  if (iniStr === '') {
-    // sufixo: últimos N bytes
-    const n = Number(fimStr);
-    if (!Number.isFinite(n) || n <= 0) return null;
-    inicio = Math.max(total - n, 0);
-    fim    = total - 1;
-  } else {
-    inicio = Number(iniStr);
-    fim    = fimStr === '' ? total - 1 : Number(fimStr);
-  }
-  if (!Number.isFinite(inicio) || !Number.isFinite(fim)) return null;
-  if (inicio < 0 || fim < inicio || inicio >= total) return null;
-  return { inicio, fim: Math.min(fim, total - 1) };
-}
-
 // Categoria reservada à MARCA DO PRODUTO. Uma linha só, `publico: true`.
 const PASTA_MARCA = 'marca';
-
-// Escreve o arquivo na resposta (headers + corpo), com suporte a Range.
-// Compartilhado por `baixar` (autorizado) e `marca` (público) para não haver duas
-// implementações de cabeçalho divergindo.
-async function enviarArquivo(req, res, midia) {
-  const inline = MIME_INLINE.has(midia.mimeType.toLowerCase());
-
-  const comuns = (publico) => {
-    res.setHeader('Content-Type', midia.mimeType);
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    // `frame-ancestors`: 'none' bloqueava a PRÓPRIA aplicação de exibir o arquivo —
-    // o visualizador embute PDF num <iframe> same-origin (VisualizadorArquivos, em
-    // Exames.tsx) e o navegador recusava a navegação do frame ("localhost recusou
-    // a conexão" dentro da caixa do visualizador, sem nenhuma requisição de rede
-    // sequer aparecer — é bloqueio de CSP, não erro de servidor). Inline (o que a
-    // UI efetivamente embute) libera SÓ a própria origem; anexo para download
-    // (Content-Disposition abaixo) nunca é embutido em frame nenhum, então segue
-    // vedado a todos.
-    res.setHeader('Content-Security-Policy',
-      inline ? "default-src 'none'; sandbox; frame-ancestors 'self'"
-             : "default-src 'none'; sandbox; frame-ancestors 'none'");
-    // Cache PRIVADO para dado de cliente: proxy compartilhado não pode guardá-lo.
-    // `immutable` é seguro porque a chave é única por conteúdo — trocar a foto gera
-    // outra chave. A marca do produto é pública e pode ser cacheada por qualquer um.
-    res.setHeader('Cache-Control', publico
-      ? 'public, max-age=86400, immutable'
-      : 'private, max-age=86400, immutable');
-    res.setHeader('Accept-Ranges', 'bytes');
-    if (!inline) {
-      const nome = (midia.nomeOriginal ?? 'arquivo').replace(/["\\\r\n]/g, '');
-      res.setHeader('Content-Disposition', `attachment; filename="${nome}"`);
-    }
-  };
-
-  const faixa = parseRange(req.headers.range, midia.tamanho);
-
-  if (faixa) {
-    // Fatia lida direto no Postgres com substring() — o vídeo NÃO é materializado
-    // inteiro em memória, e o player mantém o seek. É o que torna viável guardar
-    // binário grande em bytea.
-    // `::int` é obrigatório: o Prisma envia número como `bigint` e o Postgres só tem
-    // `substring(bytea, integer, integer)` — sem o cast a query morre com 42883.
-    const tamanhoFaixa = faixa.fim - faixa.inicio + 1;
-    const linhas = await prisma.$queryRaw`
-      SELECT substring(conteudo from ${faixa.inicio + 1}::int for ${tamanhoFaixa}::int) AS pedaco
-      FROM schs2vet.tb_midia_arquivos
-      WHERE id = ${midia.id}
-    `;
-    const pedaco = linhas?.[0]?.pedaco;
-    if (!pedaco) return res.status(404).json({ error: 'Arquivo não encontrado' });
-
-    comuns(midia.publico);
-    res.status(206);
-    res.setHeader('Content-Range', `bytes ${faixa.inicio}-${faixa.fim}/${midia.tamanho}`);
-    res.setHeader('Content-Length', String(pedaco.length));
-    return res.end(pedaco);
-  }
-
-  const completo = await prisma.midiaArquivo.findUnique({
-    where:  { id: midia.id },
-    select: { conteudo: true },
-  });
-  if (!completo) return res.status(404).json({ error: 'Arquivo não encontrado' });
-
-  comuns(midia.publico);
-  res.setHeader('Content-Length', String(completo.conteudo.length));
-  return res.end(completo.conteudo);
-}
 
 const SELECT_META = {
   id: true, mimeType: true, nomeOriginal: true, tamanho: true,
@@ -200,6 +100,15 @@ const MidiaController = {
 
       if (!(await autorizar(req, midia))) {
         // 404, não 403: não confirma a existência do arquivo para quem não pode vê-lo.
+        // A auditoria continua registrando a TENTATIVA — o 404 esconde a informação
+        // do ATACANTE, não do gestor da empresa dona do arquivo. Fire-and-forget
+        // (nunca lança, nunca atrasa a resposta), mesmo padrão de podeOperarRegistro.
+        registrarAcessoNegado(req, {
+          motivo:   'Tentativa de acesso a arquivo fora do escopo',
+          entidade: 'MIDIA',
+          entidadeId: midia.id,
+          animalId: midia.animalId,
+        });
         return res.status(404).json({ error: 'Arquivo não encontrado' });
       }
 
@@ -236,6 +145,12 @@ const MidiaController = {
       if (!midia) return res.status(404).json({ error: 'Arquivo não encontrado' });
 
       if (!(await autorizar(req, midia))) {
+        registrarAcessoNegado(req, {
+          motivo:   'Tentativa de acesso a arquivo fora do escopo (pré-visualização)',
+          entidade: 'MIDIA',
+          entidadeId: midia.id,
+          animalId: midia.animalId,
+        });
         return res.status(404).json({ error: 'Arquivo não encontrado' });
       }
 

@@ -17,6 +17,12 @@ const podeEnviar = () => !!(process.env.EMAIL_USER && process.env.EMAIL_PASS);
 
 const emailService = {
 
+  // Checagem RÁPIDA e síncrona (sem rede) — "o SMTP está configurado?" Usada
+  // por quem gera um PDF (Puppeteer, caro) antes de tentar mandar por e-mail,
+  // para não pagar o custo do PDF só para descobrir depois que não há como
+  // enviar (mesmo padrão de WhatsAppProvider#estaProntoParaEnviar).
+  estaConfigurado: podeEnviar,
+
   // ── Código de verificação em duas etapas (2FA) ────────────────────────────
   // Falha de envio é PROPAGADA de propósito: sem o código não pode nascer sessão.
   async enviarCodigoMfa({ email, nome, codigo, validadeMin, ip }) {
@@ -526,6 +532,49 @@ const emailService = {
     console.log(`[emailService] Boas-vindas proprietário → ${destinatarioEmail}`);
   },
 
+  // ── Transferência de Propriedade — aviso informativo ao NOVO proprietário ────
+  // Sem fluxo de aprovação (a transferência é ato do GESTOR, já concluída quando
+  // este e-mail sai) — só avisa quem passou a ser dono do animal.
+  async enviarTransferenciaPropriedade({ destinatarioEmail, destinatarioNome, nomeAnimal, criadoPorNome, nomeEmpresa }) {
+    if (!podeEnviar()) {
+      console.warn('[emailService] Credenciais não configuradas — e-mail de transferência de propriedade suprimido');
+      return;
+    }
+    const appUrl = process.env.APP_URL || 'http://localhost:5173';
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      destinatarioEmail,
+      subject: `[S2Vet] ${nomeAnimal} agora está sob sua responsabilidade`,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#059669;padding:24px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:22px;font-weight:700;">🐴 S2Vet</h1>
+            <p style="color:#d1fae5;margin:4px 0 0;font-size:13px;">Sistema Hospitalar Veterinário</p>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <h2 style="color:#111827;margin-top:0;">Olá, ${destinatarioNome}!</h2>
+            <p style="color:#374151;line-height:1.6;">
+              <strong>${criadoPorNome}</strong>, de <strong>${nomeEmpresa}</strong>, registrou você como
+              o novo proprietário de <strong>${nomeAnimal}</strong>. A partir de agora você poderá
+              acompanhar os atendimentos, exames e faturas do animal pelo S2Vet.
+            </p>
+            <div style="text-align:center;margin:28px 0;">
+              <a href="${appUrl}/#/login"
+                style="display:inline-block;background:#059669;color:white;text-decoration:none;padding:14px 32px;border-radius:12px;font-weight:700;font-size:15px;">
+                Acessar o S2Vet
+              </a>
+            </div>
+            <p style="color:#9ca3af;font-size:11px;border-top:1px solid #e5e7eb;padding-top:16px;margin-bottom:0;">
+              Este é um e-mail informativo. Se você já tinha conta no S2Vet, use seu login de sempre.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`[emailService] Transferência de propriedade → ${destinatarioEmail}`);
+  },
+
   // ── Envio de plano de dieta com PDF anexado ───────────────────────────────
   async enviarDieta({ emailDestinatario, nomeProprietario, nomeAnimal, planoNome, pdfBase64 }) {
     if (!podeEnviar()) {
@@ -1002,6 +1051,48 @@ const emailService = {
       `,
     });
     console.log(`[emailService] Lembrete D-1 → ${proprietarioEmail}`);
+  },
+
+  // ── Link público de fatura (envio por e-mail — ver lib/faturaLinkPublico.js) ──
+  // NUNCA anexa o PDF: manda o LINK. Sem segundo fator (capability URL pura,
+  // decisão do usuário em 2026-09-11) — toda a segurança está no token de 64
+  // caracteres embutido na URL.
+  async enviarLinkFatura({ proprietarioEmail, proprietarioNome, assunto, corpo, url }) {
+    if (!podeEnviar()) return;
+
+    await createTransporter().sendMail({
+      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      to:      proprietarioEmail,
+      subject: assunto || `[S2Vet] Sua fatura está disponível`,
+      text:    `${corpo ? corpo + '\n\n' : ''}Abra sua fatura em: ${url}`,
+      html: `
+        <div style="font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#059669;padding:24px 32px;border-radius:12px 12px 0 0;">
+            <h1 style="color:white;margin:0;font-size:22px;font-weight:700;">🐴 S2Vet</h1>
+            <p style="color:#d1fae5;margin:4px 0 0;font-size:13px;">Sua fatura está disponível</p>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <p style="color:#374151;font-size:16px;line-height:1.6;margin-top:0;">
+              Olá, <strong>${proprietarioNome}</strong>!
+            </p>
+            ${corpo ? `<p style="color:#374151;line-height:1.6;">${corpo}</p>` : ''}
+
+            <div style="text-align:center;margin:24px 0;">
+              <a href="${url}"
+                 style="background:#059669;color:white;padding:12px 28px;border-radius:8px;
+                        text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
+                Abrir Fatura →
+              </a>
+            </div>
+
+            <p style="color:#9ca3af;font-size:11px;border-top:1px solid #e5e7eb;padding-top:16px;margin:16px 0 0;">
+              S2Vet — Sistema Hospitalar Veterinário. Não responda este email.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`[emailService] Link de fatura → ${proprietarioEmail}`);
   },
 };
 

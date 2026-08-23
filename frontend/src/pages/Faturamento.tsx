@@ -14,7 +14,7 @@ import {
   Pencil, Check, X, RefreshCw, Receipt,
   CheckCircle2, Download, Printer, ChevronDown, MessageCircle, Mail,
 } from 'lucide-react';
-import { imprimirFatura, exportarFaturaCSV, compartilharFatura } from '../utils/FaturaExport';
+import { imprimirFatura, exportarFaturaCSV, gerarHtmlFatura } from '../utils/FaturaExport';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import InlineError from '../components/InlineError';
 import FotoAnimal from '../components/FotoAnimal';
@@ -237,8 +237,9 @@ function foneIntl(phone?: string): string {
 }
 
 function montarTextoFatura(fatura: Fatura, prop: ProprietarioItem): string {
+  const nomeDestinatario = prop.fullName;
   return [
-    `*Fatura — ${prop.fullName}*`,
+    `*Fatura — ${nomeDestinatario}*`,
     fatura.mesReferencia ? `Mês: ${formatMes(fatura.mesReferencia)}` : '',
     `Ref: INV-${String(fatura.id).padStart(3, '0')}`,
     `Total: ${formatBRL(fatura.total)}`,
@@ -883,16 +884,73 @@ function PainelFatura({
   };
 
   const [compartilhando, setCompartilhando] = useState(false);
+  const [enviandoEmail,  setEnviandoEmail]  = useState(false);
 
+  // Opções comuns ao envio por WhatsApp/e-mail (PDF real, via
+  // utils/compartilharPdf.ts) — mesmo HTML do botão Imprimir (gerarHtmlFatura).
+  const opcoesCompartilhar = () => {
+    if (!fatura) return null;
+    const inv         = `INV-${String(fatura.id).padStart(3, '0')}`;
+    const nomeDestino = prop.fullName;
+    return {
+      gerarHtml:   () => gerarHtmlFatura(fatura, prop.animais, logoUrl),
+      nomeArquivo: `fatura-${inv}-${nomeDestino.replace(/\s+/g, '-')}.pdf`,
+      texto:       montarTextoFatura(fatura, prop),
+      titulo:      `Fatura — ${nomeDestino}`,
+    };
+  };
+
+  // Envio por WhatsApp/e-mail passou a mandar um LINK (não o PDF anexado — ver
+  // lib/faturaLinkPublico.js no backend): o servidor gera o PDF, salva no
+  // storage e devolve a URL pública — um token de 64 caracteres é a única
+  // proteção (capability URL pura, sem segundo fator). Nunca mais depende do
+  // Puppeteer/upload terminarem dentro da janela de "user activation" do
+  // navegador do vet.
   const handleShare = async () => {
-    if (!fatura) return;
+    const opcoes = opcoesCompartilhar();
+    if (!fatura || !opcoes) return;
     setCompartilhando(true);
     try {
-      await compartilharFatura(fatura, prop.animais, logoUrl);
-    } catch {
-      setErroInline('Erro ao gerar PDF');
+      const r = await api.post(`/clinica/faturas/${fatura.id}/enviar-whatsapp`, {
+        html: opcoes.gerarHtml(), nomeArquivo: opcoes.nomeArquivo, texto: opcoes.texto, telefone: prop.phone,
+      });
+      const dados = r.data?.dados;
+      if (dados?.enviado) {
+        toast.success(dados.simulado ? 'Envio simulado (WhatsApp em modo de teste).' : 'Link da fatura enviado por WhatsApp.');
+      } else if (dados?.url) {
+        // WhatsApp da clínica indisponível — abre o app com o link já pronto
+        // (nada de PDF para baixar/anexar, é só texto).
+        abrirWhatsApp(`${opcoes.texto}\n\n📄 Abra a fatura: ${dados.url}`, prop.phone ?? undefined);
+        toast('WhatsApp da clínica indisponível — abrindo com o link pronto.', { icon: '🔗', duration: 5000 });
+      }
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } };
+      setErroInline(e.response?.data?.error ?? 'Erro ao enviar a fatura pelo WhatsApp.');
     } finally {
       setCompartilhando(false);
+    }
+  };
+
+  const handleEmail = async () => {
+    const opcoes = opcoesCompartilhar();
+    if (!fatura || !opcoes) return;
+    setEnviandoEmail(true);
+    try {
+      const r = await api.post(`/clinica/faturas/${fatura.id}/enviar-email`, {
+        html: opcoes.gerarHtml(), nomeArquivo: opcoes.nomeArquivo, texto: opcoes.texto, titulo: opcoes.titulo, email: prop.email,
+      });
+      const dados = r.data?.dados;
+      if (dados?.enviado) {
+        toast.success('Link da fatura enviado por e-mail.');
+      } else if (dados?.url) {
+        abrirEmail(opcoes.titulo, `${opcoes.texto}\n\nAbra a fatura: ${dados.url}`, prop.email ?? undefined);
+        toast('E-mail da clínica não configurado — abrindo com o link pronto.', { icon: '🔗', duration: 5000 });
+      }
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } };
+      setErroInline(e.response?.data?.error ?? 'Erro ao enviar a fatura por e-mail.');
+    } finally {
+      setEnviandoEmail(false);
     }
   };
 
@@ -1230,9 +1288,9 @@ function PainelFatura({
             {salvando ? <Loader2 size={11} className="animate-spin"/> : <CheckCircle2 size={11}/>} Marcar como Pago
           </button>
         )}
-        <button onClick={() => abrirEmail(`Fatura — ${prop.fullName}`, montarTextoFatura(fatura, prop), prop.email)}
-          className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 transition-colors">
-          <Mail size={13}/> E-mail
+        <button onClick={handleEmail} disabled={enviandoEmail}
+          className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 disabled:opacity-60 transition-colors">
+          {enviandoEmail ? <Loader2 size={13} className="animate-spin"/> : <Mail size={13}/>} E-mail
         </button>
         <button onClick={handleShare} disabled={compartilhando}
           className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 disabled:opacity-60 transition-colors">
@@ -1701,20 +1759,23 @@ function ModalFechamentoLote({ proprietarios, onClose, onDone }: {
               ) : (
                 <div className="space-y-2">
                   {resultado.map(f => {
-                    const texto = montarTextoFaturaLote(f.proprietario.fullName, f.mesReferencia, f.faturaId, f.total);
+                    const nomeDestino  = f.proprietario.fullName;
+                    const foneDestino  = f.proprietario.phone;
+                    const emailDestino = f.proprietario.email;
+                    const texto = montarTextoFaturaLote(nomeDestino, f.mesReferencia, f.faturaId, f.total);
                     return (
                       <div key={f.faturaId} className="flex items-center gap-2 border border-gray-100 rounded-xl px-3 py-2">
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-800 truncate">{f.proprietario.fullName}</p>
+                          <p className="text-sm font-medium text-gray-800 truncate">{nomeDestino}</p>
                           <p className="text-[11px] text-gray-400">{formatBRL(f.total)}</p>
                         </div>
-                        {f.proprietario.phone && (
-                          <button onClick={() => abrirWhatsApp(texto, foneIntl(f.proprietario.phone))}
+                        {foneDestino && (
+                          <button onClick={() => abrirWhatsApp(texto, foneIntl(foneDestino))}
                             className="flex items-center gap-1 px-2.5 py-1 bg-[#25D366] hover:bg-[#20BA5A] text-white rounded-lg text-xs font-semibold transition-colors">
                             <MessageCircle size={12}/> WhatsApp
                           </button>
                         )}
-                        <button onClick={() => abrirEmail(`Fatura — ${f.proprietario.fullName}`, texto, f.proprietario.email)}
+                        <button onClick={() => abrirEmail(`Fatura — ${nomeDestino}`, texto, emailDestino)}
                           className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-lg text-xs font-semibold transition-colors">
                           <Mail size={12}/> E-mail
                         </button>

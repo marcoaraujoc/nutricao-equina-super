@@ -3,6 +3,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { registrarAuditoria } = require('../lib/auditoria');
+const { garantirMedicamentoDaEmpresa } = require('../lib/catalogoManual');
 
 const INCLUDE = {
   vias: { select: { id: true, via: true }, orderBy: { via: 'asc' } },
@@ -374,6 +375,56 @@ const excluir = async (req, res) => {
 // de estoque (criarReservas / consumirReservas / verificarEstoqueParaDia fazem
 // continue quando !estoque), portanto nenhuma mudança de fluxo é necessária.
 
+// POST /medicamentos/garantir — cadastra (ou reaproveita) um MEDICAMENTO ou VACINA
+// digitado à mão nas telas de atendimento (Prescrição já resolve isso na hora de
+// salvar, via `garantirMedicamentoDaEmpresa` — ver PrescricaoGrupoController.js; a
+// Vacina PRECISA do id ANTES de salvar, porque a tela dela já usa o id para buscar
+// lote/estoque/via no mesmo clique, então este endpoint devolve o item já pronto no
+// formato que os dois comboboxes esperam de `/medicamentos/para-atendimento`).
+//
+// O item nasce PRIVADO da empresa do contexto ativo — `empresaId` não nulo em
+// `lib/catalogoManual.js` — e só ela o vê nas próprias buscas dali em diante (o
+// catálogo global, ADMIN-only, nunca é tocado por aqui).
+const garantirCatalogoManual = async (req, res) => {
+  try {
+    const { nome, tipo = 'medicamento', animalId, unidade } = req.body;
+    const n = String(nome ?? '').trim();
+    if (!n) return res.status(400).json({ error: 'Nome é obrigatório.' });
+    if (!animalId) return res.status(400).json({ error: 'animalId é obrigatório.' });
+
+    const animal = await prisma.animal.findUnique({
+      where:  { id: Number(animalId) },
+      select: { especieId: true },
+    });
+    if (!animal) return res.status(404).json({ error: 'Animal não encontrado.' });
+
+    const isVacina = tipo === 'vacina';
+    const id = await garantirMedicamentoDaEmpresa(prisma, {
+      nome:       n,
+      unidade,
+      vacina:     isVacina,
+      especieIds: animal.especieId ? [animal.especieId] : [],
+    }, req.empresaId ?? null);
+
+    // Mesmo formato de `paraAtendimento` — o front trata o resultado como mais um
+    // item da lista, sem precisar de um tipo/caminho de dado à parte.
+    const criado = await prisma.medicamento.findUnique({
+      where:   { id },
+      include: { vias: { select: { id: true, via: true }, orderBy: { via: 'asc' } } },
+    });
+    return res.status(201).json({
+      dados: {
+        id: criado.id, nome: criado.nome, formaFarmaceutica: criado.formaFarmaceutica,
+        unidade: criado.unidade, vias: criado.vias,
+        emEstoque: false, qtdEstoque: null, precoUnitarioBase: null, valorPorDose: null,
+      },
+    });
+  } catch (err) {
+    console.error('MedicamentoController.garantirCatalogoManual:', err);
+    return res.status(500).json({ error: 'Erro ao cadastrar item no catálogo.' });
+  }
+};
+
 const paraAtendimento = async (req, res) => {
   try {
     const { animalId, tipo = 'medicamento', busca } = req.query;
@@ -476,4 +527,4 @@ const paraAtendimento = async (req, res) => {
   }
 };
 
-module.exports = { listar, listarVacinas, listarEspecies, obterPorId, criar, atualizar, excluir, paraAtendimento };
+module.exports = { listar, listarVacinas, listarEspecies, obterPorId, criar, atualizar, excluir, paraAtendimento, garantirCatalogoManual };

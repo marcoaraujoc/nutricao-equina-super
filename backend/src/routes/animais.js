@@ -6,7 +6,7 @@ const multer           = require('multer');
 const path             = require('path');
 const { authenticate }                        = require('../middlewares/auth.js');
 const { tenantRls }                           = require('../middlewares/tenantRls');
-const { checkPermission }                     = require('../middlewares/permissao.middleware');
+const { checkPermission, resolverContextoPermissao } = require('../middlewares/permissao.middleware');
 const animalController                        = require('../controllers/AnimalController');
 const validate                                = require('../middlewares/validate');
 const { createAnimalRules, animalIdParam }    = require('../validators/animal.validators');
@@ -85,6 +85,16 @@ router.patch('/:id/ativar', authenticate, checkPermission('animais.ativar', 'PRO
 router.patch('/:id/reativar', authenticate, checkPermission('animais.ativar', 'PROPRIO'), animalIdParam, validate, animalController.reativarExcluido);
 
 
+
+// POST /api/animais/:id/transferir-propriedade → troca o dono do animal
+// (Doação/Venda/Aluguel). Sem checkPermission de slug único — regra BASAL,
+// gate real é "sou gestor?" dentro do controller (mesmo padrão de
+// ExportacaoController/routes/exportacao.js). `resolverContextoPermissao` só
+// popula req.equipeId/req.membroCargo, nunca responde 403 sozinho.
+const comContextoTransferencia = async (req, _res, next) => {
+  try { await resolverContextoPermissao(req); next(); } catch (err) { next(err); }
+};
+router.post('/:id/transferir-propriedade', authenticate, comContextoTransferencia, tenantRls, animalIdParam, validate, animalController.transferirPropriedade);
 
 // ⚠️ ROTAS DE VÍNCULO REMOVIDAS na fase 3 do multi-tenancy
 // (docs/MULTI-TENANCY-PLANO.md §6). Não existem mais vínculos nem aprovações entre

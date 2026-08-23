@@ -919,6 +919,7 @@ export default function MapaAtendimento() {
       {execModal && (
         <ModalExecucao
           grupo={execModal}
+          dataRef={dataFiltro}
           soVisualizacao={!isHoje}
           onClose={() => { setExecModal(null); carregar(); }}
           podeCancelar={isGestor || podeExecutar('enfermagem.prescricao.deletar')}

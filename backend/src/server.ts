@@ -177,6 +177,8 @@ const dietasRoutes             = require('./routes/dietas');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const documentosRoutes         = require('./routes/documentos');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+const faturaPublicaRoutes      = require('./routes/faturaPublica');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const examesRoutes             = require('./routes/exames');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const analiseRoutes            = require('./routes/analise');
@@ -264,6 +266,8 @@ const orcamentosRoutes         = require('./routes/orcamentos');
 const buscaRoutes              = require('./routes/busca');
 const midiaRoutes              = require('./routes/midia');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+const exportacaoRoutes         = require('./routes/exportacao');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { TETO_ARQUIVO_BYTES }   = require('./storage');
 
 // ===================== MONTAGEM DAS ROTAS =====================
@@ -272,6 +276,7 @@ app.use('/api/animais',               animaisRoutes);
 app.use('/api/alimentos',             alimentosRoutes);
 app.use('/api/dietas',                dietasRoutes);
 app.use('/api/documentos',            documentosRoutes); // envio genérico de PDF por WhatsApp/e-mail
+app.use('/api/fatura-publica',        faturaPublicaRoutes); // link público do PDF da fatura — SEM authenticate
 app.use('/api/exames',                examesRoutes);
 app.use('/api/analise',               analiseRoutes);
 app.use('/api/audit',                 auditRoutes);
@@ -319,6 +324,7 @@ app.use('/api/relatorios',            relatoriosGerenciaisRoutes);
 app.use('/api/monitoracao',           monitoracaoRoutes);
 app.use('/api/busca',                 buscaRoutes); // busca global do header
 app.use('/api/midia',                 midiaRoutes); // download AUTORIZADO de arquivo (substitui /uploads)
+app.use('/api/admin/exportacao',      exportacaoRoutes); // Administração > Exportação de prontuário
 // Marca do PRODUTO — pública por necessidade (aparece na tela de login, antes de haver
 // sessão). Rota SEPARADA e sem parâmetro: não recebe chave do cliente, então não serve
 // para alcançar arquivo de paciente.

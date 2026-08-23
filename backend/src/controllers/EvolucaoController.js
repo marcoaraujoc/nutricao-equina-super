@@ -9,6 +9,7 @@ const { animalEstaInativo } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const { storage } = require('../storage');
 const { escopoEvolucaoWhere }   = require('../lib/clinicalScope');
+const { corteDePropriedade }    = require('../lib/animalPropriedadeCorte');
 // Rastro de "assumido de quem" no agendamento arrastado junto (SQL cru)
 const { marcarAssumido }        = require('../lib/agendamentoAssumido');
 const { formatAtendimentoNum, lancarExameNaFatura } = require('../lib/faturaUtils');
@@ -182,6 +183,16 @@ const EvolucaoController = {
 
       // Segregação multi-clínica: cada empresa vê só as próprias evoluções do animal
       where.AND = [escopoEvolucaoWhere(req)];
+
+      // Transferência de Propriedade — o PROPRIETÁRIO atual só vê o que foi gerado
+      // a partir de `propriedadeDesde`; intersecta com o filtro de data que a tela
+      // já pode ter mandado (nunca afrouxa um `gte` mais restritivo do usuário).
+      const animalCorte = await prisma.animal.findUnique({ where: { id: Number(animalId) }, select: { propriedadeDesde: true } });
+      const corte = corteDePropriedade(req, animalCorte);
+      if (corte) {
+        where.dataInicio = where.dataInicio || {};
+        if (!where.dataInicio.gte || corte > where.dataInicio.gte) where.dataInicio.gte = corte;
+      }
 
       const [evolucoes, total] = await Promise.all([
         prisma.evolucaoClinica.findMany({

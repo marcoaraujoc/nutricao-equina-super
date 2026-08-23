@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Pencil, Ban, CheckCircle2, X, Loader2,
   ChevronLeft, ChevronRight, ChevronDown, Pill, Activity,
-  Clock, Search, FileText, Eye, Printer, Lock, MessageCircle, Mail, Receipt,
+  Clock, Search, FileText, Eye, Printer, Lock, MessageCircle, Mail, Receipt, Plus,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
@@ -185,6 +185,12 @@ const FREQUENCIAS_SEM_HORARIO = new Set(['agora', 'SOS', 'seNecessario']);
 // (INTERVALO_DIAS) nunca exige: a cadência é o que importa, não a hora do dia.
 const precisaHoraInicio = (frequencia: string): boolean =>
   !!frequencia && !FREQUENCIAS_SEM_HORARIO.has(frequencia) && !INTERVALO_DIAS[frequencia];
+
+// Frequências com MAIS DE UMA dose no MESMO dia — "Uma vez ao dia" fica de fora
+// de propósito: a próxima dose é só amanhã, então iniciar num horário que já
+// passou hoje não deixa nada "atrasado" na hora do cadastro. Já "de 4 em 4h"
+// (etc.) começando num horário passado nasceria com a 1ª dose já vencida.
+const FREQUENCIAS_MESMO_DIA = new Set(['12em12h', '8em8h', '6em6h', '4em4h', '1em1h']);
 
 // Rótulo do campo por frequência — "1x por semana" fala em SEMANAS (1 dose por
 // semana, então nº de semanas == nº de vezes); as demais usam o genérico "vezes".
@@ -623,6 +629,19 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     setForm({ ...FORM_VAZIO(), tipo: form.tipo });
   };
 
+  // Medicamento DIGITADO À MÃO, sem correspondência no catálogo (mesma lógica que o
+  // Procedimento já tem via texto livre) — o item nasce sem `medicamentoCatId`; ao
+  // salvar, o backend cadastra (ou reaproveita) uma entrada PRIVADA da empresa com
+  // esse nome (lib/catalogoManual.js), então da próxima vez ele já aparece na busca.
+  // Sem catálogo, via/unidade caem no `select` manual — mesmo fallback que já existe
+  // quando `medicamentoCatId` é null (ver `viasDisponiveis`/`unidadeCatalogo` abaixo).
+  const criarMedicamentoLivre = (nome: string) => {
+    setErroAcao(null);
+    setForm({ ...FORM_VAZIO(), tipo: form.tipo, medicamento: nome, medicamentoCatId: null });
+    setShowMedDropdown(false);
+    setMedBusca('');
+  };
+
   // Limpa apenas o tipo que acabou de ser inserido; preserva o backup do outro tipo
   const clearCurrentType = () => {
     const tipo = form.tipo;
@@ -808,6 +827,20 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     if (precisaHoraInicio(form.frequencia) && !form.horaInicio.trim()) {
       setErroInline('Hora Início é obrigatória para esta frequência', ['horaInicio']);
       return false;
+    }
+    // Começando HOJE, a hora não pode já ter passado — senão a 1ª dose nasce
+    // atrasada antes mesmo de a prescrição ser salva. Só na CRIAÇÃO do item: um
+    // item já existente (local ou salvo) pode ter sido cadastrado horas atrás e
+    // continuar com o mesmo horário — reeditar outro campo dele (dosagem, via...)
+    // não pode ficar bloqueado só porque o relógio andou depois do cadastro.
+    const criandoItemNovo = editingLocalIdx === null && editingServerId === null;
+    if (criandoItemNovo && FREQUENCIAS_MESMO_DIA.has(form.frequencia) && form.horaInicio.trim() && form.dataInicio === hojeLocalStr()) {
+      const agora = new Date();
+      const horaAtual = `${String(agora.getHours()).padStart(2, '0')}:${String(agora.getMinutes()).padStart(2, '0')}`;
+      if (form.horaInicio < horaAtual) {
+        setErroInline('Hora Início não pode ser anterior ao horário atual', ['horaInicio']);
+        return false;
+      }
     }
     if (!form.dataInicio.trim()) {
       setErroInline('Data de início é obrigatória', ['dataInicio']); return false;
@@ -1160,9 +1193,17 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
   // Conteúdo reutilizável do dropdown de medicamentos (usado em 2 layouts distintos)
   const renderMedList = () => {
-    if (loadingMeds && !backgroundSearching && medicamentos.length === 0)
+    const termo = medBusca.trim();
+    // "Cadastrar novo" só aparece quando o texto digitado não bate EXATAMENTE com
+    // nenhum item já existente — evita convidar a criar duplicata de algo que já
+    // está na lista (a pessoa clica no item de verdade, não recadastra).
+    const temCorrespondenciaExata = termo !== '' &&
+      medicamentos.some(m => m.nome.toLowerCase() === termo.toLowerCase());
+    const mostraCriarNovo = termo !== '' && !temCorrespondenciaExata;
+
+    if (loadingMeds && !backgroundSearching && medicamentos.length === 0 && !mostraCriarNovo)
       return <div className="flex justify-center py-3"><Loader2 size={14} className="animate-spin text-emerald-500" /></div>;
-    if (medicamentos.length === 0 && !backgroundSearching)
+    if (medicamentos.length === 0 && !backgroundSearching && !mostraCriarNovo)
       return <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum medicamento encontrado</p>;
     const onSelect = (m: MedicamentoCat) => {
       selecionarMedicamento(m);
@@ -1190,6 +1231,13 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
             }
           </button>
         ))}
+        {mostraCriarNovo && (
+          <button type="button" onMouseDown={() => criarMedicamentoLivre(termo)}
+            className="w-full text-left px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 transition-colors flex items-center gap-1.5 font-medium">
+            <Plus size={13} className="flex-shrink-0" />
+            Cadastrar "{termo}" como novo medicamento
+          </button>
+        )}
       </>
     );
   };

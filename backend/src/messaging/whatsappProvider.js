@@ -35,6 +35,21 @@ class WhatsAppProvider {
   async enviarDocumento(msg) {
     throw new Error('WhatsAppProvider.enviarDocumento não implementado');
   }
+
+  /**
+   * Pré-checagem RÁPIDA e barata — "dá pra mandar algo pra esta clínica agora?"
+   * SEM gerar PDF nem preparar arquivo nenhum. Quem chama `enviarDocumento` usa
+   * isto ANTES de pagar o custo do PDF (Puppeteer sobe um Chromium do zero a
+   * cada chamada — não é rápido): sem instância conectada, gerar o PDF só para
+   * descartar o resultado é desperdício e, no chamador, atraso que pode custar
+   * o gesto do usuário que abriria o WhatsApp no fallback manual.
+   * @param {{ empresaId?: number, equipeId?: number }} escopo
+   * @returns {Promise<boolean>}
+   */
+  // eslint-disable-next-line no-unused-vars
+  async estaProntoParaEnviar(escopo) {
+    return true;
+  }
 }
 
 /** Provider padrão — não envia nada, apenas registra no log (base pronta). */
@@ -87,6 +102,17 @@ class EvolutionWhatsAppProvider extends WhatsAppProvider {
     );
     if (!res.sucesso) logger.warn(`[WhatsApp:evolution] Envio de documento falhou (${res.erro}) para=${para}`);
     return res;
+  }
+
+  async estaProntoParaEnviar({ empresaId, equipeId } = {}) {
+    if (!empresaId) return false;
+    const whatsappService = require('../services/whatsappService');
+    try {
+      const { status } = await whatsappService.obterStatus(empresaId, equipeId ?? null);
+      return status === 'CONECTADO';
+    } catch {
+      return false;
+    }
   }
 }
 
