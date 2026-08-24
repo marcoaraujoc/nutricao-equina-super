@@ -70,7 +70,15 @@ async function htmlParaPdf(html) {
     await page.setContent(html, { waitUntil: 'domcontentloaded' });
     return await page.pdf({
       format: 'A4',
-      printBackground: true,
+      // `printBackground: false` (o padrão do próprio Puppeteer) — de propósito
+      // IGUAL ao "Imprimir → Salvar como PDF" do navegador, que por padrão NÃO
+      // imprime cor de fundo (só quem marca "gráficos de segundo plano" no
+      // diálogo vê a diferença). Com `true`, o MESMO HTML (gerarHtmlFatura,
+      // fonte única) saía com o cabeçalho verde preenchido e selos coloridos
+      // SÓ nesta rota (WhatsApp/e-mail/link) — nunca na impressão, que é o
+      // layout de referência. Manter os dois padrões IDÊNTICOS é o que faz
+      // "é o mesmo componente" ser verdade no resultado, não só no código.
+      printBackground: false,
       margin: { top: '12mm', right: '10mm', bottom: '12mm', left: '10mm' },
     });
   } finally {

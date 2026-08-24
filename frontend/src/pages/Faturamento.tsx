@@ -13,11 +13,14 @@ import {
   DollarSign, Search, Loader2, Trash2,
   Pencil, Check, X, RefreshCw, Receipt,
   CheckCircle2, Download, Printer, ChevronDown, MessageCircle, Mail,
+  Link2, Ban, Eye,
 } from 'lucide-react';
 import { imprimirFatura, exportarFaturaCSV, gerarHtmlFatura } from '../utils/FaturaExport';
+import { carregarComoDataUri } from '../utils/printUrl';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import InlineError from '../components/InlineError';
 import FotoAnimal from '../components/FotoAnimal';
+import ConfirmModal from '../components/ConfirmModal';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -49,6 +52,16 @@ interface Fatura {
 
 interface FaturaResumo {
   id: number; total: number; status: FaturaStatus; mesReferencia?: string;
+}
+
+// Link público de fatura (WhatsApp/e-mail) — GET /clinica/faturas/:id/links.
+type LinkStatus = 'PENDENTE' | 'ENVIADO' | 'FALHOU' | 'FALHOU_DEFINITIVO';
+interface FaturaLink {
+  id: number; canal: 'WHATSAPP' | 'EMAIL' | null; destino: string | null;
+  status: LinkStatus; tentativas: number; ultimoErro?: string | null;
+  enviadoEm?: string | null; proximaTentativaEm?: string | null;
+  revogadoEm?: string | null; ultimoAcessoEm?: string | null; qtdAcessos: number;
+  expiraEm: string; criadoEm: string;
 }
 
 interface ProprietarioItem {
@@ -854,10 +867,23 @@ function PainelFatura({
 
   // Logo da empresa/equipe do proprietário para PDF/impressão/compartilhamento —
   // busca best-effort, nunca bloqueia a tela (fallback: marca S2Vet no template).
+  //
+  // Convertida para `data:` URI aqui, e não deixada como caminho (`/api/midia/..`):
+  // o MESMO html de `gerarHtmlFatura` vira PDF tanto na impressão AO VIVO do
+  // navegador quanto no PDF gerado pelo SERVIDOR (WhatsApp/e-mail/link público,
+  // via Puppeteer) — e o Puppeteer BLOQUEIA qualquer requisição que não seja
+  // `data:` (proteção contra SSRF). Sem isto, a logo aparecia na impressão e
+  // vinha QUEBRADA em todo PDF enviado/compartilhado. Ver utils/printUrl.ts.
   useEffect(() => {
+    let cancelado = false;
     api.get(`/clinica/faturas/proprietario/${prop.id}/logo-empresa`)
-      .then(res => setLogoUrl(res.data?.dados?.logoUrl ?? null))
-      .catch(() => setLogoUrl(null));
+      .then(async res => {
+        const bruto = res.data?.dados?.logoUrl ?? null;
+        const dataUri = await carregarComoDataUri(bruto);
+        if (!cancelado) setLogoUrl(dataUri);
+      })
+      .catch(() => { if (!cancelado) setLogoUrl(null); });
+    return () => { cancelado = true; };
   }, [prop.id]);
 
   useEffect(() => {
@@ -952,6 +978,59 @@ function PainelFatura({
     } finally {
       setEnviandoEmail(false);
     }
+  };
+
+  // Links públicos já enviados desta fatura (WhatsApp/e-mail) — painel
+  // colapsável, carregado sob demanda (não polui a tela por padrão).
+  const [mostrarLinks,  setMostrarLinks]  = useState(false);
+  const [links,         setLinks]         = useState<FaturaLink[] | null>(null);
+  const [carregandoLinks, setCarregandoLinks] = useState(false);
+  const [linkParaRevogar, setLinkParaRevogar] = useState<FaturaLink | null>(null);
+  const [revogando, setRevogando] = useState(false);
+
+  const carregarLinks = useCallback(async () => {
+    if (!fatura) return;
+    setCarregandoLinks(true);
+    try {
+      const r = await api.get(`/clinica/faturas/${fatura.id}/links`);
+      if (r.data) setLinks(r.data.dados ?? []);
+    } catch {
+      // silencioso — o painel é opcional, não trava o resto da tela
+    } finally {
+      setCarregandoLinks(false);
+    }
+  }, [fatura]);
+
+  const toggleLinks = () => {
+    const abrindo = !mostrarLinks;
+    setMostrarLinks(abrindo);
+    if (abrindo && links === null) carregarLinks();
+  };
+
+  const confirmarRevogar = async () => {
+    if (!fatura || !linkParaRevogar) return;
+    setRevogando(true);
+    try {
+      await api.patch(`/clinica/faturas/${fatura.id}/links/${linkParaRevogar.id}/revogar`);
+      toast.success('Link revogado.');
+      await carregarLinks();
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } };
+      toast.error(e.response?.data?.error ?? 'Erro ao revogar o link.');
+    } finally {
+      setRevogando(false);
+      setLinkParaRevogar(null);
+    }
+  };
+
+  const LINK_STATUS_LABEL: Record<LinkStatus, string> = {
+    PENDENTE: 'Enviando…', ENVIADO: 'Enviado', FALHOU: 'Tentando de novo', FALHOU_DEFINITIVO: 'Falhou',
+  };
+  const LINK_STATUS_CLS: Record<LinkStatus, string> = {
+    PENDENTE: 'bg-amber-50 text-amber-700 border-amber-200',
+    ENVIADO: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    FALHOU: 'bg-amber-50 text-amber-700 border-amber-200',
+    FALHOU_DEFINITIVO: 'bg-red-50 text-red-700 border-red-200',
   };
 
   // Formulário de novo item
@@ -1296,6 +1375,10 @@ function PainelFatura({
           className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 disabled:opacity-60 transition-colors">
           {compartilhando ? <Loader2 size={13} className="animate-spin"/> : <MessageCircle size={13}/>} WhatsApp
         </button>
+        <button onClick={toggleLinks}
+          className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 transition-colors">
+          <Link2 size={13}/> Links enviados
+        </button>
         <button onClick={handlePDF}
           className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 transition-colors">
           <Printer size={13}/> Imprimir
@@ -1315,6 +1398,63 @@ function PainelFatura({
           )}
         </div>
       </div>
+
+      {/* Links públicos enviados (WhatsApp/e-mail) — colapsável, sob demanda */}
+      {mostrarLinks && (
+        <div className="mb-3 flex-shrink-0 bg-white border border-gray-200 rounded-xl p-3">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-semibold text-gray-600">Links enviados</p>
+            {carregandoLinks && <Loader2 size={13} className="animate-spin text-gray-400" />}
+          </div>
+          {links !== null && links.length === 0 && !carregandoLinks && (
+            <p className="text-xs text-gray-400">Nenhum link enviado ainda.</p>
+          )}
+          {links !== null && links.length > 0 && (
+            <div className="space-y-1.5">
+              {links.map((l) => {
+                const ativo = !l.revogadoEm && new Date(l.expiraEm).getTime() > Date.now();
+                return (
+                  <div key={l.id} className="flex items-center justify-between gap-2 text-xs border border-gray-100 rounded-lg px-2.5 py-1.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {l.canal === 'WHATSAPP' ? <MessageCircle size={12} className="text-emerald-600 flex-shrink-0"/> : <Mail size={12} className="text-blue-600 flex-shrink-0"/>}
+                      <span className="truncate text-gray-700">{l.destino ?? '—'}</span>
+                      <span className={`px-1.5 py-0.5 rounded-full border font-semibold flex-shrink-0 ${LINK_STATUS_CLS[l.status]}`}>
+                        {LINK_STATUS_LABEL[l.status]}
+                      </span>
+                      {l.revogadoEm && (
+                        <span className="px-1.5 py-0.5 rounded-full border border-gray-200 bg-gray-100 text-gray-500 font-semibold flex-shrink-0">Revogado</span>
+                      )}
+                      {l.qtdAcessos > 0 && (
+                        <span className="flex items-center gap-0.5 text-gray-400 flex-shrink-0" title="Vezes que o cliente abriu">
+                          <Eye size={11}/> {l.qtdAcessos}
+                        </span>
+                      )}
+                    </div>
+                    {ativo && (
+                      <button
+                        onClick={() => setLinkParaRevogar(l)}
+                        className="flex items-center gap-1 text-red-600 hover:text-red-700 font-semibold flex-shrink-0"
+                      >
+                        <Ban size={12}/> Revogar
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      <ConfirmModal
+        open={!!linkParaRevogar}
+        titulo="Revogar link da fatura?"
+        mensagem={`O link enviado para "${linkParaRevogar?.destino ?? ''}" para de funcionar imediatamente — quem já tiver aberto não consegue mais acessar a fatura por ele.`}
+        labelConfirmar={revogando ? 'Revogando…' : 'Revogar'}
+        variante="perigo"
+        onConfirmar={confirmarRevogar}
+        onCancelar={() => setLinkParaRevogar(null)}
+      />
 
       {/* Modal — itens "Outros" aprovados no orçamento → fatura */}
       {showImportOrc && (

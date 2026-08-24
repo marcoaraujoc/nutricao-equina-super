@@ -19,6 +19,7 @@ const { comTenant } = require('../lib/tenantDb');
 const { getWhatsAppProvider } = require('../messaging/whatsappProvider');
 const { aplicarPerfilEmLista } = require('../lib/profissionalPerfil');
 const { elegivelParaFluxoNovo, dosesTotaisEsperadas } = require('../lib/agendaDoses');
+const { fusoDaEmpresa, formatarHoraNaEmpresa } = require('../lib/fusoEmpresa');
 
 const MINUTO_MS = 60 * 1000;
 const JANELA_MIN = 15;
@@ -30,9 +31,11 @@ function foneIntl(phone) {
   return d.startsWith('55') ? d : `55${d}`;
 }
 
-function montarTexto(item, animalNome) {
-  const d    = new Date(item.proximaDoseEm);
-  const hora = d.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
+// 🔴 O horário sai no FUSO DA CLÍNICA, não em `America/Sao_Paulo` fixo. A mensagem
+// vai para o WhatsApp de quem vai aplicar a dose: para uma equipe em Manaus (UTC−4),
+// o texto anunciava a dose 1h adiantada em relação ao relógio dela.
+function montarTexto(item, animalNome, fuso) {
+  const hora = formatarHoraNaEmpresa(item.proximaDoseEm, fuso);
   return `Faltam ${JANELA_MIN} minutos para a próxima dose de ${item.medicamento} de ${animalNome} (às ${hora}).`;
 }
 
@@ -54,12 +57,17 @@ async function enviarPara(provider, telefone, texto, contexto) {
 async function enviarLembretesDosePrescricao(empresaId, agora = new Date()) {
   const provider = getWhatsAppProvider();
   const limite = new Date(agora.getTime() + JANELA_MIN * MINUTO_MS);
+  const fuso   = await fusoDaEmpresa(empresaId);
 
   // 1. LEITURA — transação curta, com o tenant carimbado.
   const itens = await comTenant(empresaId, (tx) => tx.prescricao.findMany({
     where: {
       ativo:      true,
-      horaInicio: { not: null },
+      // 🔴 `horaInicio: { not: null }` saiu daqui (2026-08-23): Hora Início virou
+      // opcional e o item sem ela ganha horário real assim que a 1ª dose é dada.
+      // Quem prova que existe horário agendado é `proximaDoseEm` — que é também o
+      // valor exibido no texto do aviso (`montarTexto`). Filtrar por `horaInicio`
+      // deixaria justamente o curso já em andamento sem lembrete.
       frequencia: { notIn: ['agora', 'SOS', 'seNecessario'] },
       aplicadaPeloProprietario: false,
       proximaDoseEm: { gte: agora, lte: limite },
@@ -85,7 +93,7 @@ async function enviarLembretesDosePrescricao(empresaId, agora = new Date()) {
     if (jaAvisado) continue;
 
     const animalNome = item.animal?.nome ?? `paciente #${item.animalId}`;
-    const texto       = montarTexto(item, animalNome);
+    const texto       = montarTexto(item, animalNome, fuso);
     const contexto     = { prescricaoId: item.id, empresaId, equipeId: item.animal?.equipeId ?? null };
 
     // "Toda a equipe": todos os membros das equipes da empresa (ou só a do animal,

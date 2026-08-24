@@ -10,6 +10,9 @@ const { buildAnimalScopeWhere }                   = require('../lib/animalScope'
 const { filhoDeAnimalVisivel, animalVisivelNaEmpresa } = require('../lib/visibilidade');
 const { formatAtendimentoNum }                    = require('../lib/faturaUtils');
 const { registrarAuditoria, registrarTransferencia, registrarAlteracao } = require('../lib/auditoria');
+const {
+  fusoDaEmpresa, FUSO_PADRAO, formatarDataNaEmpresa, formatarHoraNaEmpresa,
+} = require('../lib/fusoEmpresa');
 // Assumir/transferir a agenda arrasta a evolução aberta e tudo que está sob ela
 const { transferirEvolucoesDoAgendamento }        = require('../lib/transferenciaAtendimento');
 const emailService                                = require('../services/emailService');
@@ -162,15 +165,19 @@ async function notificarTransferencia({ req, paraVetId, deVetId, itens, modo = '
       ]);
       if (!destino) return;
 
+      // Horário no fuso da CLÍNICA — a mensagem (e-mail E WhatsApp) vai para quem
+      // vai atender, que está na praça da clínica, não em Brasília.
+      const fusoMsg = await fusoDaEmpresa(req?.empresaId).catch(() => FUSO_PADRAO);
+
       await emailService.enviarTransferenciaAgenda({
         paraEmail: destino.email, paraNome: destino.fullName,
         deNome:    origem?.fullName ?? null,
-        itens, modo,
+        itens, modo, fuso: fusoMsg,
       }).catch(() => {});
 
       if (!destino.phone) return;
-      const fmtData = (dh) => new Date(dh).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' });
-      const fmtHora = (dh) => new Date(dh).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+      const fmtData = (dh) => formatarDataNaEmpresa(dh, fusoMsg);
+      const fmtHora = (dh) => formatarHoraNaEmpresa(dh, fusoMsg);
       const linhas  = itens.slice(0, 10)
         .map(i => `• ${fmtHora(i.dataHora)} — ${i.animalNome ?? 'Paciente'}`);
       if (itens.length > 10) linhas.push(`• +${itens.length - 10} atendimento(s)`);
@@ -214,6 +221,11 @@ async function notificarGestoresForaExpediente({ req, empresaId, quemAssumiuNome
         where:   { equipe: { empresaId: Number(empresaId) }, cargo: 'GESTOR' },
         include: { user: { select: { id: true, email: true, fullName: true, phone: true } } },
       });
+      // Fuso resolvido UMA vez, fora do laço: é o mesmo para todos os gestores desta
+      // empresa. `empresaId` explícito (parâmetro da função) em vez de `req.empresaId`
+      // — este alerta é sobre a agenda de UMA empresa, que nem sempre é a do contexto
+      // de quem disparou a ação.
+      const fusoAlerta = await fusoDaEmpresa(empresaId ?? req?.empresaId).catch(() => FUSO_PADRAO);
       for (const gestor of gestores) {
         const dest = gestor.user;
         if (!dest) continue;
@@ -221,13 +233,13 @@ async function notificarGestoresForaExpediente({ req, empresaId, quemAssumiuNome
         if (dest.email) {
           emailService.enviarAlertaAssumidoForaExpediente({
             paraEmail: dest.email, paraNome: dest.fullName,
-            quemAssumiuNome, animalNome, dataHora,
+            quemAssumiuNome, animalNome, dataHora, fuso: fusoAlerta,
           }).catch(() => {});
         }
 
         if (dest.phone) {
-          const fmtData = (dh) => new Date(dh).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' });
-          const fmtHora = (dh) => new Date(dh).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+          const fmtData = (dh) => formatarDataNaEmpresa(dh, fusoAlerta);
+          const fmtHora = (dh) => formatarHoraNaEmpresa(dh, fusoAlerta);
           const msg = [
             `🐴 *S2Vet — Atendimento assumido fora do expediente*`,
             `⚠️ ${quemAssumiuNome ?? 'Um profissional'} assumiu o atendimento de *${animalNome ?? 'paciente'}* fora do horário configurado.`,
@@ -242,11 +254,18 @@ async function notificarGestoresForaExpediente({ req, empresaId, quemAssumiuNome
   });
 }
 
-// Dia da semana (0=Dom…6=Sáb) e HH:MM de um instante, sempre no fuso de Brasília —
-// independe do timezone do processo Node (mesma lógica de dateUtils.ts no frontend).
-function diaEHoraBrasilia(data) {
+// Dia da semana (0=Dom…6=Sáb) e HH:MM de um instante NO FUSO DA CLÍNICA — independe
+// do timezone do processo Node (que roda fixo em America/Sao_Paulo, server.ts).
+//
+// 🔴 Era fixo em Brasília, e é ele que decide se o horário cabe no EXPEDIENTE: numa
+// clínica de Manaus (UTC−4) a janela inteira saía 1h deslocada — um agendamento das
+// 07:30 locais era lido como 08:30 e passava por um expediente que começa às 08:00,
+// e o das 17:30 era recusado por "fora do expediente" que termina às 18:00. Pior no
+// dia da semana: o atendimento de sábado 23:00 no Acre virava domingo em Brasília e
+// era recusado por não ser dia de atendimento.
+function diaEHoraNaEmpresa(data, fuso) {
   const partes = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Sao_Paulo', weekday: 'short',
+    timeZone: fuso || FUSO_PADRAO, weekday: 'short',
     hour: '2-digit', minute: '2-digit', hour12: false,
   }).formatToParts(data);
   const mapa = Object.fromEntries(partes.map(p => [p.type, p.value]));
@@ -281,7 +300,8 @@ async function dentroDoExpediente(vetId, quando, req) {
   // Nada configurado em lugar nenhum → sem restrição
   if (!dias && !horaIni) return true;
 
-  const { diaSemana, hhmm } = diaEHoraBrasilia(quando);
+  const fuso = await fusoDaEmpresa(req.empresaId);
+  const { diaSemana, hhmm } = diaEHoraNaEmpresa(quando, fuso);
   if (dias) {
     const permitidos = String(dias).split(',').map(Number).filter(Number.isInteger);
     if (permitidos.length > 0 && !permitidos.includes(diaSemana)) return false;
@@ -662,8 +682,12 @@ const AgendamentoController = {
           }
 
           const d        = new Date(item.dataHora);
-          const dataFmt  = d.toLocaleDateString('pt-BR',  { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: 'America/Sao_Paulo' });
-          const horaFmt  = d.toLocaleTimeString('pt-BR',  { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+          // Fuso da CLÍNICA: a mensagem anuncia o horário para o profissional e para
+          // o proprietário, que estão na praça da clínica — não em Brasília. Formato
+          // longo ("segunda-feira, 24 de agosto") preservado; só o fuso mudou.
+          const fusoAg   = await fusoDaEmpresa(req.empresaId).catch(() => FUSO_PADRAO);
+          const dataFmt  = d.toLocaleDateString('pt-BR',  { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: fusoAg });
+          const horaFmt  = d.toLocaleTimeString('pt-BR',  { hour: '2-digit', minute: '2-digit', timeZone: fusoAg });
           const tipoLabel = { CONSULTA: 'Consulta', VACINA: 'Vacina', RETORNO: 'Retorno', EXAME: 'Exame', PROCEDIMENTO: 'Procedimento' }[item.tipo] ?? item.tipo;
 
           // E-mail ao veterinário
@@ -671,7 +695,7 @@ const AgendamentoController = {
             await emailService.enviarNotificacaoAgendamentoProfissional({
               vetEmail: vet.email, vetNome: vet.fullName,
               animalNome, proprietarioNome, proprietarioPhone,
-              dataHora: item.dataHora, tipo: item.tipo,
+              dataHora: item.dataHora, tipo: item.tipo, fuso: fusoAg,
             }).catch(() => {});
           }
 

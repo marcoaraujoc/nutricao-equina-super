@@ -39,9 +39,10 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import {
-  ModalExecucao, ModalExecucaoVacina, itemPendenteEm, localToday,
+  ModalExecucao, ModalExecucaoVacina, itemPendenteEm,
   type GrupoExecucao, type ItemExecucao, type VacinaExecucao,
 } from './ExecucaoPrescricao';
+import { hojeISO, formatHora } from '../utils/dateUtils';
 
 // ─── Tipos (espelham o que os endpoints já devolvem) ──────────────────────────
 
@@ -75,12 +76,9 @@ type EntradaFila =
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// Data de HOJE no fuso LOCAL (nunca `toISOString`, que devolve UTC e vira o dia seguinte
-// a partir das 21h em BRT) — a mesma `localToday` da tela de execução.
-const hojeISO = () => localToday();
-
-const horaDe = (iso: string) =>
-  new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+// `hojeISO` e `formatHora` vêm de utils/dateUtils (fonte única de data/hora — ver
+// o cabeçalho daquele arquivo). Havia aqui uma cópia local de cada uma.
+const horaDe = (iso: string) => formatHora(iso) ?? '—';
 
 type Localizavel = { local?: string | null; localizacao?: { nome: string } | null } | null | undefined;
 

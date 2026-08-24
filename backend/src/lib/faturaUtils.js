@@ -82,6 +82,75 @@ async function adicionarFaturaItem(tx, {
 }
 
 /**
+ * Lança um item na fatura CONSOLIDANDO com a linha equivalente que já exista:
+ * em vez de uma linha nova por dose aplicada, soma na QUANTIDADE da linha anterior.
+ *
+ * POR QUÊ: cada execução de prescrição gera uma cobrança (regra do produto, não muda —
+ * a fatura nasce da APLICAÇÃO). Um curso de "2x ao dia por 7 dias" produzia 14 linhas
+ * idênticas do mesmo medicamento na fatura do mês, e o financeiro tinha de somar a olho
+ * para saber quantas doses foram cobradas. Consolidado, é 1 linha com "Quant.: 14".
+ *
+ * ⚠️ A chave de consolidação inclui a ORIGEM (`prescricaoId`/`vacinaClinicaId`/…), e isso
+ * NÃO é opcional: `removerFaturaItensDaOrigem`/`atualizarFaturaItensDaOrigem` sincronizam
+ * a fatura pela FK de origem, então fundir doses de origens diferentes numa linha só
+ * quebraria o estorno (cancelar uma prescrição levaria embora a cobrança da outra).
+ * Na prática isso nunca aparece como duplicata para o usuário: a descrição carrega o
+ * número do atendimento (`[AG-0012]`), então itens de documentos distintos já são
+ * linhas distintas de qualquer forma.
+ *
+ * ⚠️ NÃO consolida em linha que tenha DESCONTO. Desconto VALOR é abatimento absoluto:
+ * somar quantidade nela mudaria o desconto por unidade sem ninguém ter pedido. Nesse
+ * caso nasce uma linha nova — o desconto negociado continua valendo só para o que foi
+ * cobrado quando ele foi dado.
+ *
+ * Deve ser chamado dentro de uma transaction (tx). Mesmos campos de
+ * `adicionarFaturaItem` — é ele quem cria a linha quando não há o que consolidar.
+ */
+async function adicionarOuSomarFaturaItem(tx, opts) {
+  const {
+    faturaId, animalId, tipo, descricao, valor, quantidade,
+    exameClinicoId, prescricaoId, vacinaClinicaId, encaminhamentoClinicoId,
+  } = opts;
+
+  const origem = {
+    exameClinicoId:          exameClinicoId ?? null,
+    prescricaoId:            prescricaoId ?? null,
+    vacinaClinicaId:         vacinaClinicaId ?? null,
+    encaminhamentoClinicoId: encaminhamentoClinicoId ?? null,
+  };
+  const temOrigem = Object.values(origem).some(v => v != null);
+  // Sem origem rastreável não há como garantir que a linha antiga é "a mesma coisa"
+  // (lançamento manual do financeiro, assistência mensal…). Cria linha nova.
+  if (!temOrigem) return adicionarFaturaItem(tx, opts);
+
+  const valorNovo = valor ?? 0;
+  const qtdNova   = quantidade ?? 1;
+
+  const candidatos = await tx.faturaItem.findMany({
+    where: { faturaId, tipo, descricao, animalId: animalId ?? null, ...origem },
+    orderBy: { id: 'asc' },
+  });
+  // `valor` é Float: compara por tolerância de centavo, nunca por igualdade exata
+  // (o preço da dose sai de regra de 3 sobre o preço do lote e pode variar no último
+  // dígito entre duas execuções do MESMO lote).
+  const alvo = candidatos.find(c =>
+    Math.abs((c.valor ?? 0) - valorNovo) < 0.005 && !(c.descontoValor > 0)
+  );
+  if (!alvo) return adicionarFaturaItem(tx, opts);
+
+  await tx.faturaItem.update({
+    where: { id: alvo.id },
+    data:  { quantidade: { increment: qtdNova } },
+  });
+  if (valorNovo > 0) {
+    await tx.fatura.update({
+      where: { id: faturaId },
+      data:  { total: { increment: valorNovo * qtdNova } },
+    });
+  }
+}
+
+/**
  * Lança um exame clínico na fatura ABERTA do proprietário com VALOR ZERADO, de forma
  * IDEMPOTENTE: se já houver um FaturaItem vinculado a este exame (exameClinicoId), não
  * duplica. Usado ao finalizar a evolução (exames solicitados) e ao concluir o exame.
@@ -367,6 +436,7 @@ module.exports = {
   formatAtendimentoNum,
   getOrCreateFatura,
   adicionarFaturaItem,
+  adicionarOuSomarFaturaItem,
   lancarExameNaFatura,
   recalcularTotal,
   descontoDoItem,

@@ -46,42 +46,43 @@ function ehIntervaloMultiDia(frequencia) {
  * Item elegível ao fluxo novo (rolling schedule — agenda só nas datas certas, não
  * todo santo dia da janela do curso)?
  *
- * "1x a cada N dias" (inclui semana): SEMPRE elegível, com ou sem `horaInicio`.
- * Hora Início NUNCA é impeditivo aqui — 🔴 exigi-la fazia o item cair no fluxo
- * ANTIGO sem ela (uma execução cobrindo o dia inteiro, repetido todo dia da
- * janela — ex.: "1x/semana × 4" virando "pendente" nos 28 dias, não só nas 4
- * datas certas). Sem `horaInicio`, a 1ª dose fica esperada para `dataInicio` à
- * meia-noite (`primeiraDoseEsperada`) — mera âncora de CALENDÁRIO, não de
- * horário; a execução real da 1ª dose vira a base de tudo dali em diante
- * (`calcularProximaDose(agora, frequencia)`, gravado como `proximaDoseEm` —
- * ver `executar` em PrescricaoGrupoController). Ou seja: o HORÁRIO só se fixa
- * DEPOIS da 1ª execução, nunca antes — CONFIRMACAO_NECESSARIA também não deve
- * bloquear essa 1ª execução por "atraso" contra uma meia-noite que ninguém
- * escolheu (ver o guard em `executar`).
+ * 🔴 `horaInicio` NÃO é mais requisito de NADA (2026-08-23). Antes, frequência
+ * intra-dia (12em12h..1em1h) e 1xDia sem hora caíam no fluxo LEGADO, que trata
+ * UMA execução como "o dia inteiro coberto" — e foi por isso que Hora Início era
+ * obrigatória no formulário. Só que a hora nunca precisou ser prescrita: quem
+ * define a grade é a PRIMEIRA EXECUÇÃO. Ivermectina "de 12 em 12h" executada às
+ * 20:00 tem a próxima dose às 08:00 — o rolling schedule
+ * (`calcularProximaDose(agora, frequencia)`, gravado em `proximaDoseEm` por
+ * `executar`) já produzia exatamente isso; o que faltava era deixar o item
+ * ENTRAR nesse fluxo sem hora.
  *
- * Demais frequências (intra-dia, tipo 12em12h): precisam de `horaInicio` — sem
- * ele não há como saber os horários do próprio dia, então mantêm o fluxo antigo.
+ * Agora toda frequência com cadência definida é elegível. Sem hora e sem
+ * nenhuma dose dada, o item simplesmente não tem horário previsto ainda — ver
+ * `semAncoraDeHorario`, que é o que impede tratar essa ausência como "atraso".
  */
 function elegivelParaFluxoNovo(item) {
   if (!item) return false;
-  if (FREQUENCIAS_SEM_HORARIO.has(item.frequencia)) return false;
-  if (ehIntervaloMultiDia(item.frequencia)) return true;
-  if (!item.horaInicio || !String(item.horaInicio).trim()) return false;
-  return true;
+  return !FREQUENCIAS_SEM_HORARIO.has(item.frequencia);
+}
+
+function temHoraInicio(item) {
+  return !!(item && item.horaInicio && String(item.horaInicio).trim());
 }
 
 /**
- * Mesma condição de `elegivelParaFluxoNovo`, mas por FREQUÊNCIA (sem precisar
- * de um item inteiro já montado) — para VALIDAR o formulário/payload antes de
- * gravar. Sem isto, uma frequência intra-dia (12em12h..1em1h) ou 1xDia salva
- * sem `horaInicio` cai no fluxo LEGADO de execução (`janelaDoItem`), que
- * trata UMA execução como "o dia inteiro coberto" — mesmo quando a frequência
- * implica várias doses naquele mesmo dia. Foi assim que "4 em 4 horas por 1
- * dia" virou EXECUTADO já na primeira dose, sem agendar as 5 seguintes.
+ * O item ainda NÃO tem âncora de horário: nenhuma hora prescrita E nenhuma dose
+ * executada. Enquanto isso for verdade não existe "horário previsto" — logo não
+ * existe adiantar nem atrasar, e o item fica disponível em qualquer dia da
+ * janela do curso (`dentroDaJanelaDoCurso`), como o fluxo legado fazia.
+ *
+ * 🔴 É este predicado que sustenta a regra de produto "o marco das próximas
+ * doses é contado DEPOIS da primeira execução". Todo lugar que compara `agora`
+ * com o previsto (gate de execução futura, cron de dose perdida, fila do dia)
+ * precisa consultá-lo antes — senão a 1ª dose de um item sem hora nasceria
+ * "atrasada" contra uma meia-noite que ninguém escolheu.
  */
-function precisaHoraInicio(frequencia) {
-  if (!frequencia || FREQUENCIAS_SEM_HORARIO.has(frequencia)) return false;
-  return !ehIntervaloMultiDia(frequencia);
+function semAncoraDeHorario(item) {
+  return !temHoraInicio(item) && (item?.dosesExecutadas ?? 0) === 0;
 }
 
 // Total de doses esperadas no curso inteiro (dosesPorDia × duracaoDias).
@@ -93,28 +94,35 @@ function dosesTotaisEsperadas(item) {
 
 // 1ª dose esperada: dataInicio (só a data) + horaInicio (HH:MM).
 //
-// 🔴 SEM horaInicio (a família "1x a cada N dias" não exige mais — ver
-// `elegivelParaFluxoNovo`), o padrão NÃO PODE ser meia-noite UTC: `dataInicio`
-// chega do front como data pura ("2026-08-19") e `new Date(...)` interpreta
-// isso como meia-noite **UTC**, que em qualquer fuso negativo (Brasil é UTC-3)
-// já é 21h do dia ANTERIOR em horário local. Toda comparação de "que dia é
-// isso" no sistema usa componentes LOCAIS (`dataLocalStr`/`hojeLocalStr`, nunca
-// `toISOString()`) — então meia-noite UTC fazia a 1ª dose nascer "vencida
-// ontem": o item sumia da fila no PRÓPRIO dia em que foi prescrito, e o cron de
-// dose perdida (`prescricaoCronService.js`) cancelaria no dia seguinte um item
-// que ninguém teve a chance de executar. Meio-dia UTC (09h em horário de
-// Brasília) fica dentro do mesmo dia LOCAL de `dataInicio` com folga.
+// 🔴 O HORÁRIO É LOCAL, NUNCA UTC (corrigido em 2026-08-23 — era a origem do
+// "sistema 3 horas atrás"). `horaInicio` é o que o veterinário digitou no
+// relógio DELE: "20:00" significa 20:00 em Brasília. A versão anterior fazia
+// `setUTCHours(20)`, ou seja, gravava 20:00 **UTC** — que o front exibe como
+// 17:00 (UTC-3). Toda a cadeia herdava o erro: chip do horário, `proximaDoseEm`,
+// a classificação antecipada/atrasada e o lembrete de WhatsApp.
+// O processo roda com `process.env.TZ = 'America/Sao_Paulo'` (server.ts), então
+// o construtor LOCAL `new Date(ano, mes, dia, h, m)` produz o instante certo.
+//
+// ⚠️ A DATA continua sendo extraída com os getters UTC: `dataInicio` chega do
+// front como data pura ("2026-08-19") e o Prisma a grava como meia-noite UTC —
+// `getUTCFullYear/Month/Date` é o que devolve o dia do CALENDÁRIO ali (mesma
+// convenção de `janelaDoItem`/`listarParaExecucao`). Usar os getters locais
+// devolveria o dia anterior.
+//
+// Sem `horaInicio` o retorno é meia-noite LOCAL de `dataInicio` — âncora de
+// CALENDÁRIO, não de horário. Ela só serve para dizer em que dia o curso começa;
+// quem compara horário precisa checar `semAncoraDeHorario` antes e ignorar este
+// valor como "previsto" (senão a 1ª dose nasceria atrasada desde 00:01).
 function primeiraDoseEsperada(item) {
   const base = new Date(item.dataInicio);
-  const diaBase = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate()));
-  const temHoraInicio = item.horaInicio && String(item.horaInicio).trim();
-  if (temHoraInicio) {
+  const ano  = base.getUTCFullYear();
+  const mes  = base.getUTCMonth();
+  const dia  = base.getUTCDate();
+  if (temHoraInicio(item)) {
     const [h, m] = String(item.horaInicio).split(':').map(Number);
-    diaBase.setUTCHours(h || 0, m || 0, 0, 0);
-  } else {
-    diaBase.setUTCHours(12, 0, 0, 0);
+    return new Date(ano, mes, dia, h || 0, m || 0, 0, 0);
   }
-  return diaBase;
+  return new Date(ano, mes, dia, 0, 0, 0, 0);
 }
 
 // Rolling schedule: a PRÓXIMA dose é sempre o horário REAL da última + o
@@ -144,14 +152,35 @@ function diferencaEmMinutos(agora, previsto) {
 
 // Horário previsto de UMA dose: se já houve dose(s) antes, é o rolling schedule
 // JÁ PERSISTIDO (`proximaDoseEm` — calculado a partir do horário REAL da última
-// execução); sem nenhuma dose ainda, é a 1ª dose esperada (teórica, de
-// `dataInicio`/`horaInicio`). Fonte ÚNICA — movida para cá (era local ao
-// controller) porque a prévia de dias futuros abaixo precisa dela também, e
-// duas cópias divergiriam na primeira correção.
+// execução); sem nenhuma dose ainda, é a 1ª dose esperada (de `dataInicio` +
+// `horaInicio`). Fonte ÚNICA — movida para cá (era local ao controller) porque a
+// prévia de dias futuros abaixo precisa dela também, e duas cópias divergiriam
+// na primeira correção.
+//
+// 🔴 Devolve `null` quando o item ainda não tem âncora (sem `horaInicio` e sem
+// nenhuma dose dada): nesse estado NÃO EXISTE horário previsto, e devolver a
+// meia-noite de `primeiraDoseEsperada` faria o item parecer atrasado o dia
+// inteiro. Todo caller precisa tratar o null — ver `semAncoraDeHorario`.
 function horarioPrevistoDoItem(item) {
+  if (semAncoraDeHorario(item)) return null;
   return (item.dosesExecutadas ?? 0) > 0 && item.proximaDoseEm
     ? item.proximaDoseEm
     : primeiraDoseEsperada(item);
+}
+
+// Data (YYYY-MM-DD local) do 1º e do último dia do curso. Enquanto o item não
+// tem âncora de horário, é esta janela — e não um horário — que decide se ele
+// está disponível no dia (mesma semântica do `janelaDoItem` do controller).
+function janelaDoCurso(item) {
+  const inicio = primeiraDoseEsperada({ ...item, horaInicio: null });
+  const fim    = new Date(inicio);
+  fim.setDate(fim.getDate() + Math.max(Number(item.duracaoDias) || 1, 1) - 1);
+  return { inicioStr: dataLocalDe(inicio), fimStr: dataLocalDe(fim) };
+}
+
+function dentroDaJanelaDoCurso(item, dataStr) {
+  const { inicioStr, fimStr } = janelaDoCurso(item);
+  return inicioStr <= dataStr && dataStr <= fimStr;
 }
 
 // Data (YYYY-MM-DD, fuso LOCAL) de um instante qualquer.
@@ -185,7 +214,12 @@ function itemPrevistoParaDataFutura(item, dataStr) {
   const jaFeitas    = item.dosesExecutadas ?? 0;
   if (jaFeitas >= totalDoses) return false;
 
-  let previsto = horarioPrevistoDoItem(item);
+  // Sem âncora ainda: não há horário para projetar — o que se sabe é só a janela
+  // do curso. Continua "previsto" em qualquer dia dela, como o fluxo legado.
+  const previstoInicial = horarioPrevistoDoItem(item);
+  if (!previstoInicial) return dentroDaJanelaDoCurso(item, dataStr);
+
+  let previsto = previstoInicial;
   for (let n = jaFeitas; n < totalDoses; n++) {
     if (dataLocalDe(previsto) === dataStr) return true;
     previsto = calcularProximaDose(previsto, item.frequencia);
@@ -198,13 +232,16 @@ module.exports = {
   intervaloEmMs,
   ehIntervaloMultiDia,
   elegivelParaFluxoNovo,
-  precisaHoraInicio,
+  temHoraInicio,
+  semAncoraDeHorario,
   dosesTotaisEsperadas,
   primeiraDoseEsperada,
   calcularProximaDose,
   classificarExecucao,
   diferencaEmMinutos,
   horarioPrevistoDoItem,
+  janelaDoCurso,
+  dentroDaJanelaDoCurso,
   dataLocalDe,
   itemPrevistoParaDataFutura,
 };

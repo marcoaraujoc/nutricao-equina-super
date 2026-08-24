@@ -42,6 +42,7 @@
 
 const { comTenant, usarClient } = require('./tenantDb');
 const logger = require('./logger');
+const { passo, grupo } = require('./cronTrace');
 
 // Resolução PREGUIÇOSA do client, pelo mesmo motivo de `tenantDb.js`: `./prisma` é
 // TypeScript e um `require` no topo quebra em teste/script rodando com node puro.
@@ -97,12 +98,14 @@ function novoDiario(rotulo) {
     ok(empresa, desc) {
       bucket(empresa).ok.push(desc);
       logger.info(`[${rotulo}] empresa ${empresa?.id}: ${desc}`);
+      passo(`OK ${desc}`);
     },
     /** Item que falhou — o restante da empresa segue. */
     erro(empresa, desc, err) {
       const msg = err?.message ?? String(err ?? '');
       bucket(empresa).erros.push(`${desc} — ${msg}`);
       logger.error(`[${rotulo}] empresa ${empresa?.id}: ${desc} — ${msg}`);
+      passo(`ERRO ${desc} — ${msg}`);
     },
     /** Falha que derrubou a EMPRESA inteira (rollback do lote dela). */
     erroDaEmpresa(empresa, err) {
@@ -158,13 +161,15 @@ async function paraCadaEmpresa(rotulo, fn) {
   const empresas = await empresasAtivas();
   const diario = novoDiario(rotulo);
   const falhas = [];
+  passo(`${rotulo}: ${empresas.length} empresa(s) ATIVA(s)`, { ids: empresas.map(e => e.id).join(',') });
 
   for (const empresa of empresas) {
     try {
       // ⚠️ Uma transação POR EMPRESA, não uma para todas. Além de carimbar o tenant,
       // isso limita o alcance de um rollback: erro na clínica A não desfaz o que já
       // foi feito na B.
-      await comTenant(empresa.id, (tx) => fn(tx, empresa, diario));
+      await grupo(`empresa ${empresa.id} — ${empresa.nome} (tenant carimbado)`,
+        () => comTenant(empresa.id, (tx) => fn(tx, empresa, diario)));
     } catch (err) {
       // Isolamento de falha: registra e SEGUE. Antes, uma exceção aqui matava o lote.
       // ⚠️ `erroDaEmpresa` LIMPA os "ok" já registrados desta empresa — eles foram
@@ -233,10 +238,12 @@ async function paraCadaEmpresaComEnvio(rotulo, fn) {
   const empresas = await empresasAtivas();
   const diario = novoDiario(rotulo);
   const falhas = [];
+  passo(`${rotulo}: ${empresas.length} empresa(s) ATIVA(s) — sem transação (job de envio)`,
+    { ids: empresas.map(e => e.id).join(',') });
 
   for (const empresa of empresas) {
     try {
-      await fn(empresa, diario);
+      await grupo(`empresa ${empresa.id} — ${empresa.nome}`, () => fn(empresa, diario));
     } catch (err) {
       falhas.push({ empresa: empresa.id, erro: err?.message ?? String(err) });
       // ⚠️ Aqui NÃO se usa `erroDaEmpresa`: sem transação não houve rollback, então o

@@ -2,6 +2,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { fusoDaEmpresa } = require('../lib/fusoEmpresa');
 const { animalVisivelNaEmpresa } = require('../lib/visibilidade');
 const {
   resolverEscopo,
@@ -111,11 +112,18 @@ const stats = async (req, res) => {
     const contasReceberVencidas = faturasVencidas.reduce((s, f) => s + (f.total ?? 0), 0);
     const semAtendimento = blocoSemAtendimento(animaisUltimo);
 
-    // Atendimentos por dia (últimos 30 dias) — raw SQL para DATE_TRUNC
+    // Atendimentos por dia (últimos 30 dias) — raw SQL para DATE_TRUNC.
+    // 🔴 O `AT TIME ZONE` usa o fuso da CLÍNICA, não Brasília fixo: é ele que decide
+    // em QUAL DIA cada atendimento é contado. Numa clínica de Manaus (UTC−4) tudo que
+    // acontecia depois das 23h local era somado no dia seguinte, e o gráfico não batia
+    // com o que a equipe via na agenda. Vai como BIND (`${fusoGrafico}`), nunca
+    // interpolado na string — o valor sai do banco e SQL cru com concatenação é
+    // injeção esperando acontecer.
+    const fusoGrafico = await fusoDaEmpresa(empresaId);
     let atendimentosPorDia = [];
     if (empresaId) {
       atendimentosPorDia = await prisma.$queryRaw`
-        SELECT DATE_TRUNC('day', e."dataInicio" AT TIME ZONE 'America/Sao_Paulo')::date AS dia,
+        SELECT DATE_TRUNC('day', e."dataInicio" AT TIME ZONE ${fusoGrafico})::date AS dia,
                COUNT(*)::int AS total
         FROM schs2vet.tb_evolucoes_clinicas e
         JOIN schs2vet.tb_animais a ON a.id = e."animalId"
@@ -127,7 +135,7 @@ const stats = async (req, res) => {
       `;
     } else {
       atendimentosPorDia = await prisma.$queryRaw`
-        SELECT DATE_TRUNC('day', "dataInicio" AT TIME ZONE 'America/Sao_Paulo')::date AS dia,
+        SELECT DATE_TRUNC('day', "dataInicio" AT TIME ZONE ${fusoGrafico})::date AS dia,
                COUNT(*)::int AS total
         FROM schs2vet.tb_evolucoes_clinicas
         WHERE ativo = true

@@ -863,6 +863,19 @@ export default function CadastroEmpresa() {
                     Em branco, o orçamento não expira.
                   </p>
                 </div>
+
+                {/* ⚠️ O FUSO HORÁRIO NÃO APARECE MAIS AQUI (removido a pedido, 2026-08-24):
+                    o campo era só leitura e não havia nada a fazer com ele nesta tela.
+                    O fuso CONTINUA existindo e valendo — é ele que faz o horário das
+                    doses, da agenda e dos avisos seguirem o relógio de quem atende. Só
+                    deixou de ser exibido. Ele é DEDUZIDO do CEP/UF que este mesmo
+                    cadastro coleta (`lib/fusoEmpresa.js#fusoPorEndereco`), chega ao
+                    front por `GET /equipes/logo` e é aplicado pelo `EmpresaContext`.
+                    Não reintroduzir como campo editável: ninguém precisa saber o que é
+                    "America/Cuiaba" para cadastrar uma clínica — foi essa a razão de o
+                    seletor ter saído da tela em 2026-08-23. Para corrigir um caso que o
+                    endereço não decide, o caminho é o override
+                    `EmpresaConfiguracao.fusoHorario`, fora da UI do gestor. */}
               </div>
             </div>
 

@@ -146,4 +146,38 @@ const reagendar = async (req, res) => {
   }
 };
 
-module.exports = { getConfig, salvarConfig, listarExecucoes, listarAgendas, reagendar };
+// ── Execução MANUAL de uma tarefa, com rastro passo a passo ──────────────────
+//
+// 🔴 GATE MAIS ESTREITO QUE O DO RESTO DA TELA: só ADMIN DA PLATAFORMA.
+//
+// `podeGerenciar` aceita GESTOR porque ler a monitoração e ajustar horário é operação
+// de quem administra a própria clínica. Disparar o job é outra coisa: ele varre TODAS
+// as empresas ativas — fecha fatura, cancela agendamento e manda WhatsApp em nome de
+// clínicas que não são a de quem clicou. Isso é ato de plataforma.
+//
+// ⚠️ `role`/`userTypeGlobal`, NUNCA o `userType` de contexto: este último é o papel na
+// EMPRESA ATIVA e um gestor o tem como VETERINARIO (ver CLAUDE.md §36-e).
+function soAdminPlataforma(req, res) {
+  const global = req.user?.role ?? req.user?.userTypeGlobal ?? req.user?.userType;
+  if (global === 'ADMIN') return true;
+  res.status(403).json({ error: 'Execução manual de tarefa é restrita ao administrador da plataforma.' });
+  return false;
+}
+
+const executarAgora = async (req, res) => {
+  if (!soAdminPlataforma(req, res)) return;
+  try {
+    const r = await cronManager.executarAgora(req.params.chave);
+    // 200 mesmo com `erro` preenchido: a EXECUÇÃO aconteceu e o rastro é o produto da
+    // chamada. Devolver 500 faria o interceptor do axios tratar como falha da rota e a
+    // tela descartaria justamente o trace que explica o problema.
+    return res.json({ dados: r });
+  } catch (err) {
+    if (err.code === 'JOB_DESCONHECIDO') return res.status(404).json({ error: 'Tarefa desconhecida.' });
+    if (err.code === 'JOB_EM_EXECUCAO')  return res.status(409).json({ error: 'Esta tarefa já está em execução — aguarde terminar.' });
+    console.error('Monitoracao.executarAgora:', err);
+    return res.status(500).json({ error: 'Erro ao executar a tarefa.' });
+  }
+};
+
+module.exports = { getConfig, salvarConfig, listarExecucoes, listarAgendas, reagendar, executarAgora };

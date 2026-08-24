@@ -1,19 +1,15 @@
 'use strict';
 
-const nodemailer = require('nodemailer');
+// Transporte real (hoje: SMTP/nodemailer; amanhã: Resend, sem tocar em nenhum
+// método abaixo) mora em messaging/emailProvider.js — mesmo princípio do
+// whatsappProvider.js/StorageProvider. `getEmailProvider().enviar(opts)` aceita
+// o MESMO shape que nodemailer.sendMail sempre recebeu aqui.
+const { getEmailProvider } = require('../messaging/emailProvider');
+const { FUSO_PADRAO } = require('../lib/fusoEmpresa');
 
-const createTransporter = () =>
-  nodemailer.createTransport({
-    host:   process.env.EMAIL_HOST   || 'smtp.gmail.com',
-    port:   Number(process.env.EMAIL_PORT) || 587,
-    secure: process.env.EMAIL_SECURE === 'true',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-  });
-
-const podeEnviar = () => !!(process.env.EMAIL_USER && process.env.EMAIL_PASS);
+// Checagem síncrona ("dá pra enviar?") — delega ao provider ativo; hoje é o
+// mesmo teste de EMAIL_USER/EMAIL_PASS que sempre foi.
+const podeEnviar = () => getEmailProvider().estaConfigurado();
 
 const emailService = {
 
@@ -32,7 +28,7 @@ const emailService = {
 
     const primeiroNome = String(nome ?? '').trim().split(' ')[0] || 'você';
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      email,
       subject: `${codigo} é o seu código de acesso S2Vet`,
@@ -75,6 +71,8 @@ const emailService = {
       return;
     }
     const destinatarios = Array.isArray(para) ? para.join(',') : para;
+    // ⚠️ Brasília FIXO de propósito: este alerta é da PLATAFORMA para o ADMIN
+    // (monitoração de cron), não de uma clínica — não há empresa cujo fuso usar.
     const dataStr = new Date(quando ?? Date.now()).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     const cor    = ok ? '#059669' : '#dc2626';
     const status = ok ? '✅ Executado com sucesso' : '❌ Erro na execução';
@@ -82,7 +80,7 @@ const emailService = {
       ? `<p style="color:#374151;line-height:1.6;margin:0;">${resumo ?? 'Tarefa concluída.'}</p>`
       : `<pre style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px;color:#991b1b;white-space:pre-wrap;font-size:13px;margin:0;">${erro ?? 'Erro desconhecido.'}</pre>`;
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      destinatarios,
       subject: `[S2Vet] Cron ${ok ? 'OK' : 'ERRO'} — ${nome}`,
@@ -118,7 +116,7 @@ const emailService = {
     }
     const destinatarios = Array.isArray(para) ? para.join(',') : para;
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      destinatarios,
       subject: `[S2Vet] CRMV não encontrado no CFMV — ${nome ?? 'cadastro'}`,
@@ -206,7 +204,7 @@ const emailService = {
          no S2Vet. A partir de agora você poderá acompanhar faturas, dietas e evoluções clínicas
          deste animal na plataforma.`;
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      proprietarioEmail,
       subject: assuntoEmail,
@@ -276,7 +274,7 @@ const emailService = {
          </div>`
       : '';
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      email,
       subject: `[S2Vet] Você foi convidado para a equipe — ${equipeNome}`,
@@ -360,7 +358,7 @@ const emailService = {
       </div>
     `;
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      email,
       subject: `[S2Vet] Você foi convidado para acessar a plataforma`,
@@ -434,7 +432,7 @@ const emailService = {
       </div>
     ` : '';
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      email,
       subject: `[S2Vet] Seu acesso de Gestor está pronto`,
@@ -483,7 +481,7 @@ const emailService = {
     const appUrl   = process.env.APP_URL || 'http://localhost:5173';
     const loginUrl = `${appUrl}/#/login`;
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      destinatarioEmail,
       subject: '[S2Vet] Sua conta foi criada — bem-vindo(a)!',
@@ -542,7 +540,7 @@ const emailService = {
     }
     const appUrl = process.env.APP_URL || 'http://localhost:5173';
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      destinatarioEmail,
       subject: `[S2Vet] ${nomeAnimal} agora está sob sua responsabilidade`,
@@ -584,7 +582,7 @@ const emailService = {
 
     const pdfBuffer = Buffer.from(pdfBase64, 'base64');
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      emailDestinatario,
       subject: `[S2Vet] Plano de Dieta — ${nomeAnimal}`,
@@ -638,7 +636,7 @@ const emailService = {
 
     const pdfBuffer = Buffer.from(pdfBase64, 'base64');
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      emailDestinatario,
       subject: assunto,
@@ -693,7 +691,7 @@ const emailService = {
          </div>`
       : '';
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      email,
       subject: `[S2Vet] Você foi adicionado à equipe — ${equipeNome}`,
@@ -735,19 +733,23 @@ const emailService = {
   },
 
   // ── Notificação de novo agendamento ao profissional ───────────────────────
-  async enviarNotificacaoAgendamentoProfissional({ vetEmail, vetNome, animalNome, proprietarioNome, proprietarioPhone, dataHora, tipo }) {
+  // `fuso` = fuso da CLÍNICA (lib/fusoEmpresa.js). Opcional e com o padrão
+  // histórico: quem não passa continua exibindo em Brasília, exatamente como
+  // antes. Quem sabe de que empresa é o e-mail passa e o horário sai no relógio
+  // de quem vai ler.
+  async enviarNotificacaoAgendamentoProfissional({ vetEmail, vetNome, animalNome, proprietarioNome, proprietarioPhone, dataHora, tipo, fuso = FUSO_PADRAO }) {
     if (!podeEnviar()) return;
     const appUrl = process.env.APP_URL || 'http://localhost:5173';
     const d      = new Date(dataHora);
-    const dataFmt = d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: 'America/Sao_Paulo' });
-    const horaFmt = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+    const dataFmt = d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: fuso });
+    const horaFmt = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: fuso });
     const tipoLabel = { CONSULTA: 'Consulta', VACINA: 'Vacina', RETORNO: 'Retorno', EXAME: 'Exame', PROCEDIMENTO: 'Procedimento' }[tipo] ?? tipo;
 
     const waLink = proprietarioPhone
       ? `https://wa.me/55${proprietarioPhone.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá! Confirmo meu agendamento com você no dia ${dataFmt} às ${horaFmt} para ${animalNome}.`)}`
       : null;
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      vetEmail,
       subject: `[S2Vet] Novo agendamento — ${animalNome} · ${horaFmt}`,
@@ -800,11 +802,11 @@ const emailService = {
   // (agenda do dia inteiro). Quem recebe a transferência é notificado aqui e por WhatsApp.
   // `modo`: 'RECEBIDO' (o destinatário ganhou os atendimentos) | 'ASSUMIDO' (o
   // destinatário PERDEU o atendimento, que `deNome` assumiu para si).
-  async enviarTransferenciaAgenda({ paraEmail, paraNome, deNome, itens = [], observacao, modo = 'RECEBIDO' }) {
+  async enviarTransferenciaAgenda({ paraEmail, paraNome, deNome, itens = [], observacao, modo = 'RECEBIDO', fuso = FUSO_PADRAO }) {
     if (!podeEnviar() || !paraEmail || itens.length === 0) return;
     const appUrl = process.env.APP_URL || 'http://localhost:5173';
-    const fmtData = (dh) => new Date(dh).toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' });
-    const fmtHora = (dh) => new Date(dh).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+    const fmtData = (dh) => new Date(dh).toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: fuso });
+    const fmtHora = (dh) => new Date(dh).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: fuso });
     const rotulo  = (t) => ({ CONSULTA: 'Consulta', VACINA: 'Vacina', RETORNO: 'Retorno', EXAME: 'Exame', PROCEDIMENTO: 'Procedimento' }[t] ?? t ?? 'Atendimento');
 
     const varios   = itens.length > 1;
@@ -822,7 +824,7 @@ const emailService = {
         <td style="padding:8px 0;color:#6b7280;font-size:13px;">${rotulo(i.tipo)}</td>
       </tr>`).join('');
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      paraEmail,
       subject: assunto,
@@ -874,7 +876,7 @@ const emailService = {
   //                uma NOVA evolução para o mesmo paciente (atendimento simultâneo).
   async enviarTransferenciaEvolucao({
     paraEmail, paraNome, deNome, animalNome, atendimentoNumero,
-    titulo, especialidade, dataInicio, modo = 'ASSUMIDA',
+    titulo, especialidade, dataInicio, modo = 'ASSUMIDA', fuso = FUSO_PADRAO,
   }) {
     if (!podeEnviar() || !paraEmail) return;
     const appUrl   = process.env.APP_URL || 'http://localhost:5173';
@@ -883,7 +885,7 @@ const emailService = {
     const quando   = dataInicio
       ? new Date(dataInicio).toLocaleString('pt-BR', {
           day: '2-digit', month: '2-digit', year: 'numeric',
-          hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo',
+          hour: '2-digit', minute: '2-digit', timeZone: fuso,
         })
       : null;
 
@@ -891,7 +893,7 @@ const emailService = {
       ? `[S2Vet] Evolução assumida por outro profissional — ${paciente}`
       : `[S2Vet] Nova evolução aberta em paralelo — ${paciente}`;
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      paraEmail,
       subject: assunto,
@@ -941,19 +943,19 @@ const emailService = {
   // acontecer a qualquer hora) — em vez de recusar, o sistema avisa quem gerencia
   // a equipe, para decidir se aquilo é normal ou precisa de alguma ação.
   async enviarAlertaAssumidoForaExpediente({
-    paraEmail, paraNome, quemAssumiuNome, animalNome, dataHora,
+    paraEmail, paraNome, quemAssumiuNome, animalNome, dataHora, fuso = FUSO_PADRAO,
   }) {
     if (!podeEnviar() || !paraEmail) return;
     const appUrl = process.env.APP_URL || 'http://localhost:5173';
     const quando = dataHora
       ? new Date(dataHora).toLocaleString('pt-BR', {
           weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric',
-          hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo',
+          hour: '2-digit', minute: '2-digit', timeZone: fuso,
         })
       : null;
     const paciente = animalNome ?? 'Paciente';
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      paraEmail,
       subject: `[S2Vet] Atendimento assumido fora do expediente — ${paciente}`,
@@ -994,18 +996,18 @@ const emailService = {
   },
 
   // ── Lembrete 1 dia antes ao proprietário ──────────────────────────────────
-  async enviarLembreteDiaAnteriorProprietario({ proprietarioEmail, proprietarioNome, animalNome, vetNome, vetPhone, dataHora, appUrl: appUrlParam }) {
+  async enviarLembreteDiaAnteriorProprietario({ proprietarioEmail, proprietarioNome, animalNome, vetNome, vetPhone, dataHora, appUrl: appUrlParam, fuso = FUSO_PADRAO }) {
     if (!podeEnviar()) return;
     const appUrl = appUrlParam || process.env.APP_URL || 'http://localhost:5173';
     const d      = new Date(dataHora);
-    const dataFmt = d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: 'America/Sao_Paulo' });
-    const horaFmt = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+    const dataFmt = d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: fuso });
+    const horaFmt = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: fuso });
 
     const waClinica = vetPhone
       ? `https://wa.me/55${vetPhone.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá! Referente ao agendamento de ${animalNome} amanhã às ${horaFmt}.`)}`
       : null;
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      proprietarioEmail,
       subject: `[S2Vet] Lembrete: consulta de ${animalNome} amanhã às ${horaFmt}`,
@@ -1060,7 +1062,7 @@ const emailService = {
   async enviarLinkFatura({ proprietarioEmail, proprietarioNome, assunto, corpo, url }) {
     if (!podeEnviar()) return;
 
-    await createTransporter().sendMail({
+    await getEmailProvider().enviar({
       from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
       to:      proprietarioEmail,
       subject: assunto || `[S2Vet] Sua fatura está disponível`,

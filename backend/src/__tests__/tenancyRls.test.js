@@ -73,6 +73,15 @@ const TENANT_PLANE = [
   // tb_fornecedores), já nasceu no padrão fail-closed (`app_plataforma() OR (...)`).
   // Migration 20260908000000_transferencia_propriedade_animal.
   'tb_animal_proprietario_historico',
+  // ✅ 2026-09-10/13 — link público de fatura (capability URL, sem login). TENANT
+  // DIRETO (empresa_id copiado da fatura na criação do link), padrão fail-closed
+  // desde que nasceu (`app_plataforma() OR empresa_id = app_empresa_id()`) — a
+  // leitura pública roda em ESCOPO DE PLATAFORMA (sem req.empresaId), então sem o
+  // `app_plataforma()` a busca pelo token não enxergaria nada. Migrations
+  // 20260910000000_fatura_link_publico (cria a tabela + policy) e
+  // 20260913000000_fatura_link_canal_status_retry_revogacao (colunas de
+  // canal/status/retry/revogação/acesso — não mexe na policy).
+  'tb_fatura_links_publicos',
 ];
 
 // ─── AGUARDANDO RLS — são de tenant, ainda sem policy ─────────────────────────

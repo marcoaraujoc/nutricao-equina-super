@@ -12,7 +12,9 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
-const { elegivelParaFluxoNovo, primeiraDoseEsperada } = require('../lib/agendaDoses');
+const {
+  elegivelParaFluxoNovo, primeiraDoseEsperada, semAncoraDeHorario, dentroDaJanelaDoCurso,
+} = require('../lib/agendaDoses');
 // Mesmas funções que `removerItem` (cancelamento manual de UM item) usa para
 // recalcular a reserva de estoque do grupo sem deixar sobra órfã para os
 // demais itens — reusadas aqui em vez de duplicadas (armadilha conhecida:
@@ -154,10 +156,26 @@ async function cancelarDosesPrescricaoPerdidas(db = prisma, diario = null, empre
   let canceladas = 0;
 
   for (const item of itens) {
+    // Explica no diário POR QUE o item foi cancelado. Declarado aqui porque os dois
+    // ramos abaixo chegam a ele: item SEM âncora de horário não tem data prevista
+    // nenhuma (é a janela do curso que venceu), e ler a variável do outro ramo era
+    // `ReferenceError` — `const` dentro do `else` não existe fora dele. Só não
+    // estourava porque, até hoje, todo item cancelado veio pelo ramo com âncora.
+    let porQue = 'janela do curso encerrada';
     if (!elegivelParaFluxoNovo(item)) continue; // legado — fica com a janela do curso, sem mudança
-    // dosesExecutadas === 0 → a próxima dose esperada É a 1ª do curso.
-    const previstoStr = dataLocalStr(primeiraDoseEsperada(item));
-    if (previstoStr >= hojeStr) continue; // é hoje ou ainda no futuro — não perdeu o prazo
+    // 🔴 Item SEM Hora Início e sem nenhuma dose dada não tem horário previsto: o
+    // prazo dele é a JANELA DO CURSO inteira, não o dia de `dataInicio` (é a 1ª
+    // execução que fixa a grade — ver lib/agendaDoses.js#semAncoraDeHorario). Sem
+    // esta ressalva, tornar Hora Início opcional faria este cron cancelar no dia
+    // seguinte todo item sem hora de um curso de vários dias.
+    if (semAncoraDeHorario(item)) {
+      if (dentroDaJanelaDoCurso(item, hojeStr)) continue; // ainda dá tempo
+    } else {
+      // dosesExecutadas === 0 → a próxima dose esperada É a 1ª do curso.
+      const previstoStr = dataLocalStr(primeiraDoseEsperada(item));
+      if (previstoStr >= hojeStr) continue; // é hoje ou ainda no futuro — não perdeu o prazo
+      porQue = `dose prevista para ${previstoStr} não foi executada`;
+    }
 
     await db.prescricao.update({
       where: { id: item.id },
@@ -180,10 +198,13 @@ async function cancelarDosesPrescricaoPerdidas(db = prisma, diario = null, empre
         data:  { status: houveExecucaoNoGrupo > 0 ? 'CANCELADO_PARCIALMENTE' : 'CANCELADO' },
       });
     } else if (item.medicamentoCatId) {
-      // Lido por FORA da transaction do tenant de propósito — mesma ressalva de
-      // `anexarAplicadaProprietario` (a flag não muda dentro dela, então ler por
-      // fora não arrisca abortar o cron).
-      const itensRestantes = await anexarAplicadaProprietario(prisma, restantes);
+      // ⚠️ `db`, NÃO o `prisma` global. Ler por fora da transaction do tenant parecia
+      // inofensivo ("a flag não muda dentro dela"), mas `anexarAplicadaProprietario`
+      // consulta `tb_prescricoes` por SQL cru — e sem `app.empresa_id` o RLS devolve
+      // zero linha e ENGOLE o erro no `catch` interno da função. O resultado era todo
+      // item voltando com `aplicadaPeloProprietario: false`: o medicamento que o
+      // proprietário aplica em casa voltava a ocupar reserva de estoque na clínica.
+      const itensRestantes = await anexarAplicadaProprietario(db, restantes);
       const aindaUsaMedicamento = itensRestantes.some(i => i.medicamentoCatId === item.medicamentoCatId);
       if (!aindaUsaMedicamento) {
         const estoquesDoMed = await db.estoqueClinica.findMany({
@@ -203,7 +224,7 @@ async function cancelarDosesPrescricaoPerdidas(db = prisma, diario = null, empre
     if (diario) {
       diario.ok(empresa,
         `prescrição #${String(item.grupo?.numero ?? item.grupoId).padStart(3, '0')} · ${item.animal?.nome ?? 'animal ?'} — `
-        + `item "${item.medicamento}" CANCELADO (dose prevista para ${previstoStr} não foi executada)`);
+        + `item "${item.medicamento}" CANCELADO (${porQue})`);
     }
   }
 

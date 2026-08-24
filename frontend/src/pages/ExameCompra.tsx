@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Activity, Loader2, CheckCircle2, PlusCircle, Paperclip, X, Printer, Pencil, Eye } from 'lucide-react';
 import api from '../services/api';
+import { hojeISO } from '../utils/dateUtils';
 import toast from 'react-hot-toast';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
@@ -164,7 +165,9 @@ const initFlexao = (): Record<string,{ sensivel: boolean; grau: Grau }> =>
 const initRadio = (): Record<string,number|null> =>
   Object.fromEntries(RADIO_PARTES.map(p => [p.key, null]));
 
-const hoje = () => new Date().toISOString().slice(0, 10);
+// `hojeISO()` (utils/dateUtils) e nao `toISOString().slice(0,10)`: este ultimo
+// devolve o dia em UTC, que a noite ja e AMANHA em qualquer fuso do Brasil.
+const hoje = () => hojeISO();
 
 // ─── Types (histórico) ────────────────────────────────────────────────────────
 

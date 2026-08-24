@@ -11,6 +11,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import { useAuth } from './AuthContext';
 import api from '../services/api';
 import { registrarAcesso } from '../utils/contextoAcessos';
+import { definirFusoDaEmpresa } from '../utils/dateUtils';
 
 export const EMPRESA_ATIVA_KEY = 's2vet_empresa_id';
 export const EQUIPE_ATIVA_KEY  = 's2vet_equipe_id';
@@ -133,7 +134,11 @@ export function EmpresaProvider({ children }: { children: ReactNode }) {
   // estados que podem divergir na troca de contexto.
   const [marca, setMarca] = useState<EmpresaMarca>({ logoUrl: null, empresaNome: null });
   useEffect(() => {
-    if (!user) { setMarca({ logoUrl: null, empresaNome: null }); return; }
+    // Sem usuário (logout) ou ao TROCAR de empresa, zera o fuso antes de recarregar:
+    // manter o da empresa anterior exibiria os horários da nova clínica no fuso errado
+    // até a resposta chegar — mesma razão pela qual `trocarContexto` limpa a seleção.
+    if (!user) { setMarca({ logoUrl: null, empresaNome: null }); definirFusoDaEmpresa(null); return; }
+    definirFusoDaEmpresa(null);
 
     let ativo = true;
     const carregar = () => {
@@ -144,6 +149,11 @@ export function EmpresaProvider({ children }: { children: ReactNode }) {
             logoUrl:     r.data?.dados?.logoUrl ?? null,
             empresaNome: r.data?.dados?.empresaNome ?? null,
           });
+          // FUSO DA CLÍNICA — empurrado para utils/dateUtils, que é quem formata
+          // data/hora no app inteiro. Vem junto da marca porque esta é a única rota
+          // de configuração legível por QUALQUER membro. A partir daqui a tela
+          // mostra o relógio da clínica, e não o do aparelho de quem abriu.
+          definirFusoDaEmpresa(r.data?.dados?.fusoHorario ?? null);
         })
         .catch(() => { /* silencioso — a marca tem fallback textual */ });
     };

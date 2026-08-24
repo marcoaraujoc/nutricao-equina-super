@@ -179,6 +179,8 @@ const documentosRoutes         = require('./routes/documentos');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const faturaPublicaRoutes      = require('./routes/faturaPublica');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+const linkPublicoRoutes        = require('./routes/linkPublico');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const examesRoutes             = require('./routes/exames');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const analiseRoutes            = require('./routes/analise');
@@ -277,6 +279,7 @@ app.use('/api/alimentos',             alimentosRoutes);
 app.use('/api/dietas',                dietasRoutes);
 app.use('/api/documentos',            documentosRoutes); // envio genérico de PDF por WhatsApp/e-mail
 app.use('/api/fatura-publica',        faturaPublicaRoutes); // link público do PDF da fatura — SEM authenticate
+app.use('/api/l',                     linkPublicoRoutes);   // redirect curto (sem "#") p/ o link ficar clicável em qualquer cliente — SEM authenticate
 app.use('/api/exames',                examesRoutes);
 app.use('/api/analise',               analiseRoutes);
 app.use('/api/audit',                 auditRoutes);
@@ -454,12 +457,21 @@ app.use((err: Error & { status?: number; statusCode?: number; code?: string; det
   });
 });
 
-app.listen(PORT, () => {
-  logger.info('Servidor iniciado', { port: PORT, env: process.env.NODE_ENV ?? 'development' });
-  // Agenda todas as tarefas com base em CronAgenda (banco), aplicando os padrões
-  // quando não configurado. Reagendamento posterior é ao vivo (cronManager.reagendar).
-  iniciarJobs().catch((e: unknown) => logger.error(`[CronManager] Falha ao iniciar jobs: ${e instanceof Error ? e.message : e}`));
-});
+// ⚠️ `CRON_CLI=1` CARREGA o módulo sem SUBIR nada: sem HTTP e sem agendar tarefa.
+//
+// É o que permite a `scripts/rodarJob.js` disparar UM job pela linha de comando. Os
+// `registrarJob(...)` deste arquivo são a única definição dos jobs, então o script
+// precisa importá-lo — e, sem esta guarda, importar significaria ocupar a porta 3001
+// (conflito com o backend em execução) e ligar TODAS as tarefas em segundo plano, que
+// é o oposto de "rodar só esta, agora, e sair".
+if (process.env.CRON_CLI !== '1') {
+  app.listen(PORT, () => {
+    logger.info('Servidor iniciado', { port: PORT, env: process.env.NODE_ENV ?? 'development' });
+    // Agenda todas as tarefas com base em CronAgenda (banco), aplicando os padrões
+    // quando não configurado. Reagendamento posterior é ao vivo (cronManager.reagendar).
+    iniciarJobs().catch((e: unknown) => logger.error(`[CronManager] Falha ao iniciar jobs: ${e instanceof Error ? e.message : e}`));
+  });
+}
 
 // ===================== CRON — TAREFAS AGENDADAS (agenda dinâmica no banco) =====================
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -522,6 +534,11 @@ const emailServiceCron = require('./services/emailService');
 //   desfaz mensagem enviada — o cliente receberia o lembrete de novo. Ver lib/cronTenant.js.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { paraCadaEmpresa, paraCadaEmpresaComEnvio, resultadoCron } = require('./lib/cronTenant');
+// Rastro passo a passo da execução MANUAL (`npm run job -- <chave>` e a rota
+// `POST /monitoracao/agendas/:chave/executar`). No cron agendado ninguém liga o trace e
+// `passoTrace` retorna na primeira instrução — ver `lib/cronTrace.js`.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { passo: passoTrace } = require('./lib/cronTrace');
 
 /** Diário de execução do cron — ver `lib/cronTenant.js`. */
 type Diario = {
@@ -621,6 +638,33 @@ registrarJob('lembrete_whatsapp', {
   }),
 });
 
+// ===================== CRON — REENVIO DE LINK PÚBLICO DE FATURA =====================
+// Quando o clique em "Enviar" (WhatsApp/e-mail) falha na hora, o link fica
+// PENDENTE/FALHOU com `proximaTentativaEm` agendado (backoff — ver
+// lib/faturaLinkPublico.js). Este job varre e tenta de novo; ver
+// lib/notificationDispatch.js para o ponto de troca para fila real (Redis/BullMQ).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { reenviarLinksPendentes } = require('./services/faturaLinkCronService');
+
+registrarJob('reenviar_links_fatura', {
+  nome: 'Reenvio de link público de fatura (WhatsApp/e-mail)',
+  exprPadrao: '*/15 * * * *', // a cada 15 minutos — o backoff mais curto já é de 10min
+  // `…ComEnvio` pelo mesmo motivo dos jobs acima: este job manda WhatsApp/e-mail.
+  fn: () => comAlerta('Reenvio de link público de fatura', async () => {
+    const detalhes: string[] = [];
+    let verificados = 0;
+    const r = await paraCadaEmpresaComEnvio('FaturaLink-Retry', async (empresa: { id: number }) => {
+      const res = await reenviarLinksPendentes(empresa.id);
+      verificados += res.verificados;
+      if (res.detalhes?.length) detalhes.push(...res.detalhes);
+      return res.enviados;
+    });
+    const cabecalho = `${r.total} link(s) reenviado(s) de ${verificados} pendente(s) na janela, em ${r.empresas} empresa(s).`;
+    const resumo = detalhes.length > 0 ? `${cabecalho}\n\n${detalhes.join('\n\n')}` : cabecalho;
+    return { ok: true, notificar: r.total > 0 || r.falhas.length > 0, resumo };
+  }),
+});
+
 // ============== CRON — AVISO DE PRÓXIMA DOSE DE PRESCRIÇÃO (WhatsApp, 15min antes) ==============
 // Execução de prescrição por DOSE individual (ver lib/agendaDoses.js e
 // PrescricaoGrupoController.executar): a cada dose, o horário da PRÓXIMA é
@@ -671,12 +715,29 @@ const FALLBACK_ULTIMO_DIA_MES: ConfigFechamento = { tipoFechamento: 'ULTIMO_DIA_
 // Retorna [] quando não há nenhuma configuração aplicável (proprietário sem equipe, ou nenhuma
 // EmpresaConfiguracao criada ainda) — o caller cai no fallback do último dia do mês (comportamento
 // anterior, preservado).
-async function resolverConfigsFechamento(proprietarioId: number | null): Promise<ConfigFechamento[]> {
+//
+// 🔴 `db` É OBRIGATÓRIO E TEM DE SER O `tx` DA EMPRESA DA VEZ.
+//
+// Este parâmetro não existia, e foi a causa do fechamento automático NUNCA acontecer no
+// dia configurado. A função usava o `prisma` global; o cron não roda sob `comEmpresa`
+// (ele carimba o tenant à mão, em `paraCadaEmpresa`), então toda consulta feita FORA do
+// `tx` chega ao banco sem `app.empresa_id`. Com o RLS fail-closed da fase 7c, isso não é
+// erro: é ZERO LINHA, em silêncio.
+//
+// O efeito em cadeia era este, todo dia: `getEquipeIdsDoProprietario` via 0 animais →
+// 0 equipes → `[]` → o chamador caía no fallback "último dia do mês" → a clínica que
+// pediu para fechar no dia 23 nunca fechava. A configuração existia no banco o tempo
+// todo; ela é que estava invisível para quem precisava lê-la.
+//
+// Regra geral para cron: **dentro de `paraCadaEmpresa`, tudo passa pelo `tx`.** O
+// `prisma` global ali dentro não é "o mesmo banco sem tenant" — é uma consulta que
+// enxerga nada.
+async function resolverConfigsFechamento(db: typeof prisma, proprietarioId: number | null): Promise<ConfigFechamento[]> {
   if (!proprietarioId) return [];
-  const equipeIds: number[] = await getEquipeIdsDoProprietario(proprietarioId);
+  const equipeIds: number[] = await getEquipeIdsDoProprietario(proprietarioId, null, db);
   if (equipeIds.length === 0) return [];
 
-  const equipes = await prisma.equipe.findMany({
+  const equipes = await db.equipe.findMany({
     where:  { id: { in: equipeIds } },
     select: { id: true, empresaId: true, empresa: { select: { cnpj: true } } },
   });
@@ -690,7 +751,7 @@ async function resolverConfigsFechamento(proprietarioId: number | null): Promise
   }
   if (escopos.size === 0) return [];
 
-  return prisma.empresaConfiguracao.findMany({
+  return db.empresaConfiguracao.findMany({
     where:  { OR: [...escopos.values()] },
     select: { tipoFechamento: true, diaFechamentoFatura: true },
   });
@@ -725,25 +786,48 @@ async function fecharFaturasDoMes() {
           proprietario: { select: { fullName: true } },
         },
       });
+      passoTrace(`${faturas.length} fatura(s) ABERTA(s)`, { ids: faturas.map(f => f.id).join(',') || '—' });
       if (!faturas.length) return;
+
+      // A configuração de fechamento é da EMPRESA/EQUIPE, não da fatura: dois clientes
+      // da mesma clínica compartilham a resposta. Resolver uma vez por proprietário
+      // evita repetir as três consultas por fatura — o comentário do job já prometia
+      // isso, e agora é verdade.
+      const configsPorProprietario = new Map<number, ConfigFechamento[]>();
 
       for (const fatura of faturas) {
         const quem = `fatura #${fatura.id}`
           + (fatura.mesReferencia ? ` (${fatura.mesReferencia})` : '')
           + ` · ${fatura.proprietario?.fullName ?? `proprietário ${fatura.proprietarioId}`}`;
         try {
-          const configs = await resolverConfigsFechamento(fatura.proprietarioId);
-          const deveFechar = configs.length > 0
+          const chaveProp = Number(fatura.proprietarioId ?? 0);
+          if (!configsPorProprietario.has(chaveProp)) {
+            configsPorProprietario.set(chaveProp, await resolverConfigsFechamento(tx, fatura.proprietarioId));
+          }
+          const configs = configsPorProprietario.get(chaveProp) as ConfigFechamento[];
+          const usouFallback = configs.length === 0;
+          const deveFechar = !usouFallback
             ? configs.some((c: ConfigFechamento) => deveFecharHoje(c, hoje))
             : deveFecharHoje(FALLBACK_ULTIMO_DIA_MES, hoje); // fallback: nenhuma equipe/empresa do proprietário configurou fechamento
 
+          passoTrace(`${quem}: regra=${usouFallback
+              ? 'FALLBACK último dia do mês (nenhuma configuração encontrada)'
+              : configs.map((c: ConfigFechamento) => `${c.tipoFechamento ?? 'ULTIMO_DIA_MES'}${c.diaFechamentoFatura != null ? `(${c.diaFechamentoFatura})` : ''}`).join(' | ')
+            } → ${deveFechar ? 'FECHA hoje' : 'não fecha hoje'}`);
+
           if (!deveFechar) continue;
 
+          // ⚠️ `tx` nas DUAS chamadas — ver a explicação em `resolverConfigsFechamento`.
+          // Sem ele, `adicionarAssistenciaMensal` não achava o perfil do cliente (o
+          // mensalista deixava de ser cobrado) e `recalcularTotal` somava ZERO item e
+          // esbarrava no RLS ao gravar ("Record to update not found"), derrubando o
+          // fechamento da fatura inteira.
+          //
           // A assistência é a da EMPRESA DA FATURA. Só fatura legada (empresaId null,
           // anterior à migration 20260812000000) cai na dedução por ProprietarioPerfil.
-          await adicionarAssistenciaMensal(fatura.id, fatura.proprietarioId, null, fatura.empresaId);
+          await adicionarAssistenciaMensal(fatura.id, fatura.proprietarioId, null, fatura.empresaId, tx);
 
-          const total = await recalcularTotal(fatura.id);
+          const total = await recalcularTotal(fatura.id, tx);
 
           await tx.fatura.update({
             where: { id: fatura.id },
@@ -803,15 +887,25 @@ async function marcarFaturasAtrasadas() {
         },
       });
 
+      passoTrace(`${faturas.length} fatura(s) FECHADA(s) a conferir`, { ids: faturas.map(f => f.id).join(',') || '—' });
+
       for (const fatura of faturas) {
         const quem = `fatura #${fatura.id} (${fatura.mesReferencia}) · ${fatura.proprietario?.fullName ?? 'proprietário ' + fatura.proprietarioId}`;
         try {
-          const dia = await diaVencimentoDoProprietario(fatura.proprietarioId, fatura.empresaId);
-          if (!dia || !fatura.mesReferencia) continue;
+          // ⚠️ `tx`, não o `prisma` global: sem tenant carimbado o RLS esconde o
+          // `ProprietarioPerfil`, `dia` volta null e o `continue` abaixo faz TODA fatura
+          // ser pulada — o job terminava "sem trabalho" e nenhuma fatura vencida era
+          // marcada como ATRASADA. Mesmo defeito do fechamento; ver `lib/cronTenant.js`.
+          const dia = await diaVencimentoDoProprietario(fatura.proprietarioId, fatura.empresaId, tx);
+          if (!dia || !fatura.mesReferencia) {
+            passoTrace(`${quem}: sem dia de vencimento no cadastro do cliente — ignorada`);
+            continue;
+          }
           const [y, m] = String(fatura.mesReferencia).split('-').map(Number);
           if (!y || !m) continue;
           // m (1-based) usado como monthIndex → mês SEGUINTE ao de referência; fim do dia.
           const vencimento = new Date(y, m, Math.min(dia, 28), 23, 59, 59, 999);
+          passoTrace(`${quem}: vence em ${vencimento.toISOString().slice(0, 10)} → ${hoje > vencimento ? 'ATRASADA' : 'em dia'}`);
           if (hoje > vencimento) {
             await tx.fatura.update({ where: { id: fatura.id }, data: { status: 'ATRASADA' } });
             diario.ok(empresa, `${quem} — ATRASADA (venceu em ${vencimento.toISOString().slice(0,10)})`);

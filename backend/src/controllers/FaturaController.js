@@ -6,6 +6,7 @@ const {
   recalcularTotal: recalcularTotalCompartilhado,
   registrarCorrecaoFatura,
   normalizarDesconto,
+  formatAtendimentoNum,
 } = require('../lib/faturaUtils');
 const { resolverLogoPorProprietario } = require('../lib/logoEmpresaUtils');
 const { registrarAuditoria } = require('../lib/auditoria');
@@ -16,7 +17,8 @@ const {
 } = require('../lib/proprietarioPerfil');
 const { htmlParaPdf } = require('../services/documentoWhatsappService');
 const { storage, chaveDaUrl } = require('../storage');
-const { criarLink: criarLinkFaturaPublico } = require('../lib/faturaLinkPublico');
+const { criarLink: criarLinkFaturaPublico, revogar: revogarLinkFaturaPublico } = require('../lib/faturaLinkPublico');
+const { enfileirarEnvioFatura } = require('../lib/notificationDispatch');
 const whatsappService = require('../services/whatsappService');
 const emailService = require('../services/emailService');
 
@@ -28,10 +30,18 @@ const emailService = require('../services/emailService');
 // tela cobria o caso de pagamento parcial que isso exigiria).
 async function comPerfilDaEmpresa(fatura, empresaId) {
   if (!fatura) return fatura;
-  return fatura.proprietario && empresaId
-    ? { ...fatura, proprietario: await aplicarPerfilProprietario(fatura.proprietario, empresaId) }
-    : fatura;
+  const comOrigem = comOrigemDosItens(fatura);
+  return comOrigem.proprietario && empresaId
+    ? { ...comOrigem, proprietario: await aplicarPerfilProprietario(comOrigem.proprietario, empresaId) }
+    : comOrigem;
 }
+
+// A evolução é o ATENDIMENTO ao qual a cobrança pertence — é dela que sai o número
+// `[AG-0012]`/`[EV-0007]` já gravado na descrição do item, e é para ela (ou para o
+// agendamento que a originou) que o financeiro precisa conseguir ir a partir da fatura.
+const EVOLUCAO_ORIGEM_SELECT = {
+  id: true, numero: true, tipoAtendimento: true, animalId: true, agendamentoId: true,
+};
 
 const ITEM_INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -40,7 +50,50 @@ const ITEM_INCLUDE = {
       id: true, nome: true, especie: { select: { nome: true } }, raca: { select: { nome: true } }, photoUrl: true,
     },
   },
+  // Origem clínica do item — só o suficiente para montar o link do número do
+  // atendimento. `FaturaItem` guarda a FK de cada origem possível (migration
+  // 20260701000001) e no máximo UMA delas é preenchida por linha.
+  // ⚠️ A prescrição chega pelo ITEM (`prescricaoId`), e a evolução mora no GRUPO —
+  // por isso o salto a mais aqui.
+  prescricao:            { select: { id: true, grupo: { select: { id: true, evolucao: { select: EVOLUCAO_ORIGEM_SELECT } } } } },
+  exameClinico:          { select: { id: true, evolucao: { select: EVOLUCAO_ORIGEM_SELECT } } },
+  vacinaClinica:         { select: { id: true, evolucao: { select: EVOLUCAO_ORIGEM_SELECT } } },
+  encaminhamentoClinico: { select: { id: true, evolucao: { select: EVOLUCAO_ORIGEM_SELECT } } },
 };
+
+// Achata a origem de cada item em `item.origem` e DESCARTA as relações cruas do
+// payload: a tela precisa de 4 campos, não da prescrição/exame/vacina inteiros —
+// e a fatura de um mês inteiro carregaria isso em toda listagem.
+// `origem` fica null quando o item não tem origem clínica (assistência mensal,
+// lançamento manual do financeiro, item OUTROS do orçamento) — nesses não há
+// atendimento nenhum para onde ir, e a tela simplesmente não mostra o link.
+function comOrigemDoItem(item) {
+  if (!item) return item;
+  const { prescricao, exameClinico, vacinaClinica, encaminhamentoClinico, ...resto } = item;
+  const evolucao = prescricao?.grupo?.evolucao
+    ?? exameClinico?.evolucao
+    ?? vacinaClinica?.evolucao
+    ?? encaminhamentoClinico?.evolucao
+    ?? null;
+  return {
+    ...resto,
+    origem: evolucao
+      ? {
+          evolucaoId:        evolucao.id,
+          animalId:          evolucao.animalId,
+          agendamentoId:     evolucao.agendamentoId ?? null,
+          // Mesmo formato que a descrição do item já carrega ("AG-0012"), montado
+          // pelo helper compartilhado — nunca à mão (CLAUDE.md, nº do atendimento).
+          atendimentoNumero: formatAtendimentoNum(evolucao.tipoAtendimento, evolucao.numero),
+        }
+      : null,
+  };
+}
+
+function comOrigemDosItens(fatura) {
+  if (!fatura?.itens) return fatura;
+  return { ...fatura, itens: fatura.itens.map(comOrigemDoItem) };
+}
 
 const FATURA_INCLUDE = {
   itens: {
@@ -51,8 +104,17 @@ const FATURA_INCLUDE = {
   proprietario: { select: { id: true, fullName: true, email: true, phone: true, valorAssistencia: true, mensalista: true } },
 };
 
-function recalcularTotal(faturaId) {
-  return recalcularTotalCompartilhado(prisma, faturaId);
+/**
+ * @param {number} faturaId
+ * @param {object} [db] cliente a usar. 🔴 OBRIGATÓRIO no CRON: dentro de
+ *   `paraCadaEmpresa` o tenant está carimbado no `tx`, e o `prisma` global chega ao
+ *   banco sem `app.empresa_id` — com o RLS fail-closed isso significa somar ZERO item e
+ *   falhar o UPDATE com "Record to update not found". Ver `lib/cronTenant.js`.
+ *   Numa requisição HTTP o padrão continua certo: `comEmpresa` já pôs o tenant no
+ *   contexto e a extensão do client o carimba sozinha.
+ */
+function recalcularTotal(faturaId, db = prisma) {
+  return recalcularTotalCompartilhado(db, faturaId);
 }
 
 function mesReferenciaAtual() {
@@ -86,14 +148,14 @@ function proximoMesRef(mesRef) {
  * A dedução pelos perfis do proprietário virou fallback exclusivo das faturas legadas
  * anteriores a essa migration, que não têm tenancy gravada.
  */
-async function resolverAssistencia(proprietarioId, empresaId = null) {
+async function resolverAssistencia(proprietarioId, empresaId = null, db = prisma) {
   const userId = Number(proprietarioId);
   if (!userId) return null;
 
   // Legado: cliente anterior à migration, que não tem perfil em empresa nenhuma —
   // o valor ficou no User. É o ÚNICO caso em que o User ainda vale.
   const doUsuarioLegado = async () => {
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { valorAssistencia: true } });
+    const user = await db.user.findUnique({ where: { id: userId }, select: { valorAssistencia: true } });
     return user?.valorAssistencia ?? null;
   };
 
@@ -101,7 +163,7 @@ async function resolverAssistencia(proprietarioId, empresaId = null) {
   //    Não varrer outras empresas aqui — o mesmo cliente pode ser mensalista na
   //    clínica A e não ser na B; cair no perfil de A faria a B cobrar o valor de A.
   if (empresaId) {
-    const perfil = await prisma.proprietarioPerfil.findUnique({
+    const perfil = await db.proprietarioPerfil.findUnique({
       where:  { userId_empresaId: { userId, empresaId: Number(empresaId) } },
       select: { valorAssistencia: true },
     });
@@ -111,7 +173,7 @@ async function resolverAssistencia(proprietarioId, empresaId = null) {
 
   // 2) SEM empresa no contexto (cron de fechamento, ADMIN global): a fatura não
   //    carrega empresa, então deduz-se pelos perfis do próprio proprietário.
-  const perfis = await prisma.proprietarioPerfil.findMany({
+  const perfis = await db.proprietarioPerfil.findMany({
     where:   { userId, valorAssistencia: { gt: 0 } },
     select:  { empresaId: true, valorAssistencia: true },
     orderBy: { empresaId: 'asc' },
@@ -141,12 +203,12 @@ async function resolverAssistencia(proprietarioId, empresaId = null) {
  * `EmpresaConfiguracao.tipoFechamento`/`diaFechamentoFatura` (tela de Configurações
  * da empresa), aplicada por `deveFecharHoje` em `lib/faturaUtils.js`.
  */
-async function diaVencimentoDoProprietario(proprietarioId, empresaId = null) {
+async function diaVencimentoDoProprietario(proprietarioId, empresaId = null, db = prisma) {
   const userId = Number(proprietarioId);
   if (!userId) return null;
 
   if (empresaId) {
-    const perfil = await prisma.proprietarioPerfil.findUnique({
+    const perfil = await db.proprietarioPerfil.findUnique({
       where:  { userId_empresaId: { userId, empresaId: Number(empresaId) } },
       select: { diaVencimentoFatura: true },
     });
@@ -154,14 +216,14 @@ async function diaVencimentoDoProprietario(proprietarioId, empresaId = null) {
   }
 
   // Fatura legada sem empresa: aceita o perfil quando ele é único e não ambíguo
-  const perfis = await prisma.proprietarioPerfil.findMany({
+  const perfis = await db.proprietarioPerfil.findMany({
     where:    { userId, diaVencimentoFatura: { not: null } },
     select:   { diaVencimentoFatura: true },
     distinct: ['diaVencimentoFatura'],
   });
   if (perfis.length === 1) return perfis[0].diaVencimentoFatura;
 
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { diaVencimentoFatura: true } });
+  const user = await db.user.findUnique({ where: { id: userId }, select: { diaVencimentoFatura: true } });
   return user?.diaVencimentoFatura ?? null;
 }
 
@@ -175,18 +237,22 @@ async function diaVencimentoDoProprietario(proprietarioId, empresaId = null) {
  * Depender do flag só acrescentaria uma segunda fonte de verdade capaz de divergir.
  *
  * @param proprietario id do proprietário (aceita também o objeto, por compatibilidade)
- * @param empresaId    empresa do contexto (`req.empresaId`); null no cron
+ * @param empresaId    empresa da FATURA (`Fatura.empresaId`); null só em fatura legada
+ * @param db           🔴 OBRIGATÓRIO no CRON: o `tx` da empresa da vez. Com o `prisma`
+ *   global, o cron não achava o `ProprietarioPerfil` (RLS sem tenant) e o mensalista
+ *   simplesmente deixava de ser cobrado no fechamento — sem erro nenhum, porque "não
+ *   achei perfil" e "não é mensalista" produzem o mesmo `return false`.
  */
-async function adicionarAssistenciaMensal(faturaId, proprietario, veterinarioId = null, empresaId = null) {
+async function adicionarAssistenciaMensal(faturaId, proprietario, veterinarioId = null, empresaId = null, db = prisma) {
   const proprietarioId = typeof proprietario === 'object' ? proprietario?.id : proprietario;
-  const valor = await resolverAssistencia(proprietarioId, empresaId);
+  const valor = await resolverAssistencia(proprietarioId, empresaId, db);
   if (!valor || valor <= 0) return false;
 
-  const existeAssistencia = await prisma.faturaItem.findFirst({
+  const existeAssistencia = await db.faturaItem.findFirst({
     where: { faturaId, tipo: 'ASSISTENCIA', descricao: 'Assistência Veterinária Mensal' },
   });
   if (existeAssistencia) return false;
-  await prisma.faturaItem.create({
+  await db.faturaItem.create({
     data: {
       faturaId,
       tipo:         'ASSISTENCIA',
@@ -196,7 +262,7 @@ async function adicionarAssistenciaMensal(faturaId, proprietario, veterinarioId 
       veterinarioId: veterinarioId ?? null,
     },
   });
-  await recalcularTotal(faturaId);
+  await recalcularTotal(faturaId, db);
   return true;
 }
 
@@ -221,7 +287,7 @@ function faturaForaDoEscopo(fatura, req) {
 // quando o vet manda pelos dois — mas como cada clique é uma ação SEPARADA do
 // usuário, um link novo por envio é aceitável (e mais simples que rastrear se o
 // conteúdo mudou desde o último).
-async function gerarLinkPublicoDaFatura({ fatura, req, html, nomeArquivo }) {
+async function gerarLinkPublicoDaFatura({ fatura, req, html, nomeArquivo, canal, destino }) {
   const pdf = await htmlParaPdf(html);
   const url = await storage.upload(
     { buffer: pdf, mimetype: 'application/pdf', originalname: nomeArquivo, size: pdf.length },
@@ -236,6 +302,8 @@ async function gerarLinkPublicoDaFatura({ fatura, req, html, nomeArquivo }) {
     proprietarioId: fatura.proprietarioId,
     midiaChave,
     criadoPorId:    req.user.id,
+    canal,
+    destino,
   });
 }
 
@@ -523,7 +591,7 @@ const FaturaController = {
       });
 
       const total = await recalcularTotal(Number(faturaId));
-      res.status(201).json({ dados: item, totalFatura: total });
+      res.status(201).json({ dados: comOrigemDoItem(item), totalFatura: total });
     } catch (err) {
       console.error('Erro ao adicionar item:', err);
       res.status(500).json({ error: 'Erro interno' });
@@ -572,7 +640,7 @@ const FaturaController = {
 
       const total = await recalcularTotal(item.faturaId);
       await registrarCorrecaoFatura(prisma, item.faturaId);
-      res.json({ dados: updated, totalFatura: total });
+      res.json({ dados: comOrigemDoItem(updated), totalFatura: total });
     } catch (err) {
       console.error('Erro ao atualizar item:', err);
       res.status(500).json({ error: 'Erro interno' });
@@ -681,14 +749,29 @@ const FaturaController = {
       const telefone = (telefoneBody || '').trim() || proprietario.phone;
       if (!telefone) return res.status(400).json({ error: 'Proprietário sem telefone cadastrado.', code: 'SEM_TELEFONE' });
 
-      const link = await gerarLinkPublicoDaFatura({ fatura, req, html, nomeArquivo });
+      const link = await gerarLinkPublicoDaFatura({ fatura, req, html, nomeArquivo, canal: 'WHATSAPP', destino: telefone });
 
       const mensagem = [texto, `📄 Abra a fatura pelo link: ${link.url}`].filter(Boolean).join('\n\n');
-      const envio = await whatsappService.sendMessage(
-        { empresaId: req.empresaId, equipeId: req.equipeId ?? null }, telefone, mensagem,
-      );
+      // enfileirarEnvioFatura: tenta na hora e grava o resultado no link (status/
+      // tentativas/proximaTentativaEm) — falha aqui NÃO é erro de requisição, o
+      // cron de reenvio (services/faturaLinkCronService.js) tenta de novo sozinho.
+      const envio = await enfileirarEnvioFatura(link.id, async () => {
+        const res = await whatsappService.sendMessage(
+          { empresaId: req.empresaId, equipeId: req.equipeId ?? null }, telefone, mensagem,
+        );
+        return res?.sucesso
+          ? { sucesso: true, simulado: !!res.simulado }
+          : { sucesso: false, erro: res?.erro ?? 'ERRO_ENVIO' };
+      });
 
-      return res.json({ dados: { enviado: !!envio?.sucesso, simulado: !!envio?.simulado, url: link.url, telefone } });
+      return res.json({
+        dados: {
+          enviado:  !!envio?.sucesso,
+          simulado: !!envio?.simulado,
+          status:   envio?.sucesso ? 'ENVIADO' : 'PENDENTE_REENVIO',
+          url: link.url, telefone,
+        },
+      });
     } catch (err) {
       console.error('FaturaController.enviarLinkWhatsapp:', err);
       return res.status(500).json({ error: 'Erro ao enviar a fatura por WhatsApp.' });
@@ -718,23 +801,93 @@ const FaturaController = {
       const destino = (emailBody || '').trim() || proprietario.email;
       if (!destino) return res.status(400).json({ error: 'Proprietário sem e-mail cadastrado.', code: 'SEM_EMAIL' });
 
-      const link = await gerarLinkPublicoDaFatura({ fatura, req, html, nomeArquivo });
+      const link = await gerarLinkPublicoDaFatura({ fatura, req, html, nomeArquivo, canal: 'EMAIL', destino });
 
       if (!emailService.estaConfigurado()) {
-        return res.json({ dados: { enviado: false, url: link.url } });
+        return res.json({ dados: { enviado: false, status: 'SEM_PROVEDOR', url: link.url } });
       }
-      await emailService.enviarLinkFatura({
-        proprietarioEmail: destino,
-        proprietarioNome:  proprietario.fullName ?? 'Cliente',
-        assunto:            titulo || nomeArquivo,
-        corpo:              texto || '',
-        url:                link.url,
+
+      const envio = await enfileirarEnvioFatura(link.id, async () => {
+        try {
+          await emailService.enviarLinkFatura({
+            proprietarioEmail: destino,
+            proprietarioNome:  proprietario.fullName ?? 'Cliente',
+            assunto:            titulo || nomeArquivo,
+            corpo:              texto || '',
+            url:                link.url,
+          });
+          return { sucesso: true };
+        } catch (err) {
+          return { sucesso: false, erro: err.message };
+        }
       });
 
-      return res.json({ dados: { enviado: true, url: link.url } });
+      return res.json({
+        dados: {
+          enviado: !!envio?.sucesso,
+          status:  envio?.sucesso ? 'ENVIADO' : 'PENDENTE_REENVIO',
+          url: link.url,
+        },
+      });
     } catch (err) {
       console.error('FaturaController.enviarLinkEmail:', err);
       return res.status(500).json({ error: 'Erro ao enviar a fatura por e-mail.' });
+    }
+  },
+
+  // GET /:faturaId/links — histórico de links enviados desta fatura (canal,
+  // destino, status, tentativas, acessos, revogação). Escopado pela mesma
+  // checagem de tenant que os demais endpoints de fatura.
+  listarLinks: async (req, res) => {
+    const { faturaId } = req.params;
+    try {
+      const fatura = await prisma.fatura.findUnique({
+        where:  { id: Number(faturaId) },
+        select: { id: true, empresaId: true },
+      });
+      if (!fatura || faturaForaDoEscopo(fatura, req)) return res.status(404).json({ error: 'Fatura não encontrada' });
+
+      const links = await prisma.faturaLinkPublico.findMany({
+        where:   { faturaId: Number(faturaId) },
+        orderBy: { criadoEm: 'desc' },
+        select: {
+          id: true, canal: true, destino: true, status: true, tentativas: true,
+          ultimoErro: true, enviadoEm: true, proximaTentativaEm: true,
+          revogadoEm: true, ultimoAcessoEm: true, qtdAcessos: true, expiraEm: true, criadoEm: true,
+        },
+      });
+      return res.json({ dados: links });
+    } catch (err) {
+      console.error('FaturaController.listarLinks:', err);
+      return res.status(500).json({ error: 'Erro ao listar os links da fatura.' });
+    }
+  },
+
+  // PATCH /:faturaId/links/:linkId/revogar — encerra o link IMEDIATAMENTE
+  // (diferente de deixar expirar em 30 dias). Mesmo gate de permissão dos
+  // demais endpoints de envio da fatura (financeiro.faturas.editar).
+  revogarLink: async (req, res) => {
+    const { faturaId, linkId } = req.params;
+    try {
+      const fatura = await prisma.fatura.findUnique({
+        where:  { id: Number(faturaId) },
+        select: { id: true, empresaId: true },
+      });
+      if (!fatura || faturaForaDoEscopo(fatura, req)) return res.status(404).json({ error: 'Fatura não encontrada' });
+
+      const link = await prisma.faturaLinkPublico.findUnique({ where: { id: Number(linkId) } });
+      if (!link || link.faturaId !== fatura.id) return res.status(404).json({ error: 'Link não encontrado' });
+      if (link.revogadoEm) return res.json({ dados: link }); // idempotente
+
+      const revogado = await revogarLinkFaturaPublico(link.id, req.user.id);
+      await registrarAuditoria(null, req, {
+        categoria: 'CANCELAMENTO', entidade: 'FATURA_LINK', entidadeId: link.id,
+        motivo: `Link de fatura (${link.canal ?? '—'} para ${link.destino ?? '—'}) revogado manualmente.`,
+      });
+      return res.json({ dados: revogado });
+    } catch (err) {
+      console.error('FaturaController.revogarLink:', err);
+      return res.status(500).json({ error: 'Erro ao revogar o link.' });
     }
   },
 

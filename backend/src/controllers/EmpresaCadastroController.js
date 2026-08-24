@@ -9,6 +9,7 @@
 // e por isso moram em telas diferentes.
 
 const prisma = require('../lib/prisma').default;
+const { invalidarCache: invalidarCacheFuso } = require('../lib/fusoEmpresa');
 const { usoDeAssentos } = require('../lib/planoEmpresa');
 // Documento da empresa: obrigatório e único entre empresas (ver lib/documentoEmpresa.js)
 const { resolverDocumento } = require('../lib/documentoEmpresa');
@@ -243,6 +244,12 @@ module.exports = {
 
       await prisma.$transaction(async (tx) => {
         await tx.empresa.update({ where: { id: empresa.id }, data: dados });
+
+        // O FUSO da clínica é deduzido do CEP/UF (lib/fusoEmpresa.js) e fica em cache
+        // de 60s por empresa. Mudou o endereço, o fuso pode ter mudado junto — zera o
+        // cache na hora em vez de deixar a fila do plantão e os avisos rodando até um
+        // minuto no fuso antigo.
+        invalidarCacheFuso(empresa.id);
 
         if (precisaMigrarEscopo) {
           const primeiraEquipe = await tx.equipe.findFirst({

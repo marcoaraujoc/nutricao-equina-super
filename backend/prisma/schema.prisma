@@ -94,6 +94,7 @@ model User {
   faturaItens          FaturaItem[]           @relation("FaturaItemVet")
   faturas              Fatura[]               @relation("FaturaProprietario")
   faturaLinksPublicos  FaturaLinkPublico[]    @relation("FaturaLinkProprietario")
+  faturaLinksRevogados FaturaLinkPublico[]    @relation("FaturaLinkRevogadoPor")
   aiUsageLogs          AiUsageLog[]
   vetPerfil            VetPerfil?
   especialidades       UsuarioEspecialidade[]
@@ -949,7 +950,12 @@ model AgendamentoClinico {
   titulo        String   @db.VarChar(255)
   dataHora      DateTime @map("data_hora")
   observacao    String?  @db.Text
-  status        String   @default("AGENDADO") @db.VarChar(20) // AGENDADO|CONCLUIDO|CANCELADO
+  // ⚠️ 30, não 20: `CANCELADO_AUTOMATICAMENTE` tem 25 caracteres e NÃO cabia em
+  // VarChar(20) — o cron noturno que o grava falhava toda noite (migration
+  // 20260914000000). Status novo aqui: confira o comprimento antes.
+  // AGENDADO|ATRASADA|EM_ANDAMENTO|CONCLUIDO|FINALIZADO|CANCELADO|
+  // CANCELADO_AUTOMATICAMENTE|REAGENDADO|TRANSFERIDO(legado)
+  status        String   @default("AGENDADO") @db.VarChar(30)
   ativo         Boolean  @default(true)
   numero        Int?     // sequencial por animal (AG-0001)
   criadoPorId   Int?     @map("criado_por_id")
@@ -1126,11 +1132,37 @@ model FaturaLinkPublico {
   criadoPorId    Int?     @map("criado_por_id")
   criadoEm       DateTime @default(now()) @map("criado_em")
 
+  /// Canal e destino do ENVIO que originou este link — cada clique de "enviar"
+  /// gera uma linha nova (ver criarLink), então canal/destino são do envio, não
+  /// um atributo genérico da fatura. `null` cobre link criado sem envio associado
+  /// (nenhum caso hoje, mas evita obrigar todo caller a informar).
+  canal               String?   @db.VarChar(10) @map("canal")   // 'WHATSAPP' | 'EMAIL'
+  destino             String?   @db.VarChar(180) @map("destino") // telefone/e-mail usado
+  status              String    @default("PENDENTE") @db.VarChar(20) @map("status")
+  // PENDENTE | ENVIADO | FALHOU | FALHOU_DEFINITIVO
+  tentativas          Int       @default(0) @map("tentativas")
+  ultimoErro          String?   @db.VarChar(300) @map("ultimo_erro")
+  enviadoEm           DateTime? @map("enviado_em")
+  proximaTentativaEm  DateTime? @map("proxima_tentativa_em")
+
+  /// Revogação — distinta de expiração (`expiraEm`, sempre 30 dias corridos).
+  /// `abrirLink`/`obterResumo` respondem 410 com mensagem própria quando setado.
+  revogadoEm     DateTime? @map("revogado_em")
+  revogadoPorId  Int?      @map("revogado_por_id")
+
+  /// Contador aproximado de acesso público — incrementado por `obterResumo`
+  /// (uma vez por visita da página, não por byte servido). Uso: UI "Links
+  /// enviados" mostrar se o cliente já abriu, não telemetria de precisão.
+  ultimoAcessoEm DateTime? @map("ultimo_acesso_em")
+  qtdAcessos     Int       @default(0) @map("qtd_acessos")
+
   fatura       Fatura @relation(fields: [faturaId], references: [id], onDelete: Cascade)
   proprietario User   @relation("FaturaLinkProprietario", fields: [proprietarioId], references: [id], onDelete: Cascade)
+  revogadoPor  User?  @relation("FaturaLinkRevogadoPor", fields: [revogadoPorId], references: [id], onDelete: SetNull)
 
   @@index([faturaId])
   @@index([expiraEm])
+  @@index([status, proximaTentativaEm])
   @@map("tb_fatura_links_publicos")
   @@schema("schs2vet")
 }
@@ -2002,6 +2034,13 @@ model EmpresaConfiguracao {
   // de Orcamento.createdAt, o cron cancela o que não foi aprovado (nem parcialmente).
   // null = sem validade — o orçamento não expira.
   validadeOrcamentoDias  Int?    @map("validade_orcamento_dias")
+  // Fuso horário da clínica (IANA, ex.: "America/Manaus") — migration 20260823000000.
+  // A aplicação roda nos 4 fusos do Brasil (UTC−2 a UTC−5); sem isto o backend
+  // assumia America/Sao_Paulo fixo e a fila do plantão / e-mail / WhatsApp saíam
+  // 1-2h deslocados para quem está em UTC−4/−5.
+  // null = America/Sao_Paulo (comportamento anterior). Ler/gravar SEMPRE por
+  // lib/fusoEmpresa.js (SQL cru — ver a nota lá).
+  fusoHorario           String?   @db.VarChar(60) @map("fuso_horario")
   // Evolution API — instância exclusiva de WhatsApp da clínica (migration 20260718170000).
   // waInstance: identificador da instância (nunca exposto ao frontend);
   // waStatus: DESCONECTADO | AGUARDANDO_QR | CONECTADO | ERRO.

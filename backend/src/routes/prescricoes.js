@@ -20,12 +20,22 @@ router.delete('/grupos/:id/itens/:itemId', authenticate, checkPermission('atendi
 router.post('/grupos/:id/finalizar',      authenticate, checkPermission('atendimento.prescricoes.finalizar', 'PROPRIO'), PrescricaoGrupoController.finalizar);
 router.post('/grupos/:id/cancelar',       authenticate, checkPermission('atendimento.prescricoes.finalizar', 'PROPRIO'), PrescricaoGrupoController.cancelar);
 router.post('/grupos/:id/cancelar-execucao', authenticate, checkPermission('atendimento.prescricoes.finalizar', 'PROPRIO'), PrescricaoGrupoController.cancelarNaExecucao);
-// Cancelar A PARTIR DO PLANTÃO (/execucao-prescricao). MESMO controller — e portanto
-// mesma regra — do cancelar da tela de prescrição: bloqueia se houve qualquer execução.
-// O que muda é só QUEM pode: quem opera o plantão não tem, e não deveria precisar ter,
-// `atendimento.prescricoes.finalizar` (permissão de quem prescreve). Por isso o slug
-// próprio do módulo Enfermagem, configurável na coluna CANCELAR do Controle de Acesso.
-router.post('/grupos/:id/cancelar-plantao', authenticate, checkPermission('enfermagem.prescricao.deletar', 'PROPRIO'), PrescricaoGrupoController.cancelar);
+// Cancelar A PARTIR DO PLANTÃO (/execucao-prescricao).
+//
+// 🔴 Aponta para `cancelarNaExecucao`, NÃO para `cancelar` (2026-08-24). O plantão é
+// justamente onde a prescrição JÁ COMEÇOU a ser aplicada: usar o `cancelar` da tela de
+// prescrição (que recusa 400 EXECUTADO se houve qualquer dose) deixava o botão de
+// cancelar sem NENHUM caso de uso real — abria o modal de justificativa e o clique
+// morria no backend. Tratamento de vários dias parado no meio ficava sem saída pela
+// tela: as doses restantes seguiam voltando à fila todo dia.
+// `cancelarNaExecucao` faz o que o plantão precisa: cancela as doses que ainda FALTAM,
+// libera as reservas de estoque remanescentes e PRESERVA o que já foi aplicado (com o
+// item de fatura e a baixa de estoque, que não podem ficar órfãos).
+// O que muda em relação ao `/cancelar-execucao` é só QUEM pode: quem opera o plantão
+// não tem, e não deveria precisar ter, `atendimento.prescricoes.finalizar` (permissão
+// de quem prescreve). Por isso o slug próprio do módulo Enfermagem, configurável na
+// coluna CANCELAR do Controle de Acesso.
+router.post('/grupos/:id/cancelar-plantao', authenticate, checkPermission('enfermagem.prescricao.deletar', 'PROPRIO'), PrescricaoGrupoController.cancelarNaExecucao);
 // Cancelar UM ITEM pelo plantão (botão ao lado do item no modal de execução). Mesmo
 // controller do remover item da tela de prescrição — mesma regra e mesma auditoria;
 // só o slug muda, pelo mesmo motivo do cancelar-plantao acima.

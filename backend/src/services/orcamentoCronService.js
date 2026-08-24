@@ -30,9 +30,6 @@ const motivoCancelamento = (dias) =>
  * @returns ResultadoCron para o comAlerta/reportarCron (Monitoração + e-mail ADMIN).
  */
 async function cancelarOrcamentosVencidos() {
-  const escopos = await listarEscoposComValidade();
-  if (escopos.length === 0) return { ok: true, notificar: false };
-
   const agora = Date.now();
   let total = 0;
   const porEmpresa = [];
@@ -43,6 +40,27 @@ async function cancelarOrcamentosVencidos() {
   // `empresaId: escopo.empresaId` continua no `where` de propósito — o RLS é a garantia
   // no banco, não substituto do filtro explícito da aplicação.
   const { comTenant } = require('../lib/tenantDb');
+  const { empresasAtivas } = require('../lib/cronTenant');
+  const { passo } = require('../lib/cronTrace');
+
+  // 🔴 A LISTA DE ESCOPOS TAMBÉM PRECISA DE TENANT.
+  //
+  // Ela vinha de `listarEscoposComValidade()` sem cliente — ou seja, do `prisma` global,
+  // sem `app.empresa_id`. `tb_empresa_configuracoes` está sob RLS: a consulta voltava
+  // VAZIA, o job saía no `if (escopos.length === 0)` da primeira linha e nenhum orçamento
+  // jamais expirava. Silencioso porque "nenhuma clínica configurou validade" e "o RLS
+  // escondeu todas" produzem exatamente o mesmo retorno.
+  //
+  // `empresasAtivas()` lê `tb_empresas`, que é CONTROL PLANE (sem RLS) — é o ponto de
+  // partida legítimo para varrer as clínicas, o mesmo de `paraCadaEmpresa`.
+  const empresas = await empresasAtivas();
+  const escopos = [];
+  for (const empresa of empresas) {
+    const doTenant = await comTenant(empresa.id, (tx) => listarEscoposComValidade(tx));
+    escopos.push(...doTenant);
+  }
+  passo(`Orcamento-Validade: ${escopos.length} escopo(s) com validade configurada, em ${empresas.length} empresa(s) ativa(s)`);
+  if (escopos.length === 0) return { ok: true, notificar: false };
 
   for (const escopo of escopos) {
     const limite = new Date(agora - escopo.dias * 24 * 60 * 60 * 1000);
@@ -75,6 +93,7 @@ async function cancelarOrcamentosVencidos() {
       return vencidos.length;
     });
 
+    passo(`empresa ${escopo.empresaId}${escopo.equipeId != null ? ` / equipe ${escopo.equipeId}` : ''}: validade ${escopo.dias} dia(s) → ${n} orçamento(s) cancelado(s)`);
     if (n === 0) continue;
     total += n;
     porEmpresa.push(`empresa ${escopo.empresaId}: ${n}`);

@@ -5,13 +5,14 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Bell, Loader2, Mail, Clock } from 'lucide-react';
+import { Bell, Loader2, Mail, Clock, Play } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import CardSegurancaAdmin from '../components/CardSegurancaAdmin';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import InlineError from '../components/InlineError';
+import ModalExecucaoJob, { type ResultadoJob } from '../components/ModalExecucaoJob';
 
 interface Agenda { chave: string; nome: string; expr: string; exprPadrao: string; ativo: boolean }
 
@@ -49,6 +50,14 @@ export default function ConfiguracaoAlerta() {
 
   const [agendas,     setAgendas]     = useState<Agenda[]>([]);
   const [savingChave, setSavingChave] = useState<string | null>(null);
+
+  // Execução MANUAL de uma tarefa (só ADMIN da plataforma — a tarefa varre TODAS as
+  // empresas, então não é ação de gestor de clínica; o backend também recusa).
+  const [execChave,     setExecChave]     = useState<string | null>(null);
+  const [execNome,      setExecNome]      = useState('');
+  const [execResultado, setExecResultado] = useState<ResultadoJob | null>(null);
+  const [execErro,      setExecErro]      = useState<string | null>(null);
+  const [execAberto,    setExecAberto]    = useState(false);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -111,6 +120,25 @@ export default function ConfiguracaoAlerta() {
       setErroInline(msg ?? 'Erro ao reagendar tarefa.');
     } finally {
       setSavingChave(null);
+    }
+  };
+
+  // ⚠️ Roda a tarefa DE VERDADE — grava no banco e dispara e-mail/WhatsApp, para todas
+  // as empresas ativas. Não há modo simulação: é a mesma função que o agendador chama.
+  const executarAgora = async (a: Agenda) => {
+    setExecChave(a.chave);
+    setExecNome(a.nome);
+    setExecResultado(null);
+    setExecErro(null);
+    setExecAberto(true);
+    try {
+      const r = await api.post(`/monitoracao/agendas/${a.chave}/executar`);
+      setExecResultado(r.data?.dados as ResultadoJob);
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setExecErro(msg ?? 'Erro ao executar a tarefa.');
+    } finally {
+      setExecChave(null);
     }
   };
 
@@ -235,6 +263,19 @@ export default function ConfiguracaoAlerta() {
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-colors flex-shrink-0">
                   {savingChave === a.chave ? 'Salvando...' : 'Aplicar'}
                 </button>
+                {/* Executar é ação de PLATAFORMA: a tarefa roda para todas as empresas.
+                    Contorno em vez de sólido só para não competir com o "Aplicar" ao
+                    lado — a cor segue sendo emerald, que é a de executar (CLAUDE.md §6). */}
+                {isAdminPlataforma && (
+                  <button
+                    onClick={() => executarAgora(a)}
+                    disabled={execChave === a.chave}
+                    title="Executar agora e ver o passo a passo (roda para todas as empresas)"
+                    className="px-4 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 text-sm font-semibold rounded-xl transition-colors flex-shrink-0 flex items-center gap-1.5">
+                    <Play size={14} />
+                    {execChave === a.chave ? 'Executando...' : 'Executar agora'}
+                  </button>
+                )}
               </div>
               <p className="text-[11px] text-gray-400 mt-1.5">
                 {descreverCron(a.expr)}
@@ -244,6 +285,15 @@ export default function ConfiguracaoAlerta() {
           ))}
         </div>
       </div>
+
+      <ModalExecucaoJob
+        aberto={execAberto}
+        nome={execNome}
+        executando={execChave !== null}
+        resultado={execResultado}
+        erro={execErro}
+        onFechar={() => setExecAberto(false)}
+      />
     </PageContainer>
   );
 }

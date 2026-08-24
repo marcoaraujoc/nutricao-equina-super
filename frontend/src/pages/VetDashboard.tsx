@@ -11,6 +11,7 @@ import {
   CalendarCheck, PawPrint, Users, AlertTriangle,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import { diaISO } from '../utils/dateUtils';
 import BotaoVoltar   from '../components/BotaoVoltar';
 import {
   Chart as ChartJS,
@@ -99,7 +100,10 @@ function fillDays(data: { dia: string; total: number }[]): { dia: string; total:
   return Array.from({ length: 30 }, (_, i) => {
     const d = new Date(hoje);
     d.setDate(d.getDate() - (29 - i));
-    const key = d.toISOString().slice(0, 10);
+    // `diaISO` e não `toISOString().slice(0,10)`: este último dá o dia em UTC e,
+    // à noite, desloca TODAS as 30 chaves em um dia — o gráfico deixava de casar
+    // com o agrupamento por dia que vem do backend. Ver utils/dateUtils.ts.
+    const key = diaISO(d)!;
     return { dia: key, total: map.get(key) ?? 0 };
   });
 }

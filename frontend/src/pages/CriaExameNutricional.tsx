@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
+import { hojeISO } from '../utils/dateUtils';
 import { Upload, Edit, Trash2, AlertCircle, X, FileText } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { consumirLaudosPendentes } from '../utils/laudoPendente';
@@ -229,7 +230,7 @@ const CriaExameNutricional = () => {
         api.post('/exames', {
           animalId: animalId || selectedAnimal?.id?.toString(),
           nutrienteId: Number(e.nutrienteId),
-          dataExame: new Date().toISOString().split('T')[0],
+          dataExame: hojeISO(),
           valorEncontrado: e.valorEncontrado,
           unidade: e.unidade,
           valorMinRef: e.valorMinRef,

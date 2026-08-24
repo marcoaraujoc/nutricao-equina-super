@@ -223,6 +223,12 @@ export function useConfiguracaoOperacional() {
   const [horaFim,    setHoraFim]    = useState('');
   const [tempoConsultaPadrao, setTempoConsultaPadrao] = useState('');
   const [validadeOrcamento, setValidadeOrcamento] = useState('');
+  // ⚠️ O `fusoLabel` que este hook expunha foi REMOVIDO em 2026-08-24, junto com o
+  // campo só-leitura "Fuso Horário" da tela de Configurações — sem consumidor, ele
+  // seria estado morto. O backend CONTINUA devolvendo `fusoLabel` em
+  // `GET/PUT /equipes/configuracoes` (contrato inalterado): é só ler de novo aqui se
+  // a exibição voltar. O fuso em si nunca dependeu desta tela — quem o aplica no
+  // front é o `EmpresaContext`, por `GET /equipes/logo`.
 
   const [especies,          setEspecies]          = useState<{ id: number; nome: string }[]>([]);
   const [especiesAtendidas, setEspeciesAtendidas] = useState<number[]>([]);

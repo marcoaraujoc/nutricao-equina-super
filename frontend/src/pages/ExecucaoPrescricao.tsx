@@ -15,7 +15,13 @@ import { regimeExigeResumo, gerarResumoDoses, DOSES_POR_DIA } from '../utils/pos
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { imprimirPrescricao, type PrintGrupoPrescricao, type PrintItemPrescricao } from '../utils/PrescricaoPrint';
-import { formatDate, formatDateShort } from '../utils/dateUtils';
+// Data/hora SEMPRE por aqui — `formatDate`/`formatDateShort` só para DATA PURA
+// (sem hora); a família `format*`/`diaISO`/`hojeISO` para INSTANTE, já no fuso de
+// quem está olhando (a aplicação roda nos 4 fusos do Brasil). Ver utils/dateUtils.ts.
+import {
+  formatDate, formatDateShort, formatHora, formatDiaMesHora,
+  formatHoraComDia, diaISO, hojeISO,
+} from '../utils/dateUtils';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import InlineError from '../components/InlineError';
@@ -49,8 +55,22 @@ export interface ItemExecucao {
   dosesExecutadas?:      number | null;
   dosesTotaisEsperadas?: number | null;
   /** Próximo horário esperado (ISO) — ROLLING: recalculado a cada execução a partir
-   *  do horário REAL da dose anterior, não uma grade fixa desde `horaInicio`. */
+   *  do horário REAL da dose anterior, não uma grade fixa desde `horaInicio`.
+   *  🔴 `null` também significa "ainda SEM âncora": item sem Hora Início e sem
+   *  nenhuma dose dada não tem horário previsto — quem o define é a 1ª execução. */
   proximaDoseEm?:         string | null;
+  /** Horário REAL de cada dose já aplicada (asc por `numeroDose`) — é daqui que
+   *  sai o "Dose 01/02 — Executado às 18:00" do card. Só o `executadoEm` do item
+   *  não serve: ele guarda apenas a ÚLTIMA execução. */
+  doses?: DoseExecutada[] | null;
+}
+
+export interface DoseExecutada {
+  numeroDose:       number;
+  horarioExecutado: string;
+  horarioPrevisto:  string;
+  classificacao:    'NO_HORARIO' | 'ANTECIPADA' | 'ATRASADA';
+  executadoPor:     { id: number; fullName: string } | null;
 }
 
 export interface GrupoExecucao {
@@ -153,30 +173,15 @@ export function getActiveSlotIdx(slots: string[]): number {
 }
 
 /** Data (ISO) do dia N do curso (1-indexado) a partir de `dataInicio` — usada para
- *  rotular cada linha do histórico de aplicações ("Aplicação (DD/MM)") na Execução
- *  de Prescrição. `gerarResumoDoses` só devolve o número do dia, não a data.
+ *  rotular a linha da dose ainda SEM horário definido (antes da 1ª execução).
+ *  `gerarResumoDoses` só devolve o número do dia, não a data.
  *  🔴 Meio-dia UTC, NUNCA meia-noite: meia-noite UTC já é o dia ANTERIOR em
- *  horário de Brasília (UTC-3), e toda comparação de "que dia é isso" no
- *  sistema lê componentes LOCAIS (`dataLocalDe`) — mesma armadilha corrigida em
- *  `primeiraDoseEsperada` (backend). */
+ *  qualquer fuso do Brasil (UTC−2 a UTC−5). Ao meio-dia UTC a data é a mesma em
+ *  todos eles, então o resultado é uma DATA PURA segura para `formatDateShort`. */
 export function dataDoDiaISO(dataInicioISO: string, dia: number): string {
   const d = new Date(dataInicioISO.split('T')[0] + 'T12:00:00Z');
   d.setUTCDate(d.getUTCDate() + (dia - 1));
   return d.toISOString();
-}
-
-export function localToday(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-/** Data ('YYYY-MM-DD') de um timestamp ISO no fuso LOCAL — nunca `slice(0, 10)`,
- *  que devolve a data em UTC e adianta o dia à noite (ver `itemPendenteHoje`). */
-export function dataLocalDe(iso: string | null | undefined): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return null;
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 /**
@@ -184,7 +189,7 @@ export function dataLocalDe(iso: string | null | undefined): string | null {
  * executado na data. Exportado porque o **Painel Principal** monta a mesma fila —
  * duas definições de "o que falta hoje" divergiriam na primeira correção.
  *
- * ⚠️ A data de `executadoEm` é lida no fuso LOCAL (`dataLocalDe`). `slice(0, 10)`
+ * ⚠️ A data de `executadoEm` é lida no fuso de quem olha (`diaISO`). `slice(0, 10)`
  * devolve a data em UTC e, a partir das 21h (BRT = UTC-3), isso já é o DIA SEGUINTE:
  * o item executado à noite não contaria como feito hoje.
  *
@@ -205,13 +210,18 @@ export function itemPendenteEm(
   data: string,
 ): boolean {
   if (item.dosesTotaisEsperadas != null) {
-    if (dataLocalDe(item.executadoEm) === data) return true;
+    if (diaISO(item.executadoEm) === data) return true;
     if ((item.dosesExecutadas ?? 0) >= item.dosesTotaisEsperadas) return false;
-    if (!item.proximaDoseEm) return false;
-    return dataLocalDe(item.proximaDoseEm) === data;
+    // 🔴 Item elegível SEM âncora de horário — Hora Início em branco e nenhuma
+    // dose dada, então o backend manda `proximaDoseEm: null`. Não há data de
+    // próxima dose para casar: vale a JANELA DO CURSO, e a 1ª execução é que fixa
+    // a grade (backend: lib/agendaDoses.js#semAncoraDeHorario). Antes isto era
+    // `return false` — com Hora Início opcional, sumiria com o item da fila.
+    if (!item.proximaDoseEm) return item.diaAtual >= 1 && item.diaAtual <= item.duracaoDias;
+    return diaISO(item.proximaDoseEm) === data;
   }
   const dentroJanela = item.diaAtual >= 1 && item.diaAtual <= item.duracaoDias;
-  return dentroJanela && dataLocalDe(item.executadoEm) !== data;
+  return dentroJanela && diaISO(item.executadoEm) !== data;
 }
 
 // Mesmo intervalo do backend (lib/agendaDoses.js#intervaloEmMs) — para
@@ -240,31 +250,60 @@ function intervaloEmMs(frequencia: string): number {
  * ⚠️ Só decide SE O ITEM APARECE ao navegar o calendário/filtro de data para um
  * dia futuro — usada tanto pela lista (`itemPendenteHoje`) quanto por
  * `ModalExecucao` (`itemDevidoHoje`), que sem isto perguntava só por HOJE
- * (`localToday()` fixo) e mostrava "Nenhum item ativo" ao abrir um item cujo
+ * (`hojeISO()` fixo) e mostrava "Nenhum item ativo" ao abrir um item cujo
  * curso ainda não chegou na data visualizada. Nunca usada para calcular
  * horário exibível nem para permitir execução fora de hoje (isso continua
  * sendo só `proximaDoseEm` em si, com o gate de `dataSel === hoje`).
  */
 export function itemPrevistoParaDataFutura(
-  item: Pick<ItemExecucao, 'dosesExecutadas' | 'dosesTotaisEsperadas' | 'proximaDoseEm' | 'frequencia'>,
+  item: Pick<ItemExecucao, 'dosesExecutadas' | 'dosesTotaisEsperadas' | 'proximaDoseEm' | 'frequencia'
+    | 'diaAtual' | 'duracaoDias'>,
   data: string,
 ): boolean {
   const total = item.dosesTotaisEsperadas;
   if (total == null) return false;
   const jaFeitas = item.dosesExecutadas ?? 0;
   if (jaFeitas >= total) return false;
-  if (!item.proximaDoseEm) return false;
+  // Sem âncora de horário ainda: não há o que projetar — vale a janela do curso
+  // (`diaAtual` já vem do backend relativo à data consultada). Ver `itemPendenteEm`.
+  if (!item.proximaDoseEm) return item.diaAtual >= 1 && item.diaAtual <= item.duracaoDias;
 
   let previsto = new Date(item.proximaDoseEm);
   for (let n = jaFeitas; n < total; n++) {
-    if (dataLocalDe(previsto.toISOString()) === data) return true;
+    if (diaISO(previsto.toISOString()) === data) return true;
     previsto = new Date(previsto.getTime() + intervaloEmMs(item.frequencia));
   }
   return false;
 }
 
-const execKey      = (grupoId: number) => `s2vet_exec_${grupoId}_${localToday()}`;
-const doneTodayKey = (grupoId: number) => `s2vet_done_${grupoId}_${localToday()}`;
+/** " (03/05)" — a posição da dose no curso, no MESMO formato de duas casas das
+ *  linhas do card ("Dose 03/05"). Devolve string vazia quando alguma das duas
+ *  contagens não veio (item legado, sem rastreio por dose): a frase segue sem o
+ *  número em vez de mostrar "(undefined/undefined)". */
+export function rotuloDose(numero?: number | null, total?: number | null): string {
+  if (numero == null || total == null) return '';
+  return ` (${String(numero).padStart(2, '0')}/${String(total).padStart(2, '0')})`;
+}
+
+/**
+ * Horário previsto da N-ésima dose ainda não dada (`n` = índice 0 = a próxima).
+ * Encadeia o intervalo da frequência a partir de `proximaDoseEm` — a MESMA conta
+ * do rolling schedule real (`calcularProximaDose`, backend). Devolve `null`
+ * quando o item ainda não tem âncora: aí não existe horário previsto nenhum, e
+ * inventar um seria mentir para quem vai aplicar.
+ */
+export function previsaoDaDose(
+  item: Pick<ItemExecucao, 'proximaDoseEm' | 'frequencia'>,
+  n: number,
+): string | null {
+  if (!item.proximaDoseEm || n < 0) return null;
+  const base = new Date(item.proximaDoseEm);
+  if (isNaN(base.getTime())) return null;
+  return new Date(base.getTime() + n * intervaloEmMs(item.frequencia)).toISOString();
+}
+
+const execKey      = (grupoId: number) => `s2vet_exec_${grupoId}_${hojeISO()}`;
+const doneTodayKey = (grupoId: number) => `s2vet_done_${grupoId}_${hojeISO()}`;
 
 export function getExecMap(grupoId: number): ExecMap {
   try { return JSON.parse(localStorage.getItem(execKey(grupoId)) ?? '{}'); }
@@ -545,7 +584,7 @@ export function ModalExecucao({
   soVisualizacao = false,
   podeCancelar = false,
   tipoFiltro = null,
-  dataRef = localToday(),
+  dataRef = hojeISO(),
 }: {
   grupo:           GrupoExecucao;
   onClose:         () => void;
@@ -581,11 +620,24 @@ export function ModalExecucao({
   // Doses executadas NESTA sessão do modal, além do que `item.dosesExecutadas` já
   // trazia do backend — o `grupo` prop fica parado até o pai recarregar a lista
   // (`onClose`), então sem isso a 2ª dose do mesmo item pareceria sempre disponível.
-  const [doseOverride, setDoseOverride] = useState<Record<number, number>>({});
+  // Guarda o HORÁRIO (ISO) de cada uma, na ordem de execução: a contagem sozinha
+  // avançava a linha "Em Execução", mas deixava a linha recém-concluída como
+  // "Executado" sem hora até o pai recarregar (`item.doses` chega do backend e
+  // ainda não conhece esta dose). Ver `horaDaDose`.
+  const [dosesLocais, setDosesLocais] = useState<Record<number, string[]>>({});
   // Execução fora do horário pendente de confirmação (antecipada/atrasada) — a
   // MESMA tela para os dois casos, nunca bloqueia, só avisa o horário correto.
   const [confirmacao, setConfirmacao] = useState<{
     item: ItemExecucao; slots: string[]; previsto: string; agora: string; classificacao: string;
+  } | null>(null);
+  // Execução ANTECIPADA (dose FUTURA) barrada pelo backend: diferente da atrasada,
+  // NÃO tem "executar mesmo assim" — só sai com justificativa, que vai para a
+  // auditoria junto com o previsto e o horário real. `modo` diz qual chamada
+  // reenviar: o item do ícone ou o lote do "Executar Todos".
+  const [execFutura, setExecFutura] = useState<{
+    modo: 'ITEM' | 'LOTE'; item?: ItemExecucao; slots: string[];
+    medicamento: string; previsto: string;
+    numeroDose?: number; totalDoses?: number;
   } | null>(null);
   // Pergunta feita só logo após a 1ª execução, quando o horário real divergiu do
   // `horaInicio` prescrito: quer atualizar a referência para as próximas doses?
@@ -605,7 +657,7 @@ export function ModalExecucao({
   // Histórico/Mapa de Atendimento navegando pro passado), perguntava sempre
   // pelo dia ERRADO. `dataRef` é a data que o CHAMADOR está exibindo.
   const executadoHojeFront = (item: ItemExecucao): boolean =>
-    dataLocalDe(item.executadoEm) === dataRef;
+    diaISO(item.executadoEm) === dataRef;
 
   // Item está DEVIDO na data exibida (`dataRef`) — decide quem entra no modal.
   //   ELEGÍVEL (rolling schedule) → 🔴 NUNCA usar `diaAtual <= duracaoDias`: essa é
@@ -626,9 +678,12 @@ export function ModalExecucao({
     if (i.dosesTotaisEsperadas != null) {
       if (executadoHojeFront(i)) return true;
       if ((i.dosesExecutadas ?? 0) >= i.dosesTotaisEsperadas) return false;
-      if (dataRef > localToday()) return itemPrevistoParaDataFutura(i, dataRef);
-      if (!i.proximaDoseEm) return false;
-      return dataLocalDe(i.proximaDoseEm) === dataRef;
+      if (dataRef > hojeISO()) return itemPrevistoParaDataFutura(i, dataRef);
+      // 🔴 Sem âncora de horário (`proximaDoseEm` null — Hora Início em branco e
+      // nenhuma dose dada): vale a janela do curso. Era `return false`, o que com
+      // Hora Início opcional esconderia o item do modal e o deixaria inexecutável.
+      if (!i.proximaDoseEm) return i.diaAtual >= 1 && i.diaAtual <= i.duracaoDias;
+      return diaISO(i.proximaDoseEm) === dataRef;
     }
     return i.diaAtual >= 1 && i.diaAtual <= i.duracaoDias;
   };
@@ -640,7 +695,19 @@ export function ModalExecucao({
   // Doses do item já dadas, contando o que este modal executou nesta sessão —
   // só existe para itens elegíveis ao fluxo por dose (`dosesTotaisEsperadas != null`).
   const dosesFeitas = (item: ItemExecucao): number =>
-    (item.dosesExecutadas ?? 0) + (doseOverride[item.id] ?? 0);
+    (item.dosesExecutadas ?? 0) + (dosesLocais[item.id]?.length ?? 0);
+
+  /** Horário REAL (ISO) da dose `numeroDose` (1-indexado) deste item: primeiro o
+   *  histórico que veio do backend; se não houver, o que ESTA sessão do modal
+   *  acabou de executar. Devolve null para dose sem registro (curso anterior ao
+   *  rastreio por dose) — a linha então fica só "Executado", sem hora inventada. */
+  const horaDaDose = (item: ItemExecucao, numeroDose: number): string | null => {
+    const real = item.doses?.find(d => d.numeroDose === numeroDose)?.horarioExecutado;
+    if (real) return real;
+    const idxLocal = numeroDose - (item.dosesExecutadas ?? 0) - 1;
+    const locais   = dosesLocais[item.id] ?? [];
+    return idxLocal >= 0 && idxLocal < locais.length ? locais[idxLocal] : null;
+  };
 
   // "Concluído" decide o estilo do card e se o botão de executar habilita:
   // elegível → todas as doses do curso já foram dadas (pode haver mais de uma por
@@ -687,10 +754,17 @@ export function ModalExecucao({
   };
 
   // Execução ITEM A ITEM: lança o item na fatura assim que ele é executado.
-  // `confirmarHorario`: reenvio após o usuário confirmar execução fora do horário
-  // (antecipada/atrasada) na tela de aviso — nunca bloqueia, só confirma.
-  const handleExecutarItem = async (item: ItemExecucao, slots: string[], confirmarHorario = false) => {
+  //   `confirmarHorario` → reenvio após o usuário confirmar uma dose ATRASADA
+  //     (aviso simples, não bloqueia).
+  //   `justificativa`    → reenvio após o usuário justificar uma dose ANTECIPADA
+  //     (dose FUTURA — bloqueada pelo backend sem isto).
+  const handleExecutarItem = async (
+    item: ItemExecucao,
+    slots: string[],
+    opts: { confirmarHorario?: boolean; justificativa?: string } = {},
+  ) => {
     if (salvando) return;
+    const { confirmarHorario = false, justificativa } = opts;
     // A pergunta de ajuste de horário (ver `ajusteHorario`) só faz sentido quando
     // esta chamada é a 1ª dose do item — captura ANTES do POST, porque o `item`
     // (mesma referência ao longo dos reenvios de CONFIRMACAO_NECESSARIA) ainda
@@ -703,27 +777,31 @@ export function ModalExecucao({
       const res = await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, {
         itemIds: [item.id],
         ...(confirmarHorario ? { confirmarHorario: true } : {}),
+        ...(justificativa ? { justificativa } : {}),
       });
       const m = marcarItemFeito(execMap, item.id, slots);
       saveExecMap(grupo.id, m);
       setExecMap(m);
-      // Doses do curso ainda por vir: soma localmente até o pai recarregar a lista.
+
+      const itemAtualizado: ItemExecucao | undefined = res.data?.dados?.itens?.find(
+        (i: ItemExecucao) => i.id === item.id,
+      );
+      // Doses do curso ainda por vir: soma localmente até o pai recarregar a lista,
+      // guardando o horário REAL da execução (o do servidor quando ele o devolve —
+      // é ele quem manda no relógio) para a linha virar "Executado às HH:MM" na hora.
       if (item.dosesTotaisEsperadas != null) {
-        setDoseOverride(prev => ({ ...prev, [item.id]: (prev[item.id] ?? 0) + 1 }));
+        const quando = itemAtualizado?.executadoEm ?? new Date().toISOString();
+        setDosesLocais(prev => ({ ...prev, [item.id]: [...(prev[item.id] ?? []), quando] }));
       }
       setConfirmacao(null);
+      setExecFutura(null);
       toast.success(`${item.medicamento} — executado e lançado na fatura`);
 
       // 1ª dose executada num horário DIFERENTE do `horaInicio` prescrito: pergunta
       // se atualiza a referência para as próximas — o AGENDAMENTO em si já segue o
       // horário real por conta própria (`calcularProximaDose`, backend), sempre;
       // isto só corrige o que fica exibido em chip/impressão.
-      const itemAtualizado: ItemExecucao | undefined = res.data?.dados?.itens?.find(
-        (i: ItemExecucao) => i.id === item.id,
-      );
-      const horaNova = itemAtualizado?.executadoEm
-        ? new Date(itemAtualizado.executadoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-        : null;
+      const horaNova = formatHora(itemAtualizado?.executadoEm);
       const perguntarHorario = foiPrimeiraDose && !!item.horaInicio && !!horaNova && horaNova !== item.horaInicio;
 
       // Execução é POR ITEM: mantém o modal aberto para executar os demais. Só fecha
@@ -742,13 +820,24 @@ export function ModalExecucao({
     } catch (err: unknown) {
       const e = err as { response?: { status?: number; data?: {
         erro?: string; previsto?: string; agora?: string; classificacao?: string;
+        medicamento?: string; numeroDose?: number; totalDoses?: number;
       } } };
-      if (e?.response?.status === 400 && e?.response?.data?.erro === 'CONFIRMACAO_NECESSARIA') {
+      const dados = e?.response?.status === 400 ? e.response.data : undefined;
+      if (dados?.erro === 'CONFIRMACAO_NECESSARIA') {
         setConfirmacao({
           item, slots,
-          previsto:      e.response.data.previsto ?? new Date().toISOString(),
-          agora:         e.response.data.agora ?? new Date().toISOString(),
-          classificacao: e.response.data.classificacao ?? 'ANTECIPADA',
+          previsto:      dados.previsto ?? new Date().toISOString(),
+          agora:         dados.agora ?? new Date().toISOString(),
+          classificacao: dados.classificacao ?? 'ATRASADA',
+        });
+      } else if (dados?.erro === 'EXECUCAO_FUTURA') {
+        // Dose FUTURA: não há "executar mesmo assim" — só com justificativa.
+        setExecFutura({
+          modo: 'ITEM', item, slots,
+          medicamento: dados.medicamento ?? item.medicamento,
+          previsto:    dados.previsto ?? '',
+          numeroDose:  dados.numeroDose,
+          totalDoses:  dados.totalDoses,
         });
       } else {
         tratarErroExec(err, 'Erro ao executar item');
@@ -787,18 +876,31 @@ export function ModalExecucao({
   };
 
   // Executa TODOS os itens restantes do dia de uma vez (backend ignora os já
-  // executados). Ação de LOTE: manda `confirmarHorario` direto, sem abrir um
-  // aviso por item — o próprio clique em "Executar Todos" já é a confirmação.
+  // executados).
+  //
+  // 🔴 O clique NÃO libera mais dose fora do horário por conta própria. Antes
+  // este handler mandava `confirmarHorario: true` fixo — enquanto o ícone
+  // "Executar" (item a item) checava o horário —, então o mesmo documento tinha
+  // duas regras: pelo ícone o sistema perguntava, pelo "Executar Todos" aplicava
+  // o curso inteiro de uma vez. Agora os dois caminhos passam pelo MESMO gate do
+  // backend; o clique em lote vale como confirmação de dose ATRASADA (é ação
+  // deliberada sobre uma dose que já era devida), mas dose FUTURA continua
+  // bloqueada e só sai com justificativa — igualzinho ao item a item.
+  //
   // ⚠️ `itemIds` é OBRIGATÓRIO aqui: sem ele o backend executa TODOS os itens
   // pendentes do grupo, inclusive os de fora deste modal (o tipo filtrado por
   // `tipoFiltro`) — era o que fazia "Executar Todos" no card de Medicamentos
   // debitar/faturar também o Procedimento da mesma prescrição.
-  const handleExecutarTodos = async () => {
+  const handleExecutarTodos = async (justificativa?: string) => {
     setSalvando(true);
     setErroEstoque([]);
     try {
       const itemIds = itensComInfo.filter(x => !x.activeDone).map(x => x.item.id);
-      await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, { itemIds, confirmarHorario: true });
+      await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, {
+        itemIds,
+        confirmarHorario: true,
+        ...(justificativa ? { justificativa } : {}),
+      });
       let m = { ...execMap };
       for (const { item, slots, activeIdx } of itensComInfo) {
         if (activeIdx >= 0) m = marcarItemFeito(m, item.id, slots);
@@ -810,10 +912,29 @@ export function ModalExecucao({
           ? 'Tratamento concluído — prescrição finalizada'
           : `Dia ${diaAtualLabel} executado — estoque debitado e fatura lançada`,
       );
+      setExecFutura(null);
       markDoneToday(grupo.id);
       onClose();
     } catch (err) {
-      tratarErroExec(err, 'Erro ao finalizar');
+      const e = err as { response?: { status?: number; data?: {
+        erro?: string; medicamento?: string; previsto?: string;
+        numeroDose?: number; totalDoses?: number;
+      } } };
+      const dados = e?.response?.status === 400 ? e.response.data : undefined;
+      if (dados?.erro === 'EXECUCAO_FUTURA') {
+        // Basta UM item com dose futura para o lote inteiro parar: o backend
+        // recusa antes de debitar/faturar qualquer coisa (o gate roda inteiro
+        // antes da transaction), então não há execução parcial a desfazer.
+        setExecFutura({
+          modo: 'LOTE', slots: [],
+          medicamento: dados.medicamento ?? '',
+          previsto:    dados.previsto ?? '',
+          numeroDose:  dados.numeroDose,
+          totalDoses:  dados.totalDoses,
+        });
+      } else {
+        tratarErroExec(err, 'Erro ao finalizar');
+      }
     } finally {
       setSalvando(false);
     }
@@ -890,7 +1011,7 @@ export function ModalExecucao({
 
           {itensComInfo.length === 0 && (
             <p className="text-center py-8 text-sm text-gray-400">
-              Nenhum item ativo {dataRef === localToday() ? 'para hoje' : `para ${formatDateShort(dataRef)}`}.
+              Nenhum item ativo {dataRef === hojeISO() ? 'para hoje' : `para ${formatDateShort(dataRef)}`}.
             </p>
           )}
 
@@ -901,7 +1022,7 @@ export function ModalExecucao({
             // A dose ATUAL (a próxima a executar): elegível (rastreio por dose) usa
             // `dosesFeitas` — que já soma o que ESTA sessão do modal executou, não só
             // o que veio do backend (`item.dosesExecutadas` só atualiza quando o pai
-            // recarrega a lista, ver `doseOverride`); legado usa a posição do dia
+            // recarrega a lista, ver `dosesLocais`); legado usa a posição do dia
             // corrente na grade.
             const idxAtual = item.dosesTotaisEsperadas != null
               ? dosesFeitas(item)
@@ -912,8 +1033,14 @@ export function ModalExecucao({
             // de "1x/semana" hoje "empurrava" a exibição pra dose 2 na hora (ela só
             // vence 7 dias depois — é o `proximaDoseEm` que sabe disso, o contador
             // de doses feitas não).
+            // 🔴 Item elegível ainda SEM âncora (`proximaDoseEm` null) conta como
+            // "a dose de agora": não há grade definida, e é justamente esta
+            // execução que vai criá-la. Sem esta perna, tornar Hora Início
+            // opcional deixaria o item visível porém SEM botão de executar.
+            const semAncora = item.dosesTotaisEsperadas != null && !item.proximaDoseEm;
             const proximaDoseRealHoje = item.dosesTotaisEsperadas == null
-              || (!!item.proximaDoseEm && dataLocalDe(item.proximaDoseEm) === localToday());
+              || semAncora
+              || (!!item.proximaDoseEm && diaISO(item.proximaDoseEm) === hojeISO());
             const temAtual = idxAtual < resumo.length && !activeDone && proximaDoseRealHoje;
             // Mostra o curso INTEIRO — inclusive as doses que ainda não chegaram —
             // com a data prevista de cada uma, direto do calendário. A linha em
@@ -1000,25 +1127,51 @@ export function ModalExecucao({
                   </p>
 
                   {temHistorico && (
-                    // Histórico de doses dentro da própria execução — cada linha já
-                    // dada aparece em cinza; a de AGORA vem com Executar + Cancelar
-                    // juntos na mesma linha; as futuras mostram a data prevista do
-                    // calendário (não somem até chegar o dia certo).
+                    // Histórico de doses dentro da própria execução: a linha já dada
+                    // mostra a HORA REAL em que foi aplicada ("Executado às 18:00"),
+                    // a de AGORA vem com Executar + Cancelar juntos, e as futuras
+                    // mostram a hora prevista ("Prevista para 06:00 de 24/08") — não
+                    // somem até chegar o dia certo.
                     <div className="mt-1.5 space-y-1">
                       {linhasVisiveis.map((linha, idx) => {
                         const executada = idx < idxAtual;
                         const ehAtual   = idx === idxAtual && temAtual;
                         const numero    = String(idx + 1).padStart(2, '0');
                         const total     = String(totalDoses).padStart(2, '0');
-                        // Data prevista da linha FUTURA: a próxima dose (idxAtual)
-                        // usa a data REAL do rolling schedule quando disponível
-                        // (`proximaDoseEm`); as demais, ainda mais à frente, usam a
-                        // prévia teórica do calendário — não há horário real para
-                        // elas até a dose anterior ser de fato executada.
-                        const dataPrevista = idx === idxAtual && item.proximaDoseEm
-                          ? formatDateShort(item.proximaDoseEm)
-                          : formatDateShort(dataDoDiaISO(item.dataInicio, linha.dia));
-                        const status = executada ? 'Executado' : ehAtual ? 'Em Execução' : `Prevista para ${dataPrevista}`;
+
+                        // ─── Dose JÁ DADA: hora REAL em que foi aplicada ─────────
+                        // Vem de `item.doses` (uma linha por dose, do backend).
+                        // `item.executadoEm` não serve: guarda só a ÚLTIMA execução,
+                        // então todas as linhas anteriores mostrariam a mesma hora.
+                        // Dose executada antes desta tela existir (ou item legado)
+                        // fica sem hora — aí a linha continua só "Executado".
+                        const horaExecutada = executada ? horaDaDose(item, idx + 1) : null;
+
+                        // ─── Dose AINDA POR VIR: DATA + HORA previstas ───────────
+                        // "Prevista para 24/08 às 07:44". A próxima (idxAtual) e
+                        // TODAS as seguintes saem do rolling schedule real,
+                        // encadeando o intervalo a partir de `proximaDoseEm` —
+                        // mesma conta do backend —, então a lista inteira do curso
+                        // aparece com o horário em que cada dose vence.
+                        // Sem âncora (`proximaDoseEm` null: item sem Hora Início e
+                        // sem nenhuma dose dada) NÃO há horário a mostrar: cai na
+                        // data teórica do calendário, sem hora — é tudo que se sabe
+                        // antes da 1ª execução, e inventar um horário aqui seria
+                        // mentir para quem vai aplicar.
+                        const previsaoISO = previsaoDaDose(item, idx - idxAtual);
+                        const quandoPrevisto = (previsaoISO && formatDiaMesHora(previsaoISO))
+                          ?? formatDateShort(dataDoDiaISO(item.dataInicio, linha.dia));
+
+                        // A dose de AGORA mostra a MESMA data/hora das futuras — só o
+                        // rótulo muda. Ela é a próxima do rolling schedule
+                        // (`previsaoDaDose(item, 0)` = `proximaDoseEm`), então o horário
+                        // sempre existiu aqui; ficar só com "Em Execução" escondia de
+                        // quem vai aplicar justamente a hora em que a dose vence.
+                        const status = executada
+                          ? (horaExecutada ? `Executado às ${formatHora(horaExecutada)}` : 'Executado')
+                          : ehAtual
+                            ? `Em Execução — ${quandoPrevisto}`
+                            : `Prevista para ${quandoPrevisto}`;
                         return (
                           <div key={idx} className="flex items-center justify-between gap-2">
                             <p className={ehAtual ? 'text-xs font-semibold text-gray-800' : 'text-[11px] text-gray-400'}>
@@ -1110,7 +1263,11 @@ export function ModalExecucao({
                   Fechar
                 </button>
                 <button
-                  onClick={handleExecutarTodos}
+                  // ⚠️ Arrow OBRIGATÓRIA: `onClick={handleExecutarTodos}` passaria o
+                  // MouseEvent como `justificativa` e todo clique viraria uma
+                  // antecipação "justificada" — o mesmo bypass silencioso que já
+                  // mordeu o `handleSalvar` de ModalNovoFornecedor (CLAUDE.md §12).
+                  onClick={() => handleExecutarTodos()}
                   disabled={salvando || todosFeitos}
                   className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
                   {salvando && execItemId == null
@@ -1144,28 +1301,61 @@ export function ModalExecucao({
       />
     )}
 
-    {/* Execução antecipada OU atrasada — MESMA tela para os dois casos, nunca
-        bloqueia: só avisa o horário correto e deixa confirmar. A execução real
-        (com auditoria de paciente/medicamento/previsto/executado/quem) só acontece
-        ao confirmar. */}
+    {/* Dose ATRASADA — aviso simples, nunca bloqueia: a dose já era devida, e
+        atrasar não inventa dose nova. A tela só lembra o horário correto e deixa
+        confirmar. (Dose ANTECIPADA NÃO cai mais aqui — ver `execFutura` abaixo.) */}
     <ConfirmModal
       open={!!confirmacao}
       variante="aviso"
-      titulo={confirmacao?.classificacao === 'ATRASADA' ? 'Dose atrasada' : 'Dose antecipada'}
+      titulo="Dose atrasada"
       mensagem={confirmacao && (
         <>
-          <strong>{confirmacao.item.medicamento}</strong> está agendado para{' '}
-          <strong>{new Date(confirmacao.previsto).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong>.
-          {confirmacao.classificacao === 'ATRASADA'
-            ? ' Já passou do horário — deseja executar agora mesmo assim?'
-            : ' Ainda não chegou o horário — deseja executar agora mesmo assim?'}
+          <strong>{confirmacao.item.medicamento}</strong> estava agendado para{' '}
+          <strong>{formatHora(confirmacao.previsto)}</strong>. Já passou do horário —
+          deseja executar agora mesmo assim?
         </>
       )}
       labelConfirmar={salvando ? 'Executando…' : 'Executar mesmo assim'}
       labelCancelar="Cancelar"
-      onConfirmar={() => { if (confirmacao) handleExecutarItem(confirmacao.item, confirmacao.slots, true); }}
+      onConfirmar={() => {
+        if (confirmacao) handleExecutarItem(confirmacao.item, confirmacao.slots, { confirmarHorario: true });
+      }}
       onCancelar={() => setConfirmacao(null)}
     />
+
+    {/* Dose FUTURA (antecipada) — BLOQUEADA. Ao contrário da atrasada, não há
+        "executar mesmo assim": antecipar é decisão clínica e exige justificativa,
+        que o backend grava na auditoria com o previsto e o horário real. Vale
+        igualmente para o ícone "Executar" e para o "Executar Todos". */}
+    {execFutura && (
+      <ModalJustificativa
+        aberto
+        titulo={execFutura.medicamento
+          ? `Antecipar dose — ${execFutura.medicamento}`
+          : 'Antecipar dose'}
+        descricao={
+          // "A próxima dose (03/05) está prevista para 00:55 de 24/08, deseja antecipar?"
+          // O "(NN/TT)" só entra quando o backend informa as duas contagens — item
+          // legado (sem rastreio por dose) cai na frase sem o número, em vez de
+          // exibir um "(undefined/undefined)".
+          `A próxima dose${rotuloDose(execFutura.numeroDose, execFutura.totalDoses)}` +
+          (execFutura.previsto
+            ? ` está prevista para ${formatHoraComDia(execFutura.previsto, dataRef)}, deseja antecipar?`
+            : ' ainda não chegou, deseja antecipar?')
+        }
+        acaoLabel="Antecipar"
+        placeholder="Por que a dose está sendo antecipada? (obrigatório)"
+        processando={salvando}
+        onConfirmar={(motivo) => {
+          if (execFutura.modo === 'ITEM' && execFutura.item) {
+            handleExecutarItem(execFutura.item, execFutura.slots, { justificativa: motivo });
+          } else {
+            handleExecutarTodos(motivo);
+          }
+        }}
+        onFechar={() => { if (!salvando) setExecFutura(null); }}
+      />
+    )}
 
     {/* 1ª dose executada fora do horário prescrito (a antecipada/atrasada acima já
         foi confirmada — a dose ACONTECEU) — pergunta se atualiza a REFERÊNCIA de
@@ -1629,7 +1819,7 @@ export default function ExecucaoPrescricao() {
   // itens exibidos por esse tipo, senão um grupo com os dois tipos misturava tudo
   // dentro do modal, não importa de qual card se clicou.
   const [modalTipo, setModalTipo] = useState<'MEDICAMENTO' | 'PROCEDIMENTO' | null>(null);
-  const [dataSel,  setDataSel]  = useState(localToday());
+  const [dataSel,  setDataSel]  = useState(hojeISO());
   // Prescrição / vacina escolhida para cancelar (abre o ModalJustificativa da lista)
   const [cancelarAlvo,   setCancelarAlvo]   = useState<GrupoExecucao | null>(null);
   const [cancelarVacina, setCancelarVacina] = useState<VacinaExecucao | null>(null);
@@ -1637,7 +1827,7 @@ export default function ExecucaoPrescricao() {
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
 
-  const isHoje = dataSel === localToday();
+  const isHoje = dataSel === hojeISO();
 
   // Fila cross-animal — busca o logo da empresa/equipe no momento da impressão
   // (não há um único animal em contexto na tela, como nas demais páginas).
@@ -1682,10 +1872,11 @@ export default function ExecucaoPrescricao() {
 
   useEffect(() => { if (!loadingPerm) carregar(); }, [carregar, loadingPerm]);
 
-  // Cancela a prescrição a partir do plantão. Aponta para `cancelar-plantao`, que no
-  // backend é o MESMO controller do cancelar da tela de prescrição — logo, mesma regra:
-  // prescrição com QUALQUER execução é recusada (400 EXECUTADO), porque o que já foi
-  // aplicado tem item de fatura e baixa de estoque e não pode ficar órfão.
+  // Cancela a prescrição a partir do plantão. `cancelar-plantao` aponta para
+  // `cancelarNaExecucao` (backend): cancela as doses que ainda FALTAM — inclusive as
+  // restantes de um item já parcialmente aplicado —, libera as reservas de estoque e
+  // PRESERVA o que já foi executado (item de fatura e baixa de estoque não podem ficar
+  // órfãos). Só a prescrição totalmente EXECUTADA é recusada: não sobra dose a cancelar.
   const handleCancelarGrupo = async (motivo: string) => {
     if (!cancelarAlvo) return;
     if (!podeCancelar) { semPermissao('cancelar prescrição'); return; }
@@ -1805,11 +1996,11 @@ export default function ExecucaoPrescricao() {
   // Item ainda a executar na data selecionada — fonte única com o Painel Principal
   // (para hoje/passado); data futura cai na prévia teórica acima.
   const itemPendenteHoje = (item: ItemExecucao): boolean =>
-    dataSel > localToday() ? itemPrevistoParaDataFutura(item, dataSel) : itemPendenteEm(item, dataSel);
+    dataSel > hojeISO() ? itemPrevistoParaDataFutura(item, dataSel) : itemPendenteEm(item, dataSel);
 
   // Item executado NA DATA VISUALIZADA — alimenta o Histórico daquele dia.
   const itemExecutadoNaData = (item: ItemExecucao): boolean =>
-    dataLocalDe(item.executadoEm) === dataSel;
+    diaISO(item.executadoEm) === dataSel;
 
   // Item TERMINADO de vez (curso inteiro encerrado, sem depender da data
   // visualizada) — elegível: todas as doses do curso já foram dadas; legado: a

@@ -6,7 +6,7 @@ import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import api from '../services/api';
 import ImportarOrcamentoModal, { type OrcamentoItemImport, marcarOrcamentoImportado } from '../components/ImportarOrcamentoModal';
 import DateInput from '../components/DateInput';
-import { formatDate } from '../utils/dateUtils';
+import { formatDate, hojeISO } from '../utils/dateUtils';
 import toast from 'react-hot-toast';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -162,7 +162,9 @@ function imprimirVacina(v: VacinaClinica, animal: AnimalInfo | null) {
   imprimirPrescricaoPrint(grupo);
 }
 
-const hoje = () => new Date().toISOString().slice(0, 10);
+// `hojeISO()` (utils/dateUtils) e nao `toISOString().slice(0,10)`: este ultimo
+// devolve o dia em UTC, que a noite ja e AMANHA em qualquer fuso do Brasil.
+const hoje = () => hojeISO();
 
 function montarTextoVacina(v: VacinaClinica): string {
   // Cabeçalho no mesmo molde do `montarTextoPrescricao`: "*Vacina #074*"

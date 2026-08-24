@@ -86,9 +86,16 @@ async function isGestor(userId, equipeId) {
  * segrega as permissões por equipe, não pela empresa inteira.
  * Animais legados sem equipeId caem no escopo de todas as equipes da empresa
  * (comportamento anterior, até serem revinculados/backfilled).
+ *
+ * @param {object} [db] cliente a usar. 🔴 O CRON TEM DE PASSAR O `tx`: fora de uma
+ *   requisição não há tenant no contexto, e o `prisma` global chega ao banco sem
+ *   `app.empresa_id`. Com o RLS fail-closed (fase 7c) isso devolve ZERO animal — e
+ *   "cliente sem animal" é indistinguível de "cliente que o RLS escondeu". Foi assim
+ *   que o fechamento de faturas parou de enxergar a configuração da clínica e passou a
+ *   cair sempre no fallback do último dia do mês. Ver `lib/cronTenant.js`.
  */
-async function getEquipeIdsDoProprietario(userId, empresaId = null) {
-  const animais = await prisma.animal.findMany({
+async function getEquipeIdsDoProprietario(userId, empresaId = null, db = prisma) {
+  const animais = await db.animal.findMany({
     // Com empresa ATIVA (seletor do portal do proprietário) o escopo é só ela:
     // o que a empresa A liberou não vale quando ele está olhando a empresa B.
     //
@@ -112,7 +119,7 @@ async function getEquipeIdsDoProprietario(userId, empresaId = null) {
   }
 
   if (empresasSemEquipe.size > 0) {
-    const equipes = await prisma.equipe.findMany({
+    const equipes = await db.equipe.findMany({
       where:  { empresaId: { in: [...empresasSemEquipe] } },
       select: { id: true },
     });

@@ -15,4 +15,9 @@ router.get('/execucoes',  ctrl.listarExecucoes); // histórico dia|semana|mes
 router.get('/agendas',        ctrl.listarAgendas);
 router.put('/agendas/:chave', ctrl.reagendar);
 
+// Execução MANUAL, com rastro passo a passo. ADMIN DA PLATAFORMA apenas (gate no
+// controller) — o job varre TODAS as empresas, não só a de quem clicou.
+// ⚠️ Roda a tarefa de verdade: grava no banco e dispara envios.
+router.post('/agendas/:chave/executar', ctrl.executarAgora);
+
 module.exports = router;

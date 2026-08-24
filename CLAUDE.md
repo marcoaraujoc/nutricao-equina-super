@@ -1,5 +1,168 @@
 ﻿# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-08-23 (parte 4) (🔴 CRONS QUEBRADOS PELO RLS — o fechamento
+#   automático de faturas NUNCA fechava no dia configurado, e mais 3 jobs falhavam em
+#   silêncio pela MESMA causa. REGRA NOVA, a mais importante desta sessão: **dentro de
+#   `paraCadaEmpresa`/`comTenant`, TUDO passa pelo `tx`.** O `prisma` global ali dentro
+#   não é "o mesmo banco sem filtro" — é uma consulta que ENXERGA NADA, porque o cron
+#   não roda sob `comEmpresa` (ele carimba o tenant à mão) e o RLS é fail-closed desde
+#   a fase 7c. E o modo de falhar é o pior possível: zero linha, sem erro.
+#   Cadeia real medida na Patyvet (dia de fechamento = 23, hoje é 23, 5 faturas ABERTAS):
+#   `resolverConfigsFechamento` → `getEquipeIdsDoProprietario` via 0 animais → 0 equipes
+#   → `[]` → o job caía no FALLBACK "último dia do mês" e não fechava nada. A
+#   configuração estava no banco o tempo todo; ela é que estava invisível para quem
+#   precisava lê-la. Mesmo se fechasse, `adicionarAssistenciaMensal` não achava o
+#   `ProprietarioPerfil` (mensalista deixava de ser cobrado) e `recalcularTotal` somava
+#   ZERO item e morria no UPDATE ("Record to update not found"). Os 3 pontos ganharam
+#   parâmetro `db`/`tx` (default `prisma`, então a rota HTTP não muda).
+#   Mesmo defeito corrigido em: `marcar_faturas_atrasadas` (`diaVencimentoDoProprietario`
+#   voltava null → `continue` → NENHUMA fatura vencida era marcada),
+#   `cancelar_orcamentos_vencidos` (`listarEscoposComValidade()` sem client → 0 escopos
+#   → saía na 1ª linha; agora varre `empresasAtivas()` e lê a config sob `comTenant`) e
+#   `cancelarDosesPrescricaoPerdidas` (`anexarAplicadaProprietario(prisma…)` devolvia
+#   `false` para todos — o remédio aplicado em casa voltava a ocupar reserva de estoque).
+#   🔴 SEGUNDO BUG, INDEPENDENTE E SEM RELAÇÃO COM RLS: `cancelar_agendamentos_nao_realizados`
+#   falha TODA NOITE desde 2026-08-18 — `CANCELADO_AUTOMATICAMENTE` tem 25 caracteres e
+#   `tb_agendamentos_clinicos.status` é VARCHAR(20) ("value too long"). Como o cron roda
+#   em transação por empresa, o erro derruba o LOTE INTEIRO ("LOTE REVERTIDO (rollback)"
+#   na Monitoração, visível nas execuções 88/94/96) e nenhum agendamento é encerrado —
+#   ficam presos em AGENDADO/EM_ANDAMENTO ocupando a grade. ✅ MIGRATION APLICADA nesta
+#   sessão (autorizada pelo usuário): `20260914000000_agendamento_status_30`
+#   (VARCHAR(20)→(30); schema.prisma junto). Status novo: confira o comprimento antes.
+#   ⚠️ `npx prisma generate` FALHOU com `EPERM` (lock do query engine no Windows, §11) e
+#   NÃO foi refeito — não faz falta aqui: `@db.VarChar` é metadado de schema, o Client
+#   não valida comprimento, quem recusava era o Postgres. Confirmado por UPDATE real
+#   (revertido) com o client antigo. Rodar o generate na próxima parada do backend.
+#   EXECUÇÃO MANUAL COM RASTRO ("set -x"), o que faltava para tudo isso ser visível:
+#   `lib/cronTrace.js` (AsyncLocalStorage; `passo`/`grupo`/`comTrace`, inerte quando
+#   ninguém liga), `cronManager.executarAgora(chave)` (uma execução por vez),
+#   `npm run job -- <chave>` (`scripts/rodarJob.js`, `--list` mostra a agenda REAL do
+#   banco) e `POST /api/monitoracao/agendas/:chave/executar` → botão "Executar agora" na
+#   tela Configuração (`ModalExecucaoJob.tsx`). ⚠️ Gate ADMIN DA PLATAFORMA, mais estreito
+#   que o resto daquela tela (que aceita GESTOR): o job varre TODAS as empresas ativas.
+#   ⚠️ Roda a tarefa DE VERDADE — grava e dispara envio; não há simulação.
+#   POR QUE O DIÁRIO NÃO BASTAVA: `reportarCron` só grava execução com TRABALHO ou ERRO,
+#   então "hoje não é dia de fechar" não deixa rastro nenhum e fica idêntico a "o
+#   servidor estava fora do ar". O trace registra a DECISÃO, não só o resultado.
+#   `CRON_CLI=1` (guarda no fim de `server.ts`) carrega o módulo sem `app.listen` nem
+#   `iniciarJobs` — é o que permite ao CLI disparar UM job sem tomar a porta 3001.
+#   Suíte: 172 passando. Lixo conhecido: `auto_aceite`/`vinculos_provisorios` continuam
+#   como linha em `CronAgenda` embora os jobs tenham sido removidos do código — não
+#   aparecem na tela (ela lista `cronManager.listarJobs()`), só ocupam banco.
+#   NA MESMA SESSÃO, pedido à parte: o campo **Fuso Horário SAIU da tela de
+#   Configurações** (`CadastroEmpresa.tsx`) — era só leitura e não havia o que fazer
+#   com ele ali. O `fusoLabel` saiu junto do `useConfiguracaoOperacional` (estado sem
+#   consumidor), mas o backend segue devolvendo `fusoLabel` nas configurações: contrato
+#   inalterado. O fuso continua valendo em tudo — ver §6.)
+# Atualizado em: 2026-08-23 (parte 3) (FUSO DEDUZIDO DO ENDEREÇO — o campo de escolha
+#   de fuso saiu da tela: "nem todos sabem o que é isso" (pedido do usuário). O valor
+#   passa a sair do CEP/UF que o cadastro da empresa já coleta — `fusoPorEndereco` /
+#   `fusoPorCep` / `fusoPorUf` em `lib/fusoEmpresa.js`, com mapa UF→IANA dos 27
+#   estados e tabela de faixas de CEP. A tela de Configurações EXIBIA o detectado
+#   ("Manaus (UTC−4)", via `rotuloFuso`, cujo deslocamento vem do `Intl` e não escrito
+#   à mão) — esse campo saiu da tela em 2026-08-24, ver a parte 4 no topo; o `rotuloFuso`
+#   e o `fusoLabel` da API continuam existindo. ⚠️ O CEP vence a UF: é o único jeito de separar Fernando de Noronha
+#   (UTC−2) do resto de PE (UTC−3). ⚠️ As faixas de CEP são por INTERVALO, nunca por
+#   prefixo — o mesmo "69" cobre AM, RR e AC, e DF/GO se intercalam no 7xxxx.
+#   A coluna `fusoHorario` CONTINUA existindo como override fora da UI (extremo oeste
+#   do AM é UTC−5 embora a UF seja AM) — ordem: coluna → endereço → padrão. Cache de
+#   60s invalidado por `EmpresaCadastroController.salvar` quando o endereço muda.
+#   Convertidos nesta parte (nada mais formata em Brasília fixo): `AgendamentoController`
+#   — inclusive `diaEHoraNaEmpresa`, que decide se o horário cabe no EXPEDIENTE (era o
+#   pior caso: em Manaus a janela saía 1h deslocada e sábado 23:00 no Acre virava
+#   domingo, recusado por "não é dia de atendimento") —, `lembreteAgendamentoService`,
+#   `DashboardController` (o `AT TIME ZONE` do gráfico, como BIND) e 5 templates de
+#   `emailService` (`fuso = FUSO_PADRAO` opcional: quem não passa mantém o
+#   comportamento antigo). FICAM em Brasília de propósito: o alerta de cron do
+#   `emailService` (plataforma → ADMIN) e o `cronManager` (fuso do AGENDAMENTO do job,
+#   que varre todas as empresas). Testes: 22 casos em `fusoEmpresa.test.js`
+#   (4 fusos, faixas intercaladas de CEP, Noronha, rótulo). Suíte: 172.)
+# Atualizado em: 2026-08-23 (parte 2) (FUSO HORÁRIO POR EMPRESA — a aplicação roda em
+#   TODO O BRASIL, que tem QUATRO fusos (UTC−2 Noronha · UTC−3 Brasília/SP/Sul/NE ·
+#   UTC−4 Manaus/Cuiabá/Campo Grande/Porto Velho/Boa Vista · UTC−5 Rio Branco/
+#   Eirunepé). Até aqui o servidor assumia `America/Sao_Paulo` fixo
+#   (`process.env.TZ`, server.ts) e o front lia o relógio do dispositivo — então para
+#   uma clínica em UTC−4/−5 o "hoje" da fila do plantão virava 1-2h antes da
+#   meia-noite local (dose das 22h no Acre contabilizada no dia seguinte) e o horário
+#   no WhatsApp/auditoria saía adiantado.
+#   🔴 MIGRATION GERADA, NÃO APLICADA — `20260823000000_empresa_fuso_horario`
+#   (só `ALTER TABLE ... ADD COLUMN IF NOT EXISTS fuso_horario VARCHAR(60)` em
+#   `tb_empresa_configuracoes`; sem RLS novo, a tabela já é escopada). Aplicar com
+#   `DATABASE_URL=$DATABASE_URL_MIGRATIONS npx prisma migrate deploy` + `npx prisma
+#   generate`. SEM BACKFILL de propósito: `null` = comportamento anterior
+#   (America/Sao_Paulo no servidor, fuso do dispositivo na tela), então nenhuma
+#   empresa muda de comportamento ao aplicar — preencher todo mundo com São Paulo
+#   transformaria uma suposição implícita em dado afirmado e deixaria a clínica de
+#   Manaus com o fuso errado gravado sem nunca ter escolhido.
+#   NOVO `lib/fusoEmpresa.js` (fonte única do backend): `fusoDaEmpresa(empresaId)`
+#   com cache de 60s, `hojeNaEmpresa`/`diaNaEmpresa`/`formatarNaEmpresa` e
+#   `instanteNoFuso` (caminho INVERSO — "08:00 na clínica" → instante UTC, duas
+#   passadas). Tudo por `Intl` com `timeZone` EXPLÍCITO: trocar `process.env.TZ` em
+#   runtime corromperia as outras clínicas atendidas pelo mesmo processo.
+#   Ligado em: `PrescricaoGrupoController` (o `hojeLocalStr()` que lia o relógio do
+#   servidor foi REMOVIDO; `executadoHojeItem`/`dataLocalStr`/`itemPendenteNoDia`/
+#   `fmtDataHora` passaram a receber `fuso`), `lembreteDosePrescricaoService`
+#   (WhatsApp), `EquipeController` (obter/salvar + `GET /equipes/logo`, que é a ÚNICA
+#   rota de config legível por qualquer membro — o fuso precisa chegar à enfermeira,
+#   não só ao gestor). Front: `definirFusoDaEmpresa` em `utils/dateUtils.ts`,
+#   alimentado pelo `EmpresaContext` (e zerado na troca de empresa), com toda a
+#   família de INSTANTE passando a formatar por `Intl` no fuso resolvido em vez dos
+#   getters locais; campo "Fuso Horário" em `CadastroEmpresa.tsx` (a tela de
+#   Configurações, que mudou de nome). Testes: `__tests__/fusoEmpresa.test.js`
+#   (11 casos — os 4 fusos, virada do dia, ida-e-volta de `instanteNoFuso`). Suíte: 161.
+#   ⚠️ PENDENTE: `emailService.js` e `AgendamentoController.js` ainda têm
+#   `timeZone: 'America/Sao_Paulo'` fixo (~12 pontos) — ver §6.)
+# Atualizado em: 2026-08-23 (AGENDA DE DOSES — 4 mudanças ligadas, todas em
+#   `lib/agendaDoses.js` + `PrescricaoGrupoController.executar` + `ExecucaoPrescricao.tsx`:
+#   1. 🔴 FUSO: `primeiraDoseEsperada` montava o horário com `setUTCHours(h)` — "20:00"
+#      virava 20:00 UTC = 17:00 em Brasília. Era a origem do "sistema 3 horas atrás"
+#      relatado, e contaminava tudo a jusante (chip do horário, `proximaDoseEm`,
+#      antecipada×atrasada, lembrete de WhatsApp). Agora o instante é montado com o
+#      construtor LOCAL (`new Date(ano, mes, dia, h, m)`) — o processo roda com
+#      `process.env.TZ='America/Sao_Paulo'` (server.ts). ⚠️ A DATA continua saindo dos
+#      getters UTC: `dataInicio` é gravada como meia-noite UTC e só `getUTCDate()`
+#      devolve o dia do calendário. Regra: DATA por getter UTC, HORA por construtor LOCAL.
+#   2. 🔴 HORA INÍCIO deixou de ser OBRIGATÓRIA em toda frequência (saíram as 3
+#      validações `HORA_INICIO_OBRIGATORIA` do backend e a do front; `precisaHoraInicio`
+#      foi REMOVIDA dos dois lados). Quem fixa a grade é a PRIMEIRA EXECUÇÃO: ivermectina
+#      "12/12h" executada às 20:00 tem a próxima às 08:00 — o rolling schedule
+#      (`calcularProximaDose(agora, frequencia)`) já fazia isso; faltava deixar o item
+#      ENTRAR nesse fluxo sem hora (`elegivelParaFluxoNovo` não exige mais `horaInicio`).
+#      Novo `semAncoraDeHorario(item)` = sem hora E sem dose dada: nesse estado NÃO
+#      EXISTE horário previsto — `horarioPrevistoDoItem` devolve `null` e o item fica
+#      disponível em toda a JANELA DO CURSO (`dentroDaJanelaDoCurso`), como o fluxo
+#      legado. TODO caller que compara `agora` com o previsto precisa checá-lo antes,
+#      senão a 1ª dose nasce "atrasada" contra uma meia-noite que ninguém escolheu.
+#      Propagado a: `itemPendenteNoDia`, `itemPendenteEm`/`itemPrevistoParaDataFutura`/
+#      `itemDevidoHoje`/`proximaDoseRealHoje` (front — sem as duas últimas o item
+#      aparecia SEM botão de executar, ou nem aparecia), ao cron de dose perdida
+#      (`prescricaoCronService` — só cancela depois que a JANELA acaba, não no dia
+#      seguinte a `dataInicio`) e ao lembrete de WhatsApp (o filtro `horaInicio: {not:
+#      null}` saiu: quem prova que há horário agendado é `proximaDoseEm`).
+#   3. 🔴 EXECUÇÃO FUTURA (ANTECIPADA) É BLOQUEADA — só passa com JUSTIFICATIVA
+#      (`ModalJustificativa`, mín. 3 chars), gravada no AuditLog em `motivo` junto do
+#      previsto/executado. `confirmarHorario` NÃO a libera mais: era esse o furo
+#      relatado — "Executar Todos" mandava a flag fixa em `true` e aplicava o curso
+#      inteiro de uma vez, enquanto o ícone "Executar" checava o horário; o MESMO
+#      documento tinha duas regras. Agora o gate roda para TODO item de `itensHoje`,
+#      venha a chamada de um caminho ou do outro. ATRASADA segue com o aviso simples
+#      (`CONFIRMACAO_NECESSARIA` + `confirmarHorario`) — a dose já era devida, atrasar
+#      não inventa dose nova; o clique em lote vale como essa confirmação.
+#      ⚠️ `onClick={() => handleExecutarTodos()}` com ARROW: `onClick={handleExecutarTodos}`
+#      passaria o MouseEvent como `justificativa` e todo clique viraria antecipação
+#      "justificada" (mesmo bypass silencioso do `handleSalvar` de ModalNovoFornecedor).
+#   4. Card da execução mostra o HORÁRIO REAL por dose: "Dose 01/02 - Executado às
+#      18:00" / "Dose 02/02 - Prevista para 06:00 de 24/08". `listarParaExecucao` passou
+#      a devolver o histórico COMPLETO (`item.doses[]`, era `take: 1`) —
+#      `item.executadoEm` guarda só a ÚLTIMA execução e faria todas as linhas exibirem a
+#      mesma hora. A previsão das doses seguintes encadeia o intervalo a partir de
+#      `proximaDoseEm` (`previsaoDaDose`), mesma conta do backend; sem âncora não há
+#      hora e a linha cai na data teórica do calendário. `doseOverride` (contador) virou
+#      `dosesLocais` (horários ISO), senão a dose recém-executada ficava "Executado" sem
+#      hora até o pai recarregar. Formato 24h pt-BR, como o resto do sistema.
+#   Testes: `src/__tests__/agendaDoses.test.js` (16 casos — fuso, hora opcional, rolling
+#   20:00→08:00, antecipada×atrasada). Suíte: 150 passando. VACINA não foi tocada: não
+#   tem agenda por dose (SALVA→FINALIZADA→EXECUTADA, aplicação única).)
 # Atualizado em: 2026-08-22 (Auditoria ganhou a categoria ACESSO_NEGADO — tentativa
 #   BLOQUEADA de acesso, não só ação bem-sucedida. Pedido do usuário: "tentativas de
 #   acesso não autorizados (aplicação, funcionalidades, animais) não estão aparecendo
@@ -1032,6 +1195,94 @@ Aplicado em Evolução, Prescrição, Exames, Vacina, Encaminhamento e no Histó
 Paciente (`Atendimento.tsx`), tanto nos ícones do desktop quanto nas pílulas do card
 mobile. Tela nova do módulo já nasce assim.
 
+#### DATA E HORA — `utils/dateUtils.ts` é FONTE ÚNICA (2026-08-23)
+```
+DATA PURA (dia do calendário, sem hora)  → formatDate / formatDateShort
+   dataInicio, dataAplicacao, dataNascimento. NÃO converte fuso.
+INSTANTE (timestamp com hora)            → formatHora / formatDiaMes /
+   formatDiaMesHora / formatDataHora / formatHoraComDia / diaISO / hojeISO
+   createdAt, executadoEm, proximaDoseEm, dataHora. Converte para o fuso de quem olha.
+```
+⚠️ **NUNCA passe um INSTANTE para `formatDate`/`formatDateShort`** — elas leem a data
+em UTC (`split('T')`), então uma dose às 22:00 em Brasília (= 01:00 UTC do dia
+seguinte) aparece com a data ERRADA. Foi assim que a linha da dose noturna saiu no
+dia errado.
+⚠️ **NUNCA `.toISOString().slice(0, 10)` para saber "que dia é"** — devolve o dia em
+UTC, que à noite já é amanhã. Use `hojeISO()` / `diaISO(x)`. Os 8 pontos que faziam
+isso foram convertidos; a busca por esse padrão no `frontend/src` hoje só acha
+comentário.
+⚠️ **NUNCA fixe `timeZone: 'America/Sao_Paulo'` no front.** A aplicação roda em
+TODO O BRASIL, que tem **4 fusos** (UTC−2 Noronha · UTC−3 Brasília/SP/Sul/NE ·
+UTC−4 Manaus/Cuiabá/Campo Grande/Porto Velho · UTC−5 Rio Branco). Fixar SP mostra
+07:44 para uma clínica no Acre cujo relógio marca 05:44 — o plantão inteiro sai
+deslocado. Era o que `formatDateTime` e o convite do `ControleAcesso` faziam.
+⚠️ Horário digitado em campo `HH:MM` é LOCAL — montar com `setUTCHours` foi a
+origem do "sistema 3 horas atrás" (ver a entrada de 2026-08-23 no topo).
+✅ **O fuso é da EMPRESA e é DEDUZIDO DO ENDEREÇO — o gestor NÃO escolhe fuso.**
+Ninguém deveria precisar saber o que é "America/Cuiaba" para cadastrar uma clínica,
+então o valor sai do CEP/UF que o cadastro já coleta (`fusoPorEndereco` →
+`fusoPorCep` → `fusoPorUf`, em `lib/fusoEmpresa.js`).
+🔴 **O fuso NÃO APARECE em tela nenhuma** (2026-08-24). A tela de Configurações
+(`CadastroEmpresa.tsx`) chegou a exibi-lo em campo read-only ("Manaus (UTC−4)"), e o
+campo foi REMOVIDO a pedido: sendo só leitura, não havia o que fazer com ele ali. O
+`fusoLabel` saiu junto do `useConfiguracaoOperacional` (estado sem consumidor é estado
+morto), mas o backend CONTINUA devolvendo `fusoLabel` em `GET/PUT
+/equipes/configuracoes` — contrato inalterado, basta voltar a ler se a exibição
+retornar. O FUSO EM SI não mudou nada: segue deduzido do endereço, aplicado no front
+pelo `EmpresaContext` (via `GET /equipes/logo`) e no backend por `fusoDaEmpresa`.
+⚠️ Não reintroduzir como campo EDITÁVEL — foi por isso que o seletor saiu em
+2026-08-23. O caso raro que o endereço não decide se resolve pelo override
+`EmpresaConfiguracao.fusoHorario`, fora da UI do gestor.
+⚠️ **O CEP vence a UF**, e não o contrário: é o único jeito de separar Fernando de
+Noronha (UTC−2) do resto de Pernambuco (UTC−3).
+⚠️ As faixas de CEP são por INTERVALO, nunca por prefixo: o mesmo "69" cobre
+Amazonas, Roraima e Acre (fusos diferentes), e DF/GO se intercalam no 7xxxx.
+⚠️ `EmpresaConfiguracao.fusoHorario` (migration `20260823000000`) continua existindo
+como OVERRIDE, fora da UI do gestor — serve ao caso raro que o endereço não decide
+(extremo oeste do AM é UTC−5 embora a UF seja AM/UTC−4) e ao ADMIN corrigir sem
+deploy. Ordem em `fusoDaEmpresa`: coluna → endereço → `FUSO_PADRAO`.
+⚠️ O fuso é cacheado 60s por empresa; `EmpresaCadastroController.salvar` invalida na
+hora, senão a fila do plantão rodaria até um minuto no fuso antigo após mudar o CEP.
+
+Vale nos DOIS lados:
+```
+BACKEND  lib/fusoEmpresa.js  → fusoDaEmpresa(empresaId) (cache 60s) +
+                               hojeNaEmpresa / diaNaEmpresa / formatarNaEmpresa /
+                               instanteNoFuso (o caminho INVERSO: "HH:MM na clínica"
+                               → instante UTC, usado pela Hora Início)
+FRONT    utils/dateUtils.ts  → definirFusoDaEmpresa(tz), chamado pelo EmpresaContext;
+                               `fusoDeExibicao()` = fuso da clínica ?? do dispositivo
+```
+`null` = não escolhido → `America/Sao_Paulo` no servidor e fuso do dispositivo na
+tela: exatamente o comportamento anterior, então NENHUMA empresa muda de
+comportamento ao aplicar a migration (por isso ela não tem backfill).
+⚠️ O fuso chega ao front por **`GET /equipes/logo`**, e não por
+`/equipes/configuracoes` — esta última é GESTOR-only e o fuso precisa alcançar a
+enfermeira que abre o plantão. `EmpresaContext` zera o fuso ao trocar de empresa
+antes de recarregar, senão a clínica nova exibiria horários no fuso da anterior.
+⚠️ **NUNCA trocar `process.env.TZ` em runtime para "virar" o fuso do tenant** — é
+global ao processo e o servidor atende várias clínicas ao mesmo tempo. Tudo passa
+por `Intl` com `timeZone` explícito, que é isolado por chamada.
+⚠️ O fuso da CLÍNICA vence o do dispositivo de propósito: o gestor que abre o
+plantão de Manaus de um notebook em SP precisa ver o horário de Manaus, que é onde
+a dose será aplicada — e é assim que a tela concorda com o backend, que decide o dia
+pelo fuso da empresa.
+✅ **Convertidos** (nada mais formata em Brasília fixo): `PrescricaoGrupoController`
+(fila do plantão + auditoria), `AgendamentoController` — incluindo
+`diaEHoraNaEmpresa`, que decide se o horário cabe no EXPEDIENTE (era o pior: em
+Manaus a janela saía 1h deslocada, e sábado 23:00 no Acre virava domingo e era
+recusado) —, `lembreteDosePrescricaoService`, `lembreteAgendamentoService`,
+`DashboardController` (o `AT TIME ZONE` do gráfico por dia, como BIND — nunca
+interpolado) e `emailService` (5 templates ganharam `fuso = FUSO_PADRAO` opcional:
+quem não passa mantém o comportamento antigo).
+🔴 **Dois `America/Sao_Paulo` que FICAM, de propósito:**
+- `emailService.js` (alerta de cron) — é da PLATAFORMA para o ADMIN, não de clínica.
+- `lib/cronManager.js` — é o fuso do AGENDAMENTO do job, e cada job varre TODAS as
+  empresas numa passada; não existe "o fuso" dele. Consequência conhecida: um job de
+  23:30 roda 22:30 em Manaus. Para cada clínica fechar no próprio fim de dia, o
+  caminho é agendar por empresa (ou rodar de hora em hora filtrando por
+  `hojeNaEmpresa`) — decisão de produto em aberto.
+
 #### Onde o ERRO aparece — ABAIXO DO BOTÃO QUE O DISPAROU
 ```
 Erro de AÇÃO  → logo abaixo do botão/rodapé que a disparou
@@ -1494,6 +1745,138 @@ New-Item -ItemType Junction `
 ---
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
+
+### Sessão 2026-08-23 (parte 4) — Crons: 4 jobs quebrados pelo RLS + execução manual com rastro
+> ✅ **MIGRATION APLICADA** (autorizada nesta sessão) — `20260914000000_agendamento_status_30`
+> (`ALTER COLUMN status TYPE VARCHAR(30)` em `tb_agendamentos_clinicos`). Era a única
+> pendente: `prisma migrate status` acusava 171 migrations, 170 já aplicadas.
+> ⚠️ `npx prisma generate` falhou com `EPERM` (lock do query engine — o problema de
+> Windows da §11) e ficou por fazer. NÃO é bloqueio para esta mudança: `@db.VarChar` é
+> metadado do schema, o Client não valida comprimento e quem recusava o valor era o
+> Postgres. Verificado com um UPDATE real (em transação revertida) gravando
+> `CANCELADO_AUTOMATICAMENTE` pelo client NÃO regenerado — aceito. Rodar o generate na
+> próxima parada do backend, para o schema tipado acompanhar.
+
+- [x] 🔴 **REGRA QUE ORIGINOU TODOS OS DEFEITOS DESTA SESSÃO — dentro de
+      `paraCadaEmpresa`/`comTenant`, TUDO passa pelo `tx`.** O cron não roda sob
+      `comEmpresa` (a extensão da fase 7b, que carimba o tenant sozinha nas requisições
+      HTTP): ele carimba à mão, dentro da transação. Então toda função auxiliar chamada
+      lá dentro que use o `prisma` GLOBAL chega ao banco **sem `app.empresa_id`** — e,
+      com o RLS fail-closed da fase 7c, o resultado não é erro: é **ZERO LINHA**.
+      Isso é pior que uma exceção. "Nenhuma equipe", "cliente sem perfil", "fatura sem
+      item" e "o RLS escondeu tudo" produzem exatamente o mesmo valor de retorno, e o
+      job segue adiante tomando a decisão errada em silêncio.
+      Todos os pontos corrigidos ganharam parâmetro `db`/`tx` com **default `prisma`** —
+      a rota HTTP não muda de comportamento; quem tem de passar o cliente é o cron.
+- [x] **`fechamento_faturas` — nunca fechou no dia configurado.** Medido na Patyvet
+      (empresa 59, `DIA_FIXO(23)`, 5 faturas ABERTA, no próprio dia 23): a cadeia era
+      `resolverConfigsFechamento` → `getEquipeIdsDoProprietario` → **0 animais** → 0
+      equipes → `[]` → o job caía no FALLBACK "último dia do mês" e não fechava nada.
+      A `EmpresaConfiguracao` estava no banco o tempo todo; ela é que estava invisível.
+      Mais dois pontos na mesma função, que só apareceriam DEPOIS de o primeiro ser
+      corrigido: `adicionarAssistenciaMensal` não achava o `ProprietarioPerfil` (o
+      mensalista deixava de ser cobrado no fechamento, sem erro nenhum — "não achei
+      perfil" e "não é mensalista" dão o mesmo `return false`) e `recalcularTotal`
+      somava ZERO item e morria no UPDATE (`P2025 Record to update not found`, porque o
+      RLS também esconde a linha do UPDATE), derrubando o fechamento daquela fatura.
+      Assinaturas novas: `resolverConfigsFechamento(db, proprietarioId)`,
+      `getEquipeIdsDoProprietario(userId, empresaId, db)`,
+      `adicionarAssistenciaMensal(faturaId, prop, vetId, empresaId, db)`,
+      `resolverAssistencia(propId, empresaId, db)`, `recalcularTotal(faturaId, db)`,
+      `diaVencimentoDoProprietario(propId, empresaId, db)`.
+      Ganhou também um cache por proprietário no laço: a configuração é da EMPRESA, e
+      resolvê-la uma vez por FATURA era o que o comentário do job já prometia não fazer.
+- [x] **`marcar_faturas_atrasadas`** — `diaVencimentoDoProprietario` com o `prisma`
+      global devolvia `null` para todo mundo, e o `if (!dia) continue` fazia TODA fatura
+      ser pulada: nenhuma fatura vencida virava ATRASADA, e o job terminava "sem
+      trabalho" (logo, sem nem aparecer na Monitoração).
+- [x] **`cancelar_orcamentos_vencidos`** — `listarEscoposComValidade()` era chamada SEM
+      cliente, antes de qualquer `comTenant`. `tb_empresa_configuracoes` está sob RLS →
+      lista vazia → o job saía no `if (escopos.length === 0)` da PRIMEIRA linha e nenhum
+      orçamento jamais expirava. Agora varre `empresasAtivas()` (control plane, sem RLS —
+      é o ponto de partida legítimo, o mesmo de `paraCadaEmpresa`) e lê a configuração
+      de cada uma dentro de `comTenant`.
+- [x] **`cancelar_doses_prescricao_perdidas`** — dois defeitos:
+      `anexarAplicadaProprietario(prisma, …)` (comentado como "lido por fora de
+      propósito") consulta `tb_prescricoes` por SQL cru e **engole o erro no `catch`
+      interno**: sem tenant, todo item voltava `aplicadaPeloProprietario: false` e o
+      medicamento que o proprietário aplica em casa voltava a ocupar reserva de estoque
+      na clínica. E `previstoStr` era lido FORA do bloco `else` que o declara —
+      `ReferenceError` latente que só não estourava porque, até hoje, todo item
+      cancelado veio pelo ramo COM âncora de horário. Virou `porQue`, declarado no topo
+      do laço, com texto próprio para cada ramo.
+- [x] 🔴 **`cancelar_agendamentos_nao_realizados` — bug INDEPENDENTE, sem relação com
+      RLS: a coluna é curta demais.** `CANCELADO_AUTOMATICAMENTE` tem 25 caracteres e
+      `tb_agendamentos_clinicos.status` é `VARCHAR(20)`; como esse é o ÚNICO valor que a
+      rotina grava, ela falha desde que o status nasceu (2026-08-18):
+      `The provided value for the column is too long for the column's type`.
+      E, por rodar em transação por empresa, o erro derruba o **LOTE INTEIRO** daquela
+      clínica ("LOTE REVERTIDO (rollback)" — visível nas execuções 88/94/96 da
+      Monitoração), então NENHUM agendamento é encerrado, nem os do ramo que teria
+      funcionado. Efeito visível: agendamento preso em AGENDADO/EM_ANDAMENTO para
+      sempre, ocupando a grade. Migration acima; `schema.prisma` já em `VarChar(30)`.
+      ⚠️ Status novo nessa tabela: **confira o comprimento antes**.
+- [x] **Execução MANUAL com rastro passo a passo — o "set -x" dos crons.** Sem isto,
+      nada acima era observável: `reportarCron` só grava execução quando houve TRABALHO
+      ou ERRO, então um job que roda, decide "hoje não é dia" e termina não deixa rastro
+      NENHUM — e fica idêntico a um job que nunca rodou porque o servidor estava fora do
+      ar. O diário (`lib/cronTenant.js`) responde "o que foi feito"; faltava responder
+      **"por que nada foi feito"**.
+      - `lib/cronTrace.js` — `AsyncLocalStorage` com `passo`/`grupo`/`comTrace`. Fora de
+        `comTrace` (isto é, no cron agendado) `passo()` retorna na primeira instrução:
+        o custo em produção é uma chamada de função vazia.
+      - `cronManager.executarAgora(chave)` — roda o job REAL, uma execução por vez por
+        chave (`emExecucao`: dois cliques processariam as mesmas faturas em paralelo).
+        Job com agenda DESLIGADA roda mesmo assim — é justamente com ele desligado que
+        se quer testar antes de religar; o estado vai no retorno.
+      - **`npm run job -- <chave>`** (`scripts/rodarJob.js`); `--list` mostra a agenda
+        REAL, lida de `CronAgenda` via `iniciarJobs({ agendar: false })` — exibir o
+        `exprPadrao` do código faria alguém procurar o problema no horário errado
+        (o padrão do fechamento é `45 23`, mas neste ambiente ele está em `00 18`).
+        ⚠️ O script escreve com `process.stdout.write`, não `console.log`: `server.ts`
+        redireciona o console para o Winston e o rastro sairia picado entre as linhas
+        de log.
+      - **`POST /api/monitoracao/agendas/:chave/executar`** → botão "Executar agora" na
+        tela Configuração (`components/ModalExecucaoJob.tsx`).
+        ⚠️ **Gate ADMIN DA PLATAFORMA**, mais estreito que o resto daquela tela (que
+        aceita GESTOR por `podeGerenciar`): o job varre TODAS as empresas ativas — fecha
+        fatura e manda WhatsApp em nome de clínicas que não são a de quem clicou.
+        ⚠️ Responde **200 mesmo com exceção**: a execução aconteceu e o rastro é o
+        produto da chamada; um 500 faria o interceptor do axios descartar justamente o
+        trace que explica a falha.
+      - **`CRON_CLI=1`** (guarda no fim de `server.ts`) carrega o módulo sem `app.listen`
+        e sem `iniciarJobs`. Os `registrarJob(...)` só existem lá, então o CLI precisa
+        importar o arquivo — e, sem a guarda, importar significaria tomar a porta 3001 do
+        backend em execução e ligar TODAS as tarefas em segundo plano.
+      ⚠️ **Roda a tarefa DE VERDADE** — grava no banco e dispara e-mail/WhatsApp. Não há
+      modo simulação, de propósito: um "faz de conta" seria outro código, testando outra
+      coisa. Nesta base `WHATSAPP_PROVIDER`/`EVOLUTION_*` e `EMAIL_*` estão configurados
+      com provedor REAL — disparar `lembrete_*` ou `reenviar_links_fatura` manualmente
+      envia mensagem a cliente.
+- [x] **Campo "Fuso Horário" REMOVIDO da tela de Configurações** (`CadastroEmpresa.tsx`,
+      pedido à parte na mesma sessão): era só leitura e não havia o que fazer com ele
+      ali. `fusoLabel` saiu junto do `useConfiguracaoOperacional` — estado sem consumidor
+      é estado morto. O backend CONTINUA devolvendo `fusoLabel` em `GET/PUT
+      /equipes/configuracoes` (contrato inalterado, basta voltar a ler). O fuso em si não
+      mudou em nada — ver §6.
+- [ ] **`auto_aceite` e `vinculos_provisorios` são lixo em `CronAgenda`**: os jobs foram
+      removidos do código quando os vínculos vet↔animal deixaram de existir, mas as
+      linhas ficaram no banco. Não aparecem na tela (ela lista `cronManager.listarJobs()`,
+      que só conhece os registrados) — só ocupam espaço. Apagar quando alguém tocar na
+      tabela; não vale uma migration só para isso.
+- [ ] **O job de fatura só roda se o backend estiver no ar naquele minuto.** No dia da
+      investigação o processo estava parado desde ~11:30 e as 18:00 passaram em branco —
+      `node-cron` não recupera disparo perdido. Enquanto não houver uma varredura de
+      recuperação ("fechou tudo que já devia ter fechado"), uma queda no horário do job
+      empurra o fechamento para o mês seguinte. O `deveFecharHoje` compara com HOJE, não
+      com "já passou do dia" — mudar isso é decisão de produto.
+- [ ] **Auditar o resto do código chamado por cron.** Foram corrigidos os pontos
+      alcançados pelos 10 jobs registrados, mas a busca foi por inspeção. Qualquer helper
+      novo usado dentro de `paraCadaEmpresa` precisa aceitar o cliente — e o modo de
+      falhar continua sendo zero linha em silêncio. Suspeito conhecido e de baixo
+      impacto: `fusoDaEmpresa(empresaId)` sem cliente não enxerga o override
+      `EmpresaConfiguracao.fuso_horario` no cron (cai na dedução por endereço, que lê
+      `tb_empresas`, control plane).
 
 ### Sessão 2026-08-31 (parte 4) — Execução de Prescrição: histórico dentro da execução
 - [x] **Card do item, dentro do `ModalExecucao`, redesenhado** para os itens com
@@ -4057,6 +4440,8 @@ POST   /lancar-na-fatura                 → { faturaId, itemIds } cria FaturaIt
 | `hooks/usePermissoes.ts` | `Nivel` inclui `'NEGADO'`. `NIVEL_ORDINAL` inclui `NEGADO: -1`. `podeExecutar` retorna false para NEGADO (ordinal -1 < qualquer mínimo). `loading` deve ser usado para gating de useEffects. |
 | `services/whisperService.ts` | Transcrição: online → Web Speech API, offline → Whisper local. Funções: `isMobile()`, `estaOnline()`, `carregarModelo()`, `transcreverOffline()` |
 | `utils/EvolucaoPrint.ts` | `imprimirEvolucao(evolucao)` — abre janela de impressão formatada para evolução clínica |
+| `lib/fusoEmpresa.js` (backend) | **FONTE ÚNICA de fuso do servidor.** `fusoDaEmpresa(empresaId)` (cache 60s), `hojeNaEmpresa`/`diaNaEmpresa`/`formatarNaEmpresa`/`formatarHoraNaEmpresa` e `instanteNoFuso` (HH:MM da clínica → instante UTC). Sempre `Intl` com `timeZone` explícito — NUNCA `process.env.TZ` em runtime. Ver §6 |
+| `utils/dateUtils.ts` | **FONTE ÚNICA de data/hora do front.** Duas famílias: DATA PURA (`formatDate`/`formatDateShort`, sem conversão de fuso) e INSTANTE (`formatHora`/`formatDiaMes`/`formatDiaMesHora`/`formatDataHora`/`formatHoraComDia`/`diaISO`/`hojeISO`/`mesmoDia`, no fuso de quem olha). `fusoDoUsuario()` é o ponto único de troca se o fuso passar a vir da empresa. Ver a regra completa na seção 6 |
 
 ### Frontend — Fluxo Vínculo V→P (Vet solicita, Proprietário aprova)
 

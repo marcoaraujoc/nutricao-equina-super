@@ -30,7 +30,11 @@ const { comEscopoPlataforma } = require('./prismaTenant');
 // EXPORTACAO     → extração em massa de dado clínico (Administração > Exportação) —
 //                  quem/quando/quantos pacientes, sem duplicar aqui a lista de nomes
 //                  já gravada em `motivo` pelo controller.
-const CATEGORIAS = ['EXCLUSAO', 'CANCELAMENTO', 'AJUSTE', 'CONFIGURACAO', 'TRANSFERENCIA', 'ALTERACAO', 'CRIACAO', 'EXECUCAO', 'ACESSO_NEGADO', 'EXPORTACAO'];
+// ACESSO_PUBLICO → o OPOSTO de ACESSO_NEGADO: alguém SEM sessão abriu um recurso por
+//                  capability URL (ex.: link público de fatura) e o token era válido.
+//                  Registrado por `registrarAcessoPublico`, mesmo molde fire-and-forget
+//                  em escopo de plataforma — não há req.user/req.empresaId aqui.
+const CATEGORIAS = ['EXCLUSAO', 'CANCELAMENTO', 'AJUSTE', 'CONFIGURACAO', 'TRANSFERENCIA', 'ALTERACAO', 'CRIACAO', 'EXECUCAO', 'ACESSO_NEGADO', 'EXPORTACAO', 'ACESSO_PUBLICO'];
 
 /**
  * Extrai o IP de origem do request de forma consistente com o `trust proxy`
@@ -178,6 +182,38 @@ async function registrarAcessoNegado(req, { motivo, entidade = 'ACESSO', entidad
     ));
   } catch (err) {
     console.warn('[auditoria] falha ao registrar ACESSO_NEGADO:', err.message);
+  }
+}
+
+/**
+ * Registra um acesso PÚBLICO bem-sucedido (capability URL — sem sessão, sem
+ * `req.user`/`req.empresaId`). Fire-and-forget: nunca lança, nunca atrasa a
+ * resposta ao cliente que abriu o link. `empresaId` é gravado como DADO (o
+ * tenant dono do recurso acessado), não como escopo de RLS — a escrita roda em
+ * `comEscopoPlataforma`, mesmo mecanismo de `registrarAcessoNegado`.
+ *
+ * @param {{ entidade:string, entidadeId?:number|null, empresaId?:number|null,
+ *           motivo?:string|null, ip?:string|null }} p
+ */
+async function registrarAcessoPublico({ entidade, entidadeId = null, empresaId = null, motivo = null, ip = null }) {
+  try {
+    await comEscopoPlataforma(() => prisma.$executeRawUnsafe(
+      `INSERT INTO schs2vet.tb_audit_logs
+         ("userId", "userName", "email", "action", "empresaId", "categoria", "entidade", "entidadeId", "animalId", "motivo", "detalhes", "ip")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      null, '', '',
+      `ACESSO_PUBLICO ${entidade}`,
+      empresaId != null ? Number(empresaId) : null,
+      'ACESSO_PUBLICO',
+      entidade,
+      entidadeId != null ? Number(entidadeId) : null,
+      null,
+      motivo?.trim() || null,
+      null,
+      ip,
+    ));
+  } catch (err) {
+    console.warn('[auditoria] falha ao registrar ACESSO_PUBLICO:', err.message);
   }
 }
 
@@ -330,6 +366,7 @@ module.exports = {
   registrarAuditoria,
   registrarAcesso,
   registrarAcessoNegado,
+  registrarAcessoPublico,
   registrarTransferencia,
   registrarTransferenciaPropriedade,
   registrarAlteracao,

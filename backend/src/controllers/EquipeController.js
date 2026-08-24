@@ -13,6 +13,8 @@ const { resolverComoCliente } = require('../lib/tipoContexto');
 const { storage }      = require('../storage');
 const { TIPOS_FECHAMENTO_VALIDOS } = require('../lib/faturaUtils');
 const { normalizarValidade, lerValidade, salvarValidade } = require('../lib/validadeOrcamento');
+// Fuso horário da clínica — a aplicação roda nos 4 fusos do Brasil (ver lib/fusoEmpresa.js).
+const { normalizarFuso, salvarFuso, fusoDaEmpresa, rotuloFuso } = require('../lib/fusoEmpresa');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 
 const prisma = require('../lib/prisma').default;
@@ -1113,6 +1115,10 @@ const EquipeController = {
 
       const config = await buscarConfiguracao(escopo);
 
+      // Fuso EFETIVO da clínica, deduzido do endereço (CEP/UF). Read-only na tela:
+      // o gestor não escolhe fuso, só confere o que foi detectado.
+      const fusoDetectado = await fusoDaEmpresa(escopo.empresaId);
+
       // Plano da empresa (SOMENTE LEITURA para o gestor — quem edita é o ADMIN).
       // Só nome + valor aparecem na tela; validade/vencimento vão junto para exibição.
       const assinatura = escopo.empresaId
@@ -1148,6 +1154,11 @@ const EquipeController = {
           validadeOrcamentoDias: config
             ? await lerValidade(prisma, escopo.empresaId, escopo.equipeId)
             : null,
+          // Fuso EFETIVO da clínica — DEDUZIDO do endereço (CEP/UF) que o cadastro
+          // já coletou. O gestor não escolhe fuso: a tela só EXIBE qual foi detectado,
+          // para ele conferir. Ver lib/fusoEmpresa.js#fusoPorEndereco.
+          fusoHorario: fusoDetectado,
+          fusoLabel:   rotuloFuso(fusoDetectado),
           // PLANO da empresa (read-only p/ gestor) — null se a empresa não tem assinatura.
           plano: assinatura?.plano
             ? {
@@ -1214,15 +1225,25 @@ const EquipeController = {
   obterLogo: async (req, res) => {
     try {
       const escopo = await resolverEscopoConfiguracaoMembro(req);
-      const vazio = { logoUrl: null, empresaNome: null };
+      // `fusoHorario` viaja JUNTO da marca de propósito: esta é a única rota de
+      // configuração que QUALQUER membro pode ler (`/equipes/configuracoes` é
+      // gestor-only), e o fuso precisa chegar à enfermeira que abre o plantão, não
+      // só a quem administra a clínica. null = empresa não escolheu → o front usa o
+      // fuso do dispositivo, como sempre fez.
+      const vazio = { logoUrl: null, empresaNome: null, fusoHorario: null };
       if (!escopo) return res.json({ sucesso: true, dados: vazio });
-      const [config, empresa] = await Promise.all([
+      const [config, empresa, fuso] = await Promise.all([
         buscarConfiguracao(escopo),
         prisma.empresa.findUnique({ where: { id: escopo.empresaId }, select: { nome: true } }),
+        fusoDaEmpresa(escopo.empresaId).catch(() => null),
       ]);
       return res.json({
         sucesso: true,
-        dados: { logoUrl: config?.logoUrl ?? null, empresaNome: empresa?.nome ?? null },
+        dados: {
+          logoUrl:     config?.logoUrl ?? null,
+          empresaNome: empresa?.nome ?? null,
+          fusoHorario: fuso ?? null,
+        },
       });
     } catch (err) {
       console.error('Erro ao obter logo:', err);
@@ -1238,8 +1259,13 @@ const EquipeController = {
       const {
         tipoFechamento, diaFechamentoFatura, removerLogo, whatsapp,
         diasAtendimento, horaInicioAtendimento, horaFimAtendimento,
-        especiesAtendidas, tempoConsultaPadraoMin, validadeOrcamentoDias,
+        especiesAtendidas, tempoConsultaPadraoMin, validadeOrcamentoDias, fusoHorario,
       } = req.body;
+
+      // Fuso da clínica. undefined = não altera; vazio = volta ao padrão do sistema.
+      const fuso = normalizarFuso(fusoHorario);
+      if (fuso.erro) return res.status(400).json({ sucesso: false, mensagem: fuso.erro });
+      const fusoFinal = fuso.valor;
 
       // Validade do orçamento em dias. undefined = não altera; vazio = sem validade.
       const validade = normalizarValidade(validadeOrcamentoDias);
@@ -1410,6 +1436,13 @@ const EquipeController = {
         ? validadeFinal
         : await lerValidade(prisma, escopo.empresaId, escopo.equipeId);
 
+      // Fuso: o gestor NÃO envia este campo (a tela só exibe o detectado), então
+      // `fusoFinal` é `undefined` no fluxo normal e nada é gravado. O caminho de
+      // escrita segue existindo como OVERRIDE do ADMIN para o caso raro em que o
+      // endereço não decide sozinho (extremo oeste do AM). Ver lib/fusoEmpresa.js.
+      await salvarFuso(prisma, escopo.empresaId, escopo.equipeId, fusoFinal);
+      const fusoAtual = await fusoDaEmpresa(escopo.empresaId);
+
       res.json({
         sucesso: true,
         dados: {
@@ -1424,6 +1457,8 @@ const EquipeController = {
           tempoConsultaPadraoMin: config.tempoConsultaPadraoMin ?? null,
           tempoConsultaPadraoSistema: TEMPO_CONSULTA_PADRAO_SISTEMA,
           validadeOrcamentoDias:  validadeAtual,
+          fusoHorario:            fusoAtual,
+          fusoLabel:              rotuloFuso(fusoAtual),
         },
       });
     } catch (err) {

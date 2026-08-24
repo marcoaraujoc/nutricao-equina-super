@@ -427,7 +427,7 @@ const garantirCatalogoManual = async (req, res) => {
 
 const paraAtendimento = async (req, res) => {
   try {
-    const { animalId, tipo = 'medicamento', busca } = req.query;
+    const { animalId, tipo = 'medicamento', busca, limit } = req.query;
     const empresaId = req.empresaId ?? null;
 
     if (!animalId) return res.status(400).json({ error: 'animalId é obrigatório.' });
@@ -469,6 +469,14 @@ const paraAtendimento = async (req, res) => {
     const estoqueWhere = { ativo: true, ...escopoFisico };
     const loteWhere    = { ativo: true, qtdDisponivel: { gt: 0 }, ...escopoFisico };
 
+    // `limit` é OPCIONAL — quem não passar continua recebendo o catálogo inteiro
+    // (SubModuloVacina/Orçamento contam com isso). O seletor de medicamento da
+    // Prescrição usa `limit=5` para o dropdown aparecer rápido ao abrir, enquanto
+    // o catálogo completo (milhares de linhas) carrega em paralelo — sem isso, o
+    // primeiro request já trazia tudo e travava a lista até terminar.
+    const limitNum = Number(limit);
+    const take = Number.isFinite(limitNum) && limitNum > 0 ? limitNum : undefined;
+
     const medicamentos = await prisma.medicamento.findMany({
       where,
       include: {
@@ -479,6 +487,7 @@ const paraAtendimento = async (req, res) => {
         ),
       },
       orderBy: { nome: 'asc' },
+      ...(take ? { take } : {}),
     });
 
     const dados = medicamentos.map(m => {

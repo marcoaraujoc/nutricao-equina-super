@@ -5,6 +5,7 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
+import { hojeISO } from '../utils/dateUtils';
 import toast from 'react-hot-toast';
 import { Calendar, Camera, AlertCircle, RefreshCw, MapPin, CheckCircle2, X, Plus, User2, Loader2, ChevronDown } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
@@ -1309,7 +1310,7 @@ const Animal = () => {
                   <div className="absolute right-3 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center">
                     <Calendar size={18} className="text-emerald-600 pointer-events-none" />
                     <input
-                      type="date" lang="pt-BR" max={new Date().toISOString().split('T')[0]}
+                      type="date" lang="pt-BR" max={hojeISO()}
                       value={formData.dataNascimento?.includes('-') ? formData.dataNascimento : ''}
                       onChange={e => {
                         if (!e.target.value) return;

@@ -6,17 +6,22 @@ const { escopoPrescricaoGrupoWhere } = require('../lib/clinicalScope');
 const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 const { buildAnimalScopeWhere } = require('../lib/animalScope');
 const { ANIMAL_VISIVEL } = require('../lib/visibilidade');
-const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem, recalcularTotal } = require('../lib/faturaUtils');
+const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, adicionarOuSomarFaturaItem, removerFaturaItensDaOrigem, recalcularTotal } = require('../lib/faturaUtils');
 const { garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
 const { registrarAuditoria, registrarAlteracao, registrarTransferencia, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 const { animalEstaInativo } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const {
-  DOSES_POR_DIA, elegivelParaFluxoNovo, precisaHoraInicio, dosesTotaisEsperadas, primeiraDoseEsperada,
+  DOSES_POR_DIA, elegivelParaFluxoNovo, semAncoraDeHorario, dosesTotaisEsperadas, primeiraDoseEsperada,
   calcularProximaDose, classificarExecucao, diferencaEmMinutos, itemPrevistoParaDataFutura,
-  horarioPrevistoDoItem,
+  horarioPrevistoDoItem, dentroDaJanelaDoCurso,
 } = require('../lib/agendaDoses');
+// FUSO DA CLÍNICA — a aplicação roda nos 4 fusos do Brasil e o processo Node roda
+// fixo em America/Sao_Paulo (server.ts). "Que dia é hoje" na fila do plantão TEM de
+// ser o dia da clínica: em Rio Branco (UTC−5) a dose das 22h cairia no dia seguinte
+// pela conta do servidor. Ver lib/fusoEmpresa.js.
+const { fusoDaEmpresa, hojeNaEmpresa, diaNaEmpresa, formatarNaEmpresa } = require('../lib/fusoEmpresa');
 
 // Frequências "conforme necessário" — sem agenda prevista, então não pertencem
 // à fila de execução do plantão (ninguém "deve" aplicar uma dose que só
@@ -114,15 +119,10 @@ function calcularQuantidadeDiaria(item) {
   return qtdPorDose * dosesPorDia;
 }
 
-// Data de hoje no fuso LOCAL do servidor, como 'YYYY-MM-DD'. Não usar
-// `new Date().toISOString()` para "hoje": isso dá a data em UTC, que já virou
-// o dia seguinte a partir das 21h no horário de Brasília (UTC-3) — faria o
-// sistema achar que um tratamento de N dias já acabou um dia mais cedo.
-function hojeLocalStr() {
-  const d = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
+// 🔴 `hojeLocalStr()` foi REMOVIDA daqui: lia o relógio do SERVIDOR (fixo em
+// America/Sao_Paulo por server.ts), e "hoje" na fila do plantão tem de ser o dia da
+// CLÍNICA — para quem está em UTC−4/−5 o servidor vira o dia 1-2h antes. Use
+// `hojeNaEmpresa(fuso)` / `diaNaEmpresa(instante, fuso)` de lib/fusoEmpresa.js.
 
 // ─── Janela de execução de um item (dataInicio .. dataInicio+duracaoDias) ────
 // hojeStr: 'YYYY-MM-DD'. Retorna { dentro, ultimoDia } — ultimoDia = hoje é o
@@ -776,19 +776,11 @@ const criar = async (req, res) => {
       });
     }
 
-    // Frequência intra-dia (12/12h..1em1h) ou 1x ao dia sem Hora Início cai no
-    // fluxo LEGADO de execução — que trata UMA execução como "o dia inteiro
-    // coberto", mesmo quando a frequência implica várias doses naquele mesmo
-    // dia (ver lib/agendaDoses.js#precisaHoraInicio).
-    const semHoraInicio = itens.find(
-      i => precisaHoraInicio(i.frequencia) && !String(i.horaInicio ?? '').trim(),
-    );
-    if (semHoraInicio) {
-      return res.status(400).json({
-        error: `Informe a Hora Início de "${semHoraInicio.medicamento ?? 'item'}" para esta frequência.`,
-        code:  'HORA_INICIO_OBRIGATORIA',
-      });
-    }
+    // 🔴 Hora Início NÃO é obrigatória em frequência nenhuma (2026-08-23). A
+    // grade das doses é definida pela PRIMEIRA EXECUÇÃO, não pelo formulário —
+    // ver lib/agendaDoses.js#elegivelParaFluxoNovo. NÃO reintroduzir a validação
+    // `HORA_INICIO_OBRIGATORIA` que existia aqui: sem hora o item continua no
+    // rolling schedule, apenas sem horário previsto até a 1ª dose ser dada.
 
     // Valida que a evolução existe e pertence ao animal
     const evolucao = await prisma.evolucaoClinica.findFirst({
@@ -892,9 +884,10 @@ const criar = async (req, res) => {
               ? Number(item.valorOrcado)
               : null,
           };
-          // Âncora do rolling schedule — só quando o item tem horário definido e
-          // frequência que implica horário esperado (ver lib/agendaDoses.js).
-          if (elegivelParaFluxoNovo(dadosItem)) {
+          // Âncora do rolling schedule — só quando o item JÁ tem horário (Hora
+          // Início preenchida). Sem ela a âncora nasce na 1ª execução, então
+          // `proximaDoseEm` fica null até lá (ver lib/agendaDoses.js).
+          if (elegivelParaFluxoNovo(dadosItem) && !semAncoraDeHorario(dadosItem)) {
             dadosItem.proximaDoseEm = primeiraDoseEsperada(dadosItem);
           }
           const criado = await tx.prescricao.create({ data: dadosItem });
@@ -999,9 +992,7 @@ const adicionarItem = async (req, res) => {
     const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente, aplicadaPeloProprietario } = req.body;
 
     if (!medicamento) return res.status(400).json({ error: 'Campo medicamento é obrigatório.' });
-    if (precisaHoraInicio(frequencia) && !String(horaInicio ?? '').trim()) {
-      return res.status(400).json({ error: 'Informe a Hora Início para esta frequência.', code: 'HORA_INICIO_OBRIGATORIA' });
-    }
+    // Hora Início opcional — ver a nota em `finalizar`.
 
     // Split na edição: se o item é de categoria diferente de um grupo homogêneo,
     // vai para uma prescrição irmã (ou nova) da categoria correta.
@@ -1051,7 +1042,7 @@ const adicionarItem = async (req, res) => {
         status:            'RASCUNHO',
         medicamentoCliente: medicamentoCliente === true,
       };
-      if (elegivelParaFluxoNovo(dadosNovoItem)) {
+      if (elegivelParaFluxoNovo(dadosNovoItem) && !semAncoraDeHorario(dadosNovoItem)) {
         dadosNovoItem.proximaDoseEm = primeiraDoseEsperada(dadosNovoItem);
       }
       const novoItem = await tx.prescricao.create({
@@ -1131,10 +1122,12 @@ const atualizarItem = async (req, res) => {
         dataInicio: data.dataInicio ?? item.dataInicio,
         frequencia: data.frequencia !== undefined ? data.frequencia : item.frequencia,
       };
-      if (precisaHoraInicio(itemFinal.frequencia) && !String(itemFinal.horaInicio ?? '').trim()) {
-        return res.status(400).json({ error: 'Informe a Hora Início para esta frequência.', code: 'HORA_INICIO_OBRIGATORIA' });
-      }
-      data.proximaDoseEm = elegivelParaFluxoNovo(itemFinal) ? primeiraDoseEsperada(itemFinal) : null;
+      // Hora Início opcional — ver a nota em `finalizar`. Sem hora (e sem dose
+      // dada, garantido pelo guard acima) o item não tem horário previsto ainda:
+      // grava `null` em vez da meia-noite, que seria lida como "atrasado".
+      data.proximaDoseEm = elegivelParaFluxoNovo(itemFinal) && !semAncoraDeHorario(itemFinal)
+        ? primeiraDoseEsperada(itemFinal)
+        : null;
     }
     // Editar NÃO transfere a autoria (2026-08-04): quem chegou até aqui é o próprio dono
     // ou o gestor, e um ajuste feito pelo gestor não pode tirar do veterinário a
@@ -1598,6 +1591,16 @@ const cancelarNaExecucao = async (req, res) => {
         where: { grupoId, ativo: true, executadoEm: null },
         data:  { status: 'CANCELADA', ativo: false },
       });
+      // Item PARCIALMENTE executado (dose 2 de 7, p.ex.): as doses que FALTAM também
+      // são canceladas — é o pedido explícito de quem cancela pelo plantão. Fica
+      // `ativo: true` de propósito: as doses já aplicadas têm item de fatura e baixa
+      // de estoque, e desativar a linha tiraria o documento da aba "Cancelado" da
+      // própria tela de execução (que só lista itens ativos) — some sem deixar rastro.
+      // Quem impede a execução das doses restantes é o status CANCELADO do GRUPO.
+      await tx.prescricao.updateMany({
+        where: { grupoId, ativo: true, executadoEm: { not: null } },
+        data:  { status: 'CANCELADA' },
+      });
       // Cancelamento na execução é SEMPRE definitivo: status CANCELADO, execução
       // bloqueada e prescrição imutável — itens já executados permanecem na fatura.
       await tx.prescricaoGrupo.update({
@@ -1690,20 +1693,16 @@ const reabrirParaEdicao = async (req, res) => {
 
 // Data local (YYYY-MM-DD) da última execução do item — para não reexecutar/refaturar
 // o MESMO item no MESMO dia (permite execução item a item sem duplicar na fatura).
-function executadoHojeItem(item, hojeStr) {
+function executadoHojeItem(item, hojeStr, fuso = null) {
   if (!item.executadoEm) return false;
-  const d = new Date(item.executadoEm);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` === hojeStr;
+  return diaNaEmpresa(item.executadoEm, fuso) === hojeStr;
 }
 
 // Data LOCAL (YYYY-MM-DD) de um instante qualquer — mesma regra de `hojeLocalStr`/
 // `executadoHojeItem`: NUNCA `toISOString()` aqui, que dá a data em UTC e já vira o
 // dia seguinte a partir das 21h no horário de Brasília.
-function dataLocalStr(d) {
-  const dt = new Date(d);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+function dataLocalStr(d, fuso = null) {
+  return diaNaEmpresa(d, fuso);
 }
 
 // Descrição do item na fatura — mesma forma no lançamento da finalização e na execução
@@ -1755,10 +1754,15 @@ async function resolverValorProcedimento(tx, empresaId, nome) {
 
 const CLASSIFICACAO_LABEL = { NO_HORARIO: 'no horário', ANTECIPADA: 'antecipada', ATRASADA: 'atrasada' };
 
-function fmtDataHora(d) {
-  const dt = new Date(d);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+// Tamanho mínimo da justificativa de execução ANTECIPADA — mesmo piso que o
+// `ModalJustificativa` do front já exige em toda ação destrutiva/justificada.
+const MIN_JUSTIFICATIVA = 3;
+
+// Texto de data/hora para a mensagem de erro e para a auditoria — NO FUSO DA
+// CLÍNICA. Lia o relógio do servidor, então a auditoria de uma clínica de Manaus
+// registrava "previsto 06:44" como 07:44.
+function fmtDataHora(d, fuso = null) {
+  return formatarNaEmpresa(d, fuso).replace(/^(\d{2}\/\d{2})\/\d{4} /, '$1 ');
 }
 
 const executar = async (req, res) => {
@@ -1770,10 +1774,15 @@ const executar = async (req, res) => {
     const itemIdsFiltro = Array.isArray(req.body?.itemIds)
       ? req.body.itemIds.map(Number).filter(Number.isInteger)
       : null;
-    // Execução fora do horário (antecipada/atrasada) exige confirmação explícita do
-    // front (tela de aviso, não-bloqueante) — sem ela, nada é debitado/faturado.
-    // "Executar Todos" manda esta flag sempre true (ação de lote — não abre N modais).
+    // Execução ATRASADA exige confirmação explícita do front (tela de aviso,
+    // não-bloqueante) — sem ela, nada é debitado/faturado.
     const confirmarHorario = req.body?.confirmarHorario === true;
+    // Execução ANTECIPADA (dose FUTURA) é BLOQUEADA e só passa com JUSTIFICATIVA.
+    // 🔴 `confirmarHorario` NÃO a libera — era exatamente esse o furo: "Executar
+    // Todos" mandava a flag sempre true e aplicava o curso inteiro de uma vez,
+    // enquanto o ícone "Executar" (item a item) checava o horário. Agora o gate é
+    // o MESMO nos dois caminhos; o que muda é só quem responde ao 400.
+    const justificativa = String(req.body?.justificativa ?? '').trim();
 
     const grupo = await prisma.prescricaoGrupo.findUnique({
       where:   { id: grupoId },
@@ -1790,7 +1799,9 @@ const executar = async (req, res) => {
     // Premissa alterada (2026-07-16): a prescrição FINALIZADA pode ser executada mesmo
     // com a evolução ainda EM_ANDAMENTO — não exige mais a evolução FINALIZADA.
 
-    const hojeStr = hojeLocalStr();
+    // "Hoje" é o dia da CLÍNICA, não o do servidor (que roda fixo em Brasília).
+    const fuso    = await fusoDaEmpresa(grupo.empresaId ?? req.empresaId);
+    const hojeStr = hojeNaEmpresa(fuso);
 
     grupo.itens = await anexarAplicadaProprietario(prisma, grupo.itens);
 
@@ -1808,7 +1819,7 @@ const executar = async (req, res) => {
       if (elegivelParaFluxoNovo(item)) {
         return (item.dosesExecutadas ?? 0) < dosesTotaisEsperadas(item);
       }
-      return janelaDoItem(item, hojeStr).dentro && !executadoHojeItem(item, hojeStr);
+      return janelaDoItem(item, hojeStr).dentro && !executadoHojeItem(item, hojeStr, fuso);
     });
     if (itensHoje.length === 0) {
       return res.status(400).json({ error: 'Nenhum item da prescrição para executar agora.' });
@@ -1816,30 +1827,57 @@ const executar = async (req, res) => {
 
     const agora = new Date();
 
-    // Gate de confirmação — ANTES de tocar em estoque/fatura/log. Cobre antecipada
-    // E atrasada com a MESMA tela no front ("mesmas regras da antecipação").
-    if (!confirmarHorario) {
-      for (const item of itensHoje) {
-        if (!elegivelParaFluxoNovo(item)) continue;
-        // 1ª execução de item SEM Hora Início: não existe base real ainda — é
-        // ESTA execução que vai fixar o horário-base para as seguintes
-        // (`proximaDoseEm = calcularProximaDose(agora, frequencia)`, abaixo).
-        // `previsto` aqui seria só a meia-noite de `dataInicio` (mera âncora de
-        // CALENDÁRIO), e cobrar confirmação de "atraso" contra um horário que
-        // ninguém escolheu não faz sentido — Hora Início nunca é impeditivo.
-        if (!item.horaInicio && (item.dosesExecutadas ?? 0) === 0) continue;
-        const previsto      = horarioPrevistoDoItem(item);
-        const classificacao = classificarExecucao(agora, previsto);
-        if (classificacao !== 'NO_HORARIO') {
+    // ─── Gate de horário — ANTES de tocar em estoque/fatura/log ───────────────
+    //
+    // Roda para TODO item de `itensHoje`, venha a chamada do ícone "Executar"
+    // (um itemId) ou do "Executar Todos" (vários) — os dois caminhos passam por
+    // aqui, que é o que corrige a divergência de comportamento entre eles.
+    //
+    //   ANTECIPADA (dose futura) → 400 EXECUCAO_FUTURA. Só executa com
+    //     `justificativa` — antecipar dose é decisão clínica e fica registrada
+    //     na auditoria com o horário previsto, o real e o motivo.
+    //   ATRASADA                 → 400 CONFIRMACAO_NECESSARIA, liberada por
+    //     `confirmarHorario` (aviso simples): a dose já era devida, atrasar não
+    //     inventa dose nova.
+    //   Sem âncora (`semAncoraDeHorario`) → não há horário previsto: esta
+    //     execução é justamente quem vai fixá-lo. Nada a comparar, nada a
+    //     confirmar. É o que sustenta "Hora Início não é obrigatória".
+    for (const item of itensHoje) {
+      if (!elegivelParaFluxoNovo(item)) continue;
+      const previsto = horarioPrevistoDoItem(item);
+      if (!previsto) continue;                      // semAncoraDeHorario
+      const classificacao = classificarExecucao(agora, previsto);
+      if (classificacao === 'NO_HORARIO') continue;
+
+      if (classificacao === 'ANTECIPADA') {
+        if (justificativa.length < MIN_JUSTIFICATIVA) {
           return res.status(400).json({
-            erro:          'CONFIRMACAO_NECESSARIA',
-            itemId:        item.id,
-            medicamento:   item.medicamento,
+            erro:        'EXECUCAO_FUTURA',
+            error:       `A próxima dose de "${item.medicamento}" está prevista para ${fmtDataHora(previsto, fuso)}. Antecipar exige justificativa.`,
+            itemId:      item.id,
+            medicamento: item.medicamento,
+            // Qual dose do curso está sendo antecipada — a tela mostra "(03/05)".
+            // Vem do backend (e não do contador do front) porque o "Executar Todos"
+            // não sabe qual dos itens do lote foi o barrado: a resposta traz o item.
+            numeroDose:  (item.dosesExecutadas ?? 0) + 1,
+            totalDoses:  dosesTotaisEsperadas(item),
             previsto,
             agora,
             classificacao,
           });
         }
+        continue;
+      }
+
+      if (!confirmarHorario) {
+        return res.status(400).json({
+          erro:          'CONFIRMACAO_NECESSARIA',
+          itemId:        item.id,
+          medicamento:   item.medicamento,
+          previsto,
+          agora,
+          classificacao,
+        });
       }
     }
 
@@ -1893,8 +1931,7 @@ const executar = async (req, res) => {
         if (!item.medicamentoCliente) {
           // Prescrição finalizada ANTES da mudança já tem uma linha zerada criada na
           // finalização: na PRIMEIRA execução ela é aproveitada (só confirma o valor)
-          // em vez de duplicar. Nas finalizadas depois, não há linha e cada dose entra
-          // como uma linha nova — o total continua sendo o efetivamente aplicado.
+          // em vez de duplicar.
           // `item.executadoEm` ainda reflete o estado ANTES desta execução (a marcação
           // acontece adiante no laço) e `itensHoje` já excluiu quem executou hoje.
           const primeiraExecucao = !item.executadoEm;
@@ -1907,7 +1944,11 @@ const executar = async (req, res) => {
               data:  { descricao, valor: valorDaDose },
             });
           } else {
-            await adicionarFaturaItem(tx, {
+            // Doses SEGUINTES do mesmo item somam na QUANTIDADE da linha que já existe
+            // (mesma origem, mesma descrição, mesmo valor unitário) em vez de repetir a
+            // linha na fatura — a cobrança por execução não muda, só deixa de virar 14
+            // linhas idênticas num curso de 7 dias. Ver `adicionarOuSomarFaturaItem`.
+            await adicionarOuSomarFaturaItem(tx, {
               faturaId:     fatura.id,
               animalId:     grupo.animalId,
               tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
@@ -1932,7 +1973,9 @@ const executar = async (req, res) => {
             const descInsumo = atendNum
               ? `[${atendNum}] ${insumo.nome} — aplicação ${item.via} (${item.medicamento})`
               : `${insumo.nome} — aplicação ${item.via} (${item.medicamento})`;
-            await adicionarFaturaItem(tx, {
+            // Mesma consolidação da dose: 7 aplicações injetáveis = "Seringa … Quant.: 7",
+            // não 7 linhas de seringa na fatura.
+            await adicionarOuSomarFaturaItem(tx, {
               faturaId:     fatura.id,
               animalId:     grupo.animalId,
               tipo:         'PROCEDIMENTO',
@@ -1950,7 +1993,12 @@ const executar = async (req, res) => {
         // só marca `executadoEm`, como sempre (o Mapa de Atendimento usa isso para
         // saber se a dose de HOJE já foi dada).
         if (elegivelParaFluxoNovo(item)) {
-          const previsto      = horarioPrevistoDoItem(item);
+          // Sem âncora, é ESTA execução que fixa o horário-base do curso: não há
+          // previsto anterior a comparar, então ela é, por definição, no horário.
+          // `horarioPrevisto` da dose recebe `agora` — a coluna é NOT NULL e o
+          // valor honesto do "previsto" desta 1ª dose é o instante em que ela
+          // aconteceu (é dele que sai `proximaDoseEm` das seguintes).
+          const previsto      = horarioPrevistoDoItem(item) ?? agora;
           const classificacao = classificarExecucao(agora, previsto);
           const diffMin       = diferencaEmMinutos(agora, previsto);
 
@@ -1980,8 +2028,12 @@ const executar = async (req, res) => {
             entidade:   'PRESCRICAO_DOSE',
             entidadeId: item.id,
             animalId:   grupo.animalId,
+            // A justificativa da dose ANTECIPADA vai para `motivo` — é o campo que
+            // a tela de Auditoria já exibe como texto do usuário (e o único que o
+            // saneador de referências não reescreve).
+            motivo:     classificacao === 'ANTECIPADA' && justificativa ? justificativa : undefined,
             detalhes:   `${grupo.animal?.nome ?? 'paciente'} — ${item.medicamento}: `
-              + `previsto ${fmtDataHora(previsto)}, executado ${fmtDataHora(agora)} `
+              + `previsto ${fmtDataHora(previsto, fuso)}, executado ${fmtDataHora(agora, fuso)} `
               + `(${CLASSIFICACAO_LABEL[classificacao]}${classificacao !== 'NO_HORARIO' ? ` ${Math.abs(diffMin)}min` : ''})`,
           });
         } else {
@@ -2106,10 +2158,15 @@ const atualizarHoraInicioPosExecucao = async (req, res) => {
 //     Executado HOJE continua "pendente" nesta função de propósito — alimenta o
 //     card "Histórico — executadas hoje" do front (que lê do MESMO resultado
 //     desta rota); doses restantes em 0 (curso completo) tiram o item da fila.
-function itemPendenteNoDia(item, hojeStr) {
+function itemPendenteNoDia(item, hojeStr, fuso = null) {
   if (elegivelParaFluxoNovo(item)) {
-    if (executadoHojeItem(item, hojeStr)) return true;
+    if (executadoHojeItem(item, hojeStr, fuso)) return true;
     if ((item.dosesExecutadas ?? 0) >= dosesTotaisEsperadas(item)) return false;
+    // Ainda SEM âncora de horário (sem Hora Início e sem nenhuma dose dada): não
+    // há data de próxima dose para casar — o item fica disponível em qualquer dia
+    // da janela do curso, e a 1ª execução é que fixa a grade. Sem esta linha, um
+    // item sem hora só apareceria no dia exato de `dataInicio` e sumiria depois.
+    if (semAncoraDeHorario(item)) return dentroDaJanelaDoCurso(item, hojeStr);
     // Navegando o calendário da Execução de Prescrição para um dia FUTURO (além
     // de hoje): o rolling schedule real (`proximaDoseEm`) só existe depois da
     // dose ANTERIOR ser executada de verdade, então ainda não sabe responder
@@ -2117,10 +2174,10 @@ function itemPendenteNoDia(item, hojeStr) {
     // duração) — mesma conta de `utils/posologia.ts#gerarResumoDoses` do front —
     // só para o item aparecer como PREVISTO; a execução continua bloqueada fora
     // de hoje (gate no front, `soVisualizacao={!isHoje}`).
-    if (hojeStr > hojeLocalStr()) {
+    if (hojeStr > hojeNaEmpresa(fuso)) {
       return itemPrevistoParaDataFutura(item, hojeStr);
     }
-    return dataLocalStr(horarioPrevistoDoItem(item)) === hojeStr;
+    return dataLocalStr(horarioPrevistoDoItem(item), fuso) === hojeStr;
   }
   return janelaDoItem(item, hojeStr).dentro;
 }
@@ -2204,10 +2261,17 @@ const listarParaExecucao = async (req, res) => {
             // procedimento ainda pendente (ou vice-versa) mostrava a dose já feita
             // no Histórico do dia sem dizer quem a aplicou. `take: 1` + orderBy
             // desc = a dose mais recente deste item.
+            // 🔴 Histórico COMPLETO das doses (era `take: 1`): a tela de execução
+            // mostra "Dose 01/02 — Executado às 18:00" por dose, e o horário real
+            // de cada uma só existe aqui. `numeroDose` asc para a linha N do card
+            // casar com a dose N sem o front ter de reordenar.
             execucoesDose: {
-              select:  { executadoPor: { select: { id: true, fullName: true } } },
-              orderBy: { horarioExecutado: 'desc' },
-              take: 1,
+              select: {
+                numeroDose: true, horarioExecutado: true, horarioPrevisto: true,
+                classificacao: true,
+                executadoPor: { select: { id: true, fullName: true } },
+              },
+              orderBy: { numeroDose: 'asc' },
             },
           },
           orderBy: { id: 'asc' },
@@ -2232,9 +2296,14 @@ const listarParaExecucao = async (req, res) => {
       .filter(g => g.itens.length > 0);
 
     // Data de referência — usa param ?data=YYYY-MM-DD ou hoje
+    // Dia de referência SEMPRE no fuso da CLÍNICA (ver lib/fusoEmpresa.js): o
+    // servidor roda em Brasília e, para uma clínica em UTC−4/−5, "hoje" vira o dia
+    // seguinte 1-2h antes da meia-noite local — a fila do plantão trocaria de dia
+    // no meio do plantão da noite.
+    const fuso    = await fusoDaEmpresa(req.empresaId);
     const hojeStr = (data && /^\d{4}-\d{2}-\d{2}$/.test(data))
       ? data
-      : hojeLocalStr();
+      : hojeNaEmpresa(fuso);
     const hoje    = new Date(hojeStr + 'T00:00:00Z'); // meia-noite UTC
 
     // Mantém apenas grupos onde pelo menos um item está PENDENTE hoje — cada item
@@ -2249,8 +2318,8 @@ const listarParaExecucao = async (req, res) => {
     // mostrar, mesmo para uma prescrição cancelada minutos antes.
     const dentroJanela = grupos.filter(g =>
       g.status === 'CANCELADO'
-        ? dataLocalStr(g.updatedAt) === hojeStr
-        : g.itens.some(item => itemPendenteNoDia(item, hojeStr))
+        ? dataLocalStr(g.updatedAt, fuso) === hojeStr
+        : g.itens.some(item => itemPendenteNoDia(item, hojeStr, fuso))
     );
 
     // Filtro de busca textual (nome animal, baia, nº prescrição, vet)
@@ -2277,14 +2346,26 @@ const listarParaExecucao = async (req, res) => {
         const diaAtual  = Math.floor((hoje.getTime() - inicio.getTime()) / (1000 * 60 * 60 * 24)) + 1;
         const elegivel  = elegivelParaFluxoNovo(item);
         const { execucoesDose, ...itemSemDoses } = item;
+        const doses = execucoesDose ?? [];
         return {
           ...itemSemDoses,
           diaAtual,
           dosesExecutadas:      elegivel ? (item.dosesExecutadas ?? 0) : null,
           dosesTotaisEsperadas: elegivel ? dosesTotaisEsperadas(item) : null,
+          // `null` quando o item ainda não tem âncora — a tela lê isso como "sem
+          // horário previsto ainda", não como "previsto para meia-noite".
           proximaDoseEm:        elegivel ? horarioPrevistoDoItem(item) : null,
-          // Ver comentário no `include.itens.execucoesDose` acima.
-          executadoPorDose: execucoesDose?.[0]?.executadoPor ?? null,
+          // Horário REAL de cada dose já aplicada — alimenta a linha
+          // "Dose 01/02 — Executado às 18:00" do card de execução.
+          doses: doses.map(d => ({
+            numeroDose:       d.numeroDose,
+            horarioExecutado: d.horarioExecutado,
+            horarioPrevisto:  d.horarioPrevisto,
+            classificacao:    d.classificacao,
+            executadoPor:     d.executadoPor,
+          })),
+          // Executor da ÚLTIMA dose (ver comentário no `include` acima).
+          executadoPorDose: doses.length ? doses[doses.length - 1].executadoPor ?? null : null,
         };
       }),
     }));

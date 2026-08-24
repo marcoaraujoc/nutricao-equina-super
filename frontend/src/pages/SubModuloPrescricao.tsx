@@ -172,19 +172,13 @@ const INTERVALO_DIAS: Record<string, number> = {
   '1x21dias': 21, '1x30dias': 30, '1x90dias': 90,
 };
 
-// Frequências SEM horário fixo — nunca exigem Hora Início (espelha
-// FREQUENCIAS_SEM_HORARIO em backend/src/lib/agendaDoses.js).
-const FREQUENCIAS_SEM_HORARIO = new Set(['agora', 'SOS', 'seNecessario']);
-
-// Hora Início é obrigatória para toda frequência com horário fixo do próprio
-// dia (1xDia..1em1h) — sem ela o item cai no fluxo LEGADO de execução, que
-// trata UMA execução como "o dia inteiro coberto", mesmo quando a frequência
-// implica várias doses no mesmo dia (ex.: "4 em 4 horas" virando EXECUTADO já
-// na 1ª dose, sem agendar as 5 seguintes). Espelha
-// backend/src/lib/agendaDoses.js#precisaHoraInicio — "1x a cada N dias"
-// (INTERVALO_DIAS) nunca exige: a cadência é o que importa, não a hora do dia.
-const precisaHoraInicio = (frequencia: string): boolean =>
-  !!frequencia && !FREQUENCIAS_SEM_HORARIO.has(frequencia) && !INTERVALO_DIAS[frequencia];
+// 🔴 Hora Início NÃO é obrigatória em frequência nenhuma (2026-08-23) — a função
+// `precisaHoraInicio` que existia aqui foi REMOVIDA junto com a do backend, e o
+// Set `FREQUENCIAS_SEM_HORARIO` que só a alimentava saiu com ela. Quem define a
+// grade das doses é a PRIMEIRA EXECUÇÃO, não o formulário: "de 12 em 12h"
+// executado às 20:00 tem a próxima às 08:00 (ver
+// backend/src/lib/agendaDoses.js#semAncoraDeHorario). Preenchida, a hora só
+// antecipa a definição dessa âncora. NÃO reintroduzir a obrigatoriedade.
 
 // Frequências com MAIS DE UMA dose no MESMO dia — "Uma vez ao dia" fica de fora
 // de propósito: a próxima dose é só amanhã, então iniciar num horário que já
@@ -543,6 +537,13 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const formBackupsRef    = useRef<Partial<Record<TipoItem, FormItem>>>({});
   const medDebounceRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchAbortRef    = useRef<AbortController | null>(null);
+  // Refs (não state) para o resultado da carga RÁPIDA dos 5 primeiros não
+  // atropelar uma busca que o usuário já tenha digitado enquanto ela ainda
+  // estava em voo — `carregarMedicamentos` roda uma vez só (useCallback com
+  // dependência em animalId), então lê o valor MAIS RECENTE por aqui, não pelo
+  // `medBusca`/`allMedsLoaded` capturados no fechamento da função.
+  const medBuscaRef       = useRef('');
+  const allMedsLoadedRef  = useRef(false);
   const [allMedsLoaded,       setAllMedsLoaded]       = useState(false);
   const [backgroundSearching, setBackgroundSearching] = useState(false);
   const [showImportOrc,       setShowImportOrc]       = useState(false);
@@ -663,20 +664,41 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     setDragOverIdx(null);
   };
 
-  // Carrega todos os medicamentos em background (silencioso — não bloqueia o dropdown).
-  // Quando chega, sinaliza allMedsLoaded para que o filtro passe a ser client-side.
+  // Catálogo de medicamento pode chegar a milhares de linhas (ver CLAUDE.md —
+  // ~4.900 só o global) — buscar tudo de uma vez deixava o dropdown vazio/
+  // travado até o request inteiro voltar. Duas fases:
+  //   1. 5 primeiros — rápido, só para o dropdown já mostrar algo ao abrir;
+  //   2. catálogo completo, em BACKGROUND — quando chega, o filtro vira
+  //      client-side (mesmo comportamento de antes).
+  // A fase 1 só escreve em `medicamentos` se o usuário AINDA não tiver digitado
+  // nada nem a fase 2 já tiver chegado — senão ela sobrescreveria um resultado
+  // mais recente (busca digitada, ou o catálogo completo já carregado).
   const carregarMedicamentos = useCallback(async () => {
     setLoadingMeds(true);
+
+    api.get('/medicamentos/para-atendimento', {
+      params: { animalId, tipo: 'medicamento', limit: 5 },
+    }).then(r => {
+      if (medBuscaRef.current.trim() === '' && !allMedsLoadedRef.current) {
+        setMedicamentos(r.data?.dados ?? []);
+      }
+    }).catch(() => {});
+
     try {
       const r = await api.get('/medicamentos/para-atendimento', {
         params: { animalId, tipo: 'medicamento' },
       });
       const lista: MedicamentoCat[] = r.data?.dados ?? [];
       setAllMeds(lista);
+      allMedsLoadedRef.current = true;
       setAllMedsLoaded(true);
     } catch {}
     finally { setLoadingMeds(false); }
   }, [animalId]);
+
+  // Mantém a ref sincronizada com o state — lida por `carregarMedicamentos`
+  // (useCallback com closure antiga) para saber se o usuário já digitou algo.
+  useEffect(() => { medBuscaRef.current = medBusca; }, [medBusca]);
 
   // Carrega o catálogo completo no mount — procedimentos com o valor da empresa
   // (Cadastro > Procedimentos) e os combos da empresa ativa
@@ -817,17 +839,8 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       setErroInline(INTERVALO_DIAS[form.frequencia] ? 'Qtd. de Vezes é obrigatória' : 'Duração (dias) é obrigatória', ['duracaoDias']);
       return false;
     }
-    // Hora Início é OBRIGATÓRIA para toda frequência com horário fixo do próprio
-    // dia (1xDia..1em1h) — sem ela o item cai no fluxo LEGADO de execução, que
-    // trata UMA execução como "o dia inteiro coberto" mesmo quando a frequência
-    // implica várias doses no mesmo dia (era o bug de "4 em 4 horas" virando
-    // Executado já na 1ª dose). NUNCA é impeditivo em "1x a cada N dias" (backend
-    // já agenda certo sem ela — lib/agendaDoses.js#elegivelParaFluxoNovo): o
-    // horário só se fixa DEPOIS da 1ª execução, que vira a base das seguintes.
-    if (precisaHoraInicio(form.frequencia) && !form.horaInicio.trim()) {
-      setErroInline('Hora Início é obrigatória para esta frequência', ['horaInicio']);
-      return false;
-    }
+    // Hora Início é OPCIONAL em toda frequência (2026-08-23) — o horário-base das
+    // doses é o da 1ª EXECUÇÃO, não o do formulário. Ver a nota no topo do arquivo.
     // Começando HOJE, a hora não pode já ter passado — senão a 1ª dose nasce
     // atrasada antes mesmo de a prescrição ser salva. Só na CRIAÇÃO do item: um
     // item já existente (local ou salvo) pode ter sido cadastrado horas atrás e
@@ -1231,6 +1244,15 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
             }
           </button>
         ))}
+        {/* Só os 5 primeiros chegaram ainda — o catálogo completo (milhares de
+            itens) segue carregando sozinho; sem digitar nada, não há por que
+            travar a UI esperando por ele. */}
+        {!allMedsLoaded && !backgroundSearching && termo === '' && (
+          <div className="flex items-center gap-1.5 px-3 py-1.5 border-t border-gray-100">
+            <Loader2 size={10} className="animate-spin text-gray-300" />
+            <span className="text-[10px] text-gray-400">Carregando o restante do catálogo...</span>
+          </div>
+        )}
         {mostraCriarNovo && (
           <button type="button" onMouseDown={() => criarMedicamentoLivre(termo)}
             className="w-full text-left px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 transition-colors flex items-center gap-1.5 font-medium">
@@ -1615,7 +1637,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 whitespace-nowrap">
-                      HORA INÍCIO{precisaHoraInicio(form.frequencia) && ' *'}
+                      HORA INÍCIO
                     </label>
                     <input type="time" value={form.horaInicio} onChange={e => set('horaInicio', e.target.value)}
                       className={classeErro(erroAcao, 'horaInicio', 'w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500')} />

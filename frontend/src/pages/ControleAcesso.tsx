@@ -13,6 +13,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../services/api';
+import { formatDataHora } from '../utils/dateUtils';
 import toast from 'react-hot-toast';
 import {
   Shield, Users2, Activity,
@@ -1761,9 +1762,11 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
                         )}
                         <span className="text-[11px] text-gray-300">·</span>
                         <span className="text-[11px] text-gray-400">
-                          Enviado em {new Date(c.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' })}
-                          {' às '}
-                          {new Date(c.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })}
+                          {/* `formatDataHora` (utils/dateUtils) no lugar de dois
+                              `toLocale*` com `timeZone: 'America/Sao_Paulo'` fixo:
+                              a aplicação roda nos 4 fusos do Brasil e o convite
+                              aparecia 1-2h adiantado para quem está em UTC−4/−5. */}
+                          Enviado em {formatDataHora(c.createdAt)?.replace(' ', ' às ') ?? '—'}
                         </span>
                       </div>
                     </div>

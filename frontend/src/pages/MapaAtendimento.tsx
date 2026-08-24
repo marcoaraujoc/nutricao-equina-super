@@ -6,7 +6,8 @@ import PageContainer from '../components/PageContainer';
 import api from '../services/api';
 import { usePermissoes } from '../hooks/usePermissoes';
 import InlineError from '../components/InlineError';
-import { ModalExecucao, localToday } from './ExecucaoPrescricao';
+import { ModalExecucao } from './ExecucaoPrescricao';
+import { hojeISO, diaISO } from '../utils/dateUtils';
 import type { GrupoExecucao } from './ExecucaoPrescricao';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -275,9 +276,9 @@ export default function MapaAtendimento() {
 
   const [resumo,        setResumo]        = useState<ResumoData | null>(null);
   const [loading,       setLoading]       = useState(false);
-  const [dataFiltro,    setDataFiltro]    = useState(() => new Date().toISOString().slice(0, 10));
+  const [dataFiltro,    setDataFiltro]    = useState(hojeISO);
   // Fim do período livre no modo SEMANAL (início = dataFiltro)
-  const [dataFimFiltro, setDataFimFiltro] = useState(() => new Date().toISOString().slice(0, 10));
+  const [dataFimFiltro, setDataFimFiltro] = useState(hojeISO);
   const [granularidade, setGranularidade] = useState<'DIARIO' | 'SEMANAL' | 'MENSAL'>('DIARIO');
   const [localizacaoId, setLocalizacaoId] = useState('');
   const [veterinarioId, setVeterinarioId] = useState('');
@@ -293,7 +294,7 @@ export default function MapaAtendimento() {
   const [loadingModal,   setLoadingModal]   = useState(false);
   const [erroInline,     setErroInline]     = useState<string | null>(null);
 
-  const isHoje = dataFiltro === localToday();
+  const isHoje = dataFiltro === hojeISO();
 
   const abrirExecucaoPrescricao = async (item: CronogramaItem) => {
     if (!item.grupoId) { setErroInline('Prescrição sem grupo associado'); return; }
@@ -501,7 +502,7 @@ export default function MapaAtendimento() {
                 // Inicializa o fim com início + 6 dias (semana) quando inválido
                 const fim = new Date(dataFiltro + 'T12:00:00');
                 fim.setDate(fim.getDate() + 6);
-                setDataFimFiltro(fim.toISOString().slice(0, 10));
+                setDataFimFiltro(diaISO(fim)!);
               }
             }}
           />

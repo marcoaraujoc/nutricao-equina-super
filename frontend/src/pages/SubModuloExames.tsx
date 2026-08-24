@@ -7,6 +7,7 @@ import {
   ChevronDown, Printer, Mail, MessageCircle, CheckCircle2, Clock,
 } from 'lucide-react';
 import api from '../services/api';
+import { hojeISO } from '../utils/dateUtils';
 import toast from 'react-hot-toast';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
@@ -134,7 +135,9 @@ interface Props {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const hoje = () => new Date().toISOString().slice(0, 10);
+// `hojeISO()` (utils/dateUtils) e nao `toISOString().slice(0,10)`: este ultimo
+// devolve o dia em UTC, que a noite ja e AMANHA em qualquer fuso do Brasil.
+const hoje = () => hojeISO();
 
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString('pt-BR', { timeZone: 'UTC' });

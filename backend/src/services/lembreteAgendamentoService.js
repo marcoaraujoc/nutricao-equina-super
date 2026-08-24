@@ -16,6 +16,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { fusoDaEmpresa, formatarDataNaEmpresa, formatarHoraNaEmpresa } = require('../lib/fusoEmpresa');
 const logger = require('../lib/logger');
 const { getWhatsAppProvider } = require('../messaging/whatsappProvider');
 
@@ -31,10 +32,13 @@ function foneIntl(phone) {
 }
 
 // "A consulta do(a) <Animal> está agendada para <Dia> às <horas> com o Dr(a) <Veterinário>"
-function montarTexto(ag) {
-  const d    = new Date(ag.dataHora);
-  const dia  = d.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-  const hora = d.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
+// 🔴 Data e hora no FUSO DA CLÍNICA, não em Brasília fixo: a mensagem vai para o
+// PROPRIETÁRIO, que está na praça da clínica. Numa clínica de Manaus (UTC−4) o aviso
+// anunciava a consulta 1h adiantada — e, para consulta no início da manhã, no DIA
+// ERRADO (07:00 de Manaus é 08:00 em Brasília; 23:00 vira 00:00 do dia seguinte).
+function montarTexto(ag, fuso) {
+  const dia  = formatarDataNaEmpresa(ag.dataHora, fuso);
+  const hora = formatarHoraNaEmpresa(ag.dataHora, fuso);
   const animalNome = ag.animal?.nome ?? 'seu animal';
   const vetNome    = ag.veterinario?.fullName ? `Dr(a) ${ag.veterinario.fullName}` : 'o(a) veterinário(a) responsável';
   return `A consulta do(a) ${animalNome} está agendada para ${dia} às ${hora} com o ${vetNome}`;
@@ -67,6 +71,7 @@ async function enviarPara(provider, telefone, texto, contexto) {
 // tudo de novo cinco minutos depois —, e a transação fica aberta durante todas as
 // chamadas ao provedor, segurando conexão do pool.
 async function enviarLembretesWhatsapp(empresaId, agora = new Date()) {
+  const fuso = await fusoDaEmpresa(empresaId);
   const { comTenant } = require('../lib/tenantDb');
   const provider = getWhatsAppProvider();
   // Janela de varredura: até 60min à frente (o tier mais distante) + folga.
@@ -99,7 +104,7 @@ async function enviarLembretesWhatsapp(empresaId, agora = new Date()) {
     else if (minutosAte <= TIER_15MIN_MIN && !ag.lembreteWa15minEnviadoEm) tier = '15MIN';
     if (!tier) continue;
 
-    const texto     = montarTexto(ag);
+    const texto     = montarTexto(ag, fuso);
     const contexto  = { agendamentoId: ag.id, tier, empresaId: ag.animal?.empresaId ?? null, equipeId: ag.animal?.equipeId ?? null };
     const tierLabel = tier === '1H' ? '1h antes' : '15min antes';
     const animalNome = ag.animal?.nome ?? `agendamento #${ag.id}`;

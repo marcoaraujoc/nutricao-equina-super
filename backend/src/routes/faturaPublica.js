@@ -11,6 +11,9 @@ const express = require('express');
 const router = express.Router();
 const FaturaPublicaController = require('../controllers/FaturaPublicaController');
 
+// Resumo estruturado ANTES do PDF — é esta rota que a página pública chama
+// primeiro (conta como "a fatura foi acessada": ver lib/faturaLinkPublico.js).
+router.get('/:token/resumo', FaturaPublicaController.resumo);
 router.get('/:token', FaturaPublicaController.abrir);
 
 module.exports = router;
