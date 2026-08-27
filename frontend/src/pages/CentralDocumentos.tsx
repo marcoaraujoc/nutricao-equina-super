@@ -1,15 +1,36 @@
 // src/pages/CentralDocumentos.tsx
-// Central de Documentos — página que compõe os três painéis (desktop), o layout de
-// duas colunas (tablet) e o fluxo próprio de celular.
+// Central de Documentos — composição dos painéis (desktop), duas colunas (tablet) e
+// o fluxo próprio de celular.
 //
-// A página é só COMPOSIÇÃO e orquestração: o domínio está em modules/documentos.
+// A página é COMPOSIÇÃO e orquestração: o domínio está em modules/documentos.
+//
+// 🔴 O QUE MUDOU EM 2026-08-26 (a tela deixou de ser protótipo):
+//   · Os modelos vêm do BACKEND, sob RLS, e não mais do `localStorage`.
+//   · Existe SELETOR DE PACIENTE. Escolhido o animal, as variáveis do documento
+//     passam a mostrar o dado REAL dele (`GET /documentos/contexto/:animalId`), e
+//     a folha ganha a logomarca da clínica e a assinatura de quem emite.
+//   · EMITIR grava um documento de verdade, vinculado ao paciente — e o documento
+//     aparece no Histórico e na Memória Clínica da tela do animal.
+//   · O "Criar com IA" virou CHAT multi-turno, ancorado no acervo de modelos.
+//
+// ⚠️ MODELO DO SISTEMA É SÓ LEITURA. Os 12 anexos da Res. CFMV 1.321/2020 são
+// globais: salvar um deles NÃO altera o global — o backend cria a cópia da clínica e
+// devolve outro id (copy-on-write). Por isso `salvar` adota o id devolvido, e por
+// isso NÃO há autosave em modelo global: um autosave ali criaria uma cópia da
+// clínica a cada pausa de digitação, sem ninguém ter pedido.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { PanelLeft, Layers, FileText, Braces, X } from 'lucide-react';
+import { PanelLeft, Layers, FileText, Braces, X, Sparkles, Loader2, ShieldCheck } from 'lucide-react';
 
 import PageContainer from '../components/PageContainer';
-import { useAuth } from '../contexts/AuthContext';
+import InlineError from '../components/InlineError';
+import SeletorAnimalInteligente from '../components/SeletorAnimalInteligente';
+import AnimalCard from '../components/AnimalCard';
+import ModalJustificativa from '../components/ModalJustificativa';
+import api from '../services/api';
+import { useEmpresa } from '../contexts/EmpresaContext';
+import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 
 import { PainelBiblioteca, PainelModelos } from '../modules/documentos/Paineis';
@@ -17,13 +38,38 @@ import type { AcoesTemplate } from '../modules/documentos/Paineis';
 import {
   DrawerVariaveis, ListaBlocos, PaletaBlocos, PainelPropriedades, PreviewA4, Toolbar,
 } from '../modules/documentos/Editor';
-import ModalCriarIA from '../modules/documentos/ModalCriarIA';
+import ChatIA from '../modules/documentos/ChatIA';
+import ModalPreencher from '../modules/documentos/ModalPreencher';
 import CentralMobile from '../modules/documentos/Mobile';
+import { carregarCampos, carregarContexto } from '../modules/documentos/api';
+import type { ContextoDocumento } from '../modules/documentos/api';
+import type { CampoDocumento, Preenchimento } from '../modules/documentos/campos';
 import { useBiblioteca, useBusca, useEditor } from '../modules/documentos/store';
 import { CATEGORIAS } from '../modules/documentos/catalogo';
 import type {
   Bloco, CategoriaId, ColecaoId, FiltroBiblioteca, Template,
 } from '../modules/documentos/types';
+
+/**
+ * Paciente como o `AnimalCard` (o card da tela de Atendimento) o consome — os campos
+ * são os que ele exibe: nome, espécie, raça, idade, peso, baia, local, tipo de
+ * trabalho e proprietário. `GET /animais` já devolve todos.
+ */
+interface AnimalDoc {
+  id:              number;
+  nome:            string;
+  photoUrl?:       string | null;
+  dataNascimento?: string | null;
+  idadeAnos?:      number | null;
+  peso?:           number | null;
+  tipoExercicio?:  string | null;
+  baia?:           string | null;
+  local?:          string | null;
+  raca?:           { nome: string } | null;
+  especie?:        { nome: string } | null;
+  user?:           { fullName: string; email: string } | null;
+  veterinarioNome?: string | null;
+}
 
 /** Vira `true` abaixo de 768px — o mesmo corte do `md:` do Tailwind. */
 function useEhMobile(): boolean {
@@ -39,12 +85,12 @@ function useEhMobile(): boolean {
 }
 
 export default function CentralDocumentos() {
-  const { user } = useAuth();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
+  const { contextoAtivo, loading: empresaLoading } = useEmpresa();
+  const { selectedAnimal } = useSelectedAnimal();
   const ehMobile = useEhMobile();
 
   // ── Guard de permissão ────────────────────────────────────────────────────
-  // Slugs próprios do módulo, já no catálogo (002_permissoes_padrao.seed.js):
   // `documentos.templates.*` para o MODELO e `documentos.emitidos.*` para a EMISSÃO.
   // São separados de propósito — quem emite atestado no campo não precisa poder
   // reescrever o modelo da clínica.
@@ -54,8 +100,7 @@ export default function CentralDocumentos() {
   const podeEmitir   = isGestor || podeExecutar('documentos.emitidos.criar');
   const podeExcluir  = isGestor || podeExecutar('documentos.templates.deletar');
 
-  const autor = user?.fullName ?? 'Profissional';
-  const bib   = useBiblioteca(autor);
+  const bib = useBiblioteca();
 
   const [filtro,  setFiltro]  = useState<FiltroBiblioteca>({ tipo: 'categoria', id: 'todos' });
   const [termo,   setTermo]   = useState('');
@@ -63,9 +108,25 @@ export default function CentralDocumentos() {
   const [aba,     setAba]     = useState<'editor' | 'preview'>('editor');
   const [zoom,    setZoom]    = useState(100);
   const [varsAberto, setVarsAberto] = useState(false);
-  const [iaAberto,   setIaAberto]   = useState(false);
+  const [chatAberto, setChatAberto] = useState(false);
   const [bibAberta,  setBibAberta]  = useState(false);   // drawer do tablet
   const [salvando,   setSalvando]   = useState(false);
+  const [emitindo,   setEmitindo]   = useState(false);
+  // Emissão: o "Gerar" abre a tela de preenchimento em vez de emitir direto.
+  // `emitindoTpl` guarda QUAL modelo está sendo emitido — pode não ser o aberto no
+  // editor (dá para clicar em Gerar direto no card da lista).
+  const [emitindoTpl,   setEmitindoTpl]   = useState<Template | null>(null);
+  const [blocosEmissao, setBlocosEmissao] = useState<Bloco[]>([]);
+  const [camposEmissao, setCamposEmissao] = useState<CampoDocumento[]>([]);
+  const [carregandoCampos, setCarregandoCampos] = useState(false);
+  const [erroEmissao,   setErroEmissao]   = useState<string | null>(null);
+  const [excluindo,  setExcluindo]  = useState<Template | null>(null);
+
+  // ── Paciente ──────────────────────────────────────────────────────────────
+  const [animais,   setAnimais]   = useState<AnimalDoc[]>([]);
+  const [animalId,  setAnimalId]  = useState<number | null>(null);
+  const [contexto,  setContexto]  = useState<ContextoDocumento | null>(null);
+  const [carregandoCtx, setCarregandoCtx] = useState(false);
 
   const folhaRef = useRef<HTMLDivElement>(null);
 
@@ -74,15 +135,75 @@ export default function CentralDocumentos() {
     [bib.templates, ativoId],
   );
 
-  // Autosave: grava os blocos no template aberto sem passar pelo botão Salvar.
+  const animal = useMemo(
+    () => animais.find(a => a.id === animalId) ?? null,
+    [animais, animalId],
+  );
+
+  /**
+   * Lista de pacientes do contexto ativo.
+   *
+   * ⚠️ Espera `empresaLoading` terminar: nenhum fetch escopado por empresa antes de o
+   * contexto estar resolvido, senão a chamada sai sem `x-empresa-id` e o backend cai
+   * no vínculo mais recente — a lista da OUTRA clínica (armadilha da sessão 2026-07-28).
+   */
+  useEffect(() => {
+    if (empresaLoading || loadingPerms || !podeVer) return;
+    let vivo = true;
+    api.get('/animais')
+      .then(res => { if (vivo) setAnimais((res.data?.dados ?? []) as AnimalDoc[]); })
+      .catch(() => { /* lista vazia: a tela segue utilizável no modo exemplo */ });
+    return () => { vivo = false; };
+  }, [empresaLoading, loadingPerms, podeVer, contextoAtivo?.empresaId, contextoAtivo?.equipeId]);
+
+  // Adota o paciente já selecionado no shell — quem veio da tela do animal não
+  // deveria ter de escolher de novo o mesmo paciente aqui.
+  useEffect(() => {
+    if (animalId != null) return;
+    if (selectedAnimal?.id) setAnimalId(selectedAnimal.id);
+  }, [selectedAnimal?.id, animalId]);
+
+  /**
+   * Contexto do paciente: variáveis resolvidas + logomarca + assinatura.
+   *
+   * É isto que faz "ao selecionar o animal, preencher automaticamente as informações
+   * do animal": o preview deixa de mostrar os exemplos do catálogo ("Thor", "Haras
+   * Boa Vista") e passa a mostrar o paciente de verdade.
+   */
+  useEffect(() => {
+    if (empresaLoading || animalId == null) { setContexto(null); return; }
+    let vivo = true;
+    setCarregandoCtx(true);
+    carregarContexto(animalId)
+      .then(ctx => { if (vivo) setContexto(ctx); })
+      .catch(() => { if (vivo) setContexto(null); })
+      .finally(() => { if (vivo) setCarregandoCtx(false); });
+    return () => { vivo = false; };
+  }, [animalId, empresaLoading, contextoAtivo?.empresaId]);
+
+  // Documentos já emitidos PARA ESTE PACIENTE. Alimentam a lista do estado vazio do
+  // editor — é onde o vet confere se o atestado que ele ia emitir já foi emitido hoje.
+  const carregarEmitidos = bib.carregarEmitidos;
+  useEffect(() => {
+    if (empresaLoading || animalId == null) return;
+    void carregarEmitidos(animalId);
+  }, [animalId, empresaLoading, carregarEmitidos]);
+
+  /**
+   * Autosave — SÓ em modelo da própria clínica.
+   *
+   * ⚠️ Modelo GLOBAL fica de fora: salvar um global dispara o copy-on-write no
+   * backend, e um autosave ali criaria uma cópia da clínica a cada pausa de
+   * digitação. Quem quer a versão própria clica em Salvar, que é um ato explícito.
+   */
   const aoAutosave = useCallback((blocos: Bloco[]) => {
-    if (!ativo) return;
-    bib.salvar({ ...ativo, blocos });
-  }, [ativo, bib]);
+    if (!ativo || ativo.global || !podeEditar) return;
+    void bib.salvar({ ...ativo, blocos });
+  }, [ativo, bib, podeEditar]);
 
   const editor = useEditor(ativo?.blocos ?? [], aoAutosave);
 
-  // Trocar de template reinicia o editor (e o histórico de undo junto).
+  // Trocar de modelo reinicia o editor (e o histórico de undo junto).
   const trocarBase = editor.trocarBase;
   useEffect(() => {
     if (ativo) trocarBase(ativo.blocos);
@@ -136,38 +257,86 @@ export default function CentralDocumentos() {
     setBibAberta(false);
   }, []);
 
-  const salvar = useCallback(() => {
+  /**
+   * Salva o modelo aberto.
+   *
+   * ⚠️ Em modelo GLOBAL o backend devolve a CÓPIA da clínica (id novo). Adotar esse
+   * id é obrigatório: sem isso, o salvar seguinte criaria mais uma cópia, e a tela
+   * ficaria editando um registro que não é o que está sendo gravado.
+   */
+  const salvar = useCallback(async (opcoes?: { novaVersao?: boolean }) => {
     if (!ativo) return;
     if (!podeEditar) { toast.error('Sem permissão para editar modelos.'); return; }
     setSalvando(true);
-    bib.salvar({ ...ativo, blocos: editor.blocos, status: 'PUBLICADO' });
-    editor.marcarSalvo();
+    const eraGlobal = ativo.global;
+    const salvo = await bib.salvar(
+      { ...ativo, blocos: editor.blocos, status: 'PUBLICADO' },
+      opcoes?.novaVersao ? { novaVersao: true, nota: 'Versão manual' } : undefined,
+    );
     setSalvando(false);
-    toast.success('Modelo salvo');
+    if (!salvo) { toast.error('Não foi possível salvar o modelo.'); return; }
+
+    if (salvo.id !== ativo.id) setAtivoId(salvo.id);
+    editor.marcarSalvo();
+
+    toast.success(eraGlobal
+      ? 'Modelo do sistema personalizado — agora existe a versão da sua clínica.'
+      : opcoes?.novaVersao ? `Versão ${salvo.versao} salva` : 'Modelo salvo');
   }, [ativo, bib, editor, podeEditar]);
 
-  const salvarVersao = useCallback(() => {
-    if (!ativo) return;
-    const versao = ativo.versao + 1;
-    bib.salvar({
-      ...ativo,
-      blocos:  editor.blocos,
-      versao,
-      // A versão guarda os blocos ANTERIORES: é o estado ao qual se volta.
-      versoes: [
-        { versao: ativo.versao, criadoEm: new Date().toISOString(), autor, nota: 'Versão automática', blocos: ativo.blocos },
-        ...ativo.versoes,
-      ].slice(0, 30),
-    });
-    editor.marcarSalvo();
-    toast.success(`Versão ${versao} salva`);
-  }, [ativo, bib, editor, autor]);
-
-  const gerar = useCallback((t: Template) => {
+  /**
+   * Emite o documento para o PACIENTE selecionado.
+   *
+   * Manda os blocos do EDITOR (o vet pode ter ajustado antes de emitir, que é o que
+   * se quer permitir) ainda com as variáveis cruas: quem as resolve é o backend, sob
+   * o tenant, e é o resultado dele que fica gravado no snapshot.
+   */
+  /**
+   * Clicar em GERAR abre a tela de preenchimento — não emite direto.
+   *
+   * Pergunta ao backend o que falta preencher NESTE modelo para ESTE paciente
+   * (`POST /documentos/campos`) e abre o `ModalPreencher` com a lista. Mesmo quando
+   * não falta nada a tela abre: é a conferência antes de emitir um documento que tem
+   * valor legal, e é onde o vet vê a folha final antes de assinar.
+   */
+  const abrirEmissao = useCallback(async (t: Template) => {
     if (!podeEmitir) { toast.error('Sem permissão para emitir documentos.'); return; }
-    const doc = bib.emitir({ ...t, blocos: t.id === ativoId ? editor.blocos : t.blocos });
-    toast.success(`Documento emitido para ${doc.animalNome}`);
-  }, [bib, ativoId, editor.blocos, podeEmitir]);
+    if (animalId == null) { toast.error('Selecione o paciente antes de emitir.'); return; }
+
+    // Os blocos do EDITOR quando o modelo é o que está aberto (o vet pode tê-lo
+    // ajustado sem salvar); os do modelo, quando o clique veio do card da lista.
+    const blocos = t.id === ativoId ? editor.blocos : t.blocos;
+
+    setEmitindoTpl(t);
+    setBlocosEmissao(blocos);
+    setCamposEmissao([]);
+    setErroEmissao(null);
+    setCarregandoCampos(true);
+    try {
+      const r = await carregarCampos({ animalId, blocos, evolucaoId: contexto?.evolucaoId ?? null });
+      setCamposEmissao(r.campos ?? []);
+    } catch {
+      // Falhar aqui não pode fechar a tela: sem a lista, ainda dá para conferir a
+      // folha e emitir com os campos em branco — que é o comportamento do papel.
+      setErroEmissao('Não foi possível carregar os campos. Você ainda pode emitir com eles em branco.');
+    } finally {
+      setCarregandoCampos(false);
+    }
+  }, [podeEmitir, animalId, ativoId, editor.blocos, contexto?.evolucaoId]);
+
+  /** Confirmação da tela de preenchimento: aí sim emite. */
+  const confirmarEmissao = useCallback(async (preenchimento: Preenchimento) => {
+    if (!emitindoTpl || animalId == null) return;
+    setEmitindo(true);
+    setErroEmissao(null);
+    const doc = await bib.emitir(
+      emitindoTpl, blocosEmissao, animalId, contexto?.evolucaoId ?? null, preenchimento,
+    );
+    setEmitindo(false);
+    if (!doc) { setErroEmissao('Não foi possível emitir o documento.'); return; }
+    setEmitindoTpl(null);
+    toast.success(`${doc.numeroFmt ?? 'Documento'} emitido para ${doc.animalNome}`);
+  }, [emitindoTpl, blocosEmissao, animalId, contexto?.evolucaoId, bib]);
 
   const compartilhar = useCallback(async (t: Template) => {
     const texto = `${t.nome} — ${t.descricao}`;
@@ -209,28 +378,56 @@ export default function CentralDocumentos() {
   const acoesTemplate: AcoesTemplate = {
     onEditar:     abrir,
     onVisualizar: (t) => { abrir(t); setAba('preview'); },
-    onDuplicar:   (t) => { const c = bib.duplicar(t.id); if (c) { abrir(c); toast.success('Modelo duplicado'); } },
-    onGerar:      gerar,
-    onExcluir:    (t) => { bib.excluir(t.id); if (t.id === ativoId) setAtivoId(null); toast.success('Movido para a lixeira'); },
-    onRestaurar:  (t) => { bib.restaurar(t.id); toast.success('Modelo restaurado'); },
-    onFavorito:   (t) => bib.alternarFavorito(t.id),
+    onDuplicar:   async (t) => {
+      const c = await bib.duplicar(t.id);
+      if (c) { abrir(c); toast.success('Modelo duplicado'); }
+    },
+    onGerar:      (t) => { void abrirEmissao(t); },
+    // A exclusão exige justificativa (§33) — o modal a coleta antes de chamar a API.
+    onExcluir:    (t) => setExcluindo(t),
+    onRestaurar:  async (t) => { await bib.restaurar(t.id); toast.success('Modelo restaurado'); },
+    onFavorito:   async (t) => {
+      const salvo = await bib.alternarFavorito(t.id);
+      // Favoritar um modelo do sistema também vira cópia da clínica — se o aberto
+      // era ele, a tela passa a editar a cópia.
+      if (salvo && t.id === ativoId && salvo.id !== t.id) setAtivoId(salvo.id);
+    },
   };
 
-  const criarNovo = useCallback(() => {
+  const confirmarExclusao = useCallback(async (motivo: string) => {
+    if (!excluindo) return;
+    const ok = await bib.excluir(excluindo.id, motivo);
+    if (ok) {
+      if (excluindo.id === ativoId) setAtivoId(null);
+      toast.success('Movido para a lixeira');
+    } else {
+      toast.error('Modelo do sistema não pode ser excluído — personalize-o para ter a versão da sua clínica.');
+    }
+    setExcluindo(null);
+  }, [excluindo, bib, ativoId]);
+
+  const criarNovo = useCallback(async () => {
     if (!podeCriar) { toast.error('Sem permissão para criar modelos.'); return; }
-    const t = bib.criarVazio();
-    bib.salvar(t);
-    abrir(t);
+    const t = await bib.criar();
+    if (t) abrir(t);
   }, [bib, abrir, podeCriar]);
 
-  const aplicarIA = useCallback((dados: Pick<Template, 'nome' | 'descricao' | 'especie' | 'blocos'>) => {
-    const t: Template = { ...bib.criarVazio(dados.nome), ...dados, categoria: 'personalizados' };
-    bib.salvar(t);
-    abrir(t);
-    toast.success('Template gerado — ajuste o que precisar');
-  }, [bib, abrir]);
+  /** A IA reescreveu a folha: entra como um passo do editor, desfazível. */
+  const aplicarBlocosDaIA = useCallback((blocos: Bloco[], nome: string | null) => {
+    editor.substituirTudo(blocos);
+    if (nome && ativo && !ativo.global) {
+      // Renomear um modelo do sistema criaria a cópia sem o vet pedir — o nome
+      // sugerido só é adotado quando o modelo já é da clínica.
+      void bib.salvar({ ...ativo, nome, blocos });
+    }
+  }, [editor, ativo, bib]);
 
-  /** Insere a variável no bloco selecionado; sem seleção, cria um bloco de texto. */
+  const escolherTemplateDaIA = useCallback((templateId: string) => {
+    const t = bib.templates.find(x => x.id === templateId);
+    if (t) abrir(t);
+  }, [bib.templates, abrir]);
+
+  /** Insere a variável no bloco selecionado; sem seleção, avisa. */
   const inserirVariavel = useCallback((chave: string) => {
     const sel = editor.blocos.find(b => b.id === editor.selecionado);
     if (!sel) { toast('Selecione um bloco antes de inserir a variável', { icon: 'ℹ️' }); return; }
@@ -252,6 +449,27 @@ export default function CentralDocumentos() {
     );
   }
 
+  // ── Paciente: o MESMO par da tela de Atendimento ───────────────────────────
+  // `SeletorAnimalInteligente` + `AnimalCard`, na mesma ordem e sem invólucro
+  // próprio. Um card diferente aqui obrigaria o vet a reaprender onde estão baia,
+  // local e proprietário a cada tela — e as duas versões divergiriam na primeira
+  // correção (a lição do `SubModuloMinhaAgenda`, armadilha 28-g).
+  const seletorPaciente = (
+    <>
+      <SeletorAnimalInteligente
+        animais={animais}
+        animalAtual={animal}
+        onSelecionar={(a) => setAnimalId(a.id)}
+      />
+      {animal && <AnimalCard animal={animal} />}
+      {carregandoCtx && (
+        <p className="flex items-center gap-1.5 text-[11px] text-gray-400 mt-1">
+          <Loader2 size={11} className="animate-spin" /> Carregando os dados do paciente…
+        </p>
+      )}
+    </>
+  );
+
   // ── Mobile: fluxo próprio ─────────────────────────────────────────────────
   if (ehMobile) {
     return (
@@ -262,14 +480,40 @@ export default function CentralDocumentos() {
           favoritos={vivos.filter(t => t.favorito)}
           selecionado={ativo}
           editor={editor}
+          contexto={contexto?.variaveis ?? null}
+          marca={contexto?.marca ?? null}
+          cabecalhoPaciente={seletorPaciente}
           onSelecionar={t => setAtivoId(t.id)}
-          onGerar={gerar}
+          onGerar={(t) => { void abrirEmissao(t); }}
           onCompartilhar={compartilhar}
-          onNovo={criarNovo}
-          onCriarIA={() => setIaAberto(true)}
-          onSalvar={salvar}
+          onNovo={() => { void criarNovo(); }}
+          onCriarIA={() => setChatAberto(true)}
+          onSalvar={() => { void salvar(); }}
         />
-        <ModalCriarIA aberto={iaAberto} onFechar={() => setIaAberto(false)} onGerado={aplicarIA} />
+        <ChatIA
+          aberto={chatAberto}
+          onFechar={() => setChatAberto(false)}
+          templateAtivo={ativo}
+          blocosAtuais={editor.blocos}
+          onAplicarBlocos={aplicarBlocosDaIA}
+          onEscolherTemplate={escolherTemplateDaIA}
+        />
+        {/* A mesma tela de preenchimento do desktop — ela já é responsiva (abas
+            "Preencher"/"Prévia" abaixo de sm). Duas versões divergiriam. */}
+        <ModalPreencher
+          aberto={!!emitindoTpl}
+          onFechar={() => { setEmitindoTpl(null); setErroEmissao(null); }}
+          templateNome={emitindoTpl?.nome ?? ''}
+          animalNome={animal?.nome ?? ''}
+          blocos={blocosEmissao}
+          campos={camposEmissao}
+          contexto={contexto?.variaveis ?? null}
+          marca={contexto?.marca ?? null}
+          carregando={carregandoCampos}
+          emitindo={emitindo}
+          erro={erroEmissao}
+          onEmitir={(p) => { void confirmarEmissao(p); }}
+        />
       </>
     );
   }
@@ -294,10 +538,20 @@ export default function CentralDocumentos() {
           <div className="min-w-0">
             <h1 className="text-2xl font-bold text-gray-900 truncate">Central de Documentos</h1>
             <p className="text-sm text-gray-500 mt-0.5 truncate">
-              Modelos, edição por blocos e emissão em segundos.
+              Modelos oficiais do CFMV, edição por blocos e emissão para o paciente.
             </p>
           </div>
+
         </header>
+
+        {/* Erro de CARGA vai no topo (§6): não veio de clique nenhum. */}
+        {bib.erro && <InlineError message={bib.erro} className="mb-3 flex-shrink-0" />}
+
+        {/* Paciente — ACIMA dos painéis e em largura cheia, na mesma posição e com o
+            MESMO card da tela de Atendimento. É ele que governa todo o conteúdo da
+            folha, então fica visível o tempo todo em vez de escondido num modal.
+            `flex-shrink-0`: o espaço sai dos painéis, que rolam por dentro. */}
+        <div className="flex-shrink-0 mb-3">{seletorPaciente}</div>
 
         <div className="flex-1 flex gap-3 min-h-0">
 
@@ -331,10 +585,16 @@ export default function CentralDocumentos() {
 
           {/* ── 33% · Modelos ── */}
           <section className="w-[38%] lg:w-[33%] flex-shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <PainelModelos
-              templates={listados} ativoId={ativoId} acoes={acoesTemplate} titulo={tituloLista}
-              perm={{ podeEditar, podeCriar, podeEmitir, podeExcluir }}
-            />
+            {bib.carregando ? (
+              <div className="h-full flex items-center justify-center">
+                <Loader2 size={20} className="animate-spin text-gray-300" />
+              </div>
+            ) : (
+              <PainelModelos
+                templates={listados} ativoId={ativoId} acoes={acoesTemplate} titulo={tituloLista}
+                perm={{ podeEditar, podeCriar, podeEmitir, podeExcluir }}
+              />
+            )}
           </section>
 
           {/* ── 45% · Editor + Preview ── */}
@@ -345,14 +605,38 @@ export default function CentralDocumentos() {
                 <p className="text-sm text-gray-400">Selecione um modelo para editar</p>
                 {podeCriar && (
                   <div className="flex gap-2 mt-4">
-                    <button onClick={criarNovo}
+                    <button onClick={() => void criarNovo()}
                       className="px-4 py-2 rounded-xl text-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors">
                       Criar do zero
                     </button>
-                    <button onClick={() => setIaAberto(true)}
-                      className="px-4 py-2 rounded-xl text-sm font-semibold bg-gray-900 text-white hover:bg-gray-800 transition-colors">
-                      Criar com IA
+                    <button onClick={() => setChatAberto(true)}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold bg-gray-900 text-white hover:bg-gray-800 transition-colors">
+                      <Sparkles size={14} /> Pedir à IA
                     </button>
+                  </div>
+                )}
+
+                {/* Já emitidos para este paciente. Evita a emissão em duplicidade —
+                    dois atestados sanitários no mesmo dia não são dois documentos,
+                    são um reenvio de formulário. */}
+                {animal && bib.documentos.length > 0 && (
+                  <div className="mt-8 w-full max-w-sm text-left">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
+                      Emitidos para {animal.nome}
+                    </p>
+                    <div className="space-y-1">
+                      {bib.documentos.slice(0, 5).map(d => (
+                        <div key={d.id} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-gray-50">
+                          <FileText size={13} className="text-gray-400 flex-shrink-0" />
+                          <span className="text-xs text-gray-700 truncate flex-1">
+                            {d.titulo || d.templateNome}
+                          </span>
+                          <span className="text-[10px] text-gray-400 tabular-nums flex-shrink-0">
+                            {d.numeroFmt ?? ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -363,18 +647,31 @@ export default function CentralDocumentos() {
                     editor={editor}
                     salvando={salvando}
                     acoes={{
-                      onNovo: criarNovo,
-                      onSalvar: salvar,
-                      onSalvarVersao: salvarVersao,
+                      onNovo: () => void criarNovo(),
+                      onSalvar: () => void salvar(),
+                      onSalvarVersao: () => void salvar({ novaVersao: true }),
                       onDuplicar: () => acoesTemplate.onDuplicar(ativo),
                       onCompartilhar: () => compartilhar(ativo),
                       onExportarPdf: exportarPdf,
                       onImprimir: () => window.print(),
                       onHistorico: () => toast(`${ativo.versoes.length} versão(ões) salvas`, { icon: '🕘' }),
                       onConfiguracoes: () => toast('Configurações do modelo em breve', { icon: '⚙️' }),
-                      onCriarIA: () => setIaAberto(true),
+                      onCriarIA: () => setChatAberto(true),
                     }}
                   />
+
+                  {/* Faixa do modelo do sistema. É a única pista de que Salvar aqui
+                      não altera o original — sem ela, "salvei e o modelo continua o
+                      mesmo para todo mundo?" vira dúvida legítima. */}
+                  {ativo.global && (
+                    <div className="flex items-start gap-2 mx-3 mt-2 px-3 py-2 rounded-xl bg-amber-50 border border-amber-100">
+                      <ShieldCheck size={14} className="text-amber-600 mt-0.5 flex-shrink-0" />
+                      <p className="text-[11px] text-amber-800 leading-relaxed">
+                        <strong>Modelo oficial do CFMV.</strong> Ao salvar, o original continua
+                        intacto e a sua clínica passa a ter uma cópia própria para editar.
+                      </p>
+                    </div>
+                  )}
 
                   <div className="flex items-center gap-1 px-3 py-2 border-b border-gray-100 flex-shrink-0">
                     {(['editor', 'preview'] as const).map(k => (
@@ -385,12 +682,25 @@ export default function CentralDocumentos() {
                         {k === 'editor' ? 'Editor' : 'Visualizar'}
                       </button>
                     ))}
+
                     <button
                       onClick={() => setVarsAberto(true)}
                       className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors"
                     >
                       <Braces size={13} /> Variáveis
                     </button>
+
+                    {podeEmitir && (
+                      <button
+                        onClick={() => void abrirEmissao(ativo)}
+                        disabled={emitindo || animalId == null}
+                        title={animalId == null ? 'Selecione o paciente para emitir' : 'Emitir para o paciente'}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {emitindo ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />}
+                        Emitir
+                      </button>
+                    )}
                   </div>
 
                   <div className="flex-1 overflow-y-auto min-h-0">
@@ -405,6 +715,8 @@ export default function CentralDocumentos() {
                       <PreviewA4
                         template={ativo} blocos={editor.blocos}
                         zoom={zoom} onZoom={setZoom} refFolha={folhaRef}
+                        contexto={contexto?.variaveis ?? null}
+                        marca={contexto?.marca ?? null}
                       />
                     )}
                   </div>
@@ -428,7 +740,36 @@ export default function CentralDocumentos() {
         onFechar={() => setVarsAberto(false)}
         onInserir={inserirVariavel}
       />
-      <ModalCriarIA aberto={iaAberto} onFechar={() => setIaAberto(false)} onGerado={aplicarIA} />
+      <ChatIA
+        aberto={chatAberto}
+        onFechar={() => setChatAberto(false)}
+        templateAtivo={ativo}
+        blocosAtuais={editor.blocos}
+        onAplicarBlocos={aplicarBlocosDaIA}
+        onEscolherTemplate={escolherTemplateDaIA}
+      />
+      <ModalPreencher
+        aberto={!!emitindoTpl}
+        onFechar={() => { setEmitindoTpl(null); setErroEmissao(null); }}
+        templateNome={emitindoTpl?.nome ?? ''}
+        animalNome={animal?.nome ?? ''}
+        blocos={blocosEmissao}
+        campos={camposEmissao}
+        contexto={contexto?.variaveis ?? null}
+        marca={contexto?.marca ?? null}
+        carregando={carregandoCampos}
+        emitindo={emitindo}
+        erro={erroEmissao}
+        onEmitir={(p) => { void confirmarEmissao(p); }}
+      />
+      <ModalJustificativa
+        aberto={!!excluindo}
+        titulo="Excluir modelo"
+        descricao={excluindo ? `O modelo "${excluindo.nome}" vai para a Lixeira.` : ''}
+        acaoLabel="Excluir"
+        onConfirmar={confirmarExclusao}
+        onFechar={() => setExcluindo(null)}
+      />
     </PageContainer>
   );
 }

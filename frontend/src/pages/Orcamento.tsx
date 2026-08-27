@@ -3,6 +3,7 @@
 // procedimentos/combos, medicamentos e vacinas. Histórico com status e decisão
 // (aceitar tudo / selecionar aceitos). Itens ACEITO são importados na Prescrição/Vacina.
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import PageContainer from '../components/PageContainer';
@@ -127,6 +128,10 @@ const STATUS_ORC: Record<StatusOrc, { label: string; cls: string }> = {
 // não recebe nenhuma. Reabrir o modal depois disso reescreveria itens que já podem
 // ter sido importados numa evolução ou lançados na fatura.
 const decisaoPendente = (status: StatusOrc): boolean => status === 'RASCUNHO';
+
+/** Status aceitos em `?status=` (os mesmos do seletor da tela). Lista explícita para
+ *  que query arbitrária não vire filtro sem opção correspondente no <select>. */
+const STATUS_FILTRAVEIS_URL: string[] = ['RASCUNHO', 'APROVADO', 'APROVADO_PARCIALMENTE', 'REJEITADO', 'CANCELADO'];
 
 const MOTIVO_DECISAO_BLOQUEADA: Record<StatusOrc, string> = {
   RASCUNHO:              'Registrar decisão (aceitar/rejeitar)',
@@ -1610,7 +1615,15 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
 }) {
   const [orcamentos, setOrcamentos] = useState<OrcamentoResumo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filtroStatus, setFiltroStatus] = useState('');
+  // `?status=` na URL pré-seleciona o filtro — é assim que os números do Relatório de
+  // Orçamentos trazem para cá exatamente o recorte que a pessoa clicou ("1 em
+  // rascunho" → /orcamento?status=RASCUNHO). Valor desconhecido cai em "todos", em vez
+  // de deixar a lista presa num filtro que a tela não sabe representar.
+  const [searchParams] = useSearchParams();
+  const statusDaUrl = (searchParams.get('status') ?? '').toUpperCase();
+  const [filtroStatus, setFiltroStatus] = useState(
+    STATUS_FILTRAVEIS_URL.includes(statusDaUrl) ? statusDaUrl : '',
+  );
   // `somenteLeitura`: aberto pelo ícone de visualizar → só exibe. A decisão
   // (aceitar/rejeitar itens) tem ação própria e abre com somenteLeitura=false.
   const [detalhe, setDetalhe] = useState<{ orc: OrcamentoResumo; somenteLeitura: boolean } | null>(null);

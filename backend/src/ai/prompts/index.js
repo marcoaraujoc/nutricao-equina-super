@@ -876,6 +876,11 @@ ${SO_JSON}
 # TEXTO
 ${texto.slice(0, 20000)}`,
   },
+
+  // ── Central de Documentos: chat que monta o documento ───────────────────────
+  // Em arquivo próprio (`./assistenteDocumento.js`) por tamanho. Ancorado NO ACERVO
+  // da clínica de propósito — ver a justificativa normativa lá.
+  ...require('./assistenteDocumento'),
 };
 
 /**

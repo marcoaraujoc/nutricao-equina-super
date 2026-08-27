@@ -49,12 +49,20 @@ function ehArquivoPdf(a: ArquivoNavegavel): boolean {
 function ehArquivoImagem(a: ArquivoNavegavel): boolean {
   return /\.(jpe?g|png|gif|webp|bmp|heic|heif|svg|avif)(\?|$)/i.test(a.nome || a.arquivoUrl);
 }
-// DOCX tem pré-visualização própria: o backend converte para HTML sob demanda
+// DOC e DOCX têm pré-visualização própria: o backend converte para HTML sob demanda
 // (GET /api/midia/:chave/preview, via mammoth — mesma lib já usada para extrair
 // texto do laudo) e o front renderiza esse HTML num <iframe sandbox>, sem baixar
 // o arquivo nem sair da aplicação.
-function ehArquivoDocx(a: ArquivoNavegavel): boolean {
-  return /\.docx(\?|$)/i.test(a.nome || a.arquivoUrl);
+//
+// `.doc` (Word 97-2003) entra aqui desde 2026-08-25: `mammoth` não abre o formato
+// binário antigo, então o backend converte para `.docx` antes (LibreOffice headless —
+// ver lib/documentoConversao.js). Laudo NOVO já é convertido no upload e chega aqui
+// como `.docx`; o `.doc` que continua com esse nome é do acervo anterior, convertido
+// sob demanda pela rota de preview.
+// ⚠️ Ambiente sem LibreOffice responde 415 e a tela cai no erro tratado abaixo, com o
+// "Abrir arquivo" intacto — nunca numa tela em branco.
+function ehArquivoWord(a: ArquivoNavegavel): boolean {
+  return /\.docx?(\?|$)/i.test(a.nome || a.arquivoUrl);
 }
 function htmlDocxPreview(corpo: string): string {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
@@ -121,12 +129,22 @@ function VisualizadorArquivos({ arquivos, indice, onNavegar, onFechar }: {
   useEffect(() => {
     setDocxHtml(null);
     setErroDocx(null);
-    if (verificando || erroArquivo || !ehArquivoDocx(atual)) return;
+    if (verificando || erroArquivo || !ehArquivoWord(atual)) return;
     let cancelado = false;
     setCarregandoDocx(true);
     api.get(`${atual.arquivoUrl.replace(/^\/api(?=\/)/, '')}/preview`)
       .then(res => { if (!cancelado) setDocxHtml(res.data?.dados?.html ?? ''); })
-      .catch(() => { if (!cancelado) setErroDocx('Não foi possível gerar a pré-visualização deste arquivo.'); })
+      .catch((err: unknown) => {
+        if (cancelado) return;
+        // 415 CONVERSAO_INDISPONIVEL = `.doc` legado num ambiente sem LibreOffice. É
+        // diferente de "o arquivo está corrompido", e a mensagem precisa dizer isso:
+        // quem lê "não foi possível" tenta de novo; quem lê o motivo vai baixar o
+        // arquivo, que é a saída real nesse caso.
+        const code = (err as { response?: { data?: { code?: string } } })?.response?.data?.code;
+        setErroDocx(code === 'CONVERSAO_INDISPONIVEL'
+          ? 'Pré-visualização de .doc não está disponível neste ambiente. Abra o arquivo para vê-lo.'
+          : 'Não foi possível gerar a pré-visualização deste arquivo.');
+      })
       .finally(() => { if (!cancelado) setCarregandoDocx(false); });
     return () => { cancelado = true; };
   }, [indice, atual?.arquivoUrl, verificando, erroArquivo]);
@@ -207,7 +225,7 @@ function VisualizadorArquivos({ arquivos, indice, onNavegar, onFechar }: {
               onError={() => { setCarregando(false); setErroArquivo('Não foi possível exibir este arquivo.'); }}
               className={`max-w-full max-h-full object-contain rounded-lg transition-opacity ${carregando ? 'opacity-0' : 'opacity-100'}`} />
           </>
-        ) : ehArquivoDocx(atual) ? (
+        ) : ehArquivoWord(atual) ? (
           carregandoDocx ? (
             <div className="flex items-center justify-center">
               <Loader2 size={32} className="animate-spin text-white/80" />
@@ -228,9 +246,9 @@ function VisualizadorArquivos({ arquivos, indice, onNavegar, onFechar }: {
               className="w-full h-full bg-white rounded-lg border-0" />
           )
         ) : (
-          // DOC, TXT... — sem pré-visualização no navegador. O arquivo continua
+          // TXT, planilha, etc. — sem pré-visualização no navegador. O arquivo continua
           // acessível pelo "Abrir em nova aba" no cabeçalho, que faz o download/
-          // abre com o app associado do usuário.
+          // abre com o app associado do usuário. (DOC e DOCX NÃO caem mais aqui.)
           <div className="flex flex-col items-center gap-3 text-white/80 text-sm text-center max-w-xs">
             <FileX size={40} className="text-white/40" />
             <span>Pré-visualização não disponível para este tipo de arquivo.</span>
@@ -592,6 +610,13 @@ const Exames = () => {
     try {
       await api.delete(`/clinica/exames/${alvo.ex.id}/imagens/${alvo.imagem.id}`);
       setPanelKey(k => k + 1);
+      // O `panelKey` recarrega a LISTA, mas o modal aberto continua com o exame que
+      // ele recebeu quando abriu: sem tirar a imagem daqui também, o arquivo recém
+      // apagado seguiria listado na tela de edição/visualização até fechá-la.
+      const semImagem = (e: ExameSolicitado | null) =>
+        e && e.id === alvo.ex.id ? { ...e, imagens: e.imagens.filter(i => i.id !== alvo.imagem.id) } : e;
+      setEditandoClinico(semImagem);
+      setVisualizandoResultado(semImagem);
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       setErroClinico(msg ?? 'Erro ao excluir a imagem');
@@ -803,6 +828,20 @@ const Exames = () => {
                     {ex.laboratorio && (
                       <span className="text-[11px] text-gray-500">{ex.laboratorio}</span>
                     )}
+                    {/* DATA DO EXAME e SOLICITANTE na própria linha, sem precisar expandir:
+                        são o que identifica o registro quando o mesmo exame se repete no
+                        paciente. A data é `dataResultado` — a data IMPRESSA no laudo, o
+                        mesmo campo do "Data do exame" da tela de carregar resultado —,
+                        formatada por `formatDate` porque é DATA PURA (CLAUDE.md §6).
+                        ⚠️ "Solicitado por" SÓ com `evolucaoId`: no exame lançado SEM PEDIDO
+                        não houve solicitação, e `veterinario` ali é quem LANÇOU o resultado
+                        — exibi-lo como solicitante inventaria um pedido que nunca existiu. */}
+                    {ex.dataResultado && (
+                      <span className="text-[11px] text-gray-500">Exame em {formatDate(ex.dataResultado)}</span>
+                    )}
+                    {ex.evolucaoId && ex.veterinario && (
+                      <span className="text-[11px] text-gray-500">Solicitado por {ex.veterinario.fullName}</span>
+                    )}
                     {/* Visualizar/editar/excluir o exame já REALIZADO — visualizar abre a
                         MESMA tela de "Carregar Resultados" travada (ResultadoModal com
                         `somenteLeitura`; os arquivos salvos abrem o VisualizadorArquivos
@@ -856,9 +895,6 @@ const Exames = () => {
                   </div>
                   {expandidos.has(ex.id) && (
                     <>
-                      {ex.dataResultado && (
-                        <p className="text-[11px] text-gray-400 mt-0.5">resultado em {formatDate(ex.dataResultado)}</p>
-                      )}
                       {ex.resultado && (
                         <LaudoTexto texto={ex.resultado} className="text-xs text-gray-600 mt-1.5 whitespace-pre-wrap" />
                       )}
@@ -1111,6 +1147,25 @@ const Exames = () => {
           ex={editandoClinico}
           animalId={effectiveAnimalId ?? ''}
           saving={salvandoClinico}
+          /* Falha ao salvar OU ao excluir um anexo caia DENTRO do modal: `erroClinico`
+             é renderizado no card da página, que aqui fica atrás do overlay — a pessoa
+             clicava e nada parecia acontecer (CLAUDE.md §6, "erro na superfície da ação"). */
+          erroSalvar={erroClinico}
+          arquivosSalvos={arquivosDoExameClinico(editandoClinico)}
+          onVerArquivo={(idx) => abrirVisualizador(arquivosDoExameClinico(editandoClinico), idx)}
+          /* O X só existe quando há `ExameImagemAnexo` para apagar E a pessoa tem a
+             permissão — exame legado cai no `arquivoUrl` solto, que não tem linha
+             própria e nenhuma rota de exclusão (armadilha 28-d: nada de botão que só
+             falha depois do clique). Índice bate com `arquivosDoExameClinico`, que
+             nesse caso mapeia `imagens` 1-para-1. */
+          onExcluirArquivo={
+            (editandoClinico.imagens?.length ?? 0) > 0 && podeExcluirImagemClinico(editandoClinico)
+              ? (idx) => {
+                  const img = editandoClinico.imagens?.[idx];
+                  if (img) excluirImagem(editandoClinico, img);
+                }
+              : undefined
+          }
           onClose={() => setEditandoClinico(null)}
           onSalvar={salvarResultadoClinico}
         />

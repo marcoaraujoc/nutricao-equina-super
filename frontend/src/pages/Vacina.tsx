@@ -23,6 +23,7 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import PageContainer from '../components/PageContainer';
 import SeletorAnimalInteligente from '../components/SeletorAnimalInteligente';
 import SubModuloVacina from './SubModuloVacina';
+import { escolherEvolucaoAtiva, lerEvolucaoSelecionada } from '../utils/evolucaoAtiva';
 
 type SelectedAnimal = NonNullable<ReturnType<typeof useSelectedAnimal>['selectedAnimal']>;
 
@@ -39,6 +40,7 @@ interface EvolucaoAtiva {
   id:                number;
   atendimentoNumero: string | null;
   veterinarioId:     number | null;
+  agendamentoId?:    number | null;
 }
 
 export default function Vacina() {
@@ -85,20 +87,33 @@ export default function Vacina() {
   const carregarEvolucaoAtiva = useCallback(async () => {
     if (!effectiveAnimalId) { setEvolucaoAtiva(null); return; }
     try {
-      // limit=20 (era 1) + "a MINHA vence": com atendimento em PARALELO o animal pode
-      // ter mais de uma evolução aberta, e pegar "a primeira" da API (de qualquer
-      // profissional) fazia a tela adotar a de OUTRO como se fosse a ativa — mesmo
-      // bug já corrigido em Atendimento.tsx#carregarEvolucaoAtiva.
+      // limit=20 (era 1): com atendimento em PARALELO o animal pode ter mais de uma
+      // evolução aberta. Quem decide qual é a de agora é `escolherEvolucaoAtiva`, a
+      // MESMA regra do shell de Atendimento (fonte única em utils/evolucaoAtiva.ts) —
+      // inclusive a ESCOLHA que o usuário fez no banner de lá, que chega por
+      // localStorage: esta tela é apartada, então o estado do shell não a alcança.
+      // Sem isso, a vacina nasceria vinculada a um atendimento diferente daquele em
+      // que a prescrição do mesmo paciente acabou de ser lançada.
       const res = await api.get(`/clinica/evolucoes/animal/${effectiveAnimalId}?status=EM_ANDAMENTO&limit=20&page=1`);
-      const dados: { id: number; veterinarioId?: number | null; atendimentoNumero?: string | null }[] = res.data?.dados ?? [];
-      if (dados.length === 0) { setEvolucaoAtiva(null); return; }
-      const minhas = dados.filter(e => e.veterinarioId === (user?.id ?? 0));
-      const ev = minhas[0] ?? dados[0];
-      setEvolucaoAtiva({
-        id:                ev.id,
-        atendimentoNumero: ev.atendimentoNumero ?? null,
-        veterinarioId:     ev.veterinarioId ?? null,
-      });
+      const dados: {
+        id: number; veterinarioId?: number | null; atendimentoNumero?: string | null;
+        agendamentoId?: number | null;
+      }[] = res.data?.dados ?? [];
+      const agendamentoCtx = localStorage.getItem(`s2vet_ag_${effectiveAnimalId}`);
+      const ev = escolherEvolucaoAtiva(
+        dados.map(e => ({
+          id:                e.id,
+          atendimentoNumero: e.atendimentoNumero ?? null,
+          veterinarioId:     e.veterinarioId ?? null,
+          agendamentoId:     e.agendamentoId ?? null,
+        })),
+        {
+          selecionadaId: lerEvolucaoSelecionada(effectiveAnimalId),
+          agendamentoId: agendamentoCtx ? Number(agendamentoCtx) : null,
+          meuUserId:     user?.id ?? null,
+        },
+      );
+      setEvolucaoAtiva(ev);
     } catch { /* silencioso */ }
   }, [effectiveAnimalId, user?.id]);
 

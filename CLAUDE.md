@@ -1,5 +1,106 @@
-﻿# S2Vet — CLAUDE.md
+# S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-08-26 (CENTRAL DE DOCUMENTOS DEIXOU DE SER PROTÓTIPO. A tela
+#   `/documentos` guardava tudo em `localStorage` (`s2vet_docs_templates`), com
+#   templates SEMEADOS NO BUNDLE, variáveis resolvidas pelo campo `exemplo` do catálogo
+#   ({{animal.nome}} virava sempre "Thor") e emissão gravando `animalNome: 'Thor'`
+#   cravado no código. Nada sobrevivia a trocar de navegador e nada era multi-tenant.
+#   ✅ MIGRATION APLICADA (autorizada nesta sessão) — `20260918000000_central_documentos`:
+#   `tb_documento_templates` (CATÁLOGO MISTO, `empresa_id` NULÁVEL),
+#   `tb_documentos_emitidos` (TENANT DIRETO) e `tb_usuario_empresa.assinatura_url`,
+#   com as duas policies de RLS. `prisma generate` refeito (exigiu PARAR o backend —
+#   o `ts-node-dev` segurava o `query_engine-windows.dll`, §11) e `node backend/seed.js`
+#   rodado: 12 modelos globais criados. RLS conferido AO VIVO contra a base: a clínica
+#   LÊ os 12 globais, ESCREVE o próprio modelo, e é RECUSADA ao tentar criar linha
+#   global ou alterar o atestado do CFMV; empresa 58 não enxerga modelo da 42; e
+#   `tb_documentos_emitidos` recusa gravar com `empresa_id` de outra empresa.
+#   **OS 12 ANEXOS DA RES. CFMV Nº 1.321/2020 VIRARAM O CATÁLOGO GLOBAL** — atestado
+#   sanitário, atestado de óbito, atestado de vacinação, os 8 TCLEs e o termo de
+#   retirada sem alta. Transcritos dos PDFs oficiais de `docs/modelos-documentos/`
+#   (`seeds/006_documentos_cfmv.seed.js`, idempotente por `chave`); a linha pontilhada
+#   do papel virou `{{variável}}` onde o S2Vet TEM o dado, e continua linha pontilhada
+#   onde não tem (tatuagem e brinco não existem no cadastro — nunca virar variável de
+#   outra coisa).
+#   🔴 **COPY-ON-WRITE É A REGRA DA TABELA DE TEMPLATES.** `empresa_id` nulo = modelo
+#   GLOBAL, que toda clínica LÊ e nenhuma ESCREVE (policy `USING` global+próprio,
+#   `WITH CHECK` só o próprio — a MESMA assimetria de `tb_medicamentos`). Salvar ou
+#   favoritar um global NÃO altera o global: `garantirCopiaDaEmpresa` cria a cópia da
+#   clínica (com `origem_id`) e a alteração vai para ela; a resposta traz `copiado:
+#   true` e o front ADOTA o id devolvido — sem isso o salvar seguinte criaria outra
+#   cópia. Excluir global responde 400 `MODELO_DO_SISTEMA` (é catálogo normativo
+#   compartilhado). ⚠️ Por isso NÃO HÁ AUTOSAVE em modelo global: um autosave ali
+#   criaria uma cópia da clínica a cada pausa de digitação.
+#   **SELETOR DE PACIENTE + PREENCHIMENTO AUTOMÁTICO.** A tela usa o MESMO par da tela
+#   de Atendimento — `SeletorAnimalInteligente` + `AnimalCard` (pedido explícito: "use
+#   o mesmo card que está sendo usado na tela de atendimento"); card próprio faria o
+#   vet reaprender onde ficam baia/local/proprietário a cada tela. Escolhido o animal,
+#   `GET /documentos/contexto/:animalId` devolve as variáveis JÁ RESOLVIDAS
+#   (`lib/documentoVariaveis.js`) + a MARCA (logo da clínica, assinatura, CRMV, nome de
+#   quem assina), e o preview troca os exemplos do catálogo pelo dado real.
+#   🔴 **NADA DE INVENTAR VALOR: variável sem dado sai VAZIA**, nunca com o exemplo do
+#   catálogo — um atestado dizendo "Pelagem: Castanho" porque o cadastro está em branco
+#   é documento falso, e nada no sistema acusaria. `resolverVariaveis(texto, contexto?)`
+#   (front) tem DOIS modos por isso: com contexto = valor real ou vazio; sem contexto
+#   (montando o modelo, sem paciente) = o exemplo, só para o vet ver a cara da folha.
+#   🔴 **QUEM RESOLVE O QUE FICA GRAVADO É O BACKEND, NUNCA O NAVEGADOR** — o documento
+#   tem valor legal e confiar no cliente para dizer qual é o CRMV de quem assina seria
+#   entregar a caneta. `aplicarEmBlocos` cobre TODO campo textual: `texto`, `rotulo`,
+#   `url`, `itens[]`, `colunas[]` e as CÉLULAS de `linhas[][]` — resolver só
+#   `conteudo.texto` deixaria `{{animal.nome}}` cru dentro da tabela impressa.
+#   `campoAuto` grava o valor em `texto` e PRESERVA a chave em `variavel`, que é o que
+#   permite auditar depois de qual variável saiu cada valor do papel.
+#   **O EMITIDO É SNAPSHOT** (`tb_documentos_emitidos.blocos`): editar o modelo depois
+#   não reescreve o papel que o cliente já recebeu. Numeração `DOC-0001` por EMPRESA,
+#   sorteada dentro da transaction (é só ali que `{{sistema.numeroDocumento}}` resolve).
+#   **CORRELAÇÃO COM O PRONTUÁRIO**: o documento emitido entra no Histórico do paciente
+#   (`HistoricoController`, origem `DOCUMENTO`, ref `documento-<id>`) e na MEMÓRIA
+#   CLÍNICA (`resumoAtendimentoService.coletarEventos`) — o tópico da IA fica clicável
+#   até o registro, e `AnimalDetail` ganhou badge, ícone, endpoint e o
+#   `DetalheModalDocumento`. ⚠️ O recorte é por EMPRESA e não por
+#   `escopoFilhoEvolucaoWhere`: `DocumentoEmitido` tem `empresaId` próprio e a evolução
+#   é OPCIONAL nele (atestado e TCLE existem sem atendimento aberto).
+#   **CHAT DE IA MULTI-TURNO, ANCORADO NO ACERVO** (`assistente_documento@v1` +
+#   `services/documentoLLMService.js`, módulo `MODULOS_IA.DOCUMENTOS`). Decisão de
+#   produto: "multi-turno, mas baseado SOMENTE nos templates que temos e forem sendo
+#   criados" — o assistente escolhe um modelo do acervo (globais + os da clínica) ou
+#   AJUSTA o que está aberto; NÃO redige documento do zero, porque o conteúdo mínimo é
+#   definido por norma e um modelo inventado sai plausível e incompleto. A resposta é
+#   VALIDADA contra o acervo: `templateId` fora da lista enviada é descartado (id
+#   alucinado viraria consulta que o RLS recusa) e bloco de tipo desconhecido é jogado
+#   fora (não convertido em `texto` — isso mentiria sobre o que foi proposto). Substitui
+#   o `ModalCriarIA`, que não chamava modelo nenhum: era `montarPorHeuristica`, uma
+#   tabela de palavras-chave rodando no bundle.
+#   **ASSINATURA DO VETERINÁRIO** — `UsuarioEmpresa.assinatura_url`, POR EMPRESA (mesma
+#   razão de `foto_url`), enviada pelo PRÓPRIO profissional em `/cadastro-pessoal` (`PUT/
+#   DELETE /users/me/assinatura`, multipart, espelho de `/me/foto`). O bloco `assinatura`
+#   renderiza a imagem SOBRE a linha, com nome e CRMV do vínculo. Sem assinatura
+#   cadastrada sobra o espaço em branco — nunca se desenha uma assinatura que não existe.
+#   ⚠️ NÃO passa pelo `FotoEditorModal`: aquele editor recorta em QUADRADO e cortaria o
+#   traço.
+#   Removidos: `modules/documentos/seeds.ts` (TEMPLATES_INICIAIS, órfão) e o
+#   `ModalCriarIA`. Testes: `__tests__/documentosCentral.test.js` (23 casos). Suíte: 235.
+#   As duas tabelas já entraram em `TENANT_PLANE` (`__tests__/tenancyRls.test.js`) —
+#   tenant plane em 15/76 tabelas. Suíte: 235.)
+#   paciente pode ter várias evoluções EM ANDAMENTO (consultas distintas, 2026-08-18
+#   parte 3) e o shell ADIVINHAVA qual era a de agora; errada a adivinhação,
+#   prescrição/exame/encaminhamento/vacina iam para o atendimento errado e nada na
+#   tela explicava por quê. Agora QUEM TROCA É O Nº no card "Histórico de Evolução
+#   Clínica": em evolução EM ANDAMENTO o AG-0013/EV-0007 vira BOTÃO
+#   (`NumeroAtendimento`, um componente para mobile e desktop) que carrega aquele
+#   atendimento na tela. ⚠️ O BANNER CONTINUA SENDO UM SÓ — a versão em lista, com uma
+#   faixa por atendimento aberto, foi RECUSADA a pedido ("não quero as duas visíveis ao
+#   mesmo tempo"); não reintroduzir. Rótulo novo do banner: "Atendimento AG-0013 de
+#   25/08/2026 17:11 - Consulta clínica geral - Em andamento" (⚠️ `titulo` só nasce na
+#   FINALIZAÇÃO, via IA — durante o atendimento o rótulo cai na `especialidade`).
+#   NOVO `utils/evolucaoAtiva.ts`, fonte ÚNICA da regra que estava copiada em 3 telas:
+#   escolha explícita → a minha do `agendamentoId` do contexto → a primeira minha → a
+#   primeira de qualquer um. `evolucaoAtiva` deixou de ser estado e virou DERIVAÇÃO.
+#   Contrato do `SubModuloEvolucao` mudou: `onEvolucaoChange` (mandava a JÁ ESCOLHIDA)
+#   saiu; entram `onEvolucoesAbertasChange` (a LISTA), `onEvolucaoCriada`,
+#   `evolucaoAtivaId` e `onSelecionarEvolucao`. ⚠️ A lista da aba é FILTRADA/PAGINADA e
+#   só é reportada quando nenhum filtro pode esconder um atendimento aberto — ver §12.
+#   Escolha persistida em `s2vet_ev_sel_<animalId>`, lida também por `Vacina.tsx`;
+#   `?agendamentoId=` na URL a limpa. Sem backend.)
 # Atualizado em: 2026-08-23 (parte 4) (🔴 CRONS QUEBRADOS PELO RLS — o fechamento
 #   automático de faturas NUNCA fechava no dia configurado, e mais 3 jobs falhavam em
 #   silêncio pela MESMA causa. REGRA NOVA, a mais importante desta sessão: **dentro de
@@ -731,6 +832,27 @@ OrcamentoItem       (migration 20260723000000). Item tipo PROCEDIMENTO|COMBO|MED
                     NUNCA reintroduzir bloqueio sem um caminho de escape na tela.
 Tratador          → responsável pelo animal (nome, telefone, localTrabalho, ativo, empresaId)
 RelatorioSalvo    → relatórios nutricionais persistidos
+DocumentoTemplate → modelo de documento da Central de Documentos (tb_documento_templates,
+                    migration 20260918000000). CATÁLOGO MISTO: `empresaId` NULO = modelo
+                    GLOBAL do sistema (os 12 anexos da Res. CFMV 1.321/2020, semeados por
+                    `seeds/006_documentos_cfmv.seed.js` e idempotentes por `chave`);
+                    preenchido = modelo daquela clínica.
+                    🔴 COPY-ON-WRITE: a policy lê global+próprio mas só ESCREVE o próprio
+                    (mesma assimetria de `tb_medicamentos`). Alterar/favoritar um global
+                    NÃO altera o global — cria a cópia da empresa (`origemId` aponta para
+                    a origem) e a resposta traz `copiado: true`; quem chama ADOTA o id
+                    devolvido. Excluir global → 400 `MODELO_DO_SISTEMA`.
+                    `blocos` é JSONB (`Bloco[]` de modules/documentos/types.ts): o bloco
+                    nunca é consultado por campo, é lido e gravado inteiro.
+DocumentoEmitido  → documento entregue ao cliente (tb_documentos_emitidos). TENANT DIRETO.
+                    SNAPSHOT: guarda os blocos com as variáveis JÁ RESOLVIDAS por
+                    `lib/documentoVariaveis.js` — editar o modelo depois não reescreve o
+                    papel que o cliente recebeu. `numero` é sequência POR EMPRESA
+                    (DOC-0001), sorteada na transaction da emissão. `evolucaoId` é
+                    OPCIONAL (atestado e TCLE existem sem atendimento aberto), e é por
+                    isso que o recorte dele é por `empresaId`, não por escopo clínico.
+                    Entra no Histórico do paciente e na Memória Clínica com ref
+                    `documento-<id>`.
 AuditLog          → log de ações dos usuários
 AiUsageLog        → rastreabilidade de uso de IA (inclui `modulo` — quem chamou a LLM)
 VetPerfil         → perfil estendido do veterinário (CRMV, bio)
@@ -1493,6 +1615,7 @@ Regras obrigatórias para prompt novo ou editado:
 | `analise_nota_clinica` | v1 | ATENDIMENTO | `AudioController` (rota ainda não montada) |
 | `parse_composicao_visao` | v2 | NUTRICAO | `composicaoParserService` (multimodal) |
 | `parse_composicao_texto` | v2 | NUTRICAO | `composicaoParserService` |
+| `assistente_documento` | v1 | DOCUMENTOS | `documentoLLMService` — chat da Central de Documentos, ancorado no ACERVO |
 
 ### Metering de IA por cliente (2026-07-28)
 Modelo de mercado adotado: **conta única no Google + medição interna por tenant**
@@ -1745,6 +1868,291 @@ New-Item -ItemType Junction `
 ---
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
+
+### Sessão 2026-08-26 — Central de Documentos: de protótipo a módulo
+> ✅ **MIGRATION APLICADA** (autorizada nesta sessão) —
+> `prisma/migrations/20260918000000_central_documentos/`. Criou
+> `tb_documento_templates`, `tb_documentos_emitidos` e a coluna
+> `tb_usuario_empresa.assinatura_url`, com as duas policies de RLS (`ENABLE` + `FORCE`
+> conferidos no `pg_class`). `npx prisma generate` refeito e `node backend/seed.js`
+> rodado — **12 modelos globais criados**. Sem backfill: nenhuma outra linha existia.
+>
+> ⚠️ O `generate` exigiu **PARAR o backend**: o `ts-node-dev --respawn` segurava o
+> `query_engine-windows.dll` e o comando morria com `EPERM` (§11). Ao contrário da
+> migration `20260914000000` (que só mudava um `VarChar` e dispensava o generate), aqui
+> ele é OBRIGATÓRIO — os controllers usam `prisma.documentoTemplate` /
+> `prisma.documentoEmitido`, models que o client antigo não conhece. Matar só o PID
+> filho não basta: o `--respawn` o levanta de novo e relocka o arquivo.
+
+- [x] **O módulo era 100% front.** `store.ts` guardava templates em
+      `localStorage` (`s2vet_docs_templates`), o acervo vinha de `seeds.ts` compilado no
+      bundle, `resolverVariaveis` trocava a chave pelo campo `exemplo` do catálogo
+      (`{{animal.nome}}` → sempre "Thor") e `emitir()` gravava
+      `animalNome: 'Thor', clienteNome: 'Haras Boa Vista'` no código. Servia para
+      demonstrar a tela; não emitia documento nenhum. Agora tudo passa por `./api` →
+      rotas sob RLS.
+- [x] **`tb_documento_templates` é CATÁLOGO MISTO e o COPY-ON-WRITE é a regra.**
+      `empresa_id` NULO = modelo GLOBAL do sistema; preenchido = modelo da clínica.
+      Policy igual à de `tb_medicamentos`: `USING` lê global+próprio, `WITH CHECK` só
+      escreve o próprio.
+      Salvar/favoritar um GLOBAL **não altera o global** — `garantirCopiaDaEmpresa`
+      cria a cópia da clínica (`origem_id` aponta para a origem) e a alteração vai para
+      ela. A resposta traz `copiado: true`, e **o front ADOTA o id devolvido**: sem
+      isso o salvar seguinte criaria outra cópia e a tela ficaria editando um registro
+      que não é o que está sendo gravado.
+      Excluir global → 400 `MODELO_DO_SISTEMA` (catálogo normativo, compartilhado); no
+      card a opção Excluir nem é renderizada (armadilha 28-d), e o lápis diz
+      "Personalizar" em vez de "Editar".
+      ⚠️ **NÃO HÁ AUTOSAVE em modelo global** (`aoAutosave` sai cedo em `ativo.global`):
+      um autosave ali criaria uma cópia da clínica a cada pausa de digitação, sem
+      ninguém ter pedido. Em modelo próprio o autosave continua (é o que protege o
+      trabalho do vet).
+      Selo **CFMV** no card, para o vet saber ANTES de clicar que ali é só leitura.
+- [x] **Os 12 anexos da Res. CFMV nº 1.321/2020 viraram o catálogo global** —
+      `seeds/006_documentos_cfmv.seed.js`, transcritos dos PDFs oficiais em
+      `docs/modelos-documentos/cfmv-res-1321/` (baixados em 2026-08-26 do CRMV-RJ):
+      atestado sanitário, atestado de óbito, atestado de vacinação, os 8 TCLEs
+      (exames, procedimento de risco, retirada do corpo, cirurgia, internação,
+      anestesia, eutanásia, doação do corpo) e o termo de retirada sem alta médica.
+      O texto das declarações é VERBATIM da norma; o que mudou é a FORMA — a linha
+      pontilhada virou `{{variável}}` **onde o S2Vet tem o dado**, e continua linha
+      pontilhada onde não tem. ⚠️ Tatuagem e Brinco não existem no cadastro (o equino
+      se identifica por resenha, chip e passaporte): ficam em branco. **Nunca**
+      transformá-los em variável "parecida" — escrever a pelagem no lugar do brinco
+      produz documento errado com cara de documento certo.
+      O seed é montado por um construtor comum (`montarBlocos`), não 12 arrays à mão:
+      é o que garante que o bloco de identificação do animal seja IDÊNTICO nos 12, como
+      a norma repete. **Atestado é assinado pelo VETERINÁRIO; TCLE, pelo RESPONSÁVEL**
+      — inverter descaracteriza o documento. Só o TCLE tem campo de observação DO
+      RESPONSÁVEL.
+      Espécie = `AMBOS` nos 12: a norma é geral, e marcar EQUINO esconderia o atestado
+      sanitário da clínica de bovinos.
+      ⚠️ O upsert por `chave` **sobrescreve** o modelo global — é assim que uma revisão
+      de norma chega às clínicas. A cópia personalizada de cada empresa não é tocada.
+      ⚠️ O resto de `docs/modelos-documentos/` (AIE, mormo, GTA, resenha, brucelose)
+      NÃO virou template: são manuais/guias e formulários ESTADUAIS, que variam por UF
+      — o README daquela pasta avisa. Ficam como referência.
+- [x] **Seletor de paciente + preenchimento automático.** A tela usa o **MESMO par da
+      tela de Atendimento**: `SeletorAnimalInteligente` + `AnimalCard`, na mesma ordem
+      e sem invólucro próprio (pedido explícito: "use o mesmo card que está sendo usado
+      na tela de atendimento"). Card próprio faria o vet reaprender onde ficam baia,
+      local e proprietário a cada tela, e as duas versões divergiriam na primeira
+      correção — a lição do `SubModuloMinhaAgenda` (28-g).
+      Escolhido o animal, `GET /documentos/contexto/:animalId` devolve as variáveis JÁ
+      RESOLVIDAS + a MARCA (logo da clínica, assinatura, CRMV, nome de quem assina), e
+      `BlocoView`/`PreviewA4` trocam os exemplos do catálogo pelo dado real.
+      ⚠️ O fetch da lista espera `empresaLoading` terminar — nenhuma chamada escopada
+      por empresa antes de o contexto estar resolvido (armadilha de 2026-07-28).
+- [x] 🔴 **`lib/documentoVariaveis.js` — NADA DE INVENTAR VALOR.** Variável sem dado
+      devolve string VAZIA. Um atestado dizendo "Pelagem: Castanho" porque o cadastro
+      estava em branco é documento falso, e nada no sistema acusaria.
+      `resolverVariaveis(texto, contexto?)` (front) tem DOIS modos por isso: **com**
+      contexto = valor real ou vazio; **sem** contexto (montando o modelo, sem
+      paciente) = o `exemplo` do catálogo, só para o vet ver a cara da folha.
+      Internação, reprodução e financeiro não têm módulo no S2Vet: as variáveis existem
+      no editor mas resolvem VAZIO, e **não são oferecidas ao chat da IA** — prometer
+      uma chave que não preenche faz a IA usá-la e o papel sair com um buraco.
+      ⚠️ Cadastro do CLIENTE por `aplicarPerfil` (`ProprietarioPerfil` da empresa do
+      contexto, §36) e do PROFISSIONAL por `UsuarioEmpresa` (§36-f) — nunca de `users`.
+      ⚠️ `LocalizacaoAnimal` **não tem cidade/estado** (só `endereco` e `cep`): o
+      município da propriedade sai do cadastro do cliente.
+- [x] 🔴 **Quem resolve o que fica GRAVADO é o backend, nunca o navegador.** O
+      documento tem valor legal; confiar no cliente para dizer qual é o CRMV de quem
+      assina seria entregar a caneta. O front resolve só para EXIBIR.
+      `aplicarEmBlocos` cobre TODO campo textual — `texto`, `rotulo`, `url`, `itens[]`,
+      `colunas[]` e as **CÉLULAS** de `linhas[][]`: resolver só `conteudo.texto`
+      deixaria `{{animal.nome}}` cru dentro da tabela impressa.
+      `campoAuto` grava o valor em `texto` e **PRESERVA a chave** em `variavel` — é o
+      que permite auditar, no documento já emitido, de qual variável saiu cada valor.
+- [x] **O EMITIDO É SNAPSHOT** (`tb_documentos_emitidos.blocos`, com as variáveis já
+      resolvidas). Editar o modelo depois NÃO reescreve o papel que o cliente já
+      recebeu — mesma premissa da `FaturaItem.descricao` gravada. Numeração `DOC-0001`
+      **por empresa**, sorteada dentro da transaction: é só ali que
+      `{{sistema.numeroDocumento}}` tem valor, e por isso ela não entra em
+      `montarContexto` (que também serve à pré-visualização, onde o documento ainda não
+      tem número). Cancelar exige justificativa + auditoria (§33) e é soft delete.
+- [x] **Correlação com o prontuário.** O documento emitido entra no **Histórico do
+      paciente** (`HistoricoController`, origem `DOCUMENTO`, ref `documento-<id>`) e na
+      **Memória Clínica** (`resumoAtendimentoService.coletarEventos`) — o tópico da IA
+      fica clicável até o registro, porque `refsAbriveis` (AnimalDetail) sai justamente
+      dos ids do Histórico. `AnimalDetail` ganhou `OrigemEvento` `DOCUMENTO`, badge,
+      ícone, `ENDPOINT` e o `DetalheModalDocumento`; `MemoriaClinicaPanel` ganhou o
+      rótulo.
+      ⚠️ O recorte é por **EMPRESA**, não por `escopoFilhoEvolucaoWhere`:
+      `DocumentoEmitido` tem `empresaId` próprio e a evolução é OPCIONAL nele —
+      atestado e termo de consentimento existem sem atendimento aberto.
+      ⚠️ As duas consultas têm `.catch(() => [])`: tabela ainda não migrada não pode
+      derrubar o Histórico nem a Memória Clínica inteiros.
+- [x] **Chat de IA multi-turno, ancorado NO ACERVO** — `assistente_documento@v1`
+      (`ai/prompts/assistenteDocumento.js`, em arquivo próprio por tamanho) +
+      `services/documentoLLMService.js`, módulo novo `MODULOS_IA.DOCUMENTOS`.
+      Decisão de produto desta sessão: *"multi-turno, mas baseado somente nos templates
+      que temos e forem sendo criados"*. O assistente escolhe um modelo do acervo
+      (globais + os da clínica) ou AJUSTA o que está aberto no editor; **não redige
+      documento do zero** — o conteúdo mínimo é definido por norma, e um modelo
+      inventado sai plausível e incompleto (falta a declaração que dá validade ao
+      atestado, falta a identificação do responsável técnico).
+      A resposta é VALIDADA contra o acervo que acabou de ser enviado: `templateId`
+      fora da lista é descartado (id alucinado viraria `findUnique` que o RLS recusa, e
+      o vet veria erro de banco em vez de resposta) e **bloco de tipo desconhecido é
+      jogado fora**, nunca convertido em `texto` (converter mentiria sobre o que o
+      assistente propôs; manter quebraria o editor).
+      `acao: 'AJUSTAR'` sem nenhum bloco aproveitável vira `RESPONDER` — senão a tela
+      limparia o documento do vet achando que recebeu algo.
+      Aplicar o ajuste passa por `editor.substituirTudo`, que **preserva o histórico**:
+      `Ctrl+Z` desfaz a sugestão. Com `trocarBase` (que reinicia o histórico), aceitar
+      uma sugestão ruim custaria o trabalho todo.
+      Os blocos enviados são os **do editor**, não os do banco: o vet pode ter alterado
+      sem salvar, e é sobre o que ele está vendo que o pedido de ajuste incide.
+      ⚠️ Substitui o `ModalCriarIA`, que **não chamava modelo nenhum** — era
+      `montarPorHeuristica`, uma tabela de palavras-chave rodando no bundle do
+      navegador. Removido.
+      ⚠️ 429 (`IA_QUOTA_EXCEDIDA`) é REPASSADO com `next(err)` — o controller tem
+      try/catch próprio e engolir ali devolveria 500 genérico (§7).
+- [x] **Assinatura do veterinário** — `UsuarioEmpresa.assinatura_url`, POR EMPRESA
+      (mesma razão de `foto_url`: o cadastro é da clínica). Enviada pelo PRÓPRIO
+      profissional em `/cadastro-pessoal`, ao lado do CRMV — é a outra metade da mesma
+      coisa, o que identifica o responsável técnico no papel. Rota
+      `PUT/DELETE /users/me/assinatura` (multipart), espelho exato de `/me/foto`,
+      inclusive na ordem "grava no banco → só então apaga o arquivo velho".
+      O bloco `assinatura` renderiza a imagem SOBRE a linha, com nome e CRMV do
+      vínculo. **Sem assinatura cadastrada sobra o espaço em branco** para assinar à
+      mão — nunca se desenha uma assinatura que não existe.
+      ⚠️ NÃO passa pelo `FotoEditorModal`: aquele editor recorta em QUADRADO e cortaria
+      o traço. Vai comprimida e inteira.
+      ⚠️ Somente leitura no `getMe` para conferência; `updateMe` não grava o campo.
+- [x] **Logomarca da clínica no timbre da folha** (`PreviewA4`), FORA dos blocos de
+      propósito: é identidade da empresa, não conteúdo do modelo — o vet não deve poder
+      apagá-la sem querer ao editar, e ela precisa sair igual em todos os documentos.
+      Sem logo, cai no nome da empresa; sem nem isso, não renderiza faixa nenhuma
+      (melhor sem timbre que com um vazio).
+- [x] **Permissões**: os slugs `documentos.templates.*` e `documentos.emitidos.*` já
+      existiam no seed 002 desde antes de haver backend — agora gateiam as rotas. São
+      separados de propósito: quem emite atestado no campo não precisa poder reescrever
+      o modelo da clínica. O chat usa `templates.criar` (ele monta modelo); o
+      `/contexto` usa `templates.ler`, e o acesso ao PACIENTE é verificado à parte com
+      `verificarAcessoAnimal` — permissão de módulo não substitui escopo de animal.
+      Cancelar emitido usa `emitidos.criar`: não existe slug de exclusão para emitidos
+      no catálogo, e criar um agora nasceria sem ninguém configurado.
+- [x] Removidos: `modules/documentos/seeds.ts` (`TEMPLATES_INICIAIS`, órfão depois que
+      o acervo passou a vir do banco) e `ModalCriarIA.tsx`.
+      Testes: `__tests__/documentosCentral.test.js` — 23 casos cobrindo o que quebra em
+      SILÊNCIO (variável vazia × exemplo, resolução dentro de célula de tabela,
+      validação da resposta do modelo, conteúdo mínimo dos 12 anexos, e um teste que
+      reprova qualquer `{{chave}}` usada nos modelos que não seja resolvível).
+      Suíte: **235 passando**. `tsc -b --noEmit` e `vite build` limpos.
+- [x] **`tb_documento_templates` e `tb_documentos_emitidos` entraram em `TENANT_PLANE`**
+      (`__tests__/tenancyRls.test.js`), agora que existem no banco — tenant plane em
+      15/76 tabelas. O gate só enxerga tabela que existe DE VERDADE, por isso a ordem é
+      sempre migration → gate, nunca o contrário.
+- [x] **RLS conferido AO VIVO contra a base**, não só pela presença da policy: a clínica
+      LÊ os 12 modelos globais; CRIA o próprio modelo (é este passo que prova que o
+      teste tem valor — sem ele, tudo "passaria" por fail-closed); é RECUSADA ao criar
+      linha global (`WITH CHECK`) e ao alterar o atestado do CFMV (`updateMany` devolve
+      count 0, o global fica intacto); a empresa 58 não enxerga modelo da 42; e
+      `tb_documentos_emitidos` recusa gravação carimbada para outra empresa.
+      🔴 **ARMADILHA DE VERIFICAÇÃO, aprendida aqui:** `comEmpresa` tem de ENVOLVER o
+      `$transaction`, nunca ficar DENTRO dele. O interceptador de `prismaTenant` lê o
+      contexto no MOMENTO em que `$transaction` é chamado e carimba o tenant uma vez, no
+      início; chamar `$transaction` fora do contexto deixa a transação SEM tenant, e aí
+      toda escrita é recusada — o que se parece exatamente com "a policy funcionou"
+      quando, na verdade, nada foi testado. Foi assim que a primeira rodada desta
+      verificação passou pelo motivo errado. Em produção não ocorre: o `authenticate`
+      abre o `comEmpresa` em volta do request inteiro, então o `$transaction` dos
+      controllers já nasce dentro do contexto.
+- [ ] O bloco `qrcode` continua um placeholder gráfico. Agora que o documento emitido
+      tem número e id, dá para gerar o QR de validação de verdade — falta decidir a
+      rota pública de validação (`{{sistema.urlValidacao}}` resolve vazio hoje).
+- [ ] `POST /documentos/{whatsapp,email,pdf}` (`DocumentoCompartilharController`)
+      continua recebendo o HTML montado na tela de origem e não conhece
+      `DocumentoEmitido`. Enviar um emitido ao cliente hoje passa por exportar o PDF na
+      mão. Ligar os dois é o próximo passo natural.
+- [ ] `resumirPorAnimal` (o resumo de uma linha por LLM, `HistoricoController`) NÃO
+      recebeu a origem `DOCUMENTO` — só `listarPorAnimal` recebeu. São consultas
+      distintas; aplicar quando aquela rota for tocada.
+- [ ] A lista "Emitidos para <paciente>" aparece só no estado vazio do editor. Uma aba
+      própria de emitidos (com reimpressão e cancelamento) é o passo seguinte — o
+      backend já tem `GET /documentos/emitidos` e `DELETE /documentos/emitidos/:id`.
+
+### Sessão 2026-08-25 — Atendimento ativo passou a ser ESCOLHIDO, não adivinhado
+- [x] **O Nº do atendimento no card "Histórico de Evolução Clínica" virou o SELETOR do
+      atendimento ativo.** O mesmo paciente pode ter mais de uma evolução EM ANDAMENTO
+      (consultas distintas — regra de 2026-08-18 parte 3), e até então o shell
+      **adivinhava** qual era a de agora ("a minha" → desempate pelo `agendamentoId` da
+      URL → a mais recente). Sem forma de corrigir a adivinhação,
+      prescrição/exame/encaminhamento/vacina lançados nas abas se vinculavam ao
+      atendimento ERRADO e não havia nada na tela que explicasse por quê. Agora, em
+      evolução EM ANDAMENTO, o `AG-0013`/`EV-0007` é um BOTÃO que CARREGA aquele
+      atendimento na tela: o banner passa a descrevê-lo e todo registro clínico lançado
+      no shell passa a se vincular a ele.
+      Componente `NumeroAtendimento` — UM só para o card mobile e a tabela desktop
+      (duas cópias divergem na primeira correção — armadilha 28-g). Ele faz
+      `stopPropagation`: a `<tr>` inteira já tem `onClick` que abre a visualização, e
+      sem isso selecionar abriria o modal junto.
+      ⚠️ Fora de EM ANDAMENTO o Nº continua sendo TEXTO: atendimento fechado não é "o de
+      agora", e botão que não faz nada é pior que nenhum (armadilha 28-d).
+- [x] **O BANNER É UM SÓ e mostra o atendimento CARREGADO** —
+      **`Atendimento AG-0013 de 25/08/2026 17:11 - Consulta clínica geral - Em
+      andamento`** (`formatDataHora` — INSTANTE, nunca `formatDate`, §6).
+      ⚠️ Uma versão com UMA FAIXA POR ATENDIMENTO ABERTO chegou a ser feita e foi
+      **RECUSADA a pedido** ("não quero que as duas estejam visíveis ao mesmo tempo").
+      Não reintroduzir: quem lista os atendimentos abertos é o histórico, que já os tem
+      com data, responsável e status; o banner responde uma pergunta só — "em qual eu
+      estou agora?".
+      ⚠️ O TÍTULO só existe depois que a IA o gera na FINALIZAÇÃO — durante o
+      atendimento o rótulo cai na `especialidade`. Sem esse fallback, a faixa mais
+      importante da tela ficaria sem nome justamente enquanto está em curso.
+      **Sem mudança no backend**: `listarPorAnimal` usa `include` sem `select`, então
+      `dataInicio`/`titulo`/`especialidade`/`agendamentoId` já vinham.
+- [ ] Selecionar NÃO abre a evolução no formulário — só carrega o atendimento. Quem
+      quer escrever nela usa o "Alterar" (lápis) que já existe na mesma linha; abrir o
+      editor no mesmo clique descartaria o rascunho em digitação do outro atendimento.
+      Reavaliar se o uso mostrar que os dois passos são sempre o mesmo gesto.
+- [ ] A troca só existe na aba **Evolução** (é lá que o histórico mora). Nas abas de
+      Prescrição/Exames/Encaminhamento o banner informa qual está ativo, mas para trocar
+      é preciso voltar à Evolução. Se incomodar, o gancho é `onSelecionarEvolucao` — o
+      "Histórico do Paciente" do shell pode oferecer o mesmo clique.
+- [x] **`utils/evolucaoAtiva.ts` — FONTE ÚNICA de "qual evolução aberta é a de agora".**
+      A regra estava COPIADA em `Atendimento.tsx`, `SubModuloEvolucao.tsx` e
+      `Vacina.tsx`, e as três já divergiam. Ordem: **escolha explícita → a minha cujo
+      `agendamentoId` bate com o contexto → a primeira minha → a primeira de qualquer
+      um**. A escolha vale só enquanto a evolução continuar ABERTA: finalizada, ela sai
+      da lista e a decisão volta ao automático (senão o shell ficaria preso a um id que
+      não existe mais e nada seria vinculado).
+- [x] **`evolucaoAtiva` deixou de ser estado e virou DERIVAÇÃO** (`useMemo` sobre
+      `evolucoesAbertas` + `evolucaoSelecionadaId`). Guardar lista e ativa em dois
+      estados deixaria a ativa apontando para uma evolução já finalizada por outra aba.
+- [x] **Contrato do `SubModuloEvolucao` mudou** — `onEvolucaoChange(ev|null)` (que
+      mandava a evolução JÁ ESCOLHIDA por ele) deu lugar a:
+      `onEvolucoesAbertasChange(abertas[])` (a LISTA, fonte da verdade a cada recarga) e
+      `onEvolucaoCriada(ev)` (só na criação — o shell a seleciona na hora, sem esperar a
+      recarga: quem acabou de abrir o atendimento é quem o conduz).
+      ⚠️ **A submódulo NÃO decide mais qual é a ativa.** Dois lugares decidindo era o que
+      fazia as telas discordarem sobre qual atendimento estava em curso.
+      ⚠️ **A lista da aba é FILTRADA e PAGINADA** — só é reportada ao shell quando
+      nenhum filtro pode estar escondendo um atendimento aberto (`retratoConfiavel`:
+      página 1, sem filtro de data/responsável, status vazio ou EM_ANDAMENTO). Reportar
+      um recorte APAGARIA do banner o atendimento em paralelo e desvincularia a
+      prescrição seguinte. Filtrou? O shell segue com a consulta própria dele
+      (`carregarEvolucoesAbertas`, `status=EM_ANDAMENTO&limit=20`), que `onSalvo`
+      re-executa depois de assumir/finalizar/cancelar.
+      ⚠️ As duas props precisam ser `useCallback` ESTÁVEL: entram nas dependências do
+      `carregarEvolucoes` do submódulo, e identidade nova a cada render fecha o laço de
+      requisições que já causou 429 (sessão 2026-08-02).
+- [x] **A escolha é persistida por paciente** (`s2vet_ev_sel_<animalId>`): o shell é
+      DESMONTADO ao ir para as telas apartadas (Vacina, Execução de Prescrição), e sem
+      isso voltar de lá reabria em outro atendimento. `Vacina.tsx` lê a mesma chave —
+      senão a vacina nasceria vinculada a um atendimento diferente daquele em que a
+      prescrição do mesmo paciente acabou de ser lançada.
+      ⚠️ **Chegar com `?agendamentoId=` na URL LIMPA a escolha anterior**: é o "Iniciar"
+      da agenda, ato explícito e mais recente que o clique no Nº. Sem isso, iniciar a
+      segunda consulta do dia deixaria o shell preso na primeira.
+      ⚠️ Atendimento escolhido que FECHA (finalizado/cancelado, aqui ou por outro
+      profissional) some da lista: `escolherEvolucaoAtiva` ignora o id órfão e a decisão
+      volta ao automático — a escolha nunca prende o shell num id que não existe mais.
+- [ ] `ExecucaoPrescricao.tsx` não participa da escolha — ele lista o que já foi
+      prescrito, não vincula registro novo a evolução. Se um dia passar a criar registro
+      clínico, precisa ler `escolherEvolucaoAtiva` como as outras três telas.
 
 ### Sessão 2026-08-23 (parte 4) — Crons: 4 jobs quebrados pelo RLS + execução manual com rastro
 > ✅ **MIGRATION APLICADA** (autorizada nesta sessão) — `20260914000000_agendamento_status_30`
@@ -4335,6 +4743,31 @@ DELETE /api/equipes/:equipeId/prestadores/:userId/designacoes      → SEM :anim
 GET  /api/equipes/configuracoes → EquipeController.obterConfiguracao (logo + diaFechamentoFatura do escopo ativo)
 PUT  /api/equipes/configuracoes → EquipeController.salvarConfiguracao (multipart: logo?, diaFechamentoFatura, removerLogo?) — GESTOR/dono only
 
+# documentos.js — prefixo /api/documentos (Central de Documentos)
+# Duas famílias de permissão, separadas de propósito: `documentos.templates.*` (o
+# MODELO) e `documentos.emitidos.*` (o DOCUMENTO entregue). Quem emite atestado no
+# campo não precisa poder reescrever o modelo da clínica.
+POST   /whatsapp | /email | /pdf         → DocumentoCompartilharController (só authenticate:
+                                           quem chama já teve acesso ao dado na tela de origem)
+POST   /chat                             → chat da IA, ancorado no ACERVO (templates.criar)
+GET    /contexto/:animalId               → variáveis do paciente JÁ RESOLVIDAS + marca
+                                           (logo, assinatura, CRMV). templates.ler + o
+                                           acesso ao ANIMAL por verificarAcessoAnimal
+GET    /emitidos?animalId=               → emitidos.ler
+POST   /emitidos                         → emite (resolve as variáveis AQUI e grava o
+                                           snapshot). emitidos.criar
+GET    /emitidos/:id                     → emitidos.ler
+DELETE /emitidos/:id  { motivo }         → cancela (soft delete + auditoria). emitidos.criar
+GET    /templates                        → globais + os da empresa. templates.ler
+POST   /templates                        → templates.criar
+GET    /templates/:id                    → templates.ler
+PUT    /templates/:id                    → salva; em modelo GLOBAL devolve a CÓPIA da
+                                           empresa (`copiado: true`). templates.editar
+POST   /templates/:id/duplicar           → templates.criar
+PATCH  /templates/:id/favorito           → também passa pelo copy-on-write. templates.editar
+PATCH  /templates/:id/restaurar          → templates.editar
+DELETE /templates/:id  { motivo }        → lixeira. templates.deletar
+
 # orcamentos.js — prefixo /api/orcamentos (OrcamentoController)
 GET    /para-importar?animalId=&tipos=   → itens ACEITO p/ importar na Prescrição/Vacina (OUTROS nunca entra)
 POST   /importar                         → marca itens como importados (após SALVAR a prescrição/vacina)
@@ -5214,8 +5647,32 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
-Backend recusa iniciar se JWT_SECRET tiver menos de 32 caracteres.
-**O valor atual é fraco — gerar novo antes de ir para produção.**
+O backend RECUSA INICIAR com segredo fraco, e desde 2026-08-25 a checagem não é mais
+só de comprimento (`segredoFraco()` em `server.ts`): rejeita também palavra previsível
+(o placeholder do `.env.example` é o caso mais comum), menos de 10 caracteres distintos
+e repetição longa do mesmo caractere. `trocar-isso-antes-de-producao-123` tem 33
+caracteres e passava no teste de tamanho sem ter entropia nenhuma.
+
+⚠️ **`JWT_REFRESH_SECRET` ausente NÃO impede subir** — `lib/sessionTokens.js` deriva
+`JWT_SECRET + '_refresh'`. Mas aí os dois deixam de ser INDEPENDENTES: quem obtiver um
+deriva o outro numa linha, e o refresh token vale pela janela de inatividade inteira. O
+boot emite `[AVISO]` nesse caso (e também quando os dois são iguais). Definir os dois
+separadamente é o correto.
+
+POR QUE é crítico: o segredo é a chave HMAC dos tokens (`lib/sessionTokens.js` é a fonte
+ÚNICA de assinatura). Quem o descobre FABRICA um token com qualquer `id`/`userType` —
+entra como ADMIN de qualquer empresa, sem senha e **sem passar pelo 2FA** (o segundo
+fator acontece ANTES de o token ser emitido; token forjado pula a etapa inteira). E o
+ataque é OFFLINE: basta capturar um JWT e testar chaves localmente, onde rate limit não
+alcança.
+
+⚠️ **A anotação antiga "o valor atual é fraco" foi REMOVIDA em 2026-08-25 por estar
+DESATUALIZADA** — o segredo em uso já era 64 caracteres hex (256 bits), exatamente a
+saída do comando acima. Alarme falso repetido é como se ensina a ignorar alarme. Para
+auditar um segredo configurado sem imprimi-lo:
+```bash
+node -e "require('dotenv').config();const v=process.env.JWT_SECRET||'';console.log('tam:',v.length,'| distintos:',new Set(v).size,'| hex:',/^[0-9a-f]+$/i.test(v))"
+```
 
 ### HashRouter — regra de ouro para links de email
 ```javascript
@@ -5402,7 +5859,7 @@ deixava o gestor trocar a senha do membro). `Usuarios.tsx` NÃO passa mais a pro
 - [x] Migrar tokens para HttpOnly Cookies (feito 2026-07-10)
 - [ ] Vincular acesso à mídia (uploads) à sessão via cookie (capability URL ainda é o único gate)
 - [ ] UUIDs em vez de IDs sequenciais (dificulta enumeração via URL)
-- [ ] Renovar JWT_SECRET antes de produção
+- [x] ~~Renovar JWT_SECRET antes de produção~~ — já é 64 chars hex (256 bits). O que FALTA é definir `JWT_REFRESH_SECRET` próprio (hoje é derivado do JWT_SECRET; o boot avisa)
 - [ ] Configurar ALLOWED_ORIGINS com domínio real em produção
 - [ ] Definir COOKIE_SECURE=true e TRUST_PROXY_HOPS conforme a topologia de proxy em produção
 - [ ] 2FA: "lembrar este dispositivo" por 30 dias (hoje o código é pedido em todo login)

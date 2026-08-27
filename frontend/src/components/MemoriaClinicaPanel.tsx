@@ -88,6 +88,7 @@ const LABEL_ORIGEM: Record<string, string> = {
   PRESCRICAO:     'Prescrição',
   ENCAMINHAMENTO: 'Encaminhamento',
   FATURA_MANUAL:  'Serviço',
+  DOCUMENTO:      'Documento',
 };
 
 // ─── Componente ───────────────────────────────────────────────────────────────

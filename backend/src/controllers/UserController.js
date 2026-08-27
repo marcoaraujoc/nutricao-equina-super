@@ -34,6 +34,8 @@ const {
   lerPagamentoEAcesso,
   lerFoto,
   salvarFoto,
+  lerAssinatura,
+  salvarAssinatura,
 } = require('../lib/usuarioEmpresa');
 const { storage } = require('../storage');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
@@ -310,10 +312,14 @@ const UserController = {
 
       // Foto DESTA empresa (o cadastro é por empresa — ver lib/usuarioEmpresa.js).
       const fotoUrl = req.empresaId ? await lerFoto(user.id, req.empresaId) : null;
+      // Assinatura do profissional NESTA empresa — usada pelo bloco `assinatura` da
+      // Central de Documentos e exibida no Cadastro Pessoal para conferência.
+      const assinaturaUrl = req.empresaId ? await lerAssinatura(user.id, req.empresaId) : null;
 
       return res.status(200).json({
         ...userData,
         fotoUrl,
+        assinaturaUrl,
         cadastroConfirmado,
         isGestorEmpresa,
         empresaConfigurada,
@@ -813,6 +819,55 @@ const UserController = {
     } catch (error) {
       console.error('Erro em salvarFotoMe:', error);
       return res.status(500).json({ success: false, error: 'Erro ao salvar a foto' });
+    }
+  },
+
+  /**
+   * PUT/DELETE /users/me/assinatura — imagem da assinatura do profissional.
+   *
+   * Espelho exato de `salvarFotoMe`, e pela mesma razão: a assinatura é do cadastro
+   * DAQUELA empresa (`tb_usuario_empresa.assinatura_url`), não do `users`. Trocar a
+   * assinatura numa clínica não pode reescrever o cadastro da outra.
+   *
+   * É o que o bloco `assinatura` da Central de Documentos renderiza sobre a linha,
+   * junto do nome e do CRMV do vínculo.
+   *
+   * ⚠️ Rota à parte (e não um campo de `updateMe`) porque `updateMe` é JSON: virar
+   * multipart obrigaria a reescrever o payload inteiro da tela de Cadastro Pessoal.
+   */
+  salvarAssinaturaMe: async (req, res) => {
+    try {
+      if (!req.empresaId) {
+        return res.status(400).json({ success: false, error: 'Selecione a empresa antes de enviar a assinatura.' });
+      }
+      const remover = req.method === 'DELETE';
+      if (!remover && !req.file) {
+        return res.status(400).json({ success: false, error: 'Envie um arquivo de imagem.' });
+      }
+
+      const vinculo = await perfilDaEmpresa(req.user.id, req.empresaId);
+      if (!vinculo) {
+        return res.status(404).json({ success: false, error: 'Você não tem cadastro nesta empresa.' });
+      }
+
+      const novaUrl = remover
+        ? null
+        : await storage.upload(req.file, 'profissionais', {
+            empresaId:   req.empresaId ?? null,
+            criadoPorId: req.user.id,
+          });
+      // Mesma ordem da foto: o arquivo velho só é apagado DEPOIS de o banco apontar
+      // para o novo — ao contrário, uma falha na gravação deixaria o cadastro
+      // apontando para arquivo que não existe mais.
+      const anterior = await salvarAssinatura(prisma, req.user.id, req.empresaId, novaUrl);
+      if (anterior && anterior !== novaUrl) {
+        try { await storage.delete(anterior); } catch { /* arquivo já sumiu — segue */ }
+      }
+
+      return res.json({ success: true, dados: { assinaturaUrl: novaUrl } });
+    } catch (error) {
+      console.error('Erro em salvarAssinaturaMe:', error);
+      return res.status(500).json({ success: false, error: 'Erro ao salvar a assinatura' });
     }
   },
 

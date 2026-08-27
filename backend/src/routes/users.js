@@ -30,6 +30,10 @@ router.put   ('/me',        authenticate, UserController.updateMe);
 // routes/animais.js. Sem isto, salvar a foto cai em RLS mesmo com req.empresaId correto.
 router.put   ('/me/foto',   authenticate, uploadFoto.single('foto'), tenantRls, UserController.salvarFotoMe);
 router.delete('/me/foto',   authenticate, UserController.salvarFotoMe);
+// Assinatura do profissional (Central de Documentos) — mesmo padrão da foto, e o
+// mesmo `tenantRls` depois do multer, pela mesma razão.
+router.put   ('/me/assinatura',   authenticate, uploadFoto.single('assinatura'), tenantRls, UserController.salvarAssinaturaMe);
+router.delete('/me/assinatura',   authenticate, UserController.salvarAssinaturaMe);
 router.patch ('/me/senha',  authenticate, UserController.alterarSenha);
 
 // Admin CRUD (somente ADMIN)

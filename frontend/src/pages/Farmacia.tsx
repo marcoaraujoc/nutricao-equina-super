@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
 import { usePermissoes } from '../hooks/usePermissoes';
 import toast from 'react-hot-toast';
+import { useSearchParams } from 'react-router-dom';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import {
@@ -169,8 +170,15 @@ export default function Farmacia() {
   const [showNovoForn, setShowNovoForn] = useState(false);
   const [meta,         setMeta]         = useState<Meta>({ total:0, totalControlados:0, totalAbaixoMinimo:0, totalAbaixoAlarmante:0 });
   const [loading,      setLoading]      = useState(false);
-  const [busca,        setBusca]        = useState('');
-  const [filtroTab,    setFiltroTab]    = useState<FiltroTab>('ativos');
+  // `?filtro=` e `?busca=` na URL pré-selecionam a aba e o termo — é por aí que os
+  // Relatórios de Farmácia trazem "abaixo do mínimo" ou um produto específico já
+  // recortado. Aba desconhecida cai no padrão "ativos".
+  const [searchParams] = useSearchParams();
+  const filtroDaUrl = (searchParams.get('filtro') ?? '').toLowerCase() as FiltroTab;
+  const [busca,        setBusca]        = useState(searchParams.get('busca') ?? '');
+  const [filtroTab,    setFiltroTab]    = useState<FiltroTab>(
+    (['todos','ativos','inativos','critico','alarmante','controlados'] as string[]).includes(filtroDaUrl) ? filtroDaUrl : 'ativos',
+  );
 
   const [form,         setForm]         = useState({ ...FORM_VAZIO });
   const [editandoId,   setEditandoId]   = useState<number | null>(null);

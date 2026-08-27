@@ -10,7 +10,9 @@ import {
   LayoutTemplate, ZoomIn,
 } from 'lucide-react';
 import BlocoView from './BlocoView';
+import type { MarcaFolha } from './BlocoView';
 import { BLOCOS, GRUPOS_VARIAVEL, VARIAVEIS } from './catalogo';
+import type { ContextoVariaveis } from './catalogo';
 import type { Alinhamento, Bloco, Borda, PesoFonte, Template, TipoBloco } from './types';
 import type { UsoEditor } from './store';
 
@@ -501,12 +503,16 @@ export function DrawerVariaveis({ aberto, onFechar, onInserir }: {
 
 const ZOOMS = [50, 75, 100, 125, 150] as const;
 
-export function PreviewA4({ template, blocos, zoom, onZoom, refFolha }: {
+export function PreviewA4({ template, blocos, zoom, onZoom, refFolha, contexto, marca }: {
   template: Template | null;
   blocos:   Bloco[];
   zoom:     number;
   onZoom:   (z: number) => void;
   refFolha: React.RefObject<HTMLDivElement>;
+  /** Variáveis do paciente resolvidas pelo backend; ausente = modo exemplo. */
+  contexto?: ContextoVariaveis | null;
+  /** Logomarca da clínica e assinatura de quem emite. */
+  marca?:    MarcaFolha | null;
 }) {
   // A4 em milímetros. O navegador converte mm→px na impressão, então a folha na
   // tela tem a MESMA proporção do papel — é o que evita a surpresa no PDF.
@@ -537,10 +543,26 @@ export function PreviewA4({ template, blocos, zoom, onZoom, refFolha }: {
 
       <div className="flex-1 overflow-auto p-6 flex justify-center">
         <div ref={refFolha} style={folha} className="shadow-lg rounded-sm">
+          {/* Timbre da clínica. Fica FORA dos blocos de propósito: é identidade da
+              empresa, não conteúdo do modelo — o vet não deve poder apagá-la sem
+              querer ao editar, e ela precisa sair igual em todos os documentos.
+              Sem logo cadastrada, cai no nome da empresa; sem nem isso, não
+              renderiza faixa nenhuma (melhor sem timbre que com um vazio). */}
+          {(marca?.logoUrl || marca?.empresaNome) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, borderBottom: '1px solid #e5e7eb',
+                          paddingBottom: 10, marginBottom: 14 }}>
+              {marca.logoUrl && (
+                <img src={marca.logoUrl} alt="" style={{ maxHeight: 48, maxWidth: 170, objectFit: 'contain' }} />
+              )}
+              {!marca.logoUrl && marca.empresaNome && (
+                <p style={{ fontSize: 14, fontWeight: 700, color: '#111827' }}>{marca.empresaNome}</p>
+              )}
+            </div>
+          )}
           {blocos.length === 0 ? (
             <p className="text-center text-gray-300 text-sm mt-20">Documento vazio</p>
           ) : (
-            blocos.map(b => <BlocoView key={b.id} bloco={b} />)
+            blocos.map(b => <BlocoView key={b.id} bloco={b} contexto={contexto} marca={marca} />)
           )}
         </div>
       </div>

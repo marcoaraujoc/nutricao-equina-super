@@ -27,6 +27,7 @@ export const MODULOS_IA = {
   NUTRICAO:        'NUTRICAO',
   AGENDA:          'AGENDA',
   TRANSCRICAO:     'TRANSCRICAO',
+  DOCUMENTOS:      'DOCUMENTOS',
 } as const;
 
 export type ModuloIA = typeof MODULOS_IA[keyof typeof MODULOS_IA];

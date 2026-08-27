@@ -97,13 +97,26 @@ const PLAT = `"${SCHEMA}"."app_plataforma"()`;
   /**
    * Subconsulta aninhada que traduz uma cadeia de saltos em predicado SQL.
    *
-   * ⚠️ A coluna da PRÓPRIA tabela vai SEM qualificação. Dentro de uma policy não existe
-   * alias para a tabela protegida — ela é o contexto implícito da expressão. Qualificar
-   * com um alias inventado (`t."col"`) faz o `CREATE POLICY` falhar com
-   * `missing FROM-clause entry for table "t"`. Só os PAIS, que entram por subconsulta,
-   * ganham alias (`p0`, `p1`, …).
+   * ⚠️ Não existe ALIAS para a tabela protegida dentro de uma policy — inventar um
+   * (`t."col"`) faz o `CREATE POLICY` falhar com `missing FROM-clause entry for table
+   * "t"`. Só os PAIS, que entram por subconsulta, ganham alias (`p0`, `p1`, …).
+   *
+   * 🔴 MAS ELA PRECISA SER QUALIFICADA PELO PRÓPRIO NOME (2026-08-25). Deixar a coluna
+   * NUA (`"equipeId"`) parecia equivalente e não é: dentro do `EXISTS`, se o PAI tiver
+   * uma coluna com o MESMO NOME, o escopo interno vence e o Postgres resolve a
+   * referência para o PAI. A correlação com a linha protegida desaparece, o predicado
+   * degenera em `p0."equipeId" = p0."equipeId"` — sempre verdadeiro — e a policy passa
+   * a significar "esta empresa tem ALGUM registro no pai?", liberando a TABELA INTEIRA.
+   *
+   * Foi exatamente o que aconteceu com `tb_matriz_perfis` (`equipeId` → `tb_perfis_equipe`,
+   * que também tem `equipeId`): as 6 empresas da base enxergavam as 6.655 linhas da
+   * matriz de permissões, e o WITH CHECK tinha o mesmo defeito — escrita inclusive.
+   *
+   * ⚠️ O modo de falhar é o pior possível: nenhum erro, policy criada com sucesso, e
+   * os gates de COBERTURA (`tenancyRls.test.js`) ficam verdes porque a tabela "tem
+   * policy". Só um teste de COMPORTAMENTO pega — ver `rlsVarreduraTenant.test.js`.
    */
-  const predicadoDaCadeia = (cadeia) => {
+  const predicadoDaCadeia = (cadeia, tabelaProtegida) => {
     // Monta de trás para a frente: o último salto é quem compara com a empresa.
     let expr = null;
     for (let i = cadeia.length - 1; i >= 0; i--) {
@@ -111,7 +124,11 @@ const PLAT = `"${SCHEMA}"."app_plataforma"()`;
       const condicao = i === cadeia.length - 1
         ? `p${i}."${colEmp(p.alvo)}" = ${FN}`
         : expr;
-      const ladoFilho = i === 0 ? `"${p.coluna}"` : `p${i - 1}."${p.coluna}"`;
+      // Salto 0 = a tabela PROTEGIDA. Qualificada pelo nome real (não por alias, que
+      // não existe aqui) para não ser capturada pelo escopo do `EXISTS` acima.
+      const ladoFilho = i === 0
+        ? `"${SCHEMA}"."${tabelaProtegida}"."${p.coluna}"`
+        : `p${i - 1}."${p.coluna}"`;
       expr = `EXISTS (SELECT 1 FROM "${SCHEMA}"."${p.alvo}" p${i} ` +
              `WHERE p${i}."${p.colunaAlvo}" = ${ladoFilho} AND ${condicao})`;
     }
@@ -147,7 +164,7 @@ const PLAT = `"${SCHEMA}"."app_plataforma"()`;
       const cadeia = CAMINHO_EXPLICITO[t] ? cadeiaDe(t, CAMINHO_EXPLICITO[t]) : null;
       if (!cadeia) { pular.push(`${t} (sem caminho até a empresa — PENDENTE de decisão)`); continue; }
       classe   = `TENANT VIA PAI (${cadeia.map(p => p.alvo).join('→')})`;
-      usando   = predicadoDaCadeia(cadeia);
+      usando   = predicadoDaCadeia(cadeia, t);
       checando = usando;
     }
 

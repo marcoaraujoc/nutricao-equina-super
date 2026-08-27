@@ -5,9 +5,20 @@
 'use strict';
 
 const express = require('express');
+const crypto  = require('crypto');
 const router  = express.Router();
 const logger  = require('../lib/logger');
 const whatsappService = require('../services/whatsappService');
+
+// Comparação de token em TEMPO CONSTANTE — `!==` vaza, pelo tempo de resposta, quantos
+// caracteres iniciais bateram, permitindo recuperar o token byte a byte. `timingSafeEqual`
+// exige buffers do MESMO tamanho, então o comprimento é conferido antes (o tamanho não é
+// segredo). Devolve false para token ausente/tamanho divergente.
+function tokenConfere(recebido, esperado) {
+  const a = Buffer.from(String(recebido ?? ''), 'utf8');
+  const b = Buffer.from(String(esperado ?? ''), 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 // Evolution envia eventos como 'connection.update' / 'CONNECTION_UPDATE'
 const normalizarEvento = (e) => String(e ?? '').toLowerCase().replace(/_/g, '.');
@@ -15,7 +26,12 @@ const normalizarEvento = (e) => String(e ?? '').toLowerCase().replace(/_/g, '.')
 router.post('/evolution', async (req, res) => {
   try {
     const esperado = process.env.EVOLUTION_WEBHOOK_TOKEN || '';
-    if (esperado && req.query.token !== esperado) {
+    // ⚠️ FAIL-OPEN conhecido: sem `EVOLUTION_WEBHOOK_TOKEN` configurado o webhook fica
+    // aberto (aceita qualquer chamada). Mantido para não quebrar ambiente de dev sem o
+    // token — mas em produção o token DEVE estar definido; avisamos alto se não estiver.
+    if (!esperado) {
+      logger.warn('[Webhook:Evolution] EVOLUTION_WEBHOOK_TOKEN não configurado — webhook ACEITANDO sem autenticação.');
+    } else if (!tokenConfere(req.query.token, esperado)) {
       return res.status(401).json({ error: 'Token inválido' });
     }
 

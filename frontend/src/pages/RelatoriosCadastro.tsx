@@ -11,6 +11,13 @@ import { usePeriodo, periodoParams } from '../contexts/PeriodoContext';
 import PeriodoSelector from '../components/relatorios/PeriodoSelector';
 import { Card, StatTiles, RankBars, CarregandoRelatorio, ErroRelatorio, formatMesRef } from '../components/relatorios/RelatorioUI';
 
+// Pacientes → lista de Pacientes (/animais-vet); Clientes → Cadastro de Clientes.
+// ⚠️ As barras "por mês" NÃO viram link: nenhuma das duas listas filtra por mês de
+// cadastro, então o clique cairia na base inteira e não responderia o que foi
+// clicado (armadilha 28-d).
+const PACIENTES = '/animais-vet';
+const CLIENTES  = '/cadastro/proprietarios';
+
 interface SerieMes { mes: string; total: number }
 interface Cadastro {
   pacientes: { ativos: number; novos: number; novosPorMes: SerieMes[] };
@@ -66,10 +73,10 @@ export default function RelatoriosCadastro() {
       {carregando ? <CarregandoRelatorio /> : (erro || !dados) ? <ErroRelatorio /> : (
         <div className="space-y-4">
           <StatTiles tiles={[
-            { label: 'Pacientes ativos',        valor: dados.pacientes.ativos },
-            { label: 'Novos pacientes no período', valor: dados.pacientes.novos, tom: 'emerald' },
-            { label: 'Clientes ativos',         valor: dados.clientes.ativos },
-            { label: 'Novos clientes no período', valor: dados.clientes.novos, tom: 'emerald' },
+            { label: 'Pacientes ativos',        valor: dados.pacientes.ativos, to: PACIENTES },
+            { label: 'Novos pacientes no período', valor: dados.pacientes.novos, tom: 'emerald', to: PACIENTES },
+            { label: 'Clientes ativos',         valor: dados.clientes.ativos, to: CLIENTES },
+            { label: 'Novos clientes no período', valor: dados.clientes.novos, tom: 'emerald', to: CLIENTES },
           ]} />
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">

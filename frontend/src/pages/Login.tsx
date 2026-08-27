@@ -106,7 +106,7 @@ export default function Login() {
           body: JSON.stringify({ access_token: tokenResponse.access_token }),
         });
         const data = await res.json();
-        if (res.ok && data.token) {
+        if (res.ok && data.success) {
           const logado = await login();
           localStorage.removeItem('s2vet_ob');
           redirecionarAposLogin(logado);

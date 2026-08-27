@@ -9,6 +9,7 @@ const {
   formatAtendimentoNum,
 } = require('../lib/faturaUtils');
 const { resolverLogoPorProprietario } = require('../lib/logoEmpresaUtils');
+const { ehClienteDaEmpresa } = require('../lib/clienteEmpresa');
 const { registrarAuditoria } = require('../lib/auditoria');
 const { escopoCatalogoEmpresa } = require('../middlewares/empresaAtiva.middleware');
 const {
@@ -55,7 +56,7 @@ const ITEM_INCLUDE = {
   // 20260701000001) e no máximo UMA delas é preenchida por linha.
   // ⚠️ A prescrição chega pelo ITEM (`prescricaoId`), e a evolução mora no GRUPO —
   // por isso o salto a mais aqui.
-  prescricao:            { select: { id: true, grupo: { select: { id: true, evolucao: { select: EVOLUCAO_ORIGEM_SELECT } } } } },
+  prescricao:            { select: { id: true, tipo: true, medicamento: true, grupo: { select: { id: true, evolucao: { select: EVOLUCAO_ORIGEM_SELECT } } } } },
   exameClinico:          { select: { id: true, evolucao: { select: EVOLUCAO_ORIGEM_SELECT } } },
   vacinaClinica:         { select: { id: true, evolucao: { select: EVOLUCAO_ORIGEM_SELECT } } },
   encaminhamentoClinico: { select: { id: true, evolucao: { select: EVOLUCAO_ORIGEM_SELECT } } },
@@ -75,8 +76,26 @@ function comOrigemDoItem(item) {
     ?? vacinaClinica?.evolucao
     ?? encaminhamentoClinico?.evolucao
     ?? null;
+
+  // INSUMO DE APLICAÇÃO (seringa/agulha da via injetável) — é FILHO da dose, e a tela
+  // precisa saber disso para exibi-lo embaixo do medicamento que o consumiu.
+  //
+  // Como se reconhece, sem coluna nova: o insumo é lançado com `prescricaoId` do ITEM
+  // DE MEDICAMENTO que o gerou, mas com tipo PROCEDIMENTO (é serviço/material, não
+  // remédio). Ou seja, `FaturaItem.tipo === 'PROCEDIMENTO'` sobre uma
+  // `Prescricao.tipo === 'MEDICAMENTO'` só acontece nesse caso — o procedimento
+  // PRESCRITO aponta para uma `Prescricao.tipo === 'PROCEDIMENTO'`.
+  // ⚠️ Mantenha essa invariante ao lançar qualquer material novo por dose: se um
+  // insumo passar a nascer com tipo MEDICAMENTO, ele vira linha solta na fatura.
+  const ehInsumo = resto.tipo === 'PROCEDIMENTO' && prescricao?.tipo === 'MEDICAMENTO';
+
   return {
     ...resto,
+    // `prescricaoItemId` é o que agrupa dose + seringa + agulha: os três compartilham
+    // o mesmo item de prescrição. `insumoDe` diz qual das três linhas é filha.
+    prescricaoItemId: prescricao?.id ?? null,
+    insumoDe:         ehInsumo ? (prescricao?.id ?? null) : null,
+    medicamentoPai:   ehInsumo ? (prescricao?.medicamento ?? null) : null,
     origem: evolucao
       ? {
           evolucaoId:        evolucao.id,
@@ -479,6 +498,16 @@ const FaturaController = {
       // mesma emitiu para este cliente. `empresaId` entra em TODO `where` daqui —
       // omiti-lo em qualquer um deles reabre o vazamento entre clínicas.
       const empresaId = req.empresaId ? Number(req.empresaId) : null;
+
+      // 🔒 AUTORIZAÇÃO A NÍVEL DE OBJETO: o `:proprietarioId` da URL precisa ser cliente
+      // DESTA empresa. Sem isto, enumerar ids devolvia PII (nome/e-mail/telefone via
+      // `include.proprietario`, lido de `users` — sem RLS) e criava fatura para cliente
+      // alheio. 404 (não 403): não confirma que o usuário existe. Só quando há empresa
+      // no contexto (ADMIN de plataforma / legado sem empresa mantêm o comportamento).
+      if (empresaId && !(await ehClienteDaEmpresa(proprietarioId, empresaId))) {
+        return res.status(404).json({ error: 'Fatura não encontrada' });
+      }
+
       const doProprietario = { proprietarioId: Number(proprietarioId), empresaId };
 
       // Meses/faturas existentes do proprietário NESTA empresa — alimenta o seletor.
@@ -542,6 +571,12 @@ const FaturaController = {
   // da fatura em vez da marca S2Vet.
   obterLogoEmpresaProprietario: async (req, res) => {
     try {
+      // Mesmo guard de objeto do `obterFaturaProprietario`: proprietário fora da
+      // empresa do contexto não deve nem revelar a logo/empresa vinculada a ele.
+      const empresaId = req.empresaId ? Number(req.empresaId) : null;
+      if (empresaId && !(await ehClienteDaEmpresa(req.params.proprietarioId, empresaId))) {
+        return res.status(404).json({ error: 'Proprietário não encontrado' });
+      }
       const logoUrl = await resolverLogoPorProprietario(req.params.proprietarioId);
       res.json({ dados: { logoUrl } });
     } catch (err) {

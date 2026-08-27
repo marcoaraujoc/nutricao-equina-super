@@ -98,7 +98,9 @@ const GoogleController = {
       });
       const token = assinarAccessToken({ ...user, sessionVersion });
 
-      // Cookies HttpOnly (consistente com o login por e-mail/senha)
+      // Cookies HttpOnly (consistente com o login por e-mail/senha) — via ÚNICA de
+      // transporte. 🔒 O token NÃO é ecoado no corpo (não exposto ao JS); o front
+      // confirma pelo `success` e carrega a identidade por /me.
       setAuthCookies(res, { accessToken: token, refreshToken });
 
       // ⚠️ O login Google NÃO passa por `emitirSessao` — cria a sessão aqui mesmo. Sem
@@ -107,8 +109,6 @@ const GoogleController = {
 
       return res.json({
         success: true,
-        token,
-        refreshToken,
         user: {
           id:       user.id,
           fullName: user.fullName,

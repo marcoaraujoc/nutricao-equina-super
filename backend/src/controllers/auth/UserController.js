@@ -8,6 +8,7 @@ const { normalizeEmail, findUserByEmail } = require('../../lib/email');
 const mfa = require('../../services/mfaService');
 const { podeAcessarSistema } = require('../../lib/usuarioEmpresa');
 const { registrarAcesso, registrarAcessoNegado } = require('../../lib/auditoria');
+const bloqueio = require('../../lib/bloqueioLogin');
 // Duração da sessão e assinatura dos tokens: fonte única em lib/sessionTokens.js
 const { assinarAccessToken, gerarRefreshToken: generateRefreshToken } = require('../../lib/sessionTokens');
 
@@ -42,8 +43,10 @@ async function emitirSessao(req, res, user) {
   });
   const token = assinarAccessToken({ ...user, sessionVersion });
 
-  // Tokens em cookies HttpOnly (não legíveis por JS). O corpo mantém os tokens
-  // por compatibilidade com clientes não-navegador; o frontend não os usa mais.
+  // Tokens em cookies HttpOnly (não legíveis por JS) — a ÚNICA via de transporte.
+  // 🔒 Os tokens NÃO são mais ecoados no corpo da resposta: um XSS pós-login não pode
+  // colhê-los do JSON, e o cookie HttpOnly cumpre o mesmo papel (o front carrega a
+  // identidade por /me). Cliente não-navegador autentica pelo Set-Cookie (cookie jar).
   setAuthCookies(res, { accessToken: token, refreshToken });
 
   // Trilha de acesso gravada AQUI, no servidor, com a identidade que o backend acabou de
@@ -54,8 +57,7 @@ async function emitirSessao(req, res, user) {
   await registrarAcesso(req, user, 'LOGIN');
 
   return {
-    token,
-    refreshToken,
+    success: true,
     user: {
       id:                 user.id,
       fullName:           user.fullName,
@@ -116,6 +118,7 @@ class UserController {
           mustChangePassword: true,
           ativo:              true,
           mfaAtivo:           true,
+          ...bloqueio.SELECT_BLOQUEIO,
         },
       });
 
@@ -137,13 +140,47 @@ class UserController {
         return res.status(403).json({ error: 'Conta desativada. Entre em contato com o administrador da equipe.' });
       }
 
+      // ── Conta travada por senha errada ───────────────────────────────────
+      // ANTES do bcrypt: quem está bloqueado não tem senha certa nem errada, tem
+      // conta fechada — e conferir o hash só gastaria CPU (bcrypt é caro de
+      // propósito), o que transformaria a trava num amplificador de carga.
+      // ⚠️ Aqui a mensagem é ESPECÍFICA, ao contrário do "Usuário ou Senha
+      // Inválidos" genérico: para chegar a este ponto é preciso ter acertado o
+      // e-mail de uma conta que já falhou 6 vezes, então não há enumeração a
+      // proteger — e sem dizer o motivo a pessoa fica tentando a senha certa para
+      // sempre, sem entender por que não entra.
+      if (bloqueio.estaBloqueado(user)) {
+        await registrarAcessoNegado(req, {
+          motivo: 'Login: conta bloqueada por tentativas de senha inválidas',
+          entidade: 'LOGIN', entidadeId: user.id, emailTentativa: email,
+        });
+        return res.status(403).json({
+          error: await bloqueio.mensagemBloqueio(user.id),
+          code:  'CONTA_BLOQUEADA',
+        });
+      }
+
       const match = await bcrypt.compare(password, user.passwordHash);
       if (!match) {
+        const r = await bloqueio.registrarFalha(user.id);
         await registrarAcessoNegado(req, {
-          motivo: 'Login: senha incorreta', entidade: 'LOGIN', entidadeId: user.id, emailTentativa: email,
+          motivo: r.bloqueado
+            ? `Login: senha incorreta (${r.tentativas}ª tentativa) — CONTA BLOQUEADA`
+            : `Login: senha incorreta (${r.tentativas}ª tentativa, restam ${r.restantes})`,
+          entidade: 'LOGIN', entidadeId: user.id, emailTentativa: email,
         });
+        if (r.bloqueado) {
+          return res.status(403).json({
+            error: await bloqueio.mensagemBloqueio(user.id),
+            code:  'CONTA_BLOQUEADA',
+          });
+        }
         return res.status(401).json({ error: 'Usuário ou Senha Inválidos' });
       }
+
+      // Senha certa: zera o contador. Não limpa `bloqueadoEm` — quem está bloqueado
+      // nem chega aqui, e limpar seria um caminho de autodesbloqueio.
+      await bloqueio.limparTentativas(user);
 
       // Antes do 2FA: não faz sentido mandar código a quem não pode entrar.
       if (await acessoBloqueado(user)) {

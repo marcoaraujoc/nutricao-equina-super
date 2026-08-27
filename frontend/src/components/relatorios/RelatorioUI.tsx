@@ -3,6 +3,25 @@
 // Atendimento, Cadastro, Farmácia). Extraídos da Relatorios.tsx original.
 
 import { Children, cloneElement, isValidElement, type ReactNode, type ReactElement } from 'react';
+import { Link } from 'react-router-dom';
+
+// ─── Navegação a partir do relatório ──────────────────────────────────
+//
+// Número de relatório é pergunta pela metade: "1 orçamento em rascunho" só serve
+// quando dá para ver QUAL. Todo indicador que tem uma tela capaz de listá-lo recebe
+// um `to` e vira link para ELA JÁ FILTRADA (`/orcamento?status=RASCUNHO`).
+//
+// ⚠️ `to` é OPCIONAL e fica de fora quando a tela de destino não consegue mostrar
+// aquele recorte — link que cai numa lista sem o filtro correspondente promete uma
+// resposta que a página não dá, e é pior que texto simples (armadilha 28-d).
+// ⚠️ Tudo aqui é `<Link>` do react-router, nunca `<a href>`: a aplicação usa
+// HashRouter, e âncora comum recarregaria o app inteiro (CLAUDE.md §14).
+
+/** Envolve o conteúdo num link quando há destino; devolve o próprio conteúdo quando não há. */
+function TalvezLink({ to, className, children }: { to?: string; className?: string; children: ReactNode }) {
+  if (!to) return <>{children}</>;
+  return <Link to={to} className={className}>{children}</Link>;
+}
 
 // ─── Formatação ────────────────────────────────────────────────────────────────
 
@@ -29,9 +48,11 @@ export function formatData(d: string | null) {
 
 // ─── Componentes ───────────────────────────────────────────────────────────────
 
-export function Card({ icon, titulo, subtitulo, children }: {
+export function Card({ icon, titulo, tituloTo, subtitulo, children }: {
   icon:       ReactNode;
   titulo:     string;
+  /** Tela que lista o que este card resume. Sem ele o título é texto simples. */
+  tituloTo?:  string;
   subtitulo?: string;
   children:   ReactNode;
 }) {
@@ -40,7 +61,11 @@ export function Card({ icon, titulo, subtitulo, children }: {
       <div className="flex items-start gap-2.5 px-5 py-4 border-b border-gray-100">
         <span className="text-emerald-600 mt-0.5">{icon}</span>
         <div>
-          <h2 className="font-bold text-gray-900 text-sm">{titulo}</h2>
+          <h2 className="font-bold text-gray-900 text-sm">
+            {tituloTo
+              ? <Link to={tituloTo} className="text-emerald-800 hover:text-emerald-900 hover:underline underline-offset-2">{titulo}</Link>
+              : titulo}
+          </h2>
           {subtitulo && <p className="text-[11px] text-gray-400 mt-0.5">{subtitulo}</p>}
         </div>
       </div>
@@ -88,6 +113,17 @@ export function Tabela({ colunas, children }: { colunas: string[]; children: Rea
   );
 }
 
+/** Link dentro de uma célula de tabela do relatório — leva à tela que lista aquela
+ *  linha. Sem `to`, renderiza o texto simples: linha sem destino não finge ser link. */
+export function CelulaLink({ to, children }: { to?: string; children: ReactNode }) {
+  if (!to) return <>{children}</>;
+  return (
+    <Link to={to} className="text-emerald-800 font-medium hover:text-emerald-900 hover:underline underline-offset-2">
+      {children}
+    </Link>
+  );
+}
+
 export function BigNumber({ valor, label }: { valor: number | string; label: string }) {
   return (
     <div className="px-5 py-4 flex items-baseline gap-2 border-b border-gray-50">
@@ -103,6 +139,9 @@ export interface StatTile {
   valor:  string | number;
   tom?:   'emerald' | 'red' | 'amber' | 'gray';
   hint?:  string;
+  /** Tela que lista o que este número conta, já filtrada. Sem `to`, o tile não é
+   *  clicável — e não ganha nenhuma pista visual de que seria. */
+  to?:    string;
 }
 
 const TOM_CLS: Record<NonNullable<StatTile['tom']>, string> = {
@@ -117,11 +156,16 @@ export function StatTiles({ tiles, cols = 4 }: { tiles: StatTile[]; cols?: 2 | 3
   return (
     <div className={`grid ${gridCls} gap-3`}>
       {tiles.map((t) => (
-        <div key={t.label} className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
-          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{t.label}</p>
-          <p className={`text-2xl font-bold mt-1 ${TOM_CLS[t.tom ?? 'gray']}`}>{t.valor}</p>
-          {t.hint && <p className="text-[10px] text-gray-400 mt-0.5">{t.hint}</p>}
-        </div>
+        <TalvezLink key={t.label} to={t.to}
+          className="block rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500">
+          <div className={`h-full bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5 ${
+            t.to ? 'transition-colors hover:border-emerald-300 hover:bg-emerald-50/40 cursor-pointer' : ''
+          }`}>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{t.label}</p>
+            <p className={`text-2xl font-bold mt-1 ${TOM_CLS[t.tom ?? 'gray']}`}>{t.valor}</p>
+            {t.hint && <p className="text-[10px] text-gray-400 mt-0.5">{t.hint}</p>}
+          </div>
+        </TalvezLink>
       ))}
     </div>
   );
@@ -129,7 +173,7 @@ export function StatTiles({ tiles, cols = 4 }: { tiles: StatTile[]; cols?: 2 | 3
 
 // Ranking com barra horizontal proporcional ao maior valor.
 export function RankBars({ itens, formato = 'num' }: {
-  itens:   { nome: string; valor: number }[];
+  itens:   { nome: string; valor: number; to?: string }[];
   formato?: 'num' | 'brl';
 }) {
   if (itens.length === 0) return <EmptyState texto="Sem dados no período" />;
@@ -138,15 +182,18 @@ export function RankBars({ itens, formato = 'num' }: {
   return (
     <div className="px-5 py-4 space-y-2.5">
       {itens.map((i) => (
-        <div key={i.nome}>
-          <div className="flex items-center justify-between text-xs mb-1">
-            <span className="text-gray-700 truncate pr-2">{i.nome}</span>
-            <span className="font-semibold text-gray-900 whitespace-nowrap">{fmt(i.valor)}</span>
+        <TalvezLink key={i.nome} to={i.to}
+          className={`block rounded-lg -mx-1.5 px-1.5 py-0.5 ${i.to ? 'transition-colors hover:bg-emerald-50' : ''}`}>
+          <div>
+            <div className="flex items-center justify-between text-xs mb-1">
+              <span className={`truncate pr-2 ${i.to ? 'text-emerald-800 font-medium' : 'text-gray-700'}`}>{i.nome}</span>
+              <span className="font-semibold text-gray-900 whitespace-nowrap">{fmt(i.valor)}</span>
+            </div>
+            <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+              <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${Math.max((i.valor / max) * 100, 2)}%` }} />
+            </div>
           </div>
-          <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-            <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${Math.max((i.valor / max) * 100, 2)}%` }} />
-          </div>
-        </div>
+        </TalvezLink>
       ))}
     </div>
   );

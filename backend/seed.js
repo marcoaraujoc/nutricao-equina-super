@@ -5,6 +5,7 @@ const seedMedicamentos = require('./src/seeds/003_medicamentos.seed');
 const seedProcedimentos = require('./src/seeds/004_procedimentos.seed');
 const { seedLaboratorios }   = require('./src/seeds/003_laboratorios.seed');
 const { seedImagemExames }  = require('./src/seeds/004_imagem_exames.seed');
+const { seedDocumentosCfmv } = require('./src/seeds/006_documentos_cfmv.seed');
 
 // Catálogos globais (medicamentos, procedimentos, laboratórios, módulos do sistema)
 // não pertencem a nenhuma empresa — precisam do client ESTENDIDO de tenant para que
@@ -139,6 +140,20 @@ async function main() {
   await seedProcedimentos(prisma);
   await seedLaboratorios();
   await seedImagemExames(prisma);
+
+  // ── Modelos de documento do CFMV (Res. 1.321/2020) ────────────────────────────
+  // Catálogo GLOBAL (empresa_id null) da Central de Documentos. Idempotente por
+  // `chave`, e o update é DELIBERADO: é assim que uma revisão de norma alcança as
+  // clínicas. A cópia personalizada de cada empresa não é tocada.
+  // ⚠️ Depende da migration `20260918000000_central_documentos`.
+  try {
+    const r = await seedDocumentosCfmv(prisma);
+    console.log(`  ✓ Modelos de documento CFMV (${r.criados} criados, ${r.atualizados} atualizados)`);
+  } catch (err) {
+    // Tabela ainda não migrada não pode derrubar o seed inteiro — quem roda o seed
+    // costuma estar semeando permissões/catálogo, não os documentos.
+    console.warn(`  ⚠ Modelos de documento CFMV não semeados: ${err.message}`);
+  }
 
   console.log('✅ Seed concluído com sucesso!');
 }

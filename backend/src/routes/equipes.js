@@ -7,6 +7,8 @@ const path                = require('path');
 const EquipeController    = require('../controllers/EquipeController');
 const PermissaoController = require('../controllers/PermissaoController');
 const { authenticate, authorize } = require('../middlewares/auth');
+// Gate do CONTROLE DE ACESSO nas acoes sobre membros (ativar/inativar, desbloquear).
+const { checkPermission } = require('../middlewares/permissao.middleware');
 const { tenantRls }       = require('../middlewares/tenantRls');
 const validate            = require('../middlewares/validate');
 const { criarGestorRules, convidarMembroRules } = require('../validators/equipe.validators');
@@ -92,8 +94,20 @@ router.post('/incluir-membro', authenticate, EquipeController.incluirMembroDiret
 router.get   ('/membros',            authenticate, EquipeController.listarMembros);
 router.post  ('/membros',            authenticate, EquipeController.adicionarMembro);
 router.put   ('/membros/:id',        authenticate, EquipeController.atualizarMembro);
-router.patch ('/membros/:id/toggle', authenticate, EquipeController.toggleMembro);
+// ATIVAR/INATIVAR membro — a permissão vem do CONTROLE DE ACESSO, coluna ALTERAR do
+// módulo Equipe (`equipe.membros.editar`). Até 2026-08-25 esta rota tinha só
+// `authenticate`: QUALQUER usuário logado podia inativar qualquer membro, inclusive de
+// outra empresa — e sem deixar de funcionar, então nada denunciava o buraco.
+// Padrão do sistema (CLAUDE.md, armadilha 28): o RBAC decide SE a pessoa executa a
+// ação; a regra de negócio, no controller, decide SOBRE QUEM.
+router.patch ('/membros/:id/toggle', authenticate, checkPermission('equipe.membros.editar', 'LEITURA'), EquipeController.toggleMembro);
 router.delete('/membros/:membroId',  authenticate, EquipeController.removerMembro);
+// Desbloqueia conta travada por senha errada (lib/bloqueioLogin.js). O gate do
+// Controle de Acesso decide SE a pessoa mexe em membros; QUEM ela pode desbloquear é
+// regra de negócio da lib (gestor destrava a equipe dele; conta de gestor só o ADMIN).
+// ⚠️ A lib consulta o banco em vez de confiar em `req.membroCargo` — assim a regra
+// continua correta mesmo se esta rota um dia perder o middleware.
+router.post  ('/membros/:userId/desbloquear', authenticate, checkPermission('equipe.membros.editar', 'LEITURA'), EquipeController.desbloquearMembro);
 
 // ─── Criar equipe avulsa ───────────────────────────────────────────────────────
 router.post('/', authenticate, EquipeController.criarEquipe);

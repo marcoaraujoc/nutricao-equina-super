@@ -243,16 +243,25 @@ const atendimento = async (req, res) => {
       select: { animal: { select: { id: true, nome: true, local: true, localizacao: { select: { nome: true } } } } },
     });
     const porLocalAnimal = new Map(); // localizacao → Map(animalNome → total)
+    // `animalId` por nome — o front usa para transformar cada chip de animal em link
+    // para a ficha dele (/animal/:id). Sem o id, o chip mostraria um nome que não
+    // leva a lugar nenhum. Homônimos caíriam no mesmo chip de qualquer forma (a
+    // agregação é por nome); aqui vence o ÚLTIMO id visto, e o link ao menos abre um
+    // dos dois — melhor que nenhum, e a contagem já era agregada antes disto.
+    const idPorAnimal = new Map();
     for (const ev of evolucoesFinalizadas) {
       const localNome  = ev.animal ? nomeLocalizacao(ev.animal) : SEM_LOCALIZACAO;
       const animalNome = ev.animal?.nome ?? 'Sem animal vinculado';
+      if (ev.animal?.id) idPorAnimal.set(animalNome, ev.animal.id);
       if (!porLocalAnimal.has(localNome)) porLocalAnimal.set(localNome, new Map());
       const porAnimal = porLocalAnimal.get(localNome);
       somaEmMapa(porAnimal, animalNome, 1);
     }
     const atendimentosPorLocalidade = [...porLocalAnimal.entries()]
       .map(([localizacao, porAnimal]) => {
-        const animais = mapaParaLista(porAnimal, 'animal', 'total').sort((a, b) => b.total - a.total);
+        const animais = mapaParaLista(porAnimal, 'animal', 'total')
+          .map(a => ({ ...a, animalId: idPorAnimal.get(a.animal) ?? null }))
+          .sort((a, b) => b.total - a.total);
         const total = animais.reduce((s, a) => s + a.total, 0);
         return { localizacao, total, animais };
       })
@@ -401,11 +410,51 @@ const farmacia = async (req, res) => {
     for (const s of saidasPeriodo) valorSaidas += (s.quantidade ?? 0) * (s.estoque?.precoUnitarioBase ?? 0);
     const giro = valorTotalEstoque > 0 ? valorSaidas / valorTotalEstoque : 0;
 
+    // ── Ajustes de estoque no período (produtos com ajuste manual) ──────────
+    // Fonte: AuditLog (categoria AJUSTE, entidade ESTOQUE_FARMACIA), gravado por
+    // EstoqueController.ajustarEstoque — é ele que traz QUEM/QUANDO/O QUÊ (o
+    // MovimentoEstoque não guarda o autor). Agrupado por MEDICAMENTO (produto,
+    // não por lote), em ORDEM DECRESCENTE de quantidade de alterações.
+    const ajustesLog = await prisma.auditLog.findMany({
+      where: {
+        categoria: 'AJUSTE', entidade: 'ESTOQUE_FARMACIA',
+        ...(empresaId ? { empresaId } : {}),
+        timestamp: { gte: inicio, lte: fim },
+      },
+      select:  { entidadeId: true, userName: true, timestamp: true, detalhes: true, motivo: true },
+      orderBy: { timestamp: 'desc' },
+    });
+    const idsEstoqueAjuste = [...new Set(ajustesLog.map(a => a.entidadeId).filter(v => v != null))];
+    const estoquesAjuste = idsEstoqueAjuste.length
+      ? await prisma.estoqueClinica.findMany({
+          where:  { id: { in: idsEstoqueAjuste } },
+          select: { id: true, medicamentoId: true, medicamento: { select: { nome: true } } },
+        })
+      : [];
+    const nomeMedPorEstoque  = new Map(estoquesAjuste.map(e => [e.id, e.medicamento?.nome ?? null]));
+    const chaveMedPorEstoque = new Map(estoquesAjuste.map(e => [e.id, e.medicamentoId]));
+    const gruposAjuste = new Map(); // chave = medicamentoId (agrega lotes do mesmo produto)
+    for (const a of ajustesLog) {
+      const nome  = nomeMedPorEstoque.get(a.entidadeId) ?? 'Produto removido';
+      const chave = chaveMedPorEstoque.get(a.entidadeId) ?? `estoque:${a.entidadeId}`;
+      if (!gruposAjuste.has(chave)) gruposAjuste.set(chave, { medicamento: nome, total: 0, itens: [] });
+      const g = gruposAjuste.get(chave);
+      g.total += 1;
+      g.itens.push({
+        quando:    a.timestamp,
+        quem:      a.userName || '—',
+        alteracao: a.detalhes || '—',
+        motivo:    a.motivo || null,
+      });
+    }
+    const ajustes = [...gruposAjuste.values()].sort((a, b) => b.total - a.total);
+
     return res.json({
       dados: {
         valorTotalEstoque,
         totais: { abaixoMinimo: abaixoMinimo.length, vencidos: vencidos.length, vencendo: vencendo.length, semMovimentacao: semMovimentacao.length },
         abaixoMinimo, vencidos, vencendo, semMovimentacao,
+        ajustes,
         consumo: {
           medicamentosMaisVendidos: medTop.map(m => ({ nome: m.descricao, quantidade: m._sum.quantidade ?? 0 })),
           procedimentosMaisRealizados: procTop.map(p => ({ nome: p.descricao, quantidade: p._sum.quantidade ?? 0 })),

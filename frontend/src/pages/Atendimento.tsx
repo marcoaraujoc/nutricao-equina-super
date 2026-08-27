@@ -1,7 +1,7 @@
 // src/pages/Atendimento.tsx
 // Shell clínico — delega cada sub-aba ao seu módulo dedicado
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -27,6 +27,8 @@ import SubModuloEncaminhamento from './SubModuloEncaminhamento';
 import Agendamentos from './Agendamentos';
 import { imprimirAtendimento, gerarHtmlAtendimento, type PrintAtendimento, type PrintAnimal, type PrintAtendimentoItem } from '../utils/AtendimentoPrint';
 import InlineError from '../components/InlineError';
+import { formatDataHora } from '../utils/dateUtils';
+import { escolherEvolucaoAtiva, lerEvolucaoSelecionada, salvarEvolucaoSelecionada } from '../utils/evolucaoAtiva';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -49,6 +51,16 @@ interface EvolucaoAtiva {
   atendimentoNumero: string | null;
   // Quem conduz — decide se o banner pode oferecer "Finalizar Atendimento".
   veterinarioId:    number | null;
+  // Agendamento de origem: é o que PROVA que duas evoluções abertas do mesmo animal
+  // (mesmo com o mesmo profissional) são consultas DISTINTAS — ver CLAUDE.md,
+  // sessão 2026-08-18 parte 3. null = evolução avulsa (EV-XXXX).
+  agendamentoId?:   number | null;
+  // Rótulo do banner: "Atendimento AG-0013 de 25/08/2026 17:11 - Consulta clínica
+  // geral - Em andamento". O título é gerado pela IA ao finalizar, então enquanto o
+  // atendimento corre normalmente só há a especialidade — daí o fallback.
+  dataInicio?:      string | null;
+  titulo?:          string | null;
+  especialidade?:   string | null;
 }
 
 type SubModulo  = 'agenda' | 'evolucao' | 'prescricao' | 'vacina' | 'exames' | 'encaminhamento';
@@ -527,6 +539,11 @@ const Atendimento = () => {
     if (fromUrl && animalIdParam) {
       localStorage.setItem(`s2vet_ag_${animalIdParam}`, fromUrl);
       setAgendamentoIdFromUrl(Number(fromUrl));
+      // Chegar com o agendamento na URL é ato EXPLÍCITO (o "Iniciar" da agenda) e
+      // vence uma escolha anterior no banner: é este o atendimento de agora. Sem
+      // isto, iniciar a segunda consulta do dia deixaria o shell preso na primeira.
+      setEvolucaoSelecionadaId(null);
+      salvarEvolucaoSelecionada(animalIdParam, null);
       return;
     }
     if (animalIdParam) {
@@ -541,9 +558,23 @@ const Atendimento = () => {
   const [carregandoLista, setCarregandoLista] = useState(true);
   const [activeTab,       setActiveTab]       = useState<SubModulo>(() => tabFromPath(location.pathname));
   const [showHistoricoM,  setShowHistoricoM]  = useState(false);
-  const [evolucaoAtiva,   setEvolucaoAtiva]   = useState<EvolucaoAtiva | null>(null);
+  // TODAS as evoluções EM ANDAMENTO do paciente — o mesmo animal pode ter mais de uma
+  // (consultas distintas no mesmo dia), e o banner as lista para o usuário ESCOLHER
+  // qual está conduzindo agora. É a escolha que decide a que atendimento prescrição,
+  // exame, encaminhamento e vacina lançados nas abas se vinculam.
+  const [evolucoesAbertas,      setEvolucoesAbertas]      = useState<EvolucaoAtiva[]>([]);
+  const [evolucaoSelecionadaId, setEvolucaoSelecionadaId] = useState<number | null>(null);
   const [historicoKey,    setHistoricoKey]    = useState(0);
   const [openItemId,        setOpenItemId]        = useState<number | null>(null);
+  // Abre uma evolução específica vinda de FORA do shell (hoje: o número do atendimento
+  // clicável na fatura — Financeiro > Faturamento). `openItemId` é ESTADO, e quem chega
+  // por link não tem como setá-lo: o item viaja na URL, mesma razão do `?item=` da
+  // Vacina. Parâmetro PRÓPRIO (`?evolucao=`) para não colidir com o `?item=` da tela
+  // apartada de Vacina, que é outro registro em outra tela.
+  useEffect(() => {
+    const alvo = new URLSearchParams(location.search).get('evolucao');
+    if (alvo) setOpenItemId(Number(alvo));
+  }, [location.search]);
   const [editEvolucaoId,    setEditEvolucaoId]    = useState<number | null>(null);
   const [editPrescricaoId,  setEditPrescricaoId]  = useState<number | null>(null);
   // Itens do atendimento pendentes de abrir em VISUALIZAÇÃO (somente leitura)
@@ -556,6 +587,63 @@ const Atendimento = () => {
   const [finalizandoAt,      setFinalizandoAt]      = useState(false);
   // Remonta a aba Evolução após finalizar pelo banner (recarrega a lista e limpa o form)
   const [evolucaoTabKey,     setEvolucaoTabKey]     = useState(0);
+
+  // A evolução ATIVA é DERIVADA, nunca um estado à parte: guardar as duas coisas
+  // (lista + ativa) deixaria a ativa apontando para uma evolução que já foi
+  // finalizada/cancelada por outra aba. Regra em `utils/evolucaoAtiva.ts`.
+  const evolucaoAtiva = useMemo(
+    () => escolherEvolucaoAtiva(evolucoesAbertas, {
+      selecionadaId: evolucaoSelecionadaId,
+      agendamentoId: agendamentoIdFromUrl ?? null,
+      meuUserId:     user?.id ?? null,
+    }),
+    [evolucoesAbertas, evolucaoSelecionadaId, agendamentoIdFromUrl, user?.id],
+  );
+
+  // Atendimento escolhido que FECHOU (finalizado/cancelado, aqui ou por outro
+  // profissional): a escolha morre com ele e a decisão volta ao automático.
+  // `escolherEvolucaoAtiva` já ignora o id órfão — isto só evita que ele fique
+  // guardado no localStorage. Guardado por `length > 0` para não apagar a escolha
+  // enquanto a lista ainda está sendo carregada (ela nasce vazia).
+  useEffect(() => {
+    if (evolucaoSelecionadaId == null || evolucoesAbertas.length === 0) return;
+    if (evolucoesAbertas.some(e => e.id === evolucaoSelecionadaId)) return;
+    setEvolucaoSelecionadaId(null);
+    salvarEvolucaoSelecionada(effectiveAnimalId, null);
+  }, [evolucoesAbertas, evolucaoSelecionadaId, effectiveAnimalId]);
+
+  // Escolha explícita no banner. Persistida por paciente porque o shell é DESMONTADO
+  // ao navegar para as telas apartadas (Vacina, Execução de Prescrição) — voltar de lá
+  // sem isso reabriria em outro atendimento.
+  const selecionarEvolucao = useCallback((id: number) => {
+    setEvolucaoSelecionadaId(id);
+    salvarEvolucaoSelecionada(effectiveAnimalId, id);
+    // Limpa o que estava aberto em visualização do atendimento ANTERIOR: prescrição e
+    // exame carregados ali não pertencem ao atendimento recém-escolhido.
+    setViewPrescricaoId(null);
+    setViewExameId(null);
+  }, [effectiveAnimalId]);
+
+  // A aba Evolução sabe antes do shell quando uma evolução nasce, é assumida,
+  // finalizada ou cancelada — por isso ela reporta a LISTA inteira a cada recarga
+  // (fonte da verdade) e, à parte, a evolução recém-CRIADA.
+  // ⚠️ As duas precisam ser estáveis (`useCallback` sem dependência instável): elas
+  // entram nas dependências do `carregarEvolucoes` do submódulo, e identidade nova a
+  // cada render fecha um laço de requisições (o 429 documentado no CLAUDE.md).
+  const handleEvolucoesAbertasChange = useCallback((abertas: EvolucaoAtiva[]) => {
+    setEvolucoesAbertas(abertas);
+  }, []);
+
+  // Quem acabou de abrir o atendimento está conduzindo ELE: a evolução nova entra
+  // selecionada, senão a prescrição lançada em seguida se vincularia à consulta
+  // anterior que continua aberta em paralelo.
+  const handleEvolucaoCriada = useCallback((ev: EvolucaoAtiva) => {
+    setEvolucoesAbertas(prev => prev.some(e => e.id === ev.id)
+      ? prev.map(e => (e.id === ev.id ? { ...e, ...ev } : e))
+      : [ev, ...prev]);
+    setEvolucaoSelecionadaId(ev.id);
+    salvarEvolucaoSelecionada(effectiveAnimalId, ev.id);
+  }, [effectiveAnimalId]);
 
   const refreshHistorico = () => setHistoricoKey(k => k + 1);
 
@@ -585,7 +673,13 @@ const Atendimento = () => {
         status:        'FINALIZADA',
       });
       toast.success('Atendimento finalizado!');
-      setEvolucaoAtiva(null);
+      // Só o atendimento finalizado sai da lista — os outros em paralelo continuam
+      // abertos, e a escolha cai no automático quando era ELE o selecionado.
+      setEvolucoesAbertas(prev => prev.filter(e => e.id !== evolucaoId));
+      if (evolucaoSelecionadaId === evolucaoId) {
+        setEvolucaoSelecionadaId(null);
+        salvarEvolucaoSelecionada(effectiveAnimalId, null);
+      }
       refreshHistorico();
       setEvolucaoTabKey(k => k + 1);
 
@@ -686,55 +780,46 @@ const Atendimento = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveAnimalId, animalIdParam, location.pathname, refreshSelectedAnimal]);
 
-  const carregarEvolucaoAtiva = useCallback(async () => {
-    if (!effectiveAnimalId) return;
+  // Carrega TODAS as evoluções em andamento do paciente. Quem escolhe entre elas é o
+  // usuário (banner) ou, na falta de escolha, `escolherEvolucaoAtiva` — este loader
+  // não decide nada, só traz a lista. limit=20: atendimento em paralelo é a exceção,
+  // não a regra; passar disso é caso a investigar, não a paginar aqui.
+  const carregarEvolucoesAbertas = useCallback(async () => {
+    if (!effectiveAnimalId) { setEvolucoesAbertas([]); return; }
     try {
-      // limit=20 (era 1): com atendimento em PARALELO o animal pode ter mais de uma
-      // evolução aberta, e pegar "a primeira" fazia o shell adotar a de OUTRO
-      // profissional — vinculando a ela a prescrição/vacina/exame lançados aqui e
-      // oferecendo o Finalizar de um atendimento alheio. A MINHA vence, mesma regra
-      // de `carregarEvolucoes` em SubModuloEvolucao.
       const res = await api.get(`/clinica/evolucoes/animal/${effectiveAnimalId}?status=EM_ANDAMENTO&limit=20&page=1`);
       type EvDados = {
         id: number; veterinarioId?: number | null; agendamentoId?: number | null;
         numero?: number | null; tipoAtendimento?: string | null; atendimentoNumero?: string | null;
+        dataInicio?: string | null; titulo?: string | null; especialidade?: string | null;
       };
       const dados: EvDados[] = res.data?.dados ?? [];
-      if (dados.length > 0) {
-        const minhas = dados.filter(e => e.veterinarioId === (user?.id ?? 0));
-        // Mais de uma MINHA aberta ao mesmo tempo (consultas distintas do mesmo
-        // animal — ex.: Clínica e Dermatologia no mesmo dia): o agendamento que veio
-        // na URL (o mesmo que o "Iniciar" da agenda propaga) desempata, dizendo qual
-        // das duas é a de agora. Sem esse contexto, cai na mais recente.
-        const ev = (agendamentoIdFromUrl != null
-          ? minhas.find(e => e.agendamentoId === agendamentoIdFromUrl)
-          : undefined) ?? minhas[0] ?? dados[0];
-        setEvolucaoAtiva({
-          id:               ev.id,
-          numero:           ev.numero ?? null,
-          tipoAtendimento:  ev.tipoAtendimento ?? null,
-          atendimentoNumero: ev.atendimentoNumero ?? null,
-          veterinarioId:    ev.veterinarioId ?? null,
-        });
-      } else {
-        setEvolucaoAtiva(null);
-      }
+      setEvolucoesAbertas(dados.map(ev => ({
+        id:               ev.id,
+        numero:           ev.numero ?? null,
+        tipoAtendimento:  ev.tipoAtendimento ?? null,
+        atendimentoNumero: ev.atendimentoNumero ?? null,
+        veterinarioId:    ev.veterinarioId ?? null,
+        agendamentoId:    ev.agendamentoId ?? null,
+        dataInicio:       ev.dataInicio ?? null,
+        titulo:           ev.titulo ?? null,
+        especialidade:    ev.especialidade ?? null,
+      })));
     } catch { /* silencioso */ }
-  }, [effectiveAnimalId, agendamentoIdFromUrl, user?.id]);
+  }, [effectiveAnimalId]);
 
   useEffect(() => {
-    setEvolucaoAtiva(null);
+    setEvolucoesAbertas([]);
+    setEvolucaoSelecionadaId(lerEvolucaoSelecionada(effectiveAnimalId));
     setViewPrescricaoId(null);
     setViewExameId(null);
     carregarAnimal();
   }, [effectiveAnimalId]);
 
-  // Separado do reset acima de propósito: precisa recarregar quando o AGENDAMENTO da
-  // URL muda (ex.: "Iniciar" de uma segunda consulta do mesmo animal), não só quando o
-  // ANIMAL muda — é o agendamento que desempata qual das minhas evoluções abertas é a
-  // ativa agora (ver `carregarEvolucaoAtiva`). Rodar o reset acima a cada troca de
-  // agendamento limparia estado (viewPrescricaoId/viewExameId) sem necessidade.
-  useEffect(() => { carregarEvolucaoAtiva(); }, [carregarEvolucaoAtiva]);
+  // Separado do reset acima de propósito: recarrega também quando o AGENDAMENTO da URL
+  // muda (ex.: "Iniciar" de uma segunda consulta do mesmo animal), e rodar o reset a
+  // cada troca de agendamento limparia estado (viewPrescricaoId/viewExameId) à toa.
+  useEffect(() => { carregarEvolucoesAbertas(); }, [carregarEvolucoesAbertas, agendamentoIdFromUrl]);
 
   // Lista de pacientes (alimenta o SeletorAnimal). ESPERA o contexto ativo resolver —
   // senão no login a busca ia sem os headers x-empresa-id/x-equipe-id e voltava vazia,
@@ -840,8 +925,17 @@ const Atendimento = () => {
             animal={animal}
             faturaId={null}
             onFaturaAtualizada={() => {}}
-            onEvolucaoChange={setEvolucaoAtiva}
-            onSalvo={refreshHistorico}
+            onEvolucaoCriada={handleEvolucaoCriada}
+            onEvolucoesAbertasChange={handleEvolucoesAbertasChange}
+            // Troca do atendimento carregado: clicar no Nº de uma evolução EM ANDAMENTO
+            // no histórico. É este par que faz o banner acima e o vínculo de
+            // prescrição/exame/encaminhamento/vacina seguirem o clique.
+            evolucaoAtivaId={evolucaoAtiva?.id ?? null}
+            onSelecionarEvolucao={selecionarEvolucao}
+            // Assumir/finalizar/cancelar mexe em quem está aberto: relê a lista pela
+            // consulta PRÓPRIA do shell (sem os filtros da aba, que podem esconder
+            // um atendimento em paralelo do banner).
+            onSalvo={() => { refreshHistorico(); carregarEvolucoesAbertas(); }}
             openItemId={openItemId ?? undefined}
             onViewConsumed={() => setOpenItemId(null)}
             editItemId={editEvolucaoId}
@@ -931,11 +1025,19 @@ const Atendimento = () => {
 
       {animal && <AnimalCard animal={animal} />}
 
+      {/* UM banner só: o atendimento CARREGADO na tela. Havendo outros em andamento
+          (consultas distintas — ex.: Clínica e Dermatologia no mesmo dia), a troca é
+          pelo Nº no card "Histórico de Evolução Clínica", não por uma segunda faixa
+          aqui — duas faixas competindo pela mesma informação foi recusado a pedido. */}
       {evolucaoAtiva && (
         <div className="flex items-center gap-2 mt-3 px-4 py-2.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-sm text-emerald-800 font-medium">
           <CircleDot size={15} className="text-emerald-500 flex-shrink-0 animate-pulse" />
           <span className="flex-1 min-w-0">
-            Atendimento <span className="font-bold">{evolucaoAtiva.atendimentoNumero}</span> em andamento
+            Atendimento <span className="font-bold">{evolucaoAtiva.atendimentoNumero ?? '—'}</span>
+            {evolucaoAtiva.dataInicio && ` de ${formatDataHora(evolucaoAtiva.dataInicio)}`}
+            {(evolucaoAtiva.titulo?.trim() || evolucaoAtiva.especialidade) &&
+              ` - ${evolucaoAtiva.titulo?.trim() || evolucaoAtiva.especialidade}`}
+            {' - Em andamento'}
           </span>
           {podeFinalizarEvolucao && evolucaoAtivaEhMinha(evolucaoAtiva) && (
             <button onClick={() => setConfirmFinalizarAt(true)} disabled={finalizandoAt}

@@ -9,7 +9,7 @@ import {
   Check, X, ChevronLeft, ChevronRight, AlertTriangle,
   Share2, FileText, CheckCircle2, Loader2,
   User, Filter, Eye, Ban, Paperclip,
-  Image, Film, Volume2, Lock, MessageCircle, Mail, UserCheck,
+  Image, Film, Volume2, Lock, MessageCircle, Mail, UserCheck, CircleDot,
 } from 'lucide-react';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import { buscarRelatorioAtendimento, type RelatorioAtendimentoDados } from '../utils/RelatorioAtendimento';
@@ -89,6 +89,15 @@ interface EvolucaoAtiva {
   // de outro profissional, e finalizar o atendimento alheio não é opção de ninguém
   // que não seja o gestor (premissa de autoria — CLAUDE.md 28-c).
   veterinarioId:    number | null;
+  // Distingue duas evoluções abertas do MESMO paciente e do MESMO profissional
+  // (consultas diferentes no mesmo dia) — ver CLAUDE.md, sessão 2026-08-18 parte 3.
+  agendamentoId?:   number | null;
+  // Rótulo do banner do shell ("Atendimento AG-0013 de 25/08/2026 17:11 - Consulta
+  // clínica geral - Em andamento"). `titulo` só existe depois que a IA o gera na
+  // finalização, então enquanto o atendimento corre o rótulo é a especialidade.
+  dataInicio?:      string | null;
+  titulo?:          string | null;
+  especialidade?:   string | null;
 }
 
 /**
@@ -982,6 +991,46 @@ function NovaEvolucaoModal({
   );
 }
 
+/**
+ * Nº do atendimento na lista do histórico (AG-0013 / EV-0007).
+ *
+ * Para evolução EM ANDAMENTO ele é o BOTÃO que carrega aquele atendimento na tela:
+ * o banner do shell passa a descrevê-lo e prescrição, exame, encaminhamento e vacina
+ * lançados nas abas passam a se vincular a ele. É a única forma de escolher entre
+ * dois atendimentos abertos do mesmo paciente (consultas distintas no mesmo dia).
+ *
+ * ⚠️ UM componente para mobile e desktop de propósito: duas cópias do mesmo rótulo
+ * divergem na primeira correção (a lição do `SubModuloMinhaAgenda`, armadilha 28-g).
+ * ⚠️ Fora do estado EM ANDAMENTO continua sendo TEXTO — atendimento fechado não é
+ * "o de agora", e um botão que não faz nada é pior que nenhum botão (armadilha 28-d).
+ */
+function NumeroAtendimento({ numero, emAndamento, ativo, onSelecionar, className = '' }: {
+  numero:       string | null | undefined;
+  emAndamento:  boolean;
+  ativo:        boolean;
+  onSelecionar?: () => void;
+  className?:   string;
+}) {
+  const rotulo = numero ?? '—';
+  if (!emAndamento || !onSelecionar) {
+    return <span className={`font-mono font-bold text-emerald-700 ${className}`}>{rotulo}</span>;
+  }
+  return (
+    <button
+      type="button"
+      onClick={e => { e.stopPropagation(); onSelecionar(); }}
+      aria-pressed={ativo}
+      title={ativo ? 'Atendimento carregado na tela' : 'Carregar este atendimento na tela'}
+      className={`inline-flex items-center gap-1 font-mono font-bold rounded-lg px-1.5 py-0.5 -mx-1.5 transition-colors ${
+        ativo ? 'text-emerald-800 bg-emerald-100 ring-1 ring-emerald-300'
+              : 'text-emerald-700 hover:bg-emerald-50 hover:underline'} ${className}`}
+    >
+      {ativo && <CircleDot size={11} className="text-emerald-600 animate-pulse flex-shrink-0" />}
+      {rotulo}
+    </button>
+  );
+}
+
 // ─── SubModuloEvolucao ────────────────────────────────────────────────────────
 
 interface Props {
@@ -989,7 +1038,21 @@ interface Props {
   animal:             AnimalInfo | null;
   faturaId:           number | null;
   onFaturaAtualizada: () => void;
-  onEvolucaoChange?:  (ev: EvolucaoAtiva | null) => void;
+  /** TODAS as evoluções EM ANDAMENTO do paciente, a cada recarga da lista. É a FONTE
+   *  DA VERDADE do banner do shell — quem escolhe entre elas é o usuário (clique) ou
+   *  `escolherEvolucaoAtiva`, nunca este submódulo. */
+  onEvolucoesAbertasChange?: (abertas: EvolucaoAtiva[]) => void;
+  /** Evolução recém-ABERTA aqui. Separada da lista de propósito: o shell a seleciona
+   *  na hora, sem esperar a recarga — quem acabou de abrir o atendimento é quem o
+   *  conduz, e é a ele que a prescrição lançada em seguida se vincula. */
+  onEvolucaoCriada?:  (ev: EvolucaoAtiva) => void;
+  /** Atendimento CARREGADO no shell (o do banner). Marca a linha correspondente no
+   *  histórico — sem isso, com dois em andamento não há como saber qual está ativo. */
+  evolucaoAtivaId?:   number | null;
+  /** Clique no Nº de uma evolução EM ANDAMENTO: carrega aquele atendimento no shell.
+   *  É o que faz prescrição, exame, encaminhamento e vacina passarem a se vincular a
+   *  ele. Ausente = a coluna Nº fica só como texto (nada a trocar). */
+  onSelecionarEvolucao?: (id: number) => void;
   onSalvo?:           () => void;
   openItemId?:        number;
   onViewConsumed?:    () => void;
@@ -1001,7 +1064,7 @@ interface Props {
   onAbrirAtendimento?: (evolucaoId: number, modo: 'visualizar' | 'editar') => void;
 }
 
-export default function SubModuloEvolucao({ animalId, animal, faturaId, onFaturaAtualizada, onEvolucaoChange, onSalvo, openItemId, onViewConsumed, editItemId, onEditConsumed, agendamentoId: agendamentoIdProp, onAbrirAtendimento }: Props) {
+export default function SubModuloEvolucao({ animalId, animal, faturaId, onFaturaAtualizada, onEvolucoesAbertasChange, onEvolucaoCriada, evolucaoAtivaId, onSelecionarEvolucao, onSalvo, openItemId, onViewConsumed, editItemId, onEditConsumed, agendamentoId: agendamentoIdProp, onAbrirAtendimento }: Props) {
   const { user } = useAuth();
   const { podeExecutar, isGestor, permissoes, loading: loadingPerms } = usePermissoes();
 
@@ -1114,33 +1177,47 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       // GET 403 → o interceptor resolve com data null (armadilha #23 do CLAUDE.md).
       // Sem este guard, `res.data.dados` estourava TypeError e caía no catch,
       // exibindo "Erro ao carregar evoluções" para um caso de permissão/contexto.
-      if (!res.data) { setEvolucoes([]); setTotal(0); onEvolucaoChange?.(null); return; }
+      // ⚠️ Esta lista é FILTRADA e PAGINADA pelos controles da tela — só serve como
+      // retrato das evoluções abertas quando nenhum filtro pode estar escondendo uma
+      // delas. Reportar um recorte ao shell APAGARIA do banner o atendimento em
+      // paralelo que o usuário está conduzindo (e desvincularia a prescrição
+      // seguinte). Filtrou algo? O shell segue com a lista da consulta própria dele.
+      const retratoConfiavel =
+        page === 1 &&
+        (!filterStatus || filterStatus === 'EM_ANDAMENTO') &&
+        !filtroDataInicio && !filtroDataFim && !filtroResponsavel;
+
+      if (!res.data) {
+        setEvolucoes([]); setTotal(0);
+        if (retratoConfiavel) onEvolucoesAbertasChange?.([]);
+        return;
+      }
       const dados: EvolucaoItem[] = res.data.dados ?? [];
       setEvolucoes(dados);
       setTotal(res.data.total ?? 0);
-      // Notify parent of current EM_ANDAMENTO evolução. Com atendimentos em
-      // PARALELO (mais de uma aberta), a MINHA vence: é a ela que prescrição,
-      // vacina e exames do shell devem se vincular — nunca à do outro profissional.
-      // Havendo mais de UMA minha aberta ao mesmo tempo (consultas distintas do
-      // mesmo animal — ex.: Clínica e Dermatologia no mesmo dia), o agendamento da
-      // URL/localStorage (`agendamentoIdProp`, o mesmo que o "Iniciar" da agenda
-      // propaga) desempata: é ele que diz qual das duas o usuário está conduzindo
-      // agora. Sem esse contexto, cai na mais recente.
-      const abertas      = dados.filter(e => e.status === 'EM_ANDAMENTO');
-      const minhasAbertas = abertas.filter(e => e.veterinarioId === (user?.id ?? 0));
-      const aberta = (agendamentoIdProp != null
-        ? minhasAbertas.find(e => e.agendamentoId === agendamentoIdProp)
-        : undefined) ?? minhasAbertas[0] ?? abertas[0] ?? null;
-      onEvolucaoChange?.(aberta ? {
-        id:               aberta.id,
-        numero:           aberta.numero ?? null,
-        tipoAtendimento:  aberta.tipoAtendimento ?? null,
-        atendimentoNumero: aberta.atendimentoNumero ?? null,
-        veterinarioId:    aberta.veterinarioId ?? null,
-      } : null);
+      // Reporta TODAS as evoluções em andamento — nunca "a escolhida". O mesmo
+      // paciente pode ter várias abertas (consultas distintas no mesmo dia, ex.:
+      // Clínica e Dermatologia); escolher entre elas é do USUÁRIO (banner do shell),
+      // e `escolherEvolucaoAtiva` só decide quando ele não escolheu.
+      // ⚠️ Este submódulo NÃO decide mais qual é a ativa: um segundo lugar decidindo
+      // fazia as telas discordarem sobre qual atendimento estava em curso.
+      if (retratoConfiavel) {
+        const abertas = dados.filter(e => e.status === 'EM_ANDAMENTO');
+        onEvolucoesAbertasChange?.(abertas.map(e => ({
+          id:               e.id,
+          numero:           e.numero ?? null,
+          tipoAtendimento:  e.tipoAtendimento ?? null,
+          atendimentoNumero: e.atendimentoNumero ?? null,
+          veterinarioId:    e.veterinarioId ?? null,
+          agendamentoId:    e.agendamentoId ?? null,
+          dataInicio:       e.dataInicio ?? null,
+          titulo:           e.titulo ?? null,
+          especialidade:    e.especialidade ?? null,
+        })));
+      }
     } catch { setErroInline('Erro ao carregar evoluções'); }
     finally { setLoading(false); }
-  }, [animalId, page, limit, filterStatus, filtroDataInicio, filtroDataFim, filtroResponsavel, onEvolucaoChange, user?.id, agendamentoIdProp]);
+  }, [animalId, page, limit, filterStatus, filtroDataInicio, filtroDataFim, filtroResponsavel, onEvolucoesAbertasChange]);
 
   useEffect(() => { if (!loadingPerms) carregarEvolucoes(); }, [carregarEvolucoes, loadingPerms]);
 
@@ -1499,7 +1576,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         });
         evolucaoId = res.data.dados?.id as number;
         const criada = res.data.dados;
-        onEvolucaoChange?.({
+        onEvolucaoCriada?.({
           id:               criada.id,
           numero:           criada.numero ?? null,
           tipoAtendimento:  criada.tipoAtendimento ?? null,
@@ -1507,6 +1584,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           // Acabou de criar: é dela mesma. Cai no `user?.id` quando o POST não
           // devolve o campo, senão o shell esconderia o Finalizar de quem prescreveu.
           veterinarioId:    criada.veterinarioId ?? user?.id ?? null,
+          agendamentoId:    criada.agendamentoId ?? agendamentoSelecionadoId ?? null,
+          dataInicio:       criada.dataInicio ?? new Date().toISOString(),
+          titulo:           criada.titulo ?? null,
+          especialidade:    criada.especialidade ?? form.especialidade,
         });
         localStorage.removeItem(`s2vet_ag_${animalId}`);
         localStorage.removeItem(rascunhoKey);
@@ -1541,18 +1622,19 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     let evolucaoId: number | undefined = editingEv?.id;
 
     try {
-      // O backend já gera o título via IA e grava na mesma escrita (quando ainda não
-      // existe um) e devolve `acoesIA` (sugestões de encaminhamento) na resposta —
-      // uma chamada só à IA, sem PATCH nem /interpretar separados depois.
-      let acoesIA: AcaoLLM[] = [];
+      // FINALIZAR NÃO ESPERA MAIS A IA. O backend gravava o título e devolvia `acoesIA`
+      // na mesma escrita, e com isso o botão "Finalizar" ficava girando o tempo INTEIRO
+      // da chamada ao Gemini — de <1s a mais de um minuto — com o atendimento já
+      // gravado no banco. Agora a escrita volta na hora e a IA roda depois, por
+      // `POST /:id/titulo-ia` (bloco após o fechamento do modal): uma só chamada, que
+      // grava o título e devolve as sugestões de encaminhamento.
       if (editingEv) {
-        const putRes = await api.put(`/clinica/evolucoes/${editingEv.id}`, {
+        await api.put(`/clinica/evolucoes/${editingEv.id}`, {
           especialidade: form.especialidade,
           texto:         form.texto,
           status:        'FINALIZADA',
         });
         evolucaoId = editingEv.id;
-        acoesIA = putRes.data?.acoesIA ?? [];
       } else {
         const createRes = await api.post('/clinica/evolucoes', {
           animalId,
@@ -1563,10 +1645,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           confirmarConcorrente: criandoConcorrente,
         });
         evolucaoId = createRes.data.dados?.id as number | undefined;
-        acoesIA = createRes.data?.acoesIA ?? [];
         localStorage.removeItem(`s2vet_ag_${animalId}`);
         localStorage.removeItem(rascunhoKey);
-        onEvolucaoChange?.(null);
+        // Nasceu já FINALIZADA: não há atendimento aberto a reportar. Quem atualiza o
+        // banner é o `carregarEvolucoes()` logo abaixo.
       }
 
       if (arquivosModal.length > 0 && evolucaoId) await uploadMidias(evolucaoId, arquivosModal);
@@ -1576,10 +1658,24 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       carregarEvolucoes();
       onSalvo?.(); // atualiza o Histórico do Paciente no shell
 
-      const encaminhamentos = acoesIA.filter(a => a.tipo === 'ENCAMINHAMENTO');
-      if (encaminhamentos.length > 0) {
-        setAcoesLLM(encaminhamentos.map(a => ({ ...a, selecionada: true })));
-        setShowLLM(true);
+      // Título + sugestões de encaminhamento, DEPOIS de a tela já estar livre: o modal
+      // fechou, o toast saiu e a lista recarregou — a IA não segura mais nada.
+      // ⚠️ Sem `await` de propósito, e FORA do try/catch do salvamento: falha aqui
+      // não pode virar "Erro ao finalizar evolução", porque a evolução FOI finalizada.
+      // ⚠️ O segundo `carregarEvolucoes()` é o que faz o título recém-gerado aparecer
+      // na lista — na primeira recarga ele ainda não existia.
+      if (evolucaoId) {
+        api.post(`/clinica/evolucoes/${evolucaoId}/titulo-ia`)
+          .then(res => {
+            const acoesIA: AcaoLLM[] = res.data?.dados?.acoes ?? [];
+            if (res.data?.dados?.titulo) carregarEvolucoes();
+            const encaminhamentos = acoesIA.filter(a => a.tipo === 'ENCAMINHAMENTO');
+            if (encaminhamentos.length > 0) {
+              setAcoesLLM(encaminhamentos.map(a => ({ ...a, selecionada: true })));
+              setShowLLM(true);
+            }
+          })
+          .catch(() => { /* silencioso — título e sugestão são conveniência */ });
       }
     } catch (err: unknown) {
       if (tratarConflitoEvolucaoAberta(err)) return;
@@ -1597,12 +1693,12 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     // Cancelar usa o mesmo slug de EXCLUIR (é o que a rota /cancelar exige).
     if (!podeDeletar) { semPermissao('cancelar evolução'); return; }
     setSavingCancelamento(true);
-    const eraAtiva = cancelandoEv.status === 'EM_ANDAMENTO';
     try {
       await api.patch(`/clinica/evolucoes/${cancelandoEv.id}/cancelar`, { justificativa });
       setCancelandoEv(null);
       toast.success('Evolução cancelada');
-      if (eraAtiva) onEvolucaoChange?.(null);
+      // O banner do shell se corrige pela recarga: a cancelada sai da lista de
+      // abertas e, se era a selecionada, a escolha volta ao automático.
       carregarEvolucoes();
       onSalvo?.(); // atualiza o Histórico do Paciente no shell
     } catch (err: unknown) {
@@ -1875,11 +1971,15 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                     </span>
                   </div>
 
-                  {ev.atendimentoNumero && (
-                    <span className="inline-block font-mono font-bold text-emerald-700 text-[11px] mb-0.5">
-                      {ev.atendimentoNumero}
-                    </span>
-                  )}
+                  <div className="mb-0.5">
+                    <NumeroAtendimento
+                      numero={ev.atendimentoNumero}
+                      emAndamento={emAndamento}
+                      ativo={ev.id === evolucaoAtivaId}
+                      onSelecionar={onSelecionarEvolucao ? () => onSelecionarEvolucao(ev.id) : undefined}
+                      className="text-[11px]"
+                    />
+                  </div>
 
                   <p className="text-xs text-gray-500">
                     {ev.veterinario?.fullName ?? '—'}
@@ -2001,9 +2101,13 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                     className={`hover:bg-gray-50 transition-colors cursor-pointer ${!ev.aprovado ? 'bg-amber-50/40' : ''}`}>
 
                     <td className="px-4 py-3 whitespace-nowrap">
-                      <span className="font-mono font-bold text-emerald-700 text-sm">
-                        {ev.atendimentoNumero ?? '—'}
-                      </span>
+                      <NumeroAtendimento
+                        numero={ev.atendimentoNumero}
+                        emAndamento={emAndamento}
+                        ativo={ev.id === evolucaoAtivaId}
+                        onSelecionar={onSelecionarEvolucao ? () => onSelecionarEvolucao(ev.id) : undefined}
+                        className="text-sm"
+                      />
                     </td>
                     <td className="px-4 py-3 text-gray-700 whitespace-nowrap">
                       <div>{formatarDataHora(ev.dataInicio)}</div>

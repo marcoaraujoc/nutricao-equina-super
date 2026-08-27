@@ -1254,30 +1254,45 @@ const removerItem = async (req, res) => {
       return res.status(403).json({ error: 'Seu nível de permissão só permite cancelar prescrições criadas por você.' });
     }
 
-    // Regra: prescrição que já teve QUALQUER execução não pode ser excluída.
-    const execucoesNoGrupoRem = await prisma.prescricao.count({
-      where: { grupoId: item.grupoId, executadoEm: { not: null } },
-    });
-    if (execucoesNoGrupoRem > 0 || item.grupo?.status === 'EXECUTADO') {
-      return res.status(400).json({ error: 'Prescrição já executada não pode ser excluída.', code: 'EXECUTADO' });
+    // Grupo TOTALMENTE executado não tem dose futura a cancelar.
+    if (item.grupo?.status === 'EXECUTADO') {
+      return res.status(400).json({ error: 'Prescrição já totalmente executada não pode ser cancelada.', code: 'EXECUTADO' });
     }
 
+    // Cancelamento POR ITEM: cancela as doses que ainda FALTAM deste item e PRESERVA o
+    // que já foi aplicado DELE (fatura + estoque) — os DEMAIS itens da prescrição
+    // seguem normalmente. Antes, qualquer execução no grupo bloqueava a operação
+    // ("já executada não pode ser excluída"), travando justamente o item em execução.
+    // Como `executar` só carrega itens `ativo: true`, desativar o item aqui já impede
+    // que as doses restantes dele voltem a ser executadas.
+    const itemComExecucao  = item.executadoEm != null;
     const grupoJaFinalizado = item.grupo?.status !== 'SALVO';
 
     await prisma.$transaction(async (tx) => {
+      // Item PARCIALMENTE executado fica VISÍVEL marcado como cancelado (ativo=true,
+      // status CANCELADA) — igual ao cancelar de fora —, preservando fatura/estoque das
+      // doses já dadas. Item nunca executado some (ativo=false); em grupo SALVO (edição)
+      // segue só desativando, sem status.
       await tx.prescricao.update({
         where: { id: itemId },
-        data:  { ativo: false, ...(grupoJaFinalizado ? { status: 'CANCELADA' } : {}) },
+        data:  itemComExecucao
+          ? { status: 'CANCELADA' }
+          : { ativo: false, ...(grupoJaFinalizado ? { status: 'CANCELADA' } : {}) },
       });
 
       let statusGrupo;
       if (grupoJaFinalizado) {
-        // Item nunca foi executado (bloqueado acima), então nunca teve FaturaItem —
-        // chamada apenas por paridade/segurança com os demais controllers.
-        await removerFaturaItensDaOrigem(tx, 'prescricaoId', itemId);
+        // Item nunca executado → remove o placeholder de fatura (nunca foi aplicado).
+        // Item PARCIALMENTE executado → PRESERVA os FaturaItems das doses já dadas
+        // (têm baixa de estoque e não podem ficar órfãos).
+        if (!itemComExecucao) {
+          await removerFaturaItensDaOrigem(tx, 'prescricaoId', itemId);
+        }
 
+        // "Ainda a aplicar" = itens ativos NÃO cancelados (fora este). Um item
+        // parcial-cancelado que fica ativo=true NÃO conta como restante.
         const restantes = await tx.prescricao.count({
-          where: { grupoId: item.grupoId, ativo: true, id: { not: itemId } },
+          where: { grupoId: item.grupoId, ativo: true, status: { not: 'CANCELADA' }, id: { not: itemId } },
         });
         if (restantes === 0) {
           await liberarReservas(tx, item.grupoId);
@@ -1289,7 +1304,7 @@ const removerItem = async (req, res) => {
           // sem isso, a reserva do item removido ficaria órfã, bloqueando o
           // estoque para outras prescrições.
           const itensRestantes = await anexarAplicadaProprietario(prisma, await tx.prescricao.findMany({
-            where: { grupoId: item.grupoId, ativo: true, id: { not: itemId } },
+            where: { grupoId: item.grupoId, ativo: true, status: { not: 'CANCELADA' }, id: { not: itemId } },
           }));
           const empresaIdEfetivo = item.grupo?.empresaId ?? null;
           if (item.medicamentoCatId && !itensRestantes.some(i => i.medicamentoCatId === item.medicamentoCatId)) {
@@ -1308,10 +1323,17 @@ const removerItem = async (req, res) => {
         }
       }
 
-      // Responsável passa a ser quem removeu (+ transição de status quando aplicável)
+      // Responsável passa a ser quem removeu (+ transição de status quando aplicável).
+      // Se este era o ÚLTIMO item (grupo inteiro CANCELADO), grava o motivo no grupo —
+      // igual ao cancelar de fora (`cancelarNaExecucao`), para o Histórico exibir a
+      // justificativa. No parcial o motivo do item fica só no AuditLog (o grupo segue vivo).
       await tx.prescricaoGrupo.update({
         where: { id: item.grupoId },
-        data:  { veterinarioId: req.user.id, ...(statusGrupo ? { status: statusGrupo } : {}) },
+        data:  {
+          veterinarioId: req.user.id,
+          ...(statusGrupo ? { status: statusGrupo } : {}),
+          ...(statusGrupo === 'CANCELADO' ? { motivoCancelamento: motivo } : {}),
+        },
       });
 
       await registrarAuditoria(tx, req, {
@@ -1814,6 +1836,9 @@ const executar = async (req, res) => {
     // plantão já não o mostra, e o filtro aqui fecha a porta de um POST com itemIds
     // (execução item a item) que o alcançasse mesmo assim.
     const itensHoje = grupo.itens.filter(item => {
+      // Item cancelado por item (fica visível ativo=true CANCELADA) nunca é executado —
+      // fecha a porta de um POST com itemIds que o alcançasse.
+      if (item.status === 'CANCELADA') return false;
       if (item.aplicadaPeloProprietario) return false;
       if (itemIdsFiltro && !itemIdsFiltro.includes(item.id)) return false;
       if (elegivelParaFluxoNovo(item)) {

@@ -53,6 +53,20 @@ const TENANT_PLANE = [
   // ✅ 2026-08-25 — catálogo de tipo de serviço (Fornecedor/Prestador). TENANT DIRETO,
   // padrão fail-closed — migration 20260825000000_fornecedor_prestador_ativacao_catalogo.
   'tb_catalogo_tipo_servico',
+  // ✅ 2026-08-25 — auditoria de PERMISSÕES. Migrou de SEM_RLS (era control plane) para
+  // cá: guarda PII de tenant (equipe, nome/e-mail do alvo, IP). TENANT VIA PAI
+  // (tb_equipes/equipeId), padrão fail-closed corrigido — migration
+  // 20260917000000_rls_auditoria_permissoes. Defesa em profundidade: a leitura
+  // (getAuditoriaPermissoes) já era escopada por equipeId e autorizada por rota.
+  'tb_auditoria_permissoes',
+  // ✅ 2026-08-26 — Central de Documentos (migration 20260918000000_central_documentos).
+  // `tb_documento_templates` é CATÁLOGO MISTO: `empresa_id` NULO = os 12 modelos
+  // globais da Res. CFMV 1.321/2020, que toda clínica LÊ e nenhuma ESCREVE — a
+  // policy tem `USING` global+próprio e `WITH CHECK` só o próprio (mesma assimetria
+  // de `tb_medicamentos`), e é ela que sustenta o copy-on-write do módulo.
+  // `tb_documentos_emitidos` é TENANT DIRETO — o documento entregue ao cliente.
+  'tb_documento_templates',
+  'tb_documentos_emitidos',
   // ✅ 2026-09-06 RESOLVIDA — as migrations de 2026-08-19/21/22 tinham nascido no
   // padrão ANTIGO da fase 6 (`app_empresa_id() IS NULL OR …`, fail-OPEN: sem
   // contexto de tenant, `tb_prestadores` devolvia 1 linha e `tb_animal_historico`
@@ -130,7 +144,7 @@ const AGUARDANDO_RLS = [
 const SEM_RLS = [
   // CONTROL PLANE — o cadastro do SaaS não é de nenhum tenant, e o login precisa ler
   // parte disto ANTES de existir tenant (§7.2 do plano)
-  '_prisma_migrations', 'tb_auditoria_permissoes', 'tb_configuracao_seguranca',
+  '_prisma_migrations', 'tb_configuracao_seguranca',
   'tb_cron_agenda', 'tb_cron_alerta_config', 'tb_cron_execucoes', 'tb_empresas',
   'tb_mfa_desafios', 'tb_modulos_sistema', 'tb_password_history',
   'users',

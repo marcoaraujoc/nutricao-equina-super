@@ -285,6 +285,10 @@ async function blocoFaturasCorrigidas(propWhere, periodo) {
       select: {
         id: true, mesReferencia: true, status: true, total: true,
         qtdCorrecoes: true, ultimaCorrecaoEm: true,
+        // `proprietarioId` é o que permite a linha do relatório abrir o Faturamento
+        // JÁ NO CLIENTE certo (/faturamento?proprietarioId=). Só o nome não serve:
+        // aquela tela seleciona por id, e homônimos cairiam no cliente errado.
+        proprietarioId: true,
         proprietario: { select: { fullName: true } },
       },
     }),
@@ -293,6 +297,7 @@ async function blocoFaturasCorrigidas(propWhere, periodo) {
     total,
     faturas: faturas.map(f => ({
       id:               f.id,
+      proprietarioId:   f.proprietarioId ?? null,
       proprietario:     f.proprietario?.fullName ?? '—',
       mesReferencia:    f.mesReferencia,
       status:           f.status,

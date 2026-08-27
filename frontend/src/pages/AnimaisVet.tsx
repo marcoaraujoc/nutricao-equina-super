@@ -1,11 +1,11 @@
 // src/pages/AnimaisVet.tsx
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
-import { Pencil, Search, ShieldOff, ClipboardList, Zap, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Pencil, Search, ShieldOff, ClipboardList, Zap, ToggleLeft, ToggleRight, MapPin, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -178,6 +178,10 @@ function AnimalCardMobile({
 
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
+/** Mesmo rótulo que o relatório gerencial usa para o animal sem localização — o
+ *  `?local=` compara por igualdade exata contra ele. */
+const SEM_LOCALIZACAO = 'Sem localização';
+
 const AnimaisVet = () => {
   const { user }                                     = useAuth();
   const isVet                                        = (user?.userType ?? '').toUpperCase() === 'VETERINARIO';
@@ -195,6 +199,12 @@ const AnimaisVet = () => {
 
   const [animais,        setAnimais]        = useState<Animal[]>([]);
   const [busca,          setBusca]          = useState('');
+  // `?local=` recorta a lista por LOCALIZAÇÃO — é assim que "Animais por localização"
+  // (Relatório de Gestão) chega aqui já mostrando só o local clicado.
+  // ⚠️ É ESTADO, não leitura direta da URL: sem isso o "✕" do chip não teria como
+  // limpar o filtro e a pessoa ficaria presa nele até recarregar a página.
+  const [searchParams] = useSearchParams();
+  const [filtroLocal,    setFiltroLocal]    = useState(searchParams.get('local') ?? '');
   const [filtroCampo,    setFiltroCampo]    = useState<FiltroCampo>('animal');
   const [loading,        setLoading]        = useState(true);
   // Abas Todos/Ativos/Inativos (Animal.ativo) — só o gestor/admin enxerga; para
@@ -260,7 +270,15 @@ const AnimaisVet = () => {
 
   useEffect(() => { if (user?.id && !loadingPerms) loadAnimais(); }, [user?.id, loadingPerms, isGestor, filtroAtivo]);
 
+  /** Mesma regra do `nomeLocalizacao` do relatório gerencial — as duas telas
+   *  precisam concordar sobre o nome do local, senão o link não acha nada. */
+  const localDoAnimal = (a: Animal) => a.localizacao?.nome ?? a.local ?? SEM_LOCALIZACAO;
+
   const animaisFiltrados = animais.filter(a => {
+    // Casa com o nome que o relatório agrupa: catálogo → texto legado → "Sem
+    // localização". Comparação EXATA (e não `includes`), senão "Haras H." traria
+    // junto o "Haras H. P." e a contagem da tela nunca bateria com a do relatório.
+    if (filtroLocal && localDoAnimal(a) !== filtroLocal) return false;
     const termo = busca.toLowerCase().trim();
     if (!termo) return true;
     return filtroCampo === 'animal'
@@ -366,6 +384,22 @@ const AnimaisVet = () => {
         )}
 
         {/* ── Busca ──────────────────────────────────────────────────────── */}
+        {/* Chip do filtro por local — VISÍVEL de propósito: filtro que não aparece na
+            tela faz a lista parecer quebrada ("cadê meus pacientes?"), e sem o ✕ não
+            haveria como voltar à lista inteira sem editar a URL. */}
+        {filtroLocal && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold">
+              <MapPin size={12} /> {filtroLocal}
+              <button type="button" onClick={() => setFiltroLocal('')}
+                title="Remover filtro de local" aria-label="Remover filtro de local"
+                className="ml-0.5 p-0.5 rounded-full hover:bg-emerald-100 transition-colors">
+                <X size={12} />
+              </button>
+            </span>
+            <span className="text-xs text-gray-400">{animaisFiltrados.length} paciente(s) neste local</span>
+          </div>
+        )}
         <div className="flex gap-2 flex-wrap">
           <select
             value={filtroCampo}

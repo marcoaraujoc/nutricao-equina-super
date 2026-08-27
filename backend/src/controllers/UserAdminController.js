@@ -12,6 +12,9 @@ const { normalizeEmail, findUserByEmail, whereEmailInsensitive } = require('../l
 const SELECT_SEGURO = {
   id: true, fullName: true, email: true, phone: true,
   role: true, userType: true, ativo: true, createdAt: true,
+  // Conta travada por senha errada (lib/bloqueioLogin.js). O ADMIN é o ÚNICO que pode
+  // destravar a conta de um gestor, então esta tela precisa mostrar o estado.
+  bloqueadoEm: true, tentativasLogin: true,
   cep: true, endereco: true, complemento: true,
   bairro: true, cidade: true, estado: true,
 };

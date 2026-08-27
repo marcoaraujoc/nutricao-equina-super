@@ -2,9 +2,11 @@
 // Módulo Financeiro — Faturamento por proprietário, consolidando todos os animais
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
+import { useSearchParams } from 'react-router-dom';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import ModalJustificativa from '../components/ModalJustificativa';
@@ -18,6 +20,7 @@ import {
 import { imprimirFatura, exportarFaturaCSV, gerarHtmlFatura } from '../utils/FaturaExport';
 import { carregarComoDataUri } from '../utils/printUrl';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
+import { ordenarComInsumos } from '../utils/faturaInsumos';
 import InlineError from '../components/InlineError';
 import FotoAnimal from '../components/FotoAnimal';
 import ConfirmModal from '../components/ConfirmModal';
@@ -34,6 +37,17 @@ interface AnimalResumo {
   especie?: { nome: string }; raca?: { nome: string };
 }
 
+/** Atendimento que ORIGINOU a cobrança — resolvido pelo backend a partir da FK de
+ *  origem do item (prescrição/exame/vacina/encaminhamento → evolução). `null` em
+ *  item sem origem clínica: assistência mensal, lançamento manual, item "Outros"
+ *  do orçamento — nesses não há para onde ir e o número não vira link. */
+interface OrigemAtendimento {
+  evolucaoId: number;
+  animalId: number;
+  agendamentoId: number | null;
+  atendimentoNumero: string | null;
+}
+
 interface FaturaItem {
   id: number; faturaId: number; animalId?: number; tipo: string;
   descricao: string; valor: number; quantidade: number;
@@ -41,6 +55,16 @@ interface FaturaItem {
   criadoEm?: string;
   veterinario?: { id: number; fullName: string };
   animal?: AnimalResumo;
+  origem?: OrigemAtendimento | null;
+  /** Item de prescrição que originou a linha — dose, seringa e agulha da MESMA
+   *  aplicação compartilham este id. É por ele que os insumos são agrupados. */
+  prescricaoItemId?: number | null;
+  /** Preenchido só no INSUMO de aplicação (seringa/agulha da via injetável): repete
+   *  o `prescricaoItemId` do medicamento que o consumiu. `null` na dose e em
+   *  qualquer outra linha. Resolvido pelo backend — ver `comOrigemDoItem`. */
+  insumoDe?: number | null;
+  /** Nome do medicamento pai — só no insumo, para o tooltip da linha recuada. */
+  medicamentoPai?: string | null;
 }
 
 interface Fatura {
@@ -275,6 +299,21 @@ function montarTextoFaturaLote(nome: string, mesRef: string | undefined, faturaI
   ].filter(Boolean).join('\n');
 }
 
+// ─── Nº do atendimento na linha da fatura ─────────────────────────────────────
+// A descrição gravada no item já começa com o número do atendimento entre colchetes
+// ("[AG-0012] Amoxicilina — 10mL × 12/12h"): é ele que o financeiro usa para saber de
+// onde veio a cobrança. Aqui esse prefixo sai do texto e vira BOTÃO, para não aparecer
+// duas vezes na mesma linha.
+//
+// ⚠️ Só remove quando o prefixo é EXATAMENTE o número que o backend resolveu pela FK de
+// origem. Descrição editada à mão pelo financeiro, ou item de outra origem, fica
+// intacta — é texto do usuário, não formato garantido.
+function descricaoSemNumero(descricao: string, numero?: string | null): string {
+  if (!numero) return descricao;
+  const prefixo = `[${numero}]`;
+  return descricao.startsWith(prefixo) ? descricao.slice(prefixo.length).trimStart() : descricao;
+}
+
 // ─── Linha de item editável ───────────────────────────────────────────────────
 
 function ItemRow({
@@ -285,6 +324,37 @@ function ItemRow({
   onDelete: (id: number) => void;
   onSave: (id: number, patch: Partial<FaturaItem>) => void;
 }) {
+  const navigate = useNavigate();
+
+  // Nº do atendimento — só vira link quando o backend resolveu a origem clínica E há
+  // paciente para abrir a tela de Atendimento (ela é sempre POR PACIENTE).
+  const origem = item.origem ?? null;
+  // INSUMO (seringa/agulha) é linha FILHA: recua e NÃO repete o nº do atendimento —
+  // ele já está na linha do medicamento logo acima, e repetir a cada filho tiraria
+  // justamente a leitura de "estes três são a mesma aplicação".
+  const ehInsumo = item.insumoDe != null;
+  const numeroAtendimento = !ehInsumo && origem?.evolucaoId && origem?.animalId
+    ? origem.atendimentoNumero
+    : null;
+
+  /**
+   * Abre o atendimento de origem na tela de Atendimento, com a evolução já aberta.
+   *
+   * `?evolucao=` é lido pelo shell (`Atendimento.tsx`) e alimenta o `openItemId` —
+   * `openItemId` é estado, então quem chega de outra tela não tem como setá-lo; o
+   * item precisa viajar na URL (mesma razão do `?item=` da Vacina).
+   * `agendamentoId` vai junto quando o atendimento nasceu de um AGENDAMENTO (número
+   * AG-xxxx): é o parâmetro que o shell já usa para amarrar a tela ao agendamento,
+   * então o mesmo clique cobre os dois destinos pedidos — a evolução e o agendamento
+   * que a originou. Atendimento avulso (EV-xxxx) não tem agendamento e vai sem ele.
+   */
+  const abrirAtendimento = () => {
+    if (!origem?.evolucaoId || !origem?.animalId) return;
+    const params = new URLSearchParams({ evolucao: String(origem.evolucaoId) });
+    if (origem.agendamentoId) params.set('agendamentoId', String(origem.agendamentoId));
+    navigate(`/clinica/evolucao/${origem.animalId}?${params.toString()}`);
+  };
+
   const fmtNum = (v: number) =>
     v === 0 ? '' : new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
 
@@ -469,13 +539,28 @@ function ItemRow({
   }
 
   return (
-    <div className="flex items-start gap-3 px-4 py-2.5 group hover:bg-gray-50/60 rounded-xl transition-colors">
+    <div className={`flex items-start gap-3 py-2.5 group hover:bg-gray-50/60 rounded-xl transition-colors ${
+      ehInsumo ? 'pl-10 pr-4 border-l-2 border-gray-100 ml-4' : 'px-4'
+    }`}>
       <div className="flex-1 min-w-0">
         <div className="flex items-start gap-2 flex-wrap">
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0 mt-0.5 ${TIPO_COR[item.tipo] ?? 'bg-gray-100 text-gray-600'}`}>
             {item.tipo}
           </span>
-          <p className="text-sm text-gray-800 flex-1 min-w-0 break-words">{item.descricao}</p>
+          {numeroAtendimento && (
+            <button
+              type="button"
+              onClick={abrirAtendimento}
+              title={`Abrir o atendimento ${numeroAtendimento}`}
+              aria-label={`Abrir o atendimento ${numeroAtendimento}`}
+              className="font-mono text-xs font-bold text-emerald-700 hover:text-emerald-900 hover:underline whitespace-nowrap flex-shrink-0 mt-0.5">
+              {numeroAtendimento}
+            </button>
+          )}
+          <p className={`flex-1 min-w-0 break-words ${ehInsumo ? 'text-xs text-gray-600' : 'text-sm text-gray-800'}`}
+            title={ehInsumo && item.medicamentoPai ? `Insumo da aplicação de ${item.medicamentoPai}` : undefined}>
+            {descricaoSemNumero(item.descricao, item.origem?.atendimentoNumero ?? null)}
+          </p>
         </div>
         <p className="text-[10px] text-gray-400 mt-1">
           {item.criadoEm && (
@@ -1501,7 +1586,7 @@ function PainelFatura({
               <p className="text-sm font-bold text-gray-700">Assistência &amp; Serviços Gerais</p>
             </div>
             <div className="divide-y divide-gray-50">
-              {(itensPorAnimal['sem'] ?? []).map((item: FaturaItem) => (
+              {ordenarComInsumos(itensPorAnimal['sem'] ?? []).map((item: FaturaItem) => (
                 <ItemRow key={item.id} item={item} canEdit={canEdit}
                   onDelete={handleDeleteItem} onSave={handleSaveItem}/>
               ))}
@@ -1552,7 +1637,7 @@ function PainelFatura({
                     </p>
                   </div>
                   <div className="divide-y divide-gray-50">
-                    {itensAssistencia.map(item => (
+                    {ordenarComInsumos(itensAssistencia).map(item => (
                       <ItemRow key={item.id} item={item} canEdit={canEdit}
                         onDelete={handleDeleteItem} onSave={handleSaveItem}/>
                     ))}
@@ -1569,7 +1654,7 @@ function PainelFatura({
                     </p>
                   </div>
                   <div className="divide-y divide-gray-50">
-                    {itensOutros.map(item => (
+                    {ordenarComInsumos(itensOutros).map(item => (
                       <ItemRow key={item.id} item={item} canEdit={canEdit}
                         onDelete={handleDeleteItem} onSave={handleSaveItem}/>
                     ))}
@@ -1608,7 +1693,7 @@ function PainelFatura({
               </div>
             </div>
             <div className="divide-y divide-gray-50">
-              {grupo.itens.map(item => (
+              {ordenarComInsumos(grupo.itens).map(item => (
                 <ItemRow key={item.id} item={item} canEdit={canEdit}
                   onDelete={handleDeleteItem} onSave={handleSaveItem}/>
               ))}
@@ -1769,10 +1854,86 @@ function PainelFatura({
 
 // ─── Painel esquerdo — lista de proprietários ─────────────────────────────────
 
+// ─── Filtro por STATUS da lista de proprietários ─────────────────────────
+//
+// A busca por texto acha QUEM; este filtro acha QUEM DEVE — "quais clientes estão em
+// atraso" era pergunta que a tela não respondia sem abrir cliente por cliente.
+//
+// ⚠️ UM componente para os DOIS lugares (dropdown do mobile e barra lateral do
+// desktop): duas cópias divergem na primeira correção (CLAUDE.md, armadilha 28-g).
+// ⚠️ O proprietário pode estar em MAIS DE UM status ao mesmo tempo (fatura aberta
+// deste mês e atrasada do mês passado), então ele aparece nos dois filtros e as
+// contagens NÃO somam o total — cada número responde "quantos clientes têm fatura
+// NESTE estado", nunca "quantos clientes existem ao todo".
+
+type FiltroLista = 'TODAS' | 'ABERTA' | 'FECHADA' | 'ATRASADA' | 'PAGA';
+
+/** Mesma paleta da barra "Fatura:" do detalhe — o mesmo estado não pode ter uma cor
+ *  na lista e outra no painel ao lado. */
+const STATUS_LISTA: { key: FiltroLista; label: string; cor: string }[] = [
+  { key: 'TODAS',    label: 'Todas',    cor: 'bg-gray-700'    },
+  { key: 'ABERTA',   label: 'Aberta',   cor: 'bg-amber-500'   },
+  { key: 'FECHADA',  label: 'Fechada',  cor: 'bg-indigo-600'  },
+  { key: 'ATRASADA', label: 'Atrasada', cor: 'bg-red-600'     },
+  { key: 'PAGA',     label: 'Paga',     cor: 'bg-emerald-600' },
+];
+
+/** Cor/rotulo da BOLINHA por status — tom mais claro que o da pilha (pilha é fundo
+ *  sólido com texto branco; a bolinha é um ponto de 8px e precisa de contraste
+ *  próprio). Mantém exatamente as cores que o card já usava. */
+const BOLINHA_STATUS: Record<Exclude<FiltroLista, 'TODAS'>, { cor: string; titulo: string }> = {
+  ABERTA:   { cor: 'bg-amber-400',   titulo: 'Fatura aberta'   },
+  FECHADA:  { cor: 'bg-indigo-400',  titulo: 'Fatura fechada'  },
+  ATRASADA: { cor: 'bg-red-500',     titulo: 'Fatura atrasada' },
+  PAGA:     { cor: 'bg-emerald-500', titulo: 'Fatura paga'     },
+};
+
+function temStatusNaLista(p: ProprietarioItem, filtro: FiltroLista): boolean {
+  switch (filtro) {
+    case 'ABERTA':   return !!p.faturaAtiva;
+    case 'FECHADA':  return !!p.faturaFechada;
+    case 'ATRASADA': return !!p.faturaAtrasada;
+    case 'PAGA':     return !!p.faturaPaga;
+    default:         return true;
+  }
+}
+
+function FiltroStatusLista({ valor, onChange, base, className = '' }: {
+  valor:      FiltroLista;
+  onChange:   (f: FiltroLista) => void;
+  /** Lista já filtrada pela BUSCA por texto — a contagem tem de refletir o que a
+   *  pessoa está vendo, senão um filtro marcaria "3" e devolveria lista vazia. */
+  base:       ProprietarioItem[];
+  className?: string;
+}) {
+  return (
+    <div className={`flex items-center gap-1.5 overflow-x-auto pb-0.5 ${className}`}>
+      {STATUS_LISTA.map(({ key, label, cor }) => {
+        const qtd = key === 'TODAS' ? base.length : base.filter(p => temStatusNaLista(p, key)).length;
+        return (
+          <button
+            key={key}
+            type="button"
+            onClick={() => onChange(key)}
+            className={`flex-shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
+              valor === key ? `${cor} text-white` : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+            }`}>
+            {label} ({qtd})
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function CardProprietario({
-  prop, selecionado, onClick,
+  prop, selecionado, onClick, filtro = 'TODAS',
 }: {
   prop: ProprietarioItem; selecionado: boolean; onClick: () => void;
+  /** Status escolhido na lista. Com um status ativo a bolinha mostra EXATAMENTE ele
+   *  — sem isso o cliente filtrado por "Atrasada" continuaria exibindo também a
+   *  bolinha âmbar da fatura aberta, e a cor contradiria o filtro em vigor. */
+  filtro?: FiltroLista;
 }) {
   return (
     <button
@@ -1800,12 +1961,20 @@ function CardProprietario({
             {prop.animais.map(a => a.nome).join(', ') || 'Sem animais'}
           </p>
         </div>
-        {/* Bolinhas indicadoras de faturas existentes */}
+        {/* Bolinhas indicadoras de faturas existentes. Sem filtro, TODAS as que o
+            cliente tem (o mesmo cliente pode ter aberta + atrasada); com filtro, só
+            a do status filtrado — a bolinha passa a ser a resposta do filtro. */}
         <div className="flex gap-1 flex-shrink-0">
-          {prop.faturaAtiva    && <span className="w-2 h-2 rounded-full bg-amber-400" title="Fatura aberta"/>}
-          {prop.faturaFechada  && <span className="w-2 h-2 rounded-full bg-indigo-400" title="Fatura fechada"/>}
-          {prop.faturaAtrasada && <span className="w-2 h-2 rounded-full bg-red-500" title="Fatura atrasada"/>}
-          {prop.faturaPaga     && <span className="w-2 h-2 rounded-full bg-emerald-500" title="Fatura paga"/>}
+          {filtro === 'TODAS' ? (
+            <>
+              {prop.faturaAtiva    && <span className="w-2 h-2 rounded-full bg-amber-400" title="Fatura aberta"/>}
+              {prop.faturaFechada  && <span className="w-2 h-2 rounded-full bg-indigo-400" title="Fatura fechada"/>}
+              {prop.faturaAtrasada && <span className="w-2 h-2 rounded-full bg-red-500" title="Fatura atrasada"/>}
+              {prop.faturaPaga     && <span className="w-2 h-2 rounded-full bg-emerald-500" title="Fatura paga"/>}
+            </>
+          ) : (
+            <span className={`w-2 h-2 rounded-full ${BOLINHA_STATUS[filtro].cor}`} title={BOLINHA_STATUS[filtro].titulo}/>
+          )}
         </div>
       </div>
     </button>
@@ -1937,7 +2106,9 @@ function ModalFechamentoLote({ proprietarios, onClose, onDone }: {
 export default function Faturamento() {
   const { podeExecutar, isGestor, loading: loadingPerm } = usePermissoes();
 
-  type FiltroTipo = 'ABERTA' | 'FECHADA' | 'ATRASADA' | 'PAGA';
+  /** Aba de fatura DENTRO do cliente — os mesmos status da lista, sem o "Todas".
+   *  Derivado de propósito: status novo entra em UM lugar só (`FiltroLista`). */
+  type FiltroTipo = Exclude<FiltroLista, 'TODAS'>;
 
   const [proprietarios, setProprietarios] = useState<ProprietarioItem[]>([]);
   const [loading,       setLoading]       = useState(true);
@@ -1945,6 +2116,24 @@ export default function Faturamento() {
   const [selecionado,   setSelecionado]   = useState<ProprietarioItem | null>(null);
   const [contadores,    setContadores]    = useState({ abertas: 0, fechadas: 0, pagas: 0 });
   const [filtroStatus,  setFiltroStatus]  = useState<FiltroTipo>('ABERTA');
+  // Filtro por status da LISTA de proprietários (distinto do `filtroStatus`, que é a
+  // aba de fatura DENTRO do cliente selecionado). Começa em "Todas": abrir a tela já
+  // escondendo cliente é o oposto do que ela existe para fazer.
+  // `?status=` na URL pré-seleciona o filtro — é por aí que os números dos Relatórios
+  // Financeiros (contas a receber, inadimplência) chegam já no recorte certo. Valor
+  // fora da lista cai em "Todas", nunca num filtro que a tela não sabe exibir.
+  const [searchParams] = useSearchParams();
+  const statusDaUrl = (searchParams.get('status') ?? '').toUpperCase() as FiltroLista;
+  // `?proprietarioId=` abre a tela JÁ NO CLIENTE — é assim que a linha "Faturas
+  // editadas / corrigidas" do Relatório de Gestão chega aqui. Aplicado DEPOIS da
+  // carga (o cliente só existe quando a lista chega) e UMA vez só (`jaAplicouUrlRef`),
+  // senão toda recarga da lista arrastaria a seleção de volta e a pessoa não
+  // conseguiria trocar de cliente.
+  const proprietarioDaUrl = Number(searchParams.get('proprietarioId')) || null;
+  const jaAplicouUrlRef = useRef(false);
+  const [filtroLista,   setFiltroLista]   = useState<FiltroLista>(
+    STATUS_LISTA.some(x => x.key === statusDaUrl) ? statusDaUrl : 'TODAS',
+  );
   // Seletor de mês/ano (só para fatura FECHADA/PAGA) — controla o mês visualizado.
   const [mesView,       setMesView]       = useState<string | null>(null);
   const [faturaMeta,    setFaturaMeta]    = useState<{ meses: MesFatura[]; mesAtual?: string }>({ meses: [] });
@@ -1976,8 +2165,20 @@ export default function Faturamento() {
 
   useEffect(() => { if (!loadingPerm) carregar(); }, [carregar, loadingPerm]);
 
-  // Trocar de proprietário volta TODOS os filtros ao padrão (status Aberta, sem mês).
-  useEffect(() => { setFiltroStatus('ABERTA'); setMesView(null); }, [selecionado?.id]);
+  useEffect(() => {
+    if (jaAplicouUrlRef.current || !proprietarioDaUrl || proprietarios.length === 0) return;
+    jaAplicouUrlRef.current = true;
+    const alvo = proprietarios.find(p => p.id === proprietarioDaUrl);
+    if (alvo) setSelecionado(alvo);
+  }, [proprietarioDaUrl, proprietarios]);
+
+  // Trocar de proprietário — ou o filtro de status da lista — realinha o detalhe: com
+  // "Atrasada" filtrado, abrir o cliente na aba "Aberta" mostraria vazio justamente no
+  // estado que a pessoa acabou de pedir. Sem filtro, mantém o padrão de sempre (Aberta).
+  useEffect(() => {
+    setFiltroStatus(filtroLista === 'TODAS' ? 'ABERTA' : filtroLista);
+    setMesView(null);
+  }, [selecionado?.id, filtroLista]);
   // Trocar o tipo de fatura reseta o mês visualizado.
   useEffect(() => { setMesView(null); }, [filtroStatus]);
 
@@ -1991,7 +2192,10 @@ export default function Faturamento() {
     return () => document.removeEventListener('mousedown', handler);
   }, [dropdownAberto]);
 
-  const filtrados = proprietarios.filter(p => {
+  // Busca por TEXTO primeiro; o filtro de STATUS incide sobre o resultado dela — as
+  // pilhas contam sobre `porBusca`, então o número na pilha é sempre o tamanho da
+  // lista que aquele clique vai produzir.
+  const porBusca = proprietarios.filter(p => {
     if (!busca) return true;
     const q = busca.toLowerCase();
     return (
@@ -2000,6 +2204,7 @@ export default function Faturamento() {
       p.animais.some(a => a.nome.toLowerCase().includes(q))
     );
   });
+  const filtrados = porBusca.filter(p => temStatusNaLista(p, filtroLista));
 
   if (loadingPerm) return (
     <div className="flex items-center justify-center py-20">
@@ -2076,6 +2281,9 @@ export default function Faturamento() {
                   className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-indigo-400 bg-white"
                 />
               </div>
+              <div className="px-2 pt-2 pb-1 border-b border-gray-100 flex-shrink-0">
+                <FiltroStatusLista valor={filtroLista} onChange={setFiltroLista} base={porBusca} />
+              </div>
               {/* Lista */}
               <div className="overflow-y-auto p-1.5 space-y-1.5">
                 {loading ? (
@@ -2086,7 +2294,9 @@ export default function Faturamento() {
                   <div className="text-center py-8">
                     <DollarSign size={28} className="mx-auto text-gray-200 mb-2"/>
                     <p className="text-xs text-gray-400">
-                      {busca ? 'Nenhum resultado.' : 'Nenhum proprietário encontrado.'}
+                      {busca                    ? 'Nenhum resultado.'
+                        : filtroLista !== 'TODAS' ? `Nenhum proprietário com fatura ${STATUS_LISTA.find(x => x.key === filtroLista)?.label.toLowerCase()}.`
+                        :                           'Nenhum proprietário encontrado.'}
                     </p>
                   </div>
                 ) : (
@@ -2094,6 +2304,7 @@ export default function Faturamento() {
                     <CardProprietario
                       key={p.id} prop={p}
                       selecionado={selecionado?.id === p.id}
+                      filtro={filtroLista}
                       onClick={() => { setSelecionado(p); setDropdownAberto(false); setBusca(''); }}
                     />
                   ))
@@ -2121,17 +2332,22 @@ export default function Faturamento() {
               <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar proprietário..."
                 className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-xl text-xs focus:outline-none focus:border-indigo-400 bg-white"/>
             </div>
+            <FiltroStatusLista valor={filtroLista} onChange={setFiltroLista} base={porBusca} className="mb-3 flex-shrink-0" />
             <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
               {loading ? (
                 <div className="flex justify-center py-8"><Loader2 size={18} className="animate-spin text-indigo-400"/></div>
               ) : filtrados.length === 0 ? (
                 <div className="text-center py-8">
                   <DollarSign size={28} className="mx-auto text-gray-200 mb-2"/>
-                  <p className="text-xs text-gray-400">{busca ? 'Nenhum resultado.' : 'Nenhum proprietário encontrado.'}</p>
+                  <p className="text-xs text-gray-400">
+                    {busca                    ? 'Nenhum resultado.'
+                      : filtroLista !== 'TODAS' ? `Nenhum proprietário com fatura ${STATUS_LISTA.find(x => x.key === filtroLista)?.label.toLowerCase()}.`
+                      :                           'Nenhum proprietário encontrado.'}
+                  </p>
                 </div>
               ) : (
                 filtrados.map(p => (
-                  <CardProprietario key={p.id} prop={p} selecionado={selecionado?.id === p.id} onClick={() => setSelecionado(p)}/>
+                  <CardProprietario key={p.id} prop={p} selecionado={selecionado?.id === p.id} filtro={filtroLista} onClick={() => setSelecionado(p)}/>
                 ))
               )}
             </div>

@@ -4,7 +4,7 @@
 import { useMemo, useState } from 'react';
 import {
   Search, Star, Clock, Share2, Trash2, Layers, Copy, Pencil, Eye, FileOutput,
-  MoreHorizontal, RotateCcw, ChevronDown,
+  MoreHorizontal, RotateCcw, ChevronDown, ShieldCheck,
 } from 'lucide-react';
 import { CATEGORIAS, rotuloCategoria } from './catalogo';
 import type { CategoriaId, ColecaoId, FiltroBiblioteca, Template } from './types';
@@ -137,7 +137,17 @@ function CardModelo({ t, ativo, acoes, perm }: {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-semibold text-gray-900 truncate">{t.nome}</h3>
-            {t.status === 'RASCUNHO' && (
+            {/* Modelo do sistema: o vet precisa saber, ANTES de clicar, que editar
+                aqui não altera o original (o backend cria a cópia da clínica). */}
+            {t.global && (
+              <span
+                title="Modelo oficial do CFMV — editar cria a versão da sua clínica"
+                className="flex items-center gap-1 text-[10px] font-semibold text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded-full flex-shrink-0"
+              >
+                <ShieldCheck size={10} /> CFMV
+              </span>
+            )}
+            {t.status === 'RASCUNHO' && !t.global && (
               <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
                 Rascunho
               </span>
@@ -196,7 +206,8 @@ function CardModelo({ t, ativo, acoes, perm }: {
             )}
             {perm.podeEditar && (
               <button onClick={e => { e.stopPropagation(); acoes.onEditar(t); }}
-                title="Editar" aria-label="Editar"
+                title={t.global ? 'Personalizar para a sua clínica' : 'Editar'}
+                aria-label={t.global ? 'Personalizar para a sua clínica' : 'Editar'}
                 className="p-1.5 text-gray-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                 <Pencil size={13} />
               </button>
@@ -224,7 +235,11 @@ function CardModelo({ t, ativo, acoes, perm }: {
                         <Copy size={12} /> Duplicar
                       </button>
                     )}
-                    {perm.podeExcluir && (
+                    {/* Modelo do sistema não vai para a lixeira de ninguém: ele é o
+                        catálogo normativo, compartilhado por todas as clínicas. O
+                        backend recusa, e botão que só falha depois do clique é o
+                        antipadrão da armadilha 28-d. */}
+                    {perm.podeExcluir && !t.global && (
                       <button
                         onClick={e => { e.stopPropagation(); setMenu(false); acoes.onExcluir(t); }}
                         className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red-600 hover:bg-red-50">

@@ -14,7 +14,9 @@ import {
   X, ChevronUp, ChevronDown, Trash2, Sparkles, Eye,
 } from 'lucide-react';
 import BlocoView from './BlocoView';
+import type { MarcaFolha } from './BlocoView';
 import { BLOCOS } from './catalogo';
+import type { ContextoVariaveis } from './catalogo';
 import type { Bloco, Template, TipoBloco } from './types';
 import type { UsoEditor } from './store';
 
@@ -73,7 +75,7 @@ function CardMobile({ t, onAbrir }: { t: Template; onAbrir: (t: Template) => voi
 // ─── Fluxo ───────────────────────────────────────────────────────────────────
 
 export default function CentralMobile({
-  templates, recentes, favoritos, selecionado, editor,
+  templates, recentes, favoritos, selecionado, editor, contexto, marca, cabecalhoPaciente,
   onSelecionar, onGerar, onCompartilhar, onNovo, onCriarIA, onSalvar,
 }: {
   templates:    Template[];
@@ -81,6 +83,12 @@ export default function CentralMobile({
   favoritos:    Template[];
   selecionado:  Template | null;
   editor:       UsoEditor;
+  /** Variáveis do paciente resolvidas pelo backend; `null` = modo exemplo. */
+  contexto?:    ContextoVariaveis | null;
+  /** Logomarca da clínica e assinatura de quem emite. */
+  marca?:       MarcaFolha | null;
+  /** Seletor de paciente montado pela página — o mobile o exibe no topo da lista. */
+  cabecalhoPaciente?: React.ReactNode;
   onSelecionar: (t: Template) => void;
   onGerar:      (t: Template) => void;
   onCompartilhar: (t: Template) => void;
@@ -107,6 +115,12 @@ export default function CentralMobile({
           <h1 className="text-2xl font-bold text-gray-900">Documentos</h1>
           <p className="text-sm text-gray-500 mt-0.5">Emita em segundos, direto do campo.</p>
         </div>
+
+        {/* Paciente: é ele que governa todo o conteúdo da folha (e sem ele não se
+            emite documento nenhum), então fica no topo, antes da busca.
+            Sem invólucro: o `AnimalCard` que vem aqui já é um card, e embrulhá-lo
+            num segundo daria card dentro de card. */}
+        {cabecalhoPaciente && <div className="px-4">{cabecalhoPaciente}</div>}
 
         <div className="px-4 py-3 sticky top-0 bg-gray-50 z-10">
           <div className="relative">
@@ -200,7 +214,7 @@ export default function CentralMobile({
 
         <div className="flex-1 p-3">
           <div className="bg-white rounded-xl shadow-sm p-5 text-[11px]">
-            {editor.blocos.map(b => <BlocoView key={b.id} bloco={b} />)}
+            {editor.blocos.map(b => <BlocoView key={b.id} bloco={b} contexto={contexto} marca={marca} />)}
           </div>
         </div>
 

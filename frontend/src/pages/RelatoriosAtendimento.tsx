@@ -9,9 +9,16 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { usePeriodo, periodoParams } from '../contexts/PeriodoContext';
 import PeriodoSelector from '../components/relatorios/PeriodoSelector';
+import { Link } from 'react-router-dom';
 import { StatTiles, CarregandoRelatorio, ErroRelatorio, Card, EmptyState } from '../components/relatorios/RelatorioUI';
 
-interface AtendimentoPorAnimal { animal: string; total: number }
+// Cada indicador leva à Agenda JÁ FILTRADA pelo mesmo recorte que ele conta.
+// ⚠️ 'REALIZADOS'/'CANCELADOS' são GRUPOS do seletor da Agenda (concluído+finalizado
+// e cancelado manual+automático) — existem justamente porque o relatório soma dois
+// status em um número só; filtrar por um deles mostraria METADE do que foi clicado.
+const agenda = (status: string) => `/agendamentos?status=${status}`;
+
+interface AtendimentoPorAnimal { animal: string; total: number; animalId?: number | null }
 interface AtendimentoPorLocalidade { localizacao: string; total: number; animais: AtendimentoPorAnimal[] }
 
 interface Atendimento {
@@ -67,11 +74,16 @@ export default function RelatoriosAtendimento() {
         <div className="space-y-4">
           <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">No período</p>
           <StatTiles tiles={[
-            { label: 'Consultas agendadas',      valor: dados.periodo.agendadas },
-            { label: 'Consultas realizadas',     valor: dados.periodo.realizadas, tom: 'emerald' },
-            { label: 'Consultas não realizadas', valor: dados.periodo.naoRealizadas, tom: dados.periodo.naoRealizadas > 0 ? 'amber' : 'gray' },
-            { label: 'Consultas canceladas',     valor: dados.periodo.canceladas, tom: dados.periodo.canceladas > 0 ? 'red' : 'gray' },
+            { label: 'Consultas agendadas',      valor: dados.periodo.agendadas, to: agenda('TODOS') },
+            { label: 'Consultas realizadas',     valor: dados.periodo.realizadas, tom: 'emerald', to: agenda('REALIZADOS') },
+            { label: 'Consultas não realizadas', valor: dados.periodo.naoRealizadas, tom: dados.periodo.naoRealizadas > 0 ? 'amber' : 'gray', to: agenda('ATRASADA') },
+            { label: 'Consultas canceladas',     valor: dados.periodo.canceladas, tom: dados.periodo.canceladas > 0 ? 'red' : 'gray', to: agenda('CANCELADOS') },
           ]} />
+          {/* Procedimentos e exames NÃO viram link: o primeiro conta itens de
+              prescrição executados e o segundo, pedidos de exame — e as duas telas que
+              os listam são POR PACIENTE (/execucao-prescricao é a fila do dia, não o
+              histórico do período). Link para uma lista que não mostra este recorte
+              promete o que a página não entrega (armadilha 28-d). */}
           <StatTiles cols={2} tiles={[
             { label: 'Procedimentos realizados', valor: dados.periodo.procedimentos },
             { label: 'Exames solicitados',       valor: dados.periodo.exames },
@@ -93,10 +105,20 @@ export default function RelatoriosAtendimento() {
                       </span>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1.5">
+                      {/* Chip do animal abre a FICHA dele (histórico do paciente), que é
+                          onde os atendimentos contados aqui aparecem um a um. Sem
+                          `animalId` (registro sem animal vinculado) fica texto. */}
                       {loc.animais.map(a => (
-                        <span key={a.animal} className="text-[11px] text-gray-600 bg-gray-50 border border-gray-100 rounded-full px-2.5 py-1">
-                          {a.animal} <span className="font-semibold text-gray-800">· {a.total}</span>
-                        </span>
+                        a.animalId ? (
+                          <Link key={a.animal} to={`/animal/${a.animalId}`}
+                            className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-100 rounded-full px-2.5 py-1 hover:bg-emerald-100 transition-colors">
+                            {a.animal} <span className="font-semibold">· {a.total}</span>
+                          </Link>
+                        ) : (
+                          <span key={a.animal} className="text-[11px] text-gray-600 bg-gray-50 border border-gray-100 rounded-full px-2.5 py-1">
+                            {a.animal} <span className="font-semibold text-gray-800">· {a.total}</span>
+                          </span>
+                        )
                       ))}
                     </div>
                   </div>

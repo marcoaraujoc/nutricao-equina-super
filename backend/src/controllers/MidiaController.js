@@ -22,6 +22,10 @@ const { registrarAcessoNegado } = require('../lib/auditoria');
 const { enviarArquivo } = require('../lib/midiaEnvio');
 
 const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+// Conversao `.doc` -> `.docx` sob demanda na pre-visualizacao. Ver o comentario em
+// `visualizarDocx`: os laudos NOVOS ja chegam convertidos do ingest; esta e a
+// retaguarda para o acervo anterior.
+const { MIME_DOC, converterDocParaDocx } = require('../lib/documentoConversao');
 
 function ehAdminPlataforma(req) {
   return req.user?.role === 'ADMIN' || req.user?.userType === 'ADMIN';
@@ -154,8 +158,18 @@ const MidiaController = {
         return res.status(404).json({ error: 'Arquivo não encontrado' });
       }
 
-      if (midia.mimeType !== MIME_DOCX) {
-        return res.status(415).json({ error: 'Pré-visualização só é suportada para arquivos DOCX' });
+      // `.doc` (Word 97-2003) entra por RETAGUARDA. Desde a conversão no ingest
+      // (lib/documentoConversao.js) todo laudo novo já chega aqui como `.docx`; esta
+      // perna existe para os `.doc` que JÁ ESTÃO no banco, anexados antes daquela
+      // mudança — sem ela continuariam eternamente sem pré-visualização, e converter a
+      // base inteira exigiria uma migração de dados sobre conteúdo binário.
+      // ⚠️ Conversão SOB DEMANDA, sem regravar o arquivo: a mídia é imutável (a chave é
+      // única por conteúdo) e reescrevê-la aqui, numa rota de LEITURA, mudaria o
+      // artefato debaixo de quem já tem o link. O custo é pagar a conversão a cada
+      // abertura de um `.doc` legado — que são poucos e só existem no acervo antigo.
+      const ehDoc = midia.mimeType === MIME_DOC || /\.doc$/i.test(midia.nomeOriginal ?? '');
+      if (midia.mimeType !== MIME_DOCX && !ehDoc) {
+        return res.status(415).json({ error: 'Pré-visualização só é suportada para arquivos DOC e DOCX' });
       }
 
       const completo = await prisma.midiaArquivo.findUnique({
@@ -164,7 +178,23 @@ const MidiaController = {
       });
       if (!completo) return res.status(404).json({ error: 'Arquivo não encontrado' });
 
-      const { value: html } = await mammoth.convertToHtml({ buffer: completo.conteudo });
+      let conteudo = completo.conteudo;
+      if (midia.mimeType !== MIME_DOCX) {
+        try {
+          conteudo = await converterDocParaDocx(conteudo);
+        } catch (errConv) {
+          // Ambiente sem LibreOffice: a tela mostra "não foi possível gerar a
+          // pré-visualização" e o botão "Abrir arquivo" continua lá. 415 e não 500 —
+          // não é falha da requisição, é formato que ESTE ambiente não sabe converter.
+          console.warn('MidiaController.visualizarDocx — conversão .doc indisponível:', errConv.message);
+          return res.status(415).json({
+            error: 'Pré-visualização de .doc indisponível neste ambiente.',
+            code:  'CONVERSAO_INDISPONIVEL',
+          });
+        }
+      }
+
+      const { value: html } = await mammoth.convertToHtml({ buffer: conteudo });
       // Mesmo cache privado do download — a chave é única por conteúdo.
       res.setHeader('Cache-Control', 'private, max-age=86400, immutable');
       return res.json({ dados: { html } });

@@ -34,6 +34,8 @@ import { linhaInfoAnimal } from '../utils/animalInfo';
 export interface ItemExecucao {
   id:              number;
   tipo:            'MEDICAMENTO' | 'PROCEDIMENTO';
+  /** ATIVA | CANCELADA — item cancelado por item fica visível marcado como cancelado. */
+  status?:         string | null;
   medicamento:     string;
   dosagem:         string | null;
   unidade:         string | null;
@@ -617,14 +619,16 @@ export function ModalExecucao({
   // inteira não mora mais aqui — é o botão da linha na lista de /execucao-prescricao.
   const [cancelarItem, setCancelarItem] = useState<ItemExecucao | null>(null);
   const [cancelando,   setCancelando]   = useState(false);
-  // Doses executadas NESTA sessão do modal, além do que `item.dosesExecutadas` já
-  // trazia do backend — o `grupo` prop fica parado até o pai recarregar a lista
-  // (`onClose`), então sem isso a 2ª dose do mesmo item pareceria sempre disponível.
-  // Guarda o HORÁRIO (ISO) de cada uma, na ordem de execução: a contagem sozinha
-  // avançava a linha "Em Execução", mas deixava a linha recém-concluída como
-  // "Executado" sem hora até o pai recarregar (`item.doses` chega do backend e
-  // ainda não conhece esta dose). Ver `horaDaDose`.
-  const [dosesLocais, setDosesLocais] = useState<Record<number, string[]>>({});
+  // OVERLAY dos itens após execução NESTA sessão do modal — atualiza a tela sem sair
+  // dela. O `grupo` prop fica parado até o pai recarregar (`onClose`), então sem isto
+  // as HORAS FUTURAS (que saem de `proximaDoseEm`, recalculado pelo backend a cada
+  // dose) só apareciam ao fechar e reabrir. A resposta do `executar` traz
+  // `proximaDoseEm`/`dosesExecutadas` frescos; guardamos aqui esses campos + a dose
+  // recém-dada ANEXADA ao histórico (a resposta do executar usa GRUPO_INCLUDE, que
+  // NÃO traz `doses` — por isso funde-se, não se substitui o item inteiro). A tela lê
+  // `comLive(item)` (prop + overlay). Ver `handleExecutarItem`.
+  const [itensLive, setItensLive] = useState<Record<number, Partial<ItemExecucao>>>({});
+  const comLive = (i: ItemExecucao): ItemExecucao => ({ ...i, ...itensLive[i.id] });
   // Execução fora do horário pendente de confirmação (antecipada/atrasada) — a
   // MESMA tela para os dois casos, nunca bloqueia, só avisa o horário correto.
   const [confirmacao, setConfirmacao] = useState<{
@@ -688,34 +692,34 @@ export function ModalExecucao({
     return i.diaAtual >= 1 && i.diaAtual <= i.duracaoDias;
   };
 
-  const itensDoDia = grupo.itens.filter(
+  // `comLive` aplica o overlay desta sessão (proximaDoseEm/dosesExecutadas/doses/
+  // executadoEm frescos) — daqui pra frente tudo enxerga o item ATUALIZADO, então a
+  // previsão das próximas doses aparece assim que a dose é executada.
+  const itensDoDia = grupo.itens.map(comLive).filter(
     i => itemDevidoHoje(i) && (!tipoFiltro || i.tipo === tipoFiltro),
   );
 
-  // Doses do item já dadas, contando o que este modal executou nesta sessão —
-  // só existe para itens elegíveis ao fluxo por dose (`dosesTotaisEsperadas != null`).
-  const dosesFeitas = (item: ItemExecucao): number =>
-    (item.dosesExecutadas ?? 0) + (dosesLocais[item.id]?.length ?? 0);
+  // Doses do item já dadas. `item` aqui JÁ vem com o overlay desta sessão aplicado
+  // (via `itensDoDia`/`itensComInfo` → `comLive`), então `dosesExecutadas` reflete o
+  // que o backend acabou de devolver — não precisa mais somar contagem local.
+  const dosesFeitas = (item: ItemExecucao): number => item.dosesExecutadas ?? 0;
 
-  /** Horário REAL (ISO) da dose `numeroDose` (1-indexado) deste item: primeiro o
-   *  histórico que veio do backend; se não houver, o que ESTA sessão do modal
-   *  acabou de executar. Devolve null para dose sem registro (curso anterior ao
-   *  rastreio por dose) — a linha então fica só "Executado", sem hora inventada. */
-  const horaDaDose = (item: ItemExecucao, numeroDose: number): string | null => {
-    const real = item.doses?.find(d => d.numeroDose === numeroDose)?.horarioExecutado;
-    if (real) return real;
-    const idxLocal = numeroDose - (item.dosesExecutadas ?? 0) - 1;
-    const locais   = dosesLocais[item.id] ?? [];
-    return idxLocal >= 0 && idxLocal < locais.length ? locais[idxLocal] : null;
-  };
+  /** Horário REAL (ISO) da dose `numeroDose` (1-indexado) deste item, lido de
+   *  `item.doses` — que já inclui, além do histórico do backend, a dose que ESTA
+   *  sessão do modal acabou de executar (anexada pelo overlay em `handleExecutarItem`).
+   *  Devolve null para dose sem registro (curso anterior ao rastreio por dose) — a
+   *  linha então fica só "Executado", sem hora inventada. */
+  const horaDaDose = (item: ItemExecucao, numeroDose: number): string | null =>
+    item.doses?.find(d => d.numeroDose === numeroDose)?.horarioExecutado ?? null;
 
   // "Concluído" decide o estilo do card e se o botão de executar habilita:
   // elegível → todas as doses do curso já foram dadas (pode haver mais de uma por
   // dia); legado (sem horário) → o critério antigo, executado hoje.
   const itemConcluido = (item: ItemExecucao): boolean =>
-    item.dosesTotaisEsperadas != null
-      ? dosesFeitas(item) >= item.dosesTotaisEsperadas
-      : executadoHojeFront(item) || (getActiveSlotIdx(calcSlots(item)) >= 0 && isSlotDone(execMap, item.id, getActiveSlotIdx(calcSlots(item))));
+    item.status === 'CANCELADA' ? true
+      : item.dosesTotaisEsperadas != null
+        ? dosesFeitas(item) >= item.dosesTotaisEsperadas
+        : executadoHojeFront(item) || (getActiveSlotIdx(calcSlots(item)) >= 0 && isSlotDone(execMap, item.id, getActiveSlotIdx(calcSlots(item))));
 
   const itensComInfo = itensDoDia.map(item => {
     const slots      = calcSlots(item);
@@ -786,12 +790,36 @@ export function ModalExecucao({
       const itemAtualizado: ItemExecucao | undefined = res.data?.dados?.itens?.find(
         (i: ItemExecucao) => i.id === item.id,
       );
-      // Doses do curso ainda por vir: soma localmente até o pai recarregar a lista,
-      // guardando o horário REAL da execução (o do servidor quando ele o devolve —
-      // é ele quem manda no relógio) para a linha virar "Executado às HH:MM" na hora.
+      // Aplica na MESMA TELA o que o backend acabou de recalcular: `proximaDoseEm`
+      // fresco (as HORAS FUTURAS de cada dose seguinte), a contagem de doses e o
+      // histórico com a dose que acabou de sair. Sem isto, a previsão das próximas
+      // doses só aparecia ao fechar e reabrir o modal. A resposta do executar
+      // (GRUPO_INCLUDE) NÃO traz `doses`, então a dose recém-dada é ANEXADA ao
+      // histórico que já estava no item — nunca se substitui o item inteiro.
       if (item.dosesTotaisEsperadas != null) {
-        const quando = itemAtualizado?.executadoEm ?? new Date().toISOString();
-        setDosesLocais(prev => ({ ...prev, [item.id]: [...(prev[item.id] ?? []), quando] }));
+        const quando     = itemAtualizado?.executadoEm ?? new Date().toISOString();
+        const numeroDose = (item.dosesExecutadas ?? 0) + 1;
+        setItensLive(prev => {
+          const base    = { ...(grupo.itens.find(x => x.id === item.id) as ItemExecucao), ...prev[item.id] };
+          const doses   = [...(base.doses ?? [])];
+          if (!doses.some(d => d.numeroDose === numeroDose)) {
+            doses.push({
+              numeroDose, horarioExecutado: quando, horarioPrevisto: quando,
+              classificacao: 'NO_HORARIO', executadoPor: null,
+            });
+          }
+          return {
+            ...prev,
+            [item.id]: {
+              // `proximaDoseEm` só é sobrescrito quando o backend o devolveu — senão
+              // manteria o valor anterior em vez de zerar a âncora das futuras.
+              proximaDoseEm:   itemAtualizado ? (itemAtualizado.proximaDoseEm ?? null) : base.proximaDoseEm,
+              dosesExecutadas: itemAtualizado?.dosesExecutadas ?? numeroDose,
+              executadoEm:     quando,
+              doses,
+            },
+          };
+        });
       }
       setConfirmacao(null);
       setExecFutura(null);
@@ -950,6 +978,12 @@ export function ModalExecucao({
     const alvo = cancelarItem;
     setCancelando(true);
     try {
+      // Cancela SÓ ESTE item (as doses que ainda faltam dele), preservando o que já foi
+      // aplicado e os DEMAIS itens da prescrição. O backend (`removerItem`) já não
+      // bloqueia mais quando há execução: item em execução vira CANCELADA/inativo e o
+      // grupo fica CANCELADO_PARCIALMENTE (segue executável para os outros itens) ou
+      // CANCELADO quando este era o único item — aí, no reload, sai de "a aplicar" para
+      // o Histórico. Difere do cancelar de FORA (a linha), que cancela a prescrição TODA.
       await api.delete(
         `/clinica/prescricoes/grupos/${grupo.id}/itens/${alvo.id}/cancelar-plantao`,
         { data: { motivo } },
@@ -1016,14 +1050,16 @@ export function ModalExecucao({
           )}
 
           {itensComInfo.map(({ item, slots, activeDone }) => {
+            // Item cancelado por item: fica VISÍVEL marcado como "Cancelado", sem botões
+            // de ação, com as doses já dadas preservadas e as futuras marcadas "Cancelada".
+            const cancelado = item.status === 'CANCELADA';
             const temHistorico = regimeExigeResumo(item.frequencia, item.duracaoDias);
             const resumo       = temHistorico ? gerarResumoDoses(item.frequencia, item.duracaoDias) : [];
             const totalDoses   = resumo.length;
             // A dose ATUAL (a próxima a executar): elegível (rastreio por dose) usa
-            // `dosesFeitas` — que já soma o que ESTA sessão do modal executou, não só
-            // o que veio do backend (`item.dosesExecutadas` só atualiza quando o pai
-            // recarrega a lista, ver `dosesLocais`); legado usa a posição do dia
-            // corrente na grade.
+            // `dosesFeitas` — e `item` já vem com o overlay desta sessão (`comLive`),
+            // então `dosesExecutadas` avança na hora, sem esperar o pai recarregar
+            // (ver `itensLive`); legado usa a posição do dia corrente na grade.
             const idxAtual = item.dosesTotaisEsperadas != null
               ? dosesFeitas(item)
               : Math.max(0, resumo.findIndex(d => d.dia === item.diaAtual));
@@ -1100,7 +1136,8 @@ export function ModalExecucao({
             return (
             <div key={item.id}
               className={`rounded-xl border transition-colors ${
-                activeDone ? 'bg-emerald-50 border-emerald-200' : 'bg-gray-50 border-gray-100'
+                cancelado ? 'bg-rose-50 border-rose-200'
+                  : activeDone ? 'bg-emerald-50 border-emerald-200' : 'bg-gray-50 border-gray-100'
               }`}>
               <div className="flex items-start gap-2.5 p-3">
                 <div className="flex-1 min-w-0">
@@ -1115,10 +1152,15 @@ export function ModalExecucao({
                       {item.tipo === 'MEDICAMENTO' ? 'Med' : 'Proc'}
                     </span>
                     <p className={`text-sm font-semibold leading-tight ${
-                      activeDone ? 'text-gray-400' : 'text-gray-800'
+                      cancelado ? 'text-rose-700 line-through' : activeDone ? 'text-gray-400' : 'text-gray-800'
                     }`}>
                       {item.medicamento}
                     </p>
+                    {cancelado && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-100 text-rose-700">
+                        <Ban size={9} /> Cancelado
+                      </span>
+                    )}
                   </div>
 
                   {/* Periodicidade + Dose */}
@@ -1169,9 +1211,11 @@ export function ModalExecucao({
                         // quem vai aplicar justamente a hora em que a dose vence.
                         const status = executada
                           ? (horaExecutada ? `Executado às ${formatHora(horaExecutada)}` : 'Executado')
-                          : ehAtual
-                            ? `Em Execução — ${quandoPrevisto}`
-                            : `Prevista para ${quandoPrevisto}`;
+                          : cancelado
+                            ? 'Cancelada'
+                            : ehAtual
+                              ? `Em Execução (${quandoPrevisto})`
+                              : `Prevista para ${quandoPrevisto}`;
                         return (
                           <div key={idx} className="flex items-center justify-between gap-2">
                             <p className={ehAtual ? 'text-xs font-semibold text-gray-800' : 'text-[11px] text-gray-400'}>
@@ -1185,7 +1229,11 @@ export function ModalExecucao({
                   )}
                 </div>
 
-                {soVisualizacao ? (
+                {cancelado ? (
+                  <span className="flex-shrink-0 mt-0.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-100 text-rose-700 whitespace-nowrap inline-flex items-center gap-1">
+                    <Ban size={12} /> Cancelado
+                  </span>
+                ) : soVisualizacao ? (
                   <span className="flex-shrink-0 mt-0.5 px-3 py-1 rounded-lg text-xs font-semibold bg-gray-100 text-gray-400 cursor-not-allowed whitespace-nowrap">
                     Somente leitura
                   </span>
@@ -1294,7 +1342,7 @@ export function ModalExecucao({
       <ModalJustificativa
         aberto
         titulo={`Cancelar item — ${cancelarItem.medicamento}`}
-        descricao={`Cancela este item da prescrição #${grupo.numeroFormatado} e libera o estoque reservado dele. Os demais itens seguem normalmente. A justificativa vai para a auditoria.`}
+        descricao={`Cancela as doses que ainda faltam deste item e libera o estoque reservado dele. O que já foi aplicado é preservado (fatura e estoque) e os demais itens da prescrição seguem normalmente.`}
         acaoLabel="Cancelar item"
         onConfirmar={handleCancelarItem}
         onFechar={() => { if (!cancelando) setCancelarItem(null); }}
@@ -2060,9 +2108,10 @@ export default function ExecucaoPrescricao() {
   // (olha `dosesExecutadas`/`dosesTotaisEsperadas`/`proximaDoseEm`, não a mera
   // presença de uma execução anterior) — não precisa do `!itemExecutadoNaData`.
   const itemAindaPrecisaAcaoHoje = (i: ItemExecucao): boolean =>
-    i.dosesTotaisEsperadas != null
-      ? itemPendenteHoje(i)
-      : !itemExecutadoNaData(i) && itemPendenteHoje(i);
+    i.status === 'CANCELADA' ? false
+      : i.dosesTotaisEsperadas != null
+        ? itemPendenteHoje(i)
+        : !itemExecutadoNaData(i) && itemPendenteHoje(i);
 
   const tipoConcluidoEm = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO'): boolean => {
     const itensDoTipo = g.itens.filter(i => i.tipo === tipo);
@@ -2074,12 +2123,13 @@ export default function ExecucaoPrescricao() {
   const grupoTemTipo = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO') =>
     g.itens.some(i => i.tipo === tipo);
 
-  // "a executar": tem algo que AINDA precisa de ação hoje — cancelada sempre
-  // aparece (informativa, execução bloqueada), mesmo sem nada pendente. Item já
-  // executado hoje não conta aqui (ver `itemAindaPrecisaAcaoHoje`) — senão ficaria
-  // nos DOIS cards ao mesmo tempo depois de resolvido.
+  // "a executar": tem algo que AINDA precisa de ação hoje. Prescrição CANCELADA SAI
+  // daqui — vai só para o Histórico (aba Cancelado). O status do grupo é a autoridade:
+  // cobre também o item parcialmente aplicado cujo `proximaDoseEm` ainda cairia hoje,
+  // que sem esta guarda seguiria contando como pendente. Item já executado hoje não
+  // conta (ver `itemAindaPrecisaAcaoHoje`), senão ficaria nos DOIS cards depois de resolvido.
   const tipoPendenteEm = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO'): boolean =>
-    g.status === 'CANCELADO' || g.itens.some(i => i.tipo === tipo && itemAindaPrecisaAcaoHoje(i));
+    g.status !== 'CANCELADO' && g.itens.some(i => i.tipo === tipo && itemAindaPrecisaAcaoHoje(i));
 
   // Hora da execução para o badge do Histórico — só entre os itens do TIPO daquele
   // card (senão o horário do medicamento vazava para o card de procedimento e
@@ -2118,13 +2168,13 @@ export default function ExecucaoPrescricao() {
     return null;
   };
 
-  // Canceladas: sempre na lista "a executar", com badge "Cancelada" e execução
-  // bloqueada — nunca vão para o Histórico (não foram feitas, foram desistidas).
+  // Canceladas SAEM de "a executar" e vão para o Histórico (aba Cancelado): uma vez
+  // cancelada não há mais o que aplicar, então some da fila e fica só como registro.
   //
-  // "a executar" = tem algo PENDENTE hoje (`tipoPendenteEm`) — item de rolling
-  // schedule cuja próxima dose ainda não chegou NÃO conta como pendente, então não
-  // aparece aqui. "Histórico" = nada pendente hoje E algo terminado/executado na
-  // data (`tipoConcluidoEm`) — mesma exclusão do item ainda não devido.
+  // "a executar" = tem algo PENDENTE hoje (`tipoPendenteEm`) E não está cancelada —
+  // item de rolling schedule cuja próxima dose ainda não chegou NÃO conta como
+  // pendente, então não aparece aqui. "Histórico" = nada pendente hoje E algo
+  // terminado/executado na data (`tipoConcluidoEm`), OU a prescrição cancelada.
   const gruposMedicamentos = aplicarBusca(grupos.filter(g =>
     grupoTemTipo(g, 'MEDICAMENTO') && tipoPendenteEm(g, 'MEDICAMENTO')));
   const gruposProcedimentos = aplicarBusca(grupos.filter(g =>
@@ -2139,10 +2189,8 @@ export default function ExecucaoPrescricao() {
     g.status !== 'CANCELADO' && grupoTemTipo(g, 'PROCEDIMENTO') && tipoConcluidoEm(g, 'PROCEDIMENTO'));
   // Cancelada chega até aqui pela DATA EM QUE FOI CANCELADA (`listarParaExecucao`
   // filtra por `updatedAt` local === data selecionada, não pela janela/próxima
-  // dose do item — é registro de auditoria, não pendência do dia). Ela segue
-  // aparecendo TAMBÉM na fila "a executar" (com a execução bloqueada, ver
-  // `tipoPendenteEm` acima) — a aba "Cancelado" aqui é só outra VISTA da mesma,
-  // para conferência/auditoria sem precisar rolar a fila.
+  // dose do item — é registro de auditoria, não pendência do dia). Não aparece mais
+  // na fila "a executar" (ver `tipoPendenteEm`): o lugar dela é a aba "Cancelado".
   const canceladosMedicamentosBase = grupos.filter(g =>
     g.status === 'CANCELADO' && grupoTemTipo(g, 'MEDICAMENTO'));
   const canceladosProcedimentosBase = grupos.filter(g =>

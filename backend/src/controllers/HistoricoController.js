@@ -71,7 +71,7 @@ const HistoricoController = {
       const animalCorte = await prisma.animal.findUnique({ where: { id: animalId }, select: { propriedadeDesde: true } });
       const corte = corteDePropriedade(req, animalCorte);
 
-      const [evolucoes, vacinas, exames, encaminhamentos, grupos] = await Promise.all([
+      const [evolucoes, vacinas, exames, encaminhamentos, grupos, documentos] = await Promise.all([
         prisma.evolucaoClinica.findMany({
           where: { ...whereAtivo, status: { in: ['EM_ANDAMENTO', 'FINALIZADA', 'CONCLUIDO'] }, AND: [escopoEvo], ...(corte ? { dataInicio: { gte: corte } } : {}), ...(buscando ? { OR: [{ titulo: like }, { especialidade: like }, { texto: like }] } : {}) },
           select: { id: true, titulo: true, especialidade: true, texto: true, status: true, dataInicio: true, dataFim: true, numero: true, tipoAtendimento: true, veterinario: VET_SELECT },
@@ -103,6 +103,21 @@ const HistoricoController = {
           },
           orderBy: { createdAt: 'desc' }, take: limit,
         }),
+        // Documentos EMITIDOS para o paciente (Central de Documentos). O recorte é por
+        // EMPRESA, não por `escopoFilhoEvolucaoWhere`: `DocumentoEmitido` tem
+        // `empresaId` próprio, e a evolução é OPCIONAL nele — atestado sanitário e
+        // termo de consentimento existem sem atendimento aberto.
+        prisma.documentoEmitido.findMany({
+          where: {
+            animalId, ativo: true,
+            ...(req.empresaId ? { empresaId: req.empresaId } : {}),
+            ...(corte ? { emitidoEm: { gte: corte } } : {}),
+            ...(buscando ? { OR: [{ titulo: like }, { templateNome: like }] } : {}),
+          },
+          select: { id: true, numero: true, titulo: true, templateNome: true, emitidoEm: true, evolucaoId: true, veterinario: VET_SELECT },
+          orderBy: { emitidoEm: 'desc' }, take: limit,
+        // Tabela ainda não migrada não pode derrubar o Histórico inteiro do paciente.
+        }).catch(() => []),
       ]);
 
       const eventos = [
@@ -206,6 +221,22 @@ const HistoricoController = {
             evolucaoId:  g.evolucaoId,
           }));
         }),
+        // Documentos emitidos. `ref` é `documento-<id>` — a MESMA forma usada por
+        // `resumoAtendimentoService`, que é o que torna o tópico da Memória Clínica
+        // clicável até o registro de origem (`refsAbriveis` em AnimalDetail).
+        ...documentos.map(d => ({
+          id:          `documento-${d.id}`,
+          origem:      'DOCUMENTO',
+          data:        d.emitidoEm,
+          titulo:      d.numero != null
+            ? `Documento nº ${String(d.numero).padStart(4, '0')} — ${d.titulo || d.templateNome}`
+            : (d.titulo || d.templateNome),
+          badge:       'Documento',
+          status:      null,
+          responsavel: d.veterinario?.fullName ?? null,
+          resumo:      d.templateNome,
+          evolucaoId:  d.evolucaoId,
+        })),
       ];
 
       eventos.sort((a, b) => new Date(b.data) - new Date(a.data));

@@ -93,7 +93,7 @@ async function coletarEventos(req, animalId) {
   const escopoFilho  = escopoFilhoEvolucaoWhere(req);
   const escopoPresc  = escopoPrescricaoGrupoWhere(req);
 
-  const [evolucoes, vacinas, exames, encaminhamentos, grupos, itensManuais] = await Promise.all([
+  const [evolucoes, vacinas, exames, encaminhamentos, grupos, itensManuais, documentos] = await Promise.all([
     prisma.evolucaoClinica.findMany({
       where:  { ...whereAtivo, status: { in: ['EM_ANDAMENTO', 'FINALIZADA', 'CONCLUIDO'] }, AND: [escopoEvo] },
       select: { id: true, titulo: true, especialidade: true, texto: true, dataInicio: true },
@@ -131,6 +131,17 @@ async function coletarEventos(req, animalId) {
       select: { id: true, tipo: true, descricao: true, valor: true, quantidade: true, criadoEm: true },
       orderBy: { criadoEm: 'asc' },
     }),
+    // Documentos EMITIDOS (Central de Documentos). Entram na memória clínica porque
+    // são fato do atendimento: um termo de consentimento para eutanásia assinado em
+    // março explica a ausência de evolução depois dele, e um atestado sanitário
+    // marca a data em que o animal foi declarado apto ao trânsito.
+    // Recorte por EMPRESA (o modelo tem `empresaId` próprio, e a evolução é opcional).
+    prisma.documentoEmitido.findMany({
+      where: { animalId, ativo: true, ...(req.empresaId ? { empresaId: req.empresaId } : {}) },
+      select: { id: true, numero: true, titulo: true, templateNome: true, emitidoEm: true },
+      orderBy: { emitidoEm: 'asc' },
+    // Tabela ainda não migrada não pode derrubar a memória clínica inteira.
+    }).catch(() => []),
   ]);
 
   const eventos = [
@@ -157,6 +168,10 @@ async function coletarEventos(req, animalId) {
     ...itensManuais.map(f => ({
       data: f.criadoEm, origem: 'FATURA_MANUAL', ref: `fatura-item-${f.id}`,
       texto: `Serviço lançado na fatura: ${f.descricao}${f.quantidade > 1 ? ` (x${f.quantidade})` : ''}`,
+    })),
+    ...documentos.map(d => ({
+      data: d.emitidoEm, origem: 'DOCUMENTO', ref: `documento-${d.id}`,
+      texto: `Documento emitido: ${d.titulo || d.templateNome}${d.numero != null ? ` (nº ${String(d.numero).padStart(4, '0')})` : ''}`,
     })),
   ].sort((a, b) => new Date(a.data) - new Date(b.data));
 

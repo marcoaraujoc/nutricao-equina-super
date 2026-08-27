@@ -20,112 +20,122 @@ datasource db {
 // =============================================================================
 
 model User {
-  id                   Int       @id @default(autoincrement())
-  fullName             String    @db.VarChar(255)
-  email                String    @unique @db.VarChar(255)
-  passwordHash         String    @db.VarChar(255)
-  phone                String?   @db.VarChar(30)
-  phone2               String?   @db.VarChar(30)
-  role                 String    @default("USER") @db.VarChar(50)
-  userType             String    @default("PROPRIETARIO") @db.VarChar(50)
-  cep                  String?   @db.VarChar(10)
-  endereco             String?   @db.VarChar(255)
-  complemento          String?   @db.VarChar(100)
-  bairro               String?   @db.VarChar(100)
-  cidade               String?   @db.VarChar(100)
-  estado               String?   @db.VarChar(2)
-  createdAt            DateTime  @default(now())
-  ativo                Boolean   @default(true)
+  id                        Int                     @id @default(autoincrement())
+  fullName                  String                  @db.VarChar(255)
+  email                     String                  @unique @db.VarChar(255)
+  passwordHash              String                  @db.VarChar(255)
+  phone                     String?                 @db.VarChar(30)
+  phone2                    String?                 @db.VarChar(30)
+  role                      String                  @default("USER") @db.VarChar(50)
+  userType                  String                  @default("PROPRIETARIO") @db.VarChar(50)
+  cep                       String?                 @db.VarChar(10)
+  endereco                  String?                 @db.VarChar(255)
+  complemento               String?                 @db.VarChar(100)
+  bairro                    String?                 @db.VarChar(100)
+  cidade                    String?                 @db.VarChar(100)
+  estado                    String?                 @db.VarChar(2)
+  createdAt                 DateTime                @default(now())
+  ativo                     Boolean                 @default(true)
   // Trilha de quem ATIVOU/INATIVOU este usuário e quando (migration
   // 20260824000000) — `ativo` sozinho só diz o estado ATUAL. Sem FK cascade:
   // excluir quem fez a ação não pode apagar nem destravar o estado do usuário
   // afetado (mesmo padrão de `Animal.inativoPorId`).
-  ativoEm              DateTime? @map("ativo_em")
-  ativoPorId           Int?      @map("ativo_por_id")
-  inativoEm            DateTime? @map("inativo_em")
-  inativoPorId         Int?      @map("inativo_por_id")
+  ativoEm                   DateTime?               @map("ativo_em")
+  ativoPorId                Int?                    @map("ativo_por_id")
+  inativoEm                 DateTime?               @map("inativo_em")
+  inativoPorId              Int?                    @map("inativo_por_id")
   // Justificativa da inativação (migration 20260901000000) — obrigatória no
   // endpoint (EquipeController.toggleMembro), exibida na aba Inativos da Equipe.
-  inativoMotivo        String?   @db.Text @map("inativo_motivo")
-  resetPasswordToken   String?   @unique @db.VarChar(255)
-  resetPasswordExpires DateTime?
-  mustChangePassword   Boolean   @default(false)
-  isConvidado          Boolean   @default(false)
-  refreshToken         String?   @db.VarChar(512)
+  inativoMotivo             String?                 @map("inativo_motivo") @db.Text
+  resetPasswordToken        String?                 @unique @db.VarChar(255)
+  resetPasswordExpires      DateTime?
+  mustChangePassword        Boolean                 @default(false)
+  isConvidado               Boolean                 @default(false)
+  refreshToken              String?                 @db.VarChar(512)
   // Contador de geração de sessão. Todo login (senha, 2FA, Google) INCREMENTA e
   // grava no access token (`sessionTokens.js#assinarAccessToken`); `authenticate`
   // compara a cada requisição contra o valor do banco — divergiu, o token é de um
   // login anterior e cai na hora (não espera os ~30min do access expirar). Refresh
   // NÃO incrementa (é o mesmo dispositivo continuando a sessão, não um login novo).
-  sessionVersion       Int       @default(0) @map("session_version")
+  sessionVersion            Int                     @default(0) @map("session_version")
   // 2FA por e-mail no login com senha. Ligado por padrão; desligar por usuário
   // aqui, ou globalmente via MFA_EMAIL_ENABLED=false (kill-switch de emergência).
-  mfaAtivo             Boolean   @default(true) @map("mfa_ativo")
-  mfaDesafios          MfaDesafio[] @relation("UserMfaDesafios")
+  mfaAtivo                  Boolean                 @default(true) @map("mfa_ativo")
+  // Bloqueio de conta por senha errada (migration 20260915000000). O contador mora
+  // AQUI, e não por empresa, porque a credencial é global — contar por empresa daria
+  // 6 tentativas em CADA uma. `bloqueadoEm` null = liberada; sem expiração
+  // automática de propósito: o desbloqueio é um ato de alguém e deixa rastro.
+  // Leitura/escrita SEMPRE por `lib/bloqueioLogin.js`.
+  tentativasLogin           Int                     @default(0) @map("tentativas_login")
+  bloqueadoEm               DateTime?               @map("bloqueado_em")
+  mfaDesafios               MfaDesafio[]            @relation("UserMfaDesafios")
   configSegurancaAtualizada ConfiguracaoSeguranca[] @relation("ConfigSegurancaAtualizadoPor")
-  cpf               String?  @db.VarChar(14)
-  cnpj              String?  @db.VarChar(18)
-  mensalista        Boolean  @default(false)
-  valorAssistencia  Float?
-  frequenciaVisitas Int?
+  cpf                       String?                 @db.VarChar(14)
+  cnpj                      String?                 @db.VarChar(18)
+  mensalista                Boolean                 @default(false)
+  valorAssistencia          Float?
+  frequenciaVisitas         Int?
   // Dia do mês (1-28) em que a fatura vence. Fatura FECHADA não paga após o
   // vencimento (dia do mês SEGUINTE ao mesReferencia) é considerada ATRASADA.
-  diaVencimentoFatura Int?   @map("dia_vencimento_fatura")
-  empresaId         Int?     @map("empresa_id")
-  equipeId          Int?     @map("equipe_id") // equipe que cadastrou o proprietário (segregação por equipe)
+  diaVencimentoFatura       Int?                    @map("dia_vencimento_fatura")
+  empresaId                 Int?                    @map("empresa_id")
+  equipeId                  Int?                    @map("equipe_id") // equipe que cadastrou o proprietário (segregação por equipe)
 
-  empresa              Empresa?               @relation("ProprietarioEmpresa", fields: [empresaId], references: [id], onDelete: SetNull)
-  equipe               Equipe?                @relation("ProprietarioEquipe", fields: [equipeId], references: [id], onDelete: SetNull)
-  animais              Animal[]
-  animaisInativados    Animal[]               @relation("AnimalInativadoPor")
-  auditLogs            AuditLog[]
-  dietasCriadas        Dieta[]                @relation("CriadorDieta")
-  dietasModificadas    Dieta[]                @relation("ModificadorDieta")
-  evolucoesCriadas     EvolucaoClinica[]      @relation("EvolucaoVeterinario")
-  evolucoesModificadas EvolucaoClinica[]      @relation("EvolucaoModificadoPor")
-  prescricoes          Prescricao[]           @relation("PrescricaoVeterinario")
-  prescricaoDosesExecutadas PrescricaoExecucaoDose[] @relation("PrescricaoDoseExecutadaPor")
-  prescricaoGrupos          PrescricaoGrupo[]      @relation("PrescricaoGrupoVet")
-  prescricaoGruposFinalizou PrescricaoGrupo[]      @relation("PrescricaoGrupoFinaliza")
-  prescricaoGruposExecutou  PrescricaoGrupo[]      @relation("PrescricaoGrupoExecuta")
-  vacinas              VacinaClinica[]        @relation("VacinaVeterinario")
-  encaminhamentos      EncaminhamentoClinico[] @relation("EncaminhamentoVeterinario")
-  examesClinicos       ExameClinico[]         @relation("ExameClinicoVeterinario")
-  faturaItens          FaturaItem[]           @relation("FaturaItemVet")
-  faturas              Fatura[]               @relation("FaturaProprietario")
-  faturaLinksPublicos  FaturaLinkPublico[]    @relation("FaturaLinkProprietario")
-  faturaLinksRevogados FaturaLinkPublico[]    @relation("FaturaLinkRevogadoPor")
-  aiUsageLogs          AiUsageLog[]
-  vetPerfil            VetPerfil?
-  especialidades       UsuarioEspecialidade[]
-  empresasOwner        Empresa[]              @relation("EmpresaOwner")
-  membrosEquipe        MembroEquipe[]
-  permissoesMembro       PermissaoMembro[]
-  permissoesProprietario PermissaoProprietario[]
-  proprietarioPerfis       ProprietarioPerfil[]    @relation("ProprietarioPerfilUser")
-  proprietarioLocalidades  ProprietarioLocalidade[] @relation("ProprietarioLocalidadeUser")
-  profissionalPerfis       ProfissionalPerfil[]    @relation("ProfissionalPerfilUser")
-  empresasVinculadas       UsuarioEmpresa[]        @relation("UsuarioEmpresaUser")
-  fornecedorPerfil         Fornecedor?             @relation("FornecedorUser")
-  prestadorPerfil          Prestador?              @relation("PrestadorUser")
-  encaminhamentosRecebidos EncaminhamentoClinico[] @relation("EncaminhamentoPrestador")
-  designacoesComoPrestador DesignacaoPrestador[]   @relation("DesignacaoPrestadorUser")
-  designacoesCriadas       DesignacaoPrestador[]   @relation("DesignacaoCriadoPor")
-  agendamentosComoVet      AgendamentoClinico[]    @relation("AgendamentoVeterinario")
-  agendamentosCriados      AgendamentoClinico[]    @relation("AgendamentoCriadoPor")
-  agendamentosPerdidos     AgendamentoClinico[]    @relation("AgendamentoAssumidoDe")
-  resenhasCriadas          ResenhaEquino[]         @relation("ResenhasCriadas")
-  resenhasGraficasCriadas  ResenhaGrafica[]        @relation("ResenhaGraficaCriadaPor")
-  passwordHistory          PasswordHistory[]
-  orcamentos               Orcamento[]             @relation("OrcamentoProprietario")
-  orcamentosCriados        Orcamento[]             @relation("OrcamentoCriadoPor")
-  animalHistoricoRegistrado AnimalHistorico[]      @relation("AnimalHistoricoCriadoPor")
+  empresa                        Empresa?                      @relation("ProprietarioEmpresa", fields: [empresaId], references: [id], onDelete: SetNull)
+  equipe                         Equipe?                       @relation("ProprietarioEquipe", fields: [equipeId], references: [id], onDelete: SetNull)
+  animais                        Animal[]
+  animaisInativados              Animal[]                      @relation("AnimalInativadoPor")
+  auditLogs                      AuditLog[]
+  dietasCriadas                  Dieta[]                       @relation("CriadorDieta")
+  dietasModificadas              Dieta[]                       @relation("ModificadorDieta")
+  evolucoesCriadas               EvolucaoClinica[]             @relation("EvolucaoVeterinario")
+  evolucoesModificadas           EvolucaoClinica[]             @relation("EvolucaoModificadoPor")
+  prescricoes                    Prescricao[]                  @relation("PrescricaoVeterinario")
+  prescricaoDosesExecutadas      PrescricaoExecucaoDose[]      @relation("PrescricaoDoseExecutadaPor")
+  prescricaoGrupos               PrescricaoGrupo[]             @relation("PrescricaoGrupoVet")
+  prescricaoGruposFinalizou      PrescricaoGrupo[]             @relation("PrescricaoGrupoFinaliza")
+  prescricaoGruposExecutou       PrescricaoGrupo[]             @relation("PrescricaoGrupoExecuta")
+  vacinas                        VacinaClinica[]               @relation("VacinaVeterinario")
+  encaminhamentos                EncaminhamentoClinico[]       @relation("EncaminhamentoVeterinario")
+  examesClinicos                 ExameClinico[]                @relation("ExameClinicoVeterinario")
+  faturaItens                    FaturaItem[]                  @relation("FaturaItemVet")
+  faturas                        Fatura[]                      @relation("FaturaProprietario")
+  faturaLinksPublicos            FaturaLinkPublico[]           @relation("FaturaLinkProprietario")
+  faturaLinksRevogados           FaturaLinkPublico[]           @relation("FaturaLinkRevogadoPor")
+  aiUsageLogs                    AiUsageLog[]
+  vetPerfil                      VetPerfil?
+  especialidades                 UsuarioEspecialidade[]
+  empresasOwner                  Empresa[]                     @relation("EmpresaOwner")
+  membrosEquipe                  MembroEquipe[]
+  permissoesMembro               PermissaoMembro[]
+  permissoesProprietario         PermissaoProprietario[]
+  proprietarioPerfis             ProprietarioPerfil[]          @relation("ProprietarioPerfilUser")
+  proprietarioLocalidades        ProprietarioLocalidade[]      @relation("ProprietarioLocalidadeUser")
+  profissionalPerfis             ProfissionalPerfil[]          @relation("ProfissionalPerfilUser")
+  empresasVinculadas             UsuarioEmpresa[]              @relation("UsuarioEmpresaUser")
+  fornecedorPerfil               Fornecedor?                   @relation("FornecedorUser")
+  prestadorPerfil                Prestador?                    @relation("PrestadorUser")
+  encaminhamentosRecebidos       EncaminhamentoClinico[]       @relation("EncaminhamentoPrestador")
+  designacoesComoPrestador       DesignacaoPrestador[]         @relation("DesignacaoPrestadorUser")
+  designacoesCriadas             DesignacaoPrestador[]         @relation("DesignacaoCriadoPor")
+  agendamentosComoVet            AgendamentoClinico[]          @relation("AgendamentoVeterinario")
+  agendamentosCriados            AgendamentoClinico[]          @relation("AgendamentoCriadoPor")
+  agendamentosPerdidos           AgendamentoClinico[]          @relation("AgendamentoAssumidoDe")
+  resenhasCriadas                ResenhaEquino[]               @relation("ResenhasCriadas")
+  resenhasGraficasCriadas        ResenhaGrafica[]              @relation("ResenhaGraficaCriadaPor")
+  passwordHistory                PasswordHistory[]
+  orcamentos                     Orcamento[]                   @relation("OrcamentoProprietario")
+  orcamentosCriados              Orcamento[]                   @relation("OrcamentoCriadoPor")
+  animalHistoricoRegistrado      AnimalHistorico[]             @relation("AnimalHistoricoCriadoPor")
   animalPropHistComoProprietario AnimalProprietarioHistorico[] @relation("AnimalPropHistProprietario")
   animalPropHistCriados          AnimalProprietarioHistorico[] @relation("AnimalPropHistCriadoPor")
-  ativoPor                 User?                   @relation("UserAtivoPor",   fields: [ativoPorId],   references: [id], onDelete: SetNull)
-  inativoPor               User?                   @relation("UserInativoPor", fields: [inativoPorId], references: [id], onDelete: SetNull)
-  usuariosQueAtivou        User[]                  @relation("UserAtivoPor")
-  usuariosQueInativou      User[]                  @relation("UserInativoPor")
+  documentoTemplates             DocumentoTemplate[]           @relation("UserDocumentoTemplates")
+  documentosEmitidos             DocumentoEmitido[]            @relation("UserDocumentosEmitidos")
+  ativoPor                       User?                         @relation("UserAtivoPor", fields: [ativoPorId], references: [id], onDelete: SetNull)
+  inativoPor                     User?                         @relation("UserInativoPor", fields: [inativoPorId], references: [id], onDelete: SetNull)
+  usuariosQueAtivou              User[]                        @relation("UserAtivoPor")
+  usuariosQueInativou            User[]                        @relation("UserInativoPor")
+
   @@index([equipeId])
   @@map("users")
   @@schema("schs2vet")
@@ -153,48 +163,48 @@ model PasswordHistory {
 // =============================================================================
 
 model Animal {
-  id                 Int      @id @default(autoincrement())
-  nome               String   @db.Text
+  id                 Int       @id @default(autoincrement())
+  nome               String    @db.Text
   peso               Float
   dataNascimento     DateTime?
-  sexo               String   @db.Text
-  photoUrl           String?  @db.Text
-  dataCadastro       DateTime @default(now())
-  ativo              Boolean  @default(true)
+  sexo               String    @db.Text
+  photoUrl           String?   @db.Text
+  dataCadastro       DateTime  @default(now())
+  ativo              Boolean   @default(true)
   // Trilha de ATIVAÇÃO/DESATIVAÇÃO do `ativo` acima (exclusão lógica — o animal
   // some de tudo enquanto ativo=false; ver AnimalController.excluir/reativar e
   // lib/animalAtivacao.js, migration 20260827000001). Nomes DELIBERADAMENTE
   // diferentes de `inativo*` abaixo: aquele é outro recurso (bloqueio, paciente
   // continua visível) e já ocupa `inativo_em`/`inativo_por_id`.
-  ativoEm        DateTime? @map("ativo_em")
-  ativoPorId     Int?      @map("ativo_por_id")
-  desativadoEm   DateTime? @map("desativado_em")
-  desativadoPorId Int?     @map("desativado_por_id")
+  ativoEm            DateTime? @map("ativo_em")
+  ativoPorId         Int?      @map("ativo_por_id")
+  desativadoEm       DateTime? @map("desativado_em")
+  desativadoPorId    Int?      @map("desativado_por_id")
   // Justificativa da EXCLUSÃO LÓGICA acima (migration 20260901000000) — NÃO
   // confundir com `inativoMotivo` abaixo, que é do bloqueio somente-leitura
   // (Animal.inativo, outro recurso). Obrigatória em AnimalController.excluir.
-  desativadoMotivo String? @db.Text @map("desativado_motivo")
+  desativadoMotivo   String?   @map("desativado_motivo") @db.Text
   especieId          Int
   racaId             Int?
   userId             Int
-  empresaId          Int      // multi-tenant: clínica principal que gerencia este animal
-  equipeId           Int?     // equipe responsável dentro da empresa (segregação de permissões)
-  categoriaAnimal    String?  @db.VarChar(100)
-  tipoExercicio      String?  @db.VarChar(100)
-  veterinarioNome    String?  @db.VarChar(255)
-  veterinarioClinica String?  @db.VarChar(255)
-  local              String?  @db.VarChar(255)
-  baia               String?  @db.VarChar(100)
+  empresaId          Int // multi-tenant: clínica principal que gerencia este animal
+  equipeId           Int? // equipe responsável dentro da empresa (segregação de permissões)
+  categoriaAnimal    String?   @db.VarChar(100)
+  tipoExercicio      String?   @db.VarChar(100)
+  veterinarioNome    String?   @db.VarChar(255)
+  veterinarioClinica String?   @db.VarChar(255)
+  local              String?   @db.VarChar(255)
+  baia               String?   @db.VarChar(100)
   idadeAnos          Int?
   localizacaoId      Int?      @map("localizacao_id")
   tratadorId         Int?      @map("tratador_id")
   bloqueado          Boolean   @default(false)
-  bloqueioTipo       String?   @db.VarChar(30) @map("bloqueio_tipo")
+  bloqueioTipo       String?   @map("bloqueio_tipo") @db.VarChar(30)
   bloqueioExpira     DateTime? @map("bloqueio_expira")
   pelagem            String?   @db.VarChar(100)
   altura             String?   @db.VarChar(50)
-  registroPassaporte String?   @db.VarChar(100) @map("registro_passaporte")
-  numeroChip         String?   @db.VarChar(50)  @map("numero_chip")
+  registroPassaporte String?   @map("registro_passaporte") @db.VarChar(100)
+  numeroChip         String?   @map("numero_chip") @db.VarChar(50)
   finalidade         String?   @db.VarChar(100)
   seguradora         String?   @db.VarChar(150)
 
@@ -213,43 +223,44 @@ model Animal {
   // lógica — o animal SOME de tudo): aqui o animal continua visível, só travado.
   // Qualquer perfil com `animais.ativar` pode inativar (com motivo); reativar é
   // SEMPRE gestor/admin (regra fixa no controller, não configurável na matriz).
-  inativo            Boolean   @default(false)
-  inativoEm          DateTime? @map("inativo_em")
-  inativoMotivo      String?   @db.Text @map("inativo_motivo")
-  inativoPorId       Int?      @map("inativo_por_id")
+  inativo       Boolean   @default(false)
+  inativoEm     DateTime? @map("inativo_em")
+  inativoMotivo String?   @map("inativo_motivo") @db.Text
+  inativoPorId  Int?      @map("inativo_por_id")
 
-  especie         Especie              @relation(fields: [especieId],    references: [id])
-  raca            Raca?                @relation(fields: [racaId],       references: [id])
-  user            User                 @relation(fields: [userId],       references: [id], onDelete: Cascade)
-  inativoPor      User?                @relation("AnimalInativadoPor", fields: [inativoPorId], references: [id], onDelete: SetNull)
-  empresa         Empresa              @relation("EmpresaAnimais", fields: [empresaId], references: [id], onDelete: Restrict)
-  equipe          Equipe?              @relation("EquipeAnimais", fields: [equipeId], references: [id], onDelete: SetNull)
-  localizacao     LocalizacaoAnimal?   @relation(fields: [localizacaoId], references: [id], onDelete: SetNull)
-  tratador        Tratador?            @relation(fields: [tratadorId],   references: [id], onDelete: SetNull)
-  dietas          Dieta[]
-  exames          ExameNutricional[]
-  ocorrencias     OcorrenciaSaude[]
-  planosDieta     PlanoDieta[]
-  relatorios      RelatorioSalvo[]
-  evolucoes       EvolucaoClinica[]      @relation("AnimalEvolucoes")
-  prescricoes      Prescricao[]           @relation("AnimalPrescricoes")
-  prescricaoGrupos PrescricaoGrupo[]     @relation("AnimalPrescricaoGrupos")
-  vacinas          VacinaClinica[]       @relation("AnimalVacinas")
-  encaminhamentos EncaminhamentoClinico[] @relation("AnimalEncaminhamentos")
-  examesClinicos  ExameClinico[]         @relation("AnimalExamesClinicos")
-  faturas         Fatura[]               @relation("AnimalFaturas")
-  faturaItens     FaturaItem[]           @relation("FaturaItemAnimal")
-  resumosIA       ResumoAtendimentoIA[]  @relation("AnimalResumosIA")
-  reservasEstoque ReservaEstoque[]       @relation("AnimalReservas")
-  reservasEstoqueVacina ReservaEstoqueVacina[] @relation("AnimalReservasVacina")
-  designacoes     DesignacaoPrestador[]  @relation("AnimalDesignacoes")
-  agendamentos    AgendamentoClinico[]   @relation("AnimalAgendamentos")
-  resenha         ResenhaEquino?         @relation("AnimalResenha")
-  resenhasGraficas ResenhaGrafica[]      @relation("ResenhaGraficaAnimal")
-  exameImagens    ExameImagemAnexo[]     @relation("AnimalExameImagens")
-  orcamentoItens  OrcamentoItem[]        @relation("OrcamentoItemAnimal")
-  historico       AnimalHistorico[]      @relation("AnimalHistoricoAnimal")
-  historicoPropriedade AnimalProprietarioHistorico[]
+  especie               Especie                       @relation(fields: [especieId], references: [id])
+  raca                  Raca?                         @relation(fields: [racaId], references: [id])
+  user                  User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  inativoPor            User?                         @relation("AnimalInativadoPor", fields: [inativoPorId], references: [id], onDelete: SetNull)
+  empresa               Empresa                       @relation("EmpresaAnimais", fields: [empresaId], references: [id], onDelete: Restrict)
+  equipe                Equipe?                       @relation("EquipeAnimais", fields: [equipeId], references: [id], onDelete: SetNull)
+  localizacao           LocalizacaoAnimal?            @relation(fields: [localizacaoId], references: [id], onDelete: SetNull)
+  tratador              Tratador?                     @relation(fields: [tratadorId], references: [id], onDelete: SetNull)
+  dietas                Dieta[]
+  exames                ExameNutricional[]
+  ocorrencias           OcorrenciaSaude[]
+  planosDieta           PlanoDieta[]
+  relatorios            RelatorioSalvo[]
+  evolucoes             EvolucaoClinica[]             @relation("AnimalEvolucoes")
+  prescricoes           Prescricao[]                  @relation("AnimalPrescricoes")
+  prescricaoGrupos      PrescricaoGrupo[]             @relation("AnimalPrescricaoGrupos")
+  vacinas               VacinaClinica[]               @relation("AnimalVacinas")
+  encaminhamentos       EncaminhamentoClinico[]       @relation("AnimalEncaminhamentos")
+  examesClinicos        ExameClinico[]                @relation("AnimalExamesClinicos")
+  faturas               Fatura[]                      @relation("AnimalFaturas")
+  faturaItens           FaturaItem[]                  @relation("FaturaItemAnimal")
+  resumosIA             ResumoAtendimentoIA[]         @relation("AnimalResumosIA")
+  reservasEstoque       ReservaEstoque[]              @relation("AnimalReservas")
+  reservasEstoqueVacina ReservaEstoqueVacina[]        @relation("AnimalReservasVacina")
+  designacoes           DesignacaoPrestador[]         @relation("AnimalDesignacoes")
+  agendamentos          AgendamentoClinico[]          @relation("AnimalAgendamentos")
+  resenha               ResenhaEquino?                @relation("AnimalResenha")
+  resenhasGraficas      ResenhaGrafica[]              @relation("ResenhaGraficaAnimal")
+  exameImagens          ExameImagemAnexo[]            @relation("AnimalExameImagens")
+  orcamentoItens        OrcamentoItem[]               @relation("OrcamentoItemAnimal")
+  historico             AnimalHistorico[]             @relation("AnimalHistoricoAnimal")
+  historicoPropriedade  AnimalProprietarioHistorico[]
+  documentosEmitidos    DocumentoEmitido[]            @relation("AnimalDocumentosEmitidos")
 
   @@index([especieId])
   @@index([racaId])
@@ -267,14 +278,14 @@ model Animal {
 // =============================================================================
 
 model Especie {
-  id            Int                  @id @default(autoincrement())
-  nome          String               @db.Text
-  animais       Animal[]
-  composicoes   ComposicaoAlimento[]
-  racas         Raca[]
-  exigenciasNRC ExigenciasNRC[]
-  vetEspecies   VetEspecie[]
-  medicamentos  MedicamentoEspecie[]
+  id             Int                  @id @default(autoincrement())
+  nome           String               @db.Text
+  animais        Animal[]
+  composicoes    ComposicaoAlimento[]
+  racas          Raca[]
+  exigenciasNRC  ExigenciasNRC[]
+  vetEspecies    VetEspecie[]
+  medicamentos   MedicamentoEspecie[]
   especialidades Especialidade[]
 
   @@map("tb_especies")
@@ -328,10 +339,10 @@ model Dieta {
   modificadopor Int?
   planoDietaId  Int?
 
-  plano           PlanoDieta? @relation(fields: [planoDietaId],  references: [id])
-  alimento        Alimento    @relation(fields: [alimentoId],    references: [id])
-  animal          Animal      @relation(fields: [animalId],      references: [id], onDelete: Cascade)
-  userCriador     User?       @relation("CriadorDieta",     fields: [criadopor],     references: [id], onDelete: SetNull)
+  plano           PlanoDieta? @relation(fields: [planoDietaId], references: [id])
+  alimento        Alimento    @relation(fields: [alimentoId], references: [id])
+  animal          Animal      @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  userCriador     User?       @relation("CriadorDieta", fields: [criadopor], references: [id], onDelete: SetNull)
   userModificador User?       @relation("ModificadorDieta", fields: [modificadopor], references: [id], onDelete: SetNull)
 
   @@index([alimentoId])
@@ -375,16 +386,16 @@ model Nutriente {
 }
 
 model ComposicaoAlimento {
-  id          Int       @id @default(autoincrement())
+  id          Int    @id @default(autoincrement())
   alimentoId  Int
   nutrienteId Int
   especieId   Int?
   valorPorKg  Float
-  base        String    @default("Seca") @db.VarChar(50)
+  base        String @default("Seca") @db.VarChar(50)
 
-  alimento  Alimento  @relation(fields: [alimentoId],  references: [id])
+  alimento  Alimento  @relation(fields: [alimentoId], references: [id])
   nutriente Nutriente @relation(fields: [nutrienteId], references: [id])
-  especie   Especie?  @relation(fields: [especieId],   references: [id])
+  especie   Especie?  @relation(fields: [especieId], references: [id])
 
   @@unique([alimentoId, nutrienteId])
   @@index([nutrienteId])
@@ -394,20 +405,20 @@ model ComposicaoAlimento {
 }
 
 model ExigenciasNRC {
-  id              Int       @id @default(autoincrement())
+  id              Int      @id @default(autoincrement())
   nutrienteId     Int
   peso            Int
-  categoriaAnimal String?   @db.VarChar(100)
-  tipoExercicio   String    @db.VarChar(100)
+  categoriaAnimal String?  @db.VarChar(100)
+  tipoExercicio   String   @db.VarChar(100)
   valorExigido    Float
-  unidade         String?   @db.VarChar(20)
-  fonte           String?   @db.VarChar(100)
+  unidade         String?  @db.VarChar(20)
+  fonte           String?  @db.VarChar(100)
   especieId       Int?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   nutriente Nutriente @relation(fields: [nutrienteId], references: [id])
-  especie   Especie?  @relation(fields: [especieId],   references: [id])
+  especie   Especie?  @relation(fields: [especieId], references: [id])
 
   @@unique([nutrienteId, peso, categoriaAnimal, tipoExercicio])
   @@index([nutrienteId])
@@ -421,18 +432,18 @@ model ExigenciasNRC {
 // =============================================================================
 
 model ExameNutricional {
-  id              Int       @id @default(autoincrement())
+  id              Int      @id @default(autoincrement())
   animalId        Int
   nutrienteId     Int
   dataExame       DateTime
   valorEncontrado Float
-  unidade         String    @db.Text
+  unidade         String   @db.Text
   valorMinRef     Float?
   valorMaxRef     Float?
-  observacao      String?   @db.Text
-  arquivoUrl      String?   @db.Text
+  observacao      String?  @db.Text
+  arquivoUrl      String?  @db.Text
 
-  animal    Animal    @relation(fields: [animalId],    references: [id], onDelete: Cascade)
+  animal    Animal    @relation(fields: [animalId], references: [id], onDelete: Cascade)
   nutriente Nutriente @relation(fields: [nutrienteId], references: [id])
 
   @@index([animalId])
@@ -457,8 +468,8 @@ model ExameImagemAnexo {
   ativo          Boolean  @default(true)
   createdAt      DateTime @default(now())
 
-  animal Animal        @relation("AnimalExameImagens",   fields: [animalId],       references: [id], onDelete: Cascade)
-  exame  ExameClinico? @relation("ExameClinicoImagens",  fields: [exameClinicoId], references: [id], onDelete: SetNull)
+  animal Animal        @relation("AnimalExameImagens", fields: [animalId], references: [id], onDelete: Cascade)
+  exame  ExameClinico? @relation("ExameClinicoImagens", fields: [exameClinicoId], references: [id], onDelete: SetNull)
 
   @@index([animalId])
   @@index([exameClinicoId])
@@ -483,10 +494,10 @@ model ExameClinico {
   numero          Int?
   ativo           Boolean   @default(true)
 
-  animal        Animal           @relation("AnimalExamesClinicos",    fields: [animalId],      references: [id], onDelete: Cascade)
-  veterinario   User?            @relation("ExameClinicoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
-  evolucao      EvolucaoClinica? @relation("EvolucaoExames",          fields: [evolucaoId],    references: [id], onDelete: SetNull)
-  faturaItens   FaturaItem[]     @relation("FaturaItemExameClinico")
+  animal         Animal                      @relation("AnimalExamesClinicos", fields: [animalId], references: [id], onDelete: Cascade)
+  veterinario    User?                       @relation("ExameClinicoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
+  evolucao       EvolucaoClinica?            @relation("EvolucaoExames", fields: [evolucaoId], references: [id], onDelete: SetNull)
+  faturaItens    FaturaItem[]                @relation("FaturaItemExameClinico")
   resultadoItens ExameClinicoResultadoItem[] @relation("ExameClinicoResultados")
   imagens        ExameImagemAnexo[]          @relation("ExameClinicoImagens")
 
@@ -577,8 +588,8 @@ model AnimalProprietarioHistorico {
   animalId            Int       @map("animal_id")
   proprietarioId      Int       @map("proprietario_id")
   dataInicio          DateTime  @default(now()) @map("data_inicio")
-  dataFim             DateTime? @map("data_fim")                        // null = janela ATUAL (dono corrente)
-  motivoTransferencia String?   @db.VarChar(20) @map("motivo_transferencia") // DOACAO|VENDA|ALUGUEL — motivo que ENCERROU esta janela
+  dataFim             DateTime? @map("data_fim") // null = janela ATUAL (dono corrente)
+  motivoTransferencia String?   @map("motivo_transferencia") @db.VarChar(20) // DOACAO|VENDA|ALUGUEL — motivo que ENCERROU esta janela
   empresaId           Int       @map("empresa_id")
   criadoPorId         Int?      @map("criado_por_id")
 
@@ -607,8 +618,8 @@ model EvolucaoClinica {
   status                String    @default("EM_ANDAMENTO")
   texto                 String    @db.Text
   titulo                String?   @db.VarChar(255)
-  numero                Int?      // sequencial por animal dentro do tipo (EV-0001 ou herdado do AG)
-  tipoAtendimento       String?   @default("EV") @db.VarChar(2) @map("tipo_atendimento") // 'AG' | 'EV'
+  numero                Int? // sequencial por animal dentro do tipo (EV-0001 ou herdado do AG)
+  tipoAtendimento       String?   @default("EV") @map("tipo_atendimento") @db.VarChar(2) // 'AG' | 'EV'
   // Tenancy: empresa/equipe do CONTEXTO em que a evolução foi criada (multi-vet:
   // o mesmo animal pode ter histórico dividido entre clínicas). Sem FK — o registro
   // clínico sobrevive à exclusão da empresa. null = legado/vet autônomo.
@@ -620,18 +631,19 @@ model EvolucaoClinica {
   ativo                 Boolean   @default(true)
   justificativaExclusao String?   @db.Text
   aprovado              Boolean   @default(true)
-  resumoIaData          Json?     @map("resumo_ia_data")   // ResumoAtendimento (body-map + scores) cacheado — ver laudoEquinoExtracao.service.ts
+  resumoIaData          Json?     @map("resumo_ia_data") // ResumoAtendimento (body-map + scores) cacheado — ver laudoEquinoExtracao.service.ts
   resumoIaVersao        String?   @map("resumo_ia_versao") @db.VarChar(50) // ex: "extrair_resultado_sessao_equino@v2" — invalida o cache se mudar
 
-  animal            Animal              @relation("AnimalEvolucoes",       fields: [animalId],        references: [id], onDelete: Cascade)
-  veterinario       User?               @relation("EvolucaoVeterinario",   fields: [veterinarioId],   references: [id], onDelete: SetNull)
-  modificadoPor     User?               @relation("EvolucaoModificadoPor", fields: [modificadoPorId], references: [id], onDelete: SetNull)
-  agendamento       AgendamentoClinico? @relation("AgendamentoEvolucoes",  fields: [agendamentoId],   references: [id], onDelete: SetNull)
-  midias            EvolucaoMidia[]
-  prescricaoGrupos  PrescricaoGrupo[]   @relation("EvolucaoPrescricaoGrupos")
-  vacinasClinicas   VacinaClinica[]     @relation("EvolucaoVacinas")
-  examesClinicos    ExameClinico[]      @relation("EvolucaoExames")
-  encaminhamentos   EncaminhamentoClinico[] @relation("EvolucaoEncaminhamentos")
+  animal           Animal                  @relation("AnimalEvolucoes", fields: [animalId], references: [id], onDelete: Cascade)
+  veterinario      User?                   @relation("EvolucaoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
+  modificadoPor    User?                   @relation("EvolucaoModificadoPor", fields: [modificadoPorId], references: [id], onDelete: SetNull)
+  agendamento      AgendamentoClinico?     @relation("AgendamentoEvolucoes", fields: [agendamentoId], references: [id], onDelete: SetNull)
+  midias           EvolucaoMidia[]
+  prescricaoGrupos PrescricaoGrupo[]       @relation("EvolucaoPrescricaoGrupos")
+  vacinasClinicas  VacinaClinica[]         @relation("EvolucaoVacinas")
+  examesClinicos   ExameClinico[]          @relation("EvolucaoExames")
+  encaminhamentos  EncaminhamentoClinico[] @relation("EvolucaoEncaminhamentos")
+  documentosEmitidos DocumentoEmitido[]    @relation("EvolucaoDocumentosEmitidos")
 
   @@index([agendamentoId])
   @@index([animalId, especialidade, dataInicio])
@@ -643,15 +655,15 @@ model EvolucaoClinica {
 }
 
 model EvolucaoMidia {
-  id         Int             @id @default(autoincrement())
+  id         Int      @id @default(autoincrement())
   evolucaoId Int
-  tipo       String          @db.VarChar(10)
-  url        String          @db.VarChar(500)
-  nome       String          @db.VarChar(255)
+  tipo       String   @db.VarChar(10)
+  url        String   @db.VarChar(500)
+  nome       String   @db.VarChar(255)
   tamanho    Int?
-  criadoEm  DateTime         @default(now())
+  criadoEm   DateTime @default(now())
 
-  evolucao   EvolucaoClinica @relation(fields: [evolucaoId], references: [id], onDelete: Cascade)
+  evolucao EvolucaoClinica @relation(fields: [evolucaoId], references: [id], onDelete: Cascade)
 
   @@index([evolucaoId])
   @@map("tb_evolucao_midias")
@@ -659,41 +671,41 @@ model EvolucaoMidia {
 }
 
 model Prescricao {
-  id                  Int       @id @default(autoincrement())
-  animalId            Int
-  veterinarioId       Int?
-  grupoId             Int?      // FK para PrescricaoGrupo (null = item legado sem grupo)
-  medicamentoCatId    Int?      // FK para Medicamento quando selecionado do catálogo
-  tipo                String    @default("MEDICAMENTO")
-  medicamento         String    // nome livre ou nome do catálogo
-  dose                String    @default("")
-  dosagem             String?
-  unidade             String?
-  frequencia          String    @default("")
-  duracao             String    @default("")
-  duracaoDias         Int       @default(1)
-  diasAplicacaoInicio Int       @default(1)
-  diasAplicacaoFim    Int?
-  horaInicio          String?
-  via                 String    @default("Oral")
-  observacao          String?
-  status              String    @default("RASCUNHO")  // RASCUNHO(=SALVO) | ATIVA(=FINALIZADO) | CANCELADA
-  horariosGerados     Json?
-  dataInicio          DateTime  @default(now())
-  dataFim             DateTime?
-  ativo               Boolean   @default(true)
-  aprovado            Boolean   @default(true)
-  medicamentoCliente  Boolean   @default(false)
+  id                       Int       @id @default(autoincrement())
+  animalId                 Int
+  veterinarioId            Int?
+  grupoId                  Int? // FK para PrescricaoGrupo (null = item legado sem grupo)
+  medicamentoCatId         Int? // FK para Medicamento quando selecionado do catálogo
+  tipo                     String    @default("MEDICAMENTO")
+  medicamento              String // nome livre ou nome do catálogo
+  dose                     String    @default("")
+  dosagem                  String?
+  unidade                  String?
+  frequencia               String    @default("")
+  duracao                  String    @default("")
+  duracaoDias              Int       @default(1)
+  diasAplicacaoInicio      Int       @default(1)
+  diasAplicacaoFim         Int?
+  horaInicio               String?
+  via                      String    @default("Oral")
+  observacao               String?
+  status                   String    @default("RASCUNHO") // RASCUNHO(=SALVO) | ATIVA(=FINALIZADO) | CANCELADA
+  horariosGerados          Json?
+  dataInicio               DateTime  @default(now())
+  dataFim                  DateTime?
+  ativo                    Boolean   @default(true)
+  aprovado                 Boolean   @default(true)
+  medicamentoCliente       Boolean   @default(false)
   // Quem aplica ESTE item é o proprietário, em casa: orientação clínica, não serviço
   // da clínica. Não entra na Execução de Prescrição (plantão) e, por consequência,
   // não gera FaturaItem nem reserva/debita estoque. Irmão do `medicamentoCliente`
   // (que trata de quem FORNECE) — os dois são por ITEM, nunca por documento.
-  aplicadaPeloProprietario Boolean @default(false) @map("aplicada_pelo_proprietario")
-  executadoEm         DateTime? // horário da ÚLTIMA dose executada (não só a 1ª — ver §execução por dose)
+  aplicadaPeloProprietario Boolean   @default(false) @map("aplicada_pelo_proprietario")
+  executadoEm              DateTime? // horário da ÚLTIMA dose executada (não só a 1ª — ver §execução por dose)
   // Origem no orçamento: `valorOrcado` é o valor UNITÁRIO aceito pelo cliente e tem
   // precedência sobre o preço do catálogo/estoque no lançamento da fatura.
-  orcamentoItemId     Int?      @map("orcamento_item_id")
-  valorOrcado         Float?    @map("valor_orcado")
+  orcamentoItemId          Int?      @map("orcamento_item_id")
+  valorOrcado              Float?    @map("valor_orcado")
 
   // ── Execução por DOSE individual (não mais por dia) ──────────────────────────
   // `dosesExecutadas`/`proximaDoseEm` são desnormalizados a partir do log
@@ -703,20 +715,20 @@ model Prescricao {
   // uma grade fixa desde `horaInicio`. Só itens COM `horaInicio` e frequência
   // diferente de agora/SOS/seNecessario entram nesse fluxo (ver lib/agendaDoses.js
   // `elegivelParaFluxoNovo`); os demais mantêm o comportamento antigo (1x/dia).
-  dosesExecutadas          Int       @default(0) @map("doses_executadas")
-  proximaDoseEm            DateTime? @map("proxima_dose_em")
+  dosesExecutadas         Int       @default(0) @map("doses_executadas")
+  proximaDoseEm           DateTime? @map("proxima_dose_em")
   // Guarda QUAL `proximaDoseEm` já recebeu o aviso de WhatsApp de 15min — muda
   // sozinho quando uma dose antecipada/atrasada desloca o próximo horário,
   // permitindo reenviar sem precisar de uma segunda coluna de controle.
   proximaDoseAvisoEnviado DateTime? @map("proxima_dose_aviso_enviado")
 
-  animal           Animal           @relation("AnimalPrescricoes",     fields: [animalId],         references: [id], onDelete: Cascade)
-  veterinario      User?            @relation("PrescricaoVeterinario", fields: [veterinarioId],    references: [id], onDelete: SetNull)
-  grupo            PrescricaoGrupo? @relation("GrupoPrescricoes",      fields: [grupoId],          references: [id])
-  medicamentoCat   Medicamento?     @relation("MedicamentoPrescricoes", fields: [medicamentoCatId], references: [id])
-  faturaItens      FaturaItem[]     @relation("FaturaItemPrescricao")
-  orcamentoItem    OrcamentoItem?   @relation("PrescricaoOrcamento",   fields: [orcamentoItemId],  references: [id], onDelete: SetNull)
-  execucoesDose    PrescricaoExecucaoDose[] @relation("PrescricaoExecucoesDose")
+  animal         Animal                   @relation("AnimalPrescricoes", fields: [animalId], references: [id], onDelete: Cascade)
+  veterinario    User?                    @relation("PrescricaoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
+  grupo          PrescricaoGrupo?         @relation("GrupoPrescricoes", fields: [grupoId], references: [id])
+  medicamentoCat Medicamento?             @relation("MedicamentoPrescricoes", fields: [medicamentoCatId], references: [id])
+  faturaItens    FaturaItem[]             @relation("FaturaItemPrescricao")
+  orcamentoItem  OrcamentoItem?           @relation("PrescricaoOrcamento", fields: [orcamentoItemId], references: [id], onDelete: SetNull)
+  execucoesDose  PrescricaoExecucaoDose[] @relation("PrescricaoExecucoesDose")
 
   @@index([animalId])
   @@index([veterinarioId])
@@ -734,18 +746,18 @@ model Prescricao {
 // esperada). `grupoId`/`animalId` são denormalizados para o cron de WhatsApp e para
 // a policy de RLS lerem sem precisar de join até `Prescricao`.
 model PrescricaoExecucaoDose {
-  id                Int      @id @default(autoincrement())
-  prescricaoId      Int
-  grupoId           Int
-  animalId          Int
-  numeroDose        Int      @map("numero_dose") // 1..N dentro do item — só para exibição/auditoria
-  horarioPrevisto   DateTime @map("horario_previsto")
-  horarioExecutado  DateTime @default(now()) @map("horario_executado")
-  executadoPorId    Int?     @map("executado_por_id")
+  id               Int      @id @default(autoincrement())
+  prescricaoId     Int
+  grupoId          Int
+  animalId         Int
+  numeroDose       Int      @map("numero_dose") // 1..N dentro do item — só para exibição/auditoria
+  horarioPrevisto  DateTime @map("horario_previsto")
+  horarioExecutado DateTime @default(now()) @map("horario_executado")
+  executadoPorId   Int?     @map("executado_por_id")
   // NO_HORARIO | ANTECIPADA | ATRASADA
-  classificacao     String   @db.VarChar(20)
-  diferencaMinutos  Int      @map("diferenca_minutos") // executado − previsto, em minutos
-  createdAt         DateTime @default(now()) @map("created_at")
+  classificacao    String   @db.VarChar(20)
+  diferencaMinutos Int      @map("diferenca_minutos") // executado − previsto, em minutos
+  createdAt        DateTime @default(now()) @map("created_at")
 
   prescricao   Prescricao @relation("PrescricaoExecucoesDose", fields: [prescricaoId], references: [id], onDelete: Cascade)
   executadoPor User?      @relation("PrescricaoDoseExecutadaPor", fields: [executadoPorId], references: [id], onDelete: SetNull)
@@ -758,28 +770,28 @@ model PrescricaoExecucaoDose {
 
 // Documento de prescrição (agrupa itens Medicamento/Procedimento)
 model PrescricaoGrupo {
-  id              Int       @id @default(autoincrement())
-  numero          Int                              // sequencial por animal (1=001, 2=002…)
-  animalId        Int
-  veterinarioId   Int?
-  empresaId       Int 
-  evolucaoId      Int?      @map("evolucao_id")   // evolução que originou este grupo
-  status          String    @default("SALVO")      // SALVO | FINALIZADO | EXECUTADO | CANCELADO | CANCELADO_PARCIALMENTE
+  id                 Int       @id @default(autoincrement())
+  numero             Int // sequencial por animal (1=001, 2=002…)
+  animalId           Int
+  veterinarioId      Int?
+  empresaId          Int
+  evolucaoId         Int?      @map("evolucao_id") // evolução que originou este grupo
+  status             String    @default("SALVO") // SALVO | FINALIZADO | EXECUTADO | CANCELADO | CANCELADO_PARCIALMENTE
   // "Aplicada pelo proprietário" mora no ITEM (Prescricao.aplicadaPeloProprietario) —
   // o mesmo documento mistura o que a clínica aplica e o que o cliente aplica em casa.
-  motivoCancelamento String? @db.Text
-  finalizadoPorId Int?
-  finalizadoEm    DateTime?
-  executadoPorId  Int?
-  executadoEm     DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  motivoCancelamento String?   @db.Text
+  finalizadoPorId    Int?
+  finalizadoEm       DateTime?
+  executadoPorId     Int?
+  executadoEm        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
-  animal        Animal           @relation("AnimalPrescricaoGrupos",    fields: [animalId],        references: [id], onDelete: Cascade)
-  veterinario   User?            @relation("PrescricaoGrupoVet",        fields: [veterinarioId],   references: [id], onDelete: SetNull)
-  finalizadoPor User?            @relation("PrescricaoGrupoFinaliza",   fields: [finalizadoPorId], references: [id], onDelete: SetNull)
-  executadoPor  User?            @relation("PrescricaoGrupoExecuta",    fields: [executadoPorId],  references: [id], onDelete: SetNull)
-  evolucao      EvolucaoClinica? @relation("EvolucaoPrescricaoGrupos",  fields: [evolucaoId],      references: [id], onDelete: SetNull)
+  animal        Animal           @relation("AnimalPrescricaoGrupos", fields: [animalId], references: [id], onDelete: Cascade)
+  veterinario   User?            @relation("PrescricaoGrupoVet", fields: [veterinarioId], references: [id], onDelete: SetNull)
+  finalizadoPor User?            @relation("PrescricaoGrupoFinaliza", fields: [finalizadoPorId], references: [id], onDelete: SetNull)
+  executadoPor  User?            @relation("PrescricaoGrupoExecuta", fields: [executadoPorId], references: [id], onDelete: SetNull)
+  evolucao      EvolucaoClinica? @relation("EvolucaoPrescricaoGrupos", fields: [evolucaoId], references: [id], onDelete: SetNull)
   itens         Prescricao[]     @relation("GrupoPrescricoes")
   reservas      ReservaEstoque[] @relation("GrupoReservas")
 
@@ -804,14 +816,14 @@ model ProcedimentoVeterinario {
   categoria        String   @db.VarChar(100)
   subcategoria     String?  @db.VarChar(100)
   especialidade    String?  @db.VarChar(100)
-  tipoProcedimento String?  @db.VarChar(50)   // CLINICO | CIRURGICO | DIAGNOSTICO
-  duracao          Int?                        // minutos
+  tipoProcedimento String?  @db.VarChar(50) // CLINICO | CIRURGICO | DIAGNOSTICO
+  duracao          Int? // minutos
   requerAnestesia  Boolean  @default(false)
   requerInternacao Boolean  @default(false)
-  risco            String?  @db.VarChar(20)   // BAIXO | MEDIO | ALTO
+  risco            String?  @db.VarChar(20) // BAIXO | MEDIO | ALTO
   valorCusto       Float?
   valorVenda       Float?
-  especie          String?  @db.VarChar(50)    // Bovino | Equino | Bovino e Equino
+  especie          String?  @db.VarChar(50) // Bovino | Equino | Bovino e Equino
   // null = catálogo global (ADMIN); setado = procedimento próprio da empresa
   // (criado por item manual de orçamento) — só a empresa dona vê/edita.
   empresaId        Int?     @map("empresa_id")
@@ -847,43 +859,43 @@ model Vacina {
 }
 
 model LoteVacina {
-  id              Int       @id @default(autoincrement())
-  vacinaId        Int?      @map("vacina_id")
-  empresaId       Int       @map("empresa_id")
-  medicamentoCatId Int?     @map("medicamento_cat_id")
-  lote            String    @db.VarChar(100)
-  validade        DateTime
-  qtdTotal        Int       @default(0) @map("qtd_total")
-  qtdDisponivel   Int       @default(0) @map("qtd_disponivel")
+  id                     Int       @id @default(autoincrement())
+  vacinaId               Int?      @map("vacina_id")
+  empresaId              Int       @map("empresa_id")
+  medicamentoCatId       Int?      @map("medicamento_cat_id")
+  lote                   String    @db.VarChar(100)
+  validade               DateTime
+  qtdTotal               Int       @default(0) @map("qtd_total")
+  qtdDisponivel          Int       @default(0) @map("qtd_disponivel")
   // Alertas de nível de estoque (doses) — mesma lógica de EstoqueClinica.estoqueMinimo/
   // .estoqueAlarmante (farmácia): mínimo = alerta vermelho, alarmante = alerta amarelo.
   // 🔴 Migration GERADA (20260919000000), NÃO aplicada.
-  estoqueMinimo    Int      @default(0) @map("estoque_minimo")
-  estoqueAlarmante Int      @default(0) @map("estoque_alarmante")
-  dosesPorFrasco  Int       @default(1)  @map("doses_por_frasco")
-  qtdFrascos      Int       @default(0)  @map("qtd_frascos")
-  validadeHoras   Int?      @map("validade_horas")
-  validadeDias    Int       @default(0)  @map("validade_dias")
+  estoqueMinimo          Int       @default(0) @map("estoque_minimo")
+  estoqueAlarmante       Int       @default(0) @map("estoque_alarmante")
+  dosesPorFrasco         Int       @default(1) @map("doses_por_frasco")
+  qtdFrascos             Int       @default(0) @map("qtd_frascos")
+  validadeHoras          Int?      @map("validade_horas")
+  validadeDias           Int       @default(0) @map("validade_dias")
   valorUnitario          Float?    @map("valor_unitario")
   valorUnitarioRepassado Float?    @map("valor_unitario_repassado")
   dataRecebimento        DateTime? @map("data_recebimento")
-  ativo           Boolean   @default(true)
+  ativo                  Boolean   @default(true)
   // Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — mesma lógica de
   // `Fornecedor` (migration 20260828000000_estoque_ativacao_trilha). Sem FK
   // cascade: excluir quem fez a ação não apaga nem destrava o registro afetado.
-  ativoEm         DateTime? @map("ativo_em")
-  ativoPorId      Int?      @map("ativo_por_id")
-  inativoEm       DateTime? @map("inativo_em")
-  inativoPorId    Int?      @map("inativo_por_id")
+  ativoEm                DateTime? @map("ativo_em")
+  ativoPorId             Int?      @map("ativo_por_id")
+  inativoEm              DateTime? @map("inativo_em")
+  inativoPorId           Int?      @map("inativo_por_id")
   // Justificativa da inativação (migration 20260901000001) — obrigatória em
   // EstoqueVacinaController.toggle, exibida na aba Inativos.
-  inativoMotivo   String?   @db.Text @map("inativo_motivo")
-  createdAt       DateTime  @default(now()) @map("created_at")
+  inativoMotivo          String?   @map("inativo_motivo") @db.Text
+  createdAt              DateTime  @default(now()) @map("created_at")
 
-  vacina         Vacina?      @relation(fields: [vacinaId],         references: [id], onDelete: Cascade)
-  medicamentoCat Medicamento? @relation("MedicamentoLotes",         fields: [medicamentoCatId], references: [id], onDelete: SetNull)
-  empresa        Empresa      @relation("LoteVacinaEmpresa",        fields: [empresaId],        references: [id], onDelete: Restrict)
-  aplicacoes     VacinaClinica[] @relation("LoteAplicacoes")
+  vacina         Vacina?                @relation(fields: [vacinaId], references: [id], onDelete: Cascade)
+  medicamentoCat Medicamento?           @relation("MedicamentoLotes", fields: [medicamentoCatId], references: [id], onDelete: SetNull)
+  empresa        Empresa                @relation("LoteVacinaEmpresa", fields: [empresaId], references: [id], onDelete: Restrict)
+  aplicacoes     VacinaClinica[]        @relation("LoteAplicacoes")
   reservas       ReservaEstoqueVacina[] @relation("LoteVacinaReservas")
 
   @@index([vacinaId])
@@ -894,41 +906,41 @@ model LoteVacina {
 }
 
 model VacinaClinica {
-  id               Int       @id @default(autoincrement())
-  animalId         Int
-  veterinarioId    Int?
-  vacinaId         Int?      @map("vacina_id")
-  loteId           Int?      @map("lote_id")
-  medicamentoCatId Int?      @map("medicamento_cat_id")
-  evolucaoId       Int?      @map("evolucao_id")
-  nome             String
-  fabricante       String?
-  lote             String?
-  dose             String?   @db.VarChar(50)
-  via              String?   @db.VarChar(100)
-  numero           Int?
-  tipoAtendimento  String?   @default("VC") @db.VarChar(2) @map("tipo_atendimento")
-  quantidade       Int?      @default(1)
-  valor            Decimal?  @db.Decimal(10, 2)
+  id                       Int       @id @default(autoincrement())
+  animalId                 Int
+  veterinarioId            Int?
+  vacinaId                 Int?      @map("vacina_id")
+  loteId                   Int?      @map("lote_id")
+  medicamentoCatId         Int?      @map("medicamento_cat_id")
+  evolucaoId               Int?      @map("evolucao_id")
+  nome                     String
+  fabricante               String?
+  lote                     String?
+  dose                     String?   @db.VarChar(50)
+  via                      String?   @db.VarChar(100)
+  numero                   Int?
+  tipoAtendimento          String?   @default("VC") @map("tipo_atendimento") @db.VarChar(2)
+  quantidade               Int?      @default(1)
+  valor                    Decimal?  @db.Decimal(10, 2)
   // Quem FORNECE a dose (a clínica, ou o próprio cliente traz)
-  cliente          Boolean   @default(false)
+  cliente                  Boolean   @default(false)
   // Quem APLICA a dose — irmã de `cliente`, nunca a mesma decisão. É o CRUZAMENTO das
   // duas que decide execução e fatura (matriz do CLAUDE.md). Ver migration
   // 20260815000001 e `VacinaClinicaController.finalizar`.
-  aplicadaPeloProprietario Boolean @default(false) @map("aplicada_pelo_proprietario")
-  status           String    @default("SALVA") @db.VarChar(20) // SALVA | FINALIZADA | EXECUTADA
-  dataAplicacao      DateTime  @default(now())
-  dataReforco        DateTime?
-  observacao         String?   @db.Text
-  ativo              Boolean   @default(true)
-  motivoInativacao   String?   @map("motivo_inativacao") @db.Text
+  aplicadaPeloProprietario Boolean   @default(false) @map("aplicada_pelo_proprietario")
+  status                   String    @default("SALVA") @db.VarChar(20) // SALVA | FINALIZADA | EXECUTADA
+  dataAplicacao            DateTime  @default(now())
+  dataReforco              DateTime?
+  observacao               String?   @db.Text
+  ativo                    Boolean   @default(true)
+  motivoInativacao         String?   @map("motivo_inativacao") @db.Text
 
-  animal      Animal           @relation("AnimalVacinas",     fields: [animalId],      references: [id], onDelete: Cascade)
-  veterinario User?            @relation("VacinaVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
-  vacina      Vacina?          @relation("VacinaAplicacoes",  fields: [vacinaId],      references: [id], onDelete: SetNull)
-  loteVacina  LoteVacina?      @relation("LoteAplicacoes",    fields: [loteId],        references: [id], onDelete: SetNull)
-  evolucao    EvolucaoClinica? @relation("EvolucaoVacinas",   fields: [evolucaoId],    references: [id], onDelete: SetNull)
-  faturaItens FaturaItem[]     @relation("FaturaItemVacina")
+  animal      Animal                 @relation("AnimalVacinas", fields: [animalId], references: [id], onDelete: Cascade)
+  veterinario User?                  @relation("VacinaVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
+  vacina      Vacina?                @relation("VacinaAplicacoes", fields: [vacinaId], references: [id], onDelete: SetNull)
+  loteVacina  LoteVacina?            @relation("LoteAplicacoes", fields: [loteId], references: [id], onDelete: SetNull)
+  evolucao    EvolucaoClinica?       @relation("EvolucaoVacinas", fields: [evolucaoId], references: [id], onDelete: SetNull)
+  faturaItens FaturaItem[]           @relation("FaturaItemVacina")
   reservas    ReservaEstoqueVacina[] @relation("VacinaReservas")
 
   @@index([animalId])
@@ -943,53 +955,53 @@ model VacinaClinica {
 // Agendamentos do animal (consultas, vacinas, retornos, exames, procedimentos)
 // Exibidos no painel "Agendamentos" da tela do animal (AnimalDetail)
 model AgendamentoClinico {
-  id            Int      @id @default(autoincrement())
-  animalId      Int      @map("animal_id")
-  veterinarioId Int?     @map("veterinario_id")
-  tipo          String   @default("CONSULTA") @db.VarChar(20) // CONSULTA|VACINA|RETORNO|EXAME|PROCEDIMENTO
-  titulo        String   @db.VarChar(255)
-  dataHora      DateTime @map("data_hora")
-  observacao    String?  @db.Text
+  id                       Int       @id @default(autoincrement())
+  animalId                 Int       @map("animal_id")
+  veterinarioId            Int?      @map("veterinario_id")
+  tipo                     String    @default("CONSULTA") @db.VarChar(20) // CONSULTA|VACINA|RETORNO|EXAME|PROCEDIMENTO
+  titulo                   String    @db.VarChar(255)
+  dataHora                 DateTime  @map("data_hora")
+  observacao               String?   @db.Text
   // ⚠️ 30, não 20: `CANCELADO_AUTOMATICAMENTE` tem 25 caracteres e NÃO cabia em
   // VarChar(20) — o cron noturno que o grava falhava toda noite (migration
   // 20260914000000). Status novo aqui: confira o comprimento antes.
   // AGENDADO|ATRASADA|EM_ANDAMENTO|CONCLUIDO|FINALIZADO|CANCELADO|
   // CANCELADO_AUTOMATICAMENTE|REAGENDADO|TRANSFERIDO(legado)
-  status        String   @default("AGENDADO") @db.VarChar(30)
-  ativo         Boolean  @default(true)
-  numero        Int?     // sequencial por animal (AG-0001)
-  criadoPorId   Int?     @map("criado_por_id")
+  status                   String    @default("AGENDADO") @db.VarChar(30)
+  ativo                    Boolean   @default(true)
+  numero                   Int? // sequencial por animal (AG-0001)
+  criadoPorId              Int?      @map("criado_por_id")
   // Contexto (empresa/equipe) em que o agendamento foi criado — agendas independentes
   // por equipe. Sem FK (sobrevive à exclusão da empresa/equipe). Backfill = contexto do animal.
-  empresaId     Int      @map("empresa_id")
-  equipeId      Int?     @map("equipe_id")
+  empresaId                Int       @map("empresa_id")
+  equipeId                 Int?      @map("equipe_id")
   // Controle de idempotência dos lembretes por WhatsApp (D-1 e 2h antes)
-  lembreteWa1DiaEnviadoEm DateTime? @map("lembrete_wa_1dia_em")   // legado — não usado mais
-  lembreteWa2hEnviadoEm   DateTime? @map("lembrete_wa_2h_em")     // legado — não usado mais
+  lembreteWa1DiaEnviadoEm  DateTime? @map("lembrete_wa_1dia_em") // legado — não usado mais
+  lembreteWa2hEnviadoEm    DateTime? @map("lembrete_wa_2h_em") // legado — não usado mais
   // Lembretes 1h / 15min antes (proprietário + veterinário) — idempotência por flag.
   lembreteWa1hEnviadoEm    DateTime? @map("lembrete_wa_1h_em")
   lembreteWa15minEnviadoEm DateTime? @map("lembrete_wa_15min_em")
   // Especialidade do atendimento — define o passo da grade e a duração do slot.
-  especialidadeId Int?   @map("especialidade_id")
+  especialidadeId          Int?      @map("especialidade_id")
   // Snapshot da duração em minutos. NÃO derivar na leitura: se o profissional mudar
   // o tempo da especialidade depois, os agendamentos já marcados mantêm o seu.
   // null = anterior à migration 20260804000000 (a agenda trata como 60min).
-  duracaoMin    Int?     @map("duracao_min")
+  duracaoMin               Int?      @map("duracao_min")
   // Quem PERDEU o atendimento na última vez em que alguém o assumiu (agenda ou
   // evolução). Sem isso a troca de responsável é invisível na tela: o atendimento
   // some da agenda de um e aparece na do outro sem explicação. Ver migration
   // 20260815000000 e lib/agendamentoAssumido.js (leitura/escrita por SQL cru).
-  assumidoDeId  Int?      @map("assumido_de_id")
-  assumidoEm    DateTime? @map("assumido_em")
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt      @map("updated_at")
+  assumidoDeId             Int?      @map("assumido_de_id")
+  assumidoEm               DateTime? @map("assumido_em")
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
 
-  animal        Animal         @relation("AnimalAgendamentos",     fields: [animalId],      references: [id], onDelete: Cascade)
-  especialidade Especialidade? @relation("AgendamentoEspecialidade", fields: [especialidadeId], references: [id], onDelete: SetNull)
-  veterinario User?                @relation("AgendamentoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
-  criadoPor   User?                @relation("AgendamentoCriadoPor",   fields: [criadoPorId],   references: [id], onDelete: SetNull)
-  assumidoDe  User?                @relation("AgendamentoAssumidoDe",  fields: [assumidoDeId],  references: [id], onDelete: SetNull)
-  evolucoes   EvolucaoClinica[]    @relation("AgendamentoEvolucoes")
+  animal        Animal            @relation("AnimalAgendamentos", fields: [animalId], references: [id], onDelete: Cascade)
+  especialidade Especialidade?    @relation("AgendamentoEspecialidade", fields: [especialidadeId], references: [id], onDelete: SetNull)
+  veterinario   User?             @relation("AgendamentoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
+  criadoPor     User?             @relation("AgendamentoCriadoPor", fields: [criadoPorId], references: [id], onDelete: SetNull)
+  assumidoDe    User?             @relation("AgendamentoAssumidoDe", fields: [assumidoDeId], references: [id], onDelete: SetNull)
+  evolucoes     EvolucaoClinica[] @relation("AgendamentoEvolucoes")
 
   @@unique([animalId, numero])
   @@index([animalId, dataHora])
@@ -1019,12 +1031,12 @@ model EncaminhamentoClinico {
   observacao         String?  @db.Text
   ativo              Boolean  @default(true)
 
-  animal      Animal           @relation("AnimalEncaminhamentos",        fields: [animalId],      references: [id], onDelete: Cascade)
-  veterinario User?            @relation("EncaminhamentoVeterinario",    fields: [veterinarioId], references: [id], onDelete: SetNull)
-  prestador   User?            @relation("EncaminhamentoPrestador",      fields: [prestadorId],   references: [id], onDelete: SetNull)
-  evolucao    EvolucaoClinica? @relation("EvolucaoEncaminhamentos",      fields: [evolucaoId],    references: [id], onDelete: SetNull)
+  animal      Animal                @relation("AnimalEncaminhamentos", fields: [animalId], references: [id], onDelete: Cascade)
+  veterinario User?                 @relation("EncaminhamentoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
+  prestador   User?                 @relation("EncaminhamentoPrestador", fields: [prestadorId], references: [id], onDelete: SetNull)
+  evolucao    EvolucaoClinica?      @relation("EvolucaoEncaminhamentos", fields: [evolucaoId], references: [id], onDelete: SetNull)
   designacoes DesignacaoPrestador[] @relation("EncaminhamentoDesignacoes")
-  faturaItens FaturaItem[]     @relation("FaturaItemEncaminhamento")
+  faturaItens FaturaItem[]          @relation("FaturaItemEncaminhamento")
 
   @@index([prestadorId])
   @@index([evolucaoId])
@@ -1041,22 +1053,22 @@ model EncaminhamentoClinico {
 model DesignacaoPrestador {
   id               Int       @id @default(autoincrement())
   animalId         Int       @map("animal_id")
-  prestadorId      Int       @map("prestador_id")      // User userType=FORNECEDOR
-  equipeId         Int       @map("equipe_id")          // equipe que designou (segregação multi-empresa)
-  encaminhamentoId Int?      @map("encaminhamento_id")  // origem clínica, quando criada via encaminhamento
+  prestadorId      Int       @map("prestador_id") // User userType=FORNECEDOR
+  equipeId         Int       @map("equipe_id") // equipe que designou (segregação multi-empresa)
+  encaminhamentoId Int?      @map("encaminhamento_id") // origem clínica, quando criada via encaminhamento
   motivo           String?   @db.VarChar(255)
   ativo            Boolean   @default(true)
   dataInicio       DateTime  @default(now()) @map("data_inicio")
   dataFim          DateTime? @map("data_fim")
   criadoPorId      Int?      @map("criado_por_id")
   createdAt        DateTime  @default(now()) @map("created_at")
-  updatedAt        DateTime  @updatedAt      @map("updated_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
 
-  animal         Animal                 @relation("AnimalDesignacoes",        fields: [animalId],         references: [id], onDelete: Cascade)
-  prestador      User                   @relation("DesignacaoPrestadorUser",  fields: [prestadorId],      references: [id], onDelete: Cascade)
-  equipe         Equipe                 @relation("EquipeDesignacoes",        fields: [equipeId],         references: [id], onDelete: Cascade)
+  animal         Animal                 @relation("AnimalDesignacoes", fields: [animalId], references: [id], onDelete: Cascade)
+  prestador      User                   @relation("DesignacaoPrestadorUser", fields: [prestadorId], references: [id], onDelete: Cascade)
+  equipe         Equipe                 @relation("EquipeDesignacoes", fields: [equipeId], references: [id], onDelete: Cascade)
   encaminhamento EncaminhamentoClinico? @relation("EncaminhamentoDesignacoes", fields: [encaminhamentoId], references: [id], onDelete: SetNull)
-  criadoPor      User?                  @relation("DesignacaoCriadoPor",      fields: [criadoPorId],      references: [id], onDelete: SetNull)
+  criadoPor      User?                  @relation("DesignacaoCriadoPor", fields: [criadoPorId], references: [id], onDelete: SetNull)
 
   @@unique([animalId, prestadorId, equipeId])
   @@index([prestadorId, ativo])
@@ -1071,24 +1083,24 @@ model DesignacaoPrestador {
 // =============================================================================
 
 model Fatura {
-  id              Int          @id @default(autoincrement())
-  animalId        Int?         // legado — manter para compatibilidade com prescricoes antigas
-  proprietarioId  Int?
-  mesReferencia   String?      @db.VarChar(7)  // "2026-06"
-  total           Float        @default(0)
-  status          String       @default("ABERTA")  // ABERTA | PAGA | CANCELADA
-  criadoEm        DateTime     @default(now())
-  qtdCorrecoes    Int          @default(0) @map("qtd_correcoes")      // nº de edições/remoções de itens existentes
-  ultimaCorrecaoEm DateTime?   @map("ultima_correcao_em")
+  id               Int          @id @default(autoincrement())
+  animalId         Int? // legado — manter para compatibilidade com prescricoes antigas
+  proprietarioId   Int?
+  mesReferencia    String?      @db.VarChar(7) // "2026-06"
+  total            Float        @default(0)
+  status           String       @default("ABERTA") // ABERTA | PAGA | CANCELADA
+  criadoEm         DateTime     @default(now())
+  qtdCorrecoes     Int          @default(0) @map("qtd_correcoes") // nº de edições/remoções de itens existentes
+  ultimaCorrecaoEm DateTime?    @map("ultima_correcao_em")
   // Tenancy: a fatura é POR EMPRESA. O mesmo cliente atendido por duas clínicas tem
   // DUAS faturas independentes — sem isto, o lançamento da clínica B caía na fatura
   // aberta da clínica A e cada uma via os itens da outra. Sem FK (mesmo critério de
   // EvolucaoClinica/AgendamentoClinico: o registro sobrevive à exclusão da empresa).
   // null = legado anterior à migration 20260812000000, sem tenancy dedutível.
-  empresaId       Int          @map("empresa_id")
-  itens           FaturaItem[]
+  empresaId        Int          @map("empresa_id")
+  itens            FaturaItem[]
 
-  animal       Animal? @relation("AnimalFaturas",      fields: [animalId],       references: [id])
+  animal       Animal? @relation("AnimalFaturas", fields: [animalId], references: [id])
   proprietario User?   @relation("FaturaProprietario", fields: [proprietarioId], references: [id], onDelete: SetNull)
 
   linksPublicos FaturaLinkPublico[]
@@ -1127,7 +1139,7 @@ model FaturaLinkPublico {
   empresaId      Int      @map("empresa_id")
   proprietarioId Int      @map("proprietario_id")
   token          String   @unique @db.VarChar(64)
-  midiaChave     String   @db.VarChar(64) @map("midia_chave")
+  midiaChave     String   @map("midia_chave") @db.VarChar(64)
   expiraEm       DateTime @map("expira_em")
   criadoPorId    Int?     @map("criado_por_id")
   criadoEm       DateTime @default(now()) @map("criado_em")
@@ -1136,19 +1148,19 @@ model FaturaLinkPublico {
   /// gera uma linha nova (ver criarLink), então canal/destino são do envio, não
   /// um atributo genérico da fatura. `null` cobre link criado sem envio associado
   /// (nenhum caso hoje, mas evita obrigar todo caller a informar).
-  canal               String?   @db.VarChar(10) @map("canal")   // 'WHATSAPP' | 'EMAIL'
-  destino             String?   @db.VarChar(180) @map("destino") // telefone/e-mail usado
-  status              String    @default("PENDENTE") @db.VarChar(20) @map("status")
+  canal              String?   @map("canal") @db.VarChar(10) // 'WHATSAPP' | 'EMAIL'
+  destino            String?   @map("destino") @db.VarChar(180) // telefone/e-mail usado
+  status             String    @default("PENDENTE") @map("status") @db.VarChar(20)
   // PENDENTE | ENVIADO | FALHOU | FALHOU_DEFINITIVO
-  tentativas          Int       @default(0) @map("tentativas")
-  ultimoErro          String?   @db.VarChar(300) @map("ultimo_erro")
-  enviadoEm           DateTime? @map("enviado_em")
-  proximaTentativaEm  DateTime? @map("proxima_tentativa_em")
+  tentativas         Int       @default(0) @map("tentativas")
+  ultimoErro         String?   @map("ultimo_erro") @db.VarChar(300)
+  enviadoEm          DateTime? @map("enviado_em")
+  proximaTentativaEm DateTime? @map("proxima_tentativa_em")
 
   /// Revogação — distinta de expiração (`expiraEm`, sempre 30 dias corridos).
   /// `abrirLink`/`obterResumo` respondem 410 com mensagem própria quando setado.
-  revogadoEm     DateTime? @map("revogado_em")
-  revogadoPorId  Int?      @map("revogado_por_id")
+  revogadoEm    DateTime? @map("revogado_em")
+  revogadoPorId Int?      @map("revogado_por_id")
 
   /// Contador aproximado de acesso público — incrementado por `obterResumo`
   /// (uma vez por visita da página, não por byte servido). Uso: UI "Links
@@ -1171,7 +1183,7 @@ model FaturaItem {
   id                      Int      @id @default(autoincrement())
   faturaId                Int
   animalId                Int?
-  tipo                    String   @db.VarChar(50)   // ASSISTENCIA | MEDICAMENTO | PROCEDIMENTO
+  tipo                    String   @db.VarChar(50) // ASSISTENCIA | MEDICAMENTO | PROCEDIMENTO
   descricao               String
   valor                   Float    @default(0)
   quantidade              Float    @default(1)
@@ -1181,19 +1193,19 @@ model FaturaItem {
   prescricaoId            Int?
   vacinaClinicaId         Int?
   encaminhamentoClinicoId Int?
-  orcamentoItemId         Int?     @map("orcamento_item_id")   // origem: OrcamentoItem tipo OUTROS
+  orcamentoItemId         Int?     @map("orcamento_item_id") // origem: OrcamentoItem tipo OUTROS
   // Desconto do item: PERCENTUAL (0-100) ou VALOR (R$ sobre o bruto). null/0 = sem desconto.
-  descontoTipo            String?  @map("desconto_tipo")  @db.VarChar(12)
+  descontoTipo            String?  @map("desconto_tipo") @db.VarChar(12)
   descontoValor           Float    @default(0) @map("desconto_valor")
 
-  fatura                Fatura                 @relation(fields: [faturaId],      references: [id])
+  fatura                Fatura                 @relation(fields: [faturaId], references: [id])
   animal                Animal?                @relation("FaturaItemAnimal", fields: [animalId], references: [id])
-  veterinario           User?                  @relation("FaturaItemVet",    fields: [veterinarioId], references: [id], onDelete: SetNull)
-  exameClinico          ExameClinico?          @relation("FaturaItemExameClinico",   fields: [exameClinicoId],          references: [id], onDelete: SetNull)
-  prescricao            Prescricao?            @relation("FaturaItemPrescricao",     fields: [prescricaoId],            references: [id], onDelete: SetNull)
-  vacinaClinica         VacinaClinica?         @relation("FaturaItemVacina",         fields: [vacinaClinicaId],         references: [id], onDelete: SetNull)
+  veterinario           User?                  @relation("FaturaItemVet", fields: [veterinarioId], references: [id], onDelete: SetNull)
+  exameClinico          ExameClinico?          @relation("FaturaItemExameClinico", fields: [exameClinicoId], references: [id], onDelete: SetNull)
+  prescricao            Prescricao?            @relation("FaturaItemPrescricao", fields: [prescricaoId], references: [id], onDelete: SetNull)
+  vacinaClinica         VacinaClinica?         @relation("FaturaItemVacina", fields: [vacinaClinicaId], references: [id], onDelete: SetNull)
   encaminhamentoClinico EncaminhamentoClinico? @relation("FaturaItemEncaminhamento", fields: [encaminhamentoClinicoId], references: [id], onDelete: SetNull)
-  orcamentoItem         OrcamentoItem?         @relation("FaturaItemOrcamento",      fields: [orcamentoItemId],         references: [id], onDelete: SetNull)
+  orcamentoItem         OrcamentoItem?         @relation("FaturaItemOrcamento", fields: [orcamentoItemId], references: [id], onDelete: SetNull)
 
   @@index([exameClinicoId])
   @@index([prescricaoId])
@@ -1202,7 +1214,6 @@ model FaturaItem {
   @@index([orcamentoItemId])
   @@index([faturaId])
   @@index([animalId])
-
   @@map("tb_fatura_itens")
   @@schema("schs2vet")
 }
@@ -1240,14 +1251,14 @@ model AuditLog {
   userName  String   @db.Text
   email     String   @db.Text
   action    String   @db.Text
-  empresaId Int?     // multi-tenant: sem FK — logs sobrevivem à exclusão da empresa
+  empresaId Int? // multi-tenant: sem FK — logs sobrevivem à exclusão da empresa
   timestamp DateTime @default(now())
 
   // Auditoria estruturada de exclusões/cancelamentos (migration 20260710000003)
   categoria  String? @db.Text // EXCLUSAO | CANCELAMENTO
   entidade   String? @db.Text // EVOLUCAO, PRESCRICAO, EXAME_CLINICO, VACINA, ENCAMINHAMENTO, AGENDAMENTO, ESTOQUE_FARMACIA, ...
   entidadeId Int?
-  animalId   Int?             // sem FK — log sobrevive à exclusão do animal
+  animalId   Int? // sem FK — log sobrevive à exclusão do animal
   motivo     String? @db.Text // justificativa informada pelo usuário (obrigatória nos endpoints de exclusão/cancelamento)
   detalhes   String? @db.Text // descrição legível do registro excluído/cancelado
   ip         String? @db.Text // IP de origem do request (migration 20260710000004)
@@ -1263,26 +1274,26 @@ model AuditLog {
 }
 
 model AiUsageLog {
-  id           Int      @id @default(autoincrement())
-  createdAt    DateTime @default(now())
-  operacao     String
+  id            Int      @id @default(autoincrement())
+  createdAt     DateTime @default(now())
+  operacao      String
   // Módulo de origem da chamada (ver MODULOS_IA em src/ai) — alimenta o
   // relatório de consumo em /ai-usage. 'LEGADO' = registros anteriores à coluna.
-  modulo       String   @default("LEGADO") @db.VarChar(40)
-  modelo       String
-  provedor     String   @default("google")
+  modulo        String   @default("LEGADO") @db.VarChar(40)
+  modelo        String
+  provedor      String   @default("google")
   tokensEntrada Int
-  tokensSaida  Int
-  tokensTotal  Int
-  custoUsd     Float
-  latenciaMs   Int
-  userId       Int?
-  animalId     Int?
+  tokensSaida   Int
+  tokensTotal   Int
+  custoUsd      Float
+  latenciaMs    Int
+  userId        Int?
+  animalId      Int?
   // Cliente (tenant) a quem o consumo é atribuído — base do metering/faturamento.
   // Sem FK de propósito: o log sobrevive à exclusão da empresa (igual AuditLog).
-  empresaId    Int?     @map("empresa_id")
-  sucesso      Boolean  @default(true)
-  erroMensagem String?
+  empresaId     Int?     @map("empresa_id")
+  sucesso       Boolean  @default(true)
+  erroMensagem  String?
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
@@ -1323,7 +1334,7 @@ model VetEspecie {
   especieId   Int
 
   vetPerfil VetPerfil @relation(fields: [vetPerfilId], references: [id], onDelete: Cascade)
-  especie   Especie   @relation(fields: [especieId],   references: [id], onDelete: Cascade)
+  especie   Especie   @relation(fields: [especieId], references: [id], onDelete: Cascade)
 
   @@unique([vetPerfilId, especieId])
   @@map("tb_vet_especies")
@@ -1365,14 +1376,14 @@ model Especialidade {
 
 // Especialidades de um usuário (VETERINARIO/FORNECEDOR com login). Multi-especialidade.
 model UsuarioEspecialidade {
-  id              Int  @id @default(autoincrement())
-  userId          Int  @map("user_id")
-  especialidadeId Int  @map("especialidade_id")
+  id              Int @id @default(autoincrement())
+  userId          Int @map("user_id")
+  especialidadeId Int @map("especialidade_id")
   // Especialidade é POR EMPRESA: o mesmo profissional pode ser ortopedista numa
   // clínica e clínico geral na outra. null = vínculo legado (anterior à 20260807000000).
-  empresaId       Int  @map("empresa_id")
+  empresaId       Int @map("empresa_id")
 
-  user          User          @relation(fields: [userId],          references: [id], onDelete: Cascade)
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   especialidade Especialidade @relation(fields: [especialidadeId], references: [id], onDelete: Cascade)
   empresa       Empresa       @relation("UsuarioEspecialidadeEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
 
@@ -1389,7 +1400,7 @@ model FornecedorEspecialidade {
   fornecedorId    Int @map("fornecedor_id")
   especialidadeId Int @map("especialidade_id")
 
-  fornecedor    Fornecedor    @relation(fields: [fornecedorId],    references: [id], onDelete: Cascade)
+  fornecedor    Fornecedor    @relation(fields: [fornecedorId], references: [id], onDelete: Cascade)
   especialidade Especialidade @relation(fields: [especialidadeId], references: [id], onDelete: Cascade)
 
   @@unique([fornecedorId, especialidadeId])
@@ -1439,8 +1450,8 @@ model ResumoAtendimentoIA {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  animal  Animal   @relation("AnimalResumosIA",  fields: [animalId],  references: [id], onDelete: Cascade)
-  empresa Empresa  @relation("EmpresaResumosIA", fields: [empresaId], references: [id], onDelete: Cascade)
+  animal  Animal  @relation("AnimalResumosIA", fields: [animalId], references: [id], onDelete: Cascade)
+  empresa Empresa @relation("EmpresaResumosIA", fields: [empresaId], references: [id], onDelete: Cascade)
 
   @@unique([animalId, empresaId])
   @@index([animalId])
@@ -1458,7 +1469,7 @@ model ProcedimentoValorEmpresa {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  empresa      Empresa                 @relation("EmpresaProcedimentoValores", fields: [empresaId],      references: [id], onDelete: Cascade)
+  empresa      Empresa                 @relation("EmpresaProcedimentoValores", fields: [empresaId], references: [id], onDelete: Cascade)
   procedimento ProcedimentoVeterinario @relation("ProcedimentoValoresEmpresa", fields: [procedimentoId], references: [id], onDelete: Cascade)
 
   @@unique([empresaId, procedimentoId])
@@ -1497,7 +1508,7 @@ model ProcedimentoComboItem {
   comboId        Int @map("combo_id")
   procedimentoId Int @map("procedimento_id")
 
-  combo        ProcedimentoCombo       @relation(fields: [comboId],        references: [id], onDelete: Cascade)
+  combo        ProcedimentoCombo       @relation(fields: [comboId], references: [id], onDelete: Cascade)
   procedimento ProcedimentoVeterinario @relation("ProcedimentoComboItens", fields: [procedimentoId], references: [id], onDelete: Cascade)
 
   @@unique([comboId, procedimentoId])
@@ -1519,15 +1530,15 @@ model Orcamento {
   equipeId       Int?     @map("equipe_id")
   proprietarioId Int      @map("proprietario_id")
   criadoPorId    Int      @map("criado_por_id")
-  numero         Int      // sequencial por empresa
+  numero         Int // sequencial por empresa
   status         String   @default("RASCUNHO") // RASCUNHO|APROVADO|APROVADO_PARCIALMENTE|REJEITADO
   observacao     String?  @db.Text
   ativo          Boolean  @default(true)
   createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt        @map("updated_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   proprietario User            @relation("OrcamentoProprietario", fields: [proprietarioId], references: [id], onDelete: Cascade)
-  criadoPor    User            @relation("OrcamentoCriadoPor",    fields: [criadoPorId],    references: [id], onDelete: Cascade)
+  criadoPor    User            @relation("OrcamentoCriadoPor", fields: [criadoPorId], references: [id], onDelete: Cascade)
   itens        OrcamentoItem[]
 
   @@index([empresaId])
@@ -1541,8 +1552,8 @@ model OrcamentoItem {
   id            Int       @id @default(autoincrement())
   orcamentoId   Int       @map("orcamento_id")
   animalId      Int?      @map("animal_id") // null = item no nível do proprietário
-  tipo          String    // PROCEDIMENTO|COMBO|MEDICAMENTO|VACINA|OUTROS
-  refId         Int?      @map("ref_id")    // id do catálogo de origem (proc/combo/medicamento/vacina)
+  tipo          String // PROCEDIMENTO|COMBO|MEDICAMENTO|VACINA|OUTROS
+  refId         Int?      @map("ref_id") // id do catálogo de origem (proc/combo/medicamento/vacina)
   especialidade String?   @db.VarChar(100)
   descricao     String    @db.VarChar(255)
   quantidade    Float     @default(1)
@@ -1554,7 +1565,7 @@ model OrcamentoItem {
   // VACINA: mesmos campos obrigatórios da tela de aplicação (Tipo Dose/Via) —
   // capturados aqui (migration 20260902000000) para a importação já vir pronta,
   // sem exigir preenchimento manual depois de importar.
-  tipoDose      String?   @db.VarChar(50)  @map("tipo_dose")
+  tipoDose      String?   @map("tipo_dose") @db.VarChar(50)
   via           String?   @db.VarChar(100)
   valorUnitario Float     @default(0) @map("valor_unitario")
   // Desconto do item: PERCENTUAL (0-100) ou VALOR (R$ sobre o bruto). null/0 = sem desconto.
@@ -1567,10 +1578,10 @@ model OrcamentoItem {
   importadoEm   DateTime? @map("importado_em")
   createdAt     DateTime  @default(now()) @map("created_at")
 
-  orcamento    Orcamento     @relation(fields: [orcamentoId], references: [id], onDelete: Cascade)
-  animal       Animal?       @relation("OrcamentoItemAnimal", fields: [animalId], references: [id], onDelete: SetNull)
-  faturaItens  FaturaItem[]  @relation("FaturaItemOrcamento")
-  prescricoes  Prescricao[]  @relation("PrescricaoOrcamento")
+  orcamento   Orcamento    @relation(fields: [orcamentoId], references: [id], onDelete: Cascade)
+  animal      Animal?      @relation("OrcamentoItemAnimal", fields: [animalId], references: [id], onDelete: SetNull)
+  faturaItens FaturaItem[] @relation("FaturaItemOrcamento")
+  prescricoes Prescricao[] @relation("PrescricaoOrcamento")
 
   @@index([orcamentoId])
   @@index([animalId])
@@ -1585,9 +1596,9 @@ model OrcamentoItem {
 /// Fica no control plane (sem RLS): é o cadastro do produto, e o ADMIN da plataforma o
 /// edita atravessando todos os tenants.
 model Plano {
-  id     Int    @id @default(autoincrement())
-  slug   String @unique @db.VarChar(40)
-  nome   String @db.VarChar(100)
+  id   Int    @id @default(autoincrement())
+  slug String @unique @db.VarChar(40)
+  nome String @db.VarChar(100)
 
   /// Assentos incluídos. **NULL = ilimitado** — e não "zero". Zero é um plano sem
   /// nenhum usuário, que existe (avaliação bloqueada); confundir os dois liberaria
@@ -1605,7 +1616,7 @@ model Plano {
   ordem Int     @default(0)
 
   createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt      @map("updated_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   assinaturas AssinaturaEmpresa[]
 
@@ -1635,7 +1646,7 @@ model AssinaturaEmpresa {
   observacao String?
 
   createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt      @map("updated_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   empresa Empresa @relation("EmpresaAssinatura", fields: [empresaId], references: [id], onDelete: Cascade)
   plano   Plano   @relation(fields: [planoId], references: [id], onDelete: Restrict)
@@ -1716,8 +1727,8 @@ model Empresa {
   // `nome`, `cnpj`, `telefone` e `endereco` acima são os campos LEGADOS: continuam
   // porque o unique(ownerId, nome, cnpj) e ~60 pontos de código dependem deles. A
   // limpeza é tarefa própria, depois que os leitores migrarem.
-  razaoSocial       String?  @map("razao_social")       @db.VarChar(255)
-  nomeFantasia      String?  @map("nome_fantasia")      @db.VarChar(255)
+  razaoSocial       String? @map("razao_social") @db.VarChar(255)
+  nomeFantasia      String? @map("nome_fantasia") @db.VarChar(255)
   // Documento em DÍGITOS (sem máscara) + o que ele é. A "empresa pessoal" (CPF) já existe
   // no modelo — ver o comentário do unique abaixo.
   // ÚNICO ENTRE EMPRESAS (migration `20260816100000`): o documento é o que identifica o
@@ -1725,46 +1736,48 @@ model Empresa {
   // fora do índice (o Postgres trata NULLs como distintos), o que preserva a empresa
   // legada que ainda não informou o seu — a aplicação é que passou a exigi-lo.
   // Escrita SEMPRE junto do `cnpj` legado, com os mesmos dígitos — ver lib/documentoEmpresa.js.
-  documento         String?  @unique                     @db.VarChar(14)
-  tipoDocumento     String?  @map("tipo_documento")      @db.VarChar(4)   // CNPJ | CPF
-  inscricaoEstadual String?  @map("inscricao_estadual")  @db.VarChar(20)
-  emailContato      String?  @map("email_contato")       @db.VarChar(255)
+  documento         String? @unique @db.VarChar(14)
+  tipoDocumento     String? @map("tipo_documento") @db.VarChar(4) // CNPJ | CPF
+  inscricaoEstadual String? @map("inscricao_estadual") @db.VarChar(20)
+  emailContato      String? @map("email_contato") @db.VarChar(255)
   // D4: o DONO do WhatsApp é este cadastro. `EmpresaConfiguracao.whatsapp` passa a ler
   // daqui — dois donos para o mesmo dado sempre divergem.
-  whatsapp          String?                              @db.VarChar(15)
-  cep               String?                              @db.VarChar(10)
-  numero            String?                              @db.VarChar(20)
-  complemento       String?                              @db.VarChar(100)
-  bairro            String?                              @db.VarChar(100)
-  cidade            String?                              @db.VarChar(100)
-  estado            String?                              @db.VarChar(2)
+  whatsapp          String? @db.VarChar(15)
+  cep               String? @db.VarChar(10)
+  numero            String? @db.VarChar(20)
+  complemento       String? @db.VarChar(100)
+  bairro            String? @db.VarChar(100)
+  cidade            String? @db.VarChar(100)
+  estado            String? @db.VarChar(2)
 
   // D3: empresa SUSPENSA **bloqueia o login de todos** dela. É por EMPRESA — quem também
   // trabalha em outra clínica entra nela normalmente, e a suspensa some do seletor de
   // contexto. Quem lê isto é `podeAcessarSistema`, o mesmo ponto do `acessoSistema`.
   // ⚠️ Este campo governa o ACESSO. `AssinaturaEmpresa.status` descreve a situação
   // COMERCIAL (o porquê) e não bloqueia nada sozinho — não confundir os dois.
-  status            String   @default("ATIVA")           @db.VarChar(20)  // ATIVA | SUSPENSA | CANCELADA
-  canceladoEm       DateTime? @map("cancelado_em")
+  status      String    @default("ATIVA") @db.VarChar(20) // ATIVA | SUSPENSA | CANCELADA
+  canceladoEm DateTime? @map("cancelado_em")
 
-  owner           User?            @relation("EmpresaOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  assinatura      AssinaturaEmpresa? @relation("EmpresaAssinatura")
-  iaPlano         IaPlanoEmpresa?  @relation("EmpresaIaPlano")
-  proprietarios   User[]           @relation("ProprietarioEmpresa")
-  proprietarioPerfis ProprietarioPerfil[] @relation("ProprietarioPerfilEmpresa")
-  proprietarioLocalidades ProprietarioLocalidade[] @relation("ProprietarioLocalidadeEmpresa")
-  profissionalPerfis ProfissionalPerfil[] @relation("ProfissionalPerfilEmpresa")
-  usuariosVinculados UsuarioEmpresa[]     @relation("UsuarioEmpresaEmpresa")
-  especialidadesMembros UsuarioEspecialidade[] @relation("UsuarioEspecialidadeEmpresa")
-  equipes         Equipe[]
-  animais         Animal[]         @relation("EmpresaAnimais")
+  owner                       User?                         @relation("EmpresaOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  assinatura                  AssinaturaEmpresa?            @relation("EmpresaAssinatura")
+  iaPlano                     IaPlanoEmpresa?               @relation("EmpresaIaPlano")
+  proprietarios               User[]                        @relation("ProprietarioEmpresa")
+  proprietarioPerfis          ProprietarioPerfil[]          @relation("ProprietarioPerfilEmpresa")
+  proprietarioLocalidades     ProprietarioLocalidade[]      @relation("ProprietarioLocalidadeEmpresa")
+  profissionalPerfis          ProfissionalPerfil[]          @relation("ProfissionalPerfilEmpresa")
+  usuariosVinculados          UsuarioEmpresa[]              @relation("UsuarioEmpresaEmpresa")
+  especialidadesMembros       UsuarioEspecialidade[]        @relation("UsuarioEspecialidadeEmpresa")
+  equipes                     Equipe[]
+  animais                     Animal[]                      @relation("EmpresaAnimais")
   animalProprietarioHistorico AnimalProprietarioHistorico[]
-  estoques    EstoqueClinica[] @relation("EmpresaEstoque")
-  loteVacinas LoteVacina[]     @relation("LoteVacinaEmpresa")
-  configuracoes   EmpresaConfiguracao[]
-  procedimentoValores ProcedimentoValorEmpresa[] @relation("EmpresaProcedimentoValores")
-  procedimentoCombos  ProcedimentoCombo[]        @relation("EmpresaProcedimentoCombos")
-  resumosIA           ResumoAtendimentoIA[]      @relation("EmpresaResumosIA")
+  estoques                    EstoqueClinica[]              @relation("EmpresaEstoque")
+  loteVacinas                 LoteVacina[]                  @relation("LoteVacinaEmpresa")
+  configuracoes               EmpresaConfiguracao[]
+  procedimentoValores         ProcedimentoValorEmpresa[]    @relation("EmpresaProcedimentoValores")
+  procedimentoCombos          ProcedimentoCombo[]           @relation("EmpresaProcedimentoCombos")
+  resumosIA                   ResumoAtendimentoIA[]         @relation("EmpresaResumosIA")
+  documentoTemplates          DocumentoTemplate[]           @relation("EmpresaDocumentoTemplates")
+  documentosEmitidos          DocumentoEmitido[]            @relation("EmpresaDocumentosEmitidos")
 
   // Duplicidade: mesmo gestor (ownerId ≡ e-mail único) + mesmo nome + mesmo CNPJ é bloqueado.
   // cnpj NULL (empresa pessoal/CPF): Postgres trata NULLs como distintos — enforcement na aplicação.
@@ -1835,6 +1848,11 @@ model UsuarioEmpresa {
   // null = sem foto (a tela cai nas iniciais). Lida/gravada por SQL cru, ver
   // lib/usuarioEmpresa.js.
   fotoUrl     String? @map("foto_url")
+  // Assinatura do profissional NESTA empresa (migration 20260918000000) — imagem
+  // recortada, usada pelo bloco `assinatura` da Central de Documentos. POR EMPRESA
+  // pela mesma razão da foto: o cadastro é da clínica. O CRMV que acompanha é a
+  // coluna `crmv` logo acima. Lida/gravada por SQL cru, ver lib/usuarioEmpresa.js.
+  assinaturaUrl String? @map("assinatura_url")
 
   // Condição comercial do CLIENTE nesta empresa
   mensalista          Boolean @default(false)
@@ -1845,7 +1863,7 @@ model UsuarioEmpresa {
   // Remuneração do PROFISSIONAL nesta empresa (o acordo é com cada clínica:
   // salário aqui, comissão ali). NULL = vínculo legado, anterior à migration
   // 20260812000002 — a obrigatoriedade é da aplicação, na inclusão/edição do membro.
-  tipoPagamento  String? @map("tipo_pagamento")  @db.VarChar(10) // SALARIO | COMISSAO
+  tipoPagamento  String? @map("tipo_pagamento") @db.VarChar(10) // SALARIO | COMISSAO
   formaPagamento String? @map("forma_pagamento") @db.VarChar(10) // VALOR | PERCENTUAL
   valorPagamento Float?  @map("valor_pagamento")
 
@@ -1855,14 +1873,14 @@ model UsuarioEmpresa {
   acessoSistema Boolean @default(true) @map("acesso_sistema")
 
   // Ativo DENTRO desta empresa (User.ativo continua global, só o ADMIN mexe)
-  ativo     Boolean  @default(true)
+  ativo                Boolean   @default(true)
   // Quando o PRÓPRIO usuário salvou o Cadastro Pessoal nesta empresa. NULL = ainda
   // não confirmou → módulos bloqueados (o gestor ter preenchido não conta).
   cadastroConfirmadoEm DateTime? @map("cadastro_confirmado_em")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
 
-  user    User    @relation("UsuarioEmpresaUser",    fields: [userId],    references: [id], onDelete: Cascade)
+  user    User    @relation("UsuarioEmpresaUser", fields: [userId], references: [id], onDelete: Cascade)
   empresa Empresa @relation("UsuarioEmpresaEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
 
   @@unique([userId, empresaId])
@@ -1877,22 +1895,22 @@ model ProfissionalPerfil {
   userId    Int @map("user_id")
   empresaId Int @map("empresa_id")
 
-  fullName    String? @map("full_name") @db.VarChar(255)
-  phone       String? @db.VarChar(30)
-  cep         String? @db.VarChar(10)
-  endereco    String? @db.VarChar(255)
-  complemento String? @db.VarChar(100)
-  bairro      String? @db.VarChar(100)
-  cidade      String? @db.VarChar(100)
-  estado      String? @db.VarChar(2)
+  fullName    String?  @map("full_name") @db.VarChar(255)
+  phone       String?  @db.VarChar(30)
+  cep         String?  @db.VarChar(10)
+  endereco    String?  @db.VarChar(255)
+  complemento String?  @db.VarChar(100)
+  bairro      String?  @db.VarChar(100)
+  cidade      String?  @db.VarChar(100)
+  estado      String?  @db.VarChar(2)
   // CRMV aqui (e não em VetPerfil, que é @unique global) — cada empresa informa o seu
-  crmv        String? @db.VarChar(20)
+  crmv        String?  @db.VarChar(20)
   // Ativo DENTRO desta empresa (User.ativo continua global, só o ADMIN mexe)
-  ativo     Boolean  @default(true)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  ativo       Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
-  user    User    @relation("ProfissionalPerfilUser",    fields: [userId],    references: [id], onDelete: Cascade)
+  user    User    @relation("ProfissionalPerfilUser", fields: [userId], references: [id], onDelete: Cascade)
   empresa Empresa @relation("ProfissionalPerfilEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
 
   @@unique([userId, empresaId])
@@ -1906,36 +1924,36 @@ model ProprietarioPerfil {
   userId    Int @map("user_id")
   empresaId Int @map("empresa_id")
 
-  fullName            String?  @map("full_name") @db.VarChar(255)
-  phone               String?  @db.VarChar(30)
-  phone2              String?  @db.VarChar(30)
-  cpf                 String?  @db.VarChar(14)
-  cnpj                String?  @db.VarChar(18)
-  cep                 String?  @db.VarChar(10)
-  endereco            String?  @db.VarChar(255)
-  complemento         String?  @db.VarChar(100)
-  bairro              String?  @db.VarChar(100)
-  cidade              String?  @db.VarChar(100)
-  estado              String?  @db.VarChar(2)
-  mensalista          Boolean  @default(false)
-  valorAssistencia    Float?   @map("valor_assistencia")
-  frequenciaVisitas   Int?     @map("frequencia_visitas")
-  diaVencimentoFatura Int?     @map("dia_vencimento_fatura")
+  fullName            String?   @map("full_name") @db.VarChar(255)
+  phone               String?   @db.VarChar(30)
+  phone2              String?   @db.VarChar(30)
+  cpf                 String?   @db.VarChar(14)
+  cnpj                String?   @db.VarChar(18)
+  cep                 String?   @db.VarChar(10)
+  endereco            String?   @db.VarChar(255)
+  complemento         String?   @db.VarChar(100)
+  bairro              String?   @db.VarChar(100)
+  cidade              String?   @db.VarChar(100)
+  estado              String?   @db.VarChar(2)
+  mensalista          Boolean   @default(false)
+  valorAssistencia    Float?    @map("valor_assistencia")
+  frequenciaVisitas   Int?      @map("frequencia_visitas")
+  diaVencimentoFatura Int?      @map("dia_vencimento_fatura")
   // Ativo DENTRO desta empresa (User.ativo continua global, só o ADMIN mexe)
-  ativo     Boolean  @default(true)
+  ativo               Boolean   @default(true)
   // Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — mesma lógica de Fornecedor/
   // Prestador/Tratador (migration 20260827000000), lida/gravada por
   // lib/cadastroAtivacao.js. Sem FK cascade: excluir quem fez a ação não apaga
   // nem restaura o registro afetado.
-  ativoEm      DateTime? @map("ativo_em")
-  ativoPorId   Int?      @map("ativo_por_id")
-  inativoEm    DateTime? @map("inativo_em")
-  inativoPorId Int?      @map("inativo_por_id")
+  ativoEm             DateTime? @map("ativo_em")
+  ativoPorId          Int?      @map("ativo_por_id")
+  inativoEm           DateTime? @map("inativo_em")
+  inativoPorId        Int?      @map("inativo_por_id")
   // Justificativa da inativação (migration 20260901000000) — obrigatória em
   // ProprietarioController.removerDaEmpresa, exibida na aba Inativos.
-  inativoMotivo String?  @db.Text @map("inativo_motivo")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  inativoMotivo       String?   @map("inativo_motivo") @db.Text
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
 
   user    User    @relation("ProprietarioPerfilUser", fields: [userId], references: [id], onDelete: Cascade)
   empresa Empresa @relation("ProprietarioPerfilEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
@@ -1954,18 +1972,18 @@ model ProprietarioPerfil {
 // POR EMPRESA, pela mesma razão do ProprietarioPerfil: o combinado da clínica A não é
 // o da clínica B, mesmo sendo o mesmo cliente (e-mail único).
 model ProprietarioLocalidade {
-  id            Int @id @default(autoincrement())
-  userId        Int @map("user_id")
-  empresaId     Int @map("empresa_id")
-  localizacaoId Int @map("localizacao_id")
+  id                Int      @id @default(autoincrement())
+  userId            Int      @map("user_id")
+  empresaId         Int      @map("empresa_id")
+  localizacaoId     Int      @map("localizacao_id")
   // Visitas por SEMANA naquela localidade (1-7). Validado na aplicação.
-  frequenciaVisitas Int @map("frequencia_visitas")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  frequenciaVisitas Int      @map("frequencia_visitas")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
 
-  user        User              @relation("ProprietarioLocalidadeUser",    fields: [userId],        references: [id], onDelete: Cascade)
-  empresa     Empresa           @relation("ProprietarioLocalidadeEmpresa", fields: [empresaId],     references: [id], onDelete: Cascade)
-  localizacao LocalizacaoAnimal @relation("ProprietarioLocalidadeLocal",   fields: [localizacaoId], references: [id], onDelete: Cascade)
+  user        User              @relation("ProprietarioLocalidadeUser", fields: [userId], references: [id], onDelete: Cascade)
+  empresa     Empresa           @relation("ProprietarioLocalidadeEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
+  localizacao LocalizacaoAnimal @relation("ProprietarioLocalidadeLocal", fields: [localizacaoId], references: [id], onDelete: Cascade)
 
   // A mesma localidade não se repete para o mesmo cliente na mesma empresa — ao
   // contrário do local de trabalho do profissional, aqui não há turno: é uma
@@ -1978,14 +1996,14 @@ model ProprietarioLocalidade {
 }
 
 model Equipe {
-  id        Int             @id @default(autoincrement())
+  id        Int      @id @default(autoincrement())
   nome      String
   empresaId Int
-  createdAt DateTime        @default(now())
+  createdAt DateTime @default(now())
 
-  empresa  Empresa         @relation(fields: [empresaId], references: [id], onDelete: Cascade)
-  membros  MembroEquipe[]
-  convites ConviteEquipe[]
+  empresa                 Empresa                 @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  membros                 MembroEquipe[]
+  convites                ConviteEquipe[]
   permissoesMembros       PermissaoMembro[]
   permissoesProprietarios PermissaoProprietario[]
   perfis                  PerfilEquipe[]
@@ -2006,50 +2024,50 @@ model Equipe {
 // escopo usado pelo EmpresaContext no frontend (ver EquipeController.getEmpresaDoGestor/
 // getEquipeAtiva). equipeId null = configuração no nível da empresa inteira.
 model EmpresaConfiguracao {
-  id                  Int      @id @default(autoincrement())
-  empresaId           Int
-  equipeId            Int?
-  logoUrl             String?
+  id                     Int       @id @default(autoincrement())
+  empresaId              Int
+  equipeId               Int?
+  logoUrl                String?
   // DIA_FIXO (usa diaFechamentoFatura 1-31, com clamp em meses menores) |
   // DIA_UTIL (usa diaFechamentoFatura como Nº do dia útil, 1-10) |
   // ULTIMO_DIA_MES (ignora diaFechamentoFatura) |
   // null → compat: se diaFechamentoFatura setado, trata como DIA_FIXO; senão ULTIMO_DIA_MES (fallback)
-  tipoFechamento      String?
-  diaFechamentoFatura Int?     // dia do mês (DIA_FIXO) ou Nº do dia útil (DIA_UTIL)
-  whatsapp            String?  // WhatsApp da empresa (somente dígitos, DDD+número) — envio/recebimento de mensagens
+  tipoFechamento         String?
+  diaFechamentoFatura    Int? // dia do mês (DIA_FIXO) ou Nº do dia útil (DIA_UTIL)
+  whatsapp               String? // WhatsApp da empresa (somente dígitos, DDD+número) — envio/recebimento de mensagens
   // Expediente de atendimento — usado para liberar horários no Agendamento.
   // diasAtendimento: CSV de dias da semana (0=Dom … 6=Sáb), ex: "1,2,3,4,5". null = todos os dias.
   // horaInicio/horaFim: "HH:MM" (ex: "08:00" / "20:00"). null = sem restrição (00:00–24:00).
-  diasAtendimento       String?  @map("dias_atendimento")
-  horaInicioAtendimento String?  @db.VarChar(5) @map("hora_inicio_atendimento")
-  horaFimAtendimento    String?  @db.VarChar(5) @map("hora_fim_atendimento")
+  diasAtendimento        String?   @map("dias_atendimento")
+  horaInicioAtendimento  String?   @map("hora_inicio_atendimento") @db.VarChar(5)
+  horaFimAtendimento     String?   @map("hora_fim_atendimento") @db.VarChar(5)
   // Espécies que a empresa atende — CSV de IDs de Especie (ex: "1,2"). null/"" = todas.
   // Usado para filtrar as especialidades oferecidas no cadastro de membros/fornecedores.
-  especiesAtendidas     String?  @map("especies_atendidas")
+  especiesAtendidas      String?   @map("especies_atendidas")
   // Tempo de consulta PADRÃO da empresa (minutos). É o que vale para a especialidade
   // que o profissional não configurou no card "Locais de trabalho" — herança dinâmica,
   // não snapshot. null = padrão do sistema (60 min).
-  tempoConsultaPadraoMin Int?    @map("tempo_consulta_padrao_min")
+  tempoConsultaPadraoMin Int?      @map("tempo_consulta_padrao_min")
   // Validade do ORÇAMENTO em dias (migration 20260813000000). Passado o prazo contado
   // de Orcamento.createdAt, o cron cancela o que não foi aprovado (nem parcialmente).
   // null = sem validade — o orçamento não expira.
-  validadeOrcamentoDias  Int?    @map("validade_orcamento_dias")
+  validadeOrcamentoDias  Int?      @map("validade_orcamento_dias")
   // Fuso horário da clínica (IANA, ex.: "America/Manaus") — migration 20260823000000.
   // A aplicação roda nos 4 fusos do Brasil (UTC−2 a UTC−5); sem isto o backend
   // assumia America/Sao_Paulo fixo e a fila do plantão / e-mail / WhatsApp saíam
   // 1-2h deslocados para quem está em UTC−4/−5.
   // null = America/Sao_Paulo (comportamento anterior). Ler/gravar SEMPRE por
   // lib/fusoEmpresa.js (SQL cru — ver a nota lá).
-  fusoHorario           String?   @db.VarChar(60) @map("fuso_horario")
+  fusoHorario            String?   @map("fuso_horario") @db.VarChar(60)
   // Evolution API — instância exclusiva de WhatsApp da clínica (migration 20260718170000).
   // waInstance: identificador da instância (nunca exposto ao frontend);
   // waStatus: DESCONECTADO | AGUARDANDO_QR | CONECTADO | ERRO.
   // NOTA: acessados via raw SQL nos services de WhatsApp enquanto o client não for regenerado.
-  waInstance            String?   @unique @map("wa_instance")
-  waStatus              String    @default("DESCONECTADO") @db.VarChar(30) @map("wa_status")
-  waStatusEm            DateTime? @map("wa_status_em")
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  waInstance             String?   @unique @map("wa_instance")
+  waStatus               String    @default("DESCONECTADO") @map("wa_status") @db.VarChar(30)
+  waStatusEm             DateTime? @map("wa_status_em")
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   equipe  Equipe? @relation(fields: [equipeId], references: [id], onDelete: Cascade)
@@ -2063,9 +2081,9 @@ model EmpresaConfiguracao {
 // Linha única (a app usa/atualiza a primeira; cria se não existir).
 model CronAlertaConfig {
   id               Int      @id @default(autoincrement())
-  emails           String?  // destinatários dos alertas (CSV). Vazio → ADMINs do sistema
-  notificarSucesso Boolean  @default(true)   // false = só envia e-mail em erros
-  ativo            Boolean  @default(true)   // liga/desliga o envio de e-mail dos alertas
+  emails           String? // destinatários dos alertas (CSV). Vazio → ADMINs do sistema
+  notificarSucesso Boolean  @default(true) // false = só envia e-mail em erros
+  ativo            Boolean  @default(true) // liga/desliga o envio de e-mail dos alertas
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -2077,8 +2095,8 @@ model CronAlertaConfig {
 // Registra eventos relevantes: erros e execuções que fizeram trabalho.
 model CronExecucao {
   id          Int      @id @default(autoincrement())
-  nome        String   // nome legível da tarefa
-  ok          Boolean  // true = sucesso, false = erro
+  nome        String // nome legível da tarefa
+  ok          Boolean // true = sucesso, false = erro
   resumo      String?  @db.Text
   erro        String?  @db.Text
   notificado  Boolean  @default(false) // e-mail de alerta foi enviado?
@@ -2096,7 +2114,7 @@ model CronAgenda {
   id        Int      @id @default(autoincrement())
   chave     String   @unique
   nome      String
-  cronExpr  String   // expressão cron de 5 campos (min hora dia mês diaSemana)
+  cronExpr  String // expressão cron de 5 campos (min hora dia mês diaSemana)
   ativo     Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2111,7 +2129,7 @@ model CronAgenda {
 model FaturaItemCatalogo {
   id          Int      @id @default(autoincrement())
   empresaId   Int      @map("empresa_id")
-  tipo        String   // ASSISTENCIA | MEDICAMENTO | PROCEDIMENTO
+  tipo        String // ASSISTENCIA | MEDICAMENTO | PROCEDIMENTO
   descricao   String
   valor       Float    @default(0)
   ativo       Boolean  @default(true)
@@ -2125,26 +2143,26 @@ model FaturaItemCatalogo {
 }
 
 model MembroEquipe {
-  id        Int      @id @default(autoincrement())
-  equipeId  Int
-  userId    Int
-  cargo     String
-  cargos    String[] @default([])
+  id                 Int      @id @default(autoincrement())
+  equipeId           Int
+  userId             Int
+  cargo              String
+  cargos             String[] @default([])
   // Expediente de trabalho do profissional (usado pela Agenda para liberar horários).
   // null = herda o expediente da empresa (EmpresaConfiguracao).
   diasTrabalho       String?  @db.VarChar(20) // CSV 0-6 (0=Dom … 6=Sáb)
-  horaInicioTrabalho String?  @db.VarChar(5)  // HH:MM
-  horaFimTrabalho    String?  @db.VarChar(5)  // HH:MM
+  horaInicioTrabalho String?  @db.VarChar(5) // HH:MM
+  horaFimTrabalho    String?  @db.VarChar(5) // HH:MM
   // Checkbox "Atender somente no local de trabalho" (Incluir/Editar Membro). false
   // (padrão) = atende em qualquer local, comportamento de sempre — nada muda. true = a
   // listagem de animais deste profissional (lib/animalScope.js) fica restrita aos
   // animais cuja localização bate com um dos `locaisTrabalho` DELE configurados para o
   // dia de HOJE.
   restringirPorLocal Boolean  @default(false) @map("restringir_por_local")
-  createdAt DateTime @default(now())
+  createdAt          DateTime @default(now())
 
-  equipe Equipe @relation(fields: [equipeId], references: [id], onDelete: Cascade)
-  user   User   @relation(fields: [userId],   references: [id], onDelete: Cascade)
+  equipe         Equipe                @relation(fields: [equipeId], references: [id], onDelete: Cascade)
+  user           User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   locaisTrabalho MembroLocalTrabalho[]
 
   @@unique([equipeId, userId])
@@ -2161,9 +2179,9 @@ model MembroLocalTrabalho {
   id                 Int      @id @default(autoincrement())
   membroEquipeId     Int      @map("membro_equipe_id")
   localizacaoId      Int      @map("localizacao_id")
-  diasTrabalho       String?  @db.VarChar(20)  // CSV 0-6 (0=Dom … 6=Sáb)
-  horaInicioTrabalho String?  @db.VarChar(5)   // HH:MM
-  horaFimTrabalho    String?  @db.VarChar(5)   // HH:MM
+  diasTrabalho       String?  @db.VarChar(20) // CSV 0-6 (0=Dom … 6=Sáb)
+  horaInicioTrabalho String?  @db.VarChar(5) // HH:MM
+  horaFimTrabalho    String?  @db.VarChar(5) // HH:MM
   especialidadesIds  String?  @db.VarChar(255) // CSV de IDs de tb_especialidades (por local)
   // Tempo de consulta POR especialidade NESTE local: { "<especialidadeId>": minutos }.
   // Toda especialidade em `especialidadesIds` tem entrada aqui (obrigatório na app).
@@ -2172,7 +2190,7 @@ model MembroLocalTrabalho {
   createdAt          DateTime @default(now())
 
   membro      MembroEquipe      @relation(fields: [membroEquipeId], references: [id], onDelete: Cascade)
-  localizacao LocalizacaoAnimal @relation(fields: [localizacaoId],  references: [id], onDelete: Cascade)
+  localizacao LocalizacaoAnimal @relation(fields: [localizacaoId], references: [id], onDelete: Cascade)
 
   @@index([membroEquipeId])
   @@index([localizacaoId])
@@ -2193,7 +2211,7 @@ model ConviteEquipe {
   // Acordo definido pelo gestor AO CONVIDAR — aplicado ao vínculo quando o convite
   // é aceito (ver UsuarioEmpresa). Sem isto, quem entra por convite nasceria sem
   // remuneração e o campo só seria obrigatório na inclusão direta.
-  tipoPagamento  String? @map("tipo_pagamento")  @db.VarChar(10)
+  tipoPagamento  String? @map("tipo_pagamento") @db.VarChar(10)
   formaPagamento String? @map("forma_pagamento") @db.VarChar(10)
   valorPagamento Float?  @map("valor_pagamento")
   acessoSistema  Boolean @default(true) @map("acesso_sistema")
@@ -2210,10 +2228,10 @@ model ConviteEquipe {
 model ModuloSistema {
   id        Int    @id @default(autoincrement())
   slug      String @unique // "atendimento.evolucoes.criar"
-  modulo    String @db.VarChar(50)   // "atendimento"
-  submodulo String @db.VarChar(50)   // "evolucoes"
-  acao      String @db.VarChar(50)   // "criar"
-  label     String @db.VarChar(150)  // "Evoluções — Criar"
+  modulo    String @db.VarChar(50) // "atendimento"
+  submodulo String @db.VarChar(50) // "evolucoes"
+  acao      String @db.VarChar(50) // "criar"
+  label     String @db.VarChar(150) // "Evoluções — Criar"
   ordemExib Int    @default(0)
 
   permissoes   PermissaoMembro[]
@@ -2235,9 +2253,9 @@ model PermissaoMembro {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  equipe Equipe        @relation(fields: [equipeId],    references: [id], onDelete: Cascade)
-  user   User          @relation(fields: [userId],      references: [id], onDelete: Cascade)
-  modulo ModuloSistema @relation(fields: [moduloSlug],  references: [slug])
+  equipe Equipe        @relation(fields: [equipeId], references: [id], onDelete: Cascade)
+  user   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  modulo ModuloSistema @relation(fields: [moduloSlug], references: [slug])
 
   @@unique([equipeId, userId, moduloSlug])
   @@index([equipeId, userId])
@@ -2303,7 +2321,7 @@ model MatrizPerfil {
   locked     Boolean @default(false)
 
   perfil PerfilEquipe  @relation(fields: [equipeId, perfilSlug], references: [equipeId, slug], onDelete: Cascade)
-  modulo ModuloSistema @relation(fields: [moduloSlug],           references: [slug])
+  modulo ModuloSistema @relation(fields: [moduloSlug], references: [slug])
 
   @@unique([equipeId, perfilSlug, moduloSlug])
   @@index([equipeId, perfilSlug])
@@ -2315,17 +2333,17 @@ model MatrizPerfil {
 // Por padrão todas são false — habilitadas sob demanda.
 // funcionalidade: "ver_prontuario" | "ver_exames" | "ver_faturas" | "agendar"
 model PermissaoProprietario {
-  id              Int      @id @default(autoincrement())
-  equipeId        Int
-  userId          Int      // userId do proprietário
-  funcionalidade  String   @db.VarChar(50)
-  habilitado      Boolean  @default(false)
-  atualizadoPor   Int
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id             Int      @id @default(autoincrement())
+  equipeId       Int
+  userId         Int // userId do proprietário
+  funcionalidade String   @db.VarChar(50)
+  habilitado     Boolean  @default(false)
+  atualizadoPor  Int
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   equipe Equipe @relation(fields: [equipeId], references: [id], onDelete: Cascade)
-  user   User   @relation(fields: [userId],   references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([equipeId, userId, funcionalidade])
   @@index([equipeId, userId])
@@ -2360,14 +2378,14 @@ model CrmvValido {
 
 // Log de cada execução do scraper
 model CrmvSyncLog {
-  id                Int      @id @default(autoincrement())
-  executadoEm       DateTime @default(now()) @db.Timestamptz
-  totalRegistros    Int      @default(0)
-  totalAdicionados  Int      @default(0)
-  totalRemovidos    Int      @default(0)
-  duracao           Int?     // segundos
-  sucesso           Boolean  @default(true)
-  erro              String?  @db.Text
+  id               Int      @id @default(autoincrement())
+  executadoEm      DateTime @default(now()) @db.Timestamptz
+  totalRegistros   Int      @default(0)
+  totalAdicionados Int      @default(0)
+  totalRemovidos   Int      @default(0)
+  duracao          Int? // segundos
+  sucesso          Boolean  @default(true)
+  erro             String?  @db.Text
 
   @@map("tb_crmv_sync_log")
   @@schema("schs2vet")
@@ -2397,8 +2415,8 @@ model Medicamento {
   vias        MedicamentoVia[]
   especies    MedicamentoEspecie[]
   estoques    EstoqueClinica[]
-  prescricoes Prescricao[]     @relation("MedicamentoPrescricoes")
-  lotes       LoteVacina[]     @relation("MedicamentoLotes")
+  prescricoes Prescricao[]         @relation("MedicamentoPrescricoes")
+  lotes       LoteVacina[]         @relation("MedicamentoLotes")
 
   @@index([nome])
   @@index([ativo])
@@ -2410,12 +2428,12 @@ model Medicamento {
 
 // Espécies para as quais o medicamento é indicado (relação N:N)
 model MedicamentoEspecie {
-  id            Int         @id @default(autoincrement())
+  id            Int @id @default(autoincrement())
   medicamentoId Int
   especieId     Int
 
   medicamento Medicamento @relation(fields: [medicamentoId], references: [id], onDelete: Cascade)
-  especie     Especie     @relation(fields: [especieId],     references: [id], onDelete: Cascade)
+  especie     Especie     @relation(fields: [especieId], references: [id], onDelete: Cascade)
 
   @@unique([medicamentoId, especieId])
   @@index([medicamentoId])
@@ -2426,9 +2444,9 @@ model MedicamentoEspecie {
 
 // Vias de administração vinculadas ao catálogo
 model MedicamentoVia {
-  id            Int         @id @default(autoincrement())
+  id            Int    @id @default(autoincrement())
   medicamentoId Int
-  via           String      @db.VarChar(255)
+  via           String @db.VarChar(255)
 
   medicamento Medicamento @relation(fields: [medicamentoId], references: [id], onDelete: Cascade)
 
@@ -2440,41 +2458,41 @@ model MedicamentoVia {
 
 // Estoque por clínica (uma linha = um medicamento em uma clínica)
 model EstoqueClinica {
-  id               Int       @id @default(autoincrement())
-  medicamentoId    Int
-  empresaId        Int 
-  valor              Float     @default(0)        // preço de compra
-  valorRepassado     Float     @default(0)        @map("valor_repassado")
-  precoUnitarioBase  Float?                       @map("preco_unitario_base") // R$/g ou R$/mL — fixo na entrada
-  lote               String?   @db.VarChar(100)
-  validade           DateTime?
-  qtdEstoque         Float     @default(0)
-  qtdEmbalagens      Int?      @map("qtd_embalagens")      // nº de embalagens da(s) entrada(s)
-  pesoPorEmbalagem   Float?    @map("peso_por_embalagem")  // peso/vol por embalagem (unidade do catálogo)
-  estoqueMinimo    Float     @default(0)        // alerta vermelho
-  estoqueAlarmante Float     @default(0)        // alerta amarelo
-  ativo            Boolean   @default(true)
+  id                Int       @id @default(autoincrement())
+  medicamentoId     Int
+  empresaId         Int
+  valor             Float     @default(0) // preço de compra
+  valorRepassado    Float     @default(0) @map("valor_repassado")
+  precoUnitarioBase Float?    @map("preco_unitario_base") // R$/g ou R$/mL — fixo na entrada
+  lote              String?   @db.VarChar(100)
+  validade          DateTime?
+  qtdEstoque        Float     @default(0)
+  qtdEmbalagens     Int?      @map("qtd_embalagens") // nº de embalagens da(s) entrada(s)
+  pesoPorEmbalagem  Float?    @map("peso_por_embalagem") // peso/vol por embalagem (unidade do catálogo)
+  estoqueMinimo     Float     @default(0) // alerta vermelho
+  estoqueAlarmante  Float     @default(0) // alerta amarelo
+  ativo             Boolean   @default(true)
   // Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — mesma lógica de
   // `Fornecedor` (migration 20260828000000_estoque_ativacao_trilha). Sem FK
   // cascade: excluir quem fez a ação não apaga nem destrava o registro afetado.
-  ativoEm          DateTime? @map("ativo_em")
-  ativoPorId       Int?      @map("ativo_por_id")
-  inativoEm        DateTime? @map("inativo_em")
-  inativoPorId     Int?      @map("inativo_por_id")
+  ativoEm           DateTime? @map("ativo_em")
+  ativoPorId        Int?      @map("ativo_por_id")
+  inativoEm         DateTime? @map("inativo_em")
+  inativoPorId      Int?      @map("inativo_por_id")
   // Justificativa da inativação (migration 20260901000001) — obrigatória em
   // EstoqueController.toggle, exibida na aba Inativos.
-  inativoMotivo    String?   @db.Text @map("inativo_motivo")
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  inativoMotivo     String?   @map("inativo_motivo") @db.Text
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
-  fornecedorId Int?      @map("fornecedor_id")
-  notaFiscal   String?   @db.VarChar(100) @map("nota_fiscal")
+  fornecedorId Int?    @map("fornecedor_id")
+  notaFiscal   String? @map("nota_fiscal") @db.VarChar(100)
 
-  medicamento Medicamento      @relation(fields: [medicamentoId], references: [id])
-  empresa     Empresa          @relation("EmpresaEstoque", fields: [empresaId], references: [id], onDelete: Restrict)
-  fornecedor  Fornecedor?      @relation("FornecedorEstoque", fields: [fornecedorId], references: [id], onDelete: SetNull)
+  medicamento Medicamento        @relation(fields: [medicamentoId], references: [id])
+  empresa     Empresa            @relation("EmpresaEstoque", fields: [empresaId], references: [id], onDelete: Restrict)
+  fornecedor  Fornecedor?        @relation("FornecedorEstoque", fields: [fornecedorId], references: [id], onDelete: SetNull)
   movimentos  MovimentoEstoque[]
-  reservas    ReservaEstoque[] @relation("EstoqueReservas")
+  reservas    ReservaEstoque[]   @relation("EstoqueReservas")
 
   @@index([medicamentoId])
   @@index([empresaId])
@@ -2486,12 +2504,12 @@ model EstoqueClinica {
 
 // Movimentações de estoque por clínica
 model MovimentoEstoque {
-  id         Int            @id @default(autoincrement())
+  id         Int      @id @default(autoincrement())
   estoqueId  Int
-  tipo       String         @db.VarChar(20)  // ENTRADA | SAIDA | AJUSTE
+  tipo       String   @db.VarChar(20) // ENTRADA | SAIDA | AJUSTE
   quantidade Float
-  motivo     String?        @db.Text
-  createdAt  DateTime       @default(now())
+  motivo     String?  @db.Text
+  createdAt  DateTime @default(now())
 
   estoque EstoqueClinica @relation(fields: [estoqueId], references: [id], onDelete: Cascade)
 
@@ -2506,31 +2524,31 @@ model MovimentoEstoque {
 // =============================================================================
 
 model Tratador {
-  id            Int      @id @default(autoincrement())
-  nome          String   @db.VarChar(255)
-  telefone      String?  @db.VarChar(30)
-  localizacaoId Int?     @map("localizacao_id")
-  tipoEntrada   String   @default("CLIENTE") @db.VarChar(10) @map("tipo_entrada")
-  ativo         Boolean  @default(true)
+  id            Int       @id @default(autoincrement())
+  nome          String    @db.VarChar(255)
+  telefone      String?   @db.VarChar(30)
+  localizacaoId Int?      @map("localizacao_id")
+  tipoEntrada   String    @default("CLIENTE") @map("tipo_entrada") @db.VarChar(10)
+  ativo         Boolean   @default(true)
   // Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — mesma lógica de Fornecedor/
   // Prestador (migration 20260825000000), replicada aqui (migration 20260826000000).
   // Sem FK cascade: excluir quem fez a ação não apaga nem destrava o registro afetado.
-  ativoEm      DateTime? @map("ativo_em")
-  ativoPorId   Int?      @map("ativo_por_id")
-  inativoEm    DateTime? @map("inativo_em")
-  inativoPorId Int?      @map("inativo_por_id")
+  ativoEm       DateTime? @map("ativo_em")
+  ativoPorId    Int?      @map("ativo_por_id")
+  inativoEm     DateTime? @map("inativo_em")
+  inativoPorId  Int?      @map("inativo_por_id")
   // Justificativa da inativação (migration 20260901000000) — obrigatória em
   // TratadorController.toggleAtivo, exibida na aba Inativos.
-  inativoMotivo String?  @db.Text @map("inativo_motivo")
+  inativoMotivo String?   @map("inativo_motivo") @db.Text
   // SYSTEM (ADMIN) e registros legados: empresaId/equipeId null = visível para todos.
   // CLIENTE novo: escopado à empresa/equipe ativa (req.empresaId/req.equipeId) de quem criou.
-  empresaId     Int      @map("empresa_id") // sem FK — sobrevive à exclusão da empresa
-  equipeId      Int?     @map("equipe_id")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  empresaId     Int       @map("empresa_id") // sem FK — sobrevive à exclusão da empresa
+  equipeId      Int?      @map("equipe_id")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
-  localizacao LocalizacaoAnimal?  @relation(fields: [localizacaoId], references: [id], onDelete: SetNull)
-  equipe      Equipe?             @relation("EquipeTratadores", fields: [equipeId], references: [id], onDelete: SetNull)
+  localizacao LocalizacaoAnimal? @relation(fields: [localizacaoId], references: [id], onDelete: SetNull)
+  equipe      Equipe?            @relation("EquipeTratadores", fields: [equipeId], references: [id], onDelete: SetNull)
   animais     Animal[]
 
   @@index([localizacaoId])
@@ -2541,43 +2559,43 @@ model Tratador {
 }
 
 model Fornecedor {
-  id          Int      @id @default(autoincrement())
-  nome        String   @db.VarChar(255)
-  cpf         String?  @db.VarChar(20)
-  cnpj        String?  @db.VarChar(20)
-  telefone    String?  @db.VarChar(30)  // obrigatório na app (nullable p/ legado)
-  email       String?  @db.VarChar(255) // obrigatório na app (nullable p/ legado) — usado p/ vincular ao User
-  tipoServico String   @db.VarChar(50)  @map("tipo_servico")
-  tipoEntrada String   @default("CLIENTE") @db.VarChar(10) @map("tipo_entrada")
-  cep         String?  @db.VarChar(10)
-  endereco    String?  @db.VarChar(500)
-  complemento String?  @db.VarChar(255)
-  bairro      String?  @db.VarChar(255)
-  cidade      String?  @db.VarChar(255)
-  estado      String?  @db.VarChar(2)
-  ativo       Boolean  @default(true)
+  id            Int       @id @default(autoincrement())
+  nome          String    @db.VarChar(255)
+  cpf           String?   @db.VarChar(20)
+  cnpj          String?   @db.VarChar(20)
+  telefone      String?   @db.VarChar(30) // obrigatório na app (nullable p/ legado)
+  email         String?   @db.VarChar(255) // obrigatório na app (nullable p/ legado) — usado p/ vincular ao User
+  tipoServico   String    @map("tipo_servico") @db.VarChar(50)
+  tipoEntrada   String    @default("CLIENTE") @map("tipo_entrada") @db.VarChar(10)
+  cep           String?   @db.VarChar(10)
+  endereco      String?   @db.VarChar(500)
+  complemento   String?   @db.VarChar(255)
+  bairro        String?   @db.VarChar(255)
+  cidade        String?   @db.VarChar(255)
+  estado        String?   @db.VarChar(2)
+  ativo         Boolean   @default(true)
   // Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — mesma lógica de `User`
   // (migration 20260824000000_user_ativacao_trilha), replicada aqui (migration
   // 20260825000000). Sem FK cascade: excluir quem fez a ação não apaga nem
   // destrava o registro afetado.
-  ativoEm      DateTime? @map("ativo_em")
-  ativoPorId   Int?      @map("ativo_por_id")
-  inativoEm    DateTime? @map("inativo_em")
-  inativoPorId Int?      @map("inativo_por_id")
+  ativoEm       DateTime? @map("ativo_em")
+  ativoPorId    Int?      @map("ativo_por_id")
+  inativoEm     DateTime? @map("inativo_em")
+  inativoPorId  Int?      @map("inativo_por_id")
   // Justificativa da inativação (migration 20260901000000) — obrigatória em
   // FornecedorController.toggleAtivo, exibida na aba Inativos.
-  inativoMotivo String?  @db.Text @map("inativo_motivo")
+  inativoMotivo String?   @map("inativo_motivo") @db.Text
   // SYSTEM (ADMIN) e registros legados: empresaId/equipeId null = visível para todos.
   // CLIENTE novo: escopado à empresa/equipe ativa (req.empresaId/req.equipeId) de quem criou.
-  empresaId   Int?     @map("empresa_id") // sem FK — sobrevive à exclusão da empresa
-  equipeId    Int?     @map("equipe_id")
-  userId      Int?     @unique @map("user_id") // conta de login (User FORNECEDOR) — dá ao prestador o tipoServico
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt      @map("updated_at")
+  empresaId     Int?      @map("empresa_id") // sem FK — sobrevive à exclusão da empresa
+  equipeId      Int?      @map("equipe_id")
+  userId        Int?      @unique @map("user_id") // conta de login (User FORNECEDOR) — dá ao prestador o tipoServico
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
 
-  user     User?            @relation("FornecedorUser", fields: [userId], references: [id], onDelete: SetNull)
-  estoques EstoqueClinica[] @relation("FornecedorEstoque")
-  equipe   Equipe?          @relation("EquipeFornecedores", fields: [equipeId], references: [id], onDelete: SetNull)
+  user           User?                     @relation("FornecedorUser", fields: [userId], references: [id], onDelete: SetNull)
+  estoques       EstoqueClinica[]          @relation("FornecedorEstoque")
+  equipe         Equipe?                   @relation("EquipeFornecedores", fields: [equipeId], references: [id], onDelete: SetNull)
   especialidades FornecedorEspecialidade[]
 
   @@index([empresaId])
@@ -2592,42 +2610,42 @@ model Fornecedor {
 // não compartilha linha com fornecedor. `empresaId`/`equipeId` SEM FK, de propósito
 // (igual Fornecedor.empresaId): sobrevivem à exclusão da empresa/equipe.
 model Prestador {
-  id          Int      @id @default(autoincrement())
-  nome        String   @db.VarChar(255)
-  cpf         String?  @db.VarChar(20)
-  cnpj        String?  @db.VarChar(20)
-  telefone    String?  @db.VarChar(30)
-  email       String?  @db.VarChar(255)
-  tipoServico String   @db.VarChar(50) @map("tipo_servico")
-  tipoEntrada String   @default("CLIENTE") @db.VarChar(10) @map("tipo_entrada")
-  cep         String?  @db.VarChar(10)
-  endereco    String?  @db.VarChar(500)
-  complemento String?  @db.VarChar(255)
-  bairro      String?  @db.VarChar(255)
-  cidade      String?  @db.VarChar(255)
-  estado      String?  @db.VarChar(2)
-  ativo       Boolean  @default(true)
+  id             Int       @id @default(autoincrement())
+  nome           String    @db.VarChar(255)
+  cpf            String?   @db.VarChar(20)
+  cnpj           String?   @db.VarChar(20)
+  telefone       String?   @db.VarChar(30)
+  email          String?   @db.VarChar(255)
+  tipoServico    String    @map("tipo_servico") @db.VarChar(50)
+  tipoEntrada    String    @default("CLIENTE") @map("tipo_entrada") @db.VarChar(10)
+  cep            String?   @db.VarChar(10)
+  endereco       String?   @db.VarChar(500)
+  complemento    String?   @db.VarChar(255)
+  bairro         String?   @db.VarChar(255)
+  cidade         String?   @db.VarChar(255)
+  estado         String?   @db.VarChar(2)
+  ativo          Boolean   @default(true)
   // Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — mesma lógica de `User`/
   // `Fornecedor` (migration 20260825000000). Sem FK cascade.
-  ativoEm      DateTime? @map("ativo_em")
-  ativoPorId   Int?      @map("ativo_por_id")
-  inativoEm    DateTime? @map("inativo_em")
-  inativoPorId Int?      @map("inativo_por_id")
+  ativoEm        DateTime? @map("ativo_em")
+  ativoPorId     Int?      @map("ativo_por_id")
+  inativoEm      DateTime? @map("inativo_em")
+  inativoPorId   Int?      @map("inativo_por_id")
   // Justificativa da inativação (migration 20260901000000) — obrigatória em
   // PrestadorController.toggleAtivo, exibida na aba Inativos.
-  inativoMotivo String?  @db.Text @map("inativo_motivo")
-  empresaId   Int?     @map("empresa_id")
-  equipeId    Int?     @map("equipe_id")
+  inativoMotivo  String?   @map("inativo_motivo") @db.Text
+  empresaId      Int?      @map("empresa_id")
+  equipeId       Int?      @map("equipe_id")
   // Login opcional, SEM MembroEquipe (decisão de 2026-08-21 revista): dá para logar,
   // mas sem RBAC — quem precisa de tela de verdade continua indo por Equipe > Incluir
   // Membro (cargo Fornecedor). Ver §5 do plano "Prestador: pagamento/local/acesso".
-  userId         Int?     @unique @map("user_id")
-  tipoPagamento  String?  @db.VarChar(20) @map("tipo_pagamento")
-  formaPagamento String?  @db.VarChar(20) @map("forma_pagamento")
-  valorPagamento Float?   @map("valor_pagamento")
-  acessoSistema  Boolean  @default(false) @map("acesso_sistema")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt      @map("updated_at")
+  userId         Int?      @unique @map("user_id")
+  tipoPagamento  String?   @map("tipo_pagamento") @db.VarChar(20)
+  formaPagamento String?   @map("forma_pagamento") @db.VarChar(20)
+  valorPagamento Float?    @map("valor_pagamento")
+  acessoSistema  Boolean   @default(false) @map("acesso_sistema")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   user           User?                    @relation("PrestadorUser", fields: [userId], references: [id], onDelete: SetNull)
   locaisTrabalho PrestadorLocalTrabalho[]
@@ -2646,9 +2664,9 @@ model PrestadorLocalTrabalho {
   id                 Int      @id @default(autoincrement())
   prestadorId        Int      @map("prestador_id")
   localizacaoId      Int      @map("localizacao_id")
-  diasTrabalho       String?  @db.VarChar(20) @map("dias_trabalho")
-  horaInicioTrabalho String?  @db.VarChar(5)  @map("hora_inicio_trabalho")
-  horaFimTrabalho    String?  @db.VarChar(5)  @map("hora_fim_trabalho")
+  diasTrabalho       String?  @map("dias_trabalho") @db.VarChar(20)
+  horaInicioTrabalho String?  @map("hora_inicio_trabalho") @db.VarChar(5)
+  horaFimTrabalho    String?  @map("hora_fim_trabalho") @db.VarChar(5)
   empresaId          Int?     @map("empresa_id")
   equipeId           Int?     @map("equipe_id")
   createdAt          DateTime @default(now()) @map("created_at")
@@ -2671,7 +2689,7 @@ model PrestadorLocalTrabalho {
 // ADMIN (escopo de plataforma) grava com empresaId null.
 model CatalogoTipoServico {
   id          Int      @id @default(autoincrement())
-  categoria   String   @db.VarChar(20)  // 'FORNECEDOR' | 'PRESTADOR'
+  categoria   String   @db.VarChar(20) // 'FORNECEDOR' | 'PRESTADOR'
   nome        String   @db.VarChar(100)
   empresaId   Int?     @map("empresa_id")
   criadoPorId Int?     @map("criado_por_id")
@@ -2691,9 +2709,9 @@ model ReservaEstoque {
   quantidade        Float
   criadoEm          DateTime @default(now())
 
-  estoque         EstoqueClinica  @relation("EstoqueReservas",  fields: [estoqueId],         references: [id], onDelete: Cascade)
-  prescricaoGrupo PrescricaoGrupo @relation("GrupoReservas",   fields: [prescricaoGrupoId], references: [id], onDelete: Cascade)
-  animal          Animal          @relation("AnimalReservas",  fields: [animalId],          references: [id], onDelete: Cascade)
+  estoque         EstoqueClinica  @relation("EstoqueReservas", fields: [estoqueId], references: [id], onDelete: Cascade)
+  prescricaoGrupo PrescricaoGrupo @relation("GrupoReservas", fields: [prescricaoGrupoId], references: [id], onDelete: Cascade)
+  animal          Animal          @relation("AnimalReservas", fields: [animalId], references: [id], onDelete: Cascade)
 
   @@unique([prescricaoGrupoId, estoqueId])
   @@index([estoqueId])
@@ -2717,9 +2735,9 @@ model ReservaEstoqueVacina {
   quantidade      Int
   criadoEm        DateTime @default(now())
 
-  loteVacina    LoteVacina    @relation("LoteVacinaReservas", fields: [loteVacinaId],    references: [id], onDelete: Cascade)
-  vacinaClinica VacinaClinica @relation("VacinaReservas",     fields: [vacinaClinicaId], references: [id], onDelete: Cascade)
-  animal        Animal        @relation("AnimalReservasVacina", fields: [animalId],       references: [id], onDelete: Cascade)
+  loteVacina    LoteVacina    @relation("LoteVacinaReservas", fields: [loteVacinaId], references: [id], onDelete: Cascade)
+  vacinaClinica VacinaClinica @relation("VacinaReservas", fields: [vacinaClinicaId], references: [id], onDelete: Cascade)
+  animal        Animal        @relation("AnimalReservasVacina", fields: [animalId], references: [id], onDelete: Cascade)
 
   @@unique([vacinaClinicaId, loteVacinaId])
   @@index([loteVacinaId])
@@ -2745,7 +2763,7 @@ model LocalizacaoAnimal {
   tipoLocalizacao   String   @db.VarChar(50)
   tipoEntrada       String   @default("CLIENTE") @db.VarChar(10)
   ativo             Boolean  @default(true)
-  empresaId         Int?     // sem FK — sobrevive à exclusão da empresa
+  empresaId         Int? // sem FK — sobrevive à exclusão da empresa
   equipeId          Int?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -2756,7 +2774,7 @@ model LocalizacaoAnimal {
   locaisPrestador PrestadorLocalTrabalho[]
   proprietarios   ProprietarioLocalidade[] @relation("ProprietarioLocalidadeLocal")
   historico       AnimalHistorico[]
-  equipe          Equipe?    @relation("EquipeLocalizacoes", fields: [equipeId], references: [id], onDelete: SetNull)
+  equipe          Equipe?                  @relation("EquipeLocalizacoes", fields: [equipeId], references: [id], onDelete: SetNull)
 
   @@index([tipoLocalizacao])
   @@index([ativo])
@@ -2804,7 +2822,7 @@ model ExameItem {
   grupoId      Int      @map("grupo_id")
   nome         String   @db.VarChar(500)
   sigla        String?  @db.VarChar(100)
-  tiposAmostra String[] @map("tipo_amostra") @default([])
+  tiposAmostra String[] @default([]) @map("tipo_amostra")
   ativo        Boolean  @default(true)
 
   grupo ExameGrupo @relation(fields: [grupoId], references: [id], onDelete: Cascade)
@@ -2854,20 +2872,20 @@ model ImagemExameItem {
 model ResenhaEquino {
   id                 Int      @id @default(autoincrement())
   animalId           Int?     @map("animal_id")
-  numeroCBH          String?  @db.VarChar(100) @map("numero_cbh")
-  paisNascimento     String?  @db.VarChar(100) @default("Brasil") @map("pais_nascimento")
-  registroGenealogia String?  @db.VarChar(100) @map("registro_genealogia")
+  numeroCBH          String?  @map("numero_cbh") @db.VarChar(100)
+  paisNascimento     String?  @default("Brasil") @map("pais_nascimento") @db.VarChar(100)
+  registroGenealogia String?  @map("registro_genealogia") @db.VarChar(100)
   pai                String?  @db.VarChar(255)
   mae                String?  @db.VarChar(255)
-  paiDaMae           String?  @db.VarChar(255) @map("pai_da_mae")
+  paiDaMae           String?  @map("pai_da_mae") @db.VarChar(255)
   sinaisCabeca       String?  @map("sinais_cabeca")
   sinaisAE           String?  @map("sinais_ae")
   sinaisAD           String?  @map("sinais_ad")
   sinaisPE           String?  @map("sinais_pe")
   sinaisPD           String?  @map("sinais_pd")
   sinaisCorpo        String?  @map("sinais_corpo")
-  marcaFogo          String?  @db.VarChar(100) @map("marca_fogo")
-  outroId            String?  @db.VarChar(100) @map("outro_id")
+  marcaFogo          String?  @map("marca_fogo") @db.VarChar(100)
+  outroId            String?  @map("outro_id") @db.VarChar(100)
   graficaData        Json?    @map("grafica_data")
   criadoPorId        Int?     @map("criado_por_id")
   createdAt          DateTime @default(now()) @map("created_at")
@@ -2981,26 +2999,126 @@ model ResenhaTracoRegiao {
 /// animal → verificarAcessoAnimal; empresa → tem de ser a do contexto. `publico=true`
 /// é só para asset do PRODUTO (a marca S2Vet), nunca para dado de cliente.
 model MidiaArquivo {
-  id            Int      @id @default(autoincrement())
+  id           Int      @id @default(autoincrement())
   /// Identificador opaco usado na URL (/api/midia/<chave>) — nunca o id sequencial,
   /// que seria enumerável.
-  chave         String   @unique @db.VarChar(64)
-  conteudo      Bytes
-  mimeType      String   @map("mime_type") @db.VarChar(150)
-  nomeOriginal  String?  @map("nome_original") @db.VarChar(255)
-  tamanho       Int
+  chave        String   @unique @db.VarChar(64)
+  conteudo     Bytes
+  mimeType     String   @map("mime_type") @db.VarChar(150)
+  nomeOriginal String?  @map("nome_original") @db.VarChar(255)
+  tamanho      Int
   /// Categoria de origem (equivale à antiga pasta): animais, evolucoes, exames,
   /// exames-imagens, empresas, profissionais.
-  pasta         String   @db.VarChar(64)
-  empresaId     Int?     @map("empresa_id")
-  animalId      Int?     @map("animal_id")
-  criadoPorId   Int?     @map("criado_por_id")
-  publico       Boolean  @default(false)
-  criadoEm      DateTime @default(now()) @map("criado_em")
+  pasta        String   @db.VarChar(64)
+  empresaId    Int?     @map("empresa_id")
+  animalId     Int?     @map("animal_id")
+  criadoPorId  Int?     @map("criado_por_id")
+  publico      Boolean  @default(false)
+  criadoEm     DateTime @default(now()) @map("criado_em")
 
   @@index([empresaId])
   @@index([animalId])
   @@index([pasta])
   @@map("tb_midia_arquivos")
+  @@schema("schs2vet")
+}
+
+/// ═══════════════════════════════════════════════════════════════════════════
+/// CENTRAL DE DOCUMENTOS (migration 20260918000000_central_documentos)
+///
+/// TEMPLATE  → modelo reutilizável (o que se edita no editor de blocos)
+/// EMITIDO   → instância do template com as variáveis JÁ RESOLVIDAS
+///
+/// Os dois são INDEPENDENTES de propósito: alterar um template não reescreve
+/// documento já emitido. O emitido guarda o próprio conteúdo resolvido, que é o
+/// que permite reimprimir daqui a dois anos exatamente o que o cliente recebeu.
+/// ═══════════════════════════════════════════════════════════════════════════
+
+/// CATÁLOGO MISTO: `empresaId` NULO = modelo GLOBAL do sistema (os 12 anexos da
+/// Res. CFMV 1.321/2020, semeados por `seeds/003_documentos_cfmv.seed.js`);
+/// preenchido = modelo daquela clínica.
+///
+/// ⚠️ COPY-ON-WRITE. A policy de RLS lê global+próprio mas só ESCREVE o próprio, e
+/// `DocumentoTemplateController` respeita isso: alterar/favoritar/excluir um modelo
+/// GLOBAL não muda o global — cria a cópia da empresa (`origemId` aponta para ele).
+/// Sem essa assimetria, uma clínica reescreveria o atestado sanitário de todas.
+model DocumentoTemplate {
+  id        Int  @id @default(autoincrement())
+  empresaId Int? @map("empresa_id")
+
+  /// Identificador estável do modelo GLOBAL (`cfmv_01_atestado_sanitario`), que
+  /// torna o seed idempotente. A cópia da empresa PRESERVA a chave — é assim que a
+  /// tela sabe que aquele modelo da clínica nasceu de uma norma.
+  chave         String?  @db.VarChar(60)
+  nome          String   @db.VarChar(160)
+  descricao     String   @default("") @db.VarChar(400)
+  categoria     String   @default("personalizados") @db.VarChar(30)
+  /// EQUINO | BOVINO | AMBOS
+  especie       String   @default("AMBOS") @db.VarChar(10)
+  tags          String[] @default([])
+  /// `Bloco[]` de frontend/src/modules/documentos/types.ts.
+  blocos        Json     @default("[]")
+  favorito      Boolean  @default(false)
+  compartilhado Boolean  @default(false)
+  /// Soft delete — vai para a Lixeira. Modelo de documento clínico não se apaga.
+  excluido      Boolean  @default(false)
+  /// RASCUNHO | PUBLICADO | ARQUIVADO
+  status        String   @default("RASCUNHO") @db.VarChar(12)
+  origemId      Int?     @map("origem_id")
+  autorId       Int?     @map("autor_id")
+  autorNome     String?  @map("autor_nome") @db.VarChar(255)
+  usos          Int      @default(0)
+  versao        Int      @default(1)
+  /// `VersaoTemplate[]` — os blocos ANTERIORES. Capado em 30 na aplicação.
+  versoes       Json     @default("[]")
+  criadoEm      DateTime @default(now()) @map("criado_em")
+  atualizadoEm  DateTime @default(now()) @updatedAt @map("atualizado_em")
+
+  empresa Empresa? @relation("EmpresaDocumentoTemplates", fields: [empresaId], references: [id], onDelete: Cascade)
+  autor   User?    @relation("UserDocumentoTemplates", fields: [autorId], references: [id], onDelete: SetNull)
+  origem  DocumentoTemplate?  @relation("DocumentoTemplateOrigem", fields: [origemId], references: [id], onDelete: SetNull)
+  copias  DocumentoTemplate[] @relation("DocumentoTemplateOrigem")
+
+  emitidos DocumentoEmitido[] @relation("DocumentoTemplateEmitidos")
+
+  @@index([empresaId])
+  @@index([categoria])
+  @@map("tb_documento_templates")
+  @@schema("schs2vet")
+}
+
+/// TENANT DIRETO. Snapshot do documento entregue — ver a nota do bloco acima.
+model DocumentoEmitido {
+  id           Int     @id @default(autoincrement())
+  empresaId    Int     @map("empresa_id")
+  animalId     Int     @map("animal_id")
+  templateId   Int?    @map("template_id")
+  templateNome String  @map("template_nome") @db.VarChar(160)
+  /// Sequência POR EMPRESA (DOC-0001), resolvida dentro da transaction da emissão.
+  numero       Int?
+  titulo       String  @default("") @db.VarChar(200)
+  /// Blocos com as variáveis JÁ RESOLVIDAS.
+  blocos       Json    @default("[]")
+  /// As variáveis usadas na resolução — auditoria de onde saiu cada valor.
+  contexto     Json    @default("{}")
+  evolucaoId   Int?    @map("evolucao_id")
+  veterinarioId Int?   @map("veterinario_id")
+  /// Nome do animal e do cliente COMO ESTAVAM na emissão (o cadastro muda; o papel não).
+  animalNome   String  @default("") @map("animal_nome") @db.VarChar(255)
+  clienteNome  String  @default("") @map("cliente_nome") @db.VarChar(255)
+  emitidoEm    DateTime @default(now()) @map("emitido_em")
+  ativo        Boolean  @default(true)
+  canceladoMotivo String? @map("cancelado_motivo") @db.Text
+
+  empresa     Empresa            @relation("EmpresaDocumentosEmitidos", fields: [empresaId], references: [id], onDelete: Cascade)
+  animal      Animal             @relation("AnimalDocumentosEmitidos", fields: [animalId], references: [id], onDelete: Cascade)
+  template    DocumentoTemplate? @relation("DocumentoTemplateEmitidos", fields: [templateId], references: [id], onDelete: SetNull)
+  evolucao    EvolucaoClinica?   @relation("EvolucaoDocumentosEmitidos", fields: [evolucaoId], references: [id], onDelete: SetNull)
+  veterinario User?              @relation("UserDocumentosEmitidos", fields: [veterinarioId], references: [id], onDelete: SetNull)
+
+  @@index([empresaId])
+  @@index([animalId])
+  @@index([evolucaoId])
+  @@map("tb_documentos_emitidos")
   @@schema("schs2vet")
 }

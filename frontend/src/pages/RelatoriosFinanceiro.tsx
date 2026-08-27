@@ -15,6 +15,14 @@ import {
   CarregandoRelatorio, ErroRelatorio, formatBRL, formatMesRef,
 } from '../components/relatorios/RelatorioUI';
 
+// Os números de recebíveis levam ao Faturamento JÁ FILTRADO pelo status equivalente.
+// ⚠️ Receita por categoria/especialidade e o fluxo de caixa NÃO viram link: não
+// existe tela que liste faturas por categoria, por especialidade ou por mês
+// projetado — e link que cai numa lista sem esse recorte promete o que a página não
+// entrega (armadilha 28-d).
+const FAT = '/faturamento';
+const fatura = (status: string) => `${FAT}?status=${status}`;
+
 interface Financeiro {
   faturamento: { periodo: number; ano: number; granularidade: string };
   ticketMedio: { porAtendimento: number; porCliente: number; atendimentosPeriodo: number; clientesPeriodo: number };
@@ -80,16 +88,16 @@ export default function RelatoriosFinanceiro() {
 
           {/* Faturamento */}
           <StatTiles cols={2} tiles={[
-            { label: 'Faturamento no período', valor: formatBRL(dados.faturamento.periodo) },
-            { label: 'Acumulado do ano',       valor: formatBRL(dados.faturamento.ano), tom: 'emerald' },
+            { label: 'Faturamento no período', valor: formatBRL(dados.faturamento.periodo), to: fatura('PAGA') },
+            { label: 'Acumulado do ano',       valor: formatBRL(dados.faturamento.ano), tom: 'emerald', to: fatura('PAGA') },
           ]} />
 
           {/* Ticket médio + recebíveis */}
           <StatTiles tiles={[
-            { label: 'Ticket médio / atendimento', valor: formatBRL(dados.ticketMedio.porAtendimento), hint: `${dados.ticketMedio.atendimentosPeriodo} atendimentos no período` },
-            { label: 'Ticket médio / cliente',     valor: formatBRL(dados.ticketMedio.porCliente),     hint: `${dados.ticketMedio.clientesPeriodo} clientes no período` },
-            { label: 'Contas a receber',           valor: formatBRL(dados.contasReceber),              tom: 'amber' },
-            { label: 'Inadimplência',              valor: `${dados.inadimplencia.toFixed(1)}%`,        tom: dados.inadimplencia >= 20 ? 'red' : 'amber', hint: formatBRL(dados.contasVencidas) + ' vencido' },
+            { label: 'Ticket médio / atendimento', valor: formatBRL(dados.ticketMedio.porAtendimento), hint: `${dados.ticketMedio.atendimentosPeriodo} atendimentos no período`, to: FAT },
+            { label: 'Ticket médio / cliente',     valor: formatBRL(dados.ticketMedio.porCliente),     hint: `${dados.ticketMedio.clientesPeriodo} clientes no período`, to: FAT },
+            { label: 'Contas a receber',           valor: formatBRL(dados.contasReceber),              tom: 'amber', to: fatura('FECHADA') },
+            { label: 'Inadimplência',              valor: `${dados.inadimplencia.toFixed(1)}%`,        tom: dados.inadimplencia >= 20 ? 'red' : 'amber', hint: formatBRL(dados.contasVencidas) + ' vencido', to: fatura('ATRASADA') },
           ]} />
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">

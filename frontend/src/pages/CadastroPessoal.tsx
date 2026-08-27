@@ -18,7 +18,7 @@ import {
   TEMPO_CONSULTA_PADRAO_SISTEMA, LocalTrabalhoFields, rotuloPagamento,
   type LocalTrabalhoForm,
 } from '../components/UsuarioFormModal';
-import { Loader2, Info, User, Plus, MapPin, Pencil, Trash2, Camera, KeyRound, X } from 'lucide-react';
+import { Loader2, Info, User, Plus, MapPin, Pencil, Trash2, Camera, KeyRound, X, PenLine } from 'lucide-react';
 import InlineError from '../components/InlineError';
 import FieldError from '../components/FieldError';
 
@@ -139,6 +139,14 @@ export default function CadastroPessoal() {
   const [fotoPreview,  setFotoPreview]  = useState<string | null>(null);
   const [fotoFile,     setFotoFile]     = useState<File | null>(null);
   const [fotoRemovida, setFotoRemovida] = useState(false);
+
+  // Assinatura do profissional NESTA empresa (tb_usuario_empresa.assinatura_url).
+  // É a imagem que a Central de Documentos põe sobre a linha do bloco `assinatura`,
+  // junto do nome e do CRMV. Mesmas regras da foto: só sobe ao SALVAR o formulário —
+  // sair da tela sem salvar não pode trocar a assinatura que a clínica já tem.
+  const [assinaturaPreview,  setAssinaturaPreview]  = useState<string | null>(null);
+  const [assinaturaFile,     setAssinaturaFile]     = useState<File | null>(null);
+  const [assinaturaRemovida, setAssinaturaRemovida] = useState(false);
   // Arquivo (recém-escolhido) ou URL (foto já salva) em edição no FotoEditorModal
   const [editandoFoto, setEditandoFoto] = useState<File | string | null>(null);
   // Erro de ação (salvar/conexão) exibido inline junto ao botão Salvar
@@ -367,6 +375,7 @@ export default function CadastroPessoal() {
             locaisTrabalho: locaisCarregados,
           });
           setFotoPreview(data.fotoUrl ?? null);
+          setAssinaturaPreview(data.assinaturaUrl ?? null);
           setFotoFile(null);
           setFotoRemovida(false);
           if (data.isConvidado) setIsConvidadoFlag(true);
@@ -412,6 +421,31 @@ export default function CadastroPessoal() {
     reader.readAsDataURL(comprimido);
   };
 
+  /**
+   * Assinatura escolhida.
+   *
+   * ⚠️ NÃO passa pelo `FotoEditorModal`: a assinatura é digitalizada num scanner ou
+   * fotografada num papel branco, e recortá-la num quadrado (que é o que aquele
+   * editor faz) cortaria o traço. Vai comprimida e inteira.
+   */
+  const handleAssinaturaChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';   // permite reescolher o MESMO arquivo depois de remover
+    if (!file) return;
+    const comprimido = await comprimirImagem(file);
+    setAssinaturaFile(comprimido);
+    setAssinaturaRemovida(false);
+    const reader = new FileReader();
+    reader.onloadend = () => setAssinaturaPreview(reader.result as string);
+    reader.readAsDataURL(comprimido);
+  };
+
+  const handleRemoverAssinatura = () => {
+    setAssinaturaPreview(null);
+    setAssinaturaFile(null);
+    setAssinaturaRemovida(true);
+  };
+
   const handleRemoverFoto = () => {
     setFotoPreview(null);
     setFotoFile(null);
@@ -437,6 +471,25 @@ export default function CadastroPessoal() {
     } catch (err) {
       const resposta = (err as { response?: { data?: { error?: string } } })?.response;
       toast.error(resposta?.data?.error ?? 'Cadastro salvo, mas a foto não pôde ser enviada.');
+    }
+  };
+
+  /** Mesma mecânica de `enviarFoto`, na rota própria da assinatura. */
+  const enviarAssinatura = async () => {
+    if (!assinaturaFile && !assinaturaRemovida) return;
+    try {
+      if (assinaturaRemovida) {
+        await api.delete('/users/me/assinatura');
+      } else if (assinaturaFile) {
+        const fd = new FormData();
+        fd.append('assinatura', assinaturaFile);
+        await api.put('/users/me/assinatura', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      }
+      setAssinaturaFile(null);
+      setAssinaturaRemovida(false);
+    } catch (err) {
+      const resposta = (err as { response?: { data?: { error?: string } } })?.response;
+      toast.error(resposta?.data?.error ?? 'Cadastro salvo, mas a assinatura não pôde ser enviada.');
     }
   };
 
@@ -698,6 +751,7 @@ export default function CadastroPessoal() {
       if (res.ok) {
         // A foto vai numa chamada à parte (multipart) — ver enviarFoto.
         await enviarFoto();
+        await enviarAssinatura();
         // O backend renovou o cookie de acesso com o userType atualizado.
         // Recarrega o perfil (identidade vem de /me).
         await refreshUser();
@@ -1013,6 +1067,39 @@ export default function CadastroPessoal() {
                     aqui soaria como recusa de um profissional legítimo. A checagem
                     acontece em silêncio no backend (ver validarCampo acima). */}
                 <p className="text-xs text-gray-400 mt-1">Formato: 12345/SP</p>
+              </div>
+
+              {/* Assinatura digitalizada — usada pela Central de Documentos.
+                  Fica AQUI, ao lado do CRMV, porque é a outra metade da mesma coisa:
+                  o que identifica o responsável técnico no papel. Opcional de
+                  propósito: sem ela o documento sai com a linha em branco para
+                  assinar à mão, que é como a clínica trabalha hoje. */}
+              <div>
+                <Label text="Assinatura digitalizada" />
+                <p className="text-xs text-gray-400 mb-2">
+                  Aparece sobre a linha de assinatura nos documentos emitidos. Use um fundo
+                  branco e sem margem. Sem assinatura, o documento sai com a linha em branco.
+                </p>
+                <div className="flex items-center gap-4">
+                  <label className="cursor-pointer group">
+                    <div className="w-56 h-24 rounded-2xl border-2 border-dashed border-gray-200 group-hover:border-emerald-400 bg-gray-50 overflow-hidden flex items-center justify-center transition-colors">
+                      {assinaturaPreview
+                        ? <img src={assinaturaPreview} alt="Sua assinatura" className="max-w-full max-h-full object-contain" />
+                        : <div className="flex flex-col items-center gap-1 text-gray-400 p-3">
+                            <PenLine size={22} />
+                            <span className="text-xs font-medium text-center leading-tight">Enviar assinatura</span>
+                          </div>
+                      }
+                    </div>
+                    <input type="file" accept="image/*" className="hidden" onChange={handleAssinaturaChange} />
+                  </label>
+                  {assinaturaPreview && (
+                    <button type="button" onClick={handleRemoverAssinatura}
+                      className="text-xs text-gray-400 hover:text-red-500 underline transition-colors">
+                      Remover
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Espécies: convidado = automático; independente = seleção.

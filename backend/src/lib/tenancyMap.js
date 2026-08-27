@@ -30,7 +30,12 @@ const CONTROL_PLANE = new Set([
   // ⚠️ `tb_audit_logs` SAIU daqui: D11 decidiu que é TENANT PLANE, com a policy (b)
   // `empresa_id = tenant` (sem `OR IS NULL` — o nulo ali era evento de plataforma, e a
   // policy mista faria todo gestor ver o LOGIN/LOGOUT de todas as clínicas).
-  'tb_modulos_sistema', 'tb_auditoria_permissoes',
+  'tb_modulos_sistema',
+  // ✅ 2026-08-25 — `tb_auditoria_permissoes` SAIU daqui: guarda PII de tenant (equipe,
+  // nome/e-mail do alvo, IP) e ganhou RLS por defesa em profundidade (TENANT VIA PAI
+  // tb_equipes/equipeId, migration 20260917000000). A única leitura já era escopada por
+  // equipeId e autorizada por rota — o RLS é o backstop para um futuro código que
+  // esqueça o escopo. Ver CAMINHO_EXPLICITO abaixo.
   'tb_cron_alerta_config', 'tb_cron_execucoes', 'tb_cron_agenda',
   '_prisma_migrations',
   // Perfil do VETERINÁRIO é do USUÁRIO, não da empresa: `VetPerfil.crmv` é `@unique`
@@ -161,6 +166,7 @@ const CAMINHO_EXPLICITO = {
   tb_perfis_equipe:                 'equipeId',
   tb_membros_equipe:                'equipeId',
   tb_convites_equipe:               'equipeId',
+  tb_auditoria_permissoes:          'equipeId',
 };
 
 /**
@@ -184,6 +190,12 @@ const CATALOGO_MISTO = new Map([
   // sem animal, é órfã de verdade — foi o caso das 2 fotos de animal apagado na fase 4.
   // Policy correspondente: `empresa_id = tenant OR publico = true`, nunca `OR IS NULL`.
   ['tb_midia_arquivos',      'publico = true OR animal_id IS NOT NULL'],
+  // Central de Documentos (2026-08-26). O nulo aqui é o modelo GLOBAL do sistema —
+  // hoje os 12 anexos da Res. CFMV 1.321/2020, que valem para qualquer clínica e
+  // são semeados por `seeds/003_documentos_cfmv.seed.js`. O predicado exige `chave`:
+  // modelo global SEM chave não existe (é o seed que a define), então uma linha sem
+  // empresa e sem chave é órfã de verdade e continua contando como tal.
+  ['tb_documento_templates', 'chave IS NOT NULL'],
 ]);
 
 /**

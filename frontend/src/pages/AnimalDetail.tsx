@@ -10,7 +10,7 @@ import {
   Search, ChevronDown, Loader2, CalendarClock,
   Clock, User as UserIcon, X, Check, Ban,
   Pill, Syringe, FlaskConical, Send, FileText, ExternalLink,
-  Scan, Activity, Building2, ArrowLeftRight,
+  Scan, Activity, Building2, ArrowLeftRight, FileSignature,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -74,7 +74,7 @@ interface AnimalData {
   inativoPor?:       { fullName: string } | null;
 }
 
-type OrigemEvento = 'EVOLUCAO' | 'VACINA' | 'EXAME' | 'EXAME_LAB' | 'EXAME_IMG' | 'EXAME_BIO' | 'EXAME_COMPRA' | 'ENCAMINHAMENTO' | 'PRESCRICAO';
+type OrigemEvento = 'EVOLUCAO' | 'VACINA' | 'EXAME' | 'EXAME_LAB' | 'EXAME_IMG' | 'EXAME_BIO' | 'EXAME_COMPRA' | 'ENCAMINHAMENTO' | 'PRESCRICAO' | 'DOCUMENTO';
 
 interface EventoHistorico {
   id:                string;
@@ -161,12 +161,27 @@ interface DetalhePrescricao {
   itens: ItemPrescricao[];
 }
 
+/**
+ * Documento EMITIDO (Central de Documentos). `blocos` é o SNAPSHOT já resolvido —
+ * o mesmo conteúdo que foi impresso; por isso o modal o exibe como texto corrido em
+ * vez de tentar recompor a folha A4 aqui (a folha vive em /documentos).
+ */
+interface DetalheDocumento {
+  numeroFmt:    string | null;
+  templateNome: string;
+  titulo:       string;
+  emitidoEm:    string;
+  emitidoPor:   string;
+  blocos:       { tipo: string; conteudo?: { texto?: string; rotulo?: string } }[];
+}
+
 type DetalheRecord =
   | { tipo: 'EVOLUCAO';       dados: DetalheEvolucao }
   | { tipo: 'VACINA';         dados: DetalheVacina }
   | { tipo: 'EXAME';          dados: DetalheExame }
   | { tipo: 'ENCAMINHAMENTO'; dados: DetalheEncaminhamento }
-  | { tipo: 'PRESCRICAO';     dados: DetalhePrescricao };
+  | { tipo: 'PRESCRICAO';     dados: DetalhePrescricao }
+  | { tipo: 'DOCUMENTO';      dados: DetalheDocumento };
 
 interface GrupoHistorico {
   key:      string;
@@ -187,6 +202,7 @@ const BADGE_ORIGEM: Record<OrigemEvento, string> = {
   EXAME_COMPRA:   'bg-amber-100 text-amber-700',
   ENCAMINHAMENTO: 'bg-orange-100 text-orange-700',
   PRESCRICAO:     'bg-blue-100 text-blue-700',
+  DOCUMENTO:      'bg-slate-100 text-slate-700',
 };
 
 const BADGE_TIPO_AG: Record<TipoAgendamento, string> = {
@@ -546,6 +562,36 @@ function DetalheModalEncaminhamento({ dados }: { dados: DetalheEncaminhamento })
   );
 }
 
+function DetalheModalDocumento({ dados }: { dados: DetalheDocumento }) {
+  // Só os blocos que carregam TEXTO: linha, assinatura e QR não dizem nada fora da
+  // folha, e listá-los aqui viraria ruído.
+  const linhas = (dados.blocos ?? [])
+    .map(b => {
+      const t = b.conteudo?.texto?.trim();
+      const r = b.conteudo?.rotulo?.trim();
+      if (!t) return null;
+      return b.tipo === 'campoAuto' && r ? `${r}: ${t}` : t;
+    })
+    .filter((x): x is string => Boolean(x));
+
+  return (
+    <div className="space-y-0">
+      <RowDetalhe label="Número"   value={dados.numeroFmt ?? '—'} />
+      <RowDetalhe label="Modelo"   value={dados.templateNome} />
+      <RowDetalhe label="Emitido em" value={formatDate(dados.emitidoEm)} />
+      <RowDetalhe label="Emitido por" value={dados.emitidoPor || '—'} />
+      {linhas.length > 0 && (
+        <div className="py-2.5">
+          <span className="text-xs text-gray-400 font-medium block mb-1.5">Conteúdo</span>
+          <div className="text-sm text-gray-800 space-y-1 max-h-72 overflow-y-auto">
+            {linhas.map((l, i) => <p key={i} className="whitespace-pre-wrap">{l}</p>)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const STATUS_PRESCRICAO: Record<string, { label: string; cls: string }> = {
   SALVO:                  { label: 'Salvo',          cls: 'bg-amber-100 text-amber-700' },
   FINALIZADO:             { label: 'Finalizado',     cls: 'bg-emerald-100 text-emerald-700' },
@@ -617,6 +663,7 @@ const DETALHE_CONFIG: Record<OrigemEvento, { icon: React.ReactNode; title: strin
   EXAME_COMPRA:   { icon: <Activity size={16} />,     title: 'Exame de Compra',     accentCls: 'text-amber-600'   },
   ENCAMINHAMENTO: { icon: <Send size={16} />,         title: 'Encaminhamento',      accentCls: 'text-orange-600'  },
   PRESCRICAO:     { icon: <Pill size={16} />,         title: 'Prescrição',          accentCls: 'text-blue-600'    },
+  DOCUMENTO:      { icon: <FileSignature size={16} />, title: 'Documento emitido',   accentCls: 'text-slate-600'   },
 };
 
 function DetalheModal({
@@ -662,6 +709,7 @@ function DetalheModal({
               {detalhe.tipo === 'EXAME'          && <DetalheModalExame          dados={detalhe.dados} />}
               {detalhe.tipo === 'ENCAMINHAMENTO' && <DetalheModalEncaminhamento dados={detalhe.dados} />}
               {detalhe.tipo === 'PRESCRICAO'     && <DetalheModalPrescricao     dados={detalhe.dados} />}
+              {detalhe.tipo === 'DOCUMENTO'      && <DetalheModalDocumento      dados={detalhe.dados} />}
             </>
           )}
         </div>
@@ -904,6 +952,7 @@ const ENDPOINT: Record<OrigemEvento, (id: number) => string> = {
   EXAME_COMPRA:   id => `/clinica/exames/${id}`,
   ENCAMINHAMENTO: id => `/clinica/encaminhamentos/${id}`,
   PRESCRICAO:     id => `/clinica/prescricoes/grupos/${id}`,
+  DOCUMENTO:      id => `/documentos/emitidos/${id}`,
 };
 
 const AnimalDetail = () => {

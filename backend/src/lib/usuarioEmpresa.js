@@ -367,6 +367,65 @@ async function anexarFotoEmRelacao(itens, chave, empresaId, client = prisma) {
   });
 }
 
+// ─── Assinatura do profissional (Central de Documentos) ──────────────────────
+//
+// Imagem da assinatura, POR EMPRESA (migration 20260918000000) — mesma razão da
+// foto: o cadastro é da clínica, e trocar a assinatura numa não pode reescrever o
+// cadastro da outra. É o que o bloco `assinatura` do documento renderiza sobre a
+// linha, junto do nome e do CRMV (a coluna `crmv` desta mesma tabela).
+//
+// Mesmo SQL cru e mesmo guard de coluna da foto — pelo mesmo motivo: coluna nova,
+// client Prisma possivelmente não regenerado (no Windows o `generate` falha com o
+// backend rodando, §11).
+
+let _temAssinatura = null;
+let _temAssinaturaEm = 0;
+async function temColunaAssinatura() {
+  if (_temAssinatura === true) return true;
+  if (_temAssinatura === false && Date.now() - _temAssinaturaEm < 60_000) return false;
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'schs2vet' AND table_name = 'tb_usuario_empresa'
+          AND column_name = 'assinatura_url' LIMIT 1`,
+    );
+    _temAssinatura = rows.length > 0;
+  } catch { _temAssinatura = false; }
+  _temAssinaturaEm = Date.now();
+  return _temAssinatura;
+}
+
+/** Assinatura do usuário nesta empresa. null = sem assinatura (ou coluna não migrada). */
+async function lerAssinatura(userId, empresaId, client = prisma) {
+  if (!userId || !empresaId) return null;
+  if (!(await temColunaAssinatura())) return null;
+  try {
+    const rows = await client.$queryRawUnsafe(
+      'SELECT assinatura_url FROM schs2vet.tb_usuario_empresa WHERE user_id = $1 AND empresa_id = $2 LIMIT 1',
+      Number(userId), Number(empresaId),
+    );
+    return rows?.[0]?.assinatura_url ?? null;
+  } catch { return null; }
+}
+
+/**
+ * Grava (ou apaga, com null) a assinatura. Devolve a URL ANTERIOR — o caller só
+ * apaga o arquivo velho DEPOIS de o banco apontar para o novo; ao contrário, uma
+ * falha na gravação deixaria o cadastro apontando para arquivo inexistente.
+ */
+async function salvarAssinatura(client, userId, empresaId, assinaturaUrl) {
+  if (!userId || !empresaId) return null;
+  if (!(await temColunaAssinatura())) return null;
+  const anterior = await lerAssinatura(userId, empresaId, client);
+  try {
+    await client.$executeRawUnsafe(
+      'UPDATE schs2vet.tb_usuario_empresa SET assinatura_url = $1 WHERE user_id = $2 AND empresa_id = $3',
+      assinaturaUrl ?? null, Number(userId), Number(empresaId),
+    );
+  } catch { /* coluna ainda não migrada */ }
+  return anterior;
+}
+
 /**
  * Empresa que NÃO deixa ninguém entrar: `status <> 'ATIVA'`.
  *
@@ -481,6 +540,8 @@ module.exports = {
   lerFotos,
   salvarFoto,
   anexarFotoEmRelacao,
+  lerAssinatura,
+  salvarAssinatura,
   ehPerfilProfissional,
   ehProfissionalNaEmpresa,
   perfilDaEmpresa,

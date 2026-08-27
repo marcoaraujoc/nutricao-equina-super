@@ -34,7 +34,8 @@ const { salvarVinculo, vincularMembro, normalizarPagamento, salvarPagamentoEAces
 const { garantirVagaDeUsuario, consomeAssento } = require('../lib/planoEmpresa');
 // Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — ver toggleMembro/listarMembros
 const { registrarAtivacao, registrarInativacao, anexarTrilhaAtivacaoEmRelacao } = require('../lib/usuarioAtivacao');
-const { registrarAuditoria } = require('../lib/auditoria');
+const { registrarAuditoria, registrarAcessoNegado } = require('../lib/auditoria');
+const bloqueioLogin = require('../lib/bloqueioLogin');
 
 // ─── Helper: encontra a empresa do usuário (owner OU gestor convidado) ─────────
 // empresaIdPreferida (req.empresaId, vindo do seletor de empresa no frontend):
@@ -1683,7 +1684,7 @@ const EquipeController = {
         const membros = await prisma.membroEquipe.findMany({
           where:   { equipeId: equipe.id, NOT: { user: { role: 'ADMIN' } } },
           include: {
-            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, createdAt: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: equipe.empresaId }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
+            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, bloqueadoEm: true, createdAt: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: equipe.empresaId }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
             equipe: { select: { nome: true } },
           },
           orderBy: { createdAt: 'desc' },
@@ -2407,6 +2408,61 @@ const EquipeController = {
         return res.status(409).json({ sucesso: false, mensagem: err.message, code: err.code, ...err.dados });
       }
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // POST /api/equipes/membros/:userId/desbloquear
+  //
+  // Libera a conta travada por tentativas de senha erradas (lib/bloqueioLogin.js).
+  // A REGRA de quem pode destravar quem mora na lib, não aqui — este controller só a
+  // consulta e registra o ato:
+  //   alvo NÃO é gestor → gestor de uma empresa do alvo (ou ADMIN)
+  //   alvo É gestor     → SOMENTE ADMIN da plataforma
+  //
+  // ⚠️ A rota passa por `checkPermission('equipe.membros.editar')` por DOIS motivos: o
+  // gate em si, e porque é ele que popula `req.membroCargo = 'GESTOR'` nos caminhos de
+  // bypass (dono da empresa incluído) — sem isso `podeDesbloquear` não teria como
+  // reconhecer o gestor.
+  desbloquearMembro: async (req, res) => {
+    try {
+      const alvoId = Number(req.params.userId);
+      const alvo = await prisma.user.findUnique({
+        where:  { id: alvoId },
+        select: { id: true, fullName: true, email: true, bloqueadoEm: true, tentativasLogin: true },
+      });
+      if (!alvo) return res.status(404).json({ error: 'Usuário não encontrado' });
+
+      const permissao = await bloqueioLogin.podeDesbloquear(req, alvoId);
+      if (!permissao.pode) {
+        registrarAcessoNegado(req, {
+          motivo:     `Desbloqueio de conta negado: ${permissao.motivo}`,
+          entidade:   'LOGIN',
+          entidadeId: alvoId,
+        });
+        return res.status(403).json({ error: permissao.motivo, code: permissao.code });
+      }
+
+      // Conta já liberada devolve 200, não erro: dois gestores clicando quase juntos é
+      // o caso normal, e um 4xx aí faria o segundo achar que falhou algo.
+      if (!alvo.bloqueadoEm) {
+        return res.json({ dados: { id: alvo.id, bloqueadoEm: null }, mensagem: 'A conta já estava liberada.' });
+      }
+
+      const liberado = await bloqueioLogin.desbloquear(alvoId);
+
+      await registrarAuditoria(prisma, req, {
+        categoria:  'ALTERACAO',
+        entidade:   'USUARIO',
+        entidadeId: alvoId,
+        motivo:     req.body?.motivo?.trim() || null,
+        detalhes:   `Conta desbloqueada (${alvo.tentativasLogin} tentativa(s) de senha inválida, bloqueada em `
+                    + `${alvo.bloqueadoEm.toISOString()})`,
+      });
+
+      return res.json({ dados: liberado, mensagem: 'Conta desbloqueada.' });
+    } catch (err) {
+      console.error('EquipeController.desbloquearMembro:', err);
+      return res.status(500).json({ error: 'Erro ao desbloquear a conta' });
     }
   },
 

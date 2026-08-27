@@ -23,14 +23,71 @@ process.env.TZ = 'America/Sao_Paulo';
 dotenv.config();
 
 // ── Startup security checks ────────────────────────────────────────────────
-const _jwtSecret = process.env.JWT_SECRET ?? '';
-if (_jwtSecret.length < 32) {
+//
+// O JWT_SECRET é a chave HMAC dos tokens de sessão (lib/sessionTokens.js). Quem o
+// descobre FABRICA um token válido com qualquer `id`/`userType` — entra como ADMIN de
+// qualquer empresa, sem senha e SEM PASSAR PELO 2FA (o segundo fator acontece antes de
+// o token ser emitido, então um token forjado pula a etapa inteira). E o ataque é
+// OFFLINE: basta capturar um JWT qualquer e testar chaves localmente, onde nenhum rate
+// limit alcança.
+//
+// ⚠️ Por isso a checagem NÃO pode ser só de COMPRIMENTO: "trocar-isso-antes-de-producao"
+// tem 33 caracteres e passaria por um teste de tamanho sem ter entropia nenhuma. O caso
+// mais comum de todos é subir com o placeholder do .env.example copiado.
+const GERAR_SEGREDO =
+  'node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"';
+
+/** Motivo pelo qual o segredo é fraco, ou `null` quando está aceitável. */
+function segredoFraco(valor: string): string | null {
+  if (valor.length < 32) return 'tem menos de 32 caracteres';
+
+  if (/(troque|trocar|mude|change|exemplo|example|placeholder|secret|senha|password|s2vet|nutri|123456|abcdef|teste|test|admin|default)/i.test(valor)) {
+    return 'contém palavra previsível (parece o placeholder do .env.example)';
+  }
+  // Entropia grosseira por variedade de caracteres: um hex de 64 chars tem ~16
+  // distintos; frase repetitiva ou padrão manual tem muito menos.
+  const distintos = new Set(valor).size;
+  if (distintos < 10) {
+    return `usa só ${distintos} caracteres distintos (parece repetitivo, não aleatório)`;
+  }
+  if (/(.)\1{5,}/.test(valor)) {
+    return 'repete o mesmo caractere seis ou mais vezes seguidas';
+  }
+  return null;
+}
+
+const _jwtSecret   = process.env.JWT_SECRET ?? '';
+const _motivoFraco = segredoFraco(_jwtSecret);
+if (_motivoFraco) {
   // eslint-disable-next-line no-console
   process.stderr.write(
-    '[FATAL] JWT_SECRET muito fraco (mínimo 32 caracteres).\n' +
-    'Gere um seguro com: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"\n'
+    `[FATAL] JWT_SECRET inseguro — ${_motivoFraco}.\n` +
+    `Gere um seguro com: ${GERAR_SEGREDO}\n`
   );
   process.exit(1);
+}
+
+// JWT_REFRESH_SECRET ausente NÃO impede subir — `lib/sessionTokens.js` deriva
+// `JWT_SECRET + '_refresh'`. Mas aí os dois deixam de ser INDEPENDENTES: quem obtiver
+// um deriva o outro numa linha, e o refresh token vale pela janela de inatividade
+// inteira. Avisa alto, sem bloquear: exigir a variável quebraria todo ambiente que
+// hoje sobe sem ela.
+if (!process.env.JWT_REFRESH_SECRET) {
+  // eslint-disable-next-line no-console
+  process.stderr.write(
+    '[AVISO] JWT_REFRESH_SECRET não definido — está sendo DERIVADO do JWT_SECRET.\n' +
+    '        Os dois segredos deixam de ser independentes. Defina um próprio:\n' +
+    `        ${GERAR_SEGREDO}\n`
+  );
+} else if (process.env.JWT_REFRESH_SECRET === _jwtSecret) {
+  // eslint-disable-next-line no-console
+  process.stderr.write('[AVISO] JWT_REFRESH_SECRET é IGUAL ao JWT_SECRET — gere um valor diferente.\n');
+} else {
+  const _motivoRefresh = segredoFraco(process.env.JWT_REFRESH_SECRET);
+  if (_motivoRefresh) {
+    // eslint-disable-next-line no-console
+    process.stderr.write(`[AVISO] JWT_REFRESH_SECRET inseguro — ${_motivoRefresh}.\n`);
+  }
 }
 
 // Extend Express Request with runtime-injected fields

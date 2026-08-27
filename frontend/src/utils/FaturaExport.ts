@@ -18,10 +18,15 @@ function brl(v: number) {
 
 // ─── Tipos locais (reutilizados de Faturamento) ───────────────────────────────
 
+import { ordenarComInsumos } from './faturaInsumos';
+
 interface AnimalMin { id: number; nome: string; especie?: { nome: string } | null }
 interface ItemMin   {
   animalId?: number | null; tipo: string; descricao: string; valor: number; quantidade: number;
   descontoTipo?: 'PERCENTUAL' | 'VALOR' | null; descontoValor?: number;
+  // Agrupamento de insumo de aplicação (seringa/agulha) sob o medicamento — ver
+  // utils/faturaInsumos.ts. A fatura impressa segue a MESMA ordem da tela.
+  prescricaoItemId?: number | null; insumoDe?: number | null;
 }
 
 // Desconto e total líquido do item — mesma regra do backend (lib/faturaUtils.js)
@@ -81,10 +86,10 @@ export function gerarHtmlFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl
 
   const linhasGrupos = [...grupos.values()].map(g => {
     const subtotal = g.itens.reduce((s, i) => s + totalItem(i), 0);
-    const linhasItens = g.itens.map(i => `
+    const linhasItens = ordenarComInsumos(g.itens).map(i => `
       <tr>
         <td><span class="badge ${i.tipo.toLowerCase()}">${i.tipo}</span></td>
-        <td>${i.descricao}${labelDesconto(i) ? `<br/><small style="color:#dc2626">Desconto ${labelDesconto(i)} (−${brl(descontoItem(i))})</small>` : ''}</td>
+        <td${i.insumoDe != null ? ' style="padding-left:22px;color:#4b5563;font-size:11px"' : ''}>${i.descricao}${labelDesconto(i) ? `<br/><small style="color:#dc2626">Desconto ${labelDesconto(i)} (−${brl(descontoItem(i))})</small>` : ''}</td>
         <td class="center">${i.quantidade}</td>
         <td class="right">${brl(i.valor)}</td>
         <td class="right">${brl(totalItem(i))}</td>
@@ -205,7 +210,8 @@ export function exportarFaturaCSV(fatura: FaturaMin, animais: AnimalMin[]) {
     ['Animal', 'Tipo', 'Descrição', 'Quantidade', 'Valor Unitário (R$)', 'Desconto (R$)', 'Subtotal (R$)'],
   ];
 
-  for (const item of fatura.itens) {
+  // Mesma ordem da tela e da impressão — o insumo sai logo abaixo do medicamento.
+  for (const item of ordenarComInsumos(fatura.itens)) {
     const nomeAnimal = item.animalId
       ? (animalMap.get(item.animalId)?.nome ?? `Animal #${item.animalId}`)
       : 'Outros';

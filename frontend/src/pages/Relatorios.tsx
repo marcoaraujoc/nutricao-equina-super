@@ -13,7 +13,14 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { usePeriodo, periodoParams } from '../contexts/PeriodoContext';
 import PeriodoSelector from '../components/relatorios/PeriodoSelector';
-import { Card, EmptyState, Tabela, BigNumber, formatBRL, formatMesRef, formatData } from '../components/relatorios/RelatorioUI';
+import { Card, EmptyState, CelulaLink, Tabela, BigNumber, formatBRL, formatMesRef, formatData } from '../components/relatorios/RelatorioUI';
+
+// Destinos das linhas deste relatório.
+// ⚠️ O `?local=` é comparado por IGUALDADE EXATA na lista de Pacientes, contra o
+// mesmo nome que o backend agrupa aqui (`nomeLocalizacao`: catálogo → texto legado →
+// "Sem localização"). Mudar a regra de um lado sem o outro faz o link abrir vazio.
+const PACIENTES = '/animais-vet';
+const pacientesNoLocal = (local: string) => `${PACIENTES}?local=${encodeURIComponent(local)}`;
 
 // ─── Types (espelho do payload do backend) ────────────────────────────────────
 
@@ -69,6 +76,8 @@ interface SemAtendimento {
 
 interface FaturaCorrigida {
   id:               number;
+  /** null em fatura legada sem proprietário vinculado — aí a linha não vira link. */
+  proprietarioId:   number | null;
   proprietario:     string;
   mesReferencia:    string | null;
   status:           string;
@@ -305,7 +314,7 @@ export default function Relatorios() {
                 {dados.semAtendimento.animais.map(a => (
                   <tr key={a.id}>
                     <td className="px-4 py-2.5 text-xs text-gray-800">
-                      {a.nome}
+                      <CelulaLink to={`/animal/${a.id}`}>{a.nome}</CelulaLink>
                       <span className="block text-[10px] text-gray-400">{a.proprietario}</span>
                     </td>
                     <td className="px-4 py-2.5 text-xs text-gray-600 text-right">{a.localizacao}</td>
@@ -335,7 +344,10 @@ export default function Relatorios() {
                 {dados.animaisPorLocalizacao.map(l => (
                   <tr key={l.localizacao}>
                     <td className="px-4 py-2.5 text-xs text-gray-800">
-                      <span className="flex items-center gap-1.5"><PawPrint size={11} className="text-gray-300" /> {l.localizacao}</span>
+                      <span className="flex items-center gap-1.5">
+                        <PawPrint size={11} className="text-gray-300" />
+                        <CelulaLink to={pacientesNoLocal(l.localizacao)}>{l.localizacao}</CelulaLink>
+                      </span>
                     </td>
                     <td className="px-4 py-2.5 text-xs text-gray-800 text-right font-semibold">{l.quantidade}</td>
                   </tr>
@@ -354,7 +366,11 @@ export default function Relatorios() {
               <Tabela colunas={['Proprietário', 'Mês', 'Correções', 'Última correção']}>
                 {dados.faturasCorrigidas.faturas.map(f => (
                   <tr key={f.id}>
-                    <td className="px-4 py-2.5 text-xs text-gray-800">{f.proprietario}</td>
+                    <td className="px-4 py-2.5 text-xs text-gray-800">
+                      <CelulaLink to={f.proprietarioId ? `/faturamento?proprietarioId=${f.proprietarioId}` : undefined}>
+                        {f.proprietario}
+                      </CelulaLink>
+                    </td>
                     <td className="px-4 py-2.5 text-xs text-gray-600 text-right whitespace-nowrap">{formatMesRef(f.mesReferencia)}</td>
                     <td className="px-4 py-2.5 text-right">
                       <span className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">

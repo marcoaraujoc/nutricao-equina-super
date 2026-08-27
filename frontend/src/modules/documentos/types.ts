@@ -83,6 +83,15 @@ export interface VersaoTemplate {
 
 export interface Template {
   id:            string;
+  /**
+   * `true` = modelo GLOBAL do sistema (os 12 anexos da Res. CFMV 1.321/2020).
+   * A clínica LÊ mas não escreve: qualquer alteração vira uma CÓPIA dela
+   * (copy-on-write no backend). A tela usa isto para oferecer "Personalizar" em vez
+   * de "Editar" — ver `DocumentoTemplateController`.
+   */
+  global:        boolean;
+  /** Identificador da norma de origem (`cfmv_01_atestado_sanitario`), quando houver. */
+  chave:         string | null;
   nome:          string;
   descricao:     string;
   categoria:     CategoriaId;
@@ -102,18 +111,32 @@ export interface Template {
   versoes:       VersaoTemplate[];
 }
 
-/** Documento EMITIDO: snapshot do template com as variáveis já resolvidas. */
+/**
+ * Documento EMITIDO: snapshot do template com as variáveis JÁ RESOLVIDAS.
+ *
+ * Espelha `DocumentoEmitidoController.serializar`. O snapshot é o ponto: editar o
+ * modelo depois não reescreve o papel que o cliente já recebeu.
+ */
 export interface DocumentoEmitido {
-  id:          string;
-  templateId:  string;
+  id:           string;
+  templateId:   string | null;
   templateNome: string;
-  animalNome:  string;
-  clienteNome: string;
-  emitidoEm:   string;
-  emitidoPor:  string;
-  assinado:    boolean;
-  /** HTML/− do que foi impresso, para reimpressão fiel. */
-  blocos:      Bloco[];
+  numero:       number | null;
+  /** `DOC-0042` — já formatado pelo backend; `null` em registro sem número. */
+  numeroFmt:    string | null;
+  titulo:       string;
+  animalId:     number;
+  animalNome:   string;
+  clienteNome:  string;
+  evolucaoId:   number | null;
+  emitidoEm:    string;
+  emitidoPor:   string;
+  ativo:        boolean;
+  canceladoMotivo: string | null;
+  /** O que foi impresso, para reimpressão fiel. */
+  blocos:       Bloco[];
+  /** As variáveis usadas na resolução — auditoria de onde saiu cada valor. */
+  contexto:     Record<string, string>;
 }
 
 /** Uma variável da biblioteca ({{animal.nome}} e amigas). */

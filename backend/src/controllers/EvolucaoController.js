@@ -389,25 +389,17 @@ const EvolucaoController = {
         });
       }
 
-      // Título via IA: só BLOQUEIA a resposta quando a evolução já nasce FINALIZADA
-      // (fluxo "Iniciar e já Finalizar" do handleFinalizar) — é o único caso em que o
-      // frontend usa `acoes` (sugestões de encaminhamento) na mesma resposta, para
-      // abrir o modal na hora. Nascer EM_ANDAMENTO (o "Salvar" do rascunho, chamado a
-      // cada edição) NÃO espera a IA: a chamada ao Gemini é uma requisição de rede
-      // com latência variável (medido em produção: de <1s a mais de 1 minuto, conta
-      // compartilhada entre tenants) e o rascunho não lê `acoesIA` nem precisa do
-      // título pronto na hora — ele chega depois (ver bloco `setImmediate` abaixo).
-      const bloquearPorAcoesIA = status === 'FINALIZADA';
-
-      let tituloIA = null;
-      let acoesIA  = [];
-      if (bloquearPorAcoesIA) {
-        const resultadoIA = await interpretarEvolucao(texto.trim(), userId, Number(animalId), req.empresaId ?? null).catch(() => null);
-        if (resultadoIA) {
-          tituloIA = resultadoIA.titulo?.trim()?.substring(0, 255) || null;
-          acoesIA  = resultadoIA.acoes ?? [];
-        }
-      }
+      // ⚠️ NENHUM caminho de criar espera a IA (2026-08-26). Até aqui, nascer já
+      // FINALIZADA bloqueava a resposta até o Gemini responder — medido em produção:
+      // de <1s a mais de um MINUTO — e só por causa de `acoesIA`, a sugestão de
+      // encaminhamento que o front abre DEPOIS de salvar. O registro clínico já
+      // estava gravado; o usuário esperava por uma sugestão.
+      // Quem faz a chamada agora é o FRONT, por `POST /:id/titulo-ia`, sem travar a
+      // tela — e é uma só chamada, que grava o título e devolve as ações.
+      // `acoesIA: []` continua no corpo da resposta de propósito: o contrato não
+      // muda para nenhum cliente que ainda o leia.
+      const tituloIA = null;
+      const acoesIA  = [];
 
       const evolucao = await prisma.$transaction(async (tx) => {
         let numero;
@@ -501,10 +493,14 @@ const EvolucaoController = {
         });
       }
 
-      // Título em segundo plano quando não bloqueamos a resposta por ele: não atrasa
-      // o "Salvar" nem falha a criação se o Gemini estiver lento/fora do ar — falha
-      // silenciosa, o registro já foi criado e o título é conveniência, não requisito.
-      if (!bloquearPorAcoesIA) {
+      // Título em segundo plano — não atrasa o "Salvar" nem falha a criação se o
+      // Gemini estiver lento/fora do ar. Falha silenciosa: o registro já foi criado e
+      // o título é conveniência, não requisito.
+      // ⚠️ NÃO roda quando a evolução já nasce FINALIZADA: nesse caso quem chama a IA
+      // é o front (`POST /:id/titulo-ia`, para receber também as ações de
+      // encaminhamento), e disparar aqui faria DUAS chamadas ao Gemini pelo mesmo
+      // texto — consumo de IA é medido e faturado por empresa (CLAUDE.md §7).
+      if (status !== 'FINALIZADA') {
         const evolucaoId = evolucao.id;
         setImmediate(async () => {
           try {
@@ -599,24 +595,17 @@ const EvolucaoController = {
       // Título via IA: regera quando ainda não há título OU quando o TEXTO mudou. Se o
       // texto não mudou, não reprocessa (evita gasto de IA a cada "Salvar" de um
       // rascunho já titulado). Falha/retorno vazio da IA mantém o título anterior
-      // (nunca zera um já existente).
-      //
-      // Só BLOQUEIA a resposta pela IA quando esta edição está FINALIZANDO a evolução
-      // — mesmo critério do `criar`: é o único momento em que o frontend lê `acoesIA`
-      // (modal de sugestão de encaminhamento). Edição comum do rascunho (texto sendo
-      // reescrito, "Salvar" chamado várias vezes ao longo do atendimento) nunca espera
-      // o Gemini — o título chega depois, em segundo plano (ver bloco após a resposta).
+      // (nunca zera um já existente). Vale só para o "Salvar" do rascunho — na
+      // FINALIZAÇÃO quem pede o título é o front, junto das ações (ver abaixo).
       const precisaTitulo = (!existente.titulo?.trim() || textoMudou) && Boolean(textoEfetivo?.trim());
 
-      let tituloParaSalvar = existente.titulo;
-      let acoesIA = [];
-      if (precisaTitulo && vaiFinalizar) {
-        const resultadoIA = await interpretarEvolucao(textoEfetivo, userId, existente.animalId, req.empresaId ?? null).catch(() => null);
-        if (resultadoIA) {
-          tituloParaSalvar = resultadoIA.titulo?.trim()?.substring(0, 255) || existente.titulo;
-          acoesIA = resultadoIA.acoes ?? [];
-        }
-      }
+      // ⚠️ FINALIZAR NÃO ESPERA MAIS A IA (2026-08-26). O `await` daqui era a
+      // duração inteira do "Finalizar" (medido: de <1s a mais de um MINUTO) e existia
+      // só por `acoesIA` — a sugestão de encaminhamento que o front abre DEPOIS de
+      // salvar. Quem chama a IA agora é o front, por `POST /:id/titulo-ia`, sem
+      // travar a tela; lá uma ÚNICA chamada grava o título e devolve as ações.
+      const tituloParaSalvar = existente.titulo;
+      const acoesIA = [];
 
       const atualizada = await prisma.$transaction(async (tx) => {
         const upd = await tx.evolucaoClinica.update({
@@ -718,6 +707,9 @@ const EvolucaoController = {
       // Título em segundo plano quando o texto mudou fora do fluxo de finalização —
       // não atrasa o "Salvar" do rascunho nem falha a edição se o Gemini estiver
       // lento/fora do ar. Falha silenciosa: título é conveniência, não requisito.
+      // ⚠️ `!vaiFinalizar`: ao FINALIZAR quem chama a IA é o front (precisa das ações
+      // de encaminhamento no mesmo retorno), e disparar aqui também faria DUAS
+      // chamadas ao Gemini pelo mesmo texto — IA é medida e faturada por empresa.
       if (precisaTitulo && !vaiFinalizar) {
         setImmediate(async () => {
           try {
@@ -1135,6 +1127,72 @@ const EvolucaoController = {
   },
 
   // ── Salvar título gerado pela LLM ─────────────────────────────────────────
+  // ── Título por IA + ações clinicas, FORA do caminho de finalizar ────────────
+  // POST /clinica/evolucoes/:id/titulo-ia
+  //
+  // POR QUE EXISTE: finalizar a evolução ESPERAVA o Gemini, e só por causa de
+  // `acoesIA` (a sugestão de encaminhamento que o front abre depois de salvar). A
+  // latência dessa chamada é de <1s a mais de um MINUTO (conta compartilhada entre
+  // tenants), então o botão "Finalizar" ficava girando esse tempo todo com o
+  // atendimento já gravado no banco há muito — o usuário esperava por uma sugestão,
+  // não pelo registro clínico.
+  //
+  // Agora finalizar responde na hora e o front chama ESTA rota em seguida, sem travar
+  // a tela. ⚠️ É **UMA SÓ** chamada de IA: `interpretarEvolucao` devolve título E
+  // ações no mesmo retorno, então gravar o título aqui evita a segunda chamada que
+  // um job de título em segundo plano custaria — e o consumo de IA é medido e
+  // faturado por empresa (CLAUDE.md §7).
+  //
+  // ⚠️ O TEXTO vem do BANCO, nunca do body: a rota não pode virar um atalho para
+  // rodar a LLM com texto arbitrário por conta do tenant.
+  // ⚠️ NÃO sobrescreve título já existente — pode ser o que alguém escreveu à mão
+  // pelo PATCH /titulo. As AÇÕES continuam sendo devolvidas nesse caso.
+
+  tituloIa: async (req, res) => {
+    const { id } = req.params;
+    try {
+      const evolucao = await prisma.evolucaoClinica.findUnique({
+        where:  { id: Number(id) },
+        select: { id: true, animalId: true, ativo: true, texto: true, titulo: true, veterinarioId: true },
+      });
+      if (!evolucao || !evolucao.ativo) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
+      }
+
+      const acesso = await verificarAcessoAnimal({
+        animalId: evolucao.animalId, userId: req.user.id,
+        empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType,
+      });
+      if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+      if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+      if (!podeOperarRegistro(req, evolucao.veterinarioId)) {
+        return res.status(403).json({ sucesso: false, mensagem: 'Só é possível operar uma evolução sua.' });
+      }
+
+      if (!evolucao.texto?.trim()) {
+        return res.json({ sucesso: true, dados: { titulo: evolucao.titulo ?? null, acoes: [] } });
+      }
+
+      // Degradação graciosa: IA fora do ar/lenta não é erro para quem chama — o
+      // atendimento JÁ está finalizado, isto aqui é conveniência.
+      const resultadoIA = await interpretarEvolucao(
+        evolucao.texto, req.user.id, evolucao.animalId, req.empresaId ?? null,
+      ).catch(() => null);
+
+      const tituloIA = resultadoIA?.titulo?.trim()?.substring(0, 255) || null;
+      let tituloFinal = evolucao.titulo;
+      if (tituloIA && !evolucao.titulo?.trim()) {
+        await prisma.evolucaoClinica.update({ where: { id: evolucao.id }, data: { titulo: tituloIA } });
+        tituloFinal = tituloIA;
+      }
+
+      res.json({ sucesso: true, dados: { titulo: tituloFinal ?? null, acoes: resultadoIA?.acoes ?? [] } });
+    } catch (error) {
+      console.error('Erro ao gerar título por IA (não crítico):', error);
+      res.json({ sucesso: true, dados: { titulo: null, acoes: [] } });
+    }
+  },
+
   // PATCH /clinica/evolucoes/:id/titulo
   // Body: { titulo }
 

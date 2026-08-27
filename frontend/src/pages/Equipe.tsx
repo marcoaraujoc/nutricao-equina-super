@@ -6,9 +6,10 @@ import toast from 'react-hot-toast';
 import {
   Users2, Mail, ToggleLeft, ToggleRight,
   Loader2, X, Search,
-  Pencil, Check,
+  Pencil, Check, Unlock, Lock,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import { usePermissoes } from '../hooks/usePermissoes';
 import BotaoVoltar   from '../components/BotaoVoltar';
 import UsuarioFormModal, { type UsuarioFormValues } from '../components/UsuarioFormModal';
 import InlineError from '../components/InlineError';
@@ -43,6 +44,10 @@ interface Membro {
     email:    string;
     userType: string;
     ativo:    boolean;
+    /** Conta travada por 6 senhas erradas (lib/bloqueioLogin.js). null = liberada.
+     *  Distinto de `ativo`: inativo é decisão do gestor; bloqueado é consequência de
+     *  tentativa de acesso — e quem destrava depende de quem o alvo é. */
+    bloqueadoEm?: string | null;
     createdAt?: string;
     // Trilha de ativação/inativação (quem fez, quando) — ver lib/usuarioAtivacao.js
     // no backend. null = nunca foi ativado/inativado por uma ação (ex.: conta
@@ -299,10 +304,20 @@ export default function Equipe() {
   const [erroModal,  setErroModal]  = useState<string | null>(null);
   const [equipeId,      setEquipeId]                      = useState<number | null>(null);
   const [isGestor,       setIsGestor]                       = useState(false);
+  // ATIVAR/INATIVAR e DESBLOQUEAR vêm do CONTROLE DE ACESSO (coluna ALTERAR do módulo
+  // Equipe), não de "sou o gestor". `isGestor` continua no OR porque o gestor tem
+  // bypass total no backend e nem sempre aparece na matriz — mas é o slug que permite
+  // ao gestor DELEGAR a ação (ex.: para a secretaria), que é o ponto de a permissão
+  // vir da matriz.
+  const { podeExecutar, loading: loadingPerms } = usePermissoes();
+  // `!loadingPerms` evita o botão APARECER e sumir: enquanto o mapa de permissões
+  // não chegou, `podeExecutar` responde false para tudo (hooks/usePermissoes).
+  const podeGerenciarMembros = isGestor || (!loadingPerms && podeExecutar('equipe.membros.editar'));
   const [loading,       setLoading]                       = useState(true);
   const [showConvite,   setShowConvite]                   = useState(false);
   const [enviando,      setEnviando]                      = useState(false);
   const [togglingId,    setTogglingId]                    = useState<number | null>(null);
+  const [desbloqueandoId, setDesbloqueandoId]             = useState<number | null>(null);
   // Membro em vias de ser INATIVADO — pede justificativa antes do PATCH (ativar
   // continua direto, sem modal, conforme pedido).
   const [inativando,    setInativando]                    = useState<Membro | null>(null);
@@ -468,6 +483,43 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
       setSalvandoEdicao(false);
     }
   };
+
+  /**
+   * Desbloqueia a conta travada por senha errada.
+   *
+   * O gate REAL é do backend (`lib/bloqueioLogin.js`): gestor destrava quem é da
+   * empresa dele; conta de GESTOR só o ADMIN destrava. Aqui a tela só não OFERECE o
+   * botão onde ele fatalmente responderia 403 — botão que só falha depois do clique é
+   * o antipadrão da armadilha 28-d.
+   */
+  const handleDesbloquear = async (membro: Membro) => {
+    setDesbloqueandoId(membro.id);
+    setErroInline(null);
+    try {
+      await api.post(`/equipes/membros/${membro.user.id}/desbloquear`);
+      toast.success(`Conta de ${membro.user.fullName} desbloqueada`);
+      await carregarMembros();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setErroInline(msg ?? 'Erro ao desbloquear a conta');
+    } finally {
+      setDesbloqueandoId(null);
+    }
+  };
+
+  /**
+   * Conta de GESTOR escala para o ADMIN — espelha a regra do backend.
+   *
+   * 🔴 Olha `cargo` **e** `cargos`: na disputa entre cargos, GESTOR vence. Um membro
+   * pode acumular funções (as permissões dele são a UNIÃO), e "gestora e veterinária"
+   * é gestora para efeito de desbloqueio. Checar só o cargo primário mostraria o botão
+   * a um gestor que o backend recusaria — botão que só falha depois do clique.
+   */
+  const ehGestor = (m: Membro) => m.cargo === 'GESTOR' || (m.cargos ?? []).includes('GESTOR');
+
+  const podeDesbloquearMembro = (m: Membro) =>
+    podeGerenciarMembros && !!m.user.bloqueadoEm && m.user.id !== user?.id
+    && (isAdminPlataforma || !ehGestor(m));
 
   const membrosAtivos   = membros.filter(m => m.user.ativo !== false);
   const membrosInativos = membros.filter(m => m.user.ativo === false);
@@ -690,9 +742,21 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                         </p>
                       )}
                     </div>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
-                      {ativo ? 'Ativo' : 'Inativo'}
-                    </span>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {/* BLOQUEADO é estado à parte de Ativo/Inativo, e os dois convivem:
+                          inativo é decisão do gestor; bloqueado é consequência de 6
+                          senhas erradas. Um selo só não distinguiria "o gestor tirou o
+                          acesso" de "alguém tentou entrar na conta". */}
+                      {m.user.bloqueadoEm && (
+                        <span title={`Bloqueada em ${formatDate(m.user.bloqueadoEm)} por tentativas de senha inválidas`}
+                          className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                          <Lock size={9} /> Bloqueado
+                        </span>
+                      )}
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+                        {ativo ? 'Ativo' : 'Inativo'}
+                      </span>
+                    </div>
                   </div>
                   {(isGestor || m.user.id !== user?.id) && (
                     <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-50">
@@ -702,7 +766,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                           <Pencil size={11} /> Editar
                         </button>
                       )}
-                      {m.user.id !== user?.id && (
+                      {podeGerenciarMembros && m.user.id !== user?.id && (
                         <button onClick={() => handleToggle(m)} disabled={togglingId === m.id}
                           className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-blue-200 rounded-lg text-xs text-blue-600 hover:bg-blue-50 transition-colors">
                           {togglingId === m.id
@@ -817,9 +881,17 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
-                          {ativo ? 'Ativo' : 'Inativo'}
-                        </span>
+                        <div className="flex items-center gap-1 flex-wrap">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+                            {ativo ? 'Ativo' : 'Inativo'}
+                          </span>
+                          {m.user.bloqueadoEm && (
+                            <span title={`Bloqueada em ${formatDate(m.user.bloqueadoEm)} por tentativas de senha inválidas`}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                              <Lock size={10} /> Bloqueado
+                            </span>
+                          )}
+                        </div>
                       </td>
                       {filtroAtivo === 'ativo' && (
                         <>
@@ -846,7 +918,16 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                                 <Pencil size={14} />
                               </button>
                             )}
-                            {m.user.id !== user?.id && (
+                            {podeDesbloquearMembro(m) && (
+                              <button onClick={() => handleDesbloquear(m)} disabled={desbloqueandoId === m.id}
+                                title="Desbloquear conta" aria-label="Desbloquear conta"
+                                className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
+                                {desbloqueandoId === m.id
+                                  ? <Loader2 size={14} className="animate-spin" />
+                                  : <Unlock size={14} />}
+                              </button>
+                            )}
+                            {podeGerenciarMembros && m.user.id !== user?.id && (
                               <button onClick={() => handleToggle(m)} disabled={togglingId === m.id}
                                 title={ativo ? 'Desativar' : 'Ativar'}
                                 className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">

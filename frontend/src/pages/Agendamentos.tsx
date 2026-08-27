@@ -1,6 +1,6 @@
 // src/pages/Agendamentos.tsx
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { useEmpresa } from '../contexts/EmpresaContext';
@@ -38,7 +38,16 @@ type DiaStatus         = 'LIVRE' | 'PARCIAL' | 'OCUPADO';
  *  'TODOS'            → tudo
  *  StatusAgendamento  → um status específico (concluído, cancelado, reagendado…)
  */
-type FiltroStatus      = 'ABERTOS' | 'TODOS' | StatusAgendamento;
+// Além dos status individuais, o seletor tem GRUPOS: 'ABERTOS' (o que ainda está na
+// agenda operacional) e — desde que os Indicadores de Atendimento passaram a linkar
+// para cá — 'REALIZADOS' e 'CANCELADOS'. Os dois existem porque o relatório conta
+// CONCLUIDO+FINALIZADO como "realizadas" e CANCELADO+CANCELADO_AUTOMATICAMENTE como
+// "canceladas": sem o grupo, o link cairia num filtro que mostra só METADE do número
+// que a pessoa clicou.
+type FiltroStatus      = 'ABERTOS' | 'TODOS' | 'REALIZADOS' | 'CANCELADOS' | StatusAgendamento;
+
+const STATUS_REALIZADOS: StatusAgendamento[] = ['CONCLUIDO', 'FINALIZADO'];
+const STATUS_CANCELADOS: StatusAgendamento[] = ['CANCELADO', 'CANCELADO_AUTOMATICAMENTE'];
 type ViewMode          = 'MES' | 'SEMANA';
 
 interface AgendamentoGlobal {
@@ -191,8 +200,10 @@ const STATUS_FILTRAVEIS: StatusAgendamento[] = ['CONCLUIDO', 'FINALIZADO', 'CANC
 
 /** O agendamento entra na lista com o filtro escolhido? */
 function statusCasaFiltro(status: StatusAgendamento, filtro: FiltroStatus): boolean {
-  if (filtro === 'TODOS')   return true;
-  if (filtro === 'ABERTOS') return STATUS_ABERTOS.includes(status);
+  if (filtro === 'TODOS')      return true;
+  if (filtro === 'ABERTOS')    return STATUS_ABERTOS.includes(status);
+  if (filtro === 'REALIZADOS') return STATUS_REALIZADOS.includes(status);
+  if (filtro === 'CANCELADOS') return STATUS_CANCELADOS.includes(status);
   // "Reagendado" precisa trazer também o legado TRANSFERIDO: é o MESMO estado, e quem
   // filtra por ele espera ver os dois — senão os registros antigos ficam inalcançáveis.
   if (filtro === 'REAGENDADO') return foiReagendado(status);
@@ -676,7 +687,16 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   const [filtroTurno, setFiltroTurno] = useState<'' | 'MANHA' | 'TARDE' | 'NOITE'>('');
   // Lista do dia: nasce mostrando só o que ainda vai acontecer (STATUS_ABERTOS).
   // "Todos os status" traz de volta cancelado, reagendado, concluído e finalizado.
-  const [filtroStatus, setFiltroStatus] = useState<FiltroStatus>('ABERTOS');
+  // `?status=` na URL pré-seleciona o filtro — é por aí que os Indicadores de
+  // Atendimento trazem "consultas canceladas/realizadas" já recortadas. Valor fora da
+  // lista cai no padrão "Em aberto".
+  const [searchParams] = useSearchParams();
+  const filtroStatusDaUrl = (() => {
+    const v = (searchParams.get('status') ?? '').toUpperCase();
+    if (v === 'ABERTOS' || v === 'TODOS' || v === 'REALIZADOS' || v === 'CANCELADOS') return v as FiltroStatus;
+    return (STATUS_FILTRAVEIS as string[]).includes(v) ? (v as FiltroStatus) : null;
+  })();
+  const [filtroStatus, setFiltroStatus] = useState<FiltroStatus>(filtroStatusDaUrl ?? 'ABERTOS');
 
   // Chave da linha com o menu de horários aberto. É por LINHA (vet+local+especialidade),
   // não por profissional: o mesmo vet aparece em várias linhas.
@@ -2485,6 +2505,11 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                 <option value="ABERTOS">Em aberto</option>
                 <option value="TODOS">Todos os status</option>
                 <optgroup label="Somente">
+                  {/* Grupos — batem com os números dos Indicadores de Atendimento:
+                      "realizadas" = concluído + finalizado; "canceladas" = cancelado
+                      manual + cancelado pela rotina noturna. */}
+                  <option value="REALIZADOS">Realizados</option>
+                  <option value="CANCELADOS">Cancelados</option>
                   {STATUS_FILTRAVEIS.map(s => (
                     // STATUS_LABEL é CAIXA ALTA (serve aos badges da lista); no seletor
                     // isso destoaria das outras opções, então cai para "Concluído".

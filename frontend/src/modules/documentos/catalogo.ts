@@ -224,17 +224,29 @@ export const VARIAVEIS: Variavel[] = [
   v('sistema.urlValidacao',  'URL de validação', 's2vet.com.br/v/0042',       'sistema'),
 ];
 
+/** Variáveis já resolvidas pelo backend (`GET /documentos/contexto/:animalId`). */
+export type ContextoVariaveis = Record<string, string>;
+
 /**
- * Substitui {{chave}} pelo EXEMPLO da variável.
+ * Substitui {{chave}} pelo valor da variável.
  *
- * É só para o PREVIEW: na emissão real quem resolve é o backend, com os dados do
- * animal/cliente/consulta. Aqui o objetivo é o vet ver a cara da folha enquanto
- * monta o template — variável não resolvida vira `‹rótulo›`, e não some, senão o
- * texto perderia o espaço que vai ocupar no papel.
+ * DOIS MODOS, e a diferença importa:
+ *
+ * 1. COM `contexto` (paciente selecionado) — usa o valor REAL que o backend
+ *    resolveu. Variável sem dado vira string VAZIA, nunca o exemplo: preencher a
+ *    pelagem com "Castanho" porque o cadastro está em branco poria no papel uma
+ *    afirmação que ninguém fez.
+ * 2. SEM `contexto` (montando o modelo, sem paciente) — usa o campo `exemplo` do
+ *    catálogo, para o vet ver a CARA da folha. Chave desconhecida vira `‹chave›` e
+ *    não some, senão o texto perderia o espaço que vai ocupar no papel.
+ *
+ * ⚠️ O modo 1 é só EXIBIÇÃO. Quem resolve o que fica GRAVADO é sempre o backend, na
+ * emissão — ver `lib/documentoVariaveis.js`.
  */
-export function resolverVariaveis(texto: string): string {
+export function resolverVariaveis(texto: string, contexto?: ContextoVariaveis | null): string {
   if (!texto) return '';
   return texto.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_todo, chave: string) => {
+    if (contexto) return contexto[chave] ?? '';
     const achada = VARIAVEIS.find(x => x.chave === chave);
     return achada ? achada.exemplo : `‹${chave}›`;
   });

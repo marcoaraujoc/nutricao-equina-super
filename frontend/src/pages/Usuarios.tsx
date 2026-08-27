@@ -7,9 +7,10 @@ import axios from 'axios';
 import {
   Pencil, Trash2,
   ToggleLeft, ToggleRight,
-  Building2, Users2, AlertCircle, X,
+  Building2, Users2, AlertCircle, X, Lock, Loader2,
 } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
+import { useAuth } from '../contexts/AuthContext';
 import UsuarioFormModal, { type UsuarioFormValues } from '../components/UsuarioFormModal';
 import { formatDate as formatarDataBR } from '../utils/dateUtils';
 import InlineError from '../components/InlineError';
@@ -36,6 +37,11 @@ interface Usuario {
   empresaNome: string | null;
   vinculos?: Vinculo[];
   ativo: boolean;
+  /** Conta travada por 6 senhas erradas (lib/bloqueioLogin.js). null = liberada.
+   *  Distinto de `ativo`: inativo é decisão de alguém; bloqueado é consequência de
+   *  tentativa de acesso. O ADMIN é o ÚNICO que destrava a conta de um GESTOR. */
+  bloqueadoEm?: string | null;
+  tentativasLogin?: number;
   createdAt: string;
   cep: string | null;
   endereco: string | null;
@@ -137,7 +143,12 @@ const Usuarios = () => {
   const [paraExcluir, setParaExcluir] = useState<Usuario | null>(null);
   // Erro fica na SUPERFÍCIE da ação: `erroLinha` na linha do usuário (ativar/inativar)
   // e `erroExclusao` dentro do modal, junto do botão que confirma.
+  // Quem está logado — o botão de desbloquear não aparece na PRÓPRIA linha: o
+  // backend recusa autodesbloqueio (`AUTO_DESBLOQUEIO`), e oferecer o botão ali
+  // seria um clique que só falha depois de dado.
+  const { user } = useAuth();
   const [erroLinha,    setErroLinha]    = useState<{ userId: number; mensagem: string } | null>(null);
+  const [desbloqueandoId, setDesbloqueandoId] = useState<number | null>(null);
   const [erroExclusao, setErroExclusao] = useState<string | null>(null);
   const [excluindo,    setExcluindo]    = useState(false);
 
@@ -256,6 +267,22 @@ const Usuarios = () => {
     }
   };
 
+  /** Desbloqueia a conta travada por senha errada. O ADMIN alcança qualquer conta —
+   *  inclusive a de gestor, que é justamente a que só ele pode destravar. */
+  const handleDesbloquear = async (u: Usuario) => {
+    setErroLinha(null);
+    setDesbloqueandoId(u.id);
+    try {
+      await api.post(`/equipes/membros/${u.id}/desbloquear`);
+      toast.success(`Conta de ${u.fullName} desbloqueada`);
+      carregarUsuarios();
+    } catch (err: unknown) {
+      setErroLinha({ userId: u.id, mensagem: msgErro(err, 'Erro ao desbloquear a conta') });
+    } finally {
+      setDesbloqueandoId(null);
+    }
+  };
+
   // ── Excluir ───────────────────────────────────────────────────────────────
 
   const confirmarExclusao = async () => {
@@ -364,15 +391,29 @@ const Usuarios = () => {
                     </td>
                     <td className="px-5 py-3.5 text-xs text-gray-500 whitespace-nowrap">{formatarDataBR(u.createdAt)}</td>
                     <td className="px-5 py-3.5">
-                      <button onClick={() => handleToggle(u)}
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-colors ${
-                          u.ativo
-                            ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                            : 'bg-red-50 text-red-600 hover:bg-red-100'
-                        }`}>
-                        {u.ativo ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
-                        {u.ativo ? 'Ativo' : 'Desativado'}
-                      </button>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button onClick={() => handleToggle(u)}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-colors ${
+                            u.ativo
+                              ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                              : 'bg-red-50 text-red-600 hover:bg-red-100'
+                          }`}>
+                          {u.ativo ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
+                          {u.ativo ? 'Ativo' : 'Desativado'}
+                        </button>
+                        {/* BLOQUEADO convive com Ativo/Inativo: são estados diferentes.
+                            Clicar destrava (o backend confere a autorização de novo). */}
+                        {u.bloqueadoEm && u.id !== user?.id && (
+                          <button onClick={() => handleDesbloquear(u)} disabled={desbloqueandoId === u.id}
+                            title={`Bloqueada em ${formatarDataBR(u.bloqueadoEm)} após ${u.tentativasLogin ?? 0} tentativa(s) de senha inválida — clique para desbloquear`}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors disabled:opacity-50">
+                            {desbloqueandoId === u.id
+                              ? <Loader2 size={14} className="animate-spin" />
+                              : <Lock size={14} />}
+                            Bloqueado
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center justify-end gap-1">

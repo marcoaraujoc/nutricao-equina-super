@@ -29,14 +29,16 @@
 // do "Cancelar exame" da tela de Pedido de Exames, então reflete lá como CANCELADA.
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { ClipboardList, Scan, Upload, Table2, Loader2, X, Plus, Trash2, CheckCircle2, FilePlus2, Camera, Ban, Eye } from 'lucide-react';
+import { ClipboardList, Scan, Upload, Table2, Loader2, X, Plus, Trash2, CheckCircle2, FilePlus2, Camera, Ban, Eye, AlertTriangle } from 'lucide-react';
 import api from '../services/api';
 import InlineError from './InlineError';
 import ModalJustificativa from './ModalJustificativa';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { useAuth } from '../contexts/AuthContext';
 import { isMobile } from '../services/whisperService';
 import { comprimirImagensAteLimite } from '../utils/imageCompress';
 import { temResultadoExame } from '../utils/exameClinico';
+import { conferirExame } from '../utils/exameConferencia';
 
 type TipoExame = 'Laboratorial' | 'Bioquímico' | 'Imagem' | 'Compra';
 
@@ -56,7 +58,13 @@ export interface ExameSolicitado {
   status:          string;
   ativo:           boolean;
   dataSolicitacao: string;
+  /** DATA DO EXAME — a data IMPRESSA no laudo (lida pela IA, revisável na tela);
+   *  em branco no lançamento, vale o instante em que o resultado foi gravado. */
   dataResultado:   string | null;
+  /** Evolução do atendimento em que o exame foi PEDIDO. `null` = exame lançado sem
+   *  pedido ("Carregar Exames sem Pedido") — aí não existe solicitante a exibir:
+   *  `veterinario` é quem LANÇOU o resultado, não quem pediu o exame. */
+  evolucaoId?:     number | null;
   resultado:       string | null;
   arquivoUrl:      string | null;
   /** Extraído de `observacao` pelo backend (JSON) — null quando o laudo não tem
@@ -188,10 +196,14 @@ function TabelaResultadoEditavel({ itens, setItens }: {
 // um `<input capture>` só tira UMA foto por vez, então quem chama decide se ela
 // substitui a seleção (Laboratorial/Bioquímico, 1 arquivo) ou se acrescenta
 // (Imagem, várias fotos de exame).
-function SeletorArquivo({ multiple, onEscolher, onFoto }: {
+function SeletorArquivo({ multiple, onEscolher, onFoto, abrirRef }: {
   multiple:   boolean;
   onEscolher: (arquivos: File[]) => void;
   onFoto:     (foto: File) => void;
+  // Gatilho imperativo do MESMO seletor do botao "Carregar Arquivos": a tela de
+  // divergencia fica por cima do formulario, e o "Anexar outro arquivo" de la
+  // precisa abrir o seletor sem obrigar a pessoa a achar o botao atras do overlay.
+  abrirRef?:  React.MutableRefObject<(() => void) | null>;
 }) {
   const cameraRef = useRef<HTMLInputElement>(null);
   // Input nativo fica OCULTO — o texto do botão/"nenhum arquivo escolhido" é do
@@ -204,6 +216,12 @@ function SeletorArquivo({ multiple, onEscolher, onFoto }: {
   // formato ainda é validado no servidor (`fileFilter` de `routes/clinica-exames.js`).
   const arquivoRef = useRef<HTMLInputElement>(null);
   const [comprimindo, setComprimindo] = useState(false);
+
+  useEffect(() => {
+    if (!abrirRef) return;
+    abrirRef.current = () => arquivoRef.current?.click();
+    return () => { abrirRef.current = null; };
+  }, [abrirRef]);
 
   const processarSelecao = async (files: File[]): Promise<File[]> => {
     if (files.length === 0) return files;
@@ -270,7 +288,7 @@ function SeletorArquivo({ multiple, onEscolher, onFoto }: {
 // (que a IA extrai do arquivo), não a data em que o pedido foi feito. SEM
 // seletor de "Tipo do exame" — o tipo é sempre conhecido (o do pedido) ou
 // detectado pela IA, nunca escolhido.
-export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, somenteLeitura, arquivosSalvos, onVerArquivo, onClose, onSalvar }: {
+export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, somenteLeitura, arquivosSalvos, onVerArquivo, onExcluirArquivo, onClose, onSalvar }: {
   /** Exame PEDIDO — presente quando é "Carregar/Editar Resultados"; `null` no
    *  fluxo avulso "Carregar Exames sem Pedido". Decide texto do cabeçalho,
    *  endpoint (via quem chama), o `exameId` da análise, e pré-preenche
@@ -294,6 +312,10 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
   somenteLeitura?: boolean;
   arquivosSalvos?: { nome: string }[];
   onVerArquivo?:   (indice: number) => void;
+  /** Remove um arquivo JÁ SALVO (índice de `arquivosSalvos`). Só quando informado o
+   *  X aparece na edição — quem sabe se aquele anexo é apagável (e se a pessoa tem
+   *  permissão) é o pai; botão que só falha depois do clique é o antipadrão 28-d. */
+  onExcluirArquivo?: (indice: number) => void;
   onClose:  () => void;
   onSalvar: (data: {
     tipo: TipoExame; descricao: string; laboratorio: string; dataExame: string;
@@ -331,6 +353,23 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
   // aviso, não erro: o arquivo é anexado normalmente ao salvar (mesmo loop de
   // upload de qualquer outro), só não teve prévia da IA.
   const [naoTranscritos, setNaoTranscritos] = useState<string[]>([]);
+  // Divergência entre o exame PEDIDO e o que a IA leu no arquivo anexado. Guarda a
+  // frase pronta (`conferirExame`) e vira a tela de confirmação abaixo — nunca um
+  // bloqueio: o nome do exame é texto livre no laudo, e recusar trancaria o
+  // lançamento legítimo de uma nomenclatura diferente da que o vet digitou.
+  const { user } = useAuth();
+  /** PROFISSIONAL do exame, só leitura. O próprio registro já guarda a pessoa certa
+   *  nos DOIS casos: no exame que veio de PEDIDO, `veterinario` é quem SOLICITOU; no
+   *  lançado sem pedido, é quem LANÇOU o resultado (é assim que a rota /nao-pedido
+   *  grava). Só sobra o caso em que o registro ainda NÃO EXISTE (`ex` null, "Carregar
+   *  Exames sem Pedido"): aí quem está carregando é o usuário da sessão. */
+  const profissionalNome = ex?.veterinario?.fullName ?? user?.fullName ?? '';
+  const abrirSeletorRef = useRef<(() => void) | null>(null);
+  const [divergencia, setDivergencia] = useState<string | null>(null);
+  // Divergência que o usuário JÁ decidiu prosseguir — vira faixa âmbar fixa no
+  // formulário. Sem isto, quem confirma no susto perde a informação de vista e salva
+  // o laudo divergente sem lembrar do aviso.
+  const [divergenciaAceita, setDivergenciaAceita] = useState<string | null>(null);
 
   const isImagem = tipo === 'Imagem';
   const preenchidos = itens.filter(i => i.parametro.trim());
@@ -352,6 +391,8 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
     setLaudo('');
     setItens([{ ...LINHA_VAZIA }]);
     setNaoTranscritos([]);
+    setDivergencia(null);
+    setDivergenciaAceita(null);
     setAnalisando(true);
     setProgresso(0);
     setErro(null);
@@ -367,8 +408,26 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
       const d = res.data?.dados;
       if (d) {
         if (Array.isArray(d.naoTranscritos) && d.naoTranscritos.length > 0) setNaoTranscritos(d.naoTranscritos);
+        // CONFERÊNCIA PEDIDO × ARQUIVO — só quando existe pedido (`ex`): no fluxo
+        // avulso não há o que conferir, o exame É o que o arquivo diz. Roda sobre o
+        // que a IA acabou de ler, ANTES de o usuário revisar a tela, para ele não
+        // preencher tudo e só então descobrir que anexou o laudo errado.
+        if (ex) {
+          const conf = conferirExame(
+            { tipo: ex.tipo, descricao: ex.descricao },
+            { tipo: isImagem ? 'Imagem' : (d.tipoSugerido ?? null) },
+            // CONTEÚDO carregado = onde se procura o exame pedido. Laboratorial: as
+            // LINHAS do resultado (parâmetros). Imagem: o TEXTO do laudo transcrito
+            // (não há tabela) — o título do arquivo deixou de ser usado para casar.
+            isImagem
+              ? String(d.laudo ?? '').split(/\s+/)
+              : (Array.isArray(d.itens) ? d.itens.map((i: { parametro?: string }) => i.parametro ?? '') : []),
+          );
+          if (!conf.combina) setDivergencia(conf.motivo);
+        }
         if (isImagem) {
           if (d.laudo)     setLaudo(d.laudo);
+          if (d.descricao) setDescricao(d.descricao);
           if (d.dataExame) setDataExame(d.dataExame);
         } else {
           if (d.tipoSugerido === 'Bioquímico' || d.tipoSugerido === 'Laboratorial') setTipo(d.tipoSugerido);
@@ -381,6 +440,11 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
             })));
           }
         }
+        // A IA não achou nome no laudo: volta o que o PEDIDO já dizia. O reset lá em
+        // cima limpa tudo para não misturar lotes de arquivos, e deixar a descrição
+        // vazia obrigaria a redigitar o que já estava informado — o campo é
+        // obrigatório no salvar.
+        if (!d.descricao && ex) setDescricao(ex.descricao);
       }
     } catch (err: unknown) {
       // best-effort para falha/indisponibilidade da IA — mas "nenhum arquivo é um
@@ -395,6 +459,23 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
       clearInterval(interval);
       setAnalisando(false);
     }
+  };
+
+  /** "Não é este" na tela de divergência: devolve o formulário ao estado anterior ao
+   *  anexo — arquivos fora e campos do PEDIDO de volta —, para o usuário anexar o
+   *  laudo certo. Não fecha o modal: fechar faria perder também o que ele já tinha
+   *  revisado à mão. */
+  const descartarLoteDivergente = () => {
+    setArquivos([]);
+    setDivergencia(null);
+    setDivergenciaAceita(null);
+    setNaoTranscritos([]);
+    setLaudo(jaTemResultado ? (ex?.resultado ?? '') : '');
+    setItens([{ ...LINHA_VAZIA }]);
+    setDescricao(ex?.descricao ?? '');
+    setLaboratorio(ex?.laboratorio ?? '');
+    setDataExame('');
+    if (ex) setTipo(ex.tipo);
   };
 
   const confirmar = () => {
@@ -455,24 +536,60 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
                 className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500" />
             </div>
 
-            {!isImagem && (
-              <div className="grid grid-cols-2 gap-3">
+            {/* DATA DO EXAME vale para TODO tipo, Imagem inclusive — é a data impressa
+                no laudo (o dia em que o exame foi feito), lida automaticamente pela
+                IA em qualquer um deles (`dataExame` da rota /analisar). Ela só não
+                aparecia em Imagem, então o valor lido era descartado em silêncio e o
+                exame sem pedido nascia com a data de HOJE, que é a do upload.
+                LABORATÓRIO segue exclusivo de Laboratorial/Bioquímico: exame de
+                imagem é feito por clínica/serviço de diagnóstico, não por laboratório
+                — o campo não tem o que receber ali. */}
+            <div className="grid grid-cols-2 gap-3">
+              {!isImagem && (
                 <div>
                   <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Laboratório</label>
                   <input type="text" value={laboratorio} onChange={e => setLaboratorio(e.target.value)}
                     placeholder="Identificado ao anexar o laudo"
                     className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500" />
                 </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Data do exame</label>
-                  <input type="date" value={dataExame} onChange={e => setDataExame(e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500" />
-                </div>
+              )}
+              <div>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Data do exame</label>
+                <input type="date" value={dataExame} onChange={e => setDataExame(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500" />
+                <p className="text-[10px] text-gray-400 mt-1">
+                  Preenchida ao anexar o laudo. Em branco, vale o dia de hoje.
+                </p>
               </div>
-            )}
+              {/* PROFISSIONAL — só leitura, ao lado da Data do exame. Só no exame de
+                  IMAGEM: em Laboratorial/Bioquímico a linha já está ocupada por
+                  Laboratório + Data, e uma terceira coluna espremeria as três.
+                  `readOnly` (não `disabled`): o campo é informativo, e desabilitado
+                  ficaria indistinguível do bloqueio de `somenteLeitura`. */}
+              {isImagem && (
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Profissional</label>
+                  <input type="text" value={profissionalNome} readOnly tabIndex={-1}
+                    placeholder="Não identificado"
+                    className="w-full border border-gray-200 bg-gray-50 rounded-xl px-3 py-2.5 text-sm text-gray-600 cursor-default focus:outline-none" />
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    {ex?.evolucaoId ? 'Solicitante do exame.' : 'Quem está lançando o resultado.'}
+                  </p>
+                </div>
+              )}
+            </div>
           </fieldset>
 
-          {somenteLeitura ? (
+          {/* ARQUIVOS JÁ SALVOS — aparecem também na EDIÇÃO, não só na visualização.
+              Sem isto, quem reabria um exame de Imagem para corrigir não via os anexos
+              que já estavam lá: não dava para apagar o laudo/foto anexado por engano
+              sem fechar o modal e ir até o card expandido de "Resultados do Exame",
+              o ÚNICO lugar onde o X existia. Na edição o bloco só aparece quando HÁ
+              anexo (na visualização continua mostrando o "Nenhum arquivo anexado",
+              que ali é a resposta à pergunta que a tela existe para responder).
+              ⚠️ O X exige `onExcluirArquivo`: anexo legado sem linha própria
+              (`arquivoUrl` solto, sem `ExameImagemAnexo`) não tem o que apagar. */}
+          {(somenteLeitura || (arquivosSalvos?.length ?? 0) > 0) && (
             <div>
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
                 Arquivos anexados
@@ -480,22 +597,33 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
               {arquivosSalvos && arquivosSalvos.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
                   {arquivosSalvos.map((a, idx) => (
-                    <button key={idx} type="button" onClick={() => onVerArquivo?.(idx)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-xl text-xs text-emerald-700 hover:bg-emerald-50 hover:border-emerald-300 transition-colors">
-                      <Eye size={12} /> {a.nome}
-                    </button>
+                    <div key={idx} className="flex items-center gap-1 border border-gray-200 rounded-xl pl-3 pr-1 py-1 hover:border-emerald-300 transition-colors">
+                      <button type="button" onClick={() => onVerArquivo?.(idx)}
+                        className="flex items-center gap-1.5 text-xs text-emerald-700 hover:text-emerald-900 transition-colors">
+                        <Eye size={12} /> {a.nome}
+                      </button>
+                      {!somenteLeitura && onExcluirArquivo && (
+                        <button type="button" onClick={() => onExcluirArquivo(idx)}
+                          title="Excluir arquivo" aria-label="Excluir arquivo"
+                          className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                          <X size={12} />
+                        </button>
+                      )}
+                    </div>
                   ))}
                 </div>
               ) : (
                 <p className="text-xs text-gray-400 italic">Nenhum arquivo anexado.</p>
               )}
             </div>
-          ) : (
+          )}
+
+          {!somenteLeitura && (
             <div>
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
                 {isImagem ? 'Imagens / laudo (PDF ou imagem)' : 'Anexar laudo(s) (opcional)'}
               </label>
-              <SeletorArquivo multiple
+              <SeletorArquivo multiple abrirRef={abrirSeletorRef}
                 onEscolher={lista => {
                   // A cada mudança na seleção, a IA lê o LOTE INTEIRO de novo — é o que
                   // garante que todo arquivo anexado seja tratado (inclusive ao trocar
@@ -524,6 +652,12 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
                       : `Lendo o laudo com IA — identificando laboratório e resultado… ${progresso}%`}
                   </p>
                 </div>
+              )}
+              {divergenciaAceita && (
+                <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-2">
+                  <strong>Exame diferente do pedido.</strong> {divergenciaAceita} Você optou por prosseguir —
+                  confira a descrição e o resultado antes de salvar.
+                </p>
               )}
               {naoTranscritos.length > 0 && (
                 <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-2">
@@ -587,6 +721,57 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
           )}
         </div>
       </div>
+
+      {/* CONFERÊNCIA PEDIDO × ARQUIVO — o laudo anexado não parece ser o exame pedido.
+          Sobrepõe o formulário porque a decisão precede tudo o que vem depois: seguir
+          revisando uma tabela que talvez nem seja deste pedido é trabalho perdido.
+          ⚠️ NUNCA bloqueia. O nome do exame é texto livre no laudo, e recusar trancaria
+          o lançamento legítimo de uma nomenclatura diferente da que o vet digitou — sem
+          nenhuma saída pela tela. Quem decide é quem está olhando o documento. */}
+      {divergencia && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md border border-gray-100">
+            <div className="flex items-center gap-2 px-5 py-4 border-b border-gray-100">
+              <AlertTriangle size={18} className="text-amber-500 flex-shrink-0" />
+              <h3 className="font-bold text-gray-900">O exame não parece ser o que foi pedido</h3>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <p className="text-sm text-gray-700">{divergencia}</p>
+              {ex && (
+                <div className="text-xs bg-gray-50 border border-gray-100 rounded-xl px-3 py-2.5 space-y-1">
+                  <p><span className="text-gray-400">Pedido:</span>{' '}
+                    <span className="font-semibold text-gray-800">{ex.tipo} · {ex.descricao}</span></p>
+                  <p><span className="text-gray-400">Arquivo anexado:</span>{' '}
+                    <span className="font-semibold text-gray-800">{descricao || 'não identificado'}</span></p>
+                </div>
+              )}
+              <p className="text-xs text-gray-500">
+                Exame divergente do solicitado, deseja continuar?
+              </p>
+            </div>
+            {/* CANCELAR fecha o lançamento inteiro; ANEXAR OUTRO ARQUIVO devolve o
+                formulário ao estado anterior ao anexo E já abre o seletor de arquivo
+                (o botão "Carregar Arquivos" fica atrás deste overlay); CONTINUAR grava
+                neste pedido do jeito que está na tela.
+                ⚠️ O `click()` do input roda no MESMO gesto do usuário, síncrono: adiado
+                (setTimeout/efeito) o navegador perde a ativação e ignora a abertura. */}
+            <div className="flex justify-end gap-2 px-5 pb-5 pt-1">
+              <button onClick={onClose}
+                className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+                Cancelar
+              </button>
+              <button onClick={() => { descartarLoteDivergente(); abrirSeletorRef.current?.(); }}
+                className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+                Anexar outro arquivo
+              </button>
+              <button onClick={() => { setDivergenciaAceita(divergencia); setDivergencia(null); }}
+                className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm font-semibold transition-colors">
+                Continuar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -736,7 +921,7 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
     carregar();
   }, [carregar, loadingPerms]);
 
-  const salvarResultado = async ({ laudo, laboratorio, itens, arquivos }: { laudo: string; laboratorio: string; itens: ItemManual[]; arquivos: File[] }) => {
+  const salvarResultado = async ({ laudo, laboratorio, dataExame, itens, arquivos }: { laudo: string; laboratorio: string; dataExame: string; itens: ItemManual[]; arquivos: File[] }) => {
     if (!alvo) return;
     setSaving(true);
     setErro(null);
@@ -744,6 +929,11 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
       const fd = new FormData();
       if (laudo) fd.append('resultado', laudo);
       fd.append('laboratorio', laboratorio);
+      // Data IMPRESSA no laudo (lida pela IA ou corrigida na tela). O campo já era
+      // exibido e preenchido, mas nunca era enviado: o exame ficava com a data do
+      // UPLOAD como data de resultado, e a coluna "Data Fim" da lista de exames
+      // mostrava o dia em que alguém digitou, não o dia em que o exame foi feito.
+      if (dataExame) fd.append('dataExame', dataExame);
       if (itens.length > 0) fd.append('itens', JSON.stringify(itens));
       arquivos.forEach(a => fd.append('arquivos', a));
       await api.patch(`/clinica/exames/${alvo.id}/resultado`, fd);

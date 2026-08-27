@@ -435,7 +435,10 @@ const ajustarEstoque = async (req, res) => {
       return res.status(400).json({ error: 'quantidade deve ser maior que zero.' });
     }
 
-    const existe = await prisma.estoqueClinica.findUnique({ where: { id } });
+    const existe = await prisma.estoqueClinica.findUnique({
+      where:   { id },
+      include: { medicamento: { select: { nome: true } } },
+    });
     if (!existe) return res.status(404).json({ error: 'Item não encontrado.' });
     if (!pertenceAEmpresa(existe, req)) return res.status(403).json({ error: 'Acesso não autorizado.' });
 
@@ -447,7 +450,25 @@ const ajustarEstoque = async (req, res) => {
       await tx.movimentoEstoque.create({
         data: { estoqueId: id, tipo, quantidade: qty, motivo: motivo ?? null },
       });
-      return tx.estoqueClinica.update({ where: { id }, data: { qtdEstoque: novaQtd }, include: INCLUDE });
+      const atualizado = await tx.estoqueClinica.update({ where: { id }, data: { qtdEstoque: novaQtd }, include: INCLUDE });
+
+      // AUDITORIA do AJUSTE — é o que alimenta o relatório "Ajustes de Estoque"
+      // (quem/quando/o quê). O MovimentoEstoque não guarda o autor; o AuditLog sim.
+      // Só o AJUSTE é auditado aqui: ENTRADA/SAIDA têm seus próprios fluxos.
+      if (tipo === 'AJUSTE') {
+        const sinal    = delta >= 0 ? '+' : '';
+        const nomeMed  = existe.medicamento?.nome ?? 'Medicamento';
+        const detalhes = `${nomeMed}${existe.lote ? ` (lote ${existe.lote})` : ''}: `
+          + `${existe.qtdEstoque} → ${novaQtd} (${sinal}${delta})`;
+        await registrarAuditoria(tx, req, {
+          categoria:  'AJUSTE',
+          entidade:   'ESTOQUE_FARMACIA',
+          entidadeId: id,
+          motivo:     motivo?.trim() || null,
+          detalhes,
+        });
+      }
+      return atualizado;
     });
 
     return res.json({ dados: item });

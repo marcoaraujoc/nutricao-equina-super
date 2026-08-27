@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
 import { usePermissoes } from '../hooks/usePermissoes';
 import toast from 'react-hot-toast';
+import { useSearchParams } from 'react-router-dom';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import {
@@ -107,7 +108,9 @@ export default function EstoqueVacina() {
   const [vacinas,      setVacinas]      = useState<MedCatItem[]>([]);
   const [meta,         setMeta]         = useState<Meta>({ totalLotes: 0, totalVencidos: 0, totalVencendo: 0, totalDoses: 0, totalAbaixoMinimo: 0, totalAbaixoAlarmante: 0 });
   const [loading,      setLoading]      = useState(false);
-  const [busca,        setBusca]        = useState('');
+  // `?busca=` na URL abre a tela já no produto que o relatório de Farmácia apontou.
+  const [searchParams] = useSearchParams();
+  const [busca,        setBusca]        = useState(searchParams.get('busca') ?? '');
   const [filtroTab,    setFiltroTab]    = useState<FiltroTab>('todos');
 
   const [form,              setForm]              = useState({ ...FORM_VAZIO });

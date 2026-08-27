@@ -6,6 +6,9 @@ const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 const { lancarExameNaFatura, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
+// `.doc` legado vira `.docx` no INGEST (convert-on-ingest) — ver lib/documentoConversao.js.
+// Sem isto o laudo `.doc` fica sem pre-visualizacao E sem leitura por IA.
+const { normalizarDocsLegados } = require('../lib/documentoConversao');
 const { registrarAuditoria, registrarAlteracao, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro, getNivelEfetivo, NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
 const { animalEstaInativo } = require('../lib/animalInativo');
@@ -331,7 +334,13 @@ const ExameClinicoController = {
     try {
       const { animalId, exameId } = req.body;
       const modoImagem = req.body?.tipo === 'Imagem';
-      const arquivos = Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []);
+      // `.doc` vira `.docx` ANTES de qualquer leitura: `mammoth` so abre `.docx` e o
+      // Gemini nao aceita `.doc` como anexo, entao sem esta linha todo laudo `.doc`
+      // caia em `ArquivoSemTranscricaoError` ("nao suportado para ser interpretado").
+      // Sem LibreOffice no ambiente devolve o original, e o comportamento e o de antes.
+      const arquivos = await normalizarDocsLegados(
+        Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []),
+      );
       if (!animalId) return res.status(400).json({ error: 'animalId é obrigatório' });
       if (arquivos.length === 0) return res.status(400).json({ error: 'Anexe ao menos um arquivo do laudo' });
 
@@ -352,6 +361,11 @@ const ExameClinicoController = {
         const laudos = [];
         const naoTranscritos = [];
         let dataExame = null;
+        // Nome do exame LIDO no laudo — usado pela tela para conferir se o arquivo
+        // anexado é mesmo o exame que foi PEDIDO (um raio-x carregado no pedido de
+        // ferro, p.ex.). Sai de `tipoExame`, que o prompt copia do TÍTULO/CABEÇALHO
+        // do documento: é texto transcrito, nunca leitura da imagem em si.
+        let descricaoLida = null;
         for (const file of arquivos) {
           try {
             const extracao = await processarLaudoImagemBuffer(file.buffer, file.mimetype, req.user?.id ?? null, Number(animalId), req.empresaId ?? null, file.originalname);
@@ -359,6 +373,7 @@ const ExameClinicoController = {
             if (extracao?.laudo) {
               laudos.push({ titulo: extracao.tipoExame || file.originalname || 'Laudo', texto: String(extracao.laudo).trim() });
             }
+            if (!descricaoLida && extracao?.tipoExame) descricaoLida = String(extracao.tipoExame).trim() || null;
             if (!dataExame && extracao?.dataExame) dataExame = extracao.dataExame;
           } catch (errLLM) {
             // .doc: aceito no upload, mas sem NENHUM caminho de leitura (nem texto,
@@ -374,7 +389,7 @@ const ExameClinicoController = {
             code:  'ARQUIVO_NAO_E_EXAME',
           });
         }
-        return res.json({ dados: { laudo: montarLaudoImagemFinal(laudos), dataExame, naoTranscritos } });
+        return res.json({ dados: { laudo: montarLaudoImagemFinal(laudos), descricao: descricaoLida, dataExame, naoTranscritos } });
       }
 
       // ── LABORATORIAL/BIOQUÍMICO: extração estruturada de CADA arquivo, combinada ──
@@ -481,7 +496,12 @@ const ExameClinicoController = {
         });
       }
 
-      const arquivos   = Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []);
+      // CONVERT-ON-INGEST: o `.docx` derivado e o artefato CANONICO — e ele que vai
+      // para o storage, e e por isso que o visualizador (que so renderiza `.docx`)
+      // passa a exibir o laudo sem precisar saber que a origem era `.doc`.
+      const arquivos   = await normalizarDocsLegados(
+        Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []),
+      );
       const laudoTexto = (resultado ?? '').toString().trim();
       const itens      = tipoFinal === 'Imagem' ? [] : parseItensManuais(req.body?.itens);
 
@@ -693,8 +713,22 @@ const ExameClinicoController = {
       }
 
       const laudoTexto = (req.body?.resultado ?? '').toString().trim();
-      const arquivos   = Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []);
+      // CONVERT-ON-INGEST — mesma razao de `criarNaoPedido`: o que fica guardado e o
+      // `.docx`, entao pre-visualizacao e leitura por IA funcionam a jusante.
+      const arquivos   = await normalizarDocsLegados(
+        Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []),
+      );
       const agora      = new Date();
+      // DATA DO EXAME — a data IMPRESSA no laudo (lida pela IA em /analisar e
+      // revisável na tela), não a do upload. Em branco, vale o instante do
+      // lançamento, que é o comportamento que sempre houve.
+      // ⚠️ `new Date('YYYY-MM-DD')` é meia-noite UTC: para uma clínica em UTC−3 o dia
+      // do calendário se mantém, e é DATA PURA (dia do exame), não instante — a
+      // tela a formata com `formatDate`, que lê em UTC de propósito (CLAUDE.md §6).
+      const dataExameBody = (req.body?.dataExame ?? '').toString().trim();
+      const dataResultadoFinal = /^\d{4}-\d{2}-\d{2}$/.test(dataExameBody)
+        ? new Date(`${dataExameBody}T00:00:00.000Z`)
+        : agora;
 
       // ── IMAGEM: imagens anexadas + laudo TRANSCRITO pela IA (sem interpretação) ──
       if (exame.tipo === 'Imagem') {
@@ -741,7 +775,7 @@ const ExameClinicoController = {
 
         await prisma.exameClinico.update({
           where: { id: exame.id },
-          data:  { resultado: laudoFinal || exame.resultado, status: 'REALIZADO', dataResultado: agora },
+          data:  { resultado: laudoFinal || exame.resultado, status: 'REALIZADO', dataResultado: dataResultadoFinal },
         });
         return res.json({ dados: { id: exame.id, status: 'REALIZADO', imagens } });
       }
@@ -831,7 +865,7 @@ const ExameClinicoController = {
         }
         await tx.exameClinico.update({
           where: { id: exame.id },
-          data:  { resultado: laudoTexto || exame.resultado, arquivoUrl, observacao: observacaoAtualizada, status: 'REALIZADO', dataResultado: agora },
+          data:  { resultado: laudoTexto || exame.resultado, arquivoUrl, observacao: observacaoAtualizada, status: 'REALIZADO', dataResultado: dataResultadoFinal },
         });
       });
 

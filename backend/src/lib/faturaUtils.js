@@ -98,10 +98,27 @@ async function adicionarFaturaItem(tx, {
  * número do atendimento (`[AG-0012]`), então itens de documentos distintos já são
  * linhas distintas de qualquer forma.
  *
- * ⚠️ NÃO consolida em linha que tenha DESCONTO. Desconto VALOR é abatimento absoluto:
- * somar quantidade nela mudaria o desconto por unidade sem ninguém ter pedido. Nesse
- * caso nasce uma linha nova — o desconto negociado continua valendo só para o que foi
- * cobrado quando ele foi dado.
+ * 🔴 CONSOLIDA TAMBÉM EM LINHA COM DESCONTO, de propósito: **o desconto é do
+ * MEDICAMENTO, não da dose**. Dado 10% na ivermectina de 4/4h por 3 dias, o desconto
+ * vale para a ivermectina inteira — as doses seguintes têm de cair NA MESMA linha e
+ * herdar o desconto. Criar linha nova para elas (como esta função fazia até
+ * 2026-08-25) partia a cobrança em "com desconto" e "sem desconto", e o cliente
+ * pagava cheio o resto do curso que já tinha sido negociado.
+ * PERCENTUAL acompanha sozinho — incide sobre o bruto (valor × qtd), então cresce com
+ * a quantidade. VALOR é abatimento absoluto DA LINHA e continua absoluto: R$ 5,00 de
+ * desconto na ivermectina são R$ 5,00 na ivermectina, não R$ 5,00 por dose.
+ *
+ * ⚠️ Por isso o total da fatura aqui é RECALCULADO (`recalcularTotal`), nunca
+ * incrementado por aritmética: com desconto na linha, o líquido acrescentado por uma
+ * dose NÃO é `valor × qtd`, e somar isso faria o total da fatura derivar do que a
+ * soma dos itens realmente dá.
+ *
+ * ⚠️ A DESCRIÇÃO faz parte da chave, e precisa fazer: a seringa e a agulha de uma
+ * aplicação injetável compartilham `prescricaoId` e tipo com a dose, e é só a
+ * descrição que as separa. Consequência a conhecer: se o financeiro RENOMEAR a linha
+ * na tela de Faturamento, as doses seguintes deixam de reconhecê-la e abrem linha
+ * nova. Mexer no VALOR unitário tem o mesmo efeito, e aí é o comportamento certo —
+ * quantidades com preços diferentes não se somam.
  *
  * Deve ser chamado dentro de uma transaction (tx). Mesmos campos de
  * `adicionarFaturaItem` — é ele quem cria a linha quando não há o que consolidar.
@@ -132,22 +149,19 @@ async function adicionarOuSomarFaturaItem(tx, opts) {
   });
   // `valor` é Float: compara por tolerância de centavo, nunca por igualdade exata
   // (o preço da dose sai de regra de 3 sobre o preço do lote e pode variar no último
-  // dígito entre duas execuções do MESMO lote).
-  const alvo = candidatos.find(c =>
-    Math.abs((c.valor ?? 0) - valorNovo) < 0.005 && !(c.descontoValor > 0)
-  );
+  // dígito entre duas execuções do MESMO lote). Preço unitário DIFERENTE é outra
+  // coisa e vira linha própria — não dá para somar quantidades com valores distintos.
+  const alvo = candidatos.find(c => Math.abs((c.valor ?? 0) - valorNovo) < 0.005);
   if (!alvo) return adicionarFaturaItem(tx, opts);
 
+  // O CONTADOR da linha sobe de `qtdNova` (1 por execução) — o curso inteiro nunca é
+  // lançado de uma vez. Uma prescrição de 14 doses chega a "Quant.: 14" só depois da
+  // 14ª aplicação; parado na 3ª dose, a fatura mostra e cobra 3.
   await tx.faturaItem.update({
     where: { id: alvo.id },
     data:  { quantidade: { increment: qtdNova } },
   });
-  if (valorNovo > 0) {
-    await tx.fatura.update({
-      where: { id: faturaId },
-      data:  { total: { increment: valorNovo * qtdNova } },
-    });
-  }
+  await recalcularTotal(tx, faturaId);
 }
 
 /**

@@ -102,6 +102,10 @@ router.patch('/:id/aprovar',  authenticate, checkPermission('atendimento.evoluco
 // — a regra é validada no controller, igual ao assumir da agenda.
 router.patch('/:id/assumir',  authenticate, checkPermission('atendimento.evolucoes.editar', 'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.assumir);
 router.patch('/:id/titulo',   authenticate, checkPermission('atendimento.evolucoes.editar',  'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.salvarTitulo);
+// Título por IA + ações clínicas, chamada DEPOIS de finalizar (o "Finalizar" deixou de
+// esperar o Gemini — ver o comentário em EvolucaoController.tituloIa). Uma só chamada
+// de IA: grava o título e devolve as sugestões de encaminhamento.
+router.post('/:id/titulo-ia', authenticate, checkPermission('atendimento.evolucoes.editar',  'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.tituloIa);
 
 // Mídias
 // ⚠️ `tenantRls` REENTRA no contexto do tenant logo APÓS o multer — ver comentário em
