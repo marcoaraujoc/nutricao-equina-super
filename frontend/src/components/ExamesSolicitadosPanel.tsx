@@ -33,12 +33,14 @@ import { ClipboardList, Scan, Upload, Table2, Loader2, X, Plus, Trash2, CheckCir
 import api from '../services/api';
 import InlineError from './InlineError';
 import ModalJustificativa from './ModalJustificativa';
+import DateInput from './DateInput';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import { isMobile } from '../services/whisperService';
 import { comprimirImagensAteLimite } from '../utils/imageCompress';
 import { temResultadoExame } from '../utils/exameClinico';
 import { conferirExame } from '../utils/exameConferencia';
+import AcaoRegistro, { AcoesRegistro } from './AcaoRegistro';
 
 type TipoExame = 'Laboratorial' | 'Bioquímico' | 'Imagem' | 'Compra';
 
@@ -188,6 +190,17 @@ function TabelaResultadoEditavel({ itens, setItens }: {
     </div>
   );
 }
+
+/**
+ * Como um novo lote de arquivos entra no formulário.
+ *   substituir → o lote novo é o resultado (o de antes é descartado). É o que sempre
+ *                aconteceu, e continua sendo o caminho de quem anexou o arquivo errado.
+ *   adicionar  → MESCLA com o que já está na tela: linhas novas entram na tabela, o
+ *                laudo é acrescentado ao final e os arquivos se somam. É o exame que
+ *                veio em várias páginas, anexadas uma a uma.
+ * A escolha nunca é adivinhada: quando há resultado na tela, a pergunta é feita.
+ */
+type ModoCarga = 'substituir' | 'adicionar';
 
 // ─── Seletor de arquivo, com opção de câmera em mobile/tablet ─────────────────
 // `isMobile()` (whisperService — mesmo detector já usado no reconhecimento de voz)
@@ -344,6 +357,10 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
       : [{ ...LINHA_VAZIA }]
   );
   const [arquivos,    setArquivos]    = useState<File[]>([]);
+  // Lote escolhido esperando a resposta de "adicionar ou substituir". Enquanto está
+  // aqui, NADA foi tocado no formulário — a pergunta acontece ANTES de qualquer reset,
+  // que é o que torna o "adicionar" possível.
+  const [loteEmEspera, setLoteEmEspera] = useState<File[] | null>(null);
   const [analisando,  setAnalisando]  = useState(false);
   // Progresso SIMULADO (a chamada de IA não emite eventos de progresso real) — mesmo
   // padrão de CriaComposicaoAlimentar.tsx/CriaExameNutricional.tsx.
@@ -379,17 +396,22 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
   // (só quando `ex` existe) exclui o PRÓPRIO pedido da checagem de duplicidade lá
   // dentro: sem ele, todo upload bateria com o pedido que está recebendo o
   // resultado e devolveria 409.
-  const analisarArquivo = async (files: File[]) => {
+  const analisarArquivo = async (files: File[], modo: ModoCarga = 'substituir') => {
     if (files.length === 0) return;
-    // RESETA antes de analisar: cada novo lote de arquivos parte do zero. Sem isto,
-    // um campo que a IA não detectasse desta vez continuaria mostrando o valor do
-    // lote ANTERIOR — parecendo (errado) que veio do arquivo que acabou de ser
-    // anexado.
-    setDescricao('');
-    setLaboratorio('');
-    setDataExame('');
-    setLaudo('');
-    setItens([{ ...LINHA_VAZIA }]);
+    const adicionando = modo === 'adicionar';
+    // SUBSTITUIR reseta: cada novo lote parte do zero, senão um campo que a IA não
+    // detectasse desta vez continuaria mostrando o valor do lote ANTERIOR — parecendo
+    // (errado) que veio do arquivo recém-anexado.
+    // ADICIONAR preserva tudo e MESCLA o que vier: é o caminho de quem recebeu o exame
+    // em várias páginas/arquivos e anexa um a um. Aqui o reset seria destrutivo — cada
+    // arquivo apagaria o resultado do anterior, que é o defeito que este modo corrige.
+    if (!adicionando) {
+      setDescricao('');
+      setLaboratorio('');
+      setDataExame('');
+      setLaudo('');
+      setItens([{ ...LINHA_VAZIA }]);
+    }
     setNaoTranscritos([]);
     setDivergencia(null);
     setDivergenciaAceita(null);
@@ -425,26 +447,51 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
           );
           if (!conf.combina) setDivergencia(conf.motivo);
         }
+        // 🔴 O QUE JÁ ESTÁ ESCRITO NÃO É SOBRESCRITO. Descrição, laboratório e data
+        // vêm do PEDIDO (ou foram digitados/corrigidos à mão) e valem mais que a
+        // leitura da IA: quem preencheu sabe o que pediu, e ver o próprio texto ser
+        // trocado por outro ao anexar o arquivo é perder trabalho sem aviso.
+        // `manterSePreenchido` é a regra: a IA só preenche campo VAZIO.
+        const manterSePreenchido = (atual: string, doArquivo: unknown, set: (v: string) => void) => {
+          const novo = String(doArquivo ?? '').trim();
+          if (novo && !atual.trim()) set(novo);
+        };
+
         if (isImagem) {
-          if (d.laudo)     setLaudo(d.laudo);
-          if (d.descricao) setDescricao(d.descricao);
-          if (d.dataExame) setDataExame(d.dataExame);
+          // Laudo de imagem é TEXTO corrido: adicionando, o novo entra depois do que já
+          // havia (separado por linha em branco), em vez de substituir a transcrição
+          // anterior — é assim que o exame que veio em 3 páginas fica inteiro.
+          if (d.laudo) setLaudo(prev => (adicionando && prev.trim() ? `${prev.trim()}\n\n${d.laudo}` : d.laudo));
+          manterSePreenchido(descricao, d.descricao, setDescricao);
+          manterSePreenchido(dataExame, d.dataExame, setDataExame);
         } else {
           if (d.tipoSugerido === 'Bioquímico' || d.tipoSugerido === 'Laboratorial') setTipo(d.tipoSugerido);
-          if (d.descricao)   setDescricao(d.descricao);
-          if (d.laboratorio) setLaboratorio(d.laboratorio);
-          if (d.dataExame)   setDataExame(d.dataExame);
+          manterSePreenchido(descricao,   d.descricao,   setDescricao);
+          manterSePreenchido(laboratorio, d.laboratorio, setLaboratorio);
+          manterSePreenchido(dataExame,   d.dataExame,   setDataExame);
           if (Array.isArray(d.itens) && d.itens.length > 0) {
-            setItens(d.itens.map((i: { parametro: string; valor: string | null; unidade: string | null; referencia: string | null }) => ({
+            const lidos = d.itens.map((i: { parametro: string; valor: string | null; unidade: string | null; referencia: string | null }) => ({
               parametro: i.parametro ?? '', valor: i.valor ?? '', unidade: i.unidade ?? '', referencia: i.referencia ?? '',
-            })));
+            }));
+            setItens(prev => {
+              if (!adicionando) return lidos;
+              // Acrescenta ao que já existe, descartando a linha em branco do rodapé
+              // (`LINHA_VAZIA`) e o parâmetro repetido — o mesmo hemograma anexado duas
+              // vezes viraria a tabela em duplicidade, e ninguém revisa 40 linhas.
+              const uteis = prev.filter(l => l.parametro.trim() || l.valor.trim());
+              const jaTem = new Set(uteis.map(l => l.parametro.trim().toLowerCase()));
+              const novos = lidos.filter((l: ItemManual) => !jaTem.has(l.parametro.trim().toLowerCase()));
+              return [...uteis, ...novos];
+            });
           }
         }
-        // A IA não achou nome no laudo: volta o que o PEDIDO já dizia. O reset lá em
-        // cima limpa tudo para não misturar lotes de arquivos, e deixar a descrição
-        // vazia obrigaria a redigitar o que já estava informado — o campo é
-        // obrigatório no salvar.
-        if (!d.descricao && ex) setDescricao(ex.descricao);
+        // A IA não achou nome no laudo: volta o que o PEDIDO já dizia. O reset do modo
+        // SUBSTITUIR limpa tudo para não misturar lotes, e deixar a descrição vazia
+        // obrigaria a redigitar o que já estava informado — o campo é obrigatório no
+        // salvar. ⚠️ `setDescricao(prev => ...)`: no modo ADICIONAR o campo pode já ter
+        // sido preenchido pelo lote anterior, e sobrescrever aqui desfaria justamente o
+        // que a regra acima protege.
+        if (!d.descricao && ex) setDescricao(prev => (prev.trim() ? prev : ex.descricao));
       }
     } catch (err: unknown) {
       // best-effort para falha/indisponibilidade da IA — mas "nenhum arquivo é um
@@ -460,6 +507,46 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
       setAnalisando(false);
     }
   };
+
+  /**
+   * Há resultado na tela que um lote novo pode atropelar?
+   *
+   * Vale para a EDIÇÃO (o exame já tem laudo/tabela salvos — é sempre perguntado,
+   * porque ali o risco é apagar resultado já gravado) e para a carga em duas etapas
+   * (já existe arquivo anexado ou linha preenchida nesta sessão).
+   * ⚠️ Descrição e laboratório NÃO entram: eles vêm preenchidos do PEDIDO, e contá-los
+   * faria a pergunta aparecer no primeiro anexo de todo exame pendente — pergunta que
+   * sempre aparece deixa de ser lida.
+   */
+  const temResultadoNaTela = () =>
+    jaTemResultado
+    || arquivos.length > 0
+    || laudo.trim().length > 0
+    || itens.some(i => i.parametro.trim() || i.valor.trim());
+
+  /** Recebe o lote do seletor: pergunta quando há o que preservar, senão segue direto. */
+  const receberLote = (lista: File[], anexarAoQueTem: boolean) => {
+    if (lista.length === 0) return;
+    if (temResultadoNaTela()) { setLoteEmEspera(lista); return; }
+    const novos = anexarAoQueTem ? [...arquivos, ...lista] : lista;
+    setArquivos(novos);
+    analisarArquivo(anexarAoQueTem ? lista : novos, 'substituir');
+  };
+
+  /** Resposta da pergunta. `adicionar` mescla; `substituir` recomeça do lote novo. */
+  const resolverLote = (modo: ModoCarga) => {
+    const lista = loteEmEspera ?? [];
+    setLoteEmEspera(null);
+    if (lista.length === 0) return;
+    if (modo === 'adicionar') {
+      setArquivos(prev => [...prev, ...lista]);
+      analisarArquivo(lista, 'adicionar');   // só o lote novo é lido: o anterior já está na tela
+    } else {
+      setArquivos(lista);
+      analisarArquivo(lista, 'substituir');
+    }
+  };
+
 
   /** "Não é este" na tela de divergência: devolve o formulário ao estado anterior ao
    *  anexo — arquivos fora e campos do PEDIDO de volta —, para o usuário anexar o
@@ -555,8 +642,17 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
               )}
               <div>
                 <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Data do exame</label>
-                <input type="date" value={dataExame} onChange={e => setDataExame(e.target.value)}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500" />
+                {/* `DateInput` e não `<input type="date">`: o nativo segue o locale do
+                    BROWSER e no Chrome ignora o `lang` da página, então a data do laudo
+                    aparecia como MM/DD/AAAA. É o mesmo componente do campo "Data Início"
+                    da tela de Prescrição — o valor continua ISO ('YYYY-MM-DD'), só a
+                    exibição muda. */}
+                <DateInput
+                  value={dataExame}
+                  onChange={setDataExame}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus-within:border-emerald-500"
+                  aria-label="Data do exame"
+                />
                 <p className="text-[10px] text-gray-400 mt-1">
                   Preenchida ao anexar o laudo. Em branco, vale o dia de hoje.
                 </p>
@@ -623,24 +719,49 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
                 {isImagem ? 'Imagens / laudo (PDF ou imagem)' : 'Anexar laudo(s) (opcional)'}
               </label>
+              {/* Seleção MÚLTIPLA de uma vez continua sendo um lote só. Selecionar um a
+                  um, ou anexar sobre um resultado que já está na tela, cai na pergunta
+                  "adicionar ou substituir" — antes, o segundo arquivo apagava o
+                  resultado do primeiro sem avisar. */}
               <SeletorArquivo multiple abrirRef={abrirSeletorRef}
-                onEscolher={lista => {
-                  // A cada mudança na seleção, a IA lê o LOTE INTEIRO de novo — é o que
-                  // garante que todo arquivo anexado seja tratado (inclusive ao trocar
-                  // a seleção por uma nova, que substitui a anterior).
-                  setArquivos(lista);
-                  if (lista.length > 0) analisarArquivo(lista);
-                }}
-                onFoto={foto => {
-                  const nova = [...arquivos, foto];
-                  setArquivos(nova);
-                  analisarArquivo(nova);
-                }} />
+                onEscolher={lista => receberLote(lista, false)}
+                onFoto={foto => receberLote([foto], true)} />
               {arquivos.length > 0 && (
                 <p className="text-[11px] text-gray-500 mt-1">
                   {arquivos.length === 1 ? arquivos[0].name : `${arquivos.length} arquivo(s) selecionado(s)`}
                 </p>
               )}
+              {/* Pergunta ANTES de tocar no formulário — é o que permite o "adicionar"
+                  existir. Sem rota de saída ela viraria uma armadilha: "Cancelar"
+                  descarta o lote e não muda nada. */}
+              {loteEmEspera && (
+                <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-xs text-amber-900 font-medium">
+                    {loteEmEspera.length === 1
+                      ? `"${loteEmEspera[0].name}" — este exame já tem resultado na tela.`
+                      : `${loteEmEspera.length} arquivos — este exame já tem resultado na tela.`}
+                  </p>
+                  <p className="text-[11px] text-amber-800 mt-0.5">
+                    Adicionar mantém o que já está aqui e acrescenta o que vier do arquivo.
+                    Substituir descarta o resultado atual.
+                  </p>
+                  <div className="flex flex-wrap gap-2 mt-2.5">
+                    <button type="button" onClick={() => resolverLote('adicionar')}
+                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-xl transition-colors">
+                      Adicionar ao resultado
+                    </button>
+                    <button type="button" onClick={() => resolverLote('substituir')}
+                      className="px-3 py-1.5 border border-red-300 text-red-600 hover:bg-red-50 text-xs font-semibold rounded-xl transition-colors">
+                      Substituir o resultado
+                    </button>
+                    <button type="button" onClick={() => setLoteEmEspera(null)}
+                      className="px-3 py-1.5 text-xs font-medium text-gray-500 hover:text-gray-700 rounded-xl transition-colors">
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {analisando && (
                 <div className="mt-2">
                   <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
@@ -865,6 +986,22 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
   // Imagem o laudo digitado já cabe dentro do "Carregar Resultados" (upload).
   const permiteManual = tipo === 'laboratorial';
 
+  // ─── Ações do exame PENDENTE — UMA declaração p/ a tabela E p/ o card ──────
+  // `AcaoRegistro` decide a forma por CSS: ícone no desktop, botão com rótulo no
+  // mobile — que é onde três ícones sem rótulo numa linha `flex-nowrap` não cabiam.
+  const acoesDoPendente = (ex: ExameSolicitado) => (
+    <AcoesRegistro>
+      <AcaoRegistro tom="finalizar" icone={Upload} rotulo="Carregar"
+        titulo="Carregar Resultados" visivel={podeLancar(ex)} onClick={() => setAlvo(ex)} />
+      <AcaoRegistro tom="neutro" icone={Table2} rotulo="Preencher"
+        titulo="Preencher manualmente" visivel={permiteManual && podeLancar(ex)}
+        onClick={() => setAlvoManual(ex)} />
+      <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
+        visivel={podeCancelar}
+        onClick={() => { setErroCancelamento(null); setCancelando(ex); }} />
+    </AcoesRegistro>
+  );
+
   const [pendentes,  setPendentes]  = useState<ExameSolicitado[]>([]);
   const [carregando, setCarregando] = useState(false);
   const [erro,       setErro]       = useState<string | null>(null);
@@ -1065,30 +1202,7 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
                   {numeroExame(ex)} · {formatData(ex.dataSolicitacao)}
                   {ex.veterinario ? ` · ${ex.veterinario.fullName}` : ''}
                 </p>
-                {/* Só ícones, mesma linha — ver o bloco equivalente do desktop */}
-                <div className="flex items-center gap-1 mt-2 flex-nowrap">
-                  {podeLancar(ex) && (
-                    <button onClick={() => setAlvo(ex)}
-                      title="Carregar Resultados" aria-label="Carregar Resultados"
-                      className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
-                      <Upload size={15} />
-                    </button>
-                  )}
-                  {permiteManual && podeLancar(ex) && (
-                    <button onClick={() => setAlvoManual(ex)}
-                      title="Preencher manualmente" aria-label="Preencher manualmente"
-                      className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
-                      <Table2 size={15} />
-                    </button>
-                  )}
-                  {podeCancelar && (
-                    <button onClick={() => { setErroCancelamento(null); setCancelando(ex); }}
-                      title="Cancelar" aria-label="Cancelar"
-                      className="p-1.5 text-red-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                      <Ban size={15} />
-                    </button>
-                  )}
-                </div>
+                <div className="mt-2">{acoesDoPendente(ex)}</div>
               </div>
             ))}
           </div>
@@ -1118,32 +1232,7 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
                     <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatData(ex.dataSolicitacao)}</td>
                     <td className="px-4 py-3 whitespace-nowrap text-gray-600">{ex.veterinario?.fullName ?? '—'}</td>
                     <td className="px-4 py-3">
-                      {/* Só ÍCONES, numa linha só. `title` + `aria-label` em cada um
-                          não são opcionais: sem rótulo visível, é o que dá nome ao
-                          botão para leitor de tela e no hover. */}
-                      <div className="flex items-center gap-1 flex-nowrap">
-                        {podeLancar(ex) && (
-                          <button onClick={() => setAlvo(ex)}
-                            title="Carregar Resultados" aria-label="Carregar Resultados"
-                            className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
-                            <Upload size={15} />
-                          </button>
-                        )}
-                        {permiteManual && podeLancar(ex) && (
-                          <button onClick={() => setAlvoManual(ex)}
-                            title="Preencher manualmente" aria-label="Preencher manualmente"
-                            className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
-                            <Table2 size={15} />
-                          </button>
-                        )}
-                        {podeCancelar && (
-                          <button onClick={() => { setErroCancelamento(null); setCancelando(ex); }}
-                            title="Cancelar" aria-label="Cancelar"
-                            className="p-1.5 text-red-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                            <Ban size={15} />
-                          </button>
-                        )}
-                      </div>
+                      {acoesDoPendente(ex)}
                     </td>
                   </tr>
                 ))}

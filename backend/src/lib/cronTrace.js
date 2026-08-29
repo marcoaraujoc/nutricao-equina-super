@@ -105,4 +105,13 @@ function formatarLinha({ ms, nivel, texto }) {
   return `+ [${seg}s] ${'  '.repeat(nivel)}${texto}`;
 }
 
-module.exports = { comTrace, passo, grupo, ativo };
+/**
+ * true quando a execução em curso veio do botão "Executar agora" — é `comTrace` que
+ * abre esse contexto, e só o disparo manual passa por ele. É assim que a origem chega
+ * ao log sem precisar mudar a assinatura dos 12 jobs.
+ */
+function ehManual() {
+  return ativo();
+}
+
+module.exports = { comTrace, passo, grupo, ativo, ehManual };

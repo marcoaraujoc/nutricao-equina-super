@@ -9,6 +9,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import ModalJustificativa from '../components/ModalJustificativa';
@@ -614,21 +615,15 @@ export default function CadastroProcedimento() {
                       </li>
                     ))}
                   </ul>
+                  {/* Ícone no desktop, botão com rótulo no mobile — `AcaoRegistro`. */}
                   {(podeEditar || podeExcluir) && (
-                    <div className="flex justify-end gap-1 mt-3 pt-2 border-t border-gray-50">
-                      {podeEditar && c.ativo && (
-                        <button onClick={() => abrirEdicaoCombo(c)} className="p-1.5 text-gray-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg" title="Editar">
-                          <Pencil size={14} />
-                        </button>
-                      )}
-                      {podeExcluir && (
-                        <button onClick={() => setComboToggle(c)}
-                          className={`p-1.5 rounded-lg ${c.ativo ? 'text-gray-400 hover:text-red-600 hover:bg-red-50' : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'}`}
-                          title={c.ativo ? 'Inativar' : 'Ativar'}>
-                          {c.ativo ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
-                        </button>
-                      )}
-                    </div>
+                    <AcoesRegistro className="mt-3 pt-2 border-t border-gray-50 md:justify-end">
+                      <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
+                        visivel={podeEditar && c.ativo} onClick={() => abrirEdicaoCombo(c)} />
+                      <AcaoRegistro tom="ativar" icone={c.ativo ? ToggleRight : ToggleLeft}
+                        rotulo={c.ativo ? 'Inativar' : 'Ativar'}
+                        visivel={podeExcluir} onClick={() => setComboToggle(c)} />
+                    </AcoesRegistro>
                   )}
                 </div>
               ))}

@@ -86,21 +86,31 @@ const listarExecucoes = async (req, res) => {
     else if (periodo === 'semana') { inicio.setDate(inicio.getDate() - 6); inicio.setHours(0, 0, 0, 0); }
     else                           { inicio.setDate(inicio.getDate() - 29); inicio.setHours(0, 0, 0, 0); } // mês = últimos 30 dias
 
-    const execucoes = await prisma.cronExecucao.findMany({
-      where:   { executadoEm: { gte: inicio } },
-      orderBy: { executadoEm: 'desc' },
-      take:    1000,
-    });
+    // SQL cru: `origem`/`duracaoMs` chegaram na migration 20260921000000 e o Prisma
+    // Client pode não conhecê-las (no Windows o `generate` só roda com o backend
+    // parado). `to_jsonb(t)->>'origem'` devolve NULL quando a coluna não existe, em vez
+    // de derrubar a consulta — assim a tela funciona antes e depois da migration.
+    const execucoes = await prisma.$queryRawUnsafe(
+      `SELECT id, nome, ok, resumo, erro, notificado, "executadoEm",
+              to_jsonb(t) ->> 'origem'    AS origem,
+              (to_jsonb(t) ->> 'duracaoMs')::int AS "duracaoMs"
+         FROM schs2vet.tb_cron_execucoes t
+        WHERE "executadoEm" >= $1
+        ORDER BY "executadoEm" DESC
+        LIMIT 1000`,
+      inicio,
+    );
 
     const porTarefa = new Map();
     let sucessos = 0, erros = 0, alertas = 0;
     for (const e of execucoes) {
       if (e.ok) sucessos++; else erros++;
       if (e.notificado) alertas++;
-      const g = porTarefa.get(e.nome) ?? { nome: e.nome, execucoes: 0, sucessos: 0, erros: 0, alertas: 0, ultima: null };
+      const g = porTarefa.get(e.nome) ?? { nome: e.nome, execucoes: 0, sucessos: 0, erros: 0, alertas: 0, manuais: 0, ultima: null };
       g.execucoes++;
       if (e.ok) g.sucessos++; else g.erros++;
       if (e.notificado) g.alertas++;
+      if (e.origem === 'MANUAL') g.manuais++;
       if (!g.ultima) g.ultima = e.executadoEm; // orderBy desc → primeira vista é a mais recente
       porTarefa.set(e.nome, g);
     }
@@ -112,6 +122,7 @@ const listarExecucoes = async (req, res) => {
       execucoes: execucoes.map(e => ({
         id: e.id, nome: e.nome, ok: e.ok, resumo: e.resumo, erro: e.erro,
         notificado: e.notificado, executadoEm: e.executadoEm,
+        origem: e.origem ?? 'AUTOMATICA', duracaoMs: e.duracaoMs ?? null,
       })),
     } });
   } catch (err) {

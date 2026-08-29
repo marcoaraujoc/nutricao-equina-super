@@ -7,9 +7,10 @@
 // Cores da ação seguem a paleta do módulo de Atendimento (CLAUDE.md §6): WhatsApp
 // verde (cor da própria marca), e-mail azul.
 import { useState } from 'react';
-import { MessageCircle, Mail, Loader2 } from 'lucide-react';
+import { MessageCircle, Mail } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { compartilharPdfWhatsApp, compartilharPdfEmail, type CompartilharPdfOpcoes } from '../utils/compartilharPdf';
+import AcaoRegistro from './AcaoRegistro';
 
 export interface CompartilharPdfBotoesProps extends CompartilharPdfOpcoes {
   /** Telefone do destinatário (WhatsApp) — dígitos com DDI, ex: 5511987654321. */
@@ -59,20 +60,19 @@ export default function CompartilharPdfBotoes({
     }
   };
 
-  const btnCls = `p-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${className}`;
-
+  // Os dois saem por `AcaoRegistro`: ícone no desktop, botão com rótulo no mobile —
+  // a mesma forma que WhatsApp/E-mail têm no resto do sistema. `size` continua na
+  // assinatura por compatibilidade, mas quem dita o tamanho agora é o breakpoint.
   return (
     <>
-      <button type="button" onClick={handleWhatsApp} disabled={disabled || enviando !== null}
-        title="WhatsApp" aria-label="Enviar por WhatsApp"
-        className={`${btnCls} text-green-600 hover:text-green-700 hover:bg-green-50`}>
-        {enviando === 'whatsapp' ? <Loader2 size={size} className="animate-spin" /> : <MessageCircle size={size} />}
-      </button>
-      <button type="button" onClick={handleEmail} disabled={disabled || enviando !== null}
-        title="E-mail" aria-label="Enviar por e-mail"
-        className={`${btnCls} text-blue-500 hover:text-blue-600 hover:bg-blue-50`}>
-        {enviando === 'email' ? <Loader2 size={size} className="animate-spin" /> : <Mail size={size} />}
-      </button>
+      <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp"
+        titulo="Enviar por WhatsApp" className={className}
+        desabilitado={disabled || enviando !== null} carregando={enviando === 'whatsapp'}
+        onClick={handleWhatsApp} />
+      <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail"
+        titulo="Enviar por e-mail" className={className}
+        desabilitado={disabled || enviando !== null} carregando={enviando === 'email'}
+        onClick={handleEmail} />
     </>
   );
 }

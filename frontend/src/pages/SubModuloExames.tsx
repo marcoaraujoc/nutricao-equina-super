@@ -19,6 +19,7 @@ import { imprimirExame as imprimirExameUtil } from '../utils/ExamePrint';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import InlineError from '../components/InlineError';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import LaudoTexto from '../components/LaudoTexto';
 
 
@@ -1269,6 +1270,28 @@ export default function SubModuloExames({
     setConfirmId(id);
   };
 
+  // ─── Ações do exame — UMA declaração para a tabela E para o card ───────────
+  // ORDEM/COR da §6: Alterar (laranja) → Ver (emerald) → Imprimir (azul) →
+  // WhatsApp (verde) → E-mail (azul) → Cancelar (vermelho). Quem decide a FORMA é o
+  // `AcaoRegistro`: ícone no desktop, botão com rótulo no mobile.
+  const acoesDoExame = (ex: ExameClinico) => (
+    <AcoesRegistro>
+      <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Alterar"
+        visivel={podeEditarEx(ex)} onClick={() => setEditingEx(ex)} />
+      <AcaoRegistro tom="ver" icone={Eye} rotulo="Ver" titulo="Ver detalhes"
+        onClick={() => setViewingEx(ex)} />
+      <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir" titulo="Imprimir requisição"
+        visivel={podeImprimir} onClick={() => imprimirExame(ex)} />
+      {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
+      <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp" titulo="Enviar por WhatsApp"
+        visivel={podeImprimir} onClick={() => compartilharWhatsApp(ex)} />
+      <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail" titulo="Enviar por e-mail"
+        visivel={podeImprimir} onClick={() => compartilharEmail(ex)} />
+      <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar" titulo="Cancelar exame"
+        visivel={podeCancelarEx(ex) && ex.ativo} onClick={() => handleExcluirSolicitado(ex.id)} />
+    </AcoesRegistro>
+  );
+
   const handleExcluirConfirmado = async (motivo: string) => {
     if (confirmId == null) return;
     const id = confirmId;
@@ -2168,42 +2191,7 @@ export default function SubModuloExames({
                     </p>
                   )}
 
-                  <div className="flex flex-wrap gap-2 mt-2">
-                    {podeEditarEx(ex) && (
-                      <button onClick={() => setEditingEx(ex)}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-orange-200 text-orange-600 rounded-lg text-xs hover:bg-orange-50 transition-colors">
-                        <Pencil size={11} /> Alterar
-                      </button>
-                    )}
-                    <button onClick={() => setViewingEx(ex)}
-                      className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
-                      <Eye size={11} /> Ver
-                    </button>
-                    {podeImprimir && (
-                      <button onClick={() => imprimirExame(ex)}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-blue-200 text-blue-600 rounded-lg text-xs hover:bg-blue-50 transition-colors">
-                        <Printer size={11} /> Imprimir
-                      </button>
-                    )}
-                    {podeImprimir && (
-                      <button onClick={() => compartilharWhatsApp(ex)}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
-                        <MessageCircle size={11} /> WhatsApp
-                      </button>
-                    )}
-                    {podeImprimir && (
-                      <button onClick={() => compartilharEmail(ex)}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
-                        <Mail size={11} /> E-mail
-                      </button>
-                    )}
-                    {podeCancelarEx(ex) && ex.ativo && (
-                      <button onClick={() => handleExcluirSolicitado(ex.id)}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
-                        <Ban size={11} /> Cancelar
-                      </button>
-                    )}
-                  </div>
+                  <div className="mt-2">{acoesDoExame(ex)}</div>
                 </div>
               );
             })}
@@ -2282,42 +2270,7 @@ export default function SubModuloExames({
                           : <span className="text-gray-300">—</span>}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          {podeEditarEx(ex) && (
-                            <button onClick={() => setEditingEx(ex)} title="Alterar"
-                              className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
-                              <Pencil size={14} />
-                            </button>
-                          )}
-                          <button onClick={() => setViewingEx(ex)} title="Ver detalhes"
-                            className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
-                            <Eye size={14} />
-                          </button>
-                          {podeImprimir && (
-                            <button onClick={() => imprimirExame(ex)} title="Imprimir requisição"
-                              className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-                              <Printer size={14} />
-                            </button>
-                          )}
-                          {podeImprimir && (
-                            <button onClick={() => compartilharWhatsApp(ex)} title="Enviar por WhatsApp"
-                              className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors">
-                              <MessageCircle size={14} />
-                            </button>
-                          )}
-                          {podeImprimir && (
-                            <button onClick={() => compartilharEmail(ex)} title="Enviar por e-mail"
-                              className="p-1.5 text-blue-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                              <Mail size={14} />
-                            </button>
-                          )}
-                          {podeCancelarEx(ex) && ex.ativo && (
-                            <button onClick={() => handleExcluirSolicitado(ex.id)} title="Cancelar exame"
-                              className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                              <Ban size={14} />
-                            </button>
-                          )}
-                        </div>
+                        {acoesDoExame(ex)}
                       </td>
                     </tr>
                   );

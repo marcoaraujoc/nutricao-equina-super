@@ -39,11 +39,55 @@ async function getEmailsAlerta(config) {
   }
 }
 
-async function registrarExecucao(nome, { ok, resumo, erro, notificado }) {
+// As colunas `origem`/`duracaoMs` chegaram na migration 20260921000000. Entre aplicá-la
+// e não aplicá-la o log NÃO pode parar: citar coluna inexistente faz o INSERT falhar, e
+// o rastro que este módulo existe para guardar é justamente o que se perderia. A
+// pergunta é feita ao BANCO (uma vez, com cache) porque o INSERT é SQL cru — quem
+// recusa aqui é o Postgres, não o Prisma Client.
+let colunasNovas = null;
+async function temColunasNovas() {
+  if (colunasNovas !== null) return colunasNovas;
   try {
-    await prisma.cronExecucao.create({
-      data: { nome, ok: !!ok, resumo: resumo ?? null, erro: erro ?? null, notificado: !!notificado },
-    });
+    const r = await prisma.$queryRawUnsafe(
+      `SELECT count(*)::int AS n FROM information_schema.columns
+        WHERE table_schema = 'schs2vet' AND table_name = 'tb_cron_execucoes'
+          AND column_name IN ('origem', 'duracaoMs')`);
+    colunasNovas = Number(r?.[0]?.n) === 2;
+  } catch {
+    colunasNovas = false;
+  }
+  return colunasNovas;
+}
+
+async function registrarExecucao(nome, { ok, resumo, erro, notificado, origem, duracaoMs }) {
+  try {
+    if (!(await temColunasNovas())) {
+      // Antes da migration: grava o que a tabela sabe guardar. O histórico fica sem
+      // origem e duração, mas continua registrando TODA execução — que é a mudança
+      // que importa.
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO schs2vet.tb_cron_execucoes (nome, ok, resumo, erro, notificado, "executadoEm")
+         VALUES ($1, $2, $3, $4, $5, now())`,
+        String(nome), !!ok, resumo ?? null, erro ?? null, !!notificado,
+      );
+      return;
+    }
+    // SQL cru: `origem`/`duracaoMs` chegaram na migration 20260921000000 e o Prisma
+    // Client pode não conhecê-las ainda (no Windows o `generate` só roda com o backend
+    // parado, §11). Pelo client tipado, campo desconhecido LANÇA — e derrubar o
+    // registro do log por causa disso é justamente perder o rastro que ele existe para
+    // guardar. O INSERT é parametrizado.
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO schs2vet.tb_cron_execucoes (nome, ok, resumo, erro, notificado, origem, "duracaoMs", "executadoEm")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now())`,
+      String(nome),
+      !!ok,
+      resumo ?? null,
+      erro ?? null,
+      !!notificado,
+      origem === 'MANUAL' ? 'MANUAL' : 'AUTOMATICA',
+      Number.isFinite(Number(duracaoMs)) ? Math.round(Number(duracaoMs)) : null,
+    );
   } catch (e) {
     logger.warn(`[CronAlert] Não foi possível registrar execução "${nome}": ${e.message}`);
   }
@@ -57,7 +101,6 @@ async function registrarExecucao(nome, { ok, resumo, erro, notificado }) {
  */
 async function reportarCron(nome, r) {
   const ok = r.ok !== false;
-  const relevante = !ok || !!r.notificar;      // registra só eventos com significado
   const config = await getConfig();
   const deveEmail = config.ativo && (!ok || (!!r.notificar && config.notificarSucesso));
 
@@ -76,7 +119,18 @@ async function reportarCron(nome, r) {
     }
   }
 
-  if (relevante) await registrarExecucao(nome, { ok, resumo: r.resumo, erro: r.erro, notificado });
+  // 🔴 REGISTRA SEMPRE — inclusive a execução que não teve trabalho nenhum.
+  // Antes só entravam erro e "fez trabalho" (`relevante = !ok || notificar`), e o
+  // resultado é que "rodou e não havia o que fazer" ficava IDÊNTICO a "não rodou": o
+  // histórico simplesmente não tinha a linha. Foi assim que 7 prescrições com a janela
+  // vencida ficaram dias sem cancelamento sem ninguém perceber — o job não rodava, e a
+  // ausência de registro parecia normal.
+  // O E-MAIL continua seletivo (`deveEmail`, acima): registrar tudo não pode virar um
+  // alerta por execução, senão o alerta deixa de ser lido.
+  await registrarExecucao(nome, {
+    ok, resumo: r.resumo, erro: r.erro, notificado,
+    origem: r.origem, duracaoMs: r.duracaoMs,
+  });
 }
 
 module.exports = { reportarCron, getConfig, getEmailsAlerta, registrarExecucao };

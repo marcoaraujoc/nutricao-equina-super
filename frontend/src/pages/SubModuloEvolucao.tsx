@@ -26,6 +26,7 @@ import {
 } from '../services/whisperService';
 import InlineError from '../components/InlineError';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 
 
 // ─── Speech Recognition types ────────────────────────────────────────────────
@@ -1778,6 +1779,60 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
   const userId = user?.id ?? 0;
 
+  // ─── Ações da evolução — UMA declaração para a tabela E para o card ────────
+  // As duas listas eram idênticas e recalculavam os MESMOS seis predicados de
+  // autoria em dois lugares. Aqui a regra existe uma vez; `AcaoRegistro` decide a
+  // forma por CSS (ícone no desktop, botão com rótulo no mobile).
+  const acoesDaEvolucao = (ev: EvolucaoItem) => {
+    const emAndamento  = ev.status === 'EM_ANDAMENTO';
+    const nivelEditar  = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.editar']  ?? 'NENHUM');
+    const nivelDeletar = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.deletar'] ?? 'NENHUM');
+    // AUTORIA (2026-08-04): a ação concedida vale sobre a evolução que a pessoa criou
+    // ou assumiu. Só o gestor opera a de outro — espelho do `podeOperarRegistro` do
+    // backend, que é quem de fato barra.
+    const meuRegistro    = ehMinhaEvolucao(ev);
+    const temNivelEditar = nivelEditar !== 'NENHUM' && nivelEditar !== 'NEGADO';
+    const podeEditarEsta = meuRegistro && temNivelEditar;
+    // EM_ANDAMENTO nunca é excluída (hard delete) — só CANCELADA. O nível é o mesmo
+    // de "excluir" (nivelDeletar), só a AÇÃO mudou.
+    const podeCancelarPropria = meuRegistro && emAndamento
+      && nivelDeletar !== 'NENHUM' && nivelDeletar !== 'NEGADO';
+    return (
+      <AcoesRegistro>
+        {/* Aprovar segue o slug de FINALIZAR (é o que a rota /aprovar exige) — não é
+            check de role, senão quem só tem VER enxergaria o botão. */}
+        <AcaoRegistro tom="aprovar" icone={CheckCircle2} rotulo="Aprovar"
+          visivel={!ev.aprovado && podeFinalizar} onClick={() => handleAprovar(ev.id)} />
+        <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Alterar"
+          visivel={(emAndamento && podeEditarEsta) || (isGestor && ev.status === 'FINALIZADA')}
+          onClick={() => { abrirEdicao(ev); onAbrirAtendimento?.(ev.id, 'editar'); }} />
+        <AcaoRegistro tom="ver" icone={Eye} rotulo="Visualizar"
+          onClick={() => { abrirVisualizacao(ev); onAbrirAtendimento?.(ev.id, 'visualizar'); }} />
+        {/* Assumir é um "puxar para si": basta ter a permissão de alterar em QUALQUER
+            nível — usa `temNivelEditar`, nunca `podeEditarEsta`, que já exige autoria e
+            por definição é falso na evolução do outro. Quem perde é comunicado por
+            e-mail e WhatsApp. */}
+        <AcaoRegistro tom="assumir" icone={UserCheck} rotulo="Assumir"
+          titulo={`Assumir a evolução de ${ev.veterinario?.fullName ?? 'outro profissional'}`}
+          visivel={emAndamento && ev.veterinarioId !== userId && temNivelEditar}
+          carregando={assumindoEv} onClick={() => handleAssumirEvolucao(ev.id)} />
+        <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
+          visivel={podeImprimir} carregando={imprimindoId === ev.id}
+          onClick={() => handleImprimir(ev)} />
+        {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
+        <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp" titulo="Enviar por WhatsApp"
+          visivel={podeImprimir} onClick={() => abrirWhatsApp(montarTextoEvolucao(ev))} />
+        <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail" titulo="Enviar por e-mail"
+          visivel={podeImprimir}
+          onClick={() => abrirEmail(`Evolução - ${ev.titulo?.trim() || ev.especialidade}`, montarTextoEvolucao(ev))} />
+        {/* Cancelar finalizada usa o slug de EXCLUIR (rota PATCH /cancelar). */}
+        <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar" titulo="Cancelar evolução"
+          visivel={(emAndamento && podeCancelarPropria) || (ev.status === 'FINALIZADA' && podeDeletar)}
+          onClick={() => setCancelandoEv(ev)} />
+      </AcoesRegistro>
+    );
+  };
+
   if (!loadingPerms && !isGestor && !podeExecutar('atendimento.evolucoes.ler')) {
     return (
       <div className="text-center py-16">
@@ -1829,6 +1884,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
               value={filtroDataInicio}
               onChange={v => { setFiltroDataInicio(v); setPage(1); }}
               className="w-32 text-xs text-gray-900"
+              /* Barra de filtros: a mensagem de data inválida iria como `title`, não
+                 como bloco abaixo — aqui ela empurraria a toolbar inteira. */
+              compacto
             />
           </div>
           <span className="text-gray-300 text-xs px-1 flex-shrink-0">→</span>
@@ -1838,6 +1896,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
               value={filtroDataFim}
               onChange={v => { setFiltroDataFim(v); setPage(1); }}
               className="w-32 text-xs text-gray-900"
+              compacto
             />
           </div>
         </div>
@@ -1931,28 +1990,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           <div className="md:hidden divide-y divide-gray-50">
             {evolucoes.map(ev => {
               const emAndamento = ev.status === 'EM_ANDAMENTO';
-              const eProprioAutor = ev.veterinarioId === userId;
-              const nivelEditar    = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.editar']    ?? 'NENHUM');
-              const nivelDeletar   = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.deletar']   ?? 'NENHUM');
-              // AUTORIA (2026-08-04): a ação concedida vale sobre a evolução que a
-              // pessoa criou ou assumiu. Só o gestor opera a de outro profissional —
-              // espelho do `podeOperarRegistro` do backend, que é quem de fato barra.
-              const meuRegistro       = ehMinhaEvolucao(ev);
-              const temNivelEditar    = nivelEditar !== 'NENHUM' && nivelEditar !== 'NEGADO';
-              const podeEditarEsta    = meuRegistro && temNivelEditar;
-              // EM_ANDAMENTO nunca é excluída (hard delete) — só CANCELADA. O nível de
-              // permissão é o mesmo de "excluir" (nivelDeletar), só a AÇÃO mudou.
-              const podeCancelarPropria = meuRegistro && emAndamento && nivelDeletar   !== 'NENHUM' && nivelDeletar   !== 'NEGADO';
-              // Aprovar segue o slug de FINALIZAR (é o que a rota /aprovar exige) —
-              // não é mais um check de role, senão quem só tem VER via o botão.
-              const podeAprovar    = !ev.aprovado && podeFinalizar;
-              const podeAlterar    = (emAndamento && podeEditarEsta) || (isGestor && ev.status === 'FINALIZADA');
-              // Assumir é um "puxar para si": basta ter a permissão de alterar em
-              // qualquer nível — usa `temNivelEditar`, NUNCA `podeEditarEsta`, que já
-              // exige autoria e por definição é falso na evolução do outro.
-              const podeAssumirEsta = emAndamento && !eProprioAutor && temNivelEditar;
-              // Cancelar finalizada usa o slug de EXCLUIR (rota PATCH /cancelar).
-              const podeCancelarFinalizada = ev.status === 'FINALIZADA' && podeDeletar;
+              // A autoria/permissão de cada ação é resolvida uma vez só, dentro de
+              // `acoesDaEvolucao` — aqui sobra o que a LISTA usa para se desenhar.
               const tituloDisplay = ev.titulo
                 ? ev.titulo
                 : ev.texto.length > 55 ? ev.texto.substring(0, 52) + '…' : ev.texto;
@@ -2001,56 +2040,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                     </p>
                   )}
 
-                  <div className="flex flex-wrap gap-2 mt-2">
-                    {podeAprovar && (
-                      <button onClick={() => handleAprovar(ev.id)}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-amber-600 rounded-lg text-xs hover:bg-amber-50 transition-colors">
-                        <CheckCircle2 size={11} /> Aprovar
-                      </button>
-                    )}
-                    {podeAlterar && (
-                      <button onClick={() => { abrirEdicao(ev); onAbrirAtendimento?.(ev.id, 'editar'); }}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-orange-200 text-orange-600 rounded-lg text-xs hover:bg-orange-50 transition-colors">
-                        <Pencil size={11} /> Alterar
-                      </button>
-                    )}
-                    <button onClick={() => { abrirVisualizacao(ev); onAbrirAtendimento?.(ev.id, 'visualizar'); }}
-                      className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
-                      <Eye size={11} /> Ver
-                    </button>
-                    {podeAssumirEsta && (
-                      <button onClick={() => handleAssumirEvolucao(ev.id)} disabled={assumindoEv}
-                        title={`Assumir a evolução de ${ev.veterinario?.fullName ?? 'outro profissional'}`}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-teal-600 rounded-lg text-xs hover:bg-teal-50 disabled:opacity-60 transition-colors">
-                        {assumindoEv ? <Loader2 size={11} className="animate-spin" /> : <UserCheck size={11} />} Assumir
-                      </button>
-                    )}
-                    {podeImprimir && (
-                      <button onClick={() => handleImprimir(ev)} disabled={imprimindoId === ev.id}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-blue-200 text-blue-600 rounded-lg text-xs hover:bg-blue-50 transition-colors disabled:opacity-50">
-                        {imprimindoId === ev.id ? <Loader2 size={11} className="animate-spin" /> : <Printer size={11} />} Imprimir
-                      </button>
-                    )}
-                    {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
-                    {podeImprimir && (
-                      <button onClick={() => abrirWhatsApp(montarTextoEvolucao(ev))}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
-                        <MessageCircle size={11} /> WhatsApp
-                      </button>
-                    )}
-                    {podeImprimir && (
-                      <button onClick={() => abrirEmail(`Evolução - ${ev.titulo?.trim() || ev.especialidade}`, montarTextoEvolucao(ev))}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
-                        <Mail size={11} /> E-mail
-                      </button>
-                    )}
-                    {(podeCancelarPropria || podeCancelarFinalizada) && (
-                      <button onClick={() => setCancelandoEv(ev)}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
-                        <Ban size={11} /> Cancelar
-                      </button>
-                    )}
-                  </div>
+                  <div className="mt-2">{acoesDaEvolucao(ev)}</div>
                 </div>
               );
             })}
@@ -2066,7 +2056,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide leading-tight">Data<br />Fim</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Título</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Responsável</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
               </tr>
@@ -2074,22 +2064,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
             <tbody className="divide-y divide-gray-50">
               {evolucoes.map(ev => {
                 const emAndamento = ev.status === 'EM_ANDAMENTO';
-                const eProprioAutor = ev.veterinarioId === userId;
-
-                // Nível de permissão para editar/excluir esta evolução
-                const nivelEditar    = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.editar']    ?? 'NENHUM');
-                const nivelDeletar   = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.deletar']   ?? 'NENHUM');
-
-                // AUTORIA (2026-08-04): a ação vale sobre o que a pessoa criou ou
-                // assumiu; só o gestor opera registro de outro. `temNivelEditar` é o
-                // nível cru, usado só pelo "assumir" (que é justamente sobre o alheio).
-                const meuRegistro       = ehMinhaEvolucao(ev);
-                const temNivelEditar    = nivelEditar !== 'NENHUM' && nivelEditar !== 'NEGADO';
-                const podeEditarEsta    = meuRegistro && temNivelEditar;
-                // EM_ANDAMENTO nunca é excluída (hard delete) — só CANCELADA. O nível
-                // de permissão é o mesmo de "excluir" (nivelDeletar), só a AÇÃO mudou.
-                const podeCancelarPropria = meuRegistro && emAndamento && nivelDeletar   !== 'NENHUM' && nivelDeletar   !== 'NEGADO';
-                const podeAprovar    = !ev.aprovado && podeFinalizar;
+                // Autoria/permissão de cada ação: `acoesDaEvolucao`, fonte única.
                 const tituloDisplay = ev.titulo
                   ? ev.titulo
                   : ev.texto.length > 55 ? ev.texto.substring(0, 52) + '…' : ev.texto;
@@ -2139,7 +2114,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                         <p className="text-[10px] text-gray-400 mt-0.5">editado por {ev.modificadoPor.fullName}</p>
                       )}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 text-center">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                         STATUS_CONFIG[ev.status]?.cls ?? 'bg-gray-100 text-gray-600'
                       }`}>
@@ -2153,69 +2128,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                     </td>
 
                     <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                      <div className="flex items-center justify-start gap-1">
-
-                        {podeAprovar && (
-                          <button onClick={() => handleAprovar(ev.id)} title="Aprovar"
-                            className="p-1.5 text-amber-500 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors">
-                            <CheckCircle2 size={14} />
-                          </button>
-                        )}
-
-                        {((emAndamento && podeEditarEsta) || (isGestor && ev.status === 'FINALIZADA')) && (
-                          <button
-                            onClick={() => { abrirEdicao(ev); onAbrirAtendimento?.(ev.id, 'editar'); }}
-                            title="Alterar"
-                            className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
-                            <Pencil size={14} />
-                          </button>
-                        )}
-
-                        <button
-                          onClick={() => { abrirVisualizacao(ev); onAbrirAtendimento?.(ev.id, 'visualizar'); }}
-                          title="Visualizar"
-                          className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
-                          <Eye size={14} />
-                        </button>
-
-                        {/* Assumir a evolução em andamento de outro profissional —
-                            ele é comunicado por e-mail e WhatsApp. */}
-                        {emAndamento && !eProprioAutor && temNivelEditar && (
-                          <button onClick={() => handleAssumirEvolucao(ev.id)} disabled={assumindoEv}
-                            title={`Assumir a evolução de ${ev.veterinario?.fullName ?? 'outro profissional'}`}
-                            className="p-1.5 text-teal-500 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors disabled:opacity-60">
-                            {assumindoEv ? <Loader2 size={14} className="animate-spin" /> : <UserCheck size={14} />}
-                          </button>
-                        )}
-
-                        {podeImprimir && (
-                          <button onClick={() => handleImprimir(ev)} disabled={imprimindoId === ev.id} title="Imprimir"
-                            className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50">
-                            {imprimindoId === ev.id ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
-                          </button>
-                        )}
-
-                        {podeImprimir && (
-                          <button onClick={() => abrirWhatsApp(montarTextoEvolucao(ev))} title="Enviar por WhatsApp"
-                            className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors">
-                            <MessageCircle size={14} />
-                          </button>
-                        )}
-
-                        {podeImprimir && (
-                          <button onClick={() => abrirEmail(`Evolução - ${ev.titulo?.trim() || ev.especialidade}`, montarTextoEvolucao(ev))} title="Enviar por e-mail"
-                            className="p-1.5 text-blue-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                            <Mail size={14} />
-                          </button>
-                        )}
-
-                        {((emAndamento && podeCancelarPropria) || (ev.status === 'FINALIZADA' && podeDeletar)) && (
-                          <button onClick={() => setCancelandoEv(ev)} title="Cancelar evolução"
-                            className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                            <Ban size={14} />
-                          </button>
-                        )}
-                      </div>
+                      {acoesDaEvolucao(ev)}
                     </td>
                   </tr>
                 );

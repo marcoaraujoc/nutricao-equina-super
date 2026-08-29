@@ -12,6 +12,7 @@ const { registrarAuditoria, registrarAlteracao, resumoTexto } = require('../lib/
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 const { animalEstaInativo } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
+const { garantirEspecialidadeDaEmpresa } = require('../lib/catalogoManual');
 
 const INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -290,6 +291,16 @@ const EncaminhamentoController = {
       if (!animalId || !especialidade || !motivo) {
         return res.status(400).json({ error: 'animalId, especialidade e motivo são obrigatórios' });
       }
+      // Todo encaminhamento tem de dizer PARA QUEM o paciente foi: prestador da equipe
+      // (prestadorId) ou o nome do profissional externo. Sem isso o registro clínico
+      // afirma que houve encaminhamento e não permite saber quem recebeu o paciente —
+      // a clínica continua opcional (o profissional externo pode ser autônomo).
+      if (!prestadorId && !String(veterinarioDestino || '').trim()) {
+        return res.status(400).json({
+          error: 'Informe o profissional de destino',
+          code:  'DESTINO_OBRIGATORIO',
+        });
+      }
       if (!evolucaoId) {
         return res.status(400).json({ error: 'evolucaoId é obrigatório', code: 'EVOLUCAO_REQUIRED' });
       }
@@ -318,6 +329,14 @@ const EncaminhamentoController = {
       if (!podeOperarRegistro(req, evolucao.veterinarioId)) {
         return res.status(403).json({ error: 'Só é possível encaminhar dentro de uma evolução sua. Assuma o atendimento antes de encaminhar.' });
       }
+
+      // Espécie do paciente — é ela que a especialidade nova recebe no catálogo
+      // (`tb_especialidades` é POR ESPÉCIE), e é o que a faz reaparecer nas próximas
+      // vezes na lista desta clínica.
+      const especieDoPaciente = await prisma.animal.findUnique({
+        where:  { id: Number(animalId) },
+        select: { especieId: true },
+      });
 
       let equipeDesignacao = null;
       if (prestadorId) {
@@ -355,6 +374,19 @@ const EncaminhamentoController = {
       }
 
       const resultado = await prisma.$transaction(async (tx) => {
+        // Especialidade que ainda não está no catálogo entra como item DA CLÍNICA
+        // (empresa_id setado — nunca global; ver lib/catalogoManual.js). É o que
+        // permite encaminhar para uma área que o catálogo do sistema não cobre e,
+        // da próxima vez, encontrá-la já na lista. Idempotente por (nome, espécie,
+        // empresa): encaminhar duas vezes para "Quiropraxia" não duplica a linha.
+        // Dentro da transaction de propósito: encaminhamento que falha não pode
+        // deixar a especialidade cadastrada sozinha.
+        await garantirEspecialidadeDaEmpresa(
+          tx,
+          { nome: especialidade, especieId: especieDoPaciente?.especieId },
+          req.empresaId,
+        );
+
         const enc = await tx.encaminhamentoClinico.create({
           data: {
             animalId:           Number(animalId),

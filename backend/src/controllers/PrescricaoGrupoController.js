@@ -12,6 +12,7 @@ const { registrarAuditoria, registrarAlteracao, registrarTransferencia, resumoTe
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 const { animalEstaInativo } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
+const { cursoTodoDoProprietario } = require('../lib/prescricaoProprietario');
 const {
   DOSES_POR_DIA, elegivelParaFluxoNovo, semAncoraDeHorario, dosesTotaisEsperadas, primeiraDoseEsperada,
   calcularProximaDose, classificarExecucao, diferencaEmMinutos, itemPrevistoParaDataFutura,
@@ -1399,6 +1400,22 @@ const finalizar = async (req, res) => {
 
     const agora = new Date();
 
+    // 🔴 PRESCRIÇÃO INTEIRAMENTE APLICADA PELO PROPRIETÁRIO JÁ NASCE NO ÚLTIMO PASSO.
+    // Ela nunca chega ao plantão: `listarParaExecucao` descarta os itens com a flag e o
+    // grupo que fica sem nenhum some da fila. Parada em FINALIZADO ("Em Execução"), ela
+    // ficaria para sempre esperando uma execução que, por construção, não vai acontecer
+    // — e engordando a lista de pendentes de quem opera a enfermagem.
+    // ⚠️ Só quando TODOS os itens são do proprietário. Documento MISTO continua
+    // FINALIZADO: a parte que a clínica aplica ainda vai ao plantão, e dizer que já
+    // terminou esconderia da enfermagem a dose que ela tem de dar.
+    // O status é `text` no Postgres (sem VARCHAR curto), então o valor não precisa de
+    // migration — mas ele é `EXECUTADO`, e não um status novo, de propósito: os ~14
+    // filtros que já tratam `EXECUTADO` (histórico do paciente, memória clínica,
+    // documentos, relatórios, crons) passariam a ignorar em SILÊNCIO um status que não
+    // conhecem, e a prescrição sumiria de cada um deles. Quem acrescenta o
+    // "pelo Proprietário" é a EXIBIÇÃO, a partir da flag dos itens.
+    const todosPeloProprietario = cursoTodoDoProprietario(grupo.itens);
+
     const animal = await prisma.animal.findUnique({
       where: { id: grupo.animalId }, select: { userId: true },
     });
@@ -1416,10 +1433,13 @@ const finalizar = async (req, res) => {
       await tx.prescricaoGrupo.update({
         where: { id: grupoId },
         data:  {
-          status:          'FINALIZADO',
+          status:          todosPeloProprietario ? 'EXECUTADO' : 'FINALIZADO',
           veterinarioId,
           finalizadoPorId: veterinarioId,
           finalizadoEm:    agora,
+          // `executadoEm` é o que a tela usa como "Data Fim" (`dataFimGrupo`). Sem ele,
+          // o documento encerrado apareceria sem data de conclusão na lista.
+          ...(todosPeloProprietario ? { executadoEm: agora } : {}),
         },
       });
 
@@ -1499,7 +1519,7 @@ const finalizar = async (req, res) => {
         entidade: 'PRESCRICAO', entidadeId: grupoId, animalId: grupo.animalId,
         donoAnteriorId: grupo.veterinarioId,
         donoAtualId:    veterinarioId,
-        campos: { status: { de: grupo.status, para: 'FINALIZADO' } },
+        campos: { status: { de: grupo.status, para: todosPeloProprietario ? 'EXECUTADO' : 'FINALIZADO' } },
       });
     });
 

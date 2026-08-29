@@ -15,6 +15,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import { formatDate } from '../utils/dateUtils';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -200,6 +201,28 @@ export default function CadastroTratador() {
     confirmarToggle(t);
   };
 
+  // ─── Ações do tratador — UMA declaração p/ a tabela E p/ o card ────────────
+  // `AcaoRegistro` decide a forma por CSS: ícone no desktop, botão com rótulo no
+  // mobile. ⚠️ Linha do CATÁLOGO GLOBAL (tipoEntrada SYSTEM) só o ADMIN opera —
+  // para os demais não há ação nenhuma, e a célula diz por quê.
+  const acoesDoTratador = (t: Tratador) => {
+    if (t.tipoEntrada === 'SYSTEM' && !isAdmin) {
+      return <span className="text-xs text-gray-400 italic">Catálogo global</span>;
+    }
+    if (!podeEditar && !podeAtivar) {
+      return <span className="text-xs text-gray-400 italic">Somente leitura</span>;
+    }
+    return (
+      <AcoesRegistro>
+        <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
+          visivel={podeEditar} onClick={() => abrirEditar(t)} />
+        <AcaoRegistro tom="ativar" icone={t.ativo ? ToggleRight : ToggleLeft}
+          rotulo={t.ativo ? 'Inativar' : 'Ativar'}
+          visivel={podeAtivar} onClick={() => toggleAtivo(t)} />
+      </AcoesRegistro>
+    );
+  };
+
   const confirmarToggle = async (t: Tratador, motivo?: string) => {
     setTogglingAtivo(true);
     try {
@@ -380,31 +403,7 @@ export default function CadastroTratador() {
                       </>
                     )}
                     <td className="px-4 py-3">
-                      <div className="flex items-center justify-center gap-2">
-                        {t.tipoEntrada === 'SYSTEM' && !isAdmin ? (
-                          <span className="text-xs text-gray-400 italic">Catálogo global</span>
-                        ) : (
-                          <>
-                            {podeEditar && (
-                              <button onClick={() => abrirEditar(t)}
-                                className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-xl transition-colors"
-                                title="Editar">
-                                <Pencil size={15} />
-                              </button>
-                            )}
-                            {podeAtivar && (
-                              <button onClick={() => toggleAtivo(t)}
-                                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-xl transition-colors"
-                                title={t.ativo ? 'Inativar' : 'Ativar'}>
-                                {t.ativo ? <ToggleRight size={15} className="text-emerald-600" /> : <ToggleLeft size={15} />}
-                              </button>
-                            )}
-                            {!podeEditar && !podeAtivar && (
-                              <span className="text-xs text-gray-400 italic">Somente leitura</span>
-                            )}
-                          </>
-                        )}
-                      </div>
+                      {acoesDoTratador(t)}
                     </td>
                   </tr>
                 ))}
@@ -461,22 +460,7 @@ export default function CadastroTratador() {
               <span className={`px-2 py-1 rounded-xl text-xs font-medium ${t.ativo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
                 {t.ativo ? 'Ativo' : 'Inativo'}
               </span>
-              {(t.tipoEntrada !== 'SYSTEM' || isAdmin) && (podeEditar || podeAtivar) && (
-                <div className="flex gap-2">
-                  {podeEditar && (
-                    <button onClick={() => abrirEditar(t)}
-                      className="flex items-center gap-1 px-3 py-1.5 text-xs text-orange-600 border border-orange-200 rounded-xl hover:bg-orange-50 transition-colors">
-                      <Pencil size={11} /> Editar
-                    </button>
-                  )}
-                  {podeAtivar && (
-                    <button onClick={() => toggleAtivo(t)}
-                      className="px-3 py-1.5 text-xs text-amber-600 border border-amber-200 rounded-xl hover:bg-amber-50 transition-colors">
-                      {t.ativo ? 'Inativar' : 'Ativar'}
-                    </button>
-                  )}
-                </div>
-              )}
+              {acoesDoTratador(t)}
             </div>
           </div>
         ))}

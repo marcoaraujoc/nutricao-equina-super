@@ -660,8 +660,20 @@ async function finalizar(req, res) {
         });
       }
 
+      // 🔴 VACINA APLICADA PELO PROPRIETÁRIO JÁ ENCERRA NO ÚLTIMO PASSO.
+      // Ela nunca chega ao plantão: `listarParaExecucao` filtra
+      // `aplicadaPeloProprietario !== true`. Parada em FINALIZADA ("Em Execução"), o
+      // registro ficaria para sempre esperando uma aplicação que, por construção, não
+      // vai acontecer — e a dose já foi debitada e cobrada AQUI, na finalização
+      // (quadrante "clínica fornece × proprietário aplica"), então não falta nada.
+      // Mesma decisão da prescrição (`lib/prescricaoProprietario.js`): o valor gravado
+      // é o `EXECUTADA` que já existe, e não um status novo — quem acrescenta o
+      // "pelo Proprietário" é a EXIBIÇÃO, a partir da flag. Status novo faria os
+      // filtros que só conhecem os quatro atuais ignorarem o registro em silêncio.
       await tx.$executeRawUnsafe(
-        `UPDATE schs2vet.tb_vacinas_clinicas SET status = 'FINALIZADA' WHERE id = $1`, Number(id)
+        `UPDATE schs2vet.tb_vacinas_clinicas SET status = $2 WHERE id = $1`,
+        Number(id),
+        aplicaDono ? 'EXECUTADA' : 'FINALIZADA',
       );
     });
 

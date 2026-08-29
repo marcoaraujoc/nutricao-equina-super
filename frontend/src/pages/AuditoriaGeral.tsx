@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
 import InlineError from '../components/InlineError';
+import DateInput from '../components/DateInput';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -372,11 +373,21 @@ export default function AuditoriaGeral() {
               ))}
             </select>
             <div className="flex items-center gap-2">
-              <input type="date" value={dataInicio} onChange={(e) => setDataInicio(e.target.value)}
-                className="flex-1 border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              {/* `compacto`: barra de filtros — o erro de data vai no `title` e na cor,
+                  não num bloco abaixo, que desalinharia a linha inteira. Vazio aqui
+                  significa "sem filtro de período" (ver o `if (dataInicio)` do
+                  carregar), então zerar numa data inválida é o comportamento certo. */}
+              <DateInput
+                value={dataInicio} onChange={setDataInicio} compacto
+                aria-label="Data inicial"
+                className="flex-1 border border-gray-200 rounded-xl px-2 py-2 text-xs focus-within:ring-2 focus-within:ring-emerald-500"
+              />
               <span className="text-gray-400 text-xs">a</span>
-              <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)}
-                className="flex-1 border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              <DateInput
+                value={dataFim} onChange={setDataFim} compacto
+                aria-label="Data final"
+                className="flex-1 border border-gray-200 rounded-xl px-2 py-2 text-xs focus-within:ring-2 focus-within:ring-emerald-500"
+              />
               <button onClick={carregar} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 flex-shrink-0">
                 <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
               </button>

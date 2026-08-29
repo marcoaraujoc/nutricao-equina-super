@@ -19,6 +19,7 @@ import ImportarOrcamentoModal, { type OrcamentoItemImport, marcarOrcamentoImport
 import InlineError from '../components/InlineError';
 import ErroAcao, { classeErro, type ErroAcaoDados } from '../components/ErroAcao';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 
 
 
@@ -213,6 +214,22 @@ const STATUS_GRUPO: Record<StatusGrupo, { label: string; cls: string }> = {
   CANCELADO_PARCIALMENTE: { label: 'Cancel. Parcial',  cls: 'bg-orange-100 text-orange-700'  },
 };
 
+// Prescrição em que TODOS os itens são aplicados pelo proprietário nunca passa pelo
+// plantão: o backend já a finaliza direto em EXECUTADO (ver `finalizar`). O que muda
+// aqui é só o RÓTULO — "Executado pelo Proprietário" —, para a lista não sugerir que
+// alguém da clínica aplicou as doses.
+// ⚠️ `every` sobre lista VAZIA é `true`: sem itens, nenhum sufixo (o `length > 0`).
+const todoDoProprietario = (g: { itens: ItemGrupo[] }) =>
+  g.itens.length > 0 && g.itens.every(i => i.aplicadaPeloProprietario === true);
+
+/** Selo de status do grupo, com o sufixo quando o curso inteiro é do proprietário. */
+const statusDoGrupo = (g: PrescricaoGrupo): { label: string; cls: string } => {
+  const base = STATUS_GRUPO[g.status] ?? { label: g.status, cls: 'bg-gray-100 text-gray-600' };
+  return todoDoProprietario(g)
+    ? { ...base, label: `${base.label} pelo Proprietário` }
+    : base;
+};
+
 // Ordem das abas de filtro por status no histórico
 const STATUS_ORDER: StatusGrupo[] = ['SALVO', 'FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE', 'CANCELADO'];
 
@@ -286,7 +303,7 @@ function montarTextoPrescricao(g: PrescricaoGrupo): string {
     `*Prescrição #${g.numeroFormatado}*`,
     `Data: ${formatarData(g.createdAt)}`,
     `Veterinário: ${g.veterinario.fullName}`,
-    `Status: ${STATUS_GRUPO[g.status]?.label ?? g.status}`,
+    `Status: ${statusDoGrupo(g).label}`,
     `\nItens (${g.itens.length}):`,
     ...linhasItens,
   ].join('\n');
@@ -1308,8 +1325,8 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                 {isCreate ? 'Criar documento de prescrição' : 'Editar prescrição'}
               </h3>
               {grupo && (
-                <span className={`inline-flex mt-0.5 px-2 py-0.5 rounded-full text-[10px] font-medium ${STATUS_GRUPO[grupo.status].cls}`}>
-                  {STATUS_GRUPO[grupo.status].label}
+                <span className={`inline-flex mt-0.5 px-2 py-0.5 rounded-full text-[10px] font-medium ${statusDoGrupo(grupo).cls}`}>
+                  {statusDoGrupo(grupo).label}
                 </span>
               )}
             </div>
@@ -2324,6 +2341,47 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       setLoadingForceDireto(false);
     }
   };
+  // ─── Ações da prescrição — UMA declaração para a tabela E para o card ───────
+  // `AcaoRegistro` decide a forma por CSS (ícone no desktop, botão com rótulo no
+  // mobile), então os dois blocos chamam a MESMA função. Antes eram duas listas
+  // paralelas que já haviam divergido: o card mobile não tinha o Finalizar.
+  const acoesDoGrupo = (g: PrescricaoGrupo) => {
+    // AUTORIA (2026-08-04): a prescrição é do profissional que a criou ou assumiu —
+    // só o gestor mexe na de outro. O slug continua sendo o de EDITAR (não o de
+    // CRIAR), e a prescrição já executada segue travada.
+    const meuRegistro = isGestor || g.veterinarioId === (user?.id ?? 0);
+    const editavel    = grupoNaoExecutado(g) && podeEditar && meuRegistro;
+    const cancelavel  = ['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(g.status)
+      && canFinalizarCancelar && meuRegistro;
+    const imprimivel  = ['FINALIZADO', 'EXECUTADO', 'CANCELADO', 'CANCELADO_PARCIALMENTE'].includes(g.status)
+      && podeImprimir;
+    return (
+      <AcoesRegistro>
+        <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Alterar"
+          visivel={editavel} onClick={() => handleAlterar(g)} />
+        <AcaoRegistro tom="ver" icone={Eye} rotulo="Visualizar"
+          onClick={() => abrirVisualizacao(g)} />
+        <AcaoRegistro tom="finalizar" icone={CheckCircle2} rotulo="Finalizar"
+          titulo="Finalizar prescrição"
+          visivel={g.status === 'SALVO' && meuRegistro && canFinalizarCancelar}
+          onClick={() => handleFinalizarDireto(g.id)} />
+        <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
+          titulo="Imprimir prescrição" visivel={imprimivel}
+          onClick={() => imprimirPrescricao(g, animal)} />
+        {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
+        <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp"
+          titulo="Enviar por WhatsApp" visivel={podeImprimir}
+          onClick={() => abrirWhatsApp(montarTextoPrescricao(g))} />
+        <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail"
+          titulo="Enviar por e-mail" visivel={podeImprimir}
+          onClick={() => abrirEmail(`Prescrição ${g.numeroFormatado}`, montarTextoPrescricao(g))} />
+        <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
+          titulo="Cancelar prescrição" visivel={cancelavel}
+          onClick={() => { setErroLinha(null); setDeletingId(g.id); }} />
+      </AcoesRegistro>
+    );
+  };
+
   const fecharModal = () => { setEditingGrupo(null); };
   const onSaved = () => { carregar(); onFaturaAtualizada(); onSalvo?.(); };
 
@@ -2544,14 +2602,6 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           </thead>
           <tbody className="divide-y divide-gray-50">
             {grupos.map(g => {
-              const eProprioAutor = g.veterinarioId === (user?.id ?? 0);
-              // AUTORIA (2026-08-04): a prescrição é do profissional que a criou ou
-              // assumiu — só o gestor mexe na de outro. O slug continua sendo o de
-              // EDITAR (não o de CRIAR), e a prescrição já executada segue travada.
-              const meuRegistro = isGestor || eProprioAutor;
-              const editavel   = grupoNaoExecutado(g) && podeEditar && meuRegistro;
-              const podeFinalizarDireto = g.status === 'SALVO' && meuRegistro;
-              const cancelavel = ['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && canFinalizarCancelar && (isGestor || eProprioAutor);
               return (
                 <tr key={g.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 text-center">
@@ -2592,8 +2642,8 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                     <p className="text-xs font-medium text-gray-800 whitespace-nowrap">{g.veterinario.fullName}</p>
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_GRUPO[g.status].cls}`}>
-                      {STATUS_GRUPO[g.status].label}
+                    <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${statusDoGrupo(g).cls}`}>
+                      {statusDoGrupo(g).label}
                     </span>
                   </td>
                   <td className="px-4 py-3">
@@ -2602,48 +2652,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                       : <span className="text-gray-300">—</span>}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap">
-                    <div className="flex items-center justify-center gap-1">
-                      {editavel && (
-                        <button onClick={() => handleAlterar(g)} title="Alterar"
-                          className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
-                          <Pencil size={13} />
-                        </button>
-                      )}
-                      <button onClick={() => abrirVisualizacao(g)} title="Visualizar"
-                        className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
-                        <Eye size={13} />
-                      </button>
-                      {podeFinalizarDireto && canFinalizarCancelar && (
-                        <button onClick={() => handleFinalizarDireto(g.id)} title="Finalizar prescrição"
-                          className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
-                          <CheckCircle2 size={13} />
-                        </button>
-                      )}
-                      {['FINALIZADO', 'EXECUTADO', 'CANCELADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && podeImprimir && (
-                        <button onClick={() => imprimirPrescricao(g, animal)} title="Imprimir prescrição"
-                          className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-                          <Printer size={13} />
-                        </button>
-                      )}
-                      {podeImprimir && (
-                        <button onClick={() => abrirWhatsApp(montarTextoPrescricao(g))} title="Enviar por WhatsApp"
-                          className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors">
-                          <MessageCircle size={13} />
-                        </button>
-                      )}
-                      {podeImprimir && (
-                        <button onClick={() => abrirEmail(`Prescrição ${g.numeroFormatado}`, montarTextoPrescricao(g))} title="Enviar por e-mail"
-                          className="p-1.5 text-blue-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                          <Mail size={13} />
-                        </button>
-                      )}
-                      {cancelavel && (
-                        <button onClick={() => { setErroLinha(null); setDeletingId(g.id); }} title="Cancelar prescrição"
-                          className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                          <Ban size={13} />
-                        </button>
-                      )}
-                    </div>
+                    {acoesDoGrupo(g)}
                     {/* Erro na superfície da ação: embaixo dos botões desta linha */}
                     <ErroAcao
                       erro={erroDaLinha(g.id) ? { mensagem: erroDaLinha(g.id)! } : null}
@@ -2660,10 +2669,6 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       {/* Mobile cards */}
       <div className="md:hidden divide-y divide-gray-50">
         {grupos.map(g => {
-          const eProprioAutorMobile = g.veterinarioId === (user?.id ?? 0);
-          // Mesma autoria do desktop — ver comentário na tabela acima.
-          const meuRegistroMobile  = isGestor || eProprioAutorMobile;
-          const editavelMobile = grupoNaoExecutado(g) && podeEditar && meuRegistroMobile;
           return (
           <div key={g.id} className="px-4 py-3">
             <div className="flex items-center justify-between mb-1">
@@ -2676,8 +2681,8 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                   {categoriaGrupo(g)}
                 </span>
               </div>
-              <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium flex-shrink-0 ${STATUS_GRUPO[g.status].cls}`}>
-                {STATUS_GRUPO[g.status].label}
+              <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium flex-shrink-0 ${statusDoGrupo(g).cls}`}>
+                {statusDoGrupo(g).label}
               </span>
             </div>
             <p className="text-xs text-gray-500">{g.veterinario.fullName} • {g.itens.length} item{g.itens.length !== 1 ? 'ns' : ''}</p>
@@ -2688,43 +2693,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                 <JustificativaCancelamento texto={g.motivoCancelamento} className="inline-block align-bottom max-w-[70vw]" />
               </p>
             )}
-            <div className="flex flex-wrap gap-2 mt-2">
-              {editavelMobile && (
-                <button onClick={() => handleAlterar(g)}
-                  className="flex items-center gap-1 px-2.5 py-1 border border-orange-200 text-orange-600 rounded-lg text-xs hover:bg-orange-50 transition-colors">
-                  <Pencil size={11} /> Alterar
-                </button>
-              )}
-              <button onClick={() => abrirVisualizacao(g)}
-                className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
-                <Eye size={11} /> Visualizar
-              </button>
-              {['FINALIZADO', 'EXECUTADO', 'CANCELADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && podeImprimir && (
-                <button onClick={() => imprimirPrescricao(g, animal)}
-                  className="flex items-center gap-1 px-2.5 py-1 border border-blue-200 text-blue-600 rounded-lg text-xs hover:bg-blue-50 transition-colors">
-                  <Printer size={11} /> Imprimir
-                </button>
-              )}
-              {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
-              {podeImprimir && (
-                <button onClick={() => abrirWhatsApp(montarTextoPrescricao(g))}
-                  className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
-                  <MessageCircle size={11} /> WhatsApp
-                </button>
-              )}
-              {podeImprimir && (
-                <button onClick={() => abrirEmail(`Prescrição ${g.numeroFormatado}`, montarTextoPrescricao(g))}
-                  className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
-                  <Mail size={11} /> E-mail
-                </button>
-              )}
-              {['SALVO', 'FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(g.status) && canFinalizarCancelar && (isGestor || eProprioAutorMobile) && (
-                <button onClick={() => { setErroLinha(null); setDeletingId(g.id); }}
-                  className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
-                  <Ban size={11} /> Cancelar
-                </button>
-              )}
-            </div>
+            <div className="mt-2">{acoesDoGrupo(g)}</div>
             {/* Erro na superfície da ação: embaixo dos botões deste card */}
             <ErroAcao
               erro={erroDaLinha(g.id) ? { mensagem: erroDaLinha(g.id)! } : null}

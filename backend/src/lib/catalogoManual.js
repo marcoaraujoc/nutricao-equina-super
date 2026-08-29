@@ -18,6 +18,11 @@
 // não duplica a linha do catálogo.
 'use strict';
 
+const {
+  escopoDaEmpresa: escopoEspecialidade,
+  catalogoPorEmpresaAtivo,
+} = require('./especialidadeEscopo');
+
 const FILTRO_VACINA     = { classificacao: { contains: 'vacin', mode: 'insensitive' } };
 const FILTRO_NAO_VACINA = { NOT: { classificacao: { contains: 'vacin', mode: 'insensitive' } } };
 
@@ -125,9 +130,64 @@ async function garantirProcedimentoDaEmpresa(tx, { nome, especialidade = null, v
   return criado.id;
 }
 
+/**
+ * Garante a ESPECIALIDADE no catálogo e devolve `{ id, nome }`.
+ *
+ * `tb_especialidades` é CATÁLOGO MISTO desde a migration 20260920000000, na mesma
+ * forma de `tb_medicamentos`: `empresa_id` nulo = item GLOBAL do sistema (os 72 do
+ * `scripts/seedEspecialidades.js`), setado = cadastrado pela clínica.
+ *
+ * Reaproveita o que já existe no escopo VISÍVEL da empresa (global + o próprio dela)
+ * comparando o nome sem diferenciar maiúsculas — "Acupuntura" e "acupuntura" são a
+ * mesma especialidade, e duas linhas fariam a lista mostrar o item repetido.
+ *
+ * 🔴 O item novo nasce SEMPRE com `empresaId` — nunca global. Deixar o `empresa_id`
+ * nulo publicaria a especialidade de uma clínica no catálogo de TODAS, e o RLS
+ * recusaria a escrita de qualquer forma (o `WITH CHECK` da policy só aceita
+ * `empresa_id = app_empresa_id()`). Sem empresa no contexto, não cadastra nada:
+ * devolve o que achou ou `null` — inventar uma linha global aqui é o vazamento.
+ *
+ * @param {object} tx                client Prisma (use o `tx` quando houver transaction)
+ * @param {object} dados             { nome, especieId }
+ * @param {number|null} empresaId
+ * @returns {Promise<{id:number,nome:string}|null>}
+ */
+async function garantirEspecialidadeDaEmpresa(tx, { nome, especieId }, empresaId) {
+  const n = String(nome ?? '').trim().slice(0, 80);
+  if (!n) return null;
+
+  const existente = await tx.especialidade.findFirst({
+    where: {
+      ativo: true,
+      nome:  { equals: n, mode: 'insensitive' },
+      ...(Number.isInteger(Number(especieId)) ? { especieId: Number(especieId) } : {}),
+      ...escopoEspecialidade(empresaId),
+    },
+    select: { id: true, nome: true },
+  });
+  if (existente) return existente;
+
+  // Antes da migration 20260920000000 (+ generate) o Client não conhece `empresaId` e a
+  // criação LANÇARIA. Não cadastrar é o comportamento correto no intervalo: a linha
+  // sairia global, no catálogo de todas as clínicas. O encaminhamento continua sendo
+  // gravado — a especialidade é texto nele.
+  if (!catalogoPorEmpresaAtivo) return null;
+
+  // Sem empresa (ADMIN de plataforma, job sem tenant) ou sem espécie do paciente não há
+  // como cadastrar de quem é nem para qual espécie: devolve o nome digitado, que o
+  // encaminhamento grava como texto do mesmo jeito.
+  if (!empresaId || !Number.isInteger(Number(especieId))) return null;
+
+  return tx.especialidade.create({
+    data: { nome: n, especieId: Number(especieId), empresaId: Number(empresaId), ativo: true },
+    select: { id: true, nome: true },
+  });
+}
+
 module.exports = {
   garantirMedicamentoDaEmpresa,
   garantirProcedimentoDaEmpresa,
+  garantirEspecialidadeDaEmpresa,
   vincularEspecie,
   normalizarEspecies,
 };

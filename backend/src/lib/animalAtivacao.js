@@ -63,6 +63,26 @@ async function temColunaMotivo() {
   return _temMotivo;
 }
 
+// Cache PRÓPRIA para `desativado_motivo_tipo` (migration 20260919000000). Mesma razão
+// das anteriores: a coluna pode não existir ainda, e a inativação NÃO pode deixar de
+// funcionar por causa disso — o tipo é um extra por cima do estado real.
+let _temMotivoTipo = null;
+let _temMotivoTipoEm = 0;
+async function temColunaMotivoTipo() {
+  if (_temMotivoTipo === true) return true;
+  if (_temMotivoTipo === false && Date.now() - _temMotivoTipoEm < 60_000) return false;
+  try {
+    const rows = await prismaPadrao.$queryRawUnsafe(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'schs2vet' AND table_name = 'tb_animais'
+          AND column_name = 'desativado_motivo_tipo' LIMIT 1`,
+    );
+    _temMotivoTipo = rows.length > 0;
+  } catch { _temMotivoTipo = false; }
+  _temMotivoTipoEm = Date.now();
+  return _temMotivoTipo;
+}
+
 /**
  * Grava a REATIVAÇÃO (ativo=true) + quem/quando.
  * ⚠️ O ativo=true SEMPRE é gravado, mesmo sem as colunas de trilha (migration
@@ -83,26 +103,43 @@ async function registrarAtivacao(client, animalId, porUserId) {
 }
 
 /**
- * Grava a DESATIVAÇÃO (ativo=false) + quem/quando + a justificativa (`motivo`,
- * exigida por `AnimalController.excluir`). Mesma garantia de best-effort acima
- * para a trilha básica; `motivo` só é gravado quando a coluna já existe.
+ * Grava a DESATIVAÇÃO (ativo=false) + quem/quando + a justificativa.
+ *
+ * DUAS COLUNAS, e elas não são redundantes:
+ *   `motivoTipo` → a CATEGORIA, de lista fechada (`lib/motivosInativacao.js`). É o que
+ *                  o relatório AGRUPA — por isso tem coluna e índice próprios.
+ *   `motivo`     → a DESCRIÇÃO livre, opcional. É o que se lê.
+ * Guardá-las juntas numa string só obrigaria o relatório a `LIKE '%...%'`, que com
+ * curinga à esquerda não usa índice e vira Seq Scan na tabela de animais.
+ *
+ * Mesma garantia de best-effort das demais: o `ativo = false` SEMPRE é gravado, mesmo
+ * sem as colunas de trilha — a inativação é o fato; a trilha é o extra.
  */
-async function registrarDesativacao(client, animalId, porUserId, motivo = null) {
+async function registrarDesativacao(client, animalId, porUserId, motivo = null, motivoTipo = null) {
   const db = client || prismaPadrao;
   if (!(await temColunas())) {
     await db.$executeRawUnsafe(`UPDATE ${TABELA} SET ativo = false WHERE id = $1`, Number(animalId));
     return;
   }
+
+  // Monta o SET conforme as colunas que EXISTEM — cada uma tem o seu próprio guard
+  // porque foram migrations diferentes e podem estar em estados diferentes.
+  const campos = ['ativo = false', 'desativado_em = now()', 'desativado_por_id = $1'];
+  const params = [Number(porUserId)];
+
   if (motivo != null && (await temColunaMotivo())) {
-    await db.$executeRawUnsafe(
-      `UPDATE ${TABELA} SET ativo = false, desativado_em = now(), desativado_por_id = $1, desativado_motivo = $2 WHERE id = $3`,
-      Number(porUserId), motivo, Number(animalId),
-    );
-    return;
+    params.push(motivo);
+    campos.push(`desativado_motivo = $${params.length}`);
   }
+  if (motivoTipo != null && (await temColunaMotivoTipo())) {
+    params.push(motivoTipo);
+    campos.push(`desativado_motivo_tipo = $${params.length}`);
+  }
+  params.push(Number(animalId));
+
   await db.$executeRawUnsafe(
-    `UPDATE ${TABELA} SET ativo = false, desativado_em = now(), desativado_por_id = $1 WHERE id = $2`,
-    Number(porUserId), Number(animalId),
+    `UPDATE ${TABELA} SET ${campos.join(', ')} WHERE id = $${params.length}`,
+    ...params,
   );
 }
 
@@ -116,10 +153,12 @@ async function lerTrilhaEmLote(ids, client) {
   const mapa = new Map();
   if (idsNum.length === 0 || !(await temColunas())) return mapa;
   const comMotivo = await temColunaMotivo();
+  const comTipo   = await temColunaMotivoTipo();
   const rows = await db.$queryRawUnsafe(
     `SELECT a.id AS id, a.ativo_em AS ativo_em, a.desativado_em AS desativado_em,
             ap."fullName" AS ativo_por_nome, dp."fullName" AS desativado_por_nome
             ${comMotivo ? ', a.desativado_motivo AS desativado_motivo' : ''}
+            ${comTipo   ? ', a.desativado_motivo_tipo AS desativado_motivo_tipo' : ''}
        FROM ${TABELA} a
        LEFT JOIN schs2vet.users ap ON ap.id = a.ativo_por_id
        LEFT JOIN schs2vet.users dp ON dp.id = a.desativado_por_id
@@ -133,6 +172,9 @@ async function lerTrilhaEmLote(ids, client) {
       desativadoEm:       r.desativado_em ?? null,
       desativadoPorNome:  r.desativado_por_nome ?? null,
       desativadoMotivo:   comMotivo ? (r.desativado_motivo ?? null) : null,
+      // Categoria do relatório. NULO em linha legada (só texto livre) e na cascata
+      // do sistema — a tela compõe tipo + descrição para exibir os dois casos.
+      desativadoMotivoTipo: comTipo ? (r.desativado_motivo_tipo ?? null) : null,
     });
   }
   return mapa;

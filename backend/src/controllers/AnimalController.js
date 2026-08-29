@@ -23,6 +23,7 @@ const {
   anexarTrilhaEmLista: anexarTrilhaAtivacaoEmLista,
 } = require('../lib/animalAtivacao');
 const { cancelarPendenciasDoAnimal } = require('../lib/cancelamentoPendencias');
+const { validarMotivoTipo, exigeDescricao } = require('../lib/motivosInativacao');
 const { transferirPropriedadeAnimal } = require('../lib/transferenciaPropriedadeAnimal');
 
 const prisma = require('../lib/prisma').default;
@@ -938,11 +939,36 @@ class AnimalController {
 
   async excluir(req, res) {
     const animalId = Number(req.params.id);
-    const { motivo } = req.body ?? {};
+    const { motivo, motivoTipo } = req.body ?? {};
     try {
-      if (!motivo?.trim()) {
+      // CATEGORIA da inativação — coluna própria e indexada, é o que o relatório
+      // agrupa. Recusar valor fora da lista é o que mantém o agrupamento confiável:
+      // um typo não quebra nada hoje, só vira fatia órfã no gráfico meses depois.
+      const { tipo: tipoValidado, erro: erroTipo } = validarMotivoTipo(motivoTipo);
+      if (erroTipo) {
+        return res.status(400).json({ sucesso: false, mensagem: erroTipo, code: 'MOTIVO_TIPO_INVALIDO' });
+      }
+
+      const descricao = String(motivo ?? '').trim();
+
+      // ⚠️ A ordem importa: o tipo é validado ANTES de exigir a descrição, porque a
+      // CATEGORIA sozinha já é justificativa suficiente ("Falecimento" diz tudo).
+      // Exigir texto livre mesmo com o motivo escolhido no seletor obrigaria o vet a
+      // redigitar o que acabou de selecionar.
+      if (!descricao && !tipoValidado) {
         return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da exclusão' });
       }
+      // "Outro" é a exceção: sozinho não informa nada — a descrição é o conteúdo dele.
+      if (exigeDescricao(tipoValidado) && descricao.length < 3) {
+        return res.status(400).json({
+          sucesso: false, code: 'DESCRICAO_OBRIGATORIA',
+          mensagem: 'Descreva o motivo quando escolher "Outro".',
+        });
+      }
+
+      // A AUDITORIA é um registro para LER, não uma dimensão de relatório: ali as duas
+      // partes vão juntas, em texto, como sempre foram.
+      const motivoAuditoria = [tipoValidado, descricao].filter(Boolean).join(' — ');
 
       const acessoExc = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acessoExc === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
@@ -954,13 +980,13 @@ class AnimalController {
       });
 
       const pendencias = await prisma.$transaction(async (tx) => {
-        await registrarDesativacao(tx, animalId, req.user.id, motivo);
+        await registrarDesativacao(tx, animalId, req.user.id, descricao || null, tipoValidado);
         await registrarAuditoria(tx, req, {
           categoria:  'EXCLUSAO',
           entidade:   'ANIMAL',
           entidadeId: animalId,
           animalId,
-          motivo,
+          motivo:     motivoAuditoria,
           detalhes:   `${animal?.nome ?? 'Animal'}${animal?.especie?.nome ? ` (${animal.especie.nome})` : ''}`,
         });
 

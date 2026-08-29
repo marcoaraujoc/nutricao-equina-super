@@ -47,7 +47,11 @@ const CONTROL_PLANE = new Set([
 
 const CATALOGO_GLOBAL = new Set([
   'tb_especies', 'tb_racas', 'tb_alimentos', 'tb_nutrientes',
-  'tb_composicao_alimentos', 'tb_exigencias_nrc', 'tb_especialidades',
+  'tb_composicao_alimentos', 'tb_exigencias_nrc',
+  // ⚠️ `tb_especialidades` SAIU daqui em 2026-08-28 — virou CATALOGO MISTO
+  // (migration 20260920000000). "Ninguém cria linha própria" deixou de valer quando o
+  // encaminhamento para profissional EXTERNO passou a cadastrar a especialidade que
+  // falta no catálogo, com `empresa_id` da clínica. Ver CATALOGO_MISTO abaixo.
   'tb_crmv_validos', 'tb_crmv_sync_log', 'tb_laboratorios',
   'tb_localizacoes_animal', 'tb_regioes_anatomicas_equino',
   'tb_medicamentos', 'tb_procedimentos', 'tb_vacinas',
@@ -196,6 +200,12 @@ const CATALOGO_MISTO = new Map([
   // modelo global SEM chave não existe (é o seed que a define), então uma linha sem
   // empresa e sem chave é órfã de verdade e continua contando como tal.
   ['tb_documento_templates', 'chave IS NOT NULL'],
+  // Especialidades (2026-08-28). O nulo aqui é o catálogo do sistema — os 72 itens de
+  // `scripts/seedEspecialidades.js`, que toda clínica lê e nenhuma escreve. Linha com
+  // `empresa_id` é a que a clínica cadastrou no encaminhamento a profissional externo
+  // (lib/catalogoManual.js#garantirEspecialidadeDaEmpresa). Sem predicado: especialidade
+  // global é só nome + espécie, não há coluna que distinga a semeada de uma órfã.
+  ['tb_especialidades',      null],
 ]);
 
 /**

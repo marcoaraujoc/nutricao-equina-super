@@ -543,21 +543,27 @@ function ItemRow({
       ehInsumo ? 'pl-10 pr-4 border-l-2 border-gray-100 ml-4' : 'px-4'
     }`}>
       <div className="flex-1 min-w-0">
-        <div className="flex items-start gap-2 flex-wrap">
-          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0 mt-0.5 ${TIPO_COR[item.tipo] ?? 'bg-gray-100 text-gray-600'}`}>
-            {item.tipo}
-          </span>
-          {numeroAtendimento && (
-            <button
-              type="button"
-              onClick={abrirAtendimento}
-              title={`Abrir o atendimento ${numeroAtendimento}`}
-              aria-label={`Abrir o atendimento ${numeroAtendimento}`}
-              className="font-mono text-xs font-bold text-emerald-700 hover:text-emerald-900 hover:underline whitespace-nowrap flex-shrink-0 mt-0.5">
-              {numeroAtendimento}
-            </button>
-          )}
-          <p className={`flex-1 min-w-0 break-words ${ehInsumo ? 'text-xs text-gray-600' : 'text-sm text-gray-800'}`}
+        {/* MOBILE: tipo + Nº do atendimento numa linha, DESCRIÇÃO na linha de baixo.
+            Lado a lado, o que sobrava de largura para o nome do medicamento era um
+            filete — e o texto quebrava uma letra por linha. No desktop volta tudo
+            para a mesma linha. */}
+        <div className="flex flex-col gap-y-0.5 md:flex-row md:items-start md:gap-2">
+          <div className="flex items-center gap-2 flex-wrap md:flex-shrink-0 md:mt-0.5">
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0 ${TIPO_COR[item.tipo] ?? 'bg-gray-100 text-gray-600'}`}>
+              {item.tipo}
+            </span>
+            {numeroAtendimento && (
+              <button
+                type="button"
+                onClick={abrirAtendimento}
+                title={`Abrir o atendimento ${numeroAtendimento}`}
+                aria-label={`Abrir o atendimento ${numeroAtendimento}`}
+                className="font-mono text-xs font-bold text-emerald-700 hover:text-emerald-900 hover:underline whitespace-nowrap flex-shrink-0">
+                {numeroAtendimento}
+              </button>
+            )}
+          </div>
+          <p className={`min-w-0 break-words md:flex-1 ${ehInsumo ? 'text-xs text-gray-600' : 'text-sm text-gray-800'}`}
             title={ehInsumo && item.medicamentoPai ? `Insumo da aplicação de ${item.medicamentoPai}` : undefined}>
             {descricaoSemNumero(item.descricao, item.origem?.atendimentoNumero ?? null)}
           </p>

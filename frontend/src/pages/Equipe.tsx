@@ -15,6 +15,7 @@ import UsuarioFormModal, { type UsuarioFormValues } from '../components/UsuarioF
 import InlineError from '../components/InlineError';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import { formatDate } from '../utils/dateUtils';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -521,6 +522,30 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
     podeGerenciarMembros && !!m.user.bloqueadoEm && m.user.id !== user?.id
     && (isAdminPlataforma || !ehGestor(m));
 
+  // ─── Ações do membro — UMA declaração p/ a tabela E p/ o card ──────────────
+  // `AcaoRegistro` decide a forma por CSS: ícone no desktop, botão com rótulo no
+  // mobile. Divergência que isto resolve: o card mobile NÃO tinha o "Desbloquear
+  // conta" — quem administra a equipe pelo celular não conseguia destravar ninguém.
+  const acoesDoMembro = (m: Membro) => {
+    const ativo      = m.user.ativo !== false;
+    const podeEditarMembro = isGestor
+      && (m.cargo !== 'GESTOR' || isAdminPlataforma || m.user.id === user?.id);
+    const podeAlternar = podeGerenciarMembros && m.user.id !== user?.id;
+    if (!podeEditarMembro && !podeDesbloquearMembro(m) && !podeAlternar) return null;
+    return (
+      <AcoesRegistro>
+        <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar" titulo="Editar perfil"
+          visivel={podeEditarMembro} onClick={() => setMembroEditando(m)} />
+        <AcaoRegistro tom="finalizar" icone={Unlock} rotulo="Desbloquear"
+          titulo="Desbloquear conta" visivel={podeDesbloquearMembro(m)}
+          carregando={desbloqueandoId === m.id} onClick={() => handleDesbloquear(m)} />
+        <AcaoRegistro tom="ativar" icone={ativo ? ToggleRight : ToggleLeft}
+          rotulo={ativo ? 'Desativar' : 'Ativar'} visivel={podeAlternar}
+          carregando={togglingId === m.id} onClick={() => handleToggle(m)} />
+      </AcoesRegistro>
+    );
+  };
+
   const membrosAtivos   = membros.filter(m => m.user.ativo !== false);
   const membrosInativos = membros.filter(m => m.user.ativo === false);
   const porStatus = filtroAtivo === 'all' ? membros
@@ -758,25 +783,8 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                       </span>
                     </div>
                   </div>
-                  {(isGestor || m.user.id !== user?.id) && (
-                    <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-50">
-                      {isGestor && (m.cargo !== 'GESTOR' || isAdminPlataforma || m.user.id === user?.id) && (
-                        <button onClick={() => setMembroEditando(m)}
-                          className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-orange-200 rounded-lg text-xs text-orange-600 hover:bg-orange-50 transition-colors">
-                          <Pencil size={11} /> Editar
-                        </button>
-                      )}
-                      {podeGerenciarMembros && m.user.id !== user?.id && (
-                        <button onClick={() => handleToggle(m)} disabled={togglingId === m.id}
-                          className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-blue-200 rounded-lg text-xs text-blue-600 hover:bg-blue-50 transition-colors">
-                          {togglingId === m.id
-                            ? <Loader2 size={11} className="animate-spin" />
-                            : ativo ? <ToggleRight size={11} /> : <ToggleLeft size={11} />
-                          }
-                          {ativo ? 'Desativar' : 'Ativar'}
-                        </button>
-                      )}
-                    </div>
+                  {acoesDoMembro(m) && (
+                    <div className="mt-3 pt-3 border-t border-gray-50">{acoesDoMembro(m)}</div>
                   )}
                 </div>
               );
@@ -911,33 +919,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
                       )}
                       {isGestor && (
                         <td className="px-4 py-3">
-                          <div className="flex items-center justify-end gap-1">
-                            {(m.cargo !== 'GESTOR' || isAdminPlataforma || m.user.id === user?.id) && (
-                              <button onClick={() => setMembroEditando(m)} title="Editar perfil"
-                                className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
-                                <Pencil size={14} />
-                              </button>
-                            )}
-                            {podeDesbloquearMembro(m) && (
-                              <button onClick={() => handleDesbloquear(m)} disabled={desbloqueandoId === m.id}
-                                title="Desbloquear conta" aria-label="Desbloquear conta"
-                                className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
-                                {desbloqueandoId === m.id
-                                  ? <Loader2 size={14} className="animate-spin" />
-                                  : <Unlock size={14} />}
-                              </button>
-                            )}
-                            {podeGerenciarMembros && m.user.id !== user?.id && (
-                              <button onClick={() => handleToggle(m)} disabled={togglingId === m.id}
-                                title={ativo ? 'Desativar' : 'Ativar'}
-                                className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-                                {togglingId === m.id
-                                  ? <Loader2 size={14} className="animate-spin" />
-                                  : ativo ? <ToggleRight size={14} /> : <ToggleLeft size={14} />
-                                }
-                              </button>
-                            )}
-                          </div>
+                          {acoesDoMembro(m)}
                         </td>
                       )}
                     </tr>

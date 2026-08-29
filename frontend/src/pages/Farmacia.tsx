@@ -21,6 +21,7 @@ import InlineError from '../components/InlineError';
 import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -500,6 +501,23 @@ export default function Farmacia() {
     confirmarToggle(item);
   };
 
+  // ─── Ações do item de estoque — UMA declaração para a tabela E para o card ──
+  // `AcaoRegistro` decide a forma por CSS (ícone no desktop, botão com rótulo no
+  // mobile). ⚠️ Item JÁ UTILIZADO (`emUso`, tem movimento de SAÍDA) não se edita:
+  // no lugar do lápis entra o olho, e o `title` diz por quê.
+  const acoesDoItem = (item: EstoqueItem) => (
+    <AcoesRegistro>
+      <AcaoRegistro tom="ver" icone={Eye} rotulo="Ver"
+        titulo="Visualizar (já utilizado — não pode ser alterado)"
+        visivel={item.emUso} onClick={() => setItemView(item)} />
+      <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
+        visivel={!item.emUso && podeEditar} onClick={() => preencherEdicao(item)} />
+      <AcaoRegistro tom="ativar" icone={item.ativo ? ToggleRight : ToggleLeft}
+        rotulo={item.ativo ? 'Inativar' : 'Ativar'}
+        visivel={podeAtivar} onClick={() => handleToggle(item)} />
+    </AcoesRegistro>
+  );
+
   const confirmarToggle = async (item: EstoqueItem, motivo?: string) => {
     setTogglingAtivo(true);
     try {
@@ -754,25 +772,7 @@ export default function Farmacia() {
                             </>
                           )}
                           <td className="px-4 py-3 whitespace-nowrap">
-                            <div className="flex items-center justify-center gap-1">
-                              {item.emUso ? (
-                                <button onClick={() => setItemView(item)} title="Visualizar (já utilizado — não pode ser alterado)"
-                                  className="p-1.5 rounded-lg border border-emerald-200 text-emerald-500 hover:bg-emerald-50">
-                                  <Eye size={13} />
-                                </button>
-                              ) : podeEditar ? (
-                                <button onClick={() => preencherEdicao(item)} title="Editar"
-                                  className="p-1.5 rounded-lg border border-orange-200 text-orange-500 hover:bg-orange-50">
-                                  <Pencil size={13} />
-                                </button>
-                              ) : null}
-                              {podeAtivar && (
-                                <button onClick={() => handleToggle(item)} title={item.ativo ? 'Inativar' : 'Ativar'}
-                                  className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50">
-                                  {item.ativo ? <ToggleRight size={13} className="text-blue-600" /> : <ToggleLeft size={13} className="text-blue-600" />}
-                                </button>
-                              )}
-                            </div>
+                            {acoesDoItem(item)}
                           </td>
                         </tr>
                       );
@@ -818,26 +818,7 @@ export default function Farmacia() {
                           Ativado em {formatDate(item.ativoEm)} por {item.ativoPorNome}
                         </p>
                       )}
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {item.emUso ? (
-                          <button onClick={() => setItemView(item)}
-                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
-                            <Eye size={11} /> Ver
-                          </button>
-                        ) : podeEditar ? (
-                          <button onClick={() => preencherEdicao(item)}
-                            className="flex items-center gap-1 px-2.5 py-1 border border-orange-200 text-orange-600 rounded-lg text-xs hover:bg-orange-50 transition-colors">
-                            <Pencil size={11} /> Editar
-                          </button>
-                        ) : null}
-                        {podeAtivar && (
-                          <button onClick={() => handleToggle(item)}
-                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
-                            {item.ativo ? <ToggleRight size={11} className="text-blue-600" /> : <ToggleLeft size={11} className="text-blue-600" />}
-                            {item.ativo ? 'Inativar' : 'Ativar'}
-                          </button>
-                        )}
-                      </div>
+                      <div className="mt-2">{acoesDoItem(item)}</div>
                     </div>
                   );
                 })}

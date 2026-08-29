@@ -19,6 +19,7 @@ import {
 import InlineError from '../components/InlineError';
 import ErroAcao, { classeErro, type ErroAcaoDados } from '../components/ErroAcao';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import { formatNumeroClinico, numeroClinicoComHash } from '../utils/numeroClinico';
 import { DOSES, INTERVALO_REFORCO_MESES, VIAS_PADRAO, normalizeVia } from '../utils/vacina';
 
@@ -204,11 +205,21 @@ const reforcoVencido = (v: VacinaClinica): boolean =>
 // status → { label, cls } alimenta o selo E as abas de filtro. Sem isso, rótulo e
 // cor de cada status ficavam escritos duas vezes e divergiam na primeira correção.
 
-function StatusBadge({ status }: { status: StatusVacina }) {
+// Vacina aplicada pelo PROPRIETÁRIO nunca passa pelo plantão: o backend já a finaliza
+// direto em EXECUTADA (ver `finalizar`). O que muda aqui é só o RÓTULO — "Executada
+// pelo Proprietário" —, para a lista não sugerir que alguém da clínica aplicou a dose.
+// Espelho da prescrição (`statusDoGrupo` em SubModuloPrescricao.tsx).
+// ⚠️ `=== true`: a flag vem de SQL cru e pode chegar `undefined`; tratar isso como
+// verdadeiro poria o sufixo em vacina que a clínica aplicou.
+function StatusBadge({ status, aplicadaPeloProprietario }: {
+  status: StatusVacina;
+  aplicadaPeloProprietario?: boolean;
+}) {
   const st = STATUS_VACINA[status];
+  const label = aplicadaPeloProprietario === true ? `${st.label} pelo Proprietário` : st.label;
   return (
     <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${st.cls}`}>
-      {st.label}
+      {label}
     </span>
   );
 }
@@ -247,7 +258,7 @@ function ViewModal({ v, onFechar }: { v: VacinaClinica; onFechar: () => void }) 
             {vcNum && (
               <span className="font-mono font-bold text-emerald-700 text-sm">#{vcNum}</span>
             )}
-            <StatusBadge status={status} />
+            <StatusBadge status={status} aplicadaPeloProprietario={v.aplicadaPeloProprietario} />
           </div>
           <button onClick={onFechar} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
@@ -1047,6 +1058,31 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
     setExcluindoId(id);
   };
 
+  // ─── Ações da vacina — UMA declaração para a tabela E para o card ──────────
+  // ORDEM/COR da §6: Alterar (laranja) → Visualizar (emerald) → Imprimir (azul) →
+  // WhatsApp (verde) → E-mail (azul) → Cancelar (vermelho). `AcaoRegistro` decide a
+  // FORMA por CSS — ícone no desktop, botão com rótulo no mobile.
+  // ⚠️ Não há ALTERAR fora de SALVA: depois de finalizada a vacina já reservou
+  // estoque, e a rota de edição recusa.
+  const acoesDaVacina = (v: VacinaClinica) => (
+    <AcoesRegistro>
+      <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Alterar" titulo="Alterar vacina"
+        visivel={getStatus(v) === 'SALVA' && v.ativo && podeEditarVac(v)}
+        onClick={() => editarHistoricoNoForm(v)} />
+      <AcaoRegistro tom="ver" icone={Eye} rotulo="Visualizar"
+        onClick={() => setViewingV(v)} />
+      <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir" titulo="Imprimir vacina"
+        visivel={podeImprimir} onClick={() => imprimirVacina(v, animal)} />
+      {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
+      <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp" titulo="Enviar por WhatsApp"
+        visivel={podeImprimir} onClick={() => abrirWhatsApp(montarTextoVacina(v))} />
+      <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail" titulo="Enviar por e-mail"
+        visivel={podeImprimir} onClick={() => abrirEmail(`Vacina - ${v.nome}`, montarTextoVacina(v))} />
+      <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar" titulo="Cancelar vacina"
+        visivel={podeExcluirVac(v) && v.ativo} onClick={() => handleExcluirSolicitado(v.id)} />
+    </AcoesRegistro>
+  );
+
   const handleExcluirConfirmado = async (motivo: string) => {
     if (excluindoId == null) return;
     const id = excluindoId;
@@ -1515,7 +1551,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                       )}
                       <span className="text-sm font-semibold text-gray-900 truncate">{v.nome}</span>
                     </div>
-                    <StatusBadge status={status} />
+                    <StatusBadge status={status} aplicadaPeloProprietario={v.aplicadaPeloProprietario} />
                   </div>
 
                   <p className="text-xs text-gray-500">
@@ -1539,43 +1575,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                     </p>
                   )}
 
-                  <div className="flex flex-wrap gap-2 mt-2">
-                    {status === 'SALVA' && v.ativo && podeEditarVac(v) && (
-                      <button onClick={() => editarHistoricoNoForm(v)}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-orange-200 text-orange-600 rounded-lg text-xs hover:bg-orange-50 transition-colors">
-                        <Pencil size={11} /> Alterar
-                      </button>
-                    )}
-                    <button onClick={() => setViewingV(v)}
-                      className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
-                      <Eye size={11} /> Visualizar
-                    </button>
-                    {podeImprimir && (
-                      <button onClick={() => imprimirVacina(v, animal)}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-blue-200 text-blue-600 rounded-lg text-xs hover:bg-blue-50 transition-colors">
-                        <Printer size={11} /> Imprimir
-                      </button>
-                    )}
-                    {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
-                    {podeImprimir && (
-                      <button onClick={() => abrirWhatsApp(montarTextoVacina(v))}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
-                        <MessageCircle size={11} /> WhatsApp
-                      </button>
-                    )}
-                    {podeImprimir && (
-                      <button onClick={() => abrirEmail(`Vacina - ${v.nome}`, montarTextoVacina(v))}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
-                        <Mail size={11} /> E-mail
-                      </button>
-                    )}
-                    {podeExcluirVac(v) && v.ativo && (
-                      <button onClick={() => handleExcluirSolicitado(v.id)}
-                        className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
-                        <Ban size={11} /> Cancelar
-                      </button>
-                    )}
-                  </div>
+                  <div className="mt-2">{acoesDaVacina(v)}</div>
                   {/* Erro na superfície da ação: embaixo dos botões deste card */}
                   <ErroAcao
                     erro={erroDaLinha(v.id) ? { mensagem: erroDaLinha(v.id)! } : null}
@@ -1598,7 +1598,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Qtd</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Lote</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Via</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Executor</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
@@ -1650,8 +1650,8 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                         )}
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-600">{v.via ?? <span className="text-gray-300">—</span>}</td>
-                      <td className="px-4 py-3">
-                        <StatusBadge status={status} />
+                      <td className="px-4 py-3 text-center">
+                        <StatusBadge status={status} aplicadaPeloProprietario={v.aplicadaPeloProprietario} />
                       </td>
                       <td className="px-4 py-3 text-xs">
                         {status === 'CANCELADA'
@@ -1664,42 +1664,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                       <td className="px-4 py-3">
                         {/* Cores por AÇÃO (CLAUDE.md §6): alterar = laranja, ver = emerald,
                             imprimir = azul, whatsapp = verde, e-mail = azul, cancelar = vermelho. */}
-                        <div className="flex items-center gap-1">
-                          {status === 'SALVA' && v.ativo && podeEditarVac(v) && (
-                            <button onClick={() => editarHistoricoNoForm(v)} title="Alterar vacina"
-                              className="p-1.5 text-orange-600 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
-                              <Pencil size={13} />
-                            </button>
-                          )}
-                          <button onClick={() => setViewingV(v)} title="Visualizar"
-                            className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
-                            <Eye size={13} />
-                          </button>
-                          {podeImprimir && (
-                            <button onClick={() => imprimirVacina(v, animal)} title="Imprimir vacina"
-                              className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-                              <Printer size={13} />
-                            </button>
-                          )}
-                          {podeImprimir && (
-                            <button onClick={() => abrirWhatsApp(montarTextoVacina(v))} title="Enviar por WhatsApp"
-                              className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors">
-                              <MessageCircle size={13} />
-                            </button>
-                          )}
-                          {podeImprimir && (
-                            <button onClick={() => abrirEmail(`Vacina - ${v.nome}`, montarTextoVacina(v))} title="Enviar por e-mail"
-                              className="p-1.5 text-blue-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                              <Mail size={13} />
-                            </button>
-                          )}
-                          {podeExcluirVac(v) && v.ativo && (
-                            <button onClick={() => handleExcluirSolicitado(v.id)} title="Cancelar vacina"
-                              className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                              <Ban size={13} />
-                            </button>
-                          )}
-                        </div>
+                        {acoesDaVacina(v)}
                         {/* Erro na superfície da ação: embaixo dos botões desta linha */}
                         <ErroAcao
                           erro={erroDaLinha(v.id) ? { mensagem: erroDaLinha(v.id)! } : null}

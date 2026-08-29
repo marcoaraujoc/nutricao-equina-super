@@ -13,6 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import InlineError from '../components/InlineError';
 import ModalExecucaoJob, { type ResultadoJob } from '../components/ModalExecucaoJob';
+import LogExecucaoJobs from '../components/LogExecucaoJobs';
 
 interface Agenda { chave: string; nome: string; expr: string; exprPadrao: string; ativo: boolean }
 
@@ -284,6 +285,12 @@ export default function ConfiguracaoAlerta() {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Log de execução — depois da agenda de propósito: primeiro se configura QUANDO a
+          tarefa roda, depois se confere SE ela rodou. */}
+      <div className="mt-6">
+        <LogExecucaoJobs />
       </div>
 
       <ModalExecucaoJob

@@ -13,6 +13,7 @@ import {
 import { Line } from 'react-chartjs-2';
 import { Loader2 } from 'lucide-react';
 import api from '../services/api';
+import DateInput from './DateInput';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -135,11 +136,20 @@ export default function GraficosAnimalPanel({ animalId }: Props) {
         </div>
         <div className="flex items-center gap-2">
           <label className="text-xs text-gray-400">De</label>
-          <input type="date" value={inicio} onChange={e => setInicio(e.target.value)}
-            className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:border-emerald-500" />
+          {/* `compacto` pelo mesmo motivo da auditoria. `w-32`: o input de texto é
+              `w-full` e, sem largura no container, encolheria para o conteúdo — o
+              nativo tinha largura intrínseca, o de texto não tem. */}
+          <DateInput
+            value={inicio} onChange={setInicio} compacto
+            aria-label="Início do período"
+            className="w-32 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus-within:border-emerald-500"
+          />
           <label className="text-xs text-gray-400">até</label>
-          <input type="date" value={fim} onChange={e => setFim(e.target.value)}
-            className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:border-emerald-500" />
+          <DateInput
+            value={fim} onChange={setFim} compacto
+            aria-label="Fim do período"
+            className="w-32 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus-within:border-emerald-500"
+          />
         </div>
       </div>
 

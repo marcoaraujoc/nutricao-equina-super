@@ -15,6 +15,8 @@ const prisma = require('../lib/prisma').default;
 const {
   elegivelParaFluxoNovo, primeiraDoseEsperada, semAncoraDeHorario, dentroDaJanelaDoCurso,
 } = require('../lib/agendaDoses');
+// "Que dia é hoje" tem de ser o dia DA CLÍNICA. Ver a regra abaixo, em `hojeDaEmpresa`.
+const { fusoDaEmpresa, hojeNaEmpresa } = require('../lib/fusoEmpresa');
 // Mesmas funções que `removerItem` (cancelamento manual de UM item) usa para
 // recalcular a reserva de estoque do grupo sem deixar sobra órfã para os
 // demais itens — reusadas aqui em vez de duplicadas (armadilha conhecida:
@@ -29,6 +31,26 @@ const MOTIVO_PARCIAL =
   'Encerrada automaticamente pelo sistema — prescrição parcialmente executada; itens não executados foram cancelados.';
 const MOTIVO_DOSE_PERDIDA =
   'Cancelada automaticamente pelo sistema — a dose não foi executada na data prevista.';
+
+/**
+ * 'YYYY-MM-DD' de HOJE no fuso da EMPRESA que está sendo varrida.
+ *
+ * 🔴 NUNCA `new Date().toISOString().split('T')[0]` aqui — era o que este arquivo fazia
+ * (contra a própria advertência de `dataLocalStr`, logo abaixo, que existia e não era
+ * usada). Este job roda às 23:40 em Brasília, ou seja, 02:40 UTC do DIA SEGUINTE: o
+ * `hojeStr` saía adiantado e a comparação `hoje > últimoDia` cancelava prescrição cuja
+ * janela termina HOJE, um dia antes do previsto. Passava despercebido porque às 23:40 o
+ * dia está acabando de qualquer forma — mas o botão "Executar agora" da tela de
+ * Configuração dispara o MESMO código a qualquer hora, e às 22:00 ele cancelava
+ * documento clínico ainda válido, sem volta.
+ *
+ * O fuso é o da empresa (Brasil tem 4 — §6 do CLAUDE.md); sem empresa no contexto cai
+ * no padrão, que é o comportamento anterior a esta correção para o servidor em SP.
+ */
+async function hojeDaEmpresa(db, empresa) {
+  const fuso = await fusoDaEmpresa(empresa?.id ?? null, db);
+  return hojeNaEmpresa(fuso);
+}
 
 // Data LOCAL (YYYY-MM-DD) de um instante — NUNCA `toISOString()` para "hoje"/datas
 // de referência: vira o dia seguinte a partir das 21h no horário de Brasília.
@@ -53,7 +75,7 @@ function ultimoDiaDoItem(item) {
  * @returns ResultadoCron para o comAlerta/reportarCron (Monitoração + e-mail ADMIN).
  */
 async function cancelarPrescricoesNaoExecutadas(db = prisma, diario = null, empresa = null) {
-  const hojeStr = new Date().toISOString().split('T')[0];
+  const hojeStr = await hojeDaEmpresa(db, empresa);
 
   const grupos = await db.prescricaoGrupo.findMany({
     where:   { status: 'FINALIZADO' },
@@ -139,7 +161,10 @@ async function cancelarPrescricoesNaoExecutadas(db = prisma, diario = null, empr
  * era o último item ainda ativo.
  */
 async function cancelarDosesPrescricaoPerdidas(db = prisma, diario = null, empresa = null) {
-  const hojeStr = dataLocalStr(new Date());
+  // Mesmo motivo do `cancelarPrescricoesNaoExecutadas`: o dia de referencia e' o da
+  // CLINICA. Aqui ja era data local (fuso do servidor), o que so acerta quem esta em
+  // Brasilia -- na clinica em Manaus a dose das 22h caia no dia seguinte.
+  const hojeStr = await hojeDaEmpresa(db, empresa);
 
   const itens = await db.prescricao.findMany({
     where: {

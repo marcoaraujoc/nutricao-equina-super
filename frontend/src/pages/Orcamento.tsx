@@ -10,6 +10,7 @@ import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import { usePermissoes } from '../hooks/usePermissoes';
 import {
   Receipt, Search, Loader2, Trash2, X, Check, Ban, CheckCircle2,
@@ -1719,6 +1720,37 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
     }
   };
 
+  // ─── Ações do orçamento — UMA declaração para a tabela E para o card ───────
+  // `AcaoRegistro` decide a forma por CSS (ícone no desktop, botão com rótulo no
+  // mobile). As duas listas já divergiam: no card o Editar SUMIA fora de RASCUNHO,
+  // no desktop ele ficava desabilitado explicando por quê — ficou a versão que
+  // explica, nos dois.
+  // ⚠️ Ver/Imprimir eram CINZA no desktop, o que a §6 reserva ao indisponível —
+  // agora nascem pintados como no resto do sistema.
+  const acoesDoOrcamento = (o: OrcamentoResumo) => (
+    <AcoesRegistro>
+      <AcaoRegistro tom="ver" icone={Eye} rotulo="Visualizar"
+        onClick={() => visualizar(o)} />
+      <AcaoRegistro tom="finalizar" icone={ListChecks} rotulo="Decidir"
+        visivel={podeAprovar && o.status !== 'CANCELADO'}
+        desabilitado={!decisaoPendente(o.status)}
+        titulo={MOTIVO_DECISAO_BLOQUEADA[o.status]}
+        onClick={() => decidir(o)} />
+      <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
+        visivel={podeEditar} desabilitado={o.status !== 'RASCUNHO'}
+        titulo={o.status === 'RASCUNHO' ? 'Editar' : 'Só é possível editar orçamentos que ainda aguardam decisão'}
+        onClick={() => editar(o)} />
+      <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
+        onClick={() => imprimirOrcamento(o)} />
+      <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp"
+        titulo="Enviar PDF por WhatsApp" carregando={enviandoId === o.id}
+        onClick={() => enviarWhatsApp(o)} />
+      <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar" titulo="Cancelar orçamento"
+        visivel={podeExcluir && o.status !== 'CANCELADO'}
+        onClick={() => setCancelando(o)} />
+    </AcoesRegistro>
+  );
+
   const LIMIT = 10;
   const totalPags = Math.max(1, Math.ceil(orcamentos.length / LIMIT));
   const pageAtual = Math.min(page, totalPags);
@@ -1776,36 +1808,7 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
                     Motivo do cancelamento: <JustificativaCancelamento texto={o.observacao} className="inline" />
                   </p>
                 )}
-                <div className="flex flex-wrap gap-2 mt-2">
-                  <button onClick={() => visualizar(o)} className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
-                    <Eye size={11} /> Visualizar
-                  </button>
-                  {podeAprovar && o.status !== 'CANCELADO' && (
-                    <button onClick={() => decidir(o)}
-                      disabled={!decisaoPendente(o.status)}
-                      title={MOTIVO_DECISAO_BLOQUEADA[o.status]}
-                      className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed">
-                      <ListChecks size={11} /> Decidir
-                    </button>
-                  )}
-                  {podeEditar && o.status === 'RASCUNHO' && (
-                    <button onClick={() => editar(o)} className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
-                      <Pencil size={11} /> Editar
-                    </button>
-                  )}
-                  <button onClick={() => imprimirOrcamento(o)} className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
-                    <Printer size={11} /> Imprimir
-                  </button>
-                  <button onClick={() => enviarWhatsApp(o)} disabled={enviandoId === o.id}
-                    className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors disabled:opacity-40">
-                    {enviandoId === o.id ? <Loader2 size={11} className="animate-spin" /> : <MessageCircle size={11} />} WhatsApp
-                  </button>
-                  {podeExcluir && o.status !== 'CANCELADO' && (
-                    <button onClick={() => setCancelando(o)} className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
-                      <Ban size={11} /> Cancelar
-                    </button>
-                  )}
-                </div>
+                <div className="mt-2">{acoesDoOrcamento(o)}</div>
               </div>
             ))}
           </div>
@@ -1849,39 +1852,7 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
                       <td className="px-4 py-3"><JustificativaCancelamento texto={o.observacao} /></td>
                     )}
                     <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                      <div className="flex items-center justify-start gap-1">
-                        <button onClick={() => visualizar(o)} title="Visualizar" className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
-                          <Eye size={14} />
-                        </button>
-                        {podeAprovar && o.status !== 'CANCELADO' && (
-                          <button onClick={() => decidir(o)}
-                            disabled={!decisaoPendente(o.status)}
-                            title={MOTIVO_DECISAO_BLOQUEADA[o.status]}
-                            className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed">
-                            <ListChecks size={14} />
-                          </button>
-                        )}
-                        {podeEditar && (
-                          <button onClick={() => editar(o)}
-                            title={o.status === 'RASCUNHO' ? 'Editar' : 'Só é possível editar orçamentos que ainda aguardam decisão'}
-                            disabled={o.status !== 'RASCUNHO'}
-                            className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed">
-                            <Pencil size={14} />
-                          </button>
-                        )}
-                        <button onClick={() => imprimirOrcamento(o)} title="Imprimir" className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
-                          <Printer size={14} />
-                        </button>
-                        <button onClick={() => enviarWhatsApp(o)} disabled={enviandoId === o.id}
-                          title="Enviar PDF por WhatsApp" className="p-1.5 text-green-500 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-40">
-                          {enviandoId === o.id ? <Loader2 size={14} className="animate-spin" /> : <MessageCircle size={14} />}
-                        </button>
-                        {podeExcluir && o.status !== 'CANCELADO' && (
-                          <button onClick={() => setCancelando(o)} title="Cancelar orçamento" className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                            <Ban size={14} />
-                          </button>
-                        )}
-                      </div>
+                      {acoesDoOrcamento(o)}
                     </td>
                   </tr>
                 ))}

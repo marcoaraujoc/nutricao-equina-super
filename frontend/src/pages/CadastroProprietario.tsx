@@ -18,6 +18,7 @@ import ProprietarioFormModal, {
 import { usePermissoes } from '../hooks/usePermissoes';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import { type ErroAcaoDados } from '../components/ErroAcao';
@@ -208,6 +209,26 @@ export default function CadastroProprietario() {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
       setErroInline(msg ?? 'Erro ao remover proprietário');
     }
+  };
+
+  // ─── Ações do cliente — UMA declaração p/ a tabela E p/ o card ─────────────
+  // `AcaoRegistro` decide a forma por CSS: ícone no desktop, botão com rótulo no
+  // mobile (onde antes eram ícones soltos, sem rótulo). Inativar/Reativar é a MESMA
+  // chave, e é o ícone (ToggleRight/ToggleLeft) que diz em que posição ela está.
+  const acoesDoProprietario = (p: Proprietario) => {
+    const semAcao = !podeEditar && !podeRemover && !podeAtivar;
+    if (semAcao) return <span className="text-xs text-gray-400 italic">Somente leitura</span>;
+    return (
+      <AcoesRegistro>
+        <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
+          visivel={podeEditar} onClick={() => abrirEdicao(p)} />
+        <AcaoRegistro tom="ativar" icone={ToggleRight} rotulo="Inativar"
+          titulo="Inativar proprietário"
+          visivel={p.ativo && podeRemover} onClick={() => handleRemoverDaEmpresa(p)} />
+        <AcaoRegistro tom="ativar" icone={ToggleLeft} rotulo="Reativar"
+          visivel={!p.ativo && podeAtivar} onClick={() => handleReativar(p)} />
+      </AcoesRegistro>
+    );
   };
 
   const handleReativar = (p: Proprietario) => {
@@ -409,29 +430,7 @@ export default function CadastroProprietario() {
                       </>
                     )}
                     <td className="px-4 py-3">
-                      <div className="flex items-center justify-center gap-2">
-                        {podeEditar ? (
-                          <button onClick={() => abrirEdicao(p)} title="Editar"
-                            className="p-1.5 text-orange-600 hover:text-orange-700 hover:bg-orange-50 rounded-xl transition-colors">
-                            <Pencil size={15} />
-                          </button>
-                        ) : null}
-                        {p.ativo && podeRemover ? (
-                          <button onClick={() => handleRemoverDaEmpresa(p)} title="Inativar proprietário"
-                            className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-xl transition-colors">
-                            <ToggleRight size={15} />
-                          </button>
-                        ) : null}
-                        {!p.ativo && podeAtivar ? (
-                          <button onClick={() => handleReativar(p)} title="Reativar"
-                            className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-xl transition-colors">
-                            <ToggleLeft size={15} />
-                          </button>
-                        ) : null}
-                        {!podeEditar && !podeRemover && !podeAtivar && (
-                          <span className="text-xs text-gray-400 italic">Somente leitura</span>
-                        )}
-                      </div>
+                      {acoesDoProprietario(p)}
                     </td>
                   </tr>
                 ))}
@@ -509,26 +508,7 @@ export default function CadastroProprietario() {
 
             <div className="flex items-center justify-between pt-2 border-t border-gray-100">
               <span className="text-xs text-gray-400">{labelDoc(p)}</span>
-              <div className="flex items-center gap-1">
-                {podeEditar && (
-                  <button onClick={() => abrirEdicao(p)} title="Editar"
-                    className="p-2 text-orange-600 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
-                    <Pencil size={15} />
-                  </button>
-                )}
-                {p.ativo && podeRemover && (
-                  <button onClick={() => handleRemoverDaEmpresa(p)} title="Inativar proprietário"
-                    className="p-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-                    <ToggleRight size={15} />
-                  </button>
-                )}
-                {!p.ativo && podeAtivar && (
-                  <button onClick={() => handleReativar(p)} title="Reativar"
-                    className="p-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-                    <ToggleLeft size={15} />
-                  </button>
-                )}
-              </div>
+              {acoesDoProprietario(p)}
             </div>
           </div>
         ))}

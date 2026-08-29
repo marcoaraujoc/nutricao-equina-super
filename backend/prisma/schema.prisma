@@ -184,6 +184,13 @@ model Animal {
   // confundir com `inativoMotivo` abaixo, que é do bloqueio somente-leitura
   // (Animal.inativo, outro recurso). Obrigatória em AnimalController.excluir.
   desativadoMotivo   String?   @map("desativado_motivo") @db.Text
+  /// CATEGORIA da inativação, de lista fechada (`lib/motivosInativacao.js`) —
+  /// migration 20260919000000. É o que o relatório AGRUPA, e por isso mora em coluna
+  /// própria e indexada: junto da descrição, agrupar exigiria `LIKE '%...%'`, que com
+  /// curinga à esquerda não usa índice e vira Seq Scan na tabela de animais.
+  /// ⚠️ NULO = legado (inativado antes desta migration, com só o texto livre) OU
+  /// cascata do sistema (proprietário inativado). Não é "sem motivo".
+  desativadoMotivoTipo String? @map("desativado_motivo_tipo") @db.VarChar(40)
   especieId          Int
   racaId             Int?
   userId             Int
@@ -269,6 +276,9 @@ model Animal {
   @@index([equipeId])
   @@index([localizacaoId])
   @@index([tratadorId])
+  /// Índice do relatório "por que perdemos pacientes": empresa primeiro (toda
+  /// consulta é escopada por tenant), depois a categoria que se agrupa.
+  @@index([empresaId, desativadoMotivoTipo])
   @@map("tb_animais")
   @@schema("schs2vet")
 }
@@ -1356,10 +1366,21 @@ model VetSubespecialidade {
 // Catálogo de especialidades por espécie (fonte única — substitui a lista fixa
 // subespecialidades.ts). Cada linha = uma especialidade para uma espécie; uma
 // especialidade comum (ex.: "Cardiologia") tem uma linha por espécie.
+// CATALOGO MISTO (migration 20260920000000), mesma forma de `Medicamento`:
+//   empresa_id NULL   = especialidade GLOBAL do sistema (seedEspecialidades.js) — toda
+//                       clinica LE, nenhuma ESCREVE;
+//   empresa_id setado = especialidade cadastrada a mao pela clinica (hoje, no
+//                       encaminhamento para profissional EXTERNO) — so ela ve e edita.
+// A unicidade e por INDICE PARCIAL, criado na migration e nao declaravel aqui:
+//   (nome, especie_id)              WHERE empresa_id IS NULL      -> uma global por especie
+//   (nome, especie_id, empresa_id)  WHERE empresa_id IS NOT NULL  -> uma por empresa
+// `@@unique([nome, especieId, empresaId])` NAO serve: no Postgres dois NULL sao
+// distintos, entao o catalogo GLOBAL deixaria de ser protegido contra duplicata.
 model Especialidade {
   id        Int      @id @default(autoincrement())
   nome      String   @db.VarChar(80)
   especieId Int      @map("especie_id")
+  empresaId Int?     @map("empresa_id")
   ativo     Boolean  @default(true)
   createdAt DateTime @default(now())
 
@@ -1368,8 +1389,8 @@ model Especialidade {
   fornecedores FornecedorEspecialidade[]
   agendamentos AgendamentoClinico[]      @relation("AgendamentoEspecialidade")
 
-  @@unique([nome, especieId])
   @@index([especieId])
+  @@index([empresaId])
   @@map("tb_especialidades")
   @@schema("schs2vet")
 }
@@ -2100,6 +2121,12 @@ model CronExecucao {
   resumo      String?  @db.Text
   erro        String?  @db.Text
   notificado  Boolean  @default(false) // e-mail de alerta foi enviado?
+  // Como a tarefa foi disparada: AUTOMATICA (agenda do node-cron) ou MANUAL (botao
+  // "Executar agora" da tela de Configuracao). Sem isto, log de teste e execucao de
+  // producao ficam indistinguiveis no historico.
+  origem      String   @default("AUTOMATICA") @db.VarChar(12)
+  /// Duracao em milissegundos — e o que denuncia o job que passou a demorar demais.
+  duracaoMs   Int?
   executadoEm DateTime @default(now())
 
   @@index([executadoEm])

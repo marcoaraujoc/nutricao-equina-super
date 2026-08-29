@@ -16,6 +16,7 @@ import PageContainer from '../components/PageContainer';
 import { formatDate } from '../utils/dateUtils';
 import DateInputBR from '../components/DateInputBR';
 import ModalJustificativa from '../components/ModalJustificativa';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import ConfirmModal from '../components/ConfirmModal';
 import ExamesSolicitadosPanel, { ResultadoModal, type ExameSolicitado, type ItemManual } from '../components/ExamesSolicitadosPanel';
 import LaudoTexto from '../components/LaudoTexto';
@@ -529,6 +530,21 @@ const Exames = () => {
     setConfirmId(id);
   };
 
+  // ─── Ações do exame NUTRICIONAL — UMA declaração p/ a tabela E p/ o card ───
+  // `AcaoRegistro` decide a forma por CSS: ícone no desktop, botão com rótulo no
+  // mobile. (O modo de EDIÇÃO da linha tem os seus próprios Salvar/Cancelar — são
+  // botões de formulário, não ações do registro, e continuam onde estão.)
+  const acoesDoExameNutricional = (ex: { id: number; arquivoUrl?: string | null }) => (
+    <AcoesRegistro>
+      <AcaoRegistro tom="ver" icone={Eye} rotulo="Laudo" titulo="Ver laudo"
+        visivel={!!ex.arquivoUrl} onClick={() => window.open(ex.arquivoUrl!, '_blank')} />
+      <AcaoRegistro tom="alterar" icone={Edit} rotulo="Editar"
+        onClick={() => startEdit(ex)} />
+      <AcaoRegistro tom="cancelar" icone={Trash2} rotulo="Excluir"
+        onClick={() => handleDelete(ex.id)} />
+    </AcoesRegistro>
+  );
+
   const handleDeleteConfirmado = async (motivo: string) => {
     if (confirmId == null) return;
     const id = confirmId;
@@ -848,50 +864,28 @@ const Exames = () => {
                         de lá dentro); editar reabre a mesma tela liberada + exclusão com
                         motivo obrigatório, igual ao restante da aplicação. Imprimir/
                         WhatsApp/e-mail compartilham o slug de imprimir do Pedido de Exames. */}
-                    <div className="ml-auto flex items-center gap-1 flex-nowrap">
-                      {temResultadoExame(ex) && (
-                        <button onClick={() => setVisualizandoResultado(ex)}
-                          title="Visualizar resultado" aria-label="Visualizar resultado"
-                          className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
-                          <Eye size={14} />
-                        </button>
-                      )}
-                      {podeEditarResultadoClinico(ex) && (
-                        <button onClick={() => abrirEdicaoClinico(ex)}
-                          title="Editar" aria-label="Editar"
-                          className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
-                          <Edit size={14} />
-                        </button>
-                      )}
-                      {podeImprimirResultado && (
-                        <button onClick={() => imprimirResultado(ex)}
-                          title="Imprimir" aria-label="Imprimir"
-                          className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-                          <Printer size={14} />
-                        </button>
-                      )}
-                      {podeImprimirResultado && (
-                        <button onClick={() => compartilharResultadoWhatsApp(ex)}
-                          title="Enviar por WhatsApp" aria-label="Enviar por WhatsApp"
-                          className="p-1.5 text-green-500 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors">
-                          <MessageCircle size={14} />
-                        </button>
-                      )}
-                      {podeImprimirResultado && (
-                        <button onClick={() => compartilharResultadoEmail(ex)}
-                          title="Enviar por e-mail" aria-label="Enviar por e-mail"
-                          className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-                          <Mail size={14} />
-                        </button>
-                      )}
-                      {podeDeletar && (
-                        <button onClick={() => excluirClinico(ex)}
-                          title="Excluir exame" aria-label="Excluir exame"
-                          className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                          <Trash2 size={14} />
-                        </button>
-                      )}
-                    </div>
+                    {/* No MOBILE estas seis ações viram botões com rótulo (e quebram
+                        linha); no desktop continuam ícones. Antes era `flex-nowrap` de
+                        ícones sem rótulo — seis deles não cabiam na largura do celular. */}
+                    <AcoesRegistro className="ml-auto">
+                      <AcaoRegistro tom="ver" icone={Eye} rotulo="Visualizar"
+                        titulo="Visualizar resultado" visivel={temResultadoExame(ex)}
+                        onClick={() => setVisualizandoResultado(ex)} />
+                      <AcaoRegistro tom="alterar" icone={Edit} rotulo="Editar"
+                        visivel={podeEditarResultadoClinico(ex)}
+                        onClick={() => abrirEdicaoClinico(ex)} />
+                      <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
+                        visivel={podeImprimirResultado} onClick={() => imprimirResultado(ex)} />
+                      <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp"
+                        titulo="Enviar por WhatsApp" visivel={podeImprimirResultado}
+                        onClick={() => compartilharResultadoWhatsApp(ex)} />
+                      <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail"
+                        titulo="Enviar por e-mail" visivel={podeImprimirResultado}
+                        onClick={() => compartilharResultadoEmail(ex)} />
+                      <AcaoRegistro tom="cancelar" icone={Trash2} rotulo="Excluir"
+                        titulo="Excluir exame" visivel={podeDeletar}
+                        onClick={() => excluirClinico(ex)} />
+                    </AcoesRegistro>
                   </div>
                   {expandidos.has(ex.id) && (
                     <>
@@ -1025,24 +1019,7 @@ const Exames = () => {
                               <button onClick={() => saveEdit(ex.id)} className="px-2.5 py-1 text-xs font-semibold text-emerald-700 border border-emerald-200 rounded-lg hover:bg-emerald-50">Salvar</button>
                               <button onClick={cancelEdit} className="px-2.5 py-1 text-xs text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">Cancelar</button>
                             </>
-                          ) : (
-                            <>
-                              {ex.arquivoUrl && (
-                                <button onClick={() => window.open(ex.arquivoUrl, '_blank')} title="Ver laudo"
-                                  className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
-                                  <Eye size={15} />
-                                </button>
-                              )}
-                              <button onClick={() => startEdit(ex)} title="Editar"
-                                className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
-                                <Edit size={15} />
-                              </button>
-                              <button onClick={() => handleDelete(ex.id)} title="Excluir"
-                                className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                                <Trash2 size={15} />
-                              </button>
-                            </>
-                          )}
+                          ) : acoesDoExameNutricional(ex)}
                         </div>
                       </td>
                     </tr>
@@ -1106,22 +1083,7 @@ const Exames = () => {
                         <Calendar size={11} /> {formatDate(ex.dataExame)}
                         {' · '}<span className="font-semibold text-emerald-700">{ex.valorEncontrado} {ex.unidade}</span>
                       </p>
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {ex.arquivoUrl && (
-                          <button onClick={() => window.open(ex.arquivoUrl, '_blank')}
-                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
-                            <Eye size={11} /> Laudo
-                          </button>
-                        )}
-                        <button onClick={() => startEdit(ex)}
-                          className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-emerald-600 rounded-lg text-xs hover:bg-emerald-50 transition-colors">
-                          <Edit size={11} /> Editar
-                        </button>
-                        <button onClick={() => handleDelete(ex.id)}
-                          className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
-                          <Trash2 size={11} /> Excluir
-                        </button>
-                      </div>
+                      <div className="mt-2">{acoesDoExameNutricional(ex)}</div>
                     </>
                   )}
                 </div>

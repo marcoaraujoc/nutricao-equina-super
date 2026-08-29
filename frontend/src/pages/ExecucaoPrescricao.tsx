@@ -11,6 +11,7 @@ import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import ModalJustificativa from '../components/ModalJustificativa';
 import ConfirmModal from '../components/ConfirmModal';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import { regimeExigeResumo, gerarResumoDoses, DOSES_POR_DIA } from '../utils/posologia';
 import toast from 'react-hot-toast';
 import api from '../services/api';
@@ -1217,8 +1218,16 @@ export function ModalExecucao({
                               ? `Em Execução (${quandoPrevisto})`
                               : `Prevista para ${quandoPrevisto}`;
                         return (
-                          <div key={idx} className="flex items-center justify-between gap-2">
-                            <p className={ehAtual ? 'text-xs font-semibold text-gray-800' : 'text-[11px] text-gray-400'}>
+                          <div key={idx} className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
+                            {/* MOBILE: o texto da dose ocupa a linha INTEIRA (`w-full`) e
+                                os botões descem para a linha de baixo — sem isso
+                                "Dose 02/03 - Prevista para 29/08 às 13:36" disputava a
+                                largura com os ícones e quebrava no meio da data.
+                                `truncate` é a rede de segurança: se ainda assim não
+                                couber, sai "…" (com o texto inteiro no `title`) em vez de
+                                estourar o card. */}
+                            <p title={`Dose ${numero}/${total} - ${status}`}
+                              className={`w-full min-w-0 truncate md:w-auto md:flex-1 ${ehAtual ? 'text-xs font-semibold text-gray-800' : 'text-[11px] text-gray-400'}`}>
                               Dose {numero}/{total} - {status}
                             </p>
                             {ehAtual && botoesLinhaAtual}
@@ -1667,7 +1676,10 @@ function LinhaExecucao({
   const infoAnimal = linhaInfoAnimal(animal);
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl flex items-center gap-3 px-3 py-2.5 shadow-sm hover:border-emerald-200 transition-colors">
+    // ⚠️ `flex-wrap`: com o celular DEITADO a largura passa de 768px, o `md:` liga as
+    // colunas de Nº e Veterinário e as ações não cabiam mais — saíam para fora do card.
+    // Quebrando, elas descem para uma segunda linha do próprio card.
+    <div className="bg-white border border-gray-200 rounded-xl flex flex-wrap items-center gap-3 px-3 py-2.5 shadow-sm hover:border-emerald-200 transition-colors">
 
       <AnimalAvatar animal={animal} size="md" />
 
@@ -1769,7 +1781,7 @@ function LinhaGrupo({
       veterinarioNome={g.veterinario.fullName}
       executorNome={executorNome}
     >
-      <div className="flex items-center gap-1.5 flex-shrink-0">
+      <AcoesRegistro className="ml-auto">
         {g.status === 'CANCELADO' && (
           <span className="flex items-center gap-1 px-2.5 py-1 bg-red-50 border border-red-200 text-red-600 text-[10px] font-bold rounded-full whitespace-nowrap"
             title={g.motivoCancelamento ?? undefined}>
@@ -1793,38 +1805,17 @@ function LinhaGrupo({
             quem não tem a permissão não vê o botão — não vê um botão que só falha depois
             do clique (armadilha 28-d). `title` + `aria-label` obrigatórios: sem rótulo
             visível, são eles que dão nome ao botão no hover e no leitor de tela. */}
-        <button onClick={onVer} title="Ver prescrição" aria-label="Ver prescrição"
-          className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-100 rounded-lg transition-colors">
-          <Eye size={14} />
-        </button>
-        {podeExecutarAcao && !soVisualizacao && !executada && (
-          <button
-            onClick={onExecutar}
-            title="Executar prescrição"
-            aria-label="Executar prescrição"
-            className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
-            <CheckCircle2 size={16} />
-          </button>
-        )}
-        {podeImprimir && (
-          <button
-            onClick={onImprimir}
-            title="Imprimir prescrição"
-            aria-label="Imprimir prescrição"
-            className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-            <Printer size={14} />
-          </button>
-        )}
-        {podeCancelar && onCancelar && (
-          <button
-            onClick={onCancelar}
-            title="Cancelar prescrição"
-            aria-label="Cancelar prescrição"
-            className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-            <Ban size={16} />
-          </button>
-        )}
-      </div>
+        <AcaoRegistro tom="ver" icone={Eye} rotulo="Ver"
+          titulo="Ver prescrição" onClick={onVer} />
+        <AcaoRegistro tom="executar" icone={CheckCircle2} rotulo="Executar"
+          titulo="Executar prescrição" onClick={onExecutar}
+          visivel={podeExecutarAcao && !soVisualizacao && !executada} />
+        <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
+          titulo="Imprimir prescrição" onClick={onImprimir} visivel={podeImprimir} />
+        <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
+          titulo="Cancelar prescrição" onClick={() => onCancelar?.()}
+          visivel={podeCancelar && !!onCancelar} />
+      </AcoesRegistro>
     </LinhaExecucao>
   );
 }
@@ -2436,40 +2427,19 @@ export default function ExecucaoPrescricao() {
                                 IMPRIMIR (a vacina não tem cancelar aqui — o cancelamento é na
                                 tela de Vacina). Ver e Executar abrem a MESMA tela, como no
                                 medicamento; só o olho a abre em somente leitura. */}
-                            <div className="flex items-center gap-1.5 flex-shrink-0">
-                              <button onClick={() => { setVacModoVer(true); setVacModal(v); }}
-                                title="Ver vacina"
-                                aria-label="Ver vacina"
-                                className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-100 rounded-lg transition-colors">
-                                <Eye size={14} />
-                              </button>
-                              {podeExecutarAcao && (
-                                <button
-                                  onClick={() => { setVacModoVer(false); setVacModal(v); }}
-                                  title="Aplicar vacina"
-                                  aria-label="Aplicar vacina"
-                                  className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
-                                  <CheckCircle2 size={16} />
-                                </button>
-                              )}
-                              {podeImprimir && (
-                                <button onClick={() => imprimirVacinaExec(v)}
-                                  title="Imprimir vacina"
-                                  aria-label="Imprimir vacina"
-                                  className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-                                  <Printer size={14} />
-                                </button>
-                              )}
-                              {podeCancelar && (
-                                <button
-                                  onClick={() => { setErroInline(null); setCancelarVacina(v); }}
-                                  title="Cancelar vacina"
-                                  aria-label="Cancelar vacina"
-                                  className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                                  <Ban size={16} />
-                                </button>
-                              )}
-                            </div>
+                            <AcoesRegistro className="ml-auto">
+                              <AcaoRegistro tom="ver" icone={Eye} rotulo="Ver" titulo="Ver vacina"
+                                onClick={() => { setVacModoVer(true); setVacModal(v); }} />
+                              <AcaoRegistro tom="executar" icone={CheckCircle2} rotulo="Aplicar"
+                                titulo="Aplicar vacina" visivel={podeExecutarAcao}
+                                onClick={() => { setVacModoVer(false); setVacModal(v); }} />
+                              <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
+                                titulo="Imprimir vacina" visivel={podeImprimir}
+                                onClick={() => imprimirVacinaExec(v)} />
+                              <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
+                                titulo="Cancelar vacina" visivel={podeCancelar}
+                                onClick={() => { setErroInline(null); setCancelarVacina(v); }} />
+                            </AcoesRegistro>
                           </LinhaExecucao>
                         ))}
                       </div>
@@ -2593,23 +2563,16 @@ export default function ExecucaoPrescricao() {
                       tituloNumero="Ir para a vacina original"
                       veterinarioNome={v.veterinario?.fullName ?? '—'}
                     >
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <AcoesRegistro className="ml-auto">
                         <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold rounded-full whitespace-nowrap">
                           <CheckCircle2 size={11} /> Executada
                         </span>
-                        <button onClick={() => { setVacModoVer(true); setVacModal(v); }}
-                          title="Ver vacina" aria-label="Ver vacina"
-                          className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-100 rounded-lg transition-colors">
-                          <Eye size={14} />
-                        </button>
-                        {podeImprimir && (
-                          <button onClick={() => imprimirVacinaExec(v)}
-                            title="Imprimir vacina" aria-label="Imprimir vacina"
-                            className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-                            <Printer size={14} />
-                          </button>
-                        )}
-                      </div>
+                        <AcaoRegistro tom="ver" icone={Eye} rotulo="Ver" titulo="Ver vacina"
+                          onClick={() => { setVacModoVer(true); setVacModal(v); }} />
+                        <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
+                          titulo="Imprimir vacina" visivel={podeImprimir}
+                          onClick={() => imprimirVacinaExec(v)} />
+                      </AcoesRegistro>
                     </LinhaExecucao>
                   ))}
                 </div>

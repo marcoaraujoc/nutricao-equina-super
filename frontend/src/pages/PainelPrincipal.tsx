@@ -28,6 +28,7 @@ import {
   CheckCircle2, Ban, Pill,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import FotoAnimal from '../components/FotoAnimal';
@@ -607,32 +608,21 @@ export default function PainelPrincipal() {
                                 ModalExecucaoVacina de lá) e CANCELAR pede justificativa.
                                 Como o popup abre SOBRE esta tela, executar pelo painel
                                 volta ao painel — a tela de retorno é sempre a chamadora. */}
-                            <span className="flex items-center gap-1 flex-shrink-0">
-                              {podeExecutarAcao && (
-                                <button
-                                  type="button"
-                                  onClick={() => ehVac ? setModalVacina(entrada.vacina) : setModalGrupo(entrada.grupo)}
-                                  title={ehVac ? 'Aplicar vacina' : 'Executar prescrição'}
-                                  aria-label={ehVac ? 'Aplicar vacina' : 'Executar prescrição'}
-                                  className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
-                                  <CheckCircle2 size={16} />
-                                </button>
-                              )}
-                              {podeCancelar && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setErroInline(null);
-                                    if (ehVac) setCancelarVacina(entrada.vacina);
-                                    else       setCancelarGrupo(entrada.grupo);
-                                  }}
-                                  title={ehVac ? 'Cancelar vacina' : 'Cancelar prescrição'}
-                                  aria-label={ehVac ? 'Cancelar vacina' : 'Cancelar prescrição'}
-                                  className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                                  <Ban size={14} />
-                                </button>
-                              )}
-                            </span>
+                            <AcoesRegistro className="flex-shrink-0">
+                              <AcaoRegistro tom="executar" icone={CheckCircle2}
+                                rotulo={ehVac ? 'Aplicar' : 'Executar'}
+                                titulo={ehVac ? 'Aplicar vacina' : 'Executar prescrição'}
+                                visivel={podeExecutarAcao}
+                                onClick={() => ehVac ? setModalVacina(entrada.vacina) : setModalGrupo(entrada.grupo)} />
+                              <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
+                                titulo={ehVac ? 'Cancelar vacina' : 'Cancelar prescrição'}
+                                visivel={podeCancelar}
+                                onClick={() => {
+                                  setErroInline(null);
+                                  if (ehVac) setCancelarVacina(entrada.vacina);
+                                  else       setCancelarGrupo(entrada.grupo);
+                                }} />
+                            </AcoesRegistro>
                           </li>
                           );
                         })}

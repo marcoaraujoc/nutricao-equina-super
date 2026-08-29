@@ -19,6 +19,7 @@ import InlineError from '../components/InlineError';
 import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -405,6 +406,26 @@ export default function EstoqueVacina() {
     confirmarToggle(lote);
   };
 
+  // ─── Ações do lote — UMA declaração para a tabela E para o card ────────────
+  // `AcaoRegistro` decide a forma por CSS (ícone no desktop, botão com rótulo no
+  // mobile). ⚠️ Lote com dose já aplicada (`qtdDisponivel < qtdTotal`) não se edita:
+  // no lugar do lápis entra o olho, e o `title` diz por quê.
+  const acoesDoLote = (lote: LoteVacina) => {
+    const jaUsado = lote.qtdDisponivel < lote.qtdTotal;
+    return (
+      <AcoesRegistro>
+        <AcaoRegistro tom="ver" icone={Eye} rotulo="Ver"
+          titulo="Visualizar lote (já utilizado — não pode ser alterado)"
+          visivel={jaUsado} onClick={() => setLoteView(lote)} />
+        <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
+          visivel={!jaUsado && podeEditar} onClick={() => preencherEdicao(lote)} />
+        <AcaoRegistro tom="ativar" icone={lote.ativo ? ToggleRight : ToggleLeft}
+          rotulo={lote.ativo ? 'Inativar' : 'Ativar'}
+          visivel={podeAtivar} onClick={() => handleToggle(lote)} />
+      </AcoesRegistro>
+    );
+  };
+
   const confirmarToggle = async (lote: LoteVacina, motivo?: string) => {
     setTogglingAtivo(true);
     try {
@@ -613,7 +634,6 @@ export default function EstoqueVacina() {
                       const dosesCls = nivelEstoque === 'critico' ? 'text-red-600'
                         : nivelEstoque === 'alarmante' ? 'text-amber-600'
                         : lote.qtdDisponivel === 0 ? 'text-gray-400' : 'text-teal-700';
-                      const jaUsado = lote.qtdDisponivel < lote.qtdTotal;
                       return (
                         <tr key={lote.id} className={`hover:bg-gray-50 transition-colors ${!lote.ativo ? 'opacity-60' : ''}`}>
                           <td className="px-4 py-3">
@@ -651,25 +671,7 @@ export default function EstoqueVacina() {
                             </>
                           ) : null}
                           <td className="px-4 py-3 whitespace-nowrap">
-                            <div className="flex items-center justify-center gap-1">
-                              {jaUsado ? (
-                                <button onClick={() => setLoteView(lote)} title="Visualizar lote (já utilizado — não pode ser alterado)"
-                                  className="p-1.5 rounded-lg border border-teal-200 text-teal-500 hover:bg-teal-50">
-                                  <Eye size={13} />
-                                </button>
-                              ) : podeEditar ? (
-                                <button onClick={() => preencherEdicao(lote)} title="Editar"
-                                  className="p-1.5 rounded-lg border border-orange-200 text-orange-500 hover:bg-orange-50">
-                                  <Pencil size={13} />
-                                </button>
-                              ) : null}
-                              {podeAtivar && (
-                                <button onClick={() => handleToggle(lote)} title={lote.ativo ? 'Inativar' : 'Ativar'}
-                                  className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50">
-                                  {lote.ativo ? <ToggleRight size={13} className="text-blue-600" /> : <ToggleLeft size={13} className="text-blue-600" />}
-                                </button>
-                              )}
-                            </div>
+                            {acoesDoLote(lote)}
                           </td>
                         </tr>
                       );
@@ -689,7 +691,6 @@ export default function EstoqueVacina() {
                   const dosesCls = nivelEstoque === 'critico' ? 'text-red-600'
                     : nivelEstoque === 'alarmante' ? 'text-amber-600'
                     : lote.qtdDisponivel === 0 ? 'text-gray-400' : 'text-teal-700';
-                  const jaUsado = lote.qtdDisponivel < lote.qtdTotal;
                   return (
                     <div key={lote.id} className={`px-4 py-3 ${!lote.ativo ? 'opacity-60' : ''}`}>
                       <div className="flex items-center justify-between gap-2 mb-1">
@@ -717,26 +718,7 @@ export default function EstoqueVacina() {
                           Ativado em {formatDate(lote.ativoEm ?? lote.createdAt)} por {lote.ativoPorNome}
                         </p>
                       )}
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {jaUsado ? (
-                          <button onClick={() => setLoteView(lote)}
-                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-teal-600 rounded-lg text-xs hover:bg-teal-50 transition-colors">
-                            <Eye size={11} /> Ver
-                          </button>
-                        ) : podeEditar ? (
-                          <button onClick={() => preencherEdicao(lote)}
-                            className="flex items-center gap-1 px-2.5 py-1 border border-orange-200 text-orange-600 rounded-lg text-xs hover:bg-orange-50 transition-colors">
-                            <Pencil size={11} /> Editar
-                          </button>
-                        ) : null}
-                        {podeAtivar && (
-                          <button onClick={() => handleToggle(lote)}
-                            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-colors">
-                            {lote.ativo ? <ToggleRight size={11} className="text-blue-600" /> : <ToggleLeft size={11} className="text-blue-600" />}
-                            {lote.ativo ? 'Inativar' : 'Ativar'}
-                          </button>
-                        )}
-                      </div>
+                      <div className="mt-2">{acoesDoLote(lote)}</div>
                     </div>
                   );
                 })}

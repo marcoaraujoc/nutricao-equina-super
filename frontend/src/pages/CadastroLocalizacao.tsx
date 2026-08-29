@@ -9,6 +9,7 @@ import {
   ChevronDown, Info,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -237,6 +238,27 @@ export default function CadastroLocalizacao() {
     }
   };
 
+  // ─── Ações da localização — UMA declaração p/ a tabela E p/ o card ─────────
+  // `AcaoRegistro` decide a forma por CSS: ícone no desktop, botão com rótulo no
+  // mobile. ⚠️ Linha do CATÁLOGO GLOBAL (tipoEntrada SYSTEM) só o ADMIN opera.
+  const acoesDaLocalizacao = (loc: Localizacao) => {
+    if (loc.tipoEntrada === 'SYSTEM' && !isAdmin) {
+      return <span className="text-xs text-gray-400 italic">Catálogo global</span>;
+    }
+    if (!podeEditar && !podeAtivar) {
+      return <span className="text-xs text-gray-400 italic">Somente leitura</span>;
+    }
+    return (
+      <AcoesRegistro>
+        <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
+          visivel={podeEditar} onClick={() => abrirEditar(loc)} />
+        <AcaoRegistro tom="ativar" icone={loc.ativo ? ToggleRight : ToggleLeft}
+          rotulo={loc.ativo ? 'Inativar' : 'Ativar'}
+          visivel={podeAtivar} onClick={() => toggleAtivo(loc)} />
+      </AcoesRegistro>
+    );
+  };
+
   // ── Guard de acesso ─────────────────────────────────────────────────────────
   if (!loadingPerms && !podeVer && !isAdmin) {
     return (
@@ -366,31 +388,7 @@ export default function CadastroLocalizacao() {
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center justify-center gap-2">
-                          {loc.tipoEntrada === 'SYSTEM' && !isAdmin ? (
-                            <span className="text-xs text-gray-400 italic">Catálogo global</span>
-                          ) : (
-                            <>
-                              {podeEditar && (
-                                <button onClick={() => abrirEditar(loc)}
-                                  className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-xl transition-colors"
-                                  title="Editar">
-                                  <Pencil size={15} />
-                                </button>
-                              )}
-                              {podeAtivar && (
-                                <button onClick={() => toggleAtivo(loc)}
-                                  className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-xl transition-colors"
-                                  title={loc.ativo ? 'Inativar' : 'Ativar'}>
-                                  {loc.ativo ? <ToggleRight size={15} /> : <ToggleLeft size={15} />}
-                                </button>
-                              )}
-                              {!podeEditar && !podeAtivar && (
-                                <span className="text-xs text-gray-400 italic">Somente leitura</span>
-                              )}
-                            </>
-                          )}
-                        </div>
+                        {acoesDaLocalizacao(loc)}
                       </td>
                     </tr>
                 ))}
@@ -439,22 +437,7 @@ export default function CadastroLocalizacao() {
                 <span className={`px-2 py-1 rounded-xl text-xs font-medium ${loc.ativo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
                   {loc.ativo ? 'Ativo' : 'Inativo'}
                 </span>
-                {(loc.tipoEntrada !== 'SYSTEM' || isAdmin) && (podeEditar || podeAtivar) && (
-                  <div className="flex gap-2">
-                    {podeEditar && (
-                      <button onClick={() => abrirEditar(loc)}
-                        className="flex items-center gap-1 px-3 py-1.5 text-xs text-emerald-600 border border-emerald-200 rounded-xl hover:bg-emerald-50 transition-colors">
-                        <Pencil size={11} /> Editar
-                      </button>
-                    )}
-                    {podeAtivar && (
-                      <button onClick={() => toggleAtivo(loc)}
-                        className="px-3 py-1.5 text-xs text-amber-600 border border-amber-200 rounded-xl hover:bg-amber-50 transition-colors">
-                        {loc.ativo ? 'Inativar' : 'Ativar'}
-                      </button>
-                    )}
-                  </div>
-                )}
+                {acoesDaLocalizacao(loc)}
               </div>
             </div>
         ))}

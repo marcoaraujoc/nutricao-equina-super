@@ -2,8 +2,15 @@
 // Encaminhamentos clínicos — destino interno (prestador da equipe, ex: quiroprata,
 // ferrador) ou externo (texto livre). Encaminhar para prestador da equipe libera o
 // acesso dele a ESTE animal (DesignacaoPrestador); concluir/cancelar encerra o acesso.
+//
+// No destino EXTERNO a especialidade é um COMBOBOX, não um <select> fechado: quem é de
+// fora pode ter uma área que o catálogo da clínica não cobre (quiropraxia, acupuntura,
+// odontologia equina...), e ali o campo obrigatório virava beco sem saída. O que se
+// digita e não existe é cadastrado no catálogo DA CLÍNICA ao encaminhar
+// (`lib/catalogoManual.js#garantirEspecialidadeDaEmpresa`, `empresa_id` setado — nunca
+// global), então na próxima vez já aparece na lista dela e de mais ninguém.
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -15,8 +22,9 @@ import api from '../services/api';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import ModalJustificativa from '../components/ModalJustificativa';
-import InlineError from '../components/InlineError';
+import ErroAcao, { classeErro, temErro, type ErroAcaoDados } from '../components/ErroAcao';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -24,6 +32,9 @@ import JustificativaCancelamento from '../components/JustificativaCancelamento';
 type StatusEnc   = 'PENDENTE' | 'CONCLUIDO' | 'CANCELADO';
 type Urgencia    = 'NORMAL' | 'ALTA' | 'URGENTE';
 type DestinoTipo = 'EQUIPE' | 'EXTERNO';
+// Campo culpado na validação do formulário novo — vira `ErroAcaoDados.campos`, que é o
+// que `classeErro` usa para destacar a borda do input.
+type CampoForm   = 'especialidade' | 'prestador' | 'profissional' | 'motivo';
 
 interface Prestador {
   userId:      number;
@@ -114,9 +125,11 @@ const montarTextoEncaminhamento = (enc: Encaminhamento): string => {
   ].filter(Boolean).join('\n');
 };
 
-// ─── Card mobile (padrão do Histórico de Evolução Clínica) ─────────────────────
-
-function EncaminhamentoCard({ enc, podeEditar, podeFinalizar, podeCompartilhar, finalizando, onStatus, onFinalizar }: {
+// ─── Ações do encaminhamento — UMA declaração para o card e para a tabela ──────
+// `AcaoRegistro` decide a forma por CSS (ícone no desktop, botão com rótulo no
+// mobile), então card e linha renderizam o MESMO componente. Antes eram duas listas
+// idênticas em dois componentes — e divergiam a cada correção.
+function AcoesEncaminhamento({ enc, podeEditar, podeFinalizar, podeCompartilhar, finalizando, onStatus, onFinalizar }: {
   enc:              Encaminhamento;
   podeEditar:       boolean;
   podeFinalizar:    boolean;
@@ -125,9 +138,40 @@ function EncaminhamentoCard({ enc, podeEditar, podeFinalizar, podeCompartilhar, 
   onStatus:         (id: number, status: 'CANCELADO') => void;
   onFinalizar:      (id: number) => void;
 }) {
+  const texto = montarTextoEncaminhamento(enc);
+  return (
+    <AcoesRegistro>
+      <AcaoRegistro tom="finalizar" icone={CheckSquare} rotulo="Concluir"
+        visivel={enc.status === 'PENDENTE' && podeFinalizar} carregando={finalizando}
+        onClick={() => onFinalizar(enc.id)} />
+      {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
+      <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp"
+        visivel={podeCompartilhar} onClick={() => abrirWhatsApp(texto)} />
+      <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail"
+        visivel={podeCompartilhar}
+        onClick={() => abrirEmail(`Encaminhamento - ${enc.especialidade}`, texto)} />
+      <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
+        visivel={enc.status === 'PENDENTE' && podeEditar}
+        onClick={() => onStatus(enc.id, 'CANCELADO')} />
+    </AcoesRegistro>
+  );
+}
+
+// ─── Card mobile (padrão do Histórico de Evolução Clínica) ─────────────────────
+
+function EncaminhamentoCard({ enc, podeEditar, podeFinalizar, podeCompartilhar, finalizando, erro, onStatus, onFinalizar }: {
+  enc:              Encaminhamento;
+  podeEditar:       boolean;
+  podeFinalizar:    boolean;
+  podeCompartilhar: boolean;
+  finalizando:      boolean;
+  /** Erro da ação DESTA linha (concluir/cancelar) — ver `erroDaLinha` no pai. */
+  erro:             ErroAcaoDados | null;
+  onStatus:         (id: number, status: 'CANCELADO') => void;
+  onFinalizar:      (id: number) => void;
+}) {
   const urgencia = URGENCIA_BADGE[enc.urgencia] ?? URGENCIA_BADGE.NORMAL;
   const { destino, interno } = getDestino(enc);
-  const texto = montarTextoEncaminhamento(enc);
 
   return (
     <div className="px-4 py-3">
@@ -166,33 +210,15 @@ function EncaminhamentoCard({ enc, podeEditar, podeFinalizar, podeCompartilhar, 
         {formatData(enc.dataEncaminhamento)}{enc.veterinario ? ` • ${enc.veterinario.fullName}` : ''}
       </p>
 
-      <div className="flex flex-wrap gap-2 mt-2">
-        {enc.status === 'PENDENTE' && podeFinalizar && (
-          <button onClick={() => onFinalizar(enc.id)} disabled={finalizando}
-            className="flex items-center gap-1 px-2.5 py-1 border border-emerald-200 text-emerald-700 rounded-lg text-xs hover:bg-emerald-50 transition-colors disabled:opacity-50">
-            {finalizando ? <Loader2 size={11} className="animate-spin" /> : <CheckSquare size={11} />} Concluir
-          </button>
-        )}
-        {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
-        {podeCompartilhar && (
-          <button onClick={() => abrirWhatsApp(texto)}
-            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-green-600 rounded-lg text-xs hover:bg-green-50 transition-colors">
-            <MessageCircle size={11} /> WhatsApp
-          </button>
-        )}
-        {podeCompartilhar && (
-          <button onClick={() => abrirEmail(`Encaminhamento - ${enc.especialidade}`, texto)}
-            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-blue-500 rounded-lg text-xs hover:bg-blue-50 transition-colors">
-            <Mail size={11} /> E-mail
-          </button>
-        )}
-        {enc.status === 'PENDENTE' && podeEditar && (
-          <button onClick={() => onStatus(enc.id, 'CANCELADO')}
-            className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-red-500 rounded-lg text-xs hover:bg-red-50 transition-colors">
-            <Ban size={11} /> Cancelar
-          </button>
-        )}
+      <div className="mt-2">
+        <AcoesEncaminhamento
+          enc={enc} podeEditar={podeEditar} podeFinalizar={podeFinalizar}
+          podeCompartilhar={podeCompartilhar} finalizando={finalizando}
+          onStatus={onStatus} onFinalizar={onFinalizar}
+        />
       </div>
+
+      <ErroAcao erro={erro} className="mt-2" />
     </div>
   );
 }
@@ -210,7 +236,6 @@ function EncaminhamentoRow({ enc, podeEditar, podeFinalizar, podeCompartilhar, f
 }) {
   const urgencia = URGENCIA_BADGE[enc.urgencia] ?? URGENCIA_BADGE.NORMAL;
   const { destino, interno } = getDestino(enc);
-  const texto = montarTextoEncaminhamento(enc);
 
   return (
     <tr className="hover:bg-gray-50 transition-colors">
@@ -244,38 +269,88 @@ function EncaminhamentoRow({ enc, podeEditar, podeFinalizar, podeCompartilhar, f
         <p className="text-xs font-medium text-gray-800">{enc.veterinario?.fullName ?? '—'}</p>
       </td>
       <td className="px-4 py-3">
-        <div className="flex items-center justify-start gap-1">
-          {enc.status === 'PENDENTE' && podeFinalizar && (
-            <button onClick={() => onFinalizar(enc.id)} disabled={finalizando} title="Concluir"
-              className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
-              {finalizando ? <Loader2 size={14} className="animate-spin" /> : <CheckSquare size={14} />}
-            </button>
-          )}
-          {podeCompartilhar && (
-            <button onClick={() => abrirWhatsApp(texto)} title="WhatsApp"
-              className="p-1.5 text-green-500 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors">
-              <MessageCircle size={14} />
-            </button>
-          )}
-          {podeCompartilhar && (
-            <button onClick={() => abrirEmail(`Encaminhamento - ${enc.especialidade}`, texto)} title="E-mail"
-              className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-              <Mail size={14} />
-            </button>
-          )}
-          {enc.status === 'PENDENTE' && podeEditar && (
-            <button onClick={() => onStatus(enc.id, 'CANCELADO')} title="Cancelar"
-              className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-              <Ban size={14} />
-            </button>
-          )}
-        </div>
+        <AcoesEncaminhamento
+          enc={enc} podeEditar={podeEditar} podeFinalizar={podeFinalizar}
+          podeCompartilhar={podeCompartilhar} finalizando={finalizando}
+          onStatus={onStatus} onFinalizar={onFinalizar}
+        />
       </td>
     </tr>
   );
 }
 
 // ─── Formulário de novo encaminhamento ────────────────────────────────────────
+
+// ─── ComboEspecialidade ───────────────────────────────────────────────────────
+// Campo de especialidade que ACEITA texto novo. Sugere o catálogo enquanto se digita,
+// e avisa quando o que está escrito ainda não existe — o cadastro em si acontece no
+// backend, ao encaminhar, no catálogo da própria clínica.
+
+const semAcento = (v: string) =>
+  v.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+
+function ComboEspecialidade({ valor, opcoes, erro, onChange, inputRef }: {
+  valor:     string;
+  opcoes:    string[];
+  erro:      boolean;
+  onChange:  (v: string) => void;
+  inputRef:  React.MutableRefObject<HTMLElement | null>;
+}) {
+  const [aberto, setAberto] = useState(false);
+
+  const jaExiste = opcoes.some(o => semAcento(o) === semAcento(valor));
+  // Texto que É exatamente uma opção não filtra nada: senão, escolhida a especialidade,
+  // a lista ficaria com um item só e não haveria como trocar sem apagar o campo antes.
+  const sugestoes = (!valor.trim() || jaExiste)
+    ? opcoes
+    : opcoes.filter(o => semAcento(o).includes(semAcento(valor)));
+
+  const ehNova = valor.trim().length > 0 && !jaExiste;
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        ref={el => { inputRef.current = el; }}
+        value={valor}
+        onChange={e => { onChange(e.target.value); setAberto(true); }}
+        // `onClick` ALÉM de `onFocus`: a opção é escolhida num onMouseDown com
+        // preventDefault, então o foco nunca sai do input — e `focus` não dispara de
+        // novo num campo já focado. Só com onFocus, clicar no campo depois de escolher
+        // não reabriria a lista.
+        onFocus={() => setAberto(true)}
+        onClick={() => setAberto(true)}
+        onBlur={() => setAberto(false)}
+        placeholder="Digite ou escolha — ex: Quiropraxia, Oftalmologia..."
+        className={`w-full border rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600 ${erro ? 'border-red-400' : 'border-gray-200'}`}
+      />
+
+      {aberto && sugestoes.length > 0 && (
+        <div className="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg">
+          {sugestoes.map(s => (
+            <button
+              key={s}
+              type="button"
+              // preventDefault mantém o foco no input: sem isso o blur fecharia a lista
+              // antes de o clique chegar na opção.
+              onMouseDown={e => { e.preventDefault(); onChange(s); setAberto(false); }}
+              className={`w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 ${
+                semAcento(s) === semAcento(valor) ? 'text-emerald-700 font-medium' : 'text-gray-700'
+              }`}>
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {ehNova && (
+        <p className="mt-1 text-[11px] text-emerald-700">
+          Nova especialidade — será cadastrada no catálogo da sua clínica ao encaminhar.
+        </p>
+      )}
+    </div>
+  );
+}
 
 function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
   animalId:    number;
@@ -285,8 +360,10 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
 }) {
   const [prestadores,         setPrestadores]         = useState<Prestador[]>([]);
   const [servicosDisponiveis, setServicosDisponiveis] = useState<string[]>([]);
-  // Erro de ação exibido inline (substitui o toast de erro)
-  const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro de AÇÃO (`components/ErroAcao`): a mensagem mora no rodapé, junto do botão que
+  // a disparou, e `campos` diz qual input destacar. `InlineError` fica para o erro de
+  // CARGA, no topo da página — é a divisão que o componente documenta.
+  const [erro, setErro] = useState<ErroAcaoDados | null>(null);
   const [especialidadesBanco, setEspecialidadesBanco] = useState<string[]>([]);
   const [loadingPrest,        setLoadingPrest]        = useState(true);
   const [destinoTipo,         setDestinoTipo]         = useState<DestinoTipo>('EQUIPE');
@@ -299,6 +376,10 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
   const [vetDestino,     setVetDestino]     = useState('');
   const [clinicaDestino, setClinicaDestino] = useState('');
   const [salvando,       setSalvando]       = useState(false);
+  const refEspecEquipe  = useRef<HTMLSelectElement>(null);
+  const refEspecExterno = useRef<HTMLElement | null>(null);
+  const refProfissional = useRef<HTMLInputElement>(null);
+  const refMotivo       = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     let cancelado = false;
@@ -352,17 +433,44 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
     else if (servs.length > 0) setEspecialidade(servs[0]);
   };
 
+  // A mensagem fica junto do botão, mas o campo culpado pode estar fora da dobra num
+  // formulário longo — por isso ele também recebe o foco.
+  const reprovar = (campo: CampoForm, mensagem: string, el: HTMLElement | null) => {
+    setErro({ mensagem, campos: [campo] });
+    el?.scrollIntoView({ block: 'nearest' });
+    el?.focus();
+  };
+
   const handleSalvar = async () => {
-    if (!evolucaoId)    { setErroInline('Inicie uma evolução antes de criar um encaminhamento.'); return; }
-    if (!motivo.trim()) { setErroInline('Informe o motivo do encaminhamento'); return; }
-    if (destinoTipo === 'EQUIPE' && !prestadorSel) {
-      setErroInline('Selecione o prestador da equipe'); return;
-    }
+    if (!evolucaoId) { setErro({ mensagem: 'Inicie uma evolução antes de criar um encaminhamento.' }); return; }
+
     // Para EQUIPE, a especialidade escolhida no filtro já conta como "informada" mesmo
     // que `especialidade` (setada só ao clicar num prestador) ainda esteja vazia —
     // evita o erro "Informe a especialidade" quando o usuário já selecionou no filtro.
     const especialidadeEfetiva = especialidade.trim() || filtroServico.trim();
-    if (!especialidadeEfetiva) { setErroInline('Informe a especialidade'); return; }
+
+    // Validação NA ORDEM DOS CAMPOS na tela: quem corrige lê o formulário de cima para
+    // baixo, e apontar primeiro o motivo (que é o último campo) mandava a pessoa para o
+    // fim da tela antes de ela saber que a especialidade também faltava.
+    if (!especialidadeEfetiva) {
+      reprovar('especialidade', 'Informe a especialidade',
+        destinoTipo === 'EQUIPE' ? refEspecEquipe.current : refEspecExterno.current);
+      return;
+    }
+    if (destinoTipo === 'EQUIPE' && !prestadorSel) {
+      reprovar('prestador', 'Selecione o prestador da equipe', refEspecEquipe.current);
+      return;
+    }
+    // Profissional é OBRIGATÓRIO no destino EXTERNO: sem o nome, o encaminhamento não
+    // registra PARA QUEM o paciente foi. A clínica segue opcional (pode ser autônomo).
+    if (destinoTipo === 'EXTERNO' && !vetDestino.trim()) {
+      reprovar('profissional', 'Informe o profissional de destino', refProfissional.current);
+      return;
+    }
+    if (!motivo.trim()) {
+      reprovar('motivo', 'Informe o motivo do encaminhamento', refMotivo.current);
+      return;
+    }
 
     setSalvando(true);
     try {
@@ -385,8 +493,10 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
           : 'Encaminhamento registrado');
       onCriado();
     } catch (err) {
-      const e = err as { isPermissionError?: boolean };
-      if (!e.isPermissionError) setErroInline('Erro ao criar encaminhamento');
+      // A mensagem do backend vence a genérica — é ela que diz QUAL regra reprovou
+      // (destino obrigatório, evolução de outro, paciente inativo...).
+      const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
+      if (!e.isPermissionError) setErro({ mensagem: e.response?.data?.error ?? 'Erro ao criar encaminhamento' });
     } finally { setSalvando(false); }
   };
 
@@ -395,10 +505,8 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
 
       {/* Alterou qualquer campo → o erro anterior some (change borbulha) */}
       <div className="p-5 space-y-4"
-        onChange={() => setErroInline(null)}
-        onInput={() => setErroInline(null)}>
-
-      <InlineError message={erroInline} />
+        onChange={() => setErro(null)}
+        onInput={() => setErro(null)}>
 
       {/* Tipo de destino */}
       <div className="flex gap-2">
@@ -406,7 +514,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
           { key: 'EQUIPE',  label: 'Prestador da equipe', icon: <UserCheck size={13} /> },
           { key: 'EXTERNO', label: 'Profissional externo', icon: <ExternalLink size={13} /> },
         ] as { key: DestinoTipo; label: string; icon: React.ReactNode }[]).map(opt => (
-          <button key={opt.key} onClick={() => { setDestinoTipo(opt.key); setPrestadorSel(null); setEspecialidade(''); setFiltroServico(''); }}
+          <button key={opt.key} onClick={() => { setDestinoTipo(opt.key); setPrestadorSel(null); setEspecialidade(''); setFiltroServico(''); setErro(null); }}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium border transition-colors ${
               destinoTipo === opt.key
                 ? 'bg-emerald-600 text-white border-emerald-600'
@@ -417,14 +525,24 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
         ))}
       </div>
 
+      {/* ⚠️ As duas pernas levam `key` PRÓPRIA. Sem ela o React reconcilia por posição,
+          reusa o mesmo nó DOM entre os ramos e o <select> de especialidade da equipe
+          (value=filtroServico) vira o campo do externo (value=especialidade) — foi o que
+          fazia o campo, depois de trocar de destino, não exibir o que se acabou de
+          escolher. */}
       {destinoTipo === 'EQUIPE' ? (
-        <div className="space-y-3">
+        <div key="destino-equipe" className="space-y-3">
           {/* Seletor de especialidade — lista só aparece após selecionar */}
           <div>
             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Especialidade</label>
-            <select value={filtroServico}
+            <select ref={refEspecEquipe} value={filtroServico}
               onChange={e => { setFiltroServico(e.target.value); setPrestadorSel(null); }}
-              className={`w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-emerald-600 ${!filtroServico ? 'text-gray-400' : 'text-gray-900'}`}>
+              aria-invalid={temErro(erro, 'especialidade') || temErro(erro, 'prestador')}
+              className={classeErro(
+                temErro(erro, 'prestador') ? { mensagem: '', campos: ['especialidade'] } : erro,
+                'especialidade',
+                `w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-emerald-600 ${!filtroServico ? 'text-gray-400' : 'text-gray-900'}`,
+              )}>
               <option value="">— Selecionar —</option>
               {servicos.map(s => <option key={s} value={s} className="text-gray-900">{s}</option>)}
             </select>
@@ -493,27 +611,25 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
           )}
         </div>
       ) : (
-        <div className="space-y-3">
+        <div key="destino-externo" className="space-y-3">
           <div>
             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Especialidade *</label>
-            {servicos.length > 0 ? (
-              <select value={especialidade} onChange={e => setEspecialidade(e.target.value)}
-                className={`w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-emerald-600 ${!especialidade ? 'text-gray-400' : 'text-gray-900'}`}>
-                <option value="">— Selecionar —</option>
-                {servicos.map(s => <option key={s} value={s} className="text-gray-900">{s}</option>)}
-              </select>
-            ) : (
-              <input type="text" value={especialidade} onChange={e => setEspecialidade(e.target.value)}
-                placeholder="Ex: Quiropraxia, Oftalmologia..."
-                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600" />
-            )}
+            <ComboEspecialidade
+              valor={especialidade}
+              opcoes={servicos}
+              erro={temErro(erro, 'especialidade')}
+              onChange={v => { setEspecialidade(v); setErro(null); }}
+              inputRef={refEspecExterno}
+            />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Profissional</label>
-              <input type="text" value={vetDestino} onChange={e => setVetDestino(e.target.value)}
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Profissional *</label>
+              <input type="text" ref={refProfissional} value={vetDestino} onChange={e => setVetDestino(e.target.value)}
                 placeholder="Nome do profissional"
-                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600" />
+                aria-invalid={temErro(erro, 'profissional')}
+                className={classeErro(erro, 'profissional',
+                  'w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600')} />
             </div>
             <div>
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Clínica</label>
@@ -527,9 +643,11 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
 
       <div>
         <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Motivo *</label>
-        <textarea value={motivo} onChange={e => setMotivo(e.target.value)} rows={3}
+        <textarea ref={refMotivo} value={motivo} onChange={e => setMotivo(e.target.value)} rows={3}
           placeholder="Descreva o motivo do encaminhamento..."
-          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600 resize-none" />
+          aria-invalid={temErro(erro, 'motivo')}
+          className={classeErro(erro, 'motivo',
+            'w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600 resize-none')} />
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -552,7 +670,9 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
 
         </div>
 
-      <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100">
+      <div className="px-5 py-4 border-t border-gray-100 space-y-3">
+      <ErroAcao erro={erro} />
+      <div className="flex justify-end gap-2">
         <button onClick={onFechar}
           className="px-4 py-2.5 text-sm font-medium text-gray-500 hover:text-gray-700 rounded-2xl transition-colors">
           Cancelar
@@ -562,6 +682,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
           {salvando ? <Loader2 size={14} className="animate-spin" /> : <Share2 size={14} />}
           Encaminhar
         </button>
+      </div>
       </div>
 
     </div>
@@ -591,11 +712,14 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucao
   const [cancelandoId,     setCancelandoId]    = useState<number | null>(null);
   const [finalizandoId,    setFinalizandoId]   = useState<number | null>(null);
   const [page,             setPage]            = useState(1);
-  // Erro de ação exibido inline (substitui o toast de erro)
-  const [erroInline, setErroInline] = useState<string | null>(null);
+  // Erro de AÇÃO, guardado com o id da LINHA que o disparou — concluir e cancelar são
+  // ações de uma linha específica, e a mensagem no topo da página deixaria o usuário
+  // sem saber a qual encaminhamento ela se refere. Mesmo padrão da tela de Vacina.
+  const [erroLinha, setErroLinha] = useState<{ id: number; dados: ErroAcaoDados } | null>(null);
+  const erroDaLinha = (id: number) => (erroLinha?.id === id ? erroLinha.dados : null);
 
-  const semPermissao = (acao: string) =>
-    setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
+  const semPermissao = (id: number, acao: string) =>
+    setErroLinha({ id, dados: { mensagem: `Sem permissão para ${acao}. Verifique com o responsável da equipe.` } });
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -618,9 +742,10 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucao
 
   // Cancelamento — rota /status, gateada por `atendimento.encaminhamentos.editar`.
   const handleStatus = async (id: number, status: 'CANCELADO', motivo?: string) => {
-    if (!podeEditar) { semPermissao('alterar encaminhamentos'); return; }
+    if (!podeEditar) { semPermissao(id, 'alterar encaminhamentos'); return; }
     // Exige justificativa — abre o modal e retorna aqui com o motivo
     if (!motivo) { setCancelandoId(id); return; }
+    setErroLinha(null);
     try {
       await api.patch(`/clinica/encaminhamentos/${id}/status`, { status, motivo });
       const enc = encaminhamentos.find(e => e.id === id);
@@ -630,7 +755,9 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucao
       carregar();
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
-      if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao atualizar encaminhamento');
+      if (!e.isPermissionError) {
+        setErroLinha({ id, dados: { mensagem: e.response?.data?.error ?? 'Erro ao atualizar encaminhamento' } });
+      }
     } finally {
       setCancelandoId(null);
     }
@@ -640,7 +767,8 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucao
   // (mesmo padrão de Evolução/Prescrição/Vacina/Exames: não reusa a rota /status,
   // que é do `editar` — senão o Controle de Acesso deixaria de valer para esta ação).
   const handleFinalizar = async (id: number) => {
-    if (!podeFinalizar) { semPermissao('finalizar encaminhamentos'); return; }
+    if (!podeFinalizar) { semPermissao(id, 'finalizar encaminhamentos'); return; }
+    setErroLinha(null);
     setFinalizandoId(id);
     try {
       await api.patch(`/clinica/encaminhamentos/${id}/finalizar`);
@@ -651,7 +779,9 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucao
       carregar();
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
-      if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao concluir encaminhamento');
+      if (!e.isPermissionError) {
+        setErroLinha({ id, dados: { mensagem: e.response?.data?.error ?? 'Erro ao concluir encaminhamento' } });
+      }
     } finally {
       setFinalizandoId(null);
     }
@@ -706,8 +836,6 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucao
   return (
     <div className="p-4 space-y-4">
 
-      <InlineError message={erroInline} />
-
       {podeCriar && (
         <FormNovoEncaminhamento
           key={formKey}
@@ -751,6 +879,7 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucao
                   podeFinalizar={podeFinalizar && (isGestor || eAutor)}
                   podeCompartilhar={podeCompartilhar}
                   finalizando={finalizandoId === enc.id}
+                  erro={erroDaLinha(enc.id)}
                   onStatus={handleStatus}
                   onFinalizar={handleFinalizar}
                 />
@@ -774,17 +903,29 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucao
               <tbody className="divide-y divide-gray-50">
                 {pageItems.map(enc => {
                   const eAutor = enc.veterinario?.id === (user?.id ?? 0);
+                  const erroDesta = erroDaLinha(enc.id);
+                  // O erro vai numa <tr> própria logo abaixo da linha: dentro de uma
+                  // célula ele espremeria a coluna, e no topo da tabela não diria a
+                  // QUAL encaminhamento se refere.
                   return (
-                    <EncaminhamentoRow
-                      key={enc.id}
-                      enc={enc}
-                      podeEditar={podeEditar && (isGestor || eAutor)}
-                      podeFinalizar={podeFinalizar && (isGestor || eAutor)}
-                      podeCompartilhar={podeCompartilhar}
-                      finalizando={finalizandoId === enc.id}
-                      onStatus={handleStatus}
-                      onFinalizar={handleFinalizar}
-                    />
+                    <Fragment key={enc.id}>
+                      <EncaminhamentoRow
+                        enc={enc}
+                        podeEditar={podeEditar && (isGestor || eAutor)}
+                        podeFinalizar={podeFinalizar && (isGestor || eAutor)}
+                        podeCompartilhar={podeCompartilhar}
+                        finalizando={finalizandoId === enc.id}
+                        onStatus={handleStatus}
+                        onFinalizar={handleFinalizar}
+                      />
+                      {erroDesta && (
+                        <tr>
+                          <td colSpan={6} className="px-4 pb-3">
+                            <ErroAcao erro={erroDesta} />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
               </tbody>

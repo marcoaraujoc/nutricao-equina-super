@@ -12,7 +12,10 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import FotoAnimal from '../components/FotoAnimal';
 import ModalJustificativa from '../components/ModalJustificativa';
+import { MOTIVOS_INATIVACAO_ANIMAL } from '../utils/motivosInativacao';
+import { justificativaDe } from '../utils/motivosInativacao';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import { type ErroAcaoDados } from '../components/ErroAcao';
 import { formatDate } from '../utils/dateUtils';
 
@@ -46,6 +49,7 @@ interface Animal {
   desativadoEm?:        string | null;
   desativadoPorNome?:   string | null;
   desativadoMotivo?:    string | null;
+  desativadoMotivoTipo?: string | null;
 }
 
 type FiltroCampo = 'animal' | 'proprietario';
@@ -72,6 +76,33 @@ const idadeDisplay = (animal: Animal): string => {
 };
 
 // ─── Card mobile ──────────────────────────────────────────────────────────────
+// ─── Ações do paciente — UMA declaração p/ a tabela E p/ o card ───────────────
+// `AcaoRegistro` decide a forma por CSS: ícone no desktop, botão com rótulo no
+// mobile (onde antes eram ícones soltos, empilhados na lateral do card).
+// ⚠️ Paciente INATIVO só oferece "Ativar" — editar um registro inativo é o caminho
+// errado: primeiro se reativa, aí se edita.
+function AcoesAnimalVet({ animal, podeEditar, podeExcluir, podeReativarExcluido, onEditar, onExcluir, onReativarExcluido }: {
+  animal:               Animal;
+  podeEditar:           boolean;
+  podeExcluir:          boolean;
+  podeReativarExcluido: boolean;
+  onEditar:             () => void;
+  onExcluir:            () => void;
+  onReativarExcluido:   () => void;
+}) {
+  const excluido = animal.ativo === false;
+  return (
+    <AcoesRegistro>
+      <AcaoRegistro tom="ativar" icone={ToggleLeft} rotulo="Ativar" titulo="Ativar paciente"
+        visivel={excluido && podeReativarExcluido} onClick={onReativarExcluido} />
+      <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
+        visivel={!excluido && podeEditar} onClick={onEditar} />
+      <AcaoRegistro tom="ativar" icone={ToggleRight} rotulo="Inativar" titulo="Inativar paciente"
+        visivel={!excluido && podeExcluir} onClick={onExcluir} />
+    </AcoesRegistro>
+  );
+}
+
 function AnimalCardMobile({
   animal, filtroAtivo, isGestor, onDashboard, onEditar, podeEditar,
   podeExcluir, podeReativarExcluido, onExcluir, onReativarExcluido,
@@ -89,9 +120,10 @@ function AnimalCardMobile({
 }) {
   const excluido = animal.ativo === false;
   return (
-    <div className={`bg-white rounded-2xl border shadow-sm p-4 flex items-center gap-3 ${
+    <div className={`bg-white rounded-2xl border shadow-sm p-4 ${
       excluido ? 'border-red-200 bg-red-50/30 opacity-75' : 'border-gray-100'
     }`}>
+      <div className="flex items-center gap-3">
       <div className="w-14 h-14 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
         <FotoAnimal url={animal.photoUrl} nome={animal.nome} />
       </div>
@@ -134,38 +166,21 @@ function AnimalCardMobile({
           <p className="text-[11px] text-gray-400 mt-1">
             Inativado em {formatDate(animal.desativadoEm)}
             {animal.desativadoPorNome ? ` por ${animal.desativadoPorNome}` : ''}
-            {animal.desativadoMotivo ? <> — <JustificativaCancelamento texto={animal.desativadoMotivo} className="inline" /></> : ''}
+            {justificativaDe(animal) ? <> — <JustificativaCancelamento texto={justificativaDe(animal)} className="inline" /></> : ''}
           </p>
         )}
       </div>
 
-      <div className="flex flex-col gap-1 flex-shrink-0">
-        {excluido ? (
-          podeReativarExcluido && (
-            <button onClick={onReativarExcluido}
-              className="p-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
-              title="Ativar paciente">
-              <ToggleLeft size={15} />
-            </button>
-          )
-        ) : (
-          <>
-            {podeEditar && (
-              <button onClick={onEditar}
-                className="p-2 text-orange-600 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors"
-                title="Editar">
-                <Pencil size={15} />
-              </button>
-            )}
-            {podeExcluir && (
-              <button onClick={onExcluir}
-                className="p-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
-                title="Inativar paciente">
-                <ToggleRight size={15} />
-              </button>
-            )}
-          </>
-        )}
+      </div>
+
+      {/* Ações no RODAPÉ do card, como nas demais listas — na lateral elas
+          espremiam o nome do paciente assim que ganharam rótulo. */}
+      <div className="mt-3 pt-3 border-t border-gray-50">
+        <AcoesAnimalVet
+          animal={animal} podeEditar={podeEditar} podeExcluir={podeExcluir}
+          podeReativarExcluido={podeReativarExcluido}
+          onEditar={onEditar} onExcluir={onExcluir} onReativarExcluido={onReativarExcluido}
+        />
       </div>
     </div>
   );
@@ -226,11 +241,13 @@ const AnimaisVet = () => {
     setModalExcluir(null); setModalReativar(null); setErroModalAtivo(null);
   };
 
-  const confirmarExcluir = async (motivo: string) => {
+  const confirmarExcluir = async (motivo: string, motivoTipo?: string) => {
     if (!modalExcluir) return;
     setProcessandoAtivo(true); setErroModalAtivo(null);
     try {
-      await api.delete(`/animais/${modalExcluir.id}`, { data: { motivo } });
+      // `motivoTipo` vai SEPARADO da descrição: é a categoria que o relatório agrupa,
+      // e no banco ela tem coluna e índice próprios.
+      await api.delete(`/animais/${modalExcluir.id}`, { data: { motivo, motivoTipo } });
       toast.success('Paciente inativado com sucesso');
       fecharModaisAtivo();
       await loadAnimais();
@@ -560,38 +577,19 @@ const AnimaisVet = () => {
                           <>
                             <td className="px-3 py-3.5 whitespace-nowrap text-gray-600 text-sm">{formatDate(animal.desativadoEm)}</td>
                             <td className="px-3 py-3.5 whitespace-nowrap text-gray-600 text-sm">{animal.desativadoPorNome ?? '—'}</td>
-                            <td className="px-3 py-3.5 text-sm"><JustificativaCancelamento texto={animal.desativadoMotivo} /></td>
+                            <td className="px-3 py-3.5 text-sm"><JustificativaCancelamento texto={justificativaDe(animal)} /></td>
                           </>
                         )}
                         <td className="pr-5 py-3.5" onClick={e => e.stopPropagation()}>
-                          <div className="flex items-center justify-end gap-1">
-                            {excluido ? (
-                              podeReativarExcluido && (
-                                <button onClick={() => setModalReativar(animal)}
-                                  className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
-                                  title="Ativar paciente">
-                                  <ToggleLeft size={15} />
-                                </button>
-                              )
-                            ) : (
-                              <>
-                                {podeEditarAnimal && (
-                                  <button onClick={() => irParaEditar(animal)}
-                                    className="p-1.5 text-orange-600 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors"
-                                    title="Editar">
-                                    <Pencil size={15} />
-                                  </button>
-                                )}
-                                {podeExcluirAnimal && (
-                                  <button onClick={() => setModalExcluir(animal)}
-                                    className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
-                                    title="Inativar paciente">
-                                    <ToggleRight size={15} />
-                                  </button>
-                                )}
-                              </>
-                            )}
-                          </div>
+                          <AcoesAnimalVet
+                            animal={animal}
+                            podeEditar={podeEditarAnimal}
+                            podeExcluir={podeExcluirAnimal}
+                            podeReativarExcluido={podeReativarExcluido}
+                            onEditar={() => irParaEditar(animal)}
+                            onExcluir={() => setModalExcluir(animal)}
+                            onReativarExcluido={() => setModalReativar(animal)}
+                          />
                         </td>
                       </tr>
                       );
@@ -624,7 +622,9 @@ const AnimaisVet = () => {
           ? `${modalExcluir.nome} deixa de aparecer em qualquer tela do sistema (agenda, busca, relatórios, orçamento...) — igual a uma exclusão, mas reversível. Só o gestor consegue reverter, na aba Inativos.`
           : undefined}
         acaoLabel="Inativar"
-        placeholder="Descreva o motivo da inativação (obrigatório)..."
+        // Motivo padronizado + descrição; a descrição só é obrigatória em "Outro".
+        motivos={MOTIVOS_INATIVACAO_ANIMAL}
+        motivoLabel="Motivo da inativação"
         processando={processandoAtivo}
         erro={erroModalAtivo}
         onConfirmar={confirmarExcluir}

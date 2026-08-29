@@ -1317,6 +1317,68 @@ Aplicado em Evolução, Prescrição, Exames, Vacina, Encaminhamento e no Histó
 Paciente (`Atendimento.tsx`), tanto nos ícones do desktop quanto nas pílulas do card
 mobile. Tela nova do módulo já nasce assim.
 
+#### AÇÃO DE REGISTRO — `components/AcaoRegistro.tsx` é FONTE ÚNICA (2026-08-28)
+```
+≥ md (desktop) → só o ÍCONE, pintado          (linha de tabela)
+< md (mobile)  → BOTÃO com rótulo, em pílula  (card)
+```
+A ação é declarada UMA vez; quem escolhe a forma é o CSS. Antes o par
+"ícone na tabela / pílula no card" estava copiado nos dois blocos de cada tela —
+dez cópias que divergiam a cada correção (o card da Prescrição ficou sem o
+Finalizar; o do Orçamento escondia o Editar em vez de explicar por que ele está
+travado; Ver/Imprimir do Orçamento eram CINZA, que a §6 reserva ao indisponível).
+```tsx
+<AcoesRegistro>
+  <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Alterar" visivel={podeEditar} onClick={…} />
+  <AcaoRegistro tom="ver"     icone={Eye}    rotulo="Visualizar" onClick={…} />
+  <AcaoRegistro tom="cancelar" icone={Ban}   rotulo="Cancelar" visivel={cancelavel} onClick={…} />
+</AcoesRegistro>
+```
+`tom` (não a cor) escolhe a paleta da §6: `alterar` laranja · `ver`/`finalizar`/
+`executar` emerald · `assumir` teal · `aprovar` âmbar · `imprimir` azul ·
+`whatsapp` verde · `email` azul · `ativar` azul (é uma CHAVE, o ícone
+ToggleRight/ToggleLeft é que diz a posição) · `cancelar` vermelho · `neutro` cinza.
+⚠️ `icone` recebe o COMPONENTE (`Pencil`), não um elemento (`<Pencil />`) — o
+tamanho acompanha o breakpoint por classe (`w-3 h-3 md:w-[15px]`), que vence o
+`width`/`height` que o lucide escreve no `<svg>`.
+⚠️ `visivel={false}` NÃO renderiza. Ação sem permissão não vira botão cinza —
+cinza é o indisponível, e botão que só falha depois do clique é a armadilha 28-d.
+⚠️ Sem rótulo visível no desktop, quem dá nome ao botão é `aria-label` + `title`,
+os dois vindos de `rotulo`/`titulo`. Por isso `rotulo` é obrigatório.
+⚠️ `AcoesRegistro` mantém `flex-wrap` TAMBÉM no desktop: celular DEITADO passa de
+768px, entra no `md:` e os ícones saíam para fora do card.
+⚠️ Onde a tela tem os dois blocos (`hidden md:block` + `md:hidden`), extraia a
+lista para UMA função/componente (`acoesDoGrupo`, `AcoesEncaminhamento`…) e chame
+das duas — é isso que impede a divergência voltar. A autoria/permissão de cada
+ação se resolve DENTRO dela, não em cada bloco.
+Aplicado em TODA lista de registro do sistema: Atendimento (Evolução, Prescrição,
+Vacina, Exames, Encaminhamento), Execução de Prescrição e Painel Principal (fila do
+plantão), Orçamento, Farmácia, Estoque de Vacinas, Exames Nutricionais + Resultados,
+`ExamesSolicitadosPanel`, Exame de Compra, Medicamentos, Procedimentos, e os
+CADASTROS: Fornecedor, Prestador, Tratador, Proprietário, Localização, Vacina,
+combos do Cadastro de Procedimento, Equipe, Pacientes (`AnimaisVet`) e
+`VetDashboard`. `CompartilharPdfBotoes` também passou a sair por ele, então
+WhatsApp/E-mail do PDF ficam responsivos em qualquer tela que o use.
+⚠️ **CARD de cadastro põe as ações no RODAPÉ** (`mt-3 pt-3 border-t border-gray-50`),
+nunca numa coluna lateral: com rótulo elas espremem o nome do registro. Foi por isso
+que os cards de `AnimaisVet` e `VetDashboard` deixaram de ser `flex items-center` com
+uma tira de ícones à direita.
+FICAM de fora, de propósito:
+- o `X` de fechar modal, o refresh de cabeçalho e as setas de paginação — são CROMO,
+  não ação do registro;
+- os dois ícones da linha de item da FATURA, que convivem com o valor à direita e
+  viram cartão alto demais se ganharem rótulo;
+- o chip de item DENTRO do formulário (Prescrição/Vacina) e as linhas da tabela de
+  digitação manual do resultado — são controles de FORMULÁRIO, não ações de registro;
+- os botões por item DENTRO do modal de execução (§ "Execução de Prescrição"), que já
+  têm decisão própria registrada;
+- `Usuarios.tsx`, tabela ADMIN-only sem card mobile (rola na horizontal por projeto);
+- o cabeçalho do acordeão de vacina LEGADA (`CadastroVacina`), onde a linha inteira já
+  é o botão de expandir;
+- a Central de Documentos (`modules/documentos/`), que tem padrão próprio: card com
+  botão primário + menu de overflow no desktop e um fluxo MOBILE dedicado
+  (`Mobile.tsx`), que não é o desktop encolhido.
+
 #### DATA E HORA — `utils/dateUtils.ts` é FONTE ÚNICA (2026-08-23)
 ```
 DATA PURA (dia do calendário, sem hora)  → formatDate / formatDateShort
@@ -1404,6 +1466,43 @@ quem não passa mantém o comportamento antigo).
   23:30 roda 22:30 em Manaus. Para cada clínica fechar no próprio fim de dia, o
   caminho é agendar por empresa (ou rodar de hora em hora filtrando por
   `hojeNaEmpresa`) — decisão de produto em aberto.
+
+#### CAMPO DE DATA — `DateInput`, NUNCA `<input type="date">` (2026-08-28)
+```
+Campo de formulário  → <DateInput ... />              (mensagem de erro ABAIXO)
+Filtro de toolbar    → <DateInput ... compacto />     (erro no `title` + vermelho)
+```
+⚠️ **`<input type="date">` cru exibe MM/DD/AAAA** quando o locale do navegador é
+en-US — o nativo segue o browser e o Chrome IGNORA o `lang` da página. É por isso que
+`DateInput` existe: ele mantém o valor em ISO (`YYYY-MM-DD`, ou `YYYY-MM-DDTHH:MM`
+com `withTime`) e exibe/aceita sempre DD/MM/AAAA.
+🔴 **DATA INVÁLIDA RECLAMA, e diz O QUE está errado.** Até 2026-08-28 os dois
+componentes de data recusavam `31/02/2026` em SILÊNCIO, e o `DateInput` fazia pior: ao
+sair do campo VOLTAVA ao último valor válido — quem digitava errado via o campo
+"consertar-se" sozinho para a data ANTERIOR e salvava aquela achando que tinha trocado.
+Agora o texto digitado PERMANECE (dá para corrigir o dígito, não recomeçar) e a
+mensagem é específica: "Dia inválido — fevereiro de 2026 tem 28 dias", "Mês inválido
+(use de 01 a 12)", "Ano inválido", "Data posterior ao permitido (DD/MM/AAAA)".
+Genérico ("data inválida") deixa a pessoa olhando para os três campos sem saber qual.
+Regra em `utils/dataValidacao.ts` — FONTE ÚNICA de `DateInput` e `DateInputBR`; duas
+validações davam veredictos diferentes para o mesmo texto.
+🔴 **`onChange('')` no inválido — e o CALLER decide o que fazer com isso:**
+```
+FORMULÁRIO → deixe zerar. É o que impede salvar o valor ANTIGO sem ninguém notar,
+             e o que faz a validação de campo obrigatório disparar.
+FILTRO     → `onChange={v => { if (v) setX(v); }}`. Nada é gravado, então não há
+             valor velho a proteger; apagar a tela enquanto a pessoa corrige um
+             dígito não ajuda ninguém. Ver MapaAtendimento, onde `dataFiltro` vai
+             direto para a query e para `new Date(x + 'T12:00:00')` — vazio ali
+             viraria `Invalid Date` e uma chamada `?data=`.
+```
+⚠️ `min`/`max` deixam de ser só limite do calendário: passam a ser VALIDADOS com
+mensagem. No `MapaAtendimento` é o que impede início depois do fim.
+⚠️ **NÃO converter `PeriodoSelector`**: lá o `<input type="date">` é `opacity-0` atrás
+de um ícone — é seletor puro, sem texto para formatar. `DateInput` renderiza texto
+visível e quebraria o botão.
+⚠️ Ao converter, troque `focus:` por `focus-within:` no `className`: o foco passa a
+estar no input DENTRO do wrapper, e sem isso a borda de foco nunca acende.
 
 #### Onde o ERRO aparece — ABAIXO DO BOTÃO QUE O DISPAROU
 ```
@@ -4855,6 +4954,7 @@ POST   /lancar-na-fatura                 → { faturaId, itemIds } cria FaturaIt
 | `MemoriaClinicaPanel.tsx` | Memória Clínica do Paciente (IA) em AnimalDetail. Highlights clicáveis no topo (realçam e rolam até os tópicos que os comprovam) + resumo por tópicos; tópico abre o registro de origem via `onAbrirRef`. Ver seção 7. |
 | `relatorios/AnaliseFinanceiraIA.tsx` | IA Financeira em Relatórios > Financeiro. Highlights + análise textual do período; chamada SOB DEMANDA (botão), nunca no load. |
 | `FotoEditorModal.tsx` | Editor da foto do Cadastro Pessoal: ZOOM (slider) + ARRASTAR (pointer events — mouse e toque no mesmo código), devolvendo o arquivo já RECORTADO (512px). Sem biblioteca externa: preview e canvas usam a MESMA conta, só multiplicada por `SAIDA/lado`. ⚠️ O lado do quadro é MEDIDO (`ResizeObserver`), não constante — em tela estreita o quadro encolhe, e com valor fixo o canvas geraria um recorte diferente do que a pessoa enquadrou. |
+| `AcaoRegistro.tsx` | **Ação de um registro (Alterar/Ver/Imprimir/WhatsApp/E-mail/Executar/Cancelar…) — FONTE ÚNICA da forma.** Uma declaração, duas apresentações decididas por CSS: ícone pintado no desktop (≥md), botão com rótulo no mobile. Props: `rotulo` (obrigatório — vira o texto da pílula e o `aria-label` do ícone), `icone` (o COMPONENTE lucide, não o elemento), `tom` (escolhe a cor pela §6), `visivel` (false = não renderiza), `desabilitado`, `carregando`, `titulo`. Exporta também `AcoesRegistro`, o contêiner que envolve a lista (mantém `flex-wrap` no desktop porque celular deitado entra no `md:`). Ver a regra completa na §6. |
 | `ModalJustificativa.tsx` | Modal padrão de exclusão/cancelamento com justificativa OBRIGATÓRIA (textarea ≥3 chars, header vermelho). Props: `aberto`, `titulo`, `descricao?`, `acaoLabel?`, `onConfirmar(motivo)`, `onFechar`. Usar em toda ação destrutiva — o motivo é exigido pelo backend e vai para a Auditoria. |
 | `FormularioNovaSenha.tsx` | Formulário de definição de senha — fonte ÚNICA de aparência e regras (`REGRAS_SENHA`, checklist ao vivo, indicador de coincidência, `InlineError`). Usado por `AlterarSenhaObrigatoria` (sessão) e `ResetPassword` (token do e-mail). Só COLETA e valida — quem submete é a tela, com a credencial que tiver. Ver §14. |
 

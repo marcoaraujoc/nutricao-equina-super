@@ -535,25 +535,38 @@ if (process.env.CRON_CLI !== '1') {
 const { executarScraping } = require('./services/crmvScraperService');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { reportarCron } = require('./lib/cronAlert');
+const { ehManual } = require('./lib/cronTrace');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { registrarJob, iniciarJobs } = require('./lib/cronManager');
 
-// Executa uma tarefa agendada e reporta (e-mail ao ADMIN + registro na Monitoração):
-// - ERRO (throw ou retorno { ok:false }): SEMPRE reportado; e-mail conforme config.
-// - SUCESSO: reportado/alertado só quando a tarefa retorna { notificar:true } —
-//   evita spam nos crons frequentes (ex: WhatsApp a cada 15 min) sem trabalho.
+// Executa uma tarefa agendada e reporta:
+// - LOG: TODA execução vira linha em `tb_cron_execucoes`, inclusive a que não teve
+//   trabalho nenhum. Registrar só o que "aconteceu" fazia "rodou e não havia o que
+//   fazer" ficar idêntico a "não rodou" — e foi assim que o cancelamento de prescrições
+//   passou dias sem rodar sem ninguém notar (migration 20260921000000).
+// - E-MAIL: continua seletivo. ERRO sempre alerta; SUCESSO só com `{ notificar: true }`,
+//   senão os crons de 15 em 15 min viram spam e o alerta deixa de ser lido.
 // A decisão de enviar e-mail e o destinatário vêm da config (reportarCron).
 type ResultadoCron = { ok?: boolean; notificar?: boolean; resumo?: string; erro?: string } | void;
 async function comAlerta(nome: string, fn: () => Promise<ResultadoCron>) {
+  const inicio = Date.now();
   let r: ResultadoCron;
   try {
     r = await fn();
   } catch (err: unknown) {
     r = { ok: false, erro: err instanceof Error ? (err.stack || err.message) : String(err) };
   }
-  if (!r) return;
-  if (r.ok === false) logger.error(`[Cron:${nome}] ERRO: ${r.erro}`);
-  await reportarCron(nome, r);
+  // Tarefa que não devolve nada TAMBÉM entra no log — é exatamente o caso do job que
+  // decidiu "hoje não é dia" e saía sem deixar rastro. `?? {}` no lugar do `return`.
+  const resultado = r ?? {};
+  if (resultado.ok === false) logger.error(`[Cron:${nome}] ERRO: ${resultado.erro}`);
+  // `ehManual()` lê o contexto que `cronManager.executarAgora` abre — é como a origem
+  // chega ao log sem mudar a assinatura dos 12 jobs.
+  await reportarCron(nome, {
+    ...resultado,
+    origem:    ehManual() ? 'MANUAL' : 'AUTOMATICA',
+    duracaoMs: Date.now() - inicio,
+  });
 }
 
 registrarJob('crmv_sync', {
@@ -1093,6 +1106,32 @@ registrarJob('cancelar_orcamentos_vencidos', {
 // a tabela cresce indefinidamente (um registro por tentativa de login).
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { limparDesafiosAntigos } = require('./services/mfaService');
+// Expurgo do LOG das tarefas. Agora que TODA execução vira linha (ver `comAlerta`), a
+// tabela cresce ~12 linhas por dia por job — sem limpeza, o histórico vira um arquivo
+// morto que ninguém consegue ler e que só engorda o backup.
+// 15 DIAS é a janela pedida: cobre a pergunta que se faz na prática ("essa tarefa rodou
+// esta semana? e na passada?") sem guardar o que ninguém mais consulta.
+// ⚠️ Roda às 03:50, ANTES da limpeza de 2FA e bem depois da janela das 23h30–23h50 dos
+// jobs noturnos — expurgar no meio deles apagaria o log da execução que acabou de
+// acontecer.
+const DIAS_LOG_CRON = 15;
+
+registrarJob('expurgo_execucoes_cron', {
+  nome: 'Expurgo do log de execução das tarefas',
+  exprPadrao: '50 3 * * *',
+  fn: () => comAlerta('Expurgo do log de execução das tarefas', async () => {
+    const corte = new Date(Date.now() - DIAS_LOG_CRON * 24 * 60 * 60 * 1000);
+    // SQL cru pelo mesmo motivo do INSERT em `cronAlert.registrarExecucao`: mantém o
+    // caminho funcionando com o Prisma Client ainda não regenerado.
+    const removidos: number = await prisma.$executeRawUnsafe(
+      'DELETE FROM schs2vet.tb_cron_execucoes WHERE "executadoEm" < $1', corte);
+    return removidos > 0
+      ? { ok: true, notificar: false,
+          resumo: `${removidos} registro(s) de execução com mais de ${DIAS_LOG_CRON} dias removido(s).` }
+      : { ok: true, resumo: `Nada a expurgar (janela de ${DIAS_LOG_CRON} dias).` };
+  }),
+});
+
 registrarJob('limpeza_desafios_2fa', {
   nome: 'Limpeza de desafios de 2FA',
   exprPadrao: '15 4 * * *', // diariamente às 04:15

@@ -600,6 +600,17 @@ const Atendimento = () => {
     [evolucoesAbertas, evolucaoSelecionadaId, agendamentoIdFromUrl, user?.id],
   );
 
+  // Texto do banner em uma string só — é o `title` da faixa: no mobile ela é cortada
+  // com "…" (uma linha), então o texto inteiro precisa continuar alcançável.
+  const rotuloAtendimentoAtivo = useMemo(() => {
+    if (!evolucaoAtiva) return '';
+    const nome = evolucaoAtiva.titulo?.trim() || evolucaoAtiva.especialidade;
+    return [
+      `Atendimento ${evolucaoAtiva.atendimentoNumero ?? '—'}`,
+      evolucaoAtiva.dataInicio ? `de ${formatDataHora(evolucaoAtiva.dataInicio)}` : null,
+    ].filter(Boolean).join(' ') + (nome ? ` - ${nome}` : '') + ' - Em andamento';
+  }, [evolucaoAtiva]);
+
   // Atendimento escolhido que FECHOU (finalizado/cancelado, aqui ou por outro
   // profissional): a escolha morre com ele e a decisão volta ao automático.
   // `escolherEvolucaoAtiva` já ignora o id órfão — isto só evita que ele fique
@@ -1030,18 +1041,24 @@ const Atendimento = () => {
           pelo Nº no card "Histórico de Evolução Clínica", não por uma segunda faixa
           aqui — duas faixas competindo pela mesma informação foi recusado a pedido. */}
       {evolucaoAtiva && (
-        <div className="flex items-center gap-2 mt-3 px-4 py-2.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-sm text-emerald-800 font-medium">
-          <CircleDot size={15} className="text-emerald-500 flex-shrink-0 animate-pulse" />
-          <span className="flex-1 min-w-0">
-            Atendimento <span className="font-bold">{evolucaoAtiva.atendimentoNumero ?? '—'}</span>
-            {evolucaoAtiva.dataInicio && ` de ${formatDataHora(evolucaoAtiva.dataInicio)}`}
-            {(evolucaoAtiva.titulo?.trim() || evolucaoAtiva.especialidade) &&
-              ` - ${evolucaoAtiva.titulo?.trim() || evolucaoAtiva.especialidade}`}
-            {' - Em andamento'}
-          </span>
+        // MOBILE: o texto do atendimento fica em UMA linha (corta com "…", inteiro no
+        // `title`) e o Finalizar desce para BAIXO dele — antes a faixa quebrava em
+        // quatro ou cinco linhas disputando espaço com o botão. No desktop os dois
+        // voltam para a mesma linha.
+        <div className="flex flex-col md:flex-row md:items-center gap-2 mt-3 px-4 py-2.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-sm text-emerald-800 font-medium">
+          <div className="flex items-center gap-2 min-w-0 md:flex-1">
+            <CircleDot size={15} className="text-emerald-500 flex-shrink-0 animate-pulse" />
+            <span className="min-w-0 truncate" title={rotuloAtendimentoAtivo}>
+              Atendimento <span className="font-bold">{evolucaoAtiva.atendimentoNumero ?? '—'}</span>
+              {evolucaoAtiva.dataInicio && ` de ${formatDataHora(evolucaoAtiva.dataInicio)}`}
+              {(evolucaoAtiva.titulo?.trim() || evolucaoAtiva.especialidade) &&
+                ` - ${evolucaoAtiva.titulo?.trim() || evolucaoAtiva.especialidade}`}
+              {' - Em andamento'}
+            </span>
+          </div>
           {podeFinalizarEvolucao && evolucaoAtivaEhMinha(evolucaoAtiva) && (
             <button onClick={() => setConfirmFinalizarAt(true)} disabled={finalizandoAt}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold transition-colors flex-shrink-0">
+              className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold transition-colors flex-shrink-0 self-stretch md:self-auto">
               {finalizandoAt ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
               Finalizar Atendimento
             </button>

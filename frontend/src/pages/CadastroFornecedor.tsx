@@ -14,10 +14,17 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import { isValidEmail } from '../utils/validators';
+// `validarCPF`/`validarCNPJ` viviam COPIADOS LITERALMENTE aqui e no cadastro
+// gêmeo (Fornecedor/Prestador) — duas cópias byte a byte, que divergiriam na
+// primeira correção. A regra agora é uma só, em utils/validacoes.ts.
+import { cpfValido as validarCPF, cnpjValido as validarCNPJ } from '../utils/validacoes';
+import * as validacao from '../utils/validacoes';
+import CampoValidado from '../components/CampoValidado';
 import InlineError from '../components/InlineError';
 import TipoServicoSelect from '../components/TipoServicoSelect';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import { formatDate } from '../utils/dateUtils';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -33,31 +40,6 @@ const TIPOS_FORNECEDOR_PADRAO = [
 type TipoDoc = 'cpf' | 'cnpj';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function validarCPF(cpf: string): boolean {
-  const n = cpf.replace(/\D/g, '');
-  if (n.length !== 11 || /^(\d)\1+$/.test(n)) return false;
-  let s = 0;
-  for (let i = 0; i < 9; i++) s += parseInt(n[i]) * (10 - i);
-  let r = (s * 10) % 11; if (r >= 10) r = 0;
-  if (r !== parseInt(n[9])) return false;
-  s = 0;
-  for (let i = 0; i < 10; i++) s += parseInt(n[i]) * (11 - i);
-  r = (s * 10) % 11; if (r >= 10) r = 0;
-  return r === parseInt(n[10]);
-}
-
-function validarCNPJ(cnpj: string): boolean {
-  const n = cnpj.replace(/\D/g, '');
-  if (n.length !== 14 || /^(\d)\1+$/.test(n)) return false;
-  const calc = (s: string, w: number[]) => {
-    let soma = 0;
-    for (let i = 0; i < w.length; i++) soma += parseInt(s[i]) * w[i];
-    const r = soma % 11; return r < 2 ? 0 : 11 - r;
-  };
-  return calc(n, [5,4,3,2,9,8,7,6,5,4,3,2]) === parseInt(n[12]) &&
-         calc(n, [6,5,4,3,2,9,8,7,6,5,4,3,2]) === parseInt(n[13]);
-}
 
 function mascaraCPF(v: string) {
   return v.replace(/\D/g,'').slice(0,11)
@@ -329,10 +311,15 @@ function ModalFornecedor({
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">E-mail</label>
-                  <input type="email" value={form.email}
-                    onChange={e => onFormChange({ email: e.target.value })}
-                    placeholder="email@exemplo.com" className={inputCls} />
+                  {/* `CampoValidado`: valida ao SAIR do campo. Antes, e-mail sem "@"
+                      só reclamava no Salvar, e a mensagem saía no rodapé do modal —
+                      longe do campo culpado. O rótulo é do próprio componente. */}
+                  <CampoValidado
+                    label="E-mail" tipo="email" value={form.email}
+                    onChange={val => onFormChange({ email: val })}
+                    validar={validacao.email}
+                    placeholder="email@exemplo.com"
+                  />
                 </div>
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">Telefone *</label>
@@ -577,6 +564,24 @@ export default function CadastroFornecedor() {
     confirmarToggle(f);
   };
 
+  // ─── Ações do fornecedor — UMA declaração p/ a tabela E p/ o card ──────────
+  // `AcaoRegistro` decide a forma por CSS: ícone no desktop, botão com rótulo no
+  // mobile. ⚠️ Linha do CATÁLOGO GLOBAL (tipoEntrada SYSTEM) só o ADMIN opera.
+  const acoesDoFornecedor = (f: Fornecedor) => {
+    if (f.tipoEntrada === 'SYSTEM' && !isAdmin) {
+      return <span className="text-xs text-gray-300 italic block text-right">Catálogo global</span>;
+    }
+    return (
+      <AcoesRegistro>
+        <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
+          visivel={podeEditar} onClick={() => abrirEdicao(f)} />
+        <AcaoRegistro tom="ativar" icone={f.ativo ? ToggleRight : ToggleLeft}
+          rotulo={f.ativo ? 'Inativar' : 'Ativar'}
+          visivel={podeAtivar} onClick={() => handleToggle(f)} />
+      </AcoesRegistro>
+    );
+  };
+
   const confirmarToggle = async (f: Fornecedor, motivo?: string) => {
     setProcessandoToggle(true);
     try {
@@ -709,23 +714,7 @@ export default function CadastroFornecedor() {
                     {f.inativoMotivo ? <> — <JustificativaCancelamento texto={f.inativoMotivo} className="inline" /></> : ''}
                   </p>
                 )}
-                {(f.tipoEntrada !== 'SYSTEM' || isAdmin) && (podeEditar || podeAtivar) && (
-                  <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-50">
-                    {podeEditar && (
-                      <button onClick={() => abrirEdicao(f)}
-                        className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-orange-200 rounded-lg text-xs text-orange-600 hover:bg-orange-50 transition-colors">
-                        <Pencil size={11} /> Editar
-                      </button>
-                    )}
-                    {podeAtivar && (
-                      <button onClick={() => handleToggle(f)}
-                        className="flex-1 flex items-center justify-center gap-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors">
-                        {f.ativo ? <ToggleRight size={11} className="text-blue-600" /> : <ToggleLeft size={11} />}
-                        {f.ativo ? 'Inativar' : 'Ativar'}
-                      </button>
-                    )}
-                  </div>
-                )}
+                <div className="mt-3 pt-3 border-t border-gray-50">{acoesDoFornecedor(f)}</div>
               </div>
             ))}
           </div>
@@ -808,24 +797,7 @@ export default function CadastroFornecedor() {
                     )}
                     {(podeEditar || podeAtivar) && (
                       <td className="px-4 py-3">
-                        {f.tipoEntrada === 'SYSTEM' && !isAdmin ? (
-                          <span className="text-xs text-gray-300 italic block text-right">Catálogo global</span>
-                        ) : (
-                          <div className="flex items-center justify-end gap-1">
-                            {podeEditar && (
-                              <button onClick={() => abrirEdicao(f)} title="Editar"
-                                className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
-                                <Pencil size={14} />
-                              </button>
-                            )}
-                            {podeAtivar && (
-                              <button onClick={() => handleToggle(f)} title={f.ativo ? 'Inativar' : 'Ativar'}
-                                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
-                                {f.ativo ? <ToggleRight size={14} className="text-blue-600" /> : <ToggleLeft size={14} />}
-                              </button>
-                            )}
-                          </div>
-                        )}
+                        {acoesDoFornecedor(f)}
                       </td>
                     )}
                   </tr>

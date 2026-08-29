@@ -9,10 +9,12 @@ import {
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import { useAuth } from '../contexts/AuthContext';
 import ConfirmModal from '../components/ConfirmModal';
 import ModalJustificativa from '../components/ModalJustificativa';
 import InlineError from '../components/InlineError';
+import DateInput from '../components/DateInput';
 import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -347,6 +349,22 @@ function CatalogoVacinasTab() {
 
   const handleExcluir = (v: MedVacina) => setConfirmVacina(v);
 
+  // ─── Ações da vacina do catálogo — UMA declaração p/ a tabela E p/ o card ──
+  // `AcaoRegistro` decide a forma por CSS: ícone no desktop, botão com rótulo no
+  // mobile (onde antes eram três ícones soltos, sem rótulo nem `title`).
+  // ⚠️ Editar/Excluir eram CINZA, o que a §6 reserva ao indisponível — agora
+  // nascem pintados, e a CHAVE de ativo/inativo é o único ícone que muda de forma.
+  const acoesDaVacinaCatalogo = (v: MedVacina) => (
+    <AcoesRegistro>
+      <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
+        onClick={() => abrirEdicao(v)} />
+      <AcaoRegistro tom="ativar" icone={v.ativo ? ToggleRight : ToggleLeft}
+        rotulo={v.ativo ? 'Inativar' : 'Reativar'} onClick={() => handleToggle(v)} />
+      <AcaoRegistro tom="cancelar" icone={Trash2} rotulo="Excluir"
+        onClick={() => handleExcluir(v)} />
+    </AcoesRegistro>
+  );
+
   const handleExcluirConfirmado = async (motivo: string) => {
     if (!confirmVacina) return;
     const v = confirmVacina;
@@ -433,20 +451,7 @@ function CatalogoVacinasTab() {
                       <p className="text-[11px] text-gray-400 mt-1">{v.vias.map(vv => normalizeVia(vv.via)).join(' · ')}</p>
                     )}
                   </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <button onClick={() => { abrirEdicao(v); }}
-                      className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
-                      <Pencil size={14} />
-                    </button>
-                    <button onClick={() => handleToggle(v)}
-                      className={`p-1.5 rounded-lg transition-colors ${v.ativo ? 'text-emerald-500 hover:text-gray-400 hover:bg-gray-50' : 'text-gray-300 hover:text-emerald-600 hover:bg-emerald-50'}`}>
-                      {v.ativo ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-                    </button>
-                    <button onClick={() => handleExcluir(v)}
-                      className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
+                  <div className="flex-shrink-0">{acoesDaVacinaCatalogo(v)}</div>
                 </div>
               </div>
             ))}
@@ -496,21 +501,7 @@ function CatalogoVacinasTab() {
                         : <span className="px-2 py-0.5 bg-gray-100 text-gray-400 text-[10px] rounded-full font-medium">Inativo</span>}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-1 justify-end">
-                        <button onClick={() => { abrirEdicao(v); }}
-                          className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="Editar">
-                          <Pencil size={13} />
-                        </button>
-                        <button onClick={() => handleToggle(v)}
-                          className={`p-1.5 rounded-lg transition-colors ${v.ativo ? 'text-emerald-500 hover:text-gray-400 hover:bg-gray-50' : 'text-gray-300 hover:text-emerald-600 hover:bg-emerald-50'}`}
-                          title={v.ativo ? 'Inativar' : 'Reativar'}>
-                          {v.ativo ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-                        </button>
-                        <button onClick={() => handleExcluir(v)}
-                          className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Excluir">
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
+                      {acoesDaVacinaCatalogo(v)}
                     </td>
                   </tr>
                 ))}
@@ -650,8 +641,15 @@ function LoteModal({ vacinaId, lote, empresas, onSalvar, onFechar, saving, erroA
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs text-gray-500 mb-1">Validade *</label>
-              <input type="date" value={validade} onChange={e => setValidade(e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-emerald-500" />
+              {/* `DateInput`: o nativo exibia MM/DD/AAAA conforme o locale do browser e
+                  recusava data impossível em silêncio. Data inválida agora zera o
+                  valor — e é `!validade` que já desabilita o Salvar logo abaixo. */}
+              <DateInput
+                value={validade}
+                onChange={setValidade}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus-within:border-emerald-500"
+                aria-label="Validade do lote"
+              />
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Qtd. Total *</label>

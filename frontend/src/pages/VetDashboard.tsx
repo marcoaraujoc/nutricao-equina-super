@@ -21,6 +21,7 @@ import {
 import { Bar, Line } from 'react-chartjs-2';
 import InlineError from '../components/InlineError';
 import FotoAnimal from '../components/FotoAnimal';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 
 
 ChartJS.register(
@@ -135,6 +136,26 @@ const nullToUndefined = (a: AnimalResumido) => ({
 
 // ─── AnimalCard (mobile) ──────────────────────────────────────────────────────
 
+// ─── Ações do paciente — UMA declaração p/ a lista E p/ o card ────────────────
+// `AcaoRegistro` decide a forma por CSS: ícone no desktop, botão com rótulo no
+// mobile. ⚠️ Os três eram CINZA (`text-gray-400`), que a §6 reserva ao
+// indisponível — agora nascem pintados.
+function AcoesAnimalVetDashboard({ onDashboard, onEditar, onDesvincular }: {
+  onDashboard:    () => void;
+  onEditar:       () => void;
+  onDesvincular?: () => void;
+}) {
+  return (
+    <AcoesRegistro>
+      <AcaoRegistro tom="ver" icone={LayoutDashboard} rotulo="Dashboard"
+        titulo="Ver dashboard" onClick={onDashboard} />
+      <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar" onClick={onEditar} />
+      <AcaoRegistro tom="aprovar" icone={Unlink} rotulo="Desvincular"
+        visivel={!!onDesvincular} onClick={() => onDesvincular?.()} />
+    </AcoesRegistro>
+  );
+}
+
 function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular }: {
   animal:         AnimalResumido;
   onDashboard:    () => void;
@@ -142,7 +163,8 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular }: {
   onDesvincular?: () => void;
 }) {
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+      <div className="flex items-center gap-3">
       {/* Foto */}
       <div className="w-14 h-14 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
         <FotoAnimal url={animal.photoUrl} nome={animal.nome} />
@@ -179,25 +201,14 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular }: {
         </div>
       </div>
 
-      {/* Ações */}
-      <div className="flex flex-col gap-1 flex-shrink-0">
-        <button onClick={onDashboard}
-          className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-          title="Ver dashboard">
-          <LayoutDashboard size={16} />
-        </button>
-        <button onClick={onEditar}
-          className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-          title="Editar">
-          <Pencil size={16} />
-        </button>
-        {onDesvincular && (
-          <button onClick={onDesvincular}
-            className="p-2 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
-            title="Desvincular">
-            <Unlink size={16} />
-          </button>
-        )}
+      </div>
+
+      {/* Ações no RODAPÉ do card — na lateral elas espremiam o nome do paciente
+          assim que ganharam rótulo no mobile. */}
+      <div className="mt-3 pt-3 border-t border-gray-50">
+        <AcoesAnimalVetDashboard
+          onDashboard={onDashboard} onEditar={onEditar} onDesvincular={onDesvincular}
+        />
       </div>
     </div>
   );
@@ -588,17 +599,11 @@ export default function VetDashboard() {
                       </p>
                       <p className="text-sm text-gray-600">{idadeDisplay(animal)}</p>
                       <p className="text-sm text-gray-600">{animal.sexo ?? '—'}</p>
-                      <div className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>
-                        <button onClick={() => irParaAnimal(animal)}
-                          className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                          title="Ver dashboard">
-                          <LayoutDashboard size={15} />
-                        </button>
-                        <button onClick={() => navigate(`/animais/${animal.id}`)}
-                          className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                          title="Editar">
-                          <Pencil size={15} />
-                        </button>
+                      <div onClick={e => e.stopPropagation()}>
+                        <AcoesAnimalVetDashboard
+                          onDashboard={() => irParaAnimal(animal)}
+                          onEditar={() => navigate(`/animais/${animal.id}`)}
+                        />
                       </div>
                     </div>
                   ))}

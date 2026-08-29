@@ -1,9 +1,16 @@
 // DateInputBR.tsx — input de data que exibe DD/MM/YYYY e aceita digitação manual
 // O valor interno é sempre YYYY-MM-DD (padrão HTML date input).
+//
+// 🔴 DATA INVÁLIDA RECLAMA (2026-08-28). Antes o componente detectava 31/02/2026 mas
+// só pintava o texto de vermelho e punha um `title` — que não aparece no celular e
+// ninguém procura no desktop. Agora mostra a mensagem, e ela diz O QUE está errado.
+// A regra é a mesma do `DateInput` (`utils/dataValidacao.ts`): duas validações de data
+// diferentes na mesma aplicação davam veredictos diferentes para o mesmo texto.
 
 import { useState, useEffect, useRef } from 'react';
 import { Calendar } from 'lucide-react';
 import { formatDate } from '../utils/dateUtils';
+import { validarDataBR } from '../utils/dataValidacao';
 
 interface Props {
   value:          string;          // YYYY-MM-DD ou ''
@@ -27,12 +34,12 @@ export default function DateInputBR({
   showIcon = true,
 }: Props) {
   const [text,    setText]    = useState(value ? formatDate(value) : '');
-  const [invalid, setInvalid] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
   const pickerRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setText(value ? formatDate(value) : '');
-    setInvalid(false);
+    setErro(null);
   }, [value]);
 
   const handleTextChange = (raw: string) => {
@@ -46,22 +53,15 @@ export default function DateInputBR({
     }
 
     setText(display);
-    setInvalid(false);
 
-    if (digits.length === 8) {
-      const d = parseInt(digits.slice(0, 2), 10);
-      const m = parseInt(digits.slice(2, 4), 10);
-      const y = parseInt(digits.slice(4, 8), 10);
-      // Valida se a data existe de fato (ex: 31/02 → inválida)
-      const dt = new Date(y, m - 1, d);
-      if (dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d) {
-        onChange(`${String(y).padStart(4,'0')}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`);
-      } else {
-        setInvalid(true); // data inválida — não dispara onChange
-      }
-    } else if (raw === '') {
-      onChange('');
-    }
+    const r = validarDataBR(display, { min });
+    // Incompleta não é erro: a pessoa ainda está digitando.
+    setErro(r.incompleta ? null : r.erro);
+    // ⚠️ Emite SEMPRE — inclusive '' quando ficou inválida. Antes o `onChange` só era
+    // disparado no caminho feliz, então trocar uma data válida por uma inválida deixava
+    // o formulário com a data ANTIGA e o campo mostrando a nova: o que era salvo não
+    // era o que estava na tela.
+    onChange(r.iso);
   };
 
   const openPicker = () => {
@@ -70,7 +70,8 @@ export default function DateInputBR({
   };
 
   return (
-    <div className={`flex items-center gap-1 ${className}`} title={invalid ? 'Data inválida' : undefined}>
+    <div className="w-full">
+    <div className={`flex items-center gap-1 ${className} ${erro ? 'border-red-400' : ''}`}>
       <input
         type="text"
         value={text}
@@ -78,8 +79,9 @@ export default function DateInputBR({
         placeholder={placeholder}
         maxLength={10}
         disabled={disabled}
+        aria-invalid={erro ? true : undefined}
         className={`flex-1 bg-transparent text-sm focus:outline-none disabled:text-gray-400 ${
-          invalid ? 'text-red-600' : 'text-gray-900'
+          erro ? 'text-red-600' : 'text-gray-900'
         } ${inputClassName}`}
       />
       {showIcon && (
@@ -104,6 +106,8 @@ export default function DateInputBR({
         className="absolute opacity-0 pointer-events-none w-0 h-0"
         tabIndex={-1}
       />
+    </div>
+      {erro && <p className="text-[11px] text-red-500 mt-1" role="alert">{erro}</p>}
     </div>
   );
 }

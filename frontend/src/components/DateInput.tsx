@@ -8,11 +8,23 @@
 // - Mantém o valor interno em ISO (drop-in para os estados atuais):
 //     date-only  → `value`/`onChange` usam 'YYYY-MM-DD'
 //     withTime   → 'YYYY-MM-DDTHH:MM' (mesmo formato do <input datetime-local>)
-//   `onChange` emite '' quando vazio/incompleto.
+//   `onChange` emite '' quando vazio/incompleto/inválido.
 // - Ícone de calendário abre o seletor nativo (showPicker) quando disponível.
+//
+// 🔴 DATA INVÁLIDA AGORA RECLAMA (2026-08-28). Antes o campo recusava 31/02/2026 em
+// SILÊNCIO — e fazia pior: ao sair, VOLTAVA ao último valor válido. Quem digitava
+// errado via o campo "consertar-se" sozinho para a data ANTERIOR e salvava aquela,
+// achando que tinha trocado. Agora:
+//   · o texto digitado PERMANECE (dá para corrigir o dígito errado, não recomeçar);
+//   · a mensagem diz O QUE está errado ("fevereiro de 2026 tem 28 dias"), não um
+//     genérico "data inválida" que deixa a pessoa olhando para os três campos;
+//   · `onChange('')` avisa o formulário de que NÃO há data — é isso que impede o
+//     salvamento com o valor antigo e faz a validação de campo obrigatório disparar.
+// A regra mora em `utils/dataValidacao.ts`, compartilhada com o `DateInputBR`.
 
 import { useEffect, useRef, useState } from 'react';
 import { Calendar } from 'lucide-react';
+import { validarDataBR } from '../utils/dataValidacao';
 
 interface DateInputProps {
   value: string;                       // ISO ('YYYY-MM-DD' ou 'YYYY-MM-DDTHH:MM') | ''
@@ -23,6 +35,12 @@ interface DateInputProps {
   max?: string;
   disabled?: boolean;
   id?: string;
+  /**
+   * Barra de filtros / toolbar: só pinta de vermelho e explica no `title`, sem o
+   * bloco de mensagem embaixo — ali ele empurraria a barra inteira e desalinharia os
+   * campos vizinhos. Em formulário (o padrão) a mensagem aparece abaixo do campo.
+   */
+  compacto?: boolean;
   'aria-label'?: string;
 }
 
@@ -50,45 +68,41 @@ const maskBR = (raw: string, withTime: boolean): string => {
   return out;
 };
 
-// DD/MM/YYYY [HH:MM] (mascarado) → ISO válido, ou '' se incompleto/inválido.
-const brToISO = (br: string, withTime: boolean): string => {
-  const digits = br.replace(/\D/g, '');
-  const needed = withTime ? 12 : 8;
-  if (digits.length !== needed) return '';
-  const d = digits.slice(0, 2), m = digits.slice(2, 4), y = digits.slice(4, 8);
-  const hh = withTime ? digits.slice(8, 10) : '00';
-  const mm = withTime ? digits.slice(10, 12) : '00';
-  const dt = new Date(`${y}-${m}-${d}T${hh}:${mm}:00`);
-  if (
-    isNaN(dt.getTime()) ||
-    dt.getFullYear() !== Number(y) || dt.getMonth() + 1 !== Number(m) || dt.getDate() !== Number(d) ||
-    Number(hh) > 23 || Number(mm) > 59
-  ) return '';
-  return withTime ? `${y}-${m}-${d}T${hh}:${mm}` : `${y}-${m}-${d}`;
-};
-
 export default function DateInput({
-  value, onChange, withTime = false, className = '', min, max, disabled, id, ...rest
+  value, onChange, withTime = false, className = '', min, max, disabled, id,
+  compacto = false, ...rest
 }: DateInputProps) {
   const [text, setText] = useState<string>(isoToBR(value, withTime));
+  const [erro, setErro] = useState<string | null>(null);
   const nativeRef = useRef<HTMLInputElement>(null);
 
   // Sincroniza quando o valor externo muda (ex.: reset do formulário).
-  useEffect(() => { setText(isoToBR(value, withTime)); }, [value, withTime]);
+  useEffect(() => {
+    setText(isoToBR(value, withTime));
+    setErro(null);
+  }, [value, withTime]);
 
   const handleText = (raw: string) => {
     const masked = maskBR(raw, withTime);
     setText(masked);
-    if (masked === '') { onChange(''); return; }
-    const iso = brToISO(masked, withTime);
-    if (iso) onChange(iso);
+
+    const r = validarDataBR(masked, { withTime, min, max });
+    // Enquanto a data está INCOMPLETA não se reclama de nada: a pessoa ainda está
+    // digitando, e um erro a cada tecla é ruído, não ajuda.
+    setErro(r.incompleta ? null : r.erro);
+    // Vazio, incompleto ou inválido → o formulário fica SEM data. É o que impede
+    // salvar com o valor anterior sem que ninguém perceba.
+    onChange(r.iso);
   };
 
   const handleBlur = () => {
-    if (text === '') { onChange(''); return; }
-    const iso = brToISO(text, withTime);
-    // Incompleto/inválido ao sair → volta ao último valor válido.
-    setText(iso ? isoToBR(iso, withTime) : isoToBR(value, withTime));
+    if (text === '') { setErro(null); onChange(''); return; }
+    const r = validarDataBR(text, { withTime, min, max });
+    // Ao SAIR do campo, incompleto vira erro — aqui a pessoa já terminou de digitar.
+    // ⚠️ O texto NÃO é revertido: apagar o que ela escreveu esconde onde está o
+    // engano e a obriga a redigitar tudo.
+    setErro(r.erro);
+    onChange(r.iso);
   };
 
   const abrirSeletor = () => {
@@ -97,8 +111,11 @@ export default function DateInput({
     el.showPicker?.();
   };
 
-  return (
-    <div className={`relative flex items-center ${className}`}>
+  const caixa = (
+    <div
+      className={`relative flex items-center ${className} ${erro ? 'border-red-400' : ''}`}
+      title={compacto && erro ? erro : undefined}
+    >
       <input
         type="text"
         inputMode="numeric"
@@ -109,8 +126,9 @@ export default function DateInput({
         disabled={disabled}
         id={id}
         aria-label={rest['aria-label']}
+        aria-invalid={erro ? true : undefined}
         maxLength={withTime ? 16 : 10}
-        className="w-full bg-transparent focus:outline-none pr-5"
+        className={`w-full bg-transparent focus:outline-none pr-5 ${erro ? 'text-red-600' : ''}`}
       />
       <button
         type="button"
@@ -135,6 +153,17 @@ export default function DateInput({
         aria-hidden="true"
         className="pointer-events-none absolute right-0 bottom-0 h-px w-px opacity-0"
       />
+    </div>
+  );
+
+  // Em modo compacto o componente continua sendo UM elemento só — envolvê-lo num
+  // wrapper quebraria as toolbars que o tratam como item de flex.
+  if (compacto) return caixa;
+
+  return (
+    <div className="w-full">
+      {caixa}
+      {erro && <p className="text-[11px] text-red-500 mt-1" role="alert">{erro}</p>}
     </div>
   );
 }

@@ -26,9 +26,24 @@ async function main() {
   console.log('  ✓ Espécies');
 
   // ── Raças (Equino) ────────────────────────────────────────────────────────────
+  // Raças de EQUÍDEOS (inclui asininos e muares — "Jumento Nacional", "Muar" — que
+  // compartilham a espécie Equino no cadastro, como no formulário de referência).
+  // Ampliada em 2026-08-28 de 8 para 36 a partir da lista de referência do cliente.
+  //
+  // ⚠️ "Raça Indefinida" da lista de origem NÃO entrou: é o mesmo conceito do 'SRD'
+  // que o seed já cria para TODAS as espécies logo abaixo. Ter os dois dividiria o
+  // mesmo caso em duas opções e a base ficaria com metade dos animais em cada —
+  // exatamente o tipo de duplicata que um catálogo controlado existe para evitar.
   const racasEquino = [
-    'Quarto de Milha', 'Mangalarga Marchador', 'Árabe', 'Puro Sangue Inglês',
-    'Crioulo', 'Appaloosa', 'Paint Horse', 'Brasileiro de Hipismo',
+    'American Tennessee', 'American Trotter', 'Anglo Arabe', 'Anglo European Studbook',
+    'Appaloosa', 'Árabe', 'Brasileiro de Hipismo', 'Bretão',
+    'Campeiro', 'Campolina', 'Clydesdale', 'Crioulo',
+    'Friesian', 'Gypsy Vanner', 'Hannover', 'Holsteiner',
+    'Jumento Nacional', 'Mangalarga', 'Mangalarga Marchador', 'Mangolina',
+    'Marajoara', 'Muar', 'Paint Horse', 'Pampa',
+    'Pantaneiro', 'Pêga', 'Pequira', 'Polo Argentino',
+    'Pônei', 'Pura Raza Española', 'Puro Sangue Inglês', 'Puro Sangue Lusitano',
+    'Quarto de Milha', 'Sela Belga', 'Sela Francesa', 'Sela Holandesa',
   ];
   for (const nome of racasEquino) {
     const existe = await prisma.raca.findFirst({ where: { nome, especieId: 1 } });

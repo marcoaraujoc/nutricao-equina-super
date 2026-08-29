@@ -22,6 +22,7 @@ import toast from 'react-hot-toast';
 import { Pencil, Trash2, MapPin, Search } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import ModalJustificativa from '../components/ModalJustificativa';
+import { MOTIVOS_INATIVACAO_ANIMAL } from '../utils/motivosInativacao';
 import InlineError from '../components/InlineError';
 import { type ErroAcaoDados } from '../components/ErroAcao';
 import FotoAnimal from '../components/FotoAnimal';
@@ -115,11 +116,12 @@ const MeusAnimais = () => {
     navigate(`/animais/${animal.id}`);
   };
 
-  const confirmDelete = async (motivo: string) => {
+  const confirmDelete = async (motivo: string, motivoTipo?: string) => {
     if (!animalToDelete) return;
     try {
-      // Exclusão exige justificativa (registrada na Auditoria)
-      await api.delete(`/animais/${animalToDelete.id}`, { data: { motivo } });
+      // Exclusão exige justificativa (registrada na Auditoria). `motivoTipo` é a
+      // CATEGORIA — vai separada porque tem coluna e índice próprios no banco.
+      await api.delete(`/animais/${animalToDelete.id}`, { data: { motivo, motivoTipo } });
       setAnimalToDelete(null);
       await refreshSelectedAnimal();
       loadAnimais();
@@ -268,6 +270,11 @@ const MeusAnimais = () => {
         descricao={animalToDelete
           ? `${animalToDelete.nome}${animalToDelete.raca?.nome ? ` (${animalToDelete.raca.nome})` : ''} será removido das listagens. O histórico clínico e nutricional é preservado.`
           : undefined}
+        // MESMA lista de `AnimaisVet`: as duas telas chamam `DELETE /animais/:id` e
+        // gravam na MESMA coluna. Listas diferentes deixariam a base com dois
+        // formatos de justificativa para o mesmo fato.
+        motivos={MOTIVOS_INATIVACAO_ANIMAL}
+        motivoLabel="Motivo da inativação"
         onConfirmar={confirmDelete}
         onFechar={() => setAnimalToDelete(null)}
       />

@@ -7,8 +7,9 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import { hojeISO } from '../utils/dateUtils';
 import toast from 'react-hot-toast';
-import { Calendar, Camera, AlertCircle, RefreshCw, MapPin, CheckCircle2, X, Plus, User2, Loader2, ChevronDown } from 'lucide-react';
+import { Camera, AlertCircle, RefreshCw, MapPin, CheckCircle2, X, Plus, User2, Loader2, ChevronDown } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import DateInput from '../components/DateInput';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
@@ -659,29 +660,6 @@ const Animal = () => {
     reader2.readAsDataURL(comprimido);
   };
 
-  const handleDateTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let val = e.target.value.replace(/\D/g, '');
-    if (val.length > 2) val = val.slice(0, 2) + '/' + val.slice(2);
-    if (val.length > 5) val = val.slice(0, 5) + '/' + val.slice(5);
-    val = val.slice(0, 10);
-    const parts = val.split('/');
-    if (parts.length === 3 && parts[2].length === 4) {
-      const [d, m, y] = parts.map(Number);
-      const obj = new Date(y, m - 1, d);
-      if (obj.getFullYear() !== y || obj.getMonth() !== m - 1 || obj.getDate() !== d) {
-        setErroInline('Data inválida.'); setFormData(p => ({ ...p, dataNascimento: '' })); return;
-      }
-      const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
-      if (obj > hoje) {
-        setErroInline('A data de nascimento não pode ser futura.'); setFormData(p => ({ ...p, dataNascimento: '' })); return;
-      }
-      const iso = `${parts[2]}-${parts[1]}-${parts[0]}`;
-      setFormData(p => ({ ...p, dataNascimento: iso, idadeAnos: calcularIdadeAnos(iso) }));
-    } else {
-      setFormData(p => ({ ...p, dataNascimento: val }));
-    }
-  };
-
   // ── Criar tratador inline ──────────────────────────────────────────────────
   const abrirModalNovoTratador = (nome: string) => {
     setNovoTratNome(nome);
@@ -1300,29 +1278,27 @@ const Animal = () => {
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
                   Data de nascimento{!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
                 </label>
-                <div className="relative">
-                  <input
-                    type="text" placeholder="dd/mm/aaaa" autoComplete="off"
-                    value={formData.dataNascimento ? formData.dataNascimento.split('-').reverse().join('/') : ''}
-                    onChange={handleDateTextChange}
-                    className={`${inputClass} pr-10`}
-                  />
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center">
-                    <Calendar size={18} className="text-emerald-600 pointer-events-none" />
-                    <input
-                      type="date" lang="pt-BR" max={hojeISO()}
-                      value={formData.dataNascimento?.includes('-') ? formData.dataNascimento : ''}
-                      onChange={e => {
-                        if (!e.target.value) return;
-                        const d = new Date(e.target.value + 'T00:00');
-                        const h = new Date(); h.setHours(0, 0, 0, 0);
-                        if (d > h) { setErroInline('Data futura não permitida.'); return; }
-                        setFormData({ ...formData, dataNascimento: e.target.value, idadeAnos: calcularIdadeAnos(e.target.value) });
-                      }}
-                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                    />
-                  </div>
-                </div>
+                {/* `DateInput` no lugar da máscara feita à mão + calendário oculto.
+                    Além de remover o código duplicado, corrige um defeito real: o
+                    handler antigo guardava o TEXTO PARCIAL em `dataNascimento`
+                    enquanto se digitava (`'12/0'`), e esse valor ia para o submit e
+                    para `getCategoriasDisponiveis`. Agora o estado é sempre ISO ou ''.
+                    ⚠️ `max={hojeISO()}` substitui a checagem manual de data futura —
+                    a mensagem passa a sair NO CAMPO, e não no `InlineError` do topo
+                    da página, longe de onde o erro aconteceu (§6). */}
+                <DateInput
+                  value={formData.dataNascimento?.includes('-') ? formData.dataNascimento : ''}
+                  max={hojeISO()}
+                  aria-label="Data de nascimento"
+                  onChange={iso => setFormData(p => ({
+                    ...p,
+                    dataNascimento: iso,
+                    // Sem data válida a idade volta a ser digitável — é o que o
+                    // `disabled` do campo Idade ao lado observa.
+                    idadeAnos: iso ? calcularIdadeAnos(iso) : p.idadeAnos,
+                  }))}
+                  className="w-full border border-gray-300 rounded-2xl px-4 py-3 text-gray-900 focus-within:border-emerald-600 focus-within:ring-2 focus-within:ring-emerald-100 transition-colors"
+                />
                 {formData.dataNascimento && (
                   <button type="button" onClick={() => setFormData({ ...formData, dataNascimento: '' })}
                     className="mt-1 text-xs text-gray-400 hover:text-red-500 underline transition-colors">

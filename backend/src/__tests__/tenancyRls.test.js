@@ -46,6 +46,15 @@ const TENANT_PLANE = [
   // AGUARDANDO_RLS ainda). Nasceu direto com RLS: TENANT VIA PAI (tb_lotes_vacina, que
   // tem empresa_id DIRETO) — migration 20260830000000_reserva_estoque_vacina.
   'tb_reservas_estoque_vacina',
+  // ✅ 2026-08-28 — catálogo de especialidades. Era CATÁLOGO GLOBAL PURO até o
+  // encaminhamento a profissional EXTERNO passar a cadastrar a especialidade que falta
+  // (`lib/catalogoManual.js#garantirEspecialidadeDaEmpresa`) — a partir daí a tabela
+  // guarda linha de clínica e precisa da policy. CATÁLOGO MISTO, mesma assimetria de
+  // `tb_medicamentos`: USING lê global + próprio, WITH CHECK escreve só o próprio
+  // (migration 20260920000000). Conferido ao vivo contra a base: a clínica lê as 30
+  // globais, cria a própria, é RECUSADA ao inserir linha global e ao alterar o catálogo
+  // do sistema (42501), e a empresa 58 não enxerga a especialidade da 42.
+  'tb_especialidades',
   // ✅ 2026-08-20 — dose executada da prescrição (rolling schedule). TENANT VIA PAI
   // (tb_prescricao_grupos) e já nasceu no padrão FAIL-CLOSED da fase 7c
   // (`app_plataforma() OR EXISTS(...)`) — migration 20260820000000_prescricao_execucao_dose.
@@ -167,7 +176,11 @@ const SEM_RLS = [
   // CATÁLOGO GLOBAL PURO — ninguém cria linha própria
   // ⚠️ `tb_medicamento_especies`/`tb_medicamento_vias` SAÍRAM daqui em 2026-09-07 —
   // ver TENANT_PLANE acima ("ninguém cria linha própria" deixou de valer).
-  'tb_alimentos', 'tb_crmv_sync_log', 'tb_crmv_validos', 'tb_especialidades',
+  // ⚠️ `tb_especialidades` SAIU daqui em 2026-08-28 — virou CATÁLOGO MISTO e foi para
+  // TENANT_PLANE (migration 20260920000000). "Ninguém cria linha própria" deixou de
+  // valer quando o encaminhamento a profissional externo passou a cadastrar a
+  // especialidade que falta, com `empresa_id` da clínica.
+  'tb_alimentos', 'tb_crmv_sync_log', 'tb_crmv_validos',
   'tb_especies', 'tb_exigencias_nrc', 'tb_laboratorios',
   'tb_nutrientes', 'tb_racas', 'tb_regioes_anatomicas_equino',
   // D8: referência técnica (composição nutricional por espécie), igual para todas

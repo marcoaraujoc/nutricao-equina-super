@@ -8,6 +8,7 @@ import {
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import PageContainer from '../components/PageContainer';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
@@ -333,6 +334,18 @@ export default function Procedimentos() {
 
   const abrirNovo   = () => { setEditingItem(null); setShowModal(true); };
   const abrirEdicao = (p: Procedimento) => { setEditingItem(p); setShowModal(true); };
+
+  // ─── Ações do procedimento — UMA declaração p/ a tabela E p/ o card ────────
+  // `AcaoRegistro` decide a forma por CSS: ícone no desktop, botão com rótulo no
+  // mobile (onde antes eram dois ícones soltos, sem rótulo nem `title`).
+  const acoesDoProcedimento = (p: Procedimento) => (
+    <AcoesRegistro>
+      <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
+        onClick={() => abrirEdicao(p)} />
+      <AcaoRegistro tom="cancelar" icone={Trash2} rotulo="Inativar"
+        onClick={() => setInativandoId(p.id)} />
+    </AcoesRegistro>
+  );
   const fecharModal = () => { setShowModal(false); setEditingItem(null); };
 
   const handleInativar = async (id: number, motivo: string) => {
@@ -451,16 +464,8 @@ export default function Procedimentos() {
                       </td>
                       <td className="px-4 py-3 text-right text-gray-700">{formatValor(p.valorVenda)}</td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center justify-center gap-1">
-                          <button onClick={() => abrirEdicao(p)}
-                            className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
-                            <Pencil size={13} />
-                          </button>
-                          <button onClick={() => setInativandoId(p.id)}
-                            className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
+                        {acoesDoProcedimento(p)}
+                      
                       </td>
                     </tr>
                   ))}
@@ -483,16 +488,7 @@ export default function Procedimentos() {
                         </div>
                       )}
                     </div>
-                    <div className="flex gap-1 flex-shrink-0">
-                      <button onClick={() => abrirEdicao(p)}
-                        className="p-1.5 text-orange-500 hover:bg-orange-50 rounded-lg">
-                        <Pencil size={13} />
-                      </button>
-                      <button onClick={() => setInativandoId(p.id)}
-                        className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg">
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
+                    <div className="flex-shrink-0">{acoesDoProcedimento(p)}</div>
                   </div>
                 </div>
               ))}

@@ -11,6 +11,7 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import PageContainer from '../components/PageContainer';
 import AnimalCard from '../components/AnimalCard';
 import CompartilharPdfBotoes from '../components/CompartilharPdfBotoes';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import { imprimirExameCompra, gerarHtmlExameCompra } from '../utils/ExameCompraPrint';
 import InlineError from '../components/InlineError';
 
@@ -1279,23 +1280,13 @@ export default function ExameCompra() {
                       {/* Paleta do módulo de Atendimento (CLAUDE.md §6): ação disponível
                           nasce PINTADA — ver emerald, alterar laranja, imprimir e e-mail
                           azuis, WhatsApp verde. Cinza é reservado ao indisponível. */}
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        {!emExibicao && (
-                          <button onClick={() => visualizarExame(ex)} title="Visualizar"
-                            className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
-                            <Eye size={14} />
-                          </button>
-                        )}
-                        {podeCriar && !emEdicao && (
-                          <button onClick={() => abrirEdicao(ex)} title="Editar"
-                            className="p-1.5 text-orange-500 hover:text-orange-700 hover:bg-orange-50 rounded-lg transition-colors">
-                            <Pencil size={14} />
-                          </button>
-                        )}
-                        <button onClick={() => imprimirLaudo(ex)} title="Imprimir"
-                          className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">
-                          <Printer size={14} />
-                        </button>
+                      <AcoesRegistro className="flex-shrink-0">
+                        <AcaoRegistro tom="ver" icone={Eye} rotulo="Visualizar"
+                          visivel={!emExibicao} onClick={() => visualizarExame(ex)} />
+                        <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
+                          visivel={podeCriar && !emEdicao} onClick={() => abrirEdicao(ex)} />
+                        <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
+                          onClick={() => imprimirLaudo(ex)} />
                         <CompartilharPdfBotoes
                           gerarHtml={() => gerarHtmlExameCompra(ex, selectedAnimal ?? undefined)}
                           nomeArquivo={nomeArquivoLaudo(ex)}
@@ -1304,7 +1295,7 @@ export default function ExameCompra() {
                           telefone={selectedAnimal?.user?.phone}
                           emailPara={selectedAnimal?.user?.email}
                         />
-                      </div>
+                      </AcoesRegistro>
                     </div>
                   );
                 })}

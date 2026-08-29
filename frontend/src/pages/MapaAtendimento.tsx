@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { MapPin, Users, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, RefreshCw, PlayCircle, Loader2, Activity } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import api from '../services/api';
+import DateInput from '../components/DateInput';
 import { usePermissoes } from '../hooks/usePermissoes';
 import InlineError from '../components/InlineError';
 import { ModalExecucao } from './ExecucaoPrescricao';
@@ -506,32 +507,45 @@ export default function MapaAtendimento() {
               }
             }}
           />
+          {/* 🔴 FILTRO OBRIGATÓRIO — `só se válida`.
+              `DateInput` emite '' quando a data digitada é impossível, e isso é o
+              certo em FORMULÁRIO (impede salvar o valor antigo sem ninguém notar).
+              Aqui é diferente: `dataFiltro` vai direto para a query e para
+              `new Date(dataFiltro + 'T12:00:00')` no `dataLabel` — vazio viraria
+              `Invalid Date` e uma chamada `?data=`. E como filtro nada é gravado,
+              não há valor velho a proteger: manter o último período válido enquanto
+              a pessoa corrige o dígito é melhor do que apagar o mapa da tela.
+              O campo continua mostrando o erro (vermelho + `title`). */}
           {granularidade === 'DIARIO' && (
-            <input
-              type="date"
+            <DateInput
               value={dataFiltro}
-              onChange={e => setDataFiltro(e.target.value)}
-              className="text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              onChange={v => { if (v) setDataFiltro(v); }}
+              compacto
+              aria-label="Data"
+              className="w-36 text-sm border border-gray-200 rounded-xl px-3 py-2 focus-within:ring-2 focus-within:ring-indigo-400"
             />
           )}
           {granularidade === 'SEMANAL' && (
             <>
-              <input
-                type="date"
+              {/* `max`/`min` cruzados deixam de ser só limite do calendário: o
+                  `DateInput` valida de verdade e explica ("Data posterior ao
+                  permitido"), em vez de aceitar um início depois do fim. */}
+              <DateInput
                 value={dataFiltro}
                 max={dataFimFiltro || undefined}
-                onChange={e => setDataFiltro(e.target.value)}
+                onChange={v => { if (v) setDataFiltro(v); }}
+                compacto
                 aria-label="Início do período"
-                className="text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                className="w-36 text-sm border border-gray-200 rounded-xl px-3 py-2 focus-within:ring-2 focus-within:ring-indigo-400"
               />
               <span className="text-xs text-gray-400">a</span>
-              <input
-                type="date"
+              <DateInput
                 value={dataFimFiltro}
                 min={dataFiltro || undefined}
-                onChange={e => setDataFimFiltro(e.target.value)}
+                onChange={v => { if (v) setDataFimFiltro(v); }}
+                compacto
                 aria-label="Fim do período"
-                className="text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                className="w-36 text-sm border border-gray-200 rounded-xl px-3 py-2 focus-within:ring-2 focus-within:ring-indigo-400"
               />
             </>
           )}

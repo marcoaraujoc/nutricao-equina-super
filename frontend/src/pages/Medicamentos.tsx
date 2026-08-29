@@ -8,6 +8,7 @@ import {
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import PageContainer from '../components/PageContainer';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
@@ -433,6 +434,18 @@ export default function Medicamentos() {
 
   const abrirNovo = () => { setEditando(null); setShowModal(true); };
   const abrirEdicao = (m: Medicamento) => { setEditando(m); setShowModal(true); };
+
+  // ─── Ações do medicamento — UMA declaração p/ a tabela E p/ o card ─────────
+  // `AcaoRegistro` decide a forma por CSS: ícone no desktop, botão com rótulo no
+  // mobile (onde antes eram dois ícones soltos, sem rótulo nem `title`).
+  const acoesDoMedicamento = (m: Medicamento) => (
+    <AcoesRegistro>
+      <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
+        onClick={() => abrirEdicao(m)} />
+      <AcaoRegistro tom="cancelar" icone={Trash2} rotulo="Desativar"
+        onClick={() => setConfirmDelete(m.id)} />
+    </AcoesRegistro>
+  );
   const fecharModal = () => { setShowModal(false); setEditando(null); };
 
   const handleSalvar = async (form: FormMedicamento) => {
@@ -608,16 +621,7 @@ export default function Medicamentos() {
                         </span>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <div className="flex items-center justify-center gap-1">
-                          <button onClick={() => abrirEdicao(m)} title="Editar"
-                            className="p-1.5 text-indigo-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
-                            <Pencil size={13} />
-                          </button>
-                          <button onClick={() => setConfirmDelete(m.id)} title="Desativar"
-                            className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
+                        {acoesDoMedicamento(m)}
                       </td>
                     </tr>
                   ))}
@@ -651,14 +655,7 @@ export default function Medicamentos() {
                       ))}
                       {m.vias.length > 3 && <span className="text-[10px] text-gray-400">+{m.vias.length - 3}</span>}
                     </div>
-                    <div className="flex gap-1">
-                      <button onClick={() => abrirEdicao(m)} className="p-1.5 text-indigo-400 hover:text-indigo-600 rounded-lg">
-                        <Pencil size={13} />
-                      </button>
-                      <button onClick={() => setConfirmDelete(m.id)} className="p-1.5 text-red-400 hover:text-red-600 rounded-lg">
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
+                    {acoesDoMedicamento(m)}
                   </div>
                 </div>
               ))}
