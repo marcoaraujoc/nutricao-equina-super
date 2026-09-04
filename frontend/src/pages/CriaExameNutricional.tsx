@@ -310,7 +310,7 @@ const CriaExameNutricional = () => {
         {selectedAnimal ? (
           <div className="bg-white rounded-3xl shadow p-4 flex gap-4 mb-6">
             <div className="w-20 h-20 bg-gray-200 rounded-2xl overflow-hidden flex-shrink-0">
-              <FotoAnimal url={selectedAnimal.photoUrl} nome={selectedAnimal.nome} iconSize={26} />
+              <FotoAnimal url={selectedAnimal.photoUrl} nome={selectedAnimal.nome} iconSize={26} animalId={selectedAnimal.id} />
             </div>
             <div className="flex-1">
               <div className="flex justify-between items-start">

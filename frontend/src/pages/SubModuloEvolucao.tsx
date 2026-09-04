@@ -1050,6 +1050,8 @@ interface Props {
   /** Atendimento CARREGADO no shell (o do banner). Marca a linha correspondente no
    *  histórico — sem isso, com dois em andamento não há como saber qual está ativo. */
   evolucaoAtivaId?:   number | null;
+  /** Paciente INATIVO — prontuário em somente leitura (ver animalInativo.js). */
+  pacienteInativo?:  boolean;
   /** Clique no Nº de uma evolução EM ANDAMENTO: carrega aquele atendimento no shell.
    *  É o que faz prescrição, exame, encaminhamento e vacina passarem a se vincular a
    *  ele. Ausente = a coluna Nº fica só como texto (nada a trocar). */
@@ -1065,15 +1067,21 @@ interface Props {
   onAbrirAtendimento?: (evolucaoId: number, modo: 'visualizar' | 'editar') => void;
 }
 
-export default function SubModuloEvolucao({ animalId, animal, faturaId, onFaturaAtualizada, onEvolucoesAbertasChange, onEvolucaoCriada, evolucaoAtivaId, onSelecionarEvolucao, onSalvo, openItemId, onViewConsumed, editItemId, onEditConsumed, agendamentoId: agendamentoIdProp, onAbrirAtendimento }: Props) {
+export default function SubModuloEvolucao({ animalId, animal, faturaId, onFaturaAtualizada, onEvolucoesAbertasChange, onEvolucaoCriada, evolucaoAtivaId, onSelecionarEvolucao, onSalvo, openItemId, onViewConsumed, editItemId, onEditConsumed, agendamentoId: agendamentoIdProp, onAbrirAtendimento, pacienteInativo}: Props) {
   const { user } = useAuth();
   const { podeExecutar, isGestor, permissoes, loading: loadingPerms } = usePermissoes();
 
-  const podeCriar     = isGestor || podeExecutar('atendimento.evolucoes.criar');
-  const podeEditar    = isGestor || podeExecutar('atendimento.evolucoes.editar');
-  const podeFinalizar = isGestor || podeExecutar('atendimento.evolucoes.finalizar');
+  // 🔴 PACIENTE INATIVO = SOMENTE LEITURA. O prontuário fica congelado na data
+  // e hora da inativação: tudo continua visível, nada mais é criado, alterado,
+  // finalizado ou cancelado até o gestor reativar. Entra AQUI, nas permissões, para
+  // alcançar todo botão de uma vez — o backend recusa igual (lib/animalInativo.js),
+  // e oferecer ação que vai dar 400 é a armadilha 28-d.
+  // ⚠️ Imprimir/compartilhar ficam de fora: são SAÍDA de conteúdo, não escrita.
+  const podeCriar     = !pacienteInativo && (isGestor || podeExecutar('atendimento.evolucoes.criar'));
+  const podeEditar    = !pacienteInativo && (isGestor || podeExecutar('atendimento.evolucoes.editar'));
+  const podeFinalizar = !pacienteInativo && (isGestor || podeExecutar('atendimento.evolucoes.finalizar'));
   const podeImprimir  = isGestor || podeExecutar('atendimento.evolucoes.imprimir');
-  const podeDeletar   = isGestor || podeExecutar('atendimento.evolucoes.deletar');
+  const podeDeletar   = !pacienteInativo && (isGestor || podeExecutar('atendimento.evolucoes.deletar'));
 
   /**
    * AUTORIA (CLAUDE.md 28-c) — FONTE ÚNICA da regra nesta tela.

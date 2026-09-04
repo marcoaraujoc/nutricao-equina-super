@@ -11,6 +11,7 @@ const {
 const { resolverLogoPorProprietario } = require('../lib/logoEmpresaUtils');
 const { ehClienteDaEmpresa } = require('../lib/clienteEmpresa');
 const { registrarAuditoria } = require('../lib/auditoria');
+const { ehGestorNoContexto } = require('../middlewares/permissao.middleware');
 const { escopoCatalogoEmpresa } = require('../middlewares/empresaAtiva.middleware');
 const {
   aplicarPerfil: aplicarPerfilProprietario,
@@ -467,14 +468,27 @@ const FaturaController = {
       // Nome/telefone/condição comercial conforme o cadastro DESTA empresa
       const comPerfil = await aplicarPerfilProprietarioEmLista(proprietarios, req.empresaId);
 
-      const dados = comPerfil.map(p => ({
-        ...p,
-        faturaAtiva:    p.faturas.find(f => f.status === 'ABERTA')   ?? null,
-        faturaFechada:  p.faturas.find(f => f.status === 'FECHADA')  ?? null,
-        faturaAtrasada: p.faturas.find(f => f.status === 'ATRASADA') ?? null,
-        faturaPaga:     faturaPagaPorProp[p.id] ?? null,
-        faturas: undefined,
-      }));
+      const dados = comPerfil
+        // 🔴 CLIENTE SEM PACIENTE NÃO ENTRA NA LISTA (a pedido, 2026-09-02). A tela de
+        // Faturamento é por PACIENTE — o lançamento, o rateio e a seção "Informação do
+        // Cavalo" da fatura partem dele —, então um cliente sem nenhum animal no escopo
+        // é uma linha em que não há o que cobrar.
+        //
+        // ⚠️ QUEM ISTO REMOVE, na prática, é o cliente retido pela regra da fatura
+        // PENDENTE logo acima (o desligado da empresa, ou aquele cujos pacientes foram
+        // todos excluídos): sem paciente e sem fatura pendente ele já não aparecia.
+        // CONSEQUÊNCIA ACEITA: uma fatura ABERTA/FECHADA/ATRASADA desse cliente deixa de
+        // ser alcançável por esta tela. Para trazê-lo de volta, o caminho é reativar um
+        // paciente dele — ou trocar este filtro por "sem paciente E sem fatura pendente".
+        .filter(p => p.animais.length > 0)
+        .map(p => ({
+          ...p,
+          faturaAtiva:    p.faturas.find(f => f.status === 'ABERTA')   ?? null,
+          faturaFechada:  p.faturas.find(f => f.status === 'FECHADA')  ?? null,
+          faturaAtrasada: p.faturas.find(f => f.status === 'ATRASADA') ?? null,
+          faturaPaga:     faturaPagaPorProp[p.id] ?? null,
+          faturas: undefined,
+        }));
 
       res.json({ dados });
     } catch (err) {
@@ -738,16 +752,47 @@ const FaturaController = {
       // marcar como PAGA (ou CANCELADA) a fatura de outra clínica.
       const alvo = await prisma.fatura.findUnique({
         where:  { id: Number(faturaId) },
-        select: { id: true, empresaId: true },
+        select: { id: true, empresaId: true, status: true, proprietarioId: true },
       });
       if (!alvo || faturaForaDoEscopo(alvo, req)) {
         return res.status(404).json({ error: 'Fatura não encontrada' });
       }
 
-      const fatura = await prisma.fatura.update({
-        where:   { id: Number(faturaId) },
-        data:    { status },
-        include: FATURA_INCLUDE,
+      // 🔴 FATURA PAGA É SOMENTE LEITURA (2026-09-02).
+      //
+      // Item de fatura paga já não podia ser incluído, alterado nem removido — mas o
+      // STATUS podia voltar para ABERTA por esta rota, e a partir daí tudo voltava a
+      // ser editável. Era a porta dos fundos do bloqueio inteiro: bastava reabrir para
+      // reescrever uma cobrança que o cliente já quitou.
+      //
+      // ⚠️ REABRIR continua POSSÍVEL, mas só para o GESTOR — mesma escolha da
+      // reativação do paciente (`AnimalController.ativar`). Sem nenhuma saída, um
+      // clique errado em "Marcar como Pago" congelaria a fatura para sempre, o que é
+      // pior que o problema. E a reabertura vai para a AUDITORIA, porque é ela que
+      // responde "quem destravou uma fatura quitada, e quando".
+      const saindoDePaga = alvo.status === 'PAGA' && status !== 'PAGA';
+      if (saindoDePaga && !ehGestorNoContexto(req)) {
+        return res.status(400).json({
+          error: 'Fatura paga fica em SOMENTE LEITURA. Só o gestor pode reabri-la.',
+          code:  'FATURA_PAGA',
+        });
+      }
+
+      const fatura = await prisma.$transaction(async (tx) => {
+        const atualizada = await tx.fatura.update({
+          where:   { id: Number(faturaId) },
+          data:    { status },
+          include: FATURA_INCLUDE,
+        });
+        if (saindoDePaga) {
+          await registrarAuditoria(tx, req, {
+            categoria:  'ALTERACAO',
+            entidade:   'FATURA',
+            entidadeId: alvo.id,
+            detalhes:   `Fatura PAGA reaberta como ${status}`,
+          });
+        }
+        return atualizada;
       });
       res.json({ dados: await comPerfilDaEmpresa(fatura, req.empresaId) });
     } catch (err) {

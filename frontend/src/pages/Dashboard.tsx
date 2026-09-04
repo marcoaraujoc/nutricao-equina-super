@@ -101,7 +101,7 @@ const AnimalDashboard = ({ animal, onNavigate, onBack }: { animal: any; onNaviga
       <div className="bg-white rounded-3xl shadow-md border border-gray-100 overflow-hidden">
         <div className="flex flex-col sm:flex-row">
           <div className="w-full sm:w-56 h-48 sm:h-auto bg-gray-200 flex-shrink-0">
-            <FotoAnimal url={animal.photoUrl} nome={animal.nome} iconSize={48} />
+            <FotoAnimal url={animal.photoUrl} nome={animal.nome} iconSize={48} animalId={animal.id} />
           </div>
           <div className="flex-1 p-6 sm:p-8">
             <h2 className="text-3xl sm:text-4xl font-bold text-gray-900">{animal.nome}</h2>
@@ -388,7 +388,7 @@ const Dashboard = () => {
               selectedAnimal?.id === animal.id ? 'border-emerald-500 shadow-md' : 'border-gray-100 hover:shadow-md'
             }`}>
             <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gray-200 rounded-2xl overflow-hidden flex-shrink-0 mr-4 sm:mr-6">
-              <FotoAnimal url={animal.photoUrl} nome={animal.nome} iconSize={26} />
+              <FotoAnimal url={animal.photoUrl} nome={animal.nome} iconSize={26} animalId={animal.id} />
             </div>
             <div className="flex-1 min-w-0">
               <h3 className="text-xl sm:text-2xl font-semibold text-gray-900 truncate">{animal.nome}</h3>

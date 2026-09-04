@@ -1,6 +1,7 @@
 // frontend/src/pages/SubModuloPrescricao.tsx
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Pencil, Ban, CheckCircle2, X, Loader2,
   ChevronLeft, ChevronRight, ChevronDown, Pill, Activity,
@@ -18,6 +19,9 @@ import ConfirmModal from '../components/ConfirmModal';
 import ImportarOrcamentoModal, { type OrcamentoItemImport, marcarOrcamentoImportado } from '../components/ImportarOrcamentoModal';
 import InlineError from '../components/InlineError';
 import ErroAcao, { classeErro, type ErroAcaoDados } from '../components/ErroAcao';
+import {
+  buscarModeloReceitaControlada, rotaReceitaControlada, NOME_RECEITA_CONTROLADA,
+} from '../modules/documentos/receitaControlada';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 
@@ -127,6 +131,8 @@ interface Props {
    *  ANTES do documento existir: o backend já recusa com 403, isto só evita o
    *  formulário inteiro para depois falhar. */
   evolucaoDeOutro?:   boolean;
+  /** Paciente INATIVO — prontuário em somente leitura (ver animalInativo.js). */
+  pacienteInativo?:  boolean;
   atendimentoNumero?: string;
   onSalvo?:           () => void;
   openItemId?:        number;
@@ -290,6 +296,34 @@ const formatarData = (d: string | null) => {
   return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
 };
 
+/**
+ * O item é medicamento sujeito a CONTROLE ESPECIAL?
+ *
+ * Quem classifica é o CATÁLOGO (`medicamentoCat.controlado`), nunca o texto digitado
+ * em `medicamento` — o campo é livre e "Gabapentina" escrita à mão não prova nada.
+ * Item fora do catálogo conta como comum: sem cadastro não há classificação, e
+ * presumir controle levaria remédio corriqueiro para o receituário especial.
+ */
+const itemControlado = (i: { tipo: string; medicamentoCat?: { controlado: boolean } | null }) =>
+  i.tipo !== 'PROCEDIMENTO' && i.medicamentoCat?.controlado === true;
+
+/** A prescrição tem algum medicamento sujeito a controle especial? */
+const grupoTemControlado = (g: PrescricaoGrupo) => g.itens.some(itemControlado);
+
+/**
+ * A prescrição com SÓ os itens que saem no papel comum.
+ *
+ * 🔴 O controlado é retirado porque ele vai para o receituário PRÓPRIO (a "Receita
+ * Controlada" da Central de Documentos): imprimi-lo nos dois lugares produziria duas
+ * receitas válidas do mesmo medicamento controlado — exatamente o que a via
+ * numerada existe para impedir.
+ * ⚠️ Só recorte quando o receituário REALMENTE for emitido. Se o modelo não existir
+ * no acervo, imprima o grupo INTEIRO: um papel com os itens certos é melhor que um
+ * papel de onde o medicamento controlado sumiu sem que ninguém percebesse.
+ */
+const semControlados = (g: PrescricaoGrupo): PrescricaoGrupo =>
+  ({ ...g, itens: g.itens.filter(i => !itemControlado(i)) });
+
 function montarTextoPrescricao(g: PrescricaoGrupo): string {
   const linhasItens = g.itens.map(i => {
     const det = [
@@ -363,6 +397,55 @@ function imprimirPrescricao(grupo: PrescricaoGrupo, animal?: PrintAnimalPrescric
       dataInicio:      i.dataInicio,
     })),
   });
+}
+
+/**
+ * RECEITUÁRIO DE CONTROLE ESPECIAL — o desvio de Imprimir / WhatsApp / E-mail quando
+ * a prescrição tem medicamento controlado.
+ *
+ * 🔴 São DOIS papéis, e é assim de propósito: o controlado sai no receituário PRÓPRIO
+ * (documento numerado da Central, com identificação do comprador e via da farmácia) e
+ * os demais itens continuam saindo na receita comum. Tudo num papel só faria o remédio
+ * corriqueiro nascer num receituário de controle especial; tudo no comum deixaria o
+ * controlado sem a via que a norma exige.
+ *
+ * A ordem importa: o papel comum sai PRIMEIRO e a navegação vem depois — sair da tela
+ * antes de disparar a impressão cancelaria o diálogo do navegador.
+ *
+ * ⚠️ SEM o modelo no acervo (ou sem permissão para ler a Central), NADA é recortado: a
+ * ação faz exatamente o que fazia antes, com o grupo INTEIRO, e um aviso diz por quê.
+ * Fallback silencioso aqui significaria imprimir uma receita de onde o medicamento
+ * controlado sumiu sem ninguém perceber.
+ *
+ * Função de MÓDULO, não hook: a lista de prescrições e o modal de visualização têm o
+ * mesmo botão de imprimir, e duas cópias divergiriam na primeira correção (28-g).
+ */
+async function receituarioControladoOuComum(
+  g: PrescricaoGrupo,
+  animalId: number,
+  navigate: (rota: string) => void,
+  acaoComum: (grupo: PrescricaoGrupo) => void,
+): Promise<void> {
+  if (!grupoTemControlado(g)) { acaoComum(g); return; }
+
+  const modelo = await buscarModeloReceitaControlada();
+  if (!modelo) {
+    acaoComum(g);
+    toast(`O modelo "${NOME_RECEITA_CONTROLADA}" não foi encontrado na Central de `
+      + 'Documentos. A receita saiu completa, com os controlados nela.',
+      { icon: '⚠️', duration: 7000 });
+    return;
+  }
+
+  // Prescrição SÓ de controlados não tem papel comum — disparar a impressão de uma
+  // receita sem nenhum item entregaria uma folha em branco.
+  const comuns = semControlados(g);
+  if (comuns.itens.length > 0) acaoComum(comuns);
+
+  navigate(rotaReceitaControlada(animalId, modelo.id, g.id));
+  toast.success(comuns.itens.length > 0
+    ? 'Os demais itens saíram na receita comum. Complete o receituário de controle especial.'
+    : 'Complete o receituário de controle especial para imprimir.');
 }
 
 // ─── AlertaEstoqueModal ───────────────────────────────────────────────────────
@@ -461,6 +544,7 @@ interface GrupoModalProps {
 }
 
 function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, podeImprimir = false, evolucaoId, onClose, onSaved, isInline = false }: GrupoModalProps) {
+  const navigate = useNavigate();
   const isCreate   = !grupo;
   // Impede inserir item novo fora de SALVO (edição/exclusão de itens já existentes,
   // por item, é liberada separadamente via ItemRow.canEdit — ver Prescricao.executadoEm)
@@ -1897,7 +1981,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
               <>
                 {/* Imprimir — FINALIZADO, EXECUTADO ou já CANCELADO (o registro impresso continua útil) */}
                 {grupo != null && ['FINALIZADO', 'EXECUTADO', 'CANCELADO', 'CANCELADO_PARCIALMENTE'].includes(grupo.status) && podeImprimir && (
-                  <button onClick={() => imprimirPrescricao(grupo!, animal)}
+                  <button onClick={() => void receituarioControladoOuComum(grupo!, animalId, navigate, gr => imprimirPrescricao(gr, animal))}
                     className="flex items-center gap-1.5 px-4 py-2 border border-blue-200 text-blue-600 hover:bg-blue-50 rounded-xl text-sm transition-colors">
                     <Printer size={14} /> Imprimir
                   </button>
@@ -2165,13 +2249,20 @@ function CancelarModal({
 
 // ─── SubModuloPrescricao ──────────────────────────────────────────────────────
 
-export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualizada, evolucaoId, evolucaoDeOutro, onSalvo, openItemId, onViewConsumed, editItemId, onEditConsumed }: Props) {
+export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualizada, evolucaoId, evolucaoDeOutro, onSalvo, openItemId, onViewConsumed, editItemId, onEditConsumed, pacienteInativo}: Props) {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
-  const podeCriar    = isGestor || podeExecutar('atendimento.prescricoes.criar');
-  const podeEditar   = isGestor || podeExecutar('atendimento.prescricoes.editar');
-  const podeFinalizar = isGestor || podeExecutar('atendimento.prescricoes.finalizar');
+  // 🔴 PACIENTE INATIVO = SOMENTE LEITURA. O prontuário fica congelado na data
+  // e hora da inativação: tudo continua visível, nada mais é criado, alterado,
+  // finalizado ou cancelado até o gestor reativar. Entra AQUI, nas permissões, para
+  // alcançar todo botão de uma vez — o backend recusa igual (lib/animalInativo.js),
+  // e oferecer ação que vai dar 400 é a armadilha 28-d.
+  // ⚠️ Imprimir/compartilhar ficam de fora: são SAÍDA de conteúdo, não escrita.
+  const podeCriar    = !pacienteInativo && (isGestor || podeExecutar('atendimento.prescricoes.criar'));
+  const podeEditar   = !pacienteInativo && (isGestor || podeExecutar('atendimento.prescricoes.editar'));
+  const podeFinalizar = !pacienteInativo && (isGestor || podeExecutar('atendimento.prescricoes.finalizar'));
   const podeImprimir  = isGestor || podeExecutar('atendimento.prescricoes.imprimir');
 
   const canEdit = podeCriar;
@@ -2365,16 +2456,19 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           titulo="Finalizar prescrição"
           visivel={g.status === 'SALVO' && meuRegistro && canFinalizarCancelar}
           onClick={() => handleFinalizarDireto(g.id)} />
+        {/* Com medicamento CONTROLADO, os três passam pelo receituário próprio:
+            o controlado vai para o documento da Central e o resto sai aqui. Ver
+            `receituarioControladoOuComum`. Sem controlado, nada muda. */}
         <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
           titulo="Imprimir prescrição" visivel={imprimivel}
-          onClick={() => imprimirPrescricao(g, animal)} />
+          onClick={() => void receituarioControladoOuComum(g, animalId, navigate, gr => imprimirPrescricao(gr, animal))} />
         {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
         <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp"
           titulo="Enviar por WhatsApp" visivel={podeImprimir}
-          onClick={() => abrirWhatsApp(montarTextoPrescricao(g))} />
+          onClick={() => void receituarioControladoOuComum(g, animalId, navigate, gr => abrirWhatsApp(montarTextoPrescricao(gr)))} />
         <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail"
           titulo="Enviar por e-mail" visivel={podeImprimir}
-          onClick={() => abrirEmail(`Prescrição ${g.numeroFormatado}`, montarTextoPrescricao(g))} />
+          onClick={() => void receituarioControladoOuComum(g, animalId, navigate, gr => abrirEmail(`Prescrição ${gr.numeroFormatado}`, montarTextoPrescricao(gr)))} />
         <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
           titulo="Cancelar prescrição" visivel={cancelavel}
           onClick={() => { setErroLinha(null); setDeletingId(g.id); }} />

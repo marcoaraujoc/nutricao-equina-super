@@ -6,7 +6,8 @@ const pdfParse = require('pdf-parse');
 const mammoth  = require('mammoth');
 const { MODULOS_IA } = require('../ai');
 const { buildPrompt } = require('../ai/prompts');
-const { gerarConteudo, PROVEDOR } = require('../ai/geminiClient');
+const { gerarConteudo, PROVEDOR, MODELO_PADRAO } = require('../ai/geminiClient');
+const { comRetentativa } = require('../ai/retentativa');
 const { logAiUsage } = require('./aiLogger.service');
 // Gate de quota — chamado direto porque este arquivo não passa mais por `callAI`
 // (que é texto-puro) para o laudo Laboratorial/Bioquímico: a chamada virou
@@ -151,10 +152,17 @@ async function chamarGeminiComLog({ parts, promptTexto, operacaoVers, userId, an
   let respostaTexto    = '';
   let tokensEntradaApi = null;
   let tokensSaidaApi   = null;
-  let modelo;
+  // 🔴 Começa em MODELO_PADRAO, NUNCA `undefined`: quando a chamada FALHA, o `r` não
+  // existe e `modelo` ficava vazio — `logAiUsage` então morria com "Argument `modelo`
+  // is missing" e perdia justamente o registro da falha que se quer investigar. Foi o
+  // erro visto ao ler um laudo durante um 503 do Gemini. O mesmo defeito já havia sido
+  // corrigido em documentoConversaoService e composicaoParserService.
+  let modelo = MODELO_PADRAO;
 
   try {
-    const r = await gerarConteudo(parts, { temperature: 0.1, maxTokens: 3000 });
+    // 503 "high demand" do Gemini é falha do MINUTO, não do laudo: sem a retentativa,
+    // o vet anexa o PDF e vê a leitura falhar por um motivo que não é o arquivo dele.
+    const r = await comRetentativa(() => gerarConteudo(parts, { temperature: 0.1, maxTokens: 3000 }));
     respostaTexto    = (r.text ?? '').trim();
     tokensEntradaApi = r.tokensEntrada;
     tokensSaidaApi   = r.tokensSaida;

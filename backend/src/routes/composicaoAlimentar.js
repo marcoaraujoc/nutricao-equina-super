@@ -8,7 +8,25 @@ const { authenticate } = require('../middlewares/auth');
 
 const router = express.Router();
 
-const upload = multer({ dest: 'uploads/composicoes/' });
+// Limite de tamanho + filtro de tipo. O parser (composicaoParserService) só lê PDF
+// (texto) e imagem (visão); sem o `fileFilter` qualquer binário era gravado no disco,
+// e sem `limits` um autenticado podia encher o disco com um upload gigante (DoS).
+// `dest` gera nome aleatório sem `originalname` — não há path traversal.
+function fileFilterComposicao(_req, file, cb) {
+  if (file.mimetype === 'application/pdf' || file.mimetype.startsWith('image/')) {
+    return cb(null, true);
+  }
+  const err = new Error(`Formato não suportado: "${file.originalname || file.mimetype}". Envie PDF ou imagem.`);
+  err.status = 415;
+  err.code   = 'FORMATO_ARQUIVO_NAO_SUPORTADO';
+  cb(err);
+}
+
+const upload = multer({
+  dest: 'uploads/composicoes/',
+  limits: { fileSize: 15 * 1024 * 1024 }, // 15 MB
+  fileFilter: fileFilterComposicao,
+});
 
 const soAdmin = (req, res, next) => {
   if (req.user?.userType !== 'ADMIN') return res.status(403).json({ error: 'Acesso restrito a administradores do sistema.' });

@@ -23,35 +23,18 @@ import type { CSSProperties } from 'react';
 import { X, Loader2, FileCheck2, PenLine, Eye, ListChecks, AlertTriangle, Sparkles } from 'lucide-react';
 
 import BlocoView from './BlocoView';
+import CabecalhoFolha from './CabecalhoFolha';
+import { prepararFolha } from './cabecalho';
 import type { MarcaFolha } from './BlocoView';
-import { agruparPorSecao, chaveDaLacuna, contarPreenchidos } from './campos';
+import CampoInput, { ListaCamposInput, preenchimentoPorCep } from './CamposForm';
+import { chaveDaLacuna, contarPreenchidos } from './campos';
 import type { CampoDocumento, Preenchimento } from './campos';
+import type { ListaDocumento, PreenchimentoListas } from './listas';
 import type { ContextoVariaveis } from './catalogo';
 import type { Bloco } from './types';
 
-/** Rótulos que pedem data — o input vira `date` e o vet ganha o calendário do SO. */
-const PISTA_DATA = /\bdata\b|nascimento|validade|fabrica[çc][ãa]o|vencimento/i;
-/** Rótulos que pedem hora. */
-const PISTA_HORA = /\bhora\b|hor[áa]rio/i;
-
-function tipoDoCampo(campo: CampoDocumento): 'text' | 'date' | 'time' {
-  if (campo.multilinha) return 'text';
-  if (PISTA_HORA.test(campo.rotulo)) return 'time';
-  // "Data de fabricação / Data de validade" são DUAS datas num rótulo só (é assim no
-  // anexo XI do CFMV) — ali um `date` mentiria sobre o que cabe. Só vira `date` quando
-  // o rótulo fala de UMA data.
-  if (PISTA_DATA.test(campo.rotulo) && !campo.rotulo.includes('/')) return 'date';
-  return 'text';
-}
-
-const AJUDA_ORIGEM: Record<CampoDocumento['origem'], string> = {
-  LACUNA:     'Campo do formulário oficial',
-  CADASTRO:   'Não consta no cadastro do paciente',
-  OBSERVACAO: 'Texto livre — opcional',
-};
-
 export default function ModalPreencher({
-  aberto, onFechar, templateNome, animalNome, blocos, campos, contexto, marca,
+  aberto, onFechar, templateNome, animalNome, blocos, campos, listas, contexto, marca,
   carregando, emitindo, erro, onEmitir,
 }: {
   aberto:       boolean;
@@ -60,14 +43,17 @@ export default function ModalPreencher({
   animalNome:   string;
   blocos:       Bloco[];
   campos:       CampoDocumento[];
+  /** Grupos REPETÍVEIS (medicamento, vacina…), já com a sugestão do paciente. */
+  listas:       ListaDocumento[];
   contexto:     ContextoVariaveis | null;
   marca:        MarcaFolha | null;
   carregando:   boolean;
   emitindo:     boolean;
   erro:         string | null;
-  onEmitir:     (preenchimento: Preenchimento) => void;
+  onEmitir:     (preenchimento: Preenchimento, listas: PreenchimentoListas) => void;
 }) {
   const [valores, setValores] = useState<Preenchimento>({});
+  const [valListas, setValListas] = useState<PreenchimentoListas>({});
   const [focado,  setFocado]  = useState<string | null>(null);
   const [abaMobile, setAbaMobile] = useState<'campos' | 'folha'>('campos');
 
@@ -77,12 +63,31 @@ export default function ModalPreencher({
   // Abrir de novo (outro modelo, outro paciente) recomeça do zero — carregar o que foi
   // digitado para o documento ANTERIOR poria dado do paciente errado no papel.
   useEffect(() => {
-    if (aberto) { setValores({}); setFocado(null); setAbaMobile('campos'); }
-  }, [aberto, templateNome, animalNome]);
+    if (!aberto) return;
+    setValores({});
+    setFocado(null);
+    setAbaMobile('campos');
+    // As listas nascem com o que o backend sugeriu a partir do PACIENTE — é o
+    // "autopreenchido": a prescrição, as vacinas e os exames que ele já tem.
+    const iniciais: PreenchimentoListas = {};
+    for (const l of listas) if (l.sugestao?.length) iniciais[l.chave] = l.sugestao;
+    setValListas(iniciais);
+  }, [aberto, templateNome, animalNome, listas]);
 
   const preenchidos = contarPreenchidos(campos, valores);
   const faltando    = campos.length - preenchidos;
-  const grupos      = useMemo(() => agruparPorSecao(campos), [campos]);
+  /** Campos e LISTAS na mesma seção — para quem emite, os dois são "o que falta". */
+  const grupos = useMemo(() => {
+    const mapa = new Map<string, { secao: string; campos: CampoDocumento[]; listas: ListaDocumento[] }>();
+    const secao = (nome: string | null) => {
+      const chave = nome ?? 'Documento';
+      if (!mapa.has(chave)) mapa.set(chave, { secao: chave, campos: [], listas: [] });
+      return mapa.get(chave)!;
+    };
+    for (const c of campos) secao(c.secao).campos.push(c);
+    for (const l of listas) secao(l.secao).listas.push(l);
+    return [...mapa.values()];
+  }, [campos, listas]);
 
   const definir = useCallback((chave: string, v: string) => {
     setValores(prev => ({ ...prev, [chave]: v }));
@@ -112,6 +117,9 @@ export default function ModalPreencher({
   }, [focado]);
 
   if (!aberto) return null;
+
+  // Cabeçalho padrão + corpo sem o bloco de título absorvido — ver ./cabecalho.ts.
+  const { cabecalho, corpo } = prepararFolha({ blocos, nome: templateNome, contexto, marca });
 
   const folha: CSSProperties = {
     width: '210mm', minHeight: '297mm', padding: '18mm 16mm',
@@ -200,49 +208,27 @@ export default function ModalPreencher({
                         {g.secao}
                       </p>
                       <div className="space-y-2.5">
-                        {g.campos.map(campo => {
-                          const valor = valores[campo.chave] ?? '';
-                          const ativo = focado === campo.chave;
-                          return (
-                            <div key={campo.chave}>
-                              <label className="flex items-center gap-1.5 text-xs font-medium text-gray-600 mb-1">
-                                {campo.rotulo}
-                                {campo.origem === 'CADASTRO' && (
-                                  <span
-                                    title={AJUDA_ORIGEM.CADASTRO}
-                                    className="text-[9px] font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-full"
-                                  >
-                                    fora do cadastro
-                                  </span>
-                                )}
-                              </label>
-                              {campo.multilinha ? (
-                                <textarea
-                                  ref={el => { inputsRef.current[campo.chave] = el; }}
-                                  value={valor} rows={3}
-                                  onChange={e => definir(campo.chave, e.target.value)}
-                                  onFocus={() => setFocado(campo.chave)}
-                                  placeholder={AJUDA_ORIGEM[campo.origem]}
-                                  className={`w-full border rounded-xl px-3 py-2 text-sm resize-none transition-colors focus:outline-none ${
-                                    ativo ? 'border-emerald-500 ring-2 ring-emerald-100' : 'border-gray-200 focus:border-emerald-500'
-                                  }`}
-                                />
-                              ) : (
-                                <input
-                                  ref={el => { inputsRef.current[campo.chave] = el; }}
-                                  type={tipoDoCampo(campo)}
-                                  value={valor}
-                                  onChange={e => definir(campo.chave, e.target.value)}
-                                  onFocus={() => setFocado(campo.chave)}
-                                  placeholder={campo.origem === 'LACUNA' ? 'Deixe em branco para preencher à mão' : ''}
-                                  className={`w-full border rounded-xl px-3 py-2 text-sm transition-colors focus:outline-none ${
-                                    ativo ? 'border-emerald-500 ring-2 ring-emerald-100' : 'border-gray-200 focus:border-emerald-500'
-                                  }`}
-                                />
-                              )}
-                            </div>
-                          );
-                        })}
+                        {g.campos.map(campo => (
+                          <CampoInput
+                            key={campo.chave}
+                            campo={campo}
+                            valor={valores[campo.chave] ?? ''}
+                            ativo={focado === campo.chave}
+                            onChange={v => definir(campo.chave, v)}
+                            onFocus={() => setFocado(campo.chave)}
+                            inputRef={el => { inputsRef.current[campo.chave] = el; }}
+                            onEnderecoDoCep={dados =>
+                              setValores(prev => ({ ...prev, ...preenchimentoPorCep(campos, dados) }))}
+                          />
+                        ))}
+                        {g.listas.map(lista => (
+                          <ListaCamposInput
+                            key={lista.chave}
+                            lista={lista}
+                            linhas={valListas[lista.chave] ?? []}
+                            onChange={linhas => setValListas(prev => ({ ...prev, [lista.chave]: linhas }))}
+                          />
+                        ))}
                       </div>
                     </div>
                   ))}
@@ -254,19 +240,13 @@ export default function ModalPreencher({
           {/* ── Folha ── */}
           <section className={`${abaMobile === 'folha' ? 'flex' : 'hidden'} sm:flex flex-1 min-w-0 bg-gray-100 overflow-auto justify-center py-5`}>
             <div ref={folhaRef} style={folha} className="shadow-lg rounded-sm flex-shrink-0">
-              {(marca?.logoUrl || marca?.empresaNome) && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, borderBottom: '1px solid #e5e7eb',
-                              paddingBottom: 10, marginBottom: 14 }}>
-                  {marca.logoUrl
-                    ? <img src={marca.logoUrl} alt="" style={{ maxHeight: 48, maxWidth: 170, objectFit: 'contain' }} />
-                    : <p style={{ fontSize: 14, fontWeight: 700 }}>{marca.empresaNome}</p>}
-                </div>
-              )}
-              {blocos.map(b => (
+              <CabecalhoFolha dados={cabecalho} />
+              {corpo.map(b => (
                 <BlocoView
                   key={b.id}
                   bloco={b} contexto={contexto} marca={marca}
                   preenchimento={valores}
+                  listas={valListas}
                   campoFocado={focado}
                   onFocarCampo={focarDaFolha}
                 />
@@ -299,7 +279,7 @@ export default function ModalPreencher({
                 Cancelar
               </button>
               <button
-                onClick={() => onEmitir(valores)}
+                onClick={() => onEmitir(valores, valListas)}
                 disabled={emitindo || carregando}
                 className="flex items-center gap-1.5 px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors"
               >

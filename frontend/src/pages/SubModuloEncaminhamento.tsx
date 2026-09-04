@@ -80,6 +80,8 @@ interface Props {
    *  backend já recusa com 403 (EncaminhamentoController.criar); isto só evita o
    *  formulário inteiro preenchido pra falhar no fim. */
   evolucaoDeOutro?:   boolean;
+  /** Paciente INATIVO — prontuário em somente leitura (ver animalInativo.js). */
+  pacienteInativo?:  boolean;
   atendimentoNumero?: string;
   onSalvo?:           () => void;
 }
@@ -691,17 +693,23 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
 
 // ─── SubModuloEncaminhamento ──────────────────────────────────────────────────
 
-export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucaoDeOutro, onSalvo }: Props) {
+export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucaoDeOutro, onSalvo, pacienteInativo}: Props) {
   const { user } = useAuth();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
-  const podeCriar   = isGestor || podeExecutar('atendimento.encaminhamentos.criar');
-  const podeEditar  = isGestor || podeExecutar('atendimento.encaminhamentos.editar');
+  // 🔴 PACIENTE INATIVO = SOMENTE LEITURA. O prontuário fica congelado na data
+  // e hora da inativação: tudo continua visível, nada mais é criado, alterado,
+  // finalizado ou cancelado até o gestor reativar. Entra AQUI, nas permissões, para
+  // alcançar todo botão de uma vez — o backend recusa igual (lib/animalInativo.js),
+  // e oferecer ação que vai dar 400 é a armadilha 28-d.
+  // ⚠️ Imprimir/compartilhar ficam de fora: são SAÍDA de conteúdo, não escrita.
+  const podeCriar   = !pacienteInativo && (isGestor || podeExecutar('atendimento.encaminhamentos.criar'));
+  const podeEditar  = !pacienteInativo && (isGestor || podeExecutar('atendimento.encaminhamentos.editar'));
   // Concluir é uma ação PRÓPRIA (`atendimento.encaminhamentos.finalizar`) — não pode
   // herdar de `editar`, senão o Controle de Acesso deixa de ter efeito: um perfil com
   // Editar liberado e Finalizar negado (ou vice-versa) precisa dos dois resultados
   // distintos na tela, exatamente como já acontece em Evolução/Prescrição/Vacina/Exames.
-  const podeFinalizar = isGestor || podeExecutar('atendimento.encaminhamentos.finalizar');
+  const podeFinalizar = !pacienteInativo && (isGestor || podeExecutar('atendimento.encaminhamentos.finalizar'));
   // WhatsApp/e-mail tiram o conteúdo do sistema — mesmo gate do IMPRIMIR.
   const podeCompartilhar = isGestor || podeExecutar('atendimento.encaminhamentos.imprimir');
   // FORNECEDOR só cancela/edita/finaliza encaminhamentos que ele próprio criou

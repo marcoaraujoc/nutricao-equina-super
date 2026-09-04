@@ -25,6 +25,8 @@ const TIPOS_BLOCO = new Set([
   'titulo', 'subtitulo', 'texto', 'tabela', 'tabelaDinamica', 'imagem', 'linha',
   'qrcode', 'assinatura', 'checklist', 'campoAuto', 'medicamentos', 'vacinas',
   'procedimentos', 'exames', 'linhaTempo', 'observacoes', 'rodape',
+  // Grupo de campos REPETÍVEL (`lib/documentoListas.js`): o "+ Adicionar" da emissão.
+  'listaCampos',
 ]);
 
 const ACOES = new Set(['USAR_TEMPLATE', 'AJUSTAR', 'RESPONDER']);
@@ -33,6 +35,8 @@ const ACOES = new Set(['USAR_TEMPLATE', 'AJUSTAR', 'RESPONDER']);
 const VARIAVEIS_VALIDAS = [
   'veterinario.nome', 'veterinario.crmv', 'veterinario.clinica', 'veterinario.telefone',
   'cliente.nome', 'cliente.documento', 'cliente.telefone', 'cliente.email',
+  'cliente.cep', 'cliente.endereco', 'cliente.complemento', 'cliente.bairro',
+  'cliente.cidade', 'cliente.estado', 'cliente.municipio',
   'propriedade.nome', 'propriedade.endereco', 'propriedade.municipio', 'propriedade.inscricao',
   'animal.nome', 'animal.idade', 'animal.raca', 'animal.especie', 'animal.sexo',
   'animal.pelagem', 'animal.peso', 'animal.resenha', 'animal.microchip', 'animal.registro',
@@ -78,6 +82,10 @@ function normalizarBlocos(brutos) {
         ...(typeof c.url        === 'string' ? { url: c.url.slice(0, 500) } : {}),
         ...(typeof c.fonteDados === 'string' ? { fonteDados: c.fonteDados.slice(0, 80) } : {}),
         ...(typeof c.mostrarCrmv === 'boolean' ? { mostrarCrmv: c.mostrarCrmv } : {}),
+        // 🔴 `assinante` decide se a folha carimba a assinatura ESCANEADA do
+        // veterinário sobre a linha. Deixá-lo de fora do whitelist fazia a linha do
+        // FARMACÊUTICO cair no comportamento antigo e sair assinada pelo vet.
+        ...(c.assinante === 'VETERINARIO' || c.assinante === 'OUTRO' ? { assinante: c.assinante } : {}),
         ...(Array.isArray(c.itens)   ? { itens:   c.itens.slice(0, 40).map(x => String(x ?? '').slice(0, 400)) } : {}),
         ...(Array.isArray(c.colunas) ? { colunas: c.colunas.slice(0, 12).map(x => String(x ?? '').slice(0, 120)) } : {}),
         ...(Array.isArray(c.linhas)  ? { linhas:  c.linhas.slice(0, 60).map(l => (Array.isArray(l) ? l.slice(0, 12).map(x => String(x ?? '').slice(0, 400)) : [])) } : {}),

@@ -5,6 +5,8 @@ import { useGoogleLogin } from '@react-oauth/google';
 import { useAuth } from '../contexts/AuthContext';
 import { AlertCircle, Eye, EyeOff } from 'lucide-react';
 import InlineError from '../components/InlineError';
+import LinkMarcaS2Vet from '../components/LinkMarcaS2Vet';
+import VitrineLogin from '../components/login/VitrineLogin';
 import Verificacao2FA from '../components/Verificacao2FA';
 import type { DesafioMfa } from '../components/Verificacao2FA';
 
@@ -144,14 +146,41 @@ export default function Login() {
 
   return (
     /*
-      h-full        → ocupa 100% da altura do #root (= 100vh)
-      overflow-auto → permite scroll APENAS se o conteúdo não couber
-                      (ex: telas muito pequenas ou banners de aviso ativos)
-    */
-    <div className="h-full bg-gray-950 flex items-center justify-center p-4 overflow-auto">
+      LAYOUT (referencia: app.simples.vet/login + gravacao de 2026-08-29):
 
-      <div className="bg-white text-gray-900 w-full max-w-md rounded-3xl shadow-2xl
-                      px-6 py-6 sm:px-10 sm:py-8">
+        >= lg  TELA CHEIA, margem de 0,5cm em volta — 30% para o login (esquerda)
+               e 70% para as telas do produto correndo (direita). Nada rola a
+               pagina: cada coluna se vira dentro da propria altura.
+        <  lg  empilhado — formulario primeiro, vitrine abaixo (o modelo de
+               mobile enviado e' exatamente essa coluna), com a pagina rolando.
+
+      E o MESMO markup nos dois tamanhos, so' mudando a direcao do flex — nunca
+      dois blocos irmaos com `hidden`/`lg:hidden`, que viram duas copias do
+      formulario e divergem na primeira correcao.
+
+      ⚠️ `lg:overflow-hidden` no wrapper + `lg:h-full` no miolo: e' o que prende
+      tudo na viewport no desktop. No mobile continua `overflow-auto`, porque a
+      vitrine empilhada deixa o conteudo mais alto que a tela.
+    */
+    <div className="h-full overflow-auto bg-white text-gray-900 lg:overflow-hidden">
+
+      {/* Margem de 0,5cm em volta de TODA a pagina. Em `cm` mesmo (o Tailwind
+          aceita a unidade no valor arbitrario): foi a medida pedida, e traduzi-la
+          para px aqui perderia a intencao no primeiro ajuste de escala. */}
+      <div className="flex min-h-full flex-col gap-10 p-[0.5cm] lg:h-full lg:min-h-0 lg:flex-row lg:gap-8">
+
+      {/* Coluna do LOGIN — 30% da largura no desktop.
+          `overflow-y-auto` + `my-auto` no miolo: centraliza quando sobra altura e
+          rola quando falta. `justify-center` no lugar do `my-auto` cortaria o topo
+          do formulario em tela baixa, que e' o bug classico dessa combinacao. */}
+      <div className="w-full lg:flex lg:w-[30%] lg:flex-shrink-0 lg:flex-col lg:overflow-y-auto">
+      <div className="mx-auto w-full max-w-md lg:my-auto">
+
+        {/* A marca vem do banco por `GET /api/marca` — rota publica, que e' o que
+            permite exibi-la aqui, antes de existir sessao. */}
+        <div className="mb-8 flex justify-center">
+          <LinkMarcaS2Vet />
+        </div>
 
         {desafio2fa ? (
           <Verificacao2FA
@@ -165,18 +194,19 @@ export default function Login() {
           />
         ) : (
         <>
-        <h1 className="text-2xl sm:text-3xl font-bold text-center mb-4 sm:mb-6">
-          Faça login na sua conta
-        </h1>
+        {/* Título REMOVIDO da tela a pedido (2026-08-29) — a marca logo acima já
+            diz onde a pessoa está. Fica só para leitor de tela: `sr-only` não
+            ocupa um pixel, e sem nenhum <h1> a página vira um formulário sem
+            título para quem navega por cabeçalhos. */}
+        <h1 className="sr-only">Entrar no S2Vet</h1>
 
-        {/* ── Banner: link de recuperação enviado (volta de "Esqueci minha senha") ──
-            Repete aqui a confirmação que a tela anterior exibiu antes de redirecionar,
-            para quem chega e já não a tem mais na frente. Texto GENÉRICO ("se houver
-            uma conta"): confirmar a existência do e-mail permitiria enumerar usuários. */}
+        {/* Banner: link de recuperacao enviado (volta de "Esqueci minha senha").
+            Repete a confirmacao que a tela anterior exibiu antes de redirecionar.
+            Texto GENERICO ("se houver uma conta"): confirmar a existencia do
+            e-mail permitiria enumerar usuarios. */}
         {msg === 'reset_link_enviado' && (
-          <div className="flex items-start gap-3 bg-emerald-50 border border-emerald-200
-                          rounded-2xl px-4 py-3 text-sm text-emerald-800 mb-4">
-            <AlertCircle size={16} className="flex-shrink-0 mt-0.5 text-emerald-600" />
+          <div className="mb-4 flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            <AlertCircle size={16} className="mt-0.5 flex-shrink-0 text-emerald-600" />
             <span>
               Se houver uma conta com o e-mail informado, enviamos um link para
               redefinir a senha. Verifique a caixa de entrada e a pasta de spam.
@@ -184,11 +214,9 @@ export default function Login() {
           </div>
         )}
 
-        {/* ── Banner: proprietário precisa logar para aprovar vínculo ── */}
         {msg === 'login_required_to_approve' && (
-          <div className="flex items-start gap-3 bg-emerald-50 border border-emerald-200
-                          rounded-2xl px-4 py-3 text-sm text-emerald-800 mb-4">
-            <AlertCircle size={16} className="flex-shrink-0 mt-0.5 text-emerald-600" />
+          <div className="mb-4 flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            <AlertCircle size={16} className="mt-0.5 flex-shrink-0 text-emerald-600" />
             <span>
               Faça login com a sua conta de proprietário para autorizar ou
               recusar o vínculo veterinário. Após o login você será
@@ -197,11 +225,9 @@ export default function Login() {
           </div>
         )}
 
-        {/* ── Banner: vet_required ── */}
         {msg === 'vet_required' && (
-          <div className="flex items-start gap-3 bg-amber-50 border border-amber-200
-                          rounded-2xl px-4 py-3 text-sm text-amber-700 mb-4">
-            <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
+          <div className="mb-4 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+            <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
             <span>
               Este link de aprovação pertence a um veterinário específico.{' '}
               <strong>Faça login com a conta do veterinário</strong> para continuar.
@@ -211,31 +237,36 @@ export default function Login() {
 
         <form onSubmit={handleEmailLogin} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">E-mail</label>
+            {/* Rotulos "Login:" / "Senha:" acima do campo, como na referencia. */}
+            <label htmlFor="login-email" className="mb-1.5 block text-sm text-gray-700">Login:</label>
             <input
+              id="login-email"
               type="email"
+              autoComplete="username"
               value={email}
               onChange={e => setEmail(e.target.value)}
-              className="w-full px-4 py-2.5 sm:py-3 rounded-3xl border border-gray-300
-                         focus:outline-none focus:border-emerald-500 text-sm sm:text-base"
-              placeholder="seuemail@email.com"
+              className="w-full rounded-lg border border-gray-300 px-4 py-3 text-base placeholder:text-gray-400 focus:border-emerald-500 focus:outline-none"
+              placeholder="Email"
               required
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Senha</label>
+            <label htmlFor="login-senha" className="mb-1.5 block text-sm text-gray-700">Senha:</label>
             <div className="relative">
               <input
+                id="login-senha"
                 type={showPassword ? 'text' : 'password'}
+                autoComplete="current-password"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
-                className="w-full px-4 py-2.5 sm:py-3 pr-11 rounded-3xl border border-gray-300
-                           focus:outline-none focus:border-emerald-500 text-sm sm:text-base"
+                className="w-full rounded-lg border border-gray-300 px-4 py-3 pr-11 text-base placeholder:text-gray-400 focus:border-emerald-500 focus:outline-none"
+                placeholder="Senha"
                 required
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(v => !v)}
+                aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                 tabIndex={-1}
               >
@@ -249,35 +280,31 @@ export default function Login() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-400
-                       text-white py-3 sm:py-4 rounded-3xl text-base sm:text-lg
-                       font-semibold transition-colors"
+            className="w-full rounded-full bg-emerald-600 py-3.5 text-base font-semibold text-white transition-colors hover:bg-emerald-700 disabled:bg-gray-400"
           >
-            {loading ? 'Entrando...' : 'Entrar'}
+            {loading ? 'Entrando...' : 'Entrar no S2Vet'}
           </button>
         </form>
 
-        <div className="text-center mt-3">
+        <div className="mt-4 text-center">
           <button
             onClick={() => setShowForgotModal(true)}
-            className="text-emerald-600 hover:underline text-sm"
+            className="text-sm text-emerald-600 hover:underline"
           >
-            Esqueci minha senha
+            Recupere sua senha
           </button>
         </div>
 
-        <div className="flex items-center gap-3 my-4 sm:my-6">
-          <div className="flex-1 h-px bg-gray-300" />
-          <span className="text-gray-400 text-sm">ou</span>
-          <div className="flex-1 h-px bg-gray-300" />
+        <div className="my-6 flex items-center gap-3">
+          <div className="h-px flex-1 bg-gray-200" />
+          <span className="text-sm text-gray-400">ou</span>
+          <div className="h-px flex-1 bg-gray-200" />
         </div>
 
         <button
           type="button"
           onClick={() => loginComGoogle()}
-          className="w-full flex items-center justify-center gap-3 px-4 py-3 border border-gray-300
-                     rounded-3xl text-sm font-medium text-gray-700 bg-white hover:bg-gray-50
-                     transition-colors shadow-sm"
+          className="flex w-full items-center justify-center gap-3 rounded-full border border-gray-300 bg-white px-4 py-3 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
         >
           <svg width="18" height="18" viewBox="0 0 48 48">
             <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
@@ -290,14 +317,27 @@ export default function Login() {
 
         <InlineError message={googleError} className="mt-3" />
 
-        <p className="text-center text-gray-500 text-sm mt-4 sm:mt-6">
-          Não tem uma conta?{' '}
-          <Link to="/register" className="text-emerald-600 font-medium hover:underline">
-            Cadastrar-se
+        <div className="mt-8 text-sm leading-relaxed text-gray-700">
+          <p className="font-medium">Deseja conhecer o S2Vet?</p>
+          <Link to="/register" className="text-emerald-600 hover:underline">
+            Crie sua conta e experimente grátis
           </Link>
-        </p>
+          <br />
+          {/* "nosso site" e' a propria pagina institucional publica ("/"),
+              servida pelo RootGate a quem nao tem sessao. */}
+          ou <Link to="/" className="text-emerald-600 hover:underline">visite nosso site</Link>
+        </div>
         </>
         )}
+      </div>
+      </div>
+
+      {/* Telas do produto — 70% da largura no desktop, bloco abaixo no mobile.
+          Escondidas durante o 2FA: ali a unica coisa a fazer e' digitar o codigo.
+          ⚠️ `min-w-0` e obrigatorio num filho de flex que contem imagem — sem ele
+          a captura (1230px de largura) empurra a coluna e estoura o layout. */}
+      {!desafio2fa && <VitrineLogin className="lg:w-[70%] lg:min-w-0" />}
+
       </div>
 
       {/* MODAL — Esqueci minha senha */}

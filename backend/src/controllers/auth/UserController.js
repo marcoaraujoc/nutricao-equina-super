@@ -18,6 +18,14 @@ const { assinarAccessToken, gerarRefreshToken: generateRefreshToken } = require(
 // barrado — é ele quem socorre a clínica que se trancou para fora.
 const MSG_SEM_ACESSO = 'Seu acesso ao sistema está desativado. Fale com o gestor da clínica.';
 
+// Hash bcrypt "isca" (cost 10, o MESMO dos hashes reais) para o login gastar o
+// mesmo tempo quando o e-mail NÃO existe. Sem isto, e-mail inexistente retornava
+// antes do bcrypt (~6ms) e e-mail real rodava o compare (~400ms): a diferença de
+// tempo distinguia conta existente de inexistente, permitindo enumerar usuários
+// mesmo com a mensagem já sendo genérica. É uma senha aleatória descartada; o
+// compare SEMPRE falha — só serve para consumir o tempo do bcrypt.
+const DUMMY_PASSWORD_HASH = '$2b$10$H2DGIUfnhk5ZdGiswg6FiO0dprvrNFSQ6q2agb7mGDpmuzeLqmORa';
+
 async function acessoBloqueado(user) {
   if (!user) return false;
   if (user.role === 'ADMIN' || user.userType === 'ADMIN') return false;
@@ -127,6 +135,10 @@ class UserController {
       // (enumeração de usuário). Não "melhorar" isso com "usuário não encontrado".
       if (!user) {
         console.log('❌ Usuário não encontrado');
+        // Consome o mesmo tempo de um bcrypt.compare real, para o tempo de resposta
+        // não denunciar que o e-mail não existe (ver DUMMY_PASSWORD_HASH). O
+        // resultado é descartado — o compare sempre falha contra a isca.
+        await bcrypt.compare(String(password ?? ''), DUMMY_PASSWORD_HASH);
         await registrarAcessoNegado(req, {
           motivo: 'Login: e-mail não cadastrado', entidade: 'LOGIN', emailTentativa: email,
         });

@@ -348,6 +348,17 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
   // Descrição/laboratório vêm do PEDIDO (já existem antes do resultado) — ver
   // comentário do componente. `ex` cobre pendente E já realizado.
   const [descricao,   setDescricao]   = useState(ex?.descricao ?? '');
+  /**
+   * A descrição atual veio da IA (do arquivo) ou de uma PESSOA (o pedido / digitada)?
+   *
+   * 🔴 É o que separa os dois casos da regra: descrição que uma pessoa colocou é
+   * PRESERVADA ao anexar o laudo; a que a IA leu de um arquivo ANTERIOR é substituída
+   * quando esse arquivo é trocado — senão anexar o laudo errado e corrigir deixaria o
+   * nome do exame errado para sempre, num campo obrigatório.
+   * `useRef` e não estado: ninguém re-renderiza por causa disto, e ele precisa estar
+   * atualizado DENTRO da mesma passagem em que a análise roda.
+   */
+  const descricaoVeioDoArquivo = useRef(false);
   const [dataExame,   setDataExame]   = useState('');
   const [laudo,       setLaudo]       = useState(jaTemResultado ? (ex?.resultado ?? '') : '');
   const [laboratorio, setLaboratorio] = useState(ex?.laboratorio ?? '');
@@ -406,7 +417,10 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
     // em várias páginas/arquivos e anexa um a um. Aqui o reset seria destrutivo — cada
     // arquivo apagaria o resultado do anterior, que é o defeito que este modo corrige.
     if (!adicionando) {
-      setDescricao('');
+      // 🔴 A DESCRIÇÃO só é zerada quando foi a IA que a preencheu, de um arquivo
+      // anterior. A que veio do PEDIDO (ou que alguém digitou) é PRESERVADA: zerá-la
+      // fazia o nome do exame sumir da tela ao anexar o laudo, num campo obrigatório.
+      if (descricaoVeioDoArquivo.current) setDescricao('');
       setLaboratorio('');
       setDataExame('');
       setLaudo('');
@@ -457,18 +471,38 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
           if (novo && !atual.trim()) set(novo);
         };
 
+        // 🔴 ARMADILHA DO RESET + CLOSURE, que fazia o campo terminar VAZIO nos dois
+        // sentidos: no modo SUBSTITUIR os `setX('')` acima zeram o formulário, mas as
+        // variáveis desta função ainda guardam o valor ANTERIOR (estado do render em
+        // que ela foi criada). `manterSePreenchido` então concluía "já está
+        // preenchido", não gravava o que a IA leu — e o campo ficava com o vazio do
+        // reset. Perdia-se o valor velho E o novo.
+        // Quem foi zerado tem de ser comparado com o VAZIO; a descrição, que não é mais
+        // zerada, continua sendo comparada com ela mesma.
+        const aposReset = (valor: string) => (adicionando ? valor : '');
+        // A descrição segue a mesma conta, com a ressalva do dono: no SUBSTITUIR ela
+        // só foi zerada se tinha vindo de um arquivo.
+        const descricaoBase = adicionando || !descricaoVeioDoArquivo.current ? descricao : '';
+        /** Preenche a descrição a partir do arquivo e ANOTA que a origem é ele. */
+        const descricaoDoArquivo = (doArquivo: unknown) => {
+          const novo = String(doArquivo ?? '').trim();
+          if (!novo || descricaoBase.trim()) return;
+          descricaoVeioDoArquivo.current = true;
+          setDescricao(novo);
+        };
+
         if (isImagem) {
           // Laudo de imagem é TEXTO corrido: adicionando, o novo entra depois do que já
           // havia (separado por linha em branco), em vez de substituir a transcrição
           // anterior — é assim que o exame que veio em 3 páginas fica inteiro.
           if (d.laudo) setLaudo(prev => (adicionando && prev.trim() ? `${prev.trim()}\n\n${d.laudo}` : d.laudo));
-          manterSePreenchido(descricao, d.descricao, setDescricao);
-          manterSePreenchido(dataExame, d.dataExame, setDataExame);
+          descricaoDoArquivo(d.descricao);
+          manterSePreenchido(aposReset(dataExame), d.dataExame, setDataExame);
         } else {
           if (d.tipoSugerido === 'Bioquímico' || d.tipoSugerido === 'Laboratorial') setTipo(d.tipoSugerido);
-          manterSePreenchido(descricao,   d.descricao,   setDescricao);
-          manterSePreenchido(laboratorio, d.laboratorio, setLaboratorio);
-          manterSePreenchido(dataExame,   d.dataExame,   setDataExame);
+          descricaoDoArquivo(d.descricao);
+          manterSePreenchido(aposReset(laboratorio), d.laboratorio, setLaboratorio);
+          manterSePreenchido(aposReset(dataExame),   d.dataExame,   setDataExame);
           if (Array.isArray(d.itens) && d.itens.length > 0) {
             const lidos = d.itens.map((i: { parametro: string; valor: string | null; unidade: string | null; referencia: string | null }) => ({
               parametro: i.parametro ?? '', valor: i.valor ?? '', unidade: i.unidade ?? '', referencia: i.referencia ?? '',
@@ -491,7 +525,10 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
         // salvar. ⚠️ `setDescricao(prev => ...)`: no modo ADICIONAR o campo pode já ter
         // sido preenchido pelo lote anterior, e sobrescrever aqui desfaria justamente o
         // que a regra acima protege.
-        if (!d.descricao && ex) setDescricao(prev => (prev.trim() ? prev : ex.descricao));
+        if (!d.descricao && ex) {
+          descricaoVeioDoArquivo.current = false;
+          setDescricao(prev => (prev.trim() ? prev : ex.descricao));
+        }
       }
     } catch (err: unknown) {
       // best-effort para falha/indisponibilidade da IA — mas "nenhum arquivo é um
@@ -559,6 +596,7 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
     setNaoTranscritos([]);
     setLaudo(jaTemResultado ? (ex?.resultado ?? '') : '');
     setItens([{ ...LINHA_VAZIA }]);
+    descricaoVeioDoArquivo.current = false;
     setDescricao(ex?.descricao ?? '');
     setLaboratorio(ex?.laboratorio ?? '');
     setDataExame('');
@@ -618,7 +656,8 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
                 Descrição do exame *
               </label>
-              <input type="text" value={descricao} onChange={e => setDescricao(e.target.value)}
+              <input type="text" value={descricao}
+                onChange={e => { descricaoVeioDoArquivo.current = false; setDescricao(e.target.value); }}
                 placeholder="Nome do exame"
                 className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500" />
             </div>

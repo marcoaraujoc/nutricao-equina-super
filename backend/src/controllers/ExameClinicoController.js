@@ -11,7 +11,7 @@ const { lancarExameNaFatura, removerFaturaItensDaOrigem, atualizarFaturaItensDaO
 const { normalizarDocsLegados } = require('../lib/documentoConversao');
 const { registrarAuditoria, registrarAlteracao, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro, getNivelEfetivo, NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
-const { animalEstaInativo } = require('../lib/animalInativo');
+const { animalEstaInativo, bloquearSeAnimalInativo } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const { processarExame, processarBuffer, processarLaudoImagem, processarLaudoImagemBuffer, ArquivoSemTranscricaoError } = require('../services/exameParserService');
 const { storage }        = require('../storage');
@@ -610,6 +610,9 @@ const ExameClinicoController = {
         animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType
       });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // alterado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, item.animalId)) return;
 
       // Autoria via RBAC (nível efetivo em atendimento.exames.editar):
       // PROPRIO → só registros próprios; EQUIPE/FULL → qualquer da equipe.
@@ -701,6 +704,9 @@ const ExameClinicoController = {
       });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // gravado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, exame.animalId)) return;
 
       // Gate do RESULTADO por TIPO (exames.laboratorial.editar / exames.imagem.editar).
       // Compra não tem resultado estruturado — sem restrição extra.
@@ -888,6 +894,9 @@ const ExameClinicoController = {
         animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType
       });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // finalizado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, item.animalId)) return;
 
       // Autoria via RBAC (nível efetivo em atendimento.exames.finalizar)
       if (!podeOperarRegistro(req, item.veterinarioId)) {
@@ -940,6 +949,9 @@ const ExameClinicoController = {
         animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType
       });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // cancelado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, item.animalId)) return;
 
       // Autoria via RBAC (nível efetivo em atendimento.exames.deletar)
       if (!podeOperarRegistro(req, item.veterinarioId)) {
@@ -994,6 +1006,9 @@ const ExameClinicoController = {
         animalId: exame.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType
       });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // removido até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, exame.animalId)) return;
 
       const base = SLUG_RESULTADO[exame.tipo];
       if (base) {

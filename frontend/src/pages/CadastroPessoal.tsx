@@ -312,6 +312,31 @@ export default function CadastroPessoal() {
   // que não é obrigado a escolher especialidade, mas se escolher informa o CRMV.
   const precisaCrmv = atuaComoVet || especialidadesEscolhidas.length > 0;
 
+  /**
+   * MOSTRAR os dados profissionais ≠ EXIGIR o CRMV.
+   *
+   * 🔴 O bloco (CRMV + assinatura + espécies) era gateado SÓ por `precisaCrmv`, e
+   * isso ESCONDIA dado que a pessoa JÁ TEM. `precisaCrmv` depende de
+   * `especialidadesEscolhidas`, que para quem tem equipe sai dos LOCAIS DE TRABALHO do
+   * vínculo da empresa ATIVA: vínculo cujos locais estão sem especialidade (o caso
+   * comum logo depois que o gestor inclui o membro) zerava a conta, e a tela abria sem
+   * o CRMV e sem a assinatura que estão gravados no banco. A MESMA tela, com outro
+   * contexto resolvido, mostrava tudo — e parecia haver duas telas de cadastro.
+   *
+   * Regra nova: **tendo dado profissional, a tela mostra**. A OBRIGATORIEDADE continua
+   * exatamente onde estava (`precisaCrmv`), senão quem tem só a assinatura passaria a
+   * ser barrado por um CRMV que ninguém pediu.
+   * ⚠️ A visibilidade precisa ser SUPERCONJUNTO da validação — nunca o contrário:
+   * campo exigido e não exibido é formulário que recusa salvar sem dizer onde.
+   */
+  const temDadoProfissional =
+    !!form.crmv.trim()
+    || !!assinaturaPreview
+    || form.especiesAtendidas.length > 0
+    || form.subespecialidades.length > 0
+    || form.especialidadeIds.length > 0;
+  const mostrarDadosProfissionais = precisaCrmv || temDadoProfissional;
+
   // Rótulos do que a EMPRESA preenche quando o campo do local fica em branco
   const diasEmpresaLabel = expedienteEmpresa.dias && expedienteEmpresa.dias.length > 0
     ? [...expedienteEmpresa.dias].sort((a, b) => a - b)
@@ -1035,17 +1060,21 @@ export default function CadastroPessoal() {
           )}
 
           {/* ── Dados profissionais ──────────────────────────────────────────
-              Aparece para quem atua como VET **ou** para quem declarou especialidade
-              (qualquer cargo, inclusive o gestor). ⚠️ A visibilidade TEM de acompanhar
-              a validação: com o bloco preso a `atuaComoVet`, o gestor que escolhesse
-              especialidade seria barrado por um CRMV que a tela não mostra. */}
-          {precisaCrmv && (
+              Aparece para quem atua como VET, para quem declarou especialidade
+              (qualquer cargo, inclusive o gestor) **e para quem simplesmente TEM
+              CRMV, assinatura ou espécies gravados** — ver `mostrarDadosProfissionais`.
+              ⚠️ A visibilidade TEM de conter a validação: com o bloco preso a
+              `atuaComoVet`, o gestor que escolhesse especialidade seria barrado por um
+              CRMV que a tela não mostra. */}
+          {mostrarDadosProfissionais && (
             <div className="pt-2 border-t border-gray-100 space-y-5" id="campo-crmv">
               <p className="text-sm font-semibold text-gray-600">Dados Profissionais</p>
 
               <div>
-                <Label text="CRMV" required />
-                {!atuaComoVet && (
+                {/* `required` acompanha a EXIGÊNCIA, não a exibição: aberto só porque
+                    existe uma assinatura cadastrada, o CRMV continua opcional. */}
+                <Label text="CRMV" required={precisaCrmv} />
+                {precisaCrmv && !atuaComoVet && (
                   <p className="text-xs text-gray-400 mb-1">
                     Obrigatório porque você selecionou uma especialidade.
                   </p>

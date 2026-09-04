@@ -25,8 +25,36 @@ export const CATEGORIAS: { id: CategoriaId; rotulo: string }[] = [
   { id: 'personalizados',  rotulo: 'Personalizados'      },
 ];
 
+/**
+ * Rótulo da categoria.
+ *
+ * As PADRÃO têm rótulo no catálogo acima (o slug `receituarios` vira "Receituários").
+ * A criada pela clínica é gravada já com o nome que ela digitou — então o próprio
+ * valor É o rótulo, e devolvê-lo cru é o certo. Sem esse fallback, a categoria nova
+ * apareceria na tela como o texto que o vet escreveu... que é exatamente o que se
+ * quer; o `??` existe para deixar isso explícito, e não por acidente.
+ */
 export const rotuloCategoria = (id: CategoriaId): string =>
-  CATEGORIAS.find(c => c.id === id)?.rotulo ?? id;
+  CATEGORIAS.find(c => c.id === id)?.rotulo ?? String(id);
+
+/**
+ * Todas as categorias que a tela deve oferecer: as PADRÃO mais as que os modelos da
+ * clínica realmente usam.
+ *
+ * POR QUÊ varrer os modelos: não existe tabela de categorias (ver `CategoriaId` em
+ * ./types) — a categoria criada pela clínica só existe porque algum modelo a aponta.
+ * Ordena as padrão na ordem do catálogo e as personalizadas em seguida, alfabéticas.
+ */
+export function categoriasDisponiveis(
+  categoriasEmUso: Iterable<CategoriaId>,
+): { id: CategoriaId; rotulo: string }[] {
+  const padrao = new Set(CATEGORIAS.map(c => c.id));
+  const extras = [...new Set(categoriasEmUso)]
+    .filter(c => c && !padrao.has(c))
+    .sort((a, b) => String(a).localeCompare(String(b), 'pt-BR'))
+    .map(id => ({ id, rotulo: rotuloCategoria(id) }));
+  return [...CATEGORIAS, ...extras];
+}
 
 // ─── Tipos de bloco ──────────────────────────────────────────────────────────
 
@@ -84,6 +112,10 @@ export const BLOCOS: DefBloco[] = [
     conteudo: { variavel: '{{animal.nome}}', rotulo: 'Animal' },
     estilo:   { tamanho: 12, espacamentoBase: 4 } },
 
+  { tipo: 'listaCampos', rotulo: 'Lista de campos', grupo: 'Conteúdo',
+    conteudo: { rotulo: 'Itens', colunas: ['Descrição', 'Quantidade', 'Observação'] },
+    estilo:   { tamanho: 11, borda: 'completa', espacamentoBase: 10 } },
+
   { tipo: 'medicamentos', rotulo: 'Medicamentos', grupo: 'Clínico',
     conteudo: { fonteDados: 'prescricao.medicamentos' },
     estilo:   { tamanho: 11, borda: 'inferior', espacamentoBase: 10 } },
@@ -109,7 +141,7 @@ export const BLOCOS: DefBloco[] = [
     estilo:   { tamanho: 12, borda: 'completa', espacamentoTopo: 10, espacamentoBase: 10, altura: 90 } },
 
   { tipo: 'assinatura',   rotulo: 'Assinatura',   grupo: 'Fecho',
-    conteudo: { rotulo: 'Médico Veterinário', mostrarCrmv: true },
+    conteudo: { rotulo: 'Médico Veterinário', mostrarCrmv: true, assinante: 'VETERINARIO' },
     estilo:   { alinhamento: 'center', espacamentoTopo: 30, altura: 60 } },
 
   { tipo: 'qrcode',       rotulo: 'QR Code',      grupo: 'Fecho',
@@ -172,6 +204,13 @@ export const VARIAVEIS: Variavel[] = [
   v('cliente.documento',     'CPF / CNPJ',       '12.345.678/0001-90',        'cliente'),
   v('cliente.telefone',      'Telefone',         '(11) 91234-5678',           'cliente'),
   v('cliente.email',         'E-mail',           'contato@haras.com.br',      'cliente'),
+  v('cliente.cep',           'CEP',              '13300-000',                 'cliente'),
+  v('cliente.endereco',      'Endereço',         'Rod. dos Bandeirantes, km 42', 'cliente'),
+  v('cliente.complemento',   'Complemento',      'Casa 2',                    'cliente'),
+  v('cliente.bairro',        'Bairro',           'Zona Rural',                'cliente'),
+  v('cliente.cidade',        'Cidade',           'Itu',                       'cliente'),
+  v('cliente.estado',        'Estado',           'SP',                        'cliente'),
+  v('cliente.municipio',     'Município / UF',   'Itu / SP',                  'cliente'),
 
   v('propriedade.nome',      'Nome',             'Sociedade Hípica Brasileira', 'propriedade'),
   v('propriedade.endereco',  'Endereço',         'Rod. dos Bandeirantes, km 32', 'propriedade'),
@@ -249,5 +288,54 @@ export function resolverVariaveis(texto: string, contexto?: ContextoVariaveis | 
     if (contexto) return contexto[chave] ?? '';
     const achada = VARIAVEIS.find(x => x.chave === chave);
     return achada ? achada.exemplo : `‹${chave}›`;
+  });
+}
+
+/**
+ * Blocos vindos de FORA do editor (a IA que converte um documento enviado, o chat)
+ * ganham o ESTILO PADRÃO do seu tipo.
+ *
+ * POR QUÊ: o modelo de linguagem descreve o CONTEÚDO com precisão e o estilo quase
+ * nunca — costuma devolver `estilo: {}`. Sem esta passada, um título viria com o
+ * tamanho de corpo de texto e uma tabela sem borda nenhuma: o documento sairia com o
+ * conteúdo certo e a cara errada. O que ele mandar continua valendo (é mesclado por
+ * cima), então dá para pedir "centralize o título" e funcionar.
+ */
+/**
+ * A linha de assinatura é DO VETERINÁRIO?
+ *
+ * 🔴 Só nela se imprime a identidade da MARCA — a imagem da assinatura, o nome e o
+ * CRMV de quem emitiu. Em toda outra (responsável pelo animal, comprador,
+ * FARMACÊUTICO) a linha sai EM BRANCO, para ser assinada à mão.
+ *
+ * O defeito que isto corrige: o renderizador carimbava a assinatura escaneada do
+ * veterinário em TODA linha, qualquer que fosse o papel escrito embaixo. No
+ * receituário de controle especial o farmacêutico aparecia assinando com a
+ * assinatura do veterinário; no TCLE, o tutor "consentia" com o nome do veterinário
+ * sobre a linha. Documento falso, e nada no sistema acusaria.
+ *
+ * ⚠️ Sem `assinante` gravado (modelo anterior a 2026-09-02), decide `mostrarCrmv` —
+ * que é `true` exatamente na linha do veterinário nos 12 modelos do CFMV e na regra
+ * que o prompt de conversão sempre seguiu. É o que evita uma migration de blocos.
+ *
+ * FONTE ÚNICA dos dois espelhos: `BlocoView.tsx` (JSX) e `utils/DocumentoPrint.ts`
+ * (string). Duas cópias divergiriam, e a divergência aqui volta a falsificar papel.
+ */
+export function assinaturaDoVeterinario(conteudo: ConteudoBloco): boolean {
+  return conteudo.assinante ? conteudo.assinante === 'VETERINARIO' : !!conteudo.mostrarCrmv;
+}
+
+export function comEstiloPadrao(blocos: Bloco[]): Bloco[] {
+  return blocos.map((b) => {
+    const base = criarBloco(b.tipo);
+    return {
+      ...base,
+      ...b,
+      // `id` vazio (ou ausente) recebe o do bloco recém-criado: chave de lista
+      // repetida faz o React reordenar o documento errado ao editar.
+      id:      b.id || base.id,
+      estilo:  { ...base.estilo, ...(b.estilo ?? {}) },
+      visivel: b.visivel !== false,
+    };
   });
 }

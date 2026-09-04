@@ -20,7 +20,10 @@
 
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
-const { montarContexto, aplicarEmBlocos, coletarCampos, chaveDaLacuna } = require('../lib/documentoVariaveis');
+const { montarContexto, aplicarEmBlocos, removerVazios, coletarCampos, chaveDaLacuna } = require('../lib/documentoVariaveis');
+const { coletarListas, sugerirListas, sugerirOpcoes } = require('../lib/documentoListas');
+const { bloquearSeAnimalInativo } = require('../lib/animalInativo');
+const { fusoDaEmpresa } = require('../lib/fusoEmpresa');
 const { registrarAuditoria } = require('../lib/auditoria');
 
 const SELECT = {
@@ -51,6 +54,14 @@ function serializar(d) {
     canceladoMotivo: d.canceladoMotivo ?? null,
     blocos:       Array.isArray(d.blocos) ? d.blocos : [],
     contexto:     d.contexto ?? {},
+    // TIMBRE do dia da emissão (logo da clínica, assinatura/CRMV de quem assinou).
+    // Fica FORA de `contexto` na resposta porque não é texto substituível em
+    // `{{...}}` — no banco ele mora em `contexto._marca`, que é JSONB e não exigiu
+    // coluna nova. `null` em documento emitido ANTES desta gravação: a reimpressão
+    // dele sai sem logo e com a linha de assinatura em branco, que é o correto —
+    // buscar a marca de HOJE carimbaria no papel antigo a assinatura de outra
+    // pessoa e a logo que a clínica passou a usar depois.
+    marca:        (d.contexto && typeof d.contexto === 'object' ? d.contexto._marca : null) ?? null,
   };
 }
 
@@ -104,7 +115,7 @@ const DocumentoEmitidoController = {
   },
 
   /**
-   * POST /api/documentos/campos  { animalId, blocos, evolucaoId? }
+   * POST /api/documentos/campos  { animalId, blocos, evolucaoId?, prescricaoGrupoId? }
    *
    * "O que falta preencher para emitir ESTE documento para ESTE paciente."
    * É a chamada que abre a tela de emissão.
@@ -133,10 +144,36 @@ const DocumentoEmitidoController = {
       const ctx = await montarContexto(req, { animalId, evolucaoId: req.body?.evolucaoId ?? null });
       if (!ctx) return res.status(404).json({ sucesso: false, error: 'Animal não encontrado' });
 
+      // LISTAS (medicamento, vacina, exame, procedimento e grupos repetíveis) vêm ao
+      // lado dos campos e JÁ SUGERIDAS com o que o paciente tem registrado — é o
+      // "autopreenchido" do pedido: o vet confere e acrescenta, não redigita.
+      const listas = coletarListas(blocos);
+      // `prescricaoGrupoId` chega de quem abriu a emissão A PARTIR de uma prescrição
+      // (o receituário de controle especial da tela de Prescrição). Sem ele, a lista
+      // clínica cai na prescrição do atendimento em curso / na última — que é o certo
+      // para quem entrou pela Central e não veio de documento nenhum.
+      const grupoPedido = Number(req.body?.prescricaoGrupoId);
+      const fuso = await fusoDaEmpresa(req.empresaId).catch(() => undefined);
+      const sugestoes = await sugerirListas(listas, {
+        animalId,
+        evolucaoId: ctx.evolucaoId,
+        empresaId:  req.empresaId ?? null,
+        fuso,
+        prescricaoGrupoId: Number.isInteger(grupoPedido) && grupoPedido > 0 ? grupoPedido : null,
+      });
+      // OPÇÕES são outra coisa: não preenchem linha nenhuma, só oferecem o que existe
+      // no cadastro da EMPRESA para a coluna virar um seletor (as vacinas, hoje).
+      const opcoes = await sugerirOpcoes(listas, { empresaId: req.empresaId ?? null, fuso });
+
       return res.json({
         sucesso: true,
         dados: {
           campos:     coletarCampos(blocos, ctx.variaveis),
+          listas:     listas.map(l => ({
+            ...l,
+            sugestao: sugestoes[l.chave] ?? [],
+            opcoes:   opcoes[l.chave] ?? [],
+          })),
           variaveis:  ctx.variaveis,
           marca:      ctx.marca,
           evolucaoId: ctx.evolucaoId,
@@ -176,6 +213,9 @@ const DocumentoEmitidoController = {
       });
       if (acesso === null) return res.status(404).json({ sucesso: false, error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, error: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — documento novo é
+      // registro novo, e não pode nascer depois da inativação. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, animalId)) return;
 
       const ctx = await montarContexto(req, { animalId, evolucaoId: req.body?.evolucaoId ?? null });
       if (!ctx) return res.status(404).json({ sucesso: false, error: 'Animal não encontrado' });
@@ -193,6 +233,20 @@ const DocumentoEmitidoController = {
         if (typeof v === 'string' && v.trim()) preenchimento[chaveDaLacuna(k)] = v.trim().slice(0, 2000);
       }
 
+      // As LINHAS das listas repetíveis, na mesma disciplina: só string, com teto de
+      // tamanho e de quantidade. Uma tabela é o lugar mais fácil de alguém empurrar
+      // um payload enorme para dentro do snapshot.
+      const listas = {};
+      for (const [k, linhas] of Object.entries(req.body?.listas ?? {})) {
+        if (!Array.isArray(linhas)) continue;
+        listas[chaveDaLacuna(k)] = linhas.slice(0, 60)
+          .filter(Array.isArray)
+          // 800 é o teto do campo de OBSERVAÇÃO (`CamposForm.MAX_MULTILINHA`), e desde
+          // 2026-09-03 a observação da vacina é uma CÉLULA desta tabela — com o corte
+          // antigo de 500 ela seria truncada em silêncio no meio da frase.
+          .map(l => l.slice(0, 12).map(c => (typeof c === 'string' ? c.trim().slice(0, 800) : '')));
+      }
+
       const doc = await prisma.$transaction(async (tx) => {
         const numero = await proximoNumero(tx, req.empresaId);
 
@@ -200,7 +254,11 @@ const DocumentoEmitidoController = {
         // sorteado, e não em `montarContexto` (que também serve à pré-visualização,
         // onde o documento ainda não tem número).
         const variaveis = { ...ctx.variaveis, 'sistema.numeroDocumento': formatNumero(numero) };
-        const resolvidos = aplicarEmBlocos(blocos, variaveis, preenchimento);
+        // `removerVazios` DEPOIS de resolver: o que não foi preenchido não vai para o
+        // papel (2026-09-03, a pedido). Vale para o SNAPSHOT, nunca para o modelo —
+        // no modelo o campo em branco é o espaço a preencher; no documento entregue
+        // ele é um buraco. Ver a regra completa em `lib/documentoVariaveis.js`.
+        const resolvidos = removerVazios(aplicarEmBlocos(blocos, variaveis, preenchimento, listas));
 
         const criado = await tx.documentoEmitido.create({
           data: {
@@ -215,7 +273,12 @@ const DocumentoEmitidoController = {
             blocos:        resolvidos,
             // Guarda TAMBÉM o que foi digitado à mão: sem isso, reabrir o documento
             // não explicaria de onde veio o número da partida da vacina.
-            contexto:      { ...variaveis, _preenchimento: preenchimento },
+            //
+            // E o TIMBRE do dia (`_marca`): logo da clínica, imagem da
+            // assinatura, nome e CRMV de quem assinou. Sem ele a reimpressão teria
+            // de buscar a marca de HOJE — e o atestado de dois anos atrás sairia com
+            // a logo nova e a assinatura de quem estiver logado agora.
+            contexto:      { ...variaveis, _preenchimento: preenchimento, _marca: ctx.marca ?? null },
             evolucaoId:    ctx.evolucaoId ?? null,
             veterinarioId: req.user?.id ?? null,
             animalNome:    String(ctx.animal.nome ?? '').slice(0, 255),
@@ -259,7 +322,14 @@ const DocumentoEmitidoController = {
 
       const docs = await prisma.documentoEmitido.findMany({
         where: {
-          ativo: true,
+          // 🔴 CANCELADO TAMBÉM APARECE (a pedido, 2026-09-03). O histórico é o registro
+          // do que a clínica emitiu, e um documento que foi cancelado é justamente o
+          // que alguém vai querer conferir depois — some-lo daqui é o mesmo que dizer
+          // que ele nunca existiu. `ativo: false` já vem com a justificativa
+          // (`canceladoMotivo`), e a tela o marca e filtra.
+          // ⚠️ Cancelar continua sendo soft delete: nada é apagado, e o emitido segue
+          // fora de qualquer caminho que o trate como válido (as ações de imprimir e
+          // enviar do cancelado já são gateadas por `doc.ativo` na tela).
           ...(Number.isInteger(animalId) ? { animalId } : {}),
           // O RLS já recorta por empresa; o filtro explícito mantém a intenção
           // legível na query e protege caso a rota seja chamada por um caminho que

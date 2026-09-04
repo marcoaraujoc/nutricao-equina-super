@@ -6,7 +6,7 @@ const { registrarAuditoria } = require('../lib/auditoria');
 // rotas por :id do plano/item, o animal só aparece depois de carregar o registro —
 // por isso a checagem vem logo após o findUnique e ANTES de responder qualquer dado.
 const { garantirAcessoAnimal } = require('../middlewares/animalAcesso.middleware');
-const { animalEstaInativo }    = require('../lib/animalInativo');
+const { animalEstaInativo, bloquearSeAnimalInativo } = require('../lib/animalInativo');
 const { animalFoiExcluido }    = require('../lib/animalAtivacao');
 
 // =============================================================================
@@ -104,6 +104,9 @@ const PlanoDietaController = {
       const existe = await prisma.planoDieta.findUnique({ where: { id: Number(id) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Plano não encontrado' });
       if (!(await garantirAcessoAnimal(req, res, existe.animalId))) return;
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // alterado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, existe.animalId, { sucessoMensagem: true })) return;
 
       const plano = await prisma.planoDieta.update({
         where: { id: Number(id) },
@@ -123,6 +126,9 @@ const PlanoDietaController = {
       const plano = await prisma.planoDieta.findUnique({ where: { id: Number(id) } });
       if (!plano) return res.status(404).json({ sucesso: false, mensagem: 'Plano não encontrado' });
       if (!(await garantirAcessoAnimal(req, res, plano.animalId))) return;
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // ativado/inativado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, plano.animalId, { sucessoMensagem: true })) return;
 
       if (!plano.ativo) {
         await prisma.planoDieta.updateMany({
@@ -149,6 +155,9 @@ const PlanoDietaController = {
       const existe = await prisma.planoDieta.findUnique({ where: { id: Number(id) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Plano não encontrado' });
       if (!(await garantirAcessoAnimal(req, res, existe.animalId))) return;
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // excluído até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, existe.animalId, { sucessoMensagem: true })) return;
 
       // Remove os itens vinculados antes de excluir o plano
       await prisma.dieta.deleteMany({ where: { planoDietaId: Number(id) } });
@@ -325,6 +334,9 @@ const DietaItemController = {
       const existe = await prisma.dieta.findUnique({ where: { id: Number(id) } });
       if (!existe) return res.status(404).json({ error: 'Item da dieta não encontrado' });
       if (!(await garantirAcessoAnimal(req, res, existe.animalId))) return;
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // alterado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, existe.animalId)) return;
 
       const dieta = await prisma.dieta.update({
         where: { id: Number(id) },
@@ -360,6 +372,9 @@ const DietaItemController = {
       });
       if (!existe) return res.status(404).json({ error: 'Item da dieta não encontrado' });
       if (!(await garantirAcessoAnimal(req, res, existe.animalId))) return;
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // excluído até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, existe.animalId)) return;
 
       await prisma.dieta.delete({ where: { id: Number(id) } });
 

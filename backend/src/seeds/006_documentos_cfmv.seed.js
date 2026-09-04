@@ -44,8 +44,27 @@ const subtitulo = (texto) =>
 const texto = (t, estilo = {}) =>
   bloco('texto', { texto: t }, { tamanho: 11, alinhamento: 'justify', espacamentoBase: 6, ...estilo });
 
-const campo = (rotulo, variavel) =>
-  bloco('campoAuto', { rotulo, variavel }, { tamanho: 11, espacamentoBase: 3 });
+/**
+ * Campo automático. `colunas: 2` faz dois deles caberem LADO A LADO na folha
+ * (2026-09-03, a pedido): a identificação tem 6 a 11 campos curtos, e um por linha
+ * empurrava a assinatura para a segunda página de uma A4 que sobrava espaço.
+ * O renderizador é quem sabe desenhar isso — ver `estilo.colunas` em `BlocoView.tsx`
+ * e em `utils/DocumentoPrint.ts`.
+ */
+const campo = (rotulo, variavel, estilo = {}) =>
+  bloco('campoAuto', { rotulo, variavel }, { tamanho: 11, espacamentoBase: 3, colunas: 2, ...estilo });
+
+/**
+ * Grupo repetível: um bloco de sub-campos (as colunas) que a emissão repete N vezes.
+ *
+ * `fonteOpcoes` transforma a PRIMEIRA coluna num seletor do cadastro da empresa e traz
+ * junto o que ela já sabe do item escolhido (ver `lib/documentoListas.js#OPCOES`).
+ */
+const listaCampos = (rotulo, colunas, { fonteOpcoes, formato } = {}) =>
+  bloco('listaCampos',
+    { rotulo, colunas, ...(fonteOpcoes ? { fonteOpcoes } : {}), ...(formato ? { formato } : {}) },
+    { tamanho: 11, borda: formato === 'campos' ? 'nenhuma' : 'completa',
+      espacamentoTopo: 8, espacamentoBase: 10 });
 
 /**
  * Campo que o sistema NÃO tem — vira LACUNA `[[Rótulo]]`, pedida na tela de emissão.
@@ -57,9 +76,9 @@ const campo = (rotulo, variavel) =>
  * ⚠️ Nunca transformar um destes em variável "parecida": escrever a pelagem no
  * lugar do brinco produz documento errado com cara de documento certo.
  */
-const linhaEmBranco = (rotulo) =>
+const linhaEmBranco = (rotulo, estilo = {}) =>
   bloco('texto', { texto: `${rotulo}: [[${rotulo}]]` },
-    { tamanho: 11, espacamentoBase: 3 });
+    { tamanho: 11, espacamentoBase: 3, ...estilo });
 
 const linha = () => bloco('linha', {}, { espacamentoTopo: 8, espacamentoBase: 8 });
 
@@ -67,8 +86,17 @@ const observacoes = (rotulo) =>
   bloco('observacoes', { texto: '', rotulo },
     { tamanho: 11, borda: 'completa', espacamentoTopo: 8, espacamentoBase: 8, altura: 70 });
 
+// 🔴 `assinante` diz de QUEM é a identidade impressa sobre a linha. Só na do
+// veterinário a folha carimba a assinatura escaneada, o nome e o CRMV de quem emite;
+// na do RESPONSÁVEL (os 8 TCLEs) a linha sai em branco, para o tutor assinar à mão.
+// Antes de 2026-09-02 o renderizador não distinguia as duas, e o termo de
+// consentimento saía com o veterinário "consentindo" no lugar do tutor.
+// Os modelos JÁ GRAVADOS continuam corretos sem re-seed: sem `assinante`, a regra
+// cai em `mostrarCrmv`, que aqui é true exatamente na linha do veterinário.
 const assinatura = (rotulo, mostrarCrmv) =>
-  bloco('assinatura', { rotulo, mostrarCrmv }, { alinhamento: 'center', espacamentoTopo: 28, altura: 60 });
+  bloco('assinatura',
+    { rotulo, mostrarCrmv, assinante: mostrarCrmv ? 'VETERINARIO' : 'OUTRO' },
+    { alinhamento: 'center', espacamentoTopo: 28, altura: 60 });
 
 const rodape = (t) =>
   bloco('rodape', { texto: t }, { tamanho: 8, alinhamento: 'center', cor: '#9ca3af', espacamentoTopo: 14 });
@@ -94,34 +122,54 @@ const IDENTIFICACAO_PROFISSIONAL = () => [
  * nesse caso a própria tela de emissão os oferece para preencher (origem CADASTRO em
  * `coletarCampos`), porque para quem emite "campo vazio é campo vazio".
  */
-const CAMPOS_ANIMAL = () => [
-  subtitulo('Identificação do animal'),
-  campo('Nome do animal', '{{animal.nome}}'),
-  campo('Espécie',        '{{animal.especie}}'),
-  campo('Sexo',           '{{animal.sexo}}'),
-  campo('Raça',           '{{animal.raca}}'),
-  campo('Idade (real ou presumida)', '{{animal.idade}}'),
-  campo('Pelagem / Cor',  '{{animal.pelagem}}'),
-  linhaEmBranco('Tatuagem'),
-  linhaEmBranco('Brinco'),
-  campo('Microchip',      '{{animal.microchip}}'),
-  campo('Registro Genealógico', '{{animal.registro}}'),
-  campo('Resenha',        '{{animal.resenha}}'),
-];
+const CAMPOS_ANIMAL = (omitir = []) => {
+  const fora = new Set(omitir);
+  return [
+    subtitulo('Identificação do animal'),
+    campo('Nome do animal', '{{animal.nome}}'),
+    campo('Espécie',        '{{animal.especie}}'),
+    campo('Sexo',           '{{animal.sexo}}'),
+    campo('Raça',           '{{animal.raca}}'),
+    campo('Idade (real ou presumida)', '{{animal.idade}}'),
+    campo('Pelagem / Cor',  '{{animal.pelagem}}'),
+    linhaEmBranco('Tatuagem'),
+    linhaEmBranco('Brinco'),
+    campo('Microchip',      '{{animal.microchip}}'),
+    campo('Registro Genealógico', '{{animal.registro}}'),
+    campo('Resenha',        '{{animal.resenha}}'),
+  ].filter(b => !fora.has(b.conteudo.rotulo) && !fora.has(String(b.conteudo.texto ?? '').split(':')[0]));
+};
 
-/** Identificação do responsável — idêntico nos 12. */
+/**
+ * Identificação do responsável — idêntico nos 12.
+ *
+ * Quem identifica a pessoa (nome, documento, telefone) sai em UMA linha de TRÊS
+ * (a pedido, 2026-09-03): são campos curtos e lidos juntos. O endereço fica em
+ * largura inteira — em fração de linha ele quebra em três — e o município, em meia.
+ */
 const CAMPOS_RESPONSAVEL = () => [
   subtitulo('Responsável pelo animal'),
-  campo('Responsável', '{{cliente.nome}}'),
-  campo('CPF / CNPJ',  '{{cliente.documento}}'),
-  campo('Telefone',    '{{cliente.telefone}}'),
-  campo('Endereço',    '{{propriedade.endereco}}'),
-  campo('Município / UF', '{{propriedade.municipio}}'),
+  campo('Responsável', '{{cliente.nome}}',      { colunas: 3 }),
+  campo('CPF / CNPJ',  '{{cliente.documento}}', { colunas: 3 }),
+  campo('Telefone',    '{{cliente.telefone}}',  { colunas: 3 }),
+  // 🔴 OS MESMOS SEIS CAMPOS DA TELA DE PROPRIETÁRIO (2026-09-03, a pedido), e do
+  // cadastro DELE — `propriedade.*` é onde o ANIMAL está, que pode ser de terceiro (o
+  // haras que hospeda), e é o que o Atestado Sanitário usa na seção própria.
+  // Em três por linha: são campos curtos, e o que estiver em branco no cadastro nem
+  // chega a ser impresso.
+  campo('CEP',         '{{cliente.cep}}',         { colunas: 3 }),
+  campo('Endereço',    '{{cliente.endereco}}',    { colunas: 3 }),
+  campo('Complemento', '{{cliente.complemento}}', { colunas: 3 }),
+  campo('Bairro',      '{{cliente.bairro}}',      { colunas: 3 }),
+  campo('Cidade',      '{{cliente.cidade}}',      { colunas: 3 }),
+  campo('Estado',      '{{cliente.estado}}',      { colunas: 3 }),
 ];
 
 const LOCAL_E_DATA = () => [
   linha(),
-  texto('Local e data: {{propriedade.municipio}}, {{sistema.dataEmissao}}.', { alinhamento: 'left', espacamentoTopo: 8 }),
+  // À DIREITA (a pedido, 2026-09-03) — é onde a linha de local e data fica no ofício
+  // brasileiro, logo acima da assinatura.
+  texto('Local e data: {{propriedade.municipio}}, {{sistema.dataEmissao}}.', { alinhamento: 'right', espacamentoTopo: 8 }),
 ];
 
 /**
@@ -321,19 +369,51 @@ const MODELOS = [
       'Atesto para os devidos fins que o animal abaixo identificado foi vacinado por mim nesta data, '
       + 'conforme informações abaixo:',
     assinante: 'VETERINARIO',
-    // Campos próprios do anexo XI. `vacinas.ultima` puxa a última vacina registrada
-    // no S2Vet; partida/fabricante/validade continuam linha em branco porque a
-    // vacina do prontuário nem sempre é a que este atestado descreve.
+    /**
+     * Campos próprios do anexo XI, remodelados em 2026-09-03 a pedido:
+     *
+     * • "Próxima dose prevista" SAIU e "Vacinação contra (última registrada)" virou
+     *   **Vacinação contra** — que é o campo do Anexo XI. Manter os dois deixaria dois
+     *   rótulos quase iguais na mesma seção.
+     * • As quatro linhas em branco (nome comercial, partida, fabricante, datas) viraram
+     *   UM GRUPO REPETÍVEL: um atestado cobre mais de uma vacina, e com campos soltos a
+     *   segunda não tinha onde entrar. `fonteOpcoes` faz a coluna do nome oferecer as
+     *   vacinas da empresa e trazer fabricante, partida e validade junto.
+     * • Fabricação e validade são COLUNAS SEPARADAS (eram um campo só, "Data de
+     *   fabricação / Data de validade", que obrigava a escrever as duas numa linha).
+     */
+    omitirCamposAnimal: ['Tatuagem', 'Brinco', 'Registro Genealógico'],
+    semObservacaoVeterinario: true,
+    /**
+     * TUDO da vacina mora na LINHA DELA (2026-09-03, a pedido).
+     *
+     * "Vacinação contra" e "Observação" eram campos soltos na seção e viraram COLUNAS:
+     * num atestado com duas vacinas, uma protege contra influenza e a outra contra
+     * tétano, e um campo único obrigaria a escrever as duas coisas numa frase só — sem
+     * dizer qual é de qual.
+     *
+     * 🔴 "Vacinação contra" é a DOENÇA e continua DIGITÁVEL: o S2Vet não guarda esse
+     * dado em lugar nenhum, e a única variável disponível (`vacinas.ultima`) devolve o
+     * NOME COMERCIAL com a data — que nesse rótulo é afirmação errada num documento
+     * com valor legal. O nome comercial tem a coluna dele, ao lado.
+     */
     extras: () => [
       subtitulo('Vacinação'),
-      campo('Vacinação contra (última registrada)', '{{vacinas.ultima}}'),
-      campo('Próxima dose prevista', '{{vacinas.proximaDose}}'),
-      linhaEmBranco('Nome comercial da vacina'),
-      linhaEmBranco('Número da partida'),
-      linhaEmBranco('Fabricante'),
-      linhaEmBranco('Data de fabricação / Data de validade'),
+      listaCampos(
+        'Vacinas aplicadas',
+        // A ORDEM é a do papel, três por linha (a pedido):
+        //   Nome comercial · Vacinação contra · Fabricante
+        //   Número da partida · Data de fabricação · Data de validade
+        //   Observação (linha inteira)
+        [
+          'Nome comercial da vacina', 'Vacinação contra', 'Fabricante',
+          'Número da partida', 'Data de fabricação', 'Data de validade', 'Observação',
+        ],
+        // `campos`: sai como os demais cards do documento, e não como tabela — sete
+        // colunas numa A4 retrato espremem o nome comercial em três linhas.
+        { fonteOpcoes: 'empresa.vacinas', formato: 'campos' },
+      ),
     ],
-    observacoes: ['Outras observações'],
   },
   {
     chave: 'cfmv_12_tcle_doacao_corpo',
@@ -359,13 +439,15 @@ function montarBlocos(def) {
     ...IDENTIFICACAO_PROFISSIONAL(),
     linha(),
     texto(def.declaracao),
-    ...CAMPOS_ANIMAL(),
+    ...CAMPOS_ANIMAL(def.omitirCamposAnimal),
   ];
 
   if (typeof def.extras === 'function') blocos.push(...def.extras());
   if (def.ciencia) blocos.push(texto(def.ciencia, { espacamentoTopo: 8 }));
 
-  blocos.push(observacoes('Observações do(a) Médico(a) Veterinário(a)'));
+  // O bloco de observações DO VETERINÁRIO é padrão nos 12; o Anexo XI o dispensa
+  // (2026-09-03, a pedido) e fica com um "Observações" só, no fim da identificação.
+  if (!def.semObservacaoVeterinario) blocos.push(observacoes('Observações do(a) Médico(a) Veterinário(a)'));
   // Só o TCLE tem campo de observação DO RESPONSÁVEL — é o que registra a
   // manifestação de quem consente, e nos atestados ela não existe.
   if (def.assinante === 'RESPONSAVEL') blocos.push(observacoes('Observações do(a) responsável'));

@@ -8,10 +8,15 @@
 > SQL → você autoriza → só então `migrate deploy`.
 > Scripts de leitura (`inventarioTenancy.js`) podem rodar a qualquer momento.
 >
-> **Status: PROPOSTA COMPLETA + DECISÕES FECHADAS. Nada foi alterado no banco.**
-> Único arquivo criado: `backend/scripts/inventarioTenancy.js` (somente leitura).
-> Decisões já tomadas: isolamento por **RLS no PostgreSQL**.
-> Levantamento executado em 2026-08-05 contra `dbs2vet` / schema `schs2vet`.
+> **Status (2026-08-29): IMPLEMENTADO — fases 0 a 7 concluídas.** O RLS está ativo e
+> **fail-closed**: 72 tabelas com policies `FORCE`, a role da aplicação sem `BYPASSRLS` e
+> sem ser dona das tabelas, o tenant carimbado pelo `authenticate` (`app.empresa_id`,
+> `lib/prismaTenant.js`), isolamento verificado ao vivo (leitura, escrita, UPDATE/DELETE e
+> WITH CHECK cruzados entre empresas → recusados; sem contexto → zero linha) e gate de
+> regressão no CI (`__tests__/tenancyRls.test.js`, `rlsCrossTenant`, `rlsVarreduraTenant`,
+> `rlsCanario`, `authTenantHeaderSpoof`). Só a **fase 8** (endurecimentos) segue em
+> acompanhamento. O texto abaixo é o **plano histórico** que guiou a migração, preservado
+> como registro. Decisão: isolamento por **RLS no PostgreSQL**. Levantamento: 2026-08-05.
 
 ---
 

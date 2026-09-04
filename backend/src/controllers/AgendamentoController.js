@@ -21,7 +21,7 @@ const { interpretarAgendamento, HORARIOS_PADRAO } = require('../services/agendam
 const { tempoConsultaPadraoDaEmpresa }            = require('./EquipeController');
 // AUTORIA (2026-08-04): a ação vale sobre a PRÓPRIA agenda; só o GESTOR opera a de outro
 const { ehGestorNoContexto }                      = require('../middlewares/permissao.middleware');
-const { animalEstaInativo }                       = require('../lib/animalInativo');
+const { animalEstaInativo, bloquearSeAnimalInativo } = require('../lib/animalInativo');
 const { animalFoiExcluido }                       = require('../lib/animalAtivacao');
 // Rastro de "assumido de quem" (colunas novas lidas por SQL cru)
 const { marcarAssumido, anexarAssumido, anexarAssumidoEmLista } = require('../lib/agendamentoAssumido');
@@ -757,6 +757,9 @@ const AgendamentoController = {
 
       const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // alterado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, item.animalId)) return;
 
       // Autoria via RBAC: PROPRIO → só agendamentos próprios (responsável ou criador)
       if (!podeOperarAgendamento(req, item)) {
@@ -831,6 +834,9 @@ const AgendamentoController = {
 
       const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // alterado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, item.animalId)) return;
 
       // Autoria via RBAC: PROPRIO → só agendamentos próprios (responsável ou criador)
       if (!podeOperarAgendamento(req, item)) {
@@ -1176,6 +1182,9 @@ const AgendamentoController = {
 
       const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // cancelado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, item.animalId)) return;
 
       // Autoria via RBAC: PROPRIO → só agendamentos próprios (responsável ou criador)
       if (!podeOperarAgendamento(req, item)) {
@@ -1238,6 +1247,9 @@ const AgendamentoController = {
       const acesso = await verificarAcessoAnimal({ animalId: item.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // assumido até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, item.animalId)) return;
 
       const duracao  = duracaoDe(item);
       const conflito = await conflitoDeAgenda(req.user.id, item.dataHora, duracao, item.id);

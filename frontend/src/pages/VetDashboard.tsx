@@ -167,7 +167,7 @@ function AnimalCardMobile({ animal, onDashboard, onEditar, onDesvincular }: {
       <div className="flex items-center gap-3">
       {/* Foto */}
       <div className="w-14 h-14 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-        <FotoAnimal url={animal.photoUrl} nome={animal.nome} />
+        <FotoAnimal url={animal.photoUrl} nome={animal.nome} animalId={animal.id} />
       </div>
 
       {/* Info */}
@@ -578,7 +578,7 @@ export default function VetDashboard() {
                                  px-5 py-4 hover:bg-gray-50 cursor-pointer transition-colors group"
                     >
                       <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-                        <FotoAnimal url={animal.photoUrl} nome={animal.nome} />
+                        <FotoAnimal url={animal.photoUrl} nome={animal.nome} animalId={animal.id} />
                       </div>
                       <div className="min-w-0">
                         <p className="font-semibold text-gray-900 truncate group-hover:text-emerald-700 transition-colors">

@@ -24,6 +24,9 @@ import type { MemoriaClinica } from '../components/MemoriaClinicaPanel';
 import GraficosAnimalPanel from '../components/GraficosAnimalPanel';
 import FotoAnimal from '../components/FotoAnimal';
 import LaudoTexto from '../components/LaudoTexto';
+import ListaDocumentosEmitidos from '../modules/documentos/Emitidos';
+import { listarEmitidos } from '../modules/documentos/api';
+import type { DocumentoEmitido } from '../modules/documentos/types';
 import { formatNumeroClinico } from '../utils/numeroClinico';
 
 // Ícone do título acompanha a espécie do animal (a espécie atendida pela empresa/equipe)
@@ -204,6 +207,30 @@ const BADGE_ORIGEM: Record<OrigemEvento, string> = {
   PRESCRICAO:     'bg-blue-100 text-blue-700',
   DOCUMENTO:      'bg-slate-100 text-slate-700',
 };
+
+// Filtro de status do painel de Agendamentos. As chaves agrupam por SIGNIFICADO,
+// não uma opção por status do banco: REAGENDADO e o legado TRANSFERIDO são o mesmo
+// estado (§6 — o usuário não deve ver dois nomes para a mesma coisa), e o cancelado
+// pela rotina noturna cai junto do cancelado à mão, que é o que a pessoa procura
+// quando filtra por "Cancelado".
+// O Histórico abre mostrando os 3 atendimentos mais recentes. Paciente antigo tem
+// dezenas, e a lista inteira empurrava a Memória Clínica e os Agendamentos para
+// fora da tela — o resto da página ficava inalcançável sem rolar o histórico todo.
+const HISTORICO_VISIVEL_PADRAO = 3;
+
+type FiltroAgendamento = 'TODOS' | 'AGENDADO' | 'CONCLUIDO' | 'CANCELADO' | 'REAGENDADO';
+
+// `status: readonly string[]` e não `as const`: com as tuplas literais o
+// `.includes(ag.status)` cai em `never` (o parâmetro vira a interseção das tuplas).
+const FILTROS_AG: ReadonlyArray<{
+  chave: FiltroAgendamento; label: string; status: readonly string[] | null;
+}> = [
+  { chave: 'TODOS',      label: 'Todos',      status: null },
+  { chave: 'AGENDADO',   label: 'Agendado',   status: ['AGENDADO', 'ATRASADA', 'EM_ANDAMENTO'] },
+  { chave: 'CONCLUIDO',  label: 'Concluído',  status: ['CONCLUIDO', 'FINALIZADO'] },
+  { chave: 'CANCELADO',  label: 'Cancelado',  status: ['CANCELADO', 'CANCELADO_AUTOMATICAMENTE'] },
+  { chave: 'REAGENDADO', label: 'Reagendado', status: ['REAGENDADO', 'TRANSFERIDO'] },
+];
 
 const BADGE_TIPO_AG: Record<TipoAgendamento, string> = {
   VACINA:       'bg-amber-100 text-amber-700',
@@ -967,6 +994,8 @@ const AnimalDetail = () => {
   const [foraDoContexto, setForaDoContexto] = useState(false);
   const [historico,    setHistorico]    = useState<EventoHistorico[]>([]);
   const [agendamentos, setAgendamentos] = useState<Agendamento[]>([]);
+  const [filtroAg,     setFiltroAg]     = useState<FiltroAgendamento>('TODOS');
+  const [historicoTodo, setHistoricoTodo] = useState(false);
   const [loading,      setLoading]      = useState(true);
   const [busca,        setBusca]        = useState('');
   const [expandidos,   setExpandidos]   = useState<Set<string>>(new Set());
@@ -979,14 +1008,42 @@ const AnimalDetail = () => {
   const [detalheRecord,  setDetalheRecord]  = useState<DetalheRecord | null>(null);
   const [detalheLoading, setDetalheLoading] = useState(false);
 
+  // Sem `?futuros=1`: aquele recorte devolve só AGENDADO futuro + os cancelados, e
+  // deixava de fora CONCLUIDO, FINALIZADO, EM_ANDAMENTO e ATRASADA — com ele não
+  // haveria o que filtrar. O corte por transferência de propriedade continua no
+  // backend, então o proprietário segue sem ver a agenda de antes da posse dele.
   const carregarAgendamentos = useCallback(async () => {
     if (!id) return;
     try {
-      const res = await api.get(`/clinica/agendamentos/animal/${id}?futuros=1`);
+      const res = await api.get(`/clinica/agendamentos/animal/${id}`);
       if (!res.data) return;
       setAgendamentos(res.data.dados ?? []);
     } catch { /* silencioso */ }
   }, [id]);
+
+  // ── Documentos emitidos para este paciente ────────────────────────────────
+  // O documento já aparece no Histórico como um EVENTO ("foi emitido tal dia"). Este
+  // card responde outra pergunta, que é a do balcão: "quais documentos este paciente
+  // tem, e me dá uma via" — por isso ele traz reimpressão e envio, que o histórico
+  // não tem. A lista é a MESMA da Central de Documentos (`ListaDocumentosEmitidos`).
+  const [documentos,           setDocumentos]           = useState<DocumentoEmitido[]>([]);
+  const [carregandoDocumentos, setCarregandoDocumentos] = useState(true);
+
+  const carregarDocumentos = useCallback(async () => {
+    if (!id) return;
+    setCarregandoDocumentos(true);
+    try {
+      setDocumentos(await listarEmitidos(Number(id)));
+    } catch {
+      // Tabela ainda não migrada ou sem permissão não pode derrubar a tela do
+      // paciente — o card apenas fica vazio.
+      setDocumentos([]);
+    } finally {
+      setCarregandoDocumentos(false);
+    }
+  }, [id]);
+
+  useEffect(() => { void carregarDocumentos(); }, [carregarDocumentos]);
 
   // ── Memória Clínica do Paciente (IA, persistida; append só com evento novo) ──
   const [memoriaIA,         setMemoriaIA]         = useState<MemoriaClinica | null>(null);
@@ -1090,12 +1147,23 @@ const AnimalDetail = () => {
   // Memória Clínica → registro de origem. O "ref" do tópico casa com o id do
   // histórico; prescrição carrega sufixo de tipo (prescricao-5-MEDICAMENTO),
   // então o prefixo "origem-id" também é aceito como chave.
+  // ⚠️ EXAME tem DUAS grafias: o Histórico separa por tipo (exame_lab-5,
+  // exame_img-5, exame_bio-5, exame_compra-5 — EXAM_ORIGEM no HistoricoController)
+  // e a Memória Clínica grava sempre `exame-5` (resumoAtendimentoService). Sem o
+  // apelido canônico abaixo, NENHUM tópico de exame entrava em `refsAbriveis` e
+  // ele era renderizado como texto morto — clicar não abria o laudo.
   const eventoPorRef = useMemo(() => {
     const mapa = new Map<string, EventoHistorico>();
+    const registrar = (chave: string, ev: EventoHistorico) => {
+      if (chave && !mapa.has(chave)) mapa.set(chave, ev);
+    };
     for (const ev of historico) {
-      if (!mapa.has(ev.id)) mapa.set(ev.id, ev);
-      const base = ev.id.split('-').slice(0, 2).join('-');
-      if (!mapa.has(base)) mapa.set(base, ev);
+      registrar(ev.id, ev);
+      registrar(ev.id.split('-').slice(0, 2).join('-'), ev);
+      if (ev.origem.startsWith('EXAME')) {
+        const numId = ev.id.split('-').pop();
+        registrar(`exame-${numId}`, ev);
+      }
     }
     return mapa;
   }, [historico]);
@@ -1106,6 +1174,33 @@ const AnimalDetail = () => {
     const ev = eventoPorRef.get(ref);
     if (ev) handleAbrirDetalhe(ev);
   };
+
+  // Agendamentos em ordem DECRESCENTE (o mais recente primeiro): o painel deixou de
+  // ser só "o que vem por aí" e passou a mostrar o histórico inteiro, e nele o que
+  // interessa é o último atendimento, não o mais antigo.
+  const agendamentosOrdenados = useMemo(
+    () => [...agendamentos].sort(
+      (a, b) => new Date(b.dataHora).getTime() - new Date(a.dataHora).getTime()),
+    [agendamentos],
+  );
+
+  const agendamentosFiltrados = useMemo(() => {
+    const alvo = FILTROS_AG.find(f => f.chave === filtroAg)?.status;
+    if (!alvo) return agendamentosOrdenados;
+    return agendamentosOrdenados.filter(ag => alvo.includes(ag.status));
+  }, [agendamentosOrdenados, filtroAg]);
+
+  // Contagem por aba — sem ela o usuário só descobre que o filtro está vazio depois
+  // de clicar nele.
+  const contagemAg = useMemo(() => {
+    const mapa = {} as Record<FiltroAgendamento, number>;
+    for (const f of FILTROS_AG) {
+      mapa[f.chave] = f.status
+        ? agendamentos.filter(ag => f.status!.includes(ag.status)).length
+        : agendamentos.length;
+    }
+    return mapa;
+  }, [agendamentos]);
 
   const gruposFiltrados = useMemo(() => {
     if (!busca.trim()) return grupos;
@@ -1126,6 +1221,13 @@ const AnimalDetail = () => {
       return matchEv || matchSub;
     });
   }, [grupos, busca]);
+
+  // `gruposFiltrados` já vem do mais recente para o mais antigo (o backend ordena
+  // por data desc), então os 3 primeiros SÃO os últimos 3 atendimentos.
+  const gruposVisiveis = useMemo(
+    () => (historicoTodo ? gruposFiltrados : gruposFiltrados.slice(0, HISTORICO_VISIVEL_PADRAO)),
+    [gruposFiltrados, historicoTodo],
+  );
 
   // Auto-expande grupos cujo sub-item bate na busca
   useEffect(() => {
@@ -1251,15 +1353,37 @@ const AnimalDetail = () => {
               <p className="text-center text-sm text-gray-300 py-12">
                 {historico.length === 0 ? 'Nenhum registro no histórico ainda' : 'Nenhum resultado para a busca'}
               </p>
-            ) : gruposFiltrados.map(g => (
-              <GrupoHistoricoItem
-                key={g.key}
-                grupo={g}
-                expandido={expandidos.has(g.key)}
-                onToggle={toggleExpand}
-                onClickEvento={handleAbrirDetalhe}
-              />
-            ))}
+            ) : (
+              <>
+                {gruposVisiveis.map(g => (
+                  <GrupoHistoricoItem
+                    key={g.key}
+                    grupo={g}
+                    expandido={expandidos.has(g.key)}
+                    onToggle={toggleExpand}
+                    onClickEvento={handleAbrirDetalhe}
+                  />
+                ))}
+                {/* Só aparece quando há mais do que os 3 mostrados — botão que
+                    revelaria nada é ruído. */}
+                {gruposFiltrados.length > HISTORICO_VISIVEL_PADRAO && (
+                  <button
+                    type="button"
+                    onClick={() => setHistoricoTodo(v => !v)}
+                    aria-expanded={historicoTodo}
+                    className="w-full flex items-center justify-center gap-1.5 py-2 text-xs font-semibold text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50/60 rounded-xl transition-colors"
+                  >
+                    <ChevronDown
+                      size={14}
+                      className={`transition-transform ${historicoTodo ? 'rotate-180' : ''}`}
+                    />
+                    {historicoTodo
+                      ? 'Mostrar menos'
+                      : `Ver todos os ${gruposFiltrados.length} atendimentos`}
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </div>
 
@@ -1282,10 +1406,35 @@ const AnimalDetail = () => {
             </div>
             {/* Criação de agendamento não é feita por aqui — usar a tela de Agenda */}
           </div>
+
+          {/* Filtro por status. Aba sem nenhum agendamento NÃO é renderizada — filtro
+              que só pode devolver lista vazia é ruído. "Todos" fica sempre. */}
+          {agendamentos.length > 0 && (
+            <div className="flex flex-wrap gap-1 px-3 pt-3 flex-shrink-0">
+              {FILTROS_AG.filter(f => f.chave === 'TODOS' || contagemAg[f.chave] > 0).map(f => (
+                <button
+                  key={f.chave}
+                  type="button"
+                  onClick={() => setFiltroAg(f.chave)}
+                  aria-pressed={filtroAg === f.chave}
+                  className={`text-[10px] font-semibold px-2 py-1 rounded-lg transition-colors ${
+                    filtroAg === f.chave
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-gray-50 text-gray-500 hover:bg-gray-100'
+                  }`}
+                >
+                  {f.label} ({contagemAg[f.chave]})
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="p-3 space-y-2.5 flex-1 min-h-0 max-h-[60vh] lg:max-h-none overflow-y-auto">
             {agendamentos.length === 0 ? (
-              <p className="text-center text-sm text-gray-300 py-10">Nenhum agendamento futuro</p>
-            ) : agendamentos.map(ag => (
+              <p className="text-center text-sm text-gray-300 py-10">Nenhum agendamento</p>
+            ) : agendamentosFiltrados.length === 0 ? (
+              <p className="text-center text-sm text-gray-300 py-10">Nenhum agendamento neste filtro</p>
+            ) : agendamentosFiltrados.map(ag => (
               <CardAgendamento key={ag.id} ag={ag}
                 podeGerenciar={false}  // tela somente de visualização — gerenciar na Agenda
                 onConcluir={handleConcluirAg}
@@ -1293,6 +1442,31 @@ const AnimalDetail = () => {
             ))}
           </div>
         </div>
+      </div>
+
+      {/* Documentos emitidos — atestados, TCLEs e demais documentos entregues ao
+          cliente, com reimpressão e envio. Card à parte (e não uma coluna da linha
+          acima) porque a lista usa a tabela larga do padrão de histórico. */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-4 border-b border-gray-50">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-emerald-50 rounded-xl flex items-center justify-center">
+              <FileSignature size={15} className="text-emerald-600" />
+            </div>
+            <h2 className="font-bold text-gray-900 text-sm">Documentos</h2>
+          </div>
+          <button
+            onClick={() => navigate(`/documentos?animalId=${animal.id}`)}
+            className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 transition-colors"
+          >
+            Emitir documento
+          </button>
+        </div>
+        <ListaDocumentosEmitidos
+          documentos={documentos}
+          carregando={carregandoDocumentos}
+          vazio="Nenhum documento emitido para este paciente"
+        />
       </div>
 
       {/* Gráficos — peso ao longo do tempo + evolução de um parâmetro de exame */}

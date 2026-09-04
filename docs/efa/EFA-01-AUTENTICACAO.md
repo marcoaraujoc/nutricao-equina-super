@@ -8,11 +8,11 @@
 | Item | Valor |
 |---|---|
 | Nome | Autenticação e Conta |
-| Versão | 1.0 |
+| Versão | 1.1 |
 | Autor | Equipe S2Vet |
-| Data | 2026-07-10 |
+| Data | 2026-08-29 (base 2026-07-10) |
 | Status | Vigente — reflete o sistema implementado |
-| Histórico | 1.0: versão inicial. |
+| Histórico | 1.0: versão inicial. · 1.1 (2026-08-29): 2FA por e-mail, sessão por inatividade de 2h, bloqueio por tentativas, anti-enumeração por timing, `sessionVersion`. |
 
 ## 2. Objetivo
 
@@ -22,18 +22,22 @@ acessem dados, e que sessões sejam renovadas de forma transparente ao usuário.
 
 ## 3. Escopo
 
-**Inclui:** registro de conta; login e-mail/senha; login/registro Google; esqueci minha
-senha; reset de senha por token; troca de senha obrigatória; refresh automático de
-token; logout (manual, por inatividade, por conta desativada); auditoria de sessão.
+**Inclui:** registro de conta; login e-mail/senha; **2FA por e-mail**; **bloqueio por
+tentativas**; login/registro Google; esqueci minha senha; reset de senha por token; troca
+de senha obrigatória; refresh automático de token; logout (manual, por inatividade de 2h,
+por conta desativada); auditoria de sessão e de acesso negado.
 
-**Não inclui:** MFA/2FA; SSO corporativo; gestão de perfis e permissões (EFA-02);
-gestão de usuários pelo ADMIN (EFA-04).
+**Não inclui:** SSO corporativo; 2FA por empresa (só o global do ADMIN — plano à parte);
+gestão de perfis e permissões (EFA-02); gestão de usuários pelo ADMIN (EFA-04).
 
 ## 4. Glossário
 
-Ver EFA-00 §4. Específicos: **Access token** — JWT de 24h enviado em `Authorization`.
-**Refresh token** — JWT de 30d usado apenas em `/api/auth/refresh` (rotacionado a cada
-uso). **mustChangePassword** — flag que bloqueia a navegação até a troca da senha padrão.
+Ver EFA-00 §4. Específicos: **Access token** — JWT curto (**30 min**) em cookie HttpOnly.
+**Refresh token** — JWT em cookie HttpOnly, usado só em `/api/auth/refresh`, rotacionado a
+cada uso dentro de uma **janela de inatividade de 2h**. **2FA** — segundo fator por código
+de 6 dígitos enviado por e-mail; a sessão só nasce após verificá-lo. **sessionVersion** —
+carimbo que derruba a sessão antiga quando a pessoa loga de novo. **mustChangePassword** —
+flag que bloqueia a navegação até a troca da senha padrão.
 
 ## 5. Personas
 
@@ -60,12 +64,15 @@ Alternativos: login Google (conta nova → PROPRIETARIO); `mustChangePassword` �
 - **Regras:** RN-01-001, RN-01-002.
 
 ### UC-01-02 — Login por e-mail/senha
-- **Fluxo principal:** `/login` → e-mail + senha (toggle olho) → `POST /api/auth/login`
-  → JWT 24h + refresh 30d → resolve contexto (gestor vence) → home por perfil.
-- **Alternativos:** `mustChangePassword=true` → redirect bloqueante a `/alterar-senha`.
-- **Erros:** credenciais inválidas → mensagem genérica; conta desativada → 401;
-  rate limit → MSG-G-007.
-- **Pós-condições:** LOGIN registrado no AuditLog; contexto salvo em localStorage.
+- **Fluxo principal:** `/login` → e-mail + senha (toggle olho) → `POST /api/auth/login`.
+  Com 2FA ativo (RN-01-008), a resposta pede o código de 6 dígitos
+  (`POST /api/auth/2fa/verificar`); só então nasce a sessão (access 30 min + refresh na
+  janela de 2h, cookies HttpOnly). Resolve contexto (gestor vence) → home por perfil.
+- **Alternativos:** `mustChangePassword=true` → redirect bloqueante a `/alterar-senha`;
+  conta bloqueada por tentativas (RN-01-009) → mensagem específica.
+- **Erros:** credenciais inválidas → mensagem genérica e tempo constante (RN-01-004);
+  conta desativada/sem acesso → 401/403; rate limit → MSG-G-007.
+- **Pós-condições:** LOGIN (ou ACESSO_NEGADO) registrado no AuditLog com IP; contexto salvo.
 
 ### UC-01-03 — Login/registro Google
 - **Fluxo:** botão Google → `useGoogleLogin` (`prompt: 'select_account'`) → backend
@@ -88,8 +95,8 @@ Alternativos: login Google (conta nova → PROPRIETARIO); `mustChangePassword` �
 
 ### UC-01-07 — Renovação de sessão e logout
 - **Fluxo:** 401 em request → interceptor chama `POST /api/auth/refresh` → repete o
-  request original (transparente). Logout: botão do Sidebar OU 5 min de inatividade OU
-  conta desativada → revoga refresh no backend, limpa storage (token, refresh,
+  request original (transparente). Logout: menu do usuário no cabeçalho OU 2h de
+  inatividade OU conta desativada → revoga refresh no backend, limpa storage (token, refresh,
   `s2vet_empresa_id`, `s2vet_equipe_id`) → `/login`. LOGOUT auditado.
 
 ## 8. Especificação das telas
@@ -128,17 +135,35 @@ fixo.
 recebem `Inicial_001` + `mustChangePassword`; navegação bloqueada até trocar. Motivo:
 nunca operar com senha conhecida por terceiros.
 
-**RN-01-004 — Resposta genérica no esqueci-senha.** Sempre 200, inclusive em erro
-interno. Motivo: não permitir enumeração de contas.
+**RN-01-004 — Sem enumeração de contas (conteúdo e timing).** Login e esqueci-senha
+respondem sempre com a **mesma mensagem** e o **mesmo tempo**: login roda um bcrypt de
+isca quando o e-mail não existe; esqueci-senha responde 200 imediato e envia o e-mail em
+segundo plano. Motivo: o tempo de resposta não pode denunciar a existência da conta.
 
-**RN-01-005 — Conta desativada não opera.** Qualquer request autenticado → 401. Motivo:
-desligamento imediato de acesso.
+**RN-01-005 — Conta desativada/sem acesso não opera.** Request autenticado de conta
+`ativo=false` (global) ou sem acesso ao sistema na empresa → 401/403.
 
-**RN-01-006 — Logout por inatividade em 5 minutos.** Motivo: estações compartilhadas em
-clínica. Exceção: nenhuma (valor fixo no frontend).
+**RN-01-006 — Sessão por janela de inatividade de 2h.** Access de 30 min renovado por
+refresh rotacionado; parado além de 2h, a sessão morre e exige novo login. O frontend
+espelha a janela. Motivo: quem trabalha nunca é interrompido; estação parada tranca.
 
-**RN-01-007 — Refresh com rotação.** Refresh token é JWT 30d verificado antes do lookup;
-tokens legados falham e exigem novo login (uma única vez).
+**RN-01-007 — Refresh com rotação e `sessionVersion`.** Refresh é JWT verificado antes do
+lookup; login novo incrementa `sessionVersion` e derruba a sessão anterior em outro
+dispositivo. Tokens legados falham e exigem novo login (uma vez).
+
+**RN-01-008 — 2FA por e-mail.** Com 2FA ativo, a senha correta **não** emite sessão: gera
+desafio + código de 6 dígitos (CSPRNG, guardado como SHA-256, comparação em tempo
+constante, 10 min, 5 tentativas, 3 reenvios). `POST /auth/2fa/verificar` cria a sessão.
+Kill-switch `MFA_EMAIL_ENABLED`; seletor global do ADMIN (entregue desativado); Google
+não passa por 2FA. Falha de SMTP → 503 e nenhuma sessão.
+
+**RN-01-009 — Bloqueio por tentativas.** 6 senhas erradas bloqueiam a conta
+(`tentativas_login`); desbloqueio pelo gestor/ADMIN. Antes do bcrypt, conta bloqueada é
+recusada com mensagem específica (chegar aqui já exige acertar o e-mail).
+
+**RN-01-010 — Senha é da pessoa.** Só o próprio dono (ou ADMIN da plataforma) troca a
+própria senha; gestor não troca a de membro (403). Formulário único `FormularioNovaSenha`
+(sessão, link de e-mail e troca obrigatória).
 
 ## 11. Fluxograma
 
@@ -155,12 +180,15 @@ inatividade, desativação (→Encerrada).
 
 ## 13. Segurança
 
-Rate limit 20/15min em `/auth`; bcrypt nas senhas; validação server-side do token
-Google; JWT_SECRET ≥32 chars; refresh verificado por assinatura. **Tokens em cookies
-HttpOnly** (`s2vet_at`/`s2vet_rt`, `SameSite=Lax`, `Secure` em produção) — não legíveis
-por JavaScript; o backend lê o cookie primeiro e aceita `Authorization: Bearer` só como
-fallback. Login/refresh setam os cookies; logout os limpa e revoga o refresh no banco.
-LGPD: EFA-00 §13.
+Rate limit 20/15min em `/auth` (e limites próprios no 2FA: 10/5min verificar, 3/10min
+reenviar); rate limit geral por **usuário** (fallback IP com `ipKeyGenerator`); bcrypt nas
+senhas; validação server-side do token Google; **`JWT_SECRET` validado por entropia** no
+startup (não só comprimento); refresh verificado por assinatura. **Tokens em cookies
+HttpOnly** (`s2vet_at`/`s2vet_rt`, `SameSite=Lax`, `Secure` em produção) — não legíveis por
+JavaScript; o backend lê o cookie primeiro e aceita `Authorization: Bearer` só como
+fallback. Login/2FA/refresh setam os cookies; logout os limpa e revoga o refresh no banco.
+2FA por e-mail (RN-01-008), bloqueio por tentativas (RN-01-009) e anti-enumeração por
+timing (RN-01-004). LGPD e RLS: EFA-00 §13.
 
 ## 14. Auditoria
 
@@ -200,10 +228,14 @@ Então sou levado à tela de troca de senha e não consigo prosseguir sem trocá
 
 Dado que informei um e-mail inexistente no "esqueci minha senha"
 Quando submeto o formulário
-Então recebo a MESMA resposta de sucesso genérica de um e-mail existente.
+Então recebo a MESMA resposta de sucesso genérica — e no MESMO tempo — de um e-mail existente.
 
-Dado que fico 5 minutos sem interagir
-Quando o tempo expira
+Dado que o login exige 2FA
+Quando informo a senha correta
+Então nenhuma sessão é criada até eu informar o código de 6 dígitos enviado por e-mail.
+
+Dado que fico 2 horas sem interagir
+Quando a janela de inatividade expira
 Então sou deslogado e o contexto ativo é limpo do navegador.
 ```
 

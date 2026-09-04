@@ -10,7 +10,7 @@ const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
 const { registrarAuditoria, registrarAlteracao, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
-const { animalEstaInativo } = require('../lib/animalInativo');
+const { animalEstaInativo, bloquearSeAnimalInativo } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const { garantirEspecialidadeDaEmpresa } = require('../lib/catalogoManual');
 
@@ -490,6 +490,9 @@ const EncaminhamentoController = {
 
       const acesso = await verificarAcessoAnimal({ animalId: enc.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // alterado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, enc.animalId)) return;
 
       const atualizado = await prisma.$transaction(async (tx) => {
         const upd = await tx.encaminhamentoClinico.update({
@@ -550,6 +553,9 @@ const EncaminhamentoController = {
 
       const acesso = await verificarAcessoAnimal({ animalId: enc.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // alterado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, enc.animalId)) return;
 
       // Autoria via RBAC (nível efetivo em atendimento.encaminhamentos.editar):
       // PROPRIO → só registros próprios; EQUIPE/FULL → qualquer da equipe.
@@ -626,6 +632,9 @@ const EncaminhamentoController = {
 
       const acesso = await verificarAcessoAnimal({ animalId: enc.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // finalizado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, enc.animalId)) return;
 
       // Autoria via RBAC (nível efetivo em atendimento.encaminhamentos.finalizar)
       if (!podeOperarRegistro(req, enc.veterinarioId)) {
@@ -673,6 +682,9 @@ const EncaminhamentoController = {
 
       const acesso = await verificarAcessoAnimal({ animalId: enc.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (!acesso) return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // cancelado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, enc.animalId)) return;
 
       // Autoria via RBAC (nível efetivo em atendimento.encaminhamentos.deletar)
       if (!podeOperarRegistro(req, enc.veterinarioId)) {

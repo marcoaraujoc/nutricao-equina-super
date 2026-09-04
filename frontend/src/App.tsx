@@ -82,6 +82,7 @@ import Monitoracao from './pages/Monitoracao';
 // Pages — Módulo Clínico
 import Atendimento  from './pages/Atendimento';
 import Vacina       from './pages/Vacina';
+import Documentos from './pages/Documentos';
 import CentralDocumentos from './pages/CentralDocumentos';
 import ExameCompra  from './pages/ExameCompra';
 import Resenha      from './pages/Resenha';
@@ -231,7 +232,11 @@ function ProtectedApp() {
 
                           {/* Orçamento (etapa opcional) */}
                           <Route path="/orcamento" element={<Orcamento />} />
-                          <Route path="/documentos" element={<CentralDocumentos />} />
+                          {/* EMISSÃO (o dia a dia) na raiz; o EDITOR DE MODELOS, que é
+                              configuração feita uma vez, mudou para /documentos/modelos
+                              e é alcançado pelo botão "Modelos" do cabeçalho. */}
+                          <Route path="/documentos"         element={<Documentos />} />
+                          <Route path="/documentos/modelos" element={<CentralDocumentos />} />
 
                           {/* Módulo Clínico */}
                           <Route path="/clinica"                          element={<Atendimento />} />

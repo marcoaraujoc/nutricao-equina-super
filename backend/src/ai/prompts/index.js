@@ -358,9 +358,27 @@ ${JSON.stringify(eventos.map(e => ({
   //     de origem via "ref"). Incremental: recebe os tópicos já consolidados e
   //     apenas os eventos novos; devolve os tópicos novos + highlights recalculados.
   //     A LLM é PROIBIDA de sugerir conduta, diagnosticar ou emitir laudo.
+  // v4: as REFERÊNCIAS do resumo viraram âncoras clicáveis. O modelo marca o trecho
+  //     que nomeia o registro com [[id|texto]] e a tela o desenha como LINK — cor,
+  //     sem parênteses — levando ao documento de origem. Marcar é tarefa do MODELO
+  //     porque só ele sabe QUAL registro a frase cita — casar por texto ("prescrição
+  //     nº 002") daria link errado no primeiro paciente com duas de mesmo número.
+  // v3: o resumo virou NARRATIVA HUMANIZADA agrupada por ATENDIMENTO, e nao mais uma
+  //     linha por registro. Duas causas do relato de 02/09: (a) os eventos chegavam
+  //     SEM o vinculo — exame, prescricao e vacina nao sabiam a que consulta
+  //     pertenciam, entao a consulta do dia 21 e o exame do dia 20 saiam como fatos
+  //     soltos; (b) a prescricao chegava so com o nome do medicamento e o status do
+  //     grupo, e o modelo afirmava "foram executadas" um curso 0%% aplicado. Agora
+  //     todo evento traz `atendimento` e o item prescrito traz "N de M doses".
+  //     Acrescenta tambem MUDANCAS: o antes x depois desde a ultima consolidacao.
+  // v2: acrescenta o RESUMO DAS ATIVIDADES — 10 a 20 linhas corridas que abrem pelos
+  //     highlights (todo highlight tem de aparecer no resumo) e seguem para a atividade
+  //     do paciente por assunto. Até aqui o campo `resumo` era montado no SERVIÇO como
+  //     uma linha por tópico: num paciente com 80 eventos virava uma lista de 80 linhas,
+  //     que não resume nada.
   'memoria_clinica': {
-    version: 'v1',
-    build: ({ topicosAtuais, eventos, animalNome }) => `Consolide a memória clínica do paciente${animalNome ? ` "${animalNome}"` : ''}.
+    version: 'v4',
+    build: ({ topicosAtuais, eventos, atendimentos, resumoAnterior, animalNome }) => `Consolide a memória clínica do paciente${animalNome ? ` "${animalNome}"` : ''}.
 
 Você recebe os TÓPICOS JÁ CONSOLIDADOS e os EVENTOS NOVOS. Descreva o que está
 registrado e aponte padrões factuais entre atendimentos.
@@ -368,10 +386,24 @@ registrado e aponte padrões factuais entre atendimentos.
 # PROIBIÇÕES ABSOLUTAS
 - Não sugira conduta, tratamento, exame ou medicação.
 - Não emita diagnóstico, hipótese diagnóstica, prognóstico ou laudo.
-- Não recomende, não oriente, não alerte, não opine.
-- Não afirme relação de causa e efeito.
+- Não recomende, não oriente, não alerte, não opine, não decida.
+- Não afirme relação de causa e efeito CLÍNICA ("a queda de peso decorre de...").
 - Não use dado que não esteja nos eventos. Não estime valor ausente.
+- Não diga que algo foi executado, aplicado, realizado ou concluído sem o dado que
+  prove isso. Prescrição traz "N de M doses aplicadas"; exame sem resultado registrado
+  É exame pendente. Chamar de executado o que está em 0% é o erro mais grave aqui.
 Você descreve e correlaciona o que foi registrado. Nada além disso.
+
+# COMO OS EVENTOS SE LIGAM
+Cada evento traz "atendimento": o id da consulta a que ele pertence. Exame, vacina,
+prescrição, encaminhamento e documento com o MESMO "atendimento" aconteceram na
+MESMA consulta e devem ser contados juntos, como uma coisa só.
+- A data que rege a narrativa é a DO ATENDIMENTO (lista ATENDIMENTOS), não a data
+  própria de cada filho. Só cite a data própria do filho quando ela for diferente da
+  do atendimento E isso importar (ex.: vacina aplicada dias depois da consulta).
+- "atendimento": null significa registro avulso, sem consulta ligada.
+Encadear os eventos da mesma consulta É descrever o que está registrado — não é
+inferir causa clínica, que continua proibido.
 
 # TÓPICOS
 Gere um tópico para CADA evento novo, na ordem recebida.
@@ -388,6 +420,7 @@ Cada highlight é um padrão VERIFICÁVEL nos registros:
 - evolução de um valor medido ao longo das datas;
 - repetição do mesmo achado, queixa ou procedimento;
 - item registrado como solicitado e sem resultado registrado depois;
+- tratamento prescrito e não aplicado (doses aplicadas abaixo do previsto);
 - alteração de conduta registrada entre atendimentos.
 - "texto": máximo 120 caracteres, com as datas e os números que sustentam o padrão.
   Exemplo de forma: "Perda progressiva de peso: 70 kg (20/06) → 60 kg (22/06) → 50 kg (27/07)."
@@ -395,15 +428,85 @@ Cada highlight é um padrão VERIFICÁVEL nos registros:
 - "direcao": aumento | reducao | estavel | nao_aplicavel
 - "topicos": ids dos tópicos que comprovam o padrão, em ordem cronológica.
   Use somente ids existentes. Mínimo 2.
-Nenhum padrão comprovável: "highlights": [].
+Nenhum padrão comprável: "highlights": [].
+
+# RESUMO DAS ATIVIDADES
+10 a 20 linhas, português do Brasil, para um veterinário ler em meio minuto e saber
+o que houve com este paciente.
+
+ESCREVA COMO SE ESTIVESSE CONTANDO A HISTÓRIA A UM COLEGA: uma linha por
+ACONTECIMENTO, encadeando o que veio junto. NUNCA uma linha por registro do sistema.
+
+Frases inteiras e naturais, sem telegrama e sem jargão de banco de dados ("consta
+como registro de evolução", "status CANCELADO_PARCIALMENTE").
+
+ORDEM: DO MAIS RECENTE PARA O MAIS ANTIGO. A primeira linha é a do atendimento mais
+novo; a última, a do mais velho. Quem abre a ficha quer saber o que houve por último,
+não o que houve primeiro.
+
+## MARQUE AS REFERÊNCIAS
+Ao citar um registro (o atendimento, a prescrição, o exame, a vacina, o documento),
+envolva o TRECHO que o nomeia em [[id|texto]], em que "id" é o id do tópico daquele
+registro (t1, t2, ...). Quem lê clica nesse trecho e vai ao registro.
+- Use SOMENTE ids que existem nos TÓPICOS ou nos EVENTOS que você recebeu.
+- Marque apenas o NOME do registro, nunca a frase inteira:
+  certo:  [[t1|atendimento de 09/08/2026]] · [[t4|prescrição nº 002]]
+  errado: [[t1|No atendimento de 09/08/2026 foi realizada avaliação clínica]]
+- NÃO escreva parênteses em volta da marcação: o trecho marcado é lido como parte
+  da frase, e o parêntese ali competiria com o dos números ("(0% executado)").
+- Marque cada registro UMA vez por linha, na primeira menção.
+- Não marque número solto, percentual, dose, nem data que não nomeie o registro.
+
+Forma das linhas, para imitar — repare que começam pela data MAIS RECENTE:
+"No [[t7|atendimento de 21/08/2026]] foram pedidos os exames de Cálcio, Colesterol
+Total, Ferro Sérico, Fósforo, Potássio e Sódio — nenhum com resultado até hoje."
+"A [[t4|prescrição nº 002]], vinculada ao atendimento de 09/08/2026, registra 17 Beta
+com 0 de 1 doses aplicadas (0% executado)."
+"No [[t1|atendimento de 09/08/2026]] foi realizada avaliação clínica, seguida pela
+aplicação da vacina Encefalogen em 16/08/2026."
+
+REGRAS:
+- Os HIGHLIGHTS vêm primeiro e nenhum pode ficar de fora, com as datas e os números
+  que os sustentam. Um highlight pode ser dito dentro da linha do atendimento a que
+  pertence — o que não pode é sumir.
+- Agrupe pelo ATENDIMENTO: tudo que aconteceu na mesma consulta sai junto, numa linha
+  ou em linhas vizinhas, começando pela data da consulta. Os GRUPOS é que se ordenam
+  do mais recente para o mais antigo — dentro de um mesmo atendimento, a leitura segue
+  a ordem natural dos fatos.
+- Diga o estado real: exame "sem resultado até hoje"; prescrição com o percentual
+  aplicado; o que foi cancelado, dito com naturalidade ("a prescrição nº 001 foi
+  cancelada em parte").
+- Cite datas por extenso curto (DD/MM/AAAA) e valores exatamente como registrados.
+- Havendo pouca coisa registrada, escreva menos que 10 linhas. NUNCA repita
+  informação nem preencha linha para atingir o número.
+- Sem markdown, sem título, sem bullet, sem numeração. Cada item do array é uma linha.
+
+# MUDANÇAS DESDE O RESUMO ANTERIOR
+Havendo RESUMO ANTERIOR, compare-o com o resumo que você acabou de escrever e liste
+o que MUDOU, no máximo 6 linhas, da mais relevante para a menos.
+- Só o que é diferente: fato novo, número que mudou, pendência que foi resolvida,
+  pendência que surgiu, estado que virou outro.
+- Diga o antes e o depois na mesma linha, nesta forma:
+  "Exames de 20/08 continuavam sem resultado; o de Potássio foi registrado em 03/09."
+  "Prescrição nº 001 passou de 0% para 50% das doses aplicadas."
+- Mudança que afeta um HIGHLIGHT vem primeiro.
+- RESUMO ANTERIOR vazio (primeira consolidação) ou nada mudou: "mudancas": [].
 
 # SAÍDA
 {
+  "resumo": [ "No [[t1|atendimento de 09/08/2026]] foi realizada ...", "linha 2" ],
+  "mudancas": [ "o que mudou desde o resumo anterior" ],
   "topicos": [ { "id": "t7", "ref": "evolucao-31", "texto": "" } ],
   "highlights": [ { "texto": "", "tipo": "TENDENCIA", "direcao": "reducao", "topicos": ["t3","t5","t7"] } ]
 }
 
 ${SO_JSON}
+
+# ATENDIMENTOS (id → data da consulta)
+${JSON.stringify(atendimentos ?? [])}
+
+# RESUMO ANTERIOR
+${JSON.stringify(resumoAnterior ?? [])}
 
 # TÓPICOS JÁ CONSOLIDADOS
 ${JSON.stringify(topicosAtuais ?? [])}
@@ -881,6 +984,11 @@ ${texto.slice(0, 20000)}`,
   // Em arquivo próprio (`./assistenteDocumento.js`) por tamanho. Ancorado NO ACERVO
   // da clínica de propósito — ver a justificativa normativa lá.
   ...require('./assistenteDocumento'),
+
+  // ── Central de Documentos: documento ENVIADO pela clínica vira MODELO ───────
+  // Também em arquivo próprio. Multimodal: recebe as páginas do arquivo anexadas
+  // junto do texto extraído. O que decide é a separação variável × lacuna — ver lá.
+  ...require('./converterDocumento'),
 };
 
 /**

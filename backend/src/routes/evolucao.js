@@ -19,7 +19,20 @@ const { criarEvolucaoRules,
         evolucaoIdParam }             = require('../validators/evolucao.validators');
 
 // ─── Multer: áudio (transcrição via Gemini) ──────────────────────────────────
-const uploadAudio = multer({ dest: 'uploads/audio_tmp/' });
+// `limits` + `fileFilter` (mesmo padrão de routes/audio.js): sem eles, qualquer
+// binário era gravado no disco e sem teto de tamanho um autenticado podia encher o
+// disco (DoS). `dest` gera nome aleatório sem `originalname` — não há path traversal.
+const uploadAudio = multer({
+  dest: 'uploads/audio_tmp/',
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith('audio/')) return cb(null, true);
+    const err = new Error(`Tipo de arquivo não suportado: ${file.mimetype}`);
+    err.status = 415;
+    err.code   = 'FORMATO_ARQUIVO_NAO_SUPORTADO';
+    cb(err);
+  },
+});
 
 // ─── Multer: mídia de evolução (imagens, vídeos, áudios) ─────────────────────
 const MIDIA_DIR = 'uploads/evolucoes/';

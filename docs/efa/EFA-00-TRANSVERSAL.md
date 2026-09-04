@@ -12,11 +12,11 @@
 | Item | Valor |
 |---|---|
 | Nome | Padrões Transversais — Plataforma S2Vet |
-| Versão | 1.0 |
+| Versão | 1.1 |
 | Autor | Equipe S2Vet (gerado por análise do código-fonte) |
-| Data | 2026-07-10 |
+| Data | 2026-08-29 (base 2026-07-10) |
 | Status | Vigente — reflete o sistema implementado |
-| Histórico | 1.0 (2026-07-10): versão inicial da suíte EFA. |
+| Histórico | 1.0 (2026-07-10): versão inicial da suíte EFA. · 1.1 (2026-08-29): multi-tenancy por RLS, storage no banco, IA unificada no Gemini, shell global + busca, 2FA, sessão por inatividade, premissa de autoria, fuso por empresa, `AcaoRegistro`/`DateInput`. |
 
 ---
 
@@ -136,7 +136,11 @@ Node.js + Express + Prisma; PostgreSQL (schema `schs2vet`); JWT + refresh token;
 5. Usuário navega pelos módulos; toda ação de escrita é validada por permissão no
    frontend (ocultação/toast) e no backend (middleware `checkPermission`).
 6. Exclusões/cancelamentos exigem justificativa (modal padrão) e alimentam a Auditoria.
-7. Logout manual, por inatividade (5 min) ou por conta desativada.
+7. Logout manual, por inatividade (**2h**) ou por conta desativada.
+
+O **shell global** envolve tudo: cabeçalho (marca, **busca global**, sino de
+notificações, menu do usuário com Sair), corpo (Sidebar + conteúdo) e rodapé. Página
+institucional **pública** em `/` para quem não está logado.
 
 **Fluxos alternativos:** troca de contexto (reload da aplicação); troca de senha
 obrigatória (`mustChangePassword` bloqueia navegação até trocar); sessão expirada
@@ -160,7 +164,10 @@ obrigatória (`mustChangePassword` bloqueia navegação até trocar); sessão ex
 | Padrão | Especificação |
 |---|---|
 | **Wrapper** | Toda página interna usa `PageContainer` (maxWidth 7xl/5xl/3xl; padding `px-6 py-6 md:px-10 md:py-8`). Proibido `min-h-screen` em páginas internas. |
-| **Mobile-first** | Listas: cards no mobile (`md:hidden`), tabela no desktop (`hidden md:block`). Sidebar vira menu hambúrguer (fixed top-6 left-6). |
+| **Shell global** | Cabeçalho (`AppHeader`: marca, busca global, notificações, menu do usuário) + corpo (Sidebar + `<main>` rolável) + rodapé (`AppFooter`). O gatilho do menu mobile mora no cabeçalho — não há mais barra `fixed`. |
+| **Mobile-first** | Listas: cards no mobile (`md:hidden`), tabela no desktop (`hidden md:block`). Sidebar vira drawer no mobile. |
+| **Ação de registro** | `AcaoRegistro`/`AcoesRegistro` — FONTE ÚNICA: a ação é declarada uma vez e o CSS escolhe a forma (ícone pintado no desktop, botão com rótulo no card mobile). `tom` escolhe a cor (§ cores): alterar laranja, ver/executar verde, imprimir/e-mail azul, WhatsApp verde, cancelar vermelho, neutro cinza. Ação sem permissão **não** é renderizada (cinza = indisponível). |
+| **Campo de data** | `DateInput` — sempre DD/MM/AAAA (nunca `<input type="date">` nativo, que segue o locale do navegador); valida e diz o erro específico ("fevereiro tem 28 dias"). |
 | **Modais** | Painel branco `rounded-2xl`, cabeçalho colorido `rounded-t-2xl` (esmeralda para operações; vermelho para destrutivas), backdrop `bg-black/50`. **Arrastáveis no desktop** pelo cabeçalho/título (mouse, ≥768px; clamp na viewport; reset ao reabrir) — comportamento global, sem código por modal. |
 | **Exclusão/cancelamento** | SEMPRE via `ModalJustificativa` (justificativa obrigatória ≥3 caracteres, botão desabilitado até preencher). Nunca `window.confirm`. |
 | **Feedback** | Toasts (react-hot-toast) topo-direita: sucesso verde, erro vermelho, avisos com ícone contextual (🔒/🔄/❌). |
@@ -278,23 +285,36 @@ Login → resolve contexto ativo → home por perfil
   Fontes: `MatrizPerfil` (por perfil/equipe; itens `locked` só o ADMIN altera),
   `PermissaoMembro` (individual; canônica p/ FORNECEDOR), matriz PROPRIETARIO
   (união + deny-wins). Bypass: ADMIN global; GESTOR/dono na empresa ativa.
-- **Enforcement duplo:** frontend (ocultação + guards + gating de `useEffect` em
-  `loadingPerms`) e backend (middleware `checkPermission(slug, nívelMínimo)` em toda rota).
-- **Transporte/sessão:** JWT 24h + refresh JWT 30d com rotação, ambos em **cookies
-  HttpOnly** (`s2vet_at`/`s2vet_rt`, `SameSite=Lax`, `Secure` em produção) — o token não
-  é legível por JavaScript (defesa contra roubo via XSS) nem armazenado em
-  storage. O backend lê o cookie primeiro e aceita `Authorization: Bearer` apenas como
-  fallback (clientes não-navegador). `trust proxy` configurado (Nº de hops em
-  `TRUST_PROXY_HOPS`, default 1) para resolver o IP real atrás do proxy. Validação de
-  vínculo dos headers `x-empresa-id`/`x-equipe-id`; Helmet; CORS allowlist com
-  `credentials`; `JWT_SECRET` ≥ 32 chars validado no startup.
-- **Uploads:** nomes aleatórios (`crypto.randomBytes`), whitelist extensão+mimetype,
-  `nosniff`, CSP sandbox, `Content-Disposition: attachment` fora da whitelist de mídia.
-- **LGPD:** dados pessoais restritos ao escopo da empresa/equipe; `forgot-password` com
-  resposta genérica (não revela existência de conta); logs sem senha; direito de
-  eliminação atendido por desativação (histórico clínico é retido por obrigação
-  veterinária — *hipótese de política a validar juridicamente*).
-- **Console do navegador** suprimido em produção (sem stack traces ao usuário).
+- **Premissa de autoria (2026-08-04):** o RBAC decide **se** a ação pode ser executada; a
+  autoria decide **sobre qual registro** — vale sobre o que a pessoa criou/assumiu, e só o
+  **GESTOR** (ou ADMIN) opera o de outro. Nível `FULL` da matriz **não** dá acesso ao
+  registro alheio. Assumir arrasta o atendimento; toda troca gera auditoria de
+  transferência (REVERTE a "autoria 100% RBAC" de 2026-07-10).
+- **Isolamento multi-tenant por RLS (fail-closed):** 72 tabelas com policies `FORCE`; a
+  role da aplicação não tem `BYPASSRLS` nem é dona das tabelas. O `authenticate` carimba
+  `app.empresa_id` (via `AsyncLocalStorage`, `lib/prismaTenant.js`) e o RLS impede leitura/
+  escrita cruzada entre clínicas independentemente do controller; sem contexto declarado,
+  tabela de tenant devolve zero. Header `x-empresa-id`/`x-equipe-id` é validado contra o
+  vínculo antes de virar contexto.
+- **Enforcement:** frontend (ocultação + guards + gating de `useEffect` em `loadingPerms`)
+  e backend (`checkPermission(slug, nívelMínimo)` + RLS como backstop no banco).
+- **Transporte/sessão:** access JWT **30 min** + refresh rotacionado numa **janela de
+  inatividade de 2h**, em **cookies HttpOnly** (`s2vet_at`/`s2vet_rt`, `SameSite=Lax`,
+  `Secure` em produção; token não legível por JS). `sessionVersion` revoga sessão antiga.
+  **2FA por e-mail** (código CSPRNG/SHA-256/tempo constante) e **bloqueio por tentativas**.
+  `trust proxy` (`TRUST_PROXY_HOPS`); Helmet; CORS allowlist com `credentials`;
+  `JWT_SECRET` validado por entropia no startup; rate limit por usuário (fallback IP).
+- **Storage no banco:** todo arquivo em `tb_midia_arquivos` (bytea); download por
+  `/api/midia/:chave` autenticado e autorizado por dono (nada servido do filesystem).
+  Uploads com whitelist extensão+mimetype e `limits.fileSize`; interface `StorageProvider`
+  para migrar a S3/GCS trocando só `STORAGE_DRIVER`.
+- **Anti-enumeração de usuário:** login e forgot-password com mensagem genérica **e tempo
+  constante** (bcrypt de isca; envio de e-mail em segundo plano). Varredura de secrets no
+  CI (`gitleaks`).
+- **LGPD:** dados pessoais restritos ao escopo da empresa (reforçado pelo RLS);
+  `forgot-password` genérico; logs sem senha; eliminação por desativação (histórico
+  clínico retido por obrigação veterinária — *validar juridicamente*).
+- **Console do navegador** suprimido em produção.
 
 ---
 
@@ -302,8 +322,8 @@ Login → resolve contexto ativo → home por perfil
 
 | Evento | Onde é registrado | Conteúdo |
 |---|---|---|
-| Login/Logout | `AuditLog` | usuário, e-mail, ação, timestamp, empresa, **IP de origem**. |
-| Exclusões/Cancelamentos | `AuditLog` estruturado | categoria (EXCLUSAO/CANCELAMENTO), entidade, id do registro, animal, **motivo**, detalhes legíveis, usuário, empresa, **IP de origem**, timestamp. |
+| Login/Logout/**Acesso negado** | `AuditLog` | usuário, e-mail, ação, timestamp, empresa, **IP de origem**. Tentativas bloqueadas (senha errada, conta bloqueada, 2FA inválido) na categoria `ACESSO_NEGADO`, em escopo de plataforma. |
+| Criação/Exclusão/Cancelamento/**Transferência**/Alteração/Configuração | `AuditLog` estruturado | categoria (`CRIACAO`/`EXCLUSAO`/`CANCELAMENTO`/`TRANSFERENCIA`/`ALTERACAO`/`CONFIGURACAO`), entidade, id, animal, **motivo**, "antes → depois" por campo, usuário, empresa, **IP**, timestamp. |
 | Alterações de permissão | `AuditoriaPermissao` (imutável) | quem alterou, alvo, nível anterior/novo, motivo, IP. |
 | Alterações clínicas relevantes | Campos do registro (`modificadoPorId`, `dataModificacao`, `justificativaExclusao`) + relatório gerencial (evoluções editadas pós-finalização, correções de fatura). |
 
@@ -325,12 +345,12 @@ Tela de consulta: **EFA-14** (`/auditoria-geral`).
 | BrasilAPI (CNPJ) | Auto-preenchimento de razão social | REST público, chamada direta do frontend | Toast informativo; campos permanecem editáveis. |
 | ViaCEP | Endereço por CEP | REST público | Falha silenciosa. |
 | CFMV | Validação de CRMV | REST via backend (`/api/crmv`) | Mensagem de CRMV inválido/indisponível. |
-| Groq (LLM) | Interpretação de evolução, laudos, voz, dieta | Backend (`AIProvider`), prompts versionados, log em `AiUsageLog` | **Degradação graciosa** — a operação principal nunca é bloqueada por falha de IA. |
-| Whisper (local) | Transcrição offline | Modelo local no navegador + transcodificação no backend | Fila de áudios pendentes. |
-| E-mail (SMTP) | Transacionais (vínculos, convites, boas-vindas, reset) | `emailService`; links sempre `/#/` | Erro logado; fluxo segue (best-effort). |
-| WhatsApp (share) | Compartilhamento de documentos | Deep link `wa.me` (sem API) | — |
+| **Google Gemini** (LLM único) | Texto, visão e **transcrição de áudio**; interpretação de evolução, laudos, voz, dieta, memória clínica, IA financeira, assistente de documentos | Backend (`geminiClient.ts`), prompts versionados, log em `AiUsageLog` com módulo e empresa; **metering + quota por empresa** (429 ao exceder) | **Degradação graciosa** — a operação principal nunca é bloqueada por falha de IA. |
+| Web Speech API | Ditado online no cliente | Navegador | Cai para o Gemini no backend. |
+| E-mail (SMTP) | Transacionais (vínculos, convites, boas-vindas, reset, **código 2FA**) | `emailService`; links sempre `/#/` | Erro logado; fluxo segue (best-effort). |
+| **WhatsApp (Evolution API)** | Envio de lembretes, faturas, documentos, orçamentos | Instância por empresa; `WHATSAPP_PROVIDER=evolution`; **webhook autenticado por token** (`/api/webhooks/evolution`) | Provider "noop" quando não configurado. |
 
-Sem webhooks nem fila de mensageria no estado atual.
+Groq, OpenAI e Anthropic foram **removidos** (2026-07-28) — Gemini é o provedor único.
 
 ---
 

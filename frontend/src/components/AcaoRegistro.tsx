@@ -118,15 +118,25 @@ export default function AcaoRegistro({
 }
 
 /** Linha de ações: pílulas que QUEBRAM em várias linhas no mobile, ícones lado a lado
- *  no desktop. ⚠️ O `flex-wrap` continua valendo no desktop de propósito — celular
- *  DEITADO tem ≥ 768px de largura (entra no `md:`), e sem a quebra os ícones saíam
- *  para fora do card. */
+ *  e SEMPRE NA MESMA LINHA no desktop (`md:flex-nowrap`).
+ *
+ *  ⚠️ O `md:flex-nowrap` NÃO é cosmético — é o que faz a coluna "Ações" existir na
+ *  tabela. Com `flex-wrap`, a largura MÍNIMA do contêiner é a de UM ícone; a `<table
+ *  className="w-full">` então espreme a coluna até isso e as 8 ações da evolução saem
+ *  empilhadas, uma por linha. Não adianta `whitespace-nowrap` no `<td>`: aquilo governa
+ *  quebra de TEXTO, não de item flex. Quem precisa de largura é o contêiner flex.
+ *
+ *  ⚠️ A quebra continua valendo abaixo de `md`, que é onde ela serve para alguma coisa:
+ *  ali a ação é uma PÍLULA COM RÓTULO e várias não cabem lado a lado. De `md` para cima
+ *  o rótulo já está escondido (`md:hidden` no `<span>`), então cada ação ocupa ~27px —
+ *  as 8 juntas cabem em ~230px, inclusive no card de um celular DEITADO (≥768px), que
+ *  era a preocupação registrada aqui antes de o rótulo passar a sumir no `md`. */
 export function AcoesRegistro({ children, className = '' }: {
   children:   ReactNode;
   className?: string;
 }) {
   return (
-    <div className={`flex flex-wrap items-center gap-2 md:gap-1 md:justify-center ${className}`}>
+    <div className={`flex flex-wrap md:flex-nowrap items-center gap-2 md:gap-1 md:justify-center ${className}`}>
       {children}
     </div>
   );

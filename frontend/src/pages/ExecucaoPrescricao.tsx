@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   CheckCircle2, ClipboardList, Loader2, Search,
   Eye, Printer, ChevronLeft, ChevronRight, Calendar,
-  User, X, Link, Ban, Syringe, Pill, Stethoscope,
+  User, X, Link, Ban, Syringe, Pill, Stethoscope, AlertTriangle, Lock,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -20,7 +20,7 @@ import { imprimirPrescricao, type PrintGrupoPrescricao, type PrintItemPrescricao
 // (sem hora); a família `format*`/`diaISO`/`hojeISO` para INSTANTE, já no fuso de
 // quem está olhando (a aplicação roda nos 4 fusos do Brasil). Ver utils/dateUtils.ts.
 import {
-  formatDate, formatDateShort, formatHora, formatDiaMesHora,
+  formatDate, formatDateShort, formatHora, formatDiaMes, formatDiaMesHora,
   formatHoraComDia, diaISO, hojeISO,
 } from '../utils/dateUtils';
 import { useAuth } from '../contexts/AuthContext';
@@ -101,6 +101,15 @@ export interface GrupoExecucao {
     dataNascimento?: string | null;
     idadeAnos?:      number | null;
   };
+  /**
+   * Paciente INATIVO — prontuário CONGELADO (backend/src/lib/animalInativo.js).
+   *
+   * 🔴 A linha CONTINUA na fila (a equipe precisa ver que o tratamento existe e
+   * ficou parado), mas SEM executar e SEM cancelar: os dois respondem 400, e botão que
+   * só falha depois do clique é a armadilha 28-d. Ver / imprimir seguem valendo — o
+   * prontuário congelado é para ser lido.
+   */
+  animalInativo?:  boolean;
   itens: ItemExecucao[];
 }
 
@@ -122,6 +131,15 @@ export interface VacinaExecucao {
   observacao:      string | null;
   animal:          GrupoExecucao['animal'];
   veterinario:     { id: number; fullName: string } | null;
+  /**
+   * Paciente INATIVO — prontuário CONGELADO (backend/src/lib/animalInativo.js).
+   *
+   * 🔴 A linha CONTINUA na fila (a equipe precisa ver que o tratamento existe e
+   * ficou parado), mas SEM executar e SEM cancelar: os dois respondem 400, e botão que
+   * só falha depois do clique é a armadilha 28-d. Ver / imprimir seguem valendo — o
+   * prontuário congelado é para ser lido.
+   */
+  animalInativo?:  boolean;
 }
 
 interface AlertaEstoque {
@@ -221,10 +239,66 @@ export function itemPendenteEm(
     // a grade (backend: lib/agendaDoses.js#semAncoraDeHorario). Antes isto era
     // `return false` — com Hora Início opcional, sumiria com o item da fila.
     if (!item.proximaDoseEm) return item.diaAtual >= 1 && item.diaAtual <= item.duracaoDias;
-    return diaISO(item.proximaDoseEm) === data;
+    // 🔴 `<=`, e não `===` (mudança de 2026-08-29). Com igualdade estrita a dose
+    // não aplicada SUMIA da fila no dia seguinte, sem ninguém ter aplicado nem
+    // cancelado nada — era o defeito relatado. Agora ela PERMANECE, marcada como
+    // ATRASADA com a data em que era devida (`itemAtrasadoEm`), até ser aplicada
+    // ou cancelada. Não reintroduz o bug do "1x/semana aparecendo todo dia": antes
+    // do vencimento `proximaDoseEm > data` e o item continua fora da fila; assim
+    // que é executado, o rolling schedule joga a próxima para o futuro.
+    // `diaISO` pode devolver null (data inválida) — com `===` isso caía em
+    // false sozinho, mas `<=` compararia null com string. Guarda explícita.
+    const diaPrevisto = diaISO(item.proximaDoseEm);
+    return !!diaPrevisto && diaPrevisto <= data;
   }
   const dentroJanela = item.diaAtual >= 1 && item.diaAtual <= item.duracaoDias;
   return dentroJanela && diaISO(item.executadoEm) !== data;
+}
+
+/**
+ * Data (ISO) em que a dose ainda PENDENTE do item era devida.
+ *  - com âncora  -> `proximaDoseEm`, o rolling schedule real;
+ *  - sem âncora  -> o 1º dia do curso. Item sem Hora Início não tem HORÁRIO
+ *    previsto (por isso `proximaDoseEm` vem null), mas tem PRAZO: o curso começou
+ *    num dia, e passado esse dia sem nenhuma dose ele está atrasado.
+ */
+export function previsaoPendenteISO(
+  item: Pick<ItemExecucao, 'proximaDoseEm' | 'dataInicio'>,
+): string | null {
+  if (item.proximaDoseEm) return item.proximaDoseEm;
+  return item.dataInicio ? dataDoDiaISO(item.dataInicio, 1) : null;
+}
+
+/**
+ * Item cuja dose já venceu e não foi aplicada, olhando da data `data`.
+ * Exportado porque o **Painel Principal** monta a mesma fila — mesma razão de
+ * `itemPendenteEm` ser exportada.
+ *
+ * ⚠️ Aplicado NA data consultada não é atraso: a dose foi dada, e o item só
+ * continua na lista para alimentar o Histórico daquele dia.
+ */
+export function itemAtrasadoEm(
+  item: Pick<ItemExecucao, 'proximaDoseEm' | 'dataInicio' | 'executadoEm'
+    | 'dosesExecutadas' | 'dosesTotaisEsperadas'>,
+  data: string,
+): boolean {
+  if (item.dosesTotaisEsperadas != null
+    && (item.dosesExecutadas ?? 0) >= item.dosesTotaisEsperadas) return false;
+  if (diaISO(item.executadoEm) === data) return false;
+  const previsto = previsaoPendenteISO(item);
+  const dia = previsto ? diaISO(previsto) : null;
+  return !!dia && dia < data;
+}
+
+/** Vacina FINALIZADA cuja data de aplicação já passou.
+ *  ⚠️ `dataAplicacao` é DATA PURA (§6) — comparação por `split('T')`, nunca por
+ *  `diaISO`, que converteria fuso num valor que não tem hora. */
+export function vacinaAtrasadaEm(
+  vacina: Pick<VacinaExecucao, 'dataAplicacao'>,
+  data: string,
+): boolean {
+  const dia = vacina.dataAplicacao?.split('T')[0];
+  return !!dia && dia < data;
 }
 
 // Mesmo intervalo do backend (lib/agendaDoses.js#intervaloEmMs) — para
@@ -349,9 +423,15 @@ export function toggleSlot(grupoId: number, map: ExecMap, itemId: number, slotId
 
 // ─── AnimalAvatar ─────────────────────────────────────────────────────────────
 
-export function AnimalAvatar({ animal, size = 'md' }: {
-  animal: { nome: string; photoUrl: string | null };
+export function AnimalAvatar({ animal, size = 'md', linkarDetalhe = false }: {
+  animal: { id?: number; nome: string; photoUrl: string | null };
   size?: 'sm' | 'md' | 'lg';
+  /**
+   * `true` = a foto vira link para o Detalhamento do Animal. Ligado na FILA
+   * (LinhaExecucao) e DESLIGADO no cabeçalho dos modais de execução: sair dali
+   * abandonaria a aplicação que está sendo conferida, sem nada gravado.
+   */
+  linkarDetalhe?: boolean;
 }) {
   const cls = size === 'lg' ? 'w-14 h-14 text-xl rounded-xl'
             : size === 'sm' ? 'w-9 h-9 text-sm rounded-lg'
@@ -359,6 +439,7 @@ export function AnimalAvatar({ animal, size = 'md' }: {
   // Sem foto → ícone de paciente (era a LETRA INICIAL; o vazio agora é o mesmo em
   // todas as telas — ver components/FotoAnimal.tsx).
   return <FotoAnimal url={animal.photoUrl} nome={animal.nome}
+    animalId={linkarDetalhe ? animal.id : undefined}
     className={`${cls} flex-shrink-0`}
     iconSize={size === 'lg' ? 24 : size === 'sm' ? 16 : 20} />;
 }
@@ -382,6 +463,11 @@ export function ModalExecucaoVacina({
   podeCancelar?:     boolean;
   soVisualizacao?:   boolean;
 }) {
+  // 🔴 Paciente INATIVO = prontuário congelado: o modal abre em SOMENTE LEITURA venha
+  // de onde vier. A tela já esconde o "Aplicar" na fila, mas o modal é reutilizado por
+  // outras telas (Painel Principal) — resolver aqui é o que impede um caminho novo
+  // reabrir a ação que o backend recusa com 400 (lib/animalInativo.js).
+  const soLeitura = soVisualizacao || !!v.animalInativo;
   const [salvando,     setSalvando]     = useState(false);
   const [cancelando,   setCancelando]   = useState(false);
   const [confirmarCan, setConfirmarCan] = useState(false);
@@ -497,7 +583,7 @@ export function ModalExecucaoVacina({
                   na mesma paleta (emerald / vermelho) — nunca botão sólido. E em
                   visualização, a MESMA tarja "Somente leitura" que o item do medicamento
                   mostra: a tela do olho é igual nos dois. */}
-              {soVisualizacao ? (
+              {soLeitura ? (
                 <span className="flex-shrink-0 mt-0.5 px-3 py-1 rounded-lg text-xs font-semibold bg-gray-100 text-gray-400 cursor-not-allowed whitespace-nowrap">
                   Somente leitura
                 </span>
@@ -534,7 +620,7 @@ export function ModalExecucaoVacina({
         {/* Rodapé IDÊNTICO ao do medicamento: em visualização, só a tarja âmbar (o X do
             cabeçalho fecha); executando, FECHAR e depois EXECUTAR TODOS. */}
         <div className="px-4 pt-2 pb-4 border-t border-gray-100 flex-shrink-0">
-          {soVisualizacao ? (
+          {soLeitura ? (
             <div className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold bg-amber-50 border border-amber-200 text-amber-700">
               <Calendar size={14} />
               Execução disponível apenas para hoje
@@ -608,6 +694,9 @@ export function ModalExecucao({
    *  hoje" — vazio — mesmo com a prescrição bem viva. */
   dataRef?:        string;
 }) {
+  // 🔴 Mesmo motivo do modal da vacina: paciente inativo abre em SOMENTE LEITURA,
+  // qualquer que seja a tela que chamou. Ver lib/animalInativo.js.
+  const soLeituraGrupo = soVisualizacao || !!grupo.animalInativo;
   const [execMap,     setExecMap]     = useState<ExecMap>(() => getExecMap(grupo.id));
   const [salvando,    setSalvando]    = useState(false);
   // QUAL item está sendo executado — sem isso o spinner apareceria em TODOS os ícones
@@ -1109,7 +1198,7 @@ export function ModalExecucao({
               ? `${POSOLOGIAS[item.frequencia] ?? item.frequencia} por ${duracaoTxt}${doseTxt ? ` - ${doseTxt}` : ''}`
               : `${POSOLOGIAS[item.frequencia] ?? item.frequencia}${doseTxt ? ` - ${doseTxt}` : ''}`;
 
-            const botoesLinhaAtual = !soVisualizacao && (
+            const botoesLinhaAtual = !soLeituraGrupo && (
               <div className="flex items-center gap-1 flex-shrink-0">
                 <button
                   onClick={() => handleExecutarItem(item, slots)}
@@ -1210,13 +1299,23 @@ export function ModalExecucao({
                         // (`previsaoDaDose(item, 0)` = `proximaDoseEm`), então o horário
                         // sempre existiu aqui; ficar só com "Em Execução" escondia de
                         // quem vai aplicar justamente a hora em que a dose vence.
+                        // Dose vencida e não aplicada diz ATRASADA e a data em que ERA
+                        // devida — antes saía "Em Execução (25/08 às 08:00)" dentro da
+                        // fila do dia 29, o que lia como tarefa de hoje.
+                        const doseAtrasada = ehAtual && itemAtrasadoEm(item, dataRef);
                         const status = executada
-                          ? (horaExecutada ? `Executado às ${formatHora(horaExecutada)}` : 'Executado')
+                          // DIA + hora, nunca só a hora: o card lista o curso inteiro
+                          // (várias doses, dias diferentes) e "Executado às 18:00" em
+                          // duas linhas seguidas não dizia se foram no mesmo dia.
+                          // `formatDiaMesHora` = INSTANTE no fuso da clínica (§6).
+                          ? (horaExecutada ? `Executado em ${formatDiaMesHora(horaExecutada)}` : 'Executado')
                           : cancelado
                             ? 'Cancelada'
-                            : ehAtual
-                              ? `Em Execução (${quandoPrevisto})`
-                              : `Prevista para ${quandoPrevisto}`;
+                            : doseAtrasada
+                              ? `Atrasada — era ${quandoPrevisto}`
+                              : ehAtual
+                                ? `Em Execução (${quandoPrevisto})`
+                                : `Prevista para ${quandoPrevisto}`;
                         return (
                           <div key={idx} className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
                             {/* MOBILE: o texto da dose ocupa a linha INTEIRA (`w-full`) e
@@ -1227,7 +1326,7 @@ export function ModalExecucao({
                                 couber, sai "…" (com o texto inteiro no `title`) em vez de
                                 estourar o card. */}
                             <p title={`Dose ${numero}/${total} - ${status}`}
-                              className={`w-full min-w-0 truncate md:w-auto md:flex-1 ${ehAtual ? 'text-xs font-semibold text-gray-800' : 'text-[11px] text-gray-400'}`}>
+                              className={`w-full min-w-0 truncate md:w-auto md:flex-1 ${doseAtrasada ? 'text-xs font-semibold text-red-600' : ehAtual ? 'text-xs font-semibold text-gray-800' : 'text-[11px] text-gray-400'}`}>
                               Dose {numero}/{total} - {status}
                             </p>
                             {ehAtual && botoesLinhaAtual}
@@ -1242,7 +1341,7 @@ export function ModalExecucao({
                   <span className="flex-shrink-0 mt-0.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-100 text-rose-700 whitespace-nowrap inline-flex items-center gap-1">
                     <Ban size={12} /> Cancelado
                   </span>
-                ) : soVisualizacao ? (
+                ) : soLeituraGrupo ? (
                   <span className="flex-shrink-0 mt-0.5 px-3 py-1 rounded-lg text-xs font-semibold bg-gray-100 text-gray-400 cursor-not-allowed whitespace-nowrap">
                     Somente leitura
                   </span>
@@ -1301,7 +1400,7 @@ export function ModalExecucao({
                 <p className="text-xs font-normal text-red-500 mt-1">Motivo: {grupo.motivoCancelamento}</p>
               )}
             </div>
-          ) : soVisualizacao ? (
+          ) : soLeituraGrupo ? (
             <div className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold bg-amber-50 border border-amber-200 text-amber-700">
               <Calendar size={14} />
               Execução disponível apenas para hoje
@@ -1681,7 +1780,7 @@ function LinhaExecucao({
     // Quebrando, elas descem para uma segunda linha do próprio card.
     <div className="bg-white border border-gray-200 rounded-xl flex flex-wrap items-center gap-3 px-3 py-2.5 shadow-sm hover:border-emerald-200 transition-colors">
 
-      <AnimalAvatar animal={animal} size="md" />
+      <AnimalAvatar animal={animal} size="md" linkarDetalhe />
 
       <div className="flex-1 min-w-0">
         <p className="font-semibold text-gray-900 text-sm leading-tight">{animal.nome}</p>
@@ -1739,6 +1838,7 @@ function LinhaExecucao({
 
 function LinhaGrupo({
   g,
+  atraso = null,
   onExecutar,
   onVer,
   onImprimir,
@@ -1768,6 +1868,8 @@ function LinhaGrupo({
   executada?: boolean;
   horaExecucao?: string | null;
   executorNome?: string | null;
+  /** "25/08 às 08:00" da dose mais antiga vencida e não aplicada; null = em dia. */
+  atraso?: string | null;
 }) {
   const navigate = useNavigate();
 
@@ -1782,15 +1884,32 @@ function LinhaGrupo({
       executorNome={executorNome}
     >
       <AcoesRegistro className="ml-auto">
+        {/* 🔴 PRONTUÁRIO CONGELADO — o selo é o que explica por que a linha está aqui
+            sem os botões de agir. Sem ele, "sumiu o Executar" vira chamado. */}
+        {g.animalInativo && (
+          <span className="flex items-center gap-1 px-2.5 py-1 bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold rounded-full whitespace-nowrap"
+            title="Paciente inativo — o prontuário está em somente leitura. Reative com o gestor para voltar a executar.">
+            <Lock size={11} /> Somente leitura
+          </span>
+        )}
         {g.status === 'CANCELADO' && (
           <span className="flex items-center gap-1 px-2.5 py-1 bg-red-50 border border-red-200 text-red-600 text-[10px] font-bold rounded-full whitespace-nowrap"
             title={g.motivoCancelamento ?? undefined}>
             <Ban size={11} /> Cancelada
           </span>
         )}
+        {/* ATRASADA vem antes de tudo: é a informação que muda a ordem do plantão.
+            Mostra a data em que a dose ERA devida — sem ela a linha se confunde
+            com as do dia. */}
+        {atraso && g.status !== 'CANCELADO' && (
+          <span className="flex items-center gap-1 px-2.5 py-1 bg-red-50 border border-red-200 text-red-600 text-[10px] font-bold rounded-full whitespace-nowrap"
+            title={`Dose não aplicada — era ${atraso}`}>
+            <AlertTriangle size={11} /> Atrasada — era {atraso}
+          </span>
+        )}
         {executada && (
           <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold rounded-full whitespace-nowrap">
-            <CheckCircle2 size={11} /> Executada{horaExecucao ? ` às ${horaExecucao}` : ''}
+            <CheckCircle2 size={11} /> Executada{horaExecucao ? ` em ${horaExecucao}` : ''}
           </span>
         )}
         {/* ORDEM DAS AÇÕES — VISUALIZAR · EXECUTAR · IMPRIMIR · CANCELAR, sempre, nesta
@@ -1809,12 +1928,12 @@ function LinhaGrupo({
           titulo="Ver prescrição" onClick={onVer} />
         <AcaoRegistro tom="executar" icone={CheckCircle2} rotulo="Executar"
           titulo="Executar prescrição" onClick={onExecutar}
-          visivel={podeExecutarAcao && !soVisualizacao && !executada} />
+          visivel={podeExecutarAcao && !soVisualizacao && !executada && !g.animalInativo} />
         <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
           titulo="Imprimir prescrição" onClick={onImprimir} visivel={podeImprimir} />
         <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
           titulo="Cancelar prescrição" onClick={() => onCancelar?.()}
-          visivel={podeCancelar && !!onCancelar} />
+          visivel={podeCancelar && !!onCancelar && !g.animalInativo} />
       </AcoesRegistro>
     </LinhaExecucao>
   );
@@ -2127,15 +2246,23 @@ export default function ExecucaoPrescricao() {
   // vice-versa). localStorage (hora exata do clique) tem prioridade; fallback no
   // executadoEm vindo do backend.
   const horaExecucaoDeTipo = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO'): string | null => {
+    // Devolve DIA + hora ("24/08 às 18:00"), não só a hora: o card do Histórico
+    // é alcançável por qualquer data do calendário, e "às 18:00" sozinho não
+    // dizia de que dia era a aplicação.
+    //
+    // O localStorage guarda só "HH:MM", mas a CHAVE é por dia (`doneTodayKey`
+    // usa `hojeISO()`) — quando ele responde, a execução é necessariamente de
+    // hoje, então o dia pode ser completado aqui com segurança.
     const local = horaExecucaoHoje(g.id);
-    if (local) return local;
+    if (local) return `${formatDiaMes(new Date())} às ${local}`;
+    // ⚠️ `formatDiaMesHora`, e não `getHours()`: o getter lê o relógio do
+    // DISPOSITIVO, e a clínica pode estar em outro fuso (§6). Era um erro que
+    // já existia aqui e só aparecia fora de Brasília.
     const ultima = g.itens
-      .filter(i => i.tipo === tipo)
-      .map(i => (i.executadoEm ? new Date(i.executadoEm) : null))
-      .filter((d): d is Date => !!d && !isNaN(d.getTime()))
-      .sort((a, b) => b.getTime() - a.getTime())[0];
-    if (!ultima) return null;
-    return `${String(ultima.getHours()).padStart(2, '0')}:${String(ultima.getMinutes()).padStart(2, '0')}`;
+      .filter(i => i.tipo === tipo && i.executadoEm)
+      .map(i => i.executadoEm as string)
+      .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
+    return ultima ? formatDiaMesHora(ultima) : null;
   };
 
   // Executor da dose mais recente ENTRE OS ITENS DO TIPO daquele card — mesmo motivo
@@ -2226,10 +2353,25 @@ export default function ExecucaoPrescricao() {
   // sempre "hoje", mesmo navegando para um dia anterior.
   const rotuloHistorico = isHoje ? 'executadas hoje' : `executadas em ${formatDataSel(dataSel)}`;
 
+  // Data/hora da dose vencida MAIS ANTIGA entre os itens DO TIPO daquele card —
+  // mesmo recorte por tipo de `horaExecucaoDeTipo`, senão o atraso do medicamento
+  // vazaria para o card de procedimento do mesmo documento.
+  const atrasoDoTipo = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO'): string | null => {
+    const vencidas = g.itens
+      .filter(i => i.tipo === tipo && itemAtrasadoEm(i, dataSel))
+      .map(i => previsaoPendenteISO(i))
+      .filter((v): v is string => !!v)
+      .sort();
+    if (vencidas.length === 0) return null;
+    // Sem âncora de horário não existe hora a mostrar — só a data do dia do curso.
+    return formatDiaMesHora(vencidas[0]) ?? formatDateShort(vencidas[0]);
+  };
+
   const renderGrupoAtivo = (tipo: 'MEDICAMENTO' | 'PROCEDIMENTO') => (g: GrupoExecucao) => (
     <LinhaGrupo
       key={g.id}
       g={g}
+      atraso={atrasoDoTipo(g, tipo)}
       onExecutar={() => { if (!podeExecutarAcao) { semPermissao('executar prescrição'); return; } setModalVer(false); setModalTipo(tipo); setModal(g); }}
       onVer={() => { setModalVer(true); setModalTipo(tipo); setModal(g); }}
       onImprimir={() => podeImprimir ? handleImprimirGrupo(g) : semPermissao('imprimir prescrição')}
@@ -2428,16 +2570,33 @@ export default function ExecucaoPrescricao() {
                                 tela de Vacina). Ver e Executar abrem a MESMA tela, como no
                                 medicamento; só o olho a abre em somente leitura. */}
                             <AcoesRegistro className="ml-auto">
+                              {/* A fila de vacinas NÃO é filtrada por data (a vacina fica
+                                  até ser aplicada), então sem este selo a que venceu dias
+                                  atrás parecia de hoje — o defeito relatado em 2026-08-29. */}
+                              {/* 🔴 Prontuário CONGELADO: a linha fica, as ações somem, e o
+                                  selo é o que explica por quê. */}
+                              {v.animalInativo && (
+                                <span className="flex items-center gap-1 px-2.5 py-1 bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold rounded-full whitespace-nowrap"
+                                  title="Paciente inativo — o prontuário está em somente leitura. Reative com o gestor para voltar a aplicar.">
+                                  <Lock size={11} /> Somente leitura
+                                </span>
+                              )}
+                              {vacinaAtrasadaEm(v, dataSel) && (
+                                <span className="flex items-center gap-1 px-2.5 py-1 bg-red-50 border border-red-200 text-red-600 text-[10px] font-bold rounded-full whitespace-nowrap"
+                                  title={`Vacina não aplicada — era ${formatDate(v.dataAplicacao)}`}>
+                                  <AlertTriangle size={11} /> Atrasada — era {formatDateShort(v.dataAplicacao)}
+                                </span>
+                              )}
                               <AcaoRegistro tom="ver" icone={Eye} rotulo="Ver" titulo="Ver vacina"
                                 onClick={() => { setVacModoVer(true); setVacModal(v); }} />
                               <AcaoRegistro tom="executar" icone={CheckCircle2} rotulo="Aplicar"
-                                titulo="Aplicar vacina" visivel={podeExecutarAcao}
+                                titulo="Aplicar vacina" visivel={podeExecutarAcao && !v.animalInativo}
                                 onClick={() => { setVacModoVer(false); setVacModal(v); }} />
                               <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
                                 titulo="Imprimir vacina" visivel={podeImprimir}
                                 onClick={() => imprimirVacinaExec(v)} />
                               <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
-                                titulo="Cancelar vacina" visivel={podeCancelar}
+                                titulo="Cancelar vacina" visivel={podeCancelar && !v.animalInativo}
                                 onClick={() => { setErroInline(null); setCancelarVacina(v); }} />
                             </AcoesRegistro>
                           </LinhaExecucao>

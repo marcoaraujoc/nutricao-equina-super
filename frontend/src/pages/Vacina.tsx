@@ -34,6 +34,10 @@ type AnimalExtended = SelectedAnimal & {
   raca?:           { nome: string } | null;
   user?:           { fullName: string; email: string } | null;
   logoUrl?:        string | null;
+  /** Paciente INATIVO — prontuário congelado (ver backend/src/lib/animalInativo.js). */
+  inativo?:        boolean;
+  inativoEm?:      string | null;
+  inativoMotivo?:  string | null;
 };
 
 interface EvolucaoAtiva {
@@ -48,11 +52,17 @@ export default function Vacina() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
-  const { selectedAnimal, setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
+  const { setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
   const { loading: empresaLoading, contextoAtivo } = useEmpresa();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
-  const effectiveAnimalId = animalIdParam || (selectedAnimal?.id ? String(selectedAnimal.id) : '');
+  // 🔴 O PACIENTE NASCE VAZIO (2026-09-03, a pedido): o id vem SÓ da URL — o
+  // "Vacina" do Histórico do Paciente e o link do card, que são escolhas explícitas.
+  // O `selectedAnimal` do shell NÃO entra aqui: ele é global e persistido em
+  // localStorage, então abrir a tela trazia pré-escolhido um paciente que a pessoa
+  // não escolheu para ESTA aplicação — e vacina é registro clínico com baixa de
+  // estoque e cobrança. Escolher é o primeiro passo da tela.
+  const effectiveAnimalId = animalIdParam ?? '';
 
   const [animal,        setAnimal]        = useState<AnimalExtended | null>(null);
   const [todosAnimais,  setTodosAnimais]  = useState<AnimalExtended[]>([]);
@@ -66,7 +76,10 @@ export default function Vacina() {
   useEffect(() => { setOpenItemId(itemParam ? Number(itemParam) : null); }, [itemParam]);
 
   const carregarAnimal = useCallback(async () => {
-    if (!effectiveAnimalId) return;
+    // Voltar para `/clinica/vacina` (sem id) tem de LIMPAR o card e o seletor: o
+    // React Router reusa o componente entre as duas rotas, e sem isto a tela ficaria
+    // com o paciente anterior em cima de um formulário que já está vazio.
+    if (!effectiveAnimalId) { setAnimal(null); return; }
     try {
       const res = await api.get(`/animais/${effectiveAnimalId}`);
       // GET 403 → data null: id de OUTRA empresa (link antigo/troca de contexto).
@@ -143,16 +156,6 @@ export default function Vacina() {
       .finally(() => setCarregandoLista(false));
   }, [empresaLoading, contextoAtivo?.empresaId, contextoAtivo?.equipeId]);
 
-  // Sem paciente na URL nem selecionado, adota o primeiro da lista — a tela precisa
-  // ser utilizável logo após o login, sem obrigar a mexer no seletor antes.
-  // `setSelectedAnimal` fora das dependências pelo mesmo motivo acima (identidade
-  // instável). O guard do `effectiveAnimalId` já impede repetir a seleção.
-  useEffect(() => {
-    if (effectiveAnimalId || empresaLoading || carregandoLista) return;
-    if (todosAnimais.length > 0) setSelectedAnimal(todosAnimais[0]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveAnimalId, empresaLoading, carregandoLista, todosAnimais]);
-
   if (!loadingPerms && !isGestor && !podeExecutar('atendimento.vacinas.ler')) {
     return (
       <PageContainer>
@@ -165,6 +168,7 @@ export default function Vacina() {
   }
 
   const animalIdNum = effectiveAnimalId ? Number(effectiveAnimalId) : 0;
+  const semPaciente = animalIdNum === 0;
 
   return (
     <PageContainer>
@@ -188,9 +192,42 @@ export default function Vacina() {
 
       {animal && <AnimalCard animal={animal} />}
 
+      {/* Mesma faixa do shell de Atendimento: sem ela, os botões apenas somem e quem
+          olha conclui que perdeu permissão. */}
+      {animal?.inativo && (
+        <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <p className="text-sm font-semibold text-amber-900">
+            Paciente inativo — prontuário em somente leitura.
+          </p>
+          <p className="text-xs text-amber-800 mt-0.5">
+            O histórico de vacinas continua visível e pode ser impresso ou enviado. Nada
+            pode ser registrado, finalizado, executado ou cancelado até o gestor reativar
+            o paciente.
+            {animal.inativoMotivo && <> Motivo: “{animal.inativoMotivo}”.</>}
+          </p>
+        </div>
+      )}
+
+      {/* Sem paciente escolhido, o submódulo NÃO é montado: ele carrega catálogo e
+          histórico por animal e sairia batendo em `/animal/0`. */}
+      {semPaciente ? (
+        <div className="mt-4 bg-white rounded-2xl border border-gray-100 shadow-sm">
+          <div className="flex flex-col items-center justify-center py-14 text-center px-6">
+            <Syringe size={30} className="text-gray-200 mb-3" />
+            <p className="text-sm text-gray-400">
+              {carregandoLista
+                ? 'Carregando pacientes…'
+                : todosAnimais.length === 0
+                  ? 'Nenhum paciente disponível.'
+                  : 'Selecione o paciente acima para registrar ou consultar vacinas.'}
+            </p>
+          </div>
+        </div>
+      ) : (
       <div className="mt-4 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
         <SubModuloVacina
           animalId={animalIdNum}
+          pacienteInativo={!!animal?.inativo}
           animal={animal}
           evolucaoId={evolucaoAtiva?.id}
           atendimentoNumero={evolucaoAtiva?.atendimentoNumero ?? undefined}
@@ -198,6 +235,7 @@ export default function Vacina() {
           onViewConsumed={() => setOpenItemId(null)}
         />
       </div>
+      )}
     </PageContainer>
   );
 }

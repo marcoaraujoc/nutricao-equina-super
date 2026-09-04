@@ -25,7 +25,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Loader2, Search, MapPin, AlertTriangle, Clock, Syringe,
   ClipboardList, PackageCheck, Stethoscope, RefreshCw,
-  CheckCircle2, Ban, Pill,
+  CheckCircle2, Ban, Pill, Lock,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
@@ -41,9 +41,10 @@ import { useEmpresa } from '../contexts/EmpresaContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import {
   ModalExecucao, ModalExecucaoVacina, itemPendenteEm,
+  itemAtrasadoEm, previsaoPendenteISO, vacinaAtrasadaEm,
   type GrupoExecucao, type ItemExecucao, type VacinaExecucao,
 } from './ExecucaoPrescricao';
-import { hojeISO, formatHora } from '../utils/dateUtils';
+import { hojeISO, formatHora, formatDiaMes, formatDateShort } from '../utils/dateUtils';
 
 // ─── Tipos (espelham o que os endpoints já devolvem) ──────────────────────────
 
@@ -570,10 +571,28 @@ export default function PainelPrincipal() {
                         {itensLocal.map(entrada => {
                           const ehVac  = entrada.kind === 'VAC';
                           const animal = entrada.animal;
+                          // Prontuário congelado (Animal.inativo) — vem do backend na
+                          // própria linha da fila, para a tela não precisar consultar.
+                          const congelado = ehVac
+                            ? !!entrada.vacina.animalInativo
+                            : !!entrada.grupo.animalInativo;
                           const resumo = ehVac
                             ? [entrada.vacina.nome, entrada.vacina.dose, entrada.vacina.via]
                                 .filter(Boolean).join(' · ')
                             : entrada.itens.map(i => i.medicamento).join(' · ');
+                          // A fila do painel usa a MESMA `itemPendenteEm` do plantão e,
+                          // desde 2026-08-29, ela mantém a dose vencida na lista. Sem o
+                          // selo, o atrasado voltaria a se confundir com o do dia — que
+                          // é justamente o defeito que a mudança veio corrigir.
+                          const atraso = ehVac
+                            ? (vacinaAtrasadaEm(entrada.vacina, hojeISO())
+                                ? formatDateShort(entrada.vacina.dataAplicacao) : null)
+                            : entrada.itens
+                                .filter(i => itemAtrasadoEm(i, hojeISO()))
+                                .map(i => previsaoPendenteISO(i))
+                                .filter((v): v is string => !!v)
+                                .sort()
+                                .map(v => formatDiaMes(v) ?? formatDateShort(v))[0] ?? null;
                           return (
                           <li key={entrada.id}
                             className="flex items-center gap-2.5 border border-gray-100 rounded-xl px-2.5 py-2">
@@ -583,6 +602,7 @@ export default function PainelPrincipal() {
                             <FotoAnimal
                               url={animal.photoUrl ?? animalPorId.get(animal.id)?.photoUrl ?? null}
                               nome={animal.nome}
+                              animalId={animal.id}
                               className="w-9 h-9 rounded-lg overflow-hidden flex-shrink-0"
                               iconSize={16}
                             />
@@ -602,6 +622,11 @@ export default function PainelPrincipal() {
                                 </span>
                               </span>
                               <span className="block text-[11px] text-gray-500 truncate">{resumo}</span>
+                              {atraso && (
+                                <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-bold text-red-600">
+                                  <AlertTriangle size={10} /> Atrasada — era {atraso}
+                                </span>
+                              )}
                             </span>
                             {/* AS MESMAS ações do plantão, na mesma ordem e cores:
                                 EXECUTAR abre o popup de execução (o próprio ModalExecucao /
@@ -609,14 +634,24 @@ export default function PainelPrincipal() {
                                 Como o popup abre SOBRE esta tela, executar pelo painel
                                 volta ao painel — a tela de retorno é sempre a chamadora. */}
                             <AcoesRegistro className="flex-shrink-0">
+                              {/* 🔴 Paciente INATIVO: a parada CONTINUA na fila (a equipe
+                                  precisa saber que existe e ficou parada), mas sem ação —
+                                  executar e cancelar respondem 400 (lib/animalInativo.js).
+                                  O selo é o que evita "sumiu o botão". */}
+                              {congelado && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-[9px] font-bold whitespace-nowrap"
+                                  title="Paciente inativo — prontuário em somente leitura. Reative com o gestor.">
+                                  <Lock size={9} /> Somente leitura
+                                </span>
+                              )}
                               <AcaoRegistro tom="executar" icone={CheckCircle2}
                                 rotulo={ehVac ? 'Aplicar' : 'Executar'}
                                 titulo={ehVac ? 'Aplicar vacina' : 'Executar prescrição'}
-                                visivel={podeExecutarAcao}
+                                visivel={podeExecutarAcao && !congelado}
                                 onClick={() => ehVac ? setModalVacina(entrada.vacina) : setModalGrupo(entrada.grupo)} />
                               <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
                                 titulo={ehVac ? 'Cancelar vacina' : 'Cancelar prescrição'}
-                                visivel={podeCancelar}
+                                visivel={podeCancelar && !congelado}
                                 onClick={() => {
                                   setErroInline(null);
                                   if (ehVac) setCancelarVacina(entrada.vacina);

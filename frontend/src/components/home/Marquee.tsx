@@ -1,9 +1,5 @@
 // components/home/Marquee.tsx
 const items = [
-  'Evolução automática',
-  'Prescrição digital',
-  'Relatórios clínicos',
-  'Prontuário SOAP',
   'Agenda inteligente',
   'Integração laboratorial',
 ];

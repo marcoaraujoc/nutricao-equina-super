@@ -5,7 +5,7 @@ const { ANIMAL_VISIVEL } = require('../lib/visibilidade');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem } = require('../lib/faturaUtils');
 const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
-const { animalEstaInativo } = require('../lib/animalInativo');
+const { animalEstaInativo, bloquearSeAnimalInativo, lerInativosEmLote } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const { garantirMedicamentoDaEmpresa } = require('../lib/catalogoManual');
 const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
@@ -428,6 +428,9 @@ async function atualizar(req, res) {
     const { id } = req.params;
     const vacina = await prisma.vacinaClinica.findUnique({ where: { id: Number(id) } });
     if (!vacina || !vacina.ativo) return res.status(404).json({ error: 'Registro não encontrado' });
+    // SOMENTE LEITURA: paciente inativo congela o prontuário — a vacina não é
+    // alterada até o gestor reativar. Ver lib/animalInativo.js.
+    if (await bloquearSeAnimalInativo(res, vacina.animalId)) return;
 
     if (!podeOperarRegistro(req, vacina.veterinarioId)) {
       return res.status(403).json({ error: 'Seu nível de permissão só permite alterar vacinas que você registrou.' });
@@ -585,6 +588,9 @@ async function finalizar(req, res) {
       where: { id: Number(id) }, include: INCLUDE_VACINA,
     });
     if (!vacina || !vacina.ativo) return res.status(404).json({ error: 'Registro não encontrado' });
+    // SOMENTE LEITURA: paciente inativo congela o prontuário — a vacina não é
+    // finalizada até o gestor reativar. Ver lib/animalInativo.js.
+    if (await bloquearSeAnimalInativo(res, vacina.animalId)) return;
 
     // Autoria via RBAC (nível efetivo em atendimento.vacinas.finalizar):
     // PROPRIO → só finaliza o que registrou; EQUIPE/FULL → qualquer da equipe.
@@ -767,7 +773,22 @@ async function listarParaExecucao(req, res) {
       // Ela já foi cobrada (e o lote debitado) na finalização — ver a matriz em `finalizar`.
       .filter((v) => v.status === 'FINALIZADA' && v.aplicadaPeloProprietario !== true);
 
-    res.json({ dados });
+    // 🔴 O PACIENTE INATIVO CONTINUA NA FILA — só SEM AÇÃO. O prontuário dele está
+    // congelado e `executar`/`cancelar` respondem 400 (lib/animalInativo.js), mas
+    // sumir com ele da fila esconderia da equipe que aquele tratamento existe e ficou
+    // parado. Então ele aparece, marcado, e a tela apaga os botões — que é a mesma
+    // regra do resto do sistema: nada que vá falhar é oferecido (28-d).
+    // ⚠️ `animalInativo` é lido por SQL cru (`lerInativosEmLote`), NUNCA pelo `where`
+    // do Prisma: `Animal.inativo` é lida assim em todo o projeto porque o client pode
+    // não estar regenerado (CLAUDE.md §11), e `where` com campo desconhecido derruba a
+    // fila inteira com "Unknown argument".
+    const inativos = await lerInativosEmLote(dados.map((v) => v.animalId));
+    const fila = dados.map((v) => ({
+      ...v,
+      animalInativo: !!inativos.get(Number(v.animalId))?.inativo,
+    }));
+
+    res.json({ dados: fila });
   } catch (err) {
     console.error('listarParaExecucao vacinas:', err);
     res.status(500).json({ error: 'Erro ao listar vacinas para execução' });
@@ -914,6 +935,9 @@ async function executar(req, res) {
       where: { id: Number(id) }, include: INCLUDE_VACINA,
     });
     if (!vacina || !vacina.ativo) return res.status(404).json({ error: 'Registro não encontrado' });
+    // SOMENTE LEITURA: paciente inativo congela o prontuário — a vacina não é
+    // executada até o gestor reativar. Ver lib/animalInativo.js.
+    if (await bloquearSeAnimalInativo(res, vacina.animalId)) return;
 
     const extras = await prisma.$queryRawUnsafe(
       `SELECT status, quantidade, valor::float AS valor, cliente, numero,
@@ -1091,6 +1115,9 @@ async function excluir(req, res) {
     const vacina = await prisma.vacinaClinica.findUnique({ where: { id: Number(id) } });
     if (!vacina) return res.status(404).json({ error: 'Registro não encontrado' });
     if (!vacina.ativo) return res.status(400).json({ error: 'Registro já está inativo' });
+    // SOMENTE LEITURA: paciente inativo congela o prontuário — a vacina não é
+    // cancelada até o gestor reativar. Ver lib/animalInativo.js.
+    if (await bloquearSeAnimalInativo(res, vacina.animalId)) return;
 
     // Autoria: só o gestor (FULL) exclui vacina de outro; os demais só as que registraram.
     if (!podeOperarRegistro(req, vacina.veterinarioId)) {

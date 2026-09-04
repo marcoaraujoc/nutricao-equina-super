@@ -10,7 +10,7 @@ const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, adicionarO
 const { garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
 const { registrarAuditoria, registrarAlteracao, registrarTransferencia, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
-const { animalEstaInativo } = require('../lib/animalInativo');
+const { animalEstaInativo, bloquearSeAnimalInativo, lerInativosEmLote } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const { cursoTodoDoProprietario } = require('../lib/prescricaoProprietario');
 const {
@@ -1083,6 +1083,9 @@ const atualizarItem = async (req, res) => {
     const item = await prisma.prescricao.findUnique({ where: { id: itemId }, include: { grupo: true } });
     if (!item)       return res.status(404).json({ error: 'Item não encontrado.' });
     if (!item.ativo) return res.status(400).json({ error: 'Item já foi removido.' });
+    // SOMENTE LEITURA: paciente inativo congela o prontuário — a prescrição não é
+    // alterada até o gestor reativar. Ver lib/animalInativo.js.
+    if (await bloquearSeAnimalInativo(res, item.grupo?.animalId ?? item.animalId)) return;
 
     // Autoria: o dono do DOCUMENTO manda no item. Sem isto, qualquer profissional com
     // "alterar prescrição" reescrevia a posologia prescrita por outro — e o antigo
@@ -1249,6 +1252,9 @@ const removerItem = async (req, res) => {
     const item = await prisma.prescricao.findUnique({ where: { id: itemId }, include: { grupo: true } });
     if (!item)             return res.status(404).json({ error: 'Item não encontrado.' });
     if (!item.ativo)       return res.status(400).json({ error: 'Item já foi removido.' });
+    // SOMENTE LEITURA: paciente inativo congela o prontuário — a prescrição não é
+    // cancelada até o gestor reativar. Ver lib/animalInativo.js.
+    if (await bloquearSeAnimalInativo(res, item.grupo?.animalId ?? item.animalId)) return;
 
     // Autoria: cancelar item da prescrição de outro é ato do dono — ou do gestor.
     if (!podeOperarRegistro(req, item.grupo?.veterinarioId ?? item.veterinarioId)) {
@@ -1374,6 +1380,9 @@ const finalizar = async (req, res) => {
     });
 
     if (!grupo)                   return res.status(404).json({ error: 'Prescrição não encontrada.' });
+    // SOMENTE LEITURA: paciente inativo congela o prontuário — a prescrição não é
+    // finalizada até o gestor reativar. Ver lib/animalInativo.js.
+    if (await bloquearSeAnimalInativo(res, grupo.animalId)) return;
     if (grupo.status !== 'SALVO') return res.status(400).json({ error: 'Só é possível finalizar prescrições com status SALVO.' });
 
     // Autoria via RBAC (nível efetivo em atendimento.prescricoes.finalizar):
@@ -1549,6 +1558,9 @@ const cancelar = async (req, res) => {
       include: { itens: { where: { ativo: true } } },
     });
     if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
+    // SOMENTE LEITURA: paciente inativo congela o prontuário — a prescrição não é
+    // cancelada até o gestor reativar. Ver lib/animalInativo.js.
+    if (await bloquearSeAnimalInativo(res, grupo.animalId)) return;
 
     // Autoria via RBAC (nível efetivo em atendimento.prescricoes.deletar)
     if (!podeOperarRegistro(req, grupo.veterinarioId)) {
@@ -1609,6 +1621,9 @@ const cancelarNaExecucao = async (req, res) => {
       include: { itens: { where: { ativo: true } } },
     });
     if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
+    // SOMENTE LEITURA: paciente inativo congela o prontuário — a prescrição não é
+    // cancelada até o gestor reativar. Ver lib/animalInativo.js.
+    if (await bloquearSeAnimalInativo(res, grupo.animalId)) return;
 
     if (!podeOperarRegistro(req, grupo.veterinarioId)) {
       return res.status(403).json({ error: 'Seu nível de permissão só permite cancelar prescrições criadas por você.' });
@@ -1685,6 +1700,9 @@ const reabrirParaEdicao = async (req, res) => {
       include: { itens: { where: { ativo: true } } },
     });
     if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
+    // SOMENTE LEITURA: paciente inativo congela o prontuário — a prescrição não é
+    // reaberta até o gestor reativar. Ver lib/animalInativo.js.
+    if (await bloquearSeAnimalInativo(res, grupo.animalId)) return;
 
     if (!podeOperarRegistro(req, grupo.veterinarioId)) {
       return res.status(403).json({ error: 'Seu nível de permissão só permite editar prescrições criadas por você.' });
@@ -1835,6 +1853,9 @@ const executar = async (req, res) => {
       },
     });
     if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
+    // SOMENTE LEITURA: paciente inativo congela o prontuário — a prescrição não é
+    // executada até o gestor reativar. Ver lib/animalInativo.js.
+    if (await bloquearSeAnimalInativo(res, grupo.animalId)) return;
     if (!['FINALIZADO', 'CANCELADO_PARCIALMENTE'].includes(grupo.status)) {
       return res.status(400).json({ error: 'Apenas prescrições FINALIZADAS podem ser executadas.' });
     }
@@ -2154,6 +2175,9 @@ const atualizarHoraInicioPosExecucao = async (req, res) => {
     const item = await prisma.prescricao.findUnique({ where: { id: itemId }, include: { grupo: true } });
     if (!item || item.grupoId !== grupoId) {
       return res.status(404).json({ error: 'Item não encontrado.' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — a prescrição não é
+      // alterada até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, item.grupo?.animalId ?? item.animalId)) return;
     }
     if (!podeOperarRegistro(req, item.grupo?.veterinarioId ?? item.veterinarioId)) {
       return res.status(403).json({ error: 'Seu nível de permissão só permite alterar prescrições criadas por você.' });
@@ -2415,7 +2439,22 @@ const listarParaExecucao = async (req, res) => {
       }),
     }));
 
-    return res.json({ dados: comDia, total: comDia.length });
+    // 🔴 O PACIENTE INATIVO CONTINUA NA FILA — só SEM AÇÃO. O prontuário dele está
+    // congelado e `executar`/`cancelar` respondem 400 (lib/animalInativo.js), mas
+    // sumir com ele da fila esconderia da equipe que aquele tratamento existe e ficou
+    // parado. Então ele aparece, marcado, e a tela apaga os botões — que é a mesma
+    // regra do resto do sistema: nada que vá falhar é oferecido (28-d).
+    // ⚠️ `animalInativo` é lido por SQL cru (`lerInativosEmLote`), NUNCA pelo `where`
+    // do Prisma: `Animal.inativo` é lida assim em todo o projeto porque o client pode
+    // não estar regenerado (CLAUDE.md §11), e `where` com campo desconhecido derruba a
+    // fila inteira com "Unknown argument".
+    const inativos = await lerInativosEmLote(comDia.map(g => g.animalId ?? g.animal?.id));
+    const fila = comDia.map(g => ({
+      ...g,
+      animalInativo: !!inativos.get(Number(g.animalId ?? g.animal?.id))?.inativo,
+    }));
+
+    return res.json({ dados: fila, total: fila.length });
   } catch (err) {
     console.error('PrescricaoGrupoController.listarParaExecucao:', err);
     return res.status(500).json({ error: 'Erro ao listar prescrições para execução.' });

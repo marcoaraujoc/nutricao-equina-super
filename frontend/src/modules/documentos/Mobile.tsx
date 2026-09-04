@@ -14,6 +14,8 @@ import {
   X, ChevronUp, ChevronDown, Trash2, Sparkles, Eye,
 } from 'lucide-react';
 import BlocoView from './BlocoView';
+import CabecalhoFolha from './CabecalhoFolha';
+import { prepararFolha } from './cabecalho';
 import type { MarcaFolha } from './BlocoView';
 import { BLOCOS } from './catalogo';
 import type { ContextoVariaveis } from './catalogo';
@@ -106,6 +108,9 @@ export default function CentralMobile({
     : [];
 
   const abrir = (t: Template) => { onSelecionar(t); setTela('preview'); };
+
+  // Cabeçalho padrão + corpo sem o bloco de título absorvido — ver ./cabecalho.ts.
+  const folha = prepararFolha({ blocos: editor.blocos, nome: selecionado?.nome, contexto, marca });
 
   // ── Início ───────────────────────────────────────────────────────────────
   if (tela === 'inicio') {
@@ -214,7 +219,9 @@ export default function CentralMobile({
 
         <div className="flex-1 p-3">
           <div className="bg-white rounded-xl shadow-sm p-5 text-[11px]">
-            {editor.blocos.map(b => <BlocoView key={b.id} bloco={b} contexto={contexto} marca={marca} />)}
+            {/* MESMO cabeçalho padrão da folha do desktop — ver ./cabecalho.ts. */}
+            <CabecalhoFolha dados={folha.cabecalho} />
+            {folha.corpo.map(b => <BlocoView key={b.id} bloco={b} contexto={contexto} marca={marca} />)}
           </div>
         </div>
 

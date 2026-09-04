@@ -65,6 +65,8 @@ const ENTIDADE_LABEL: Record<string, string> = {
   TRATADOR:          'Tratador',
   PROPRIETARIO:      'Proprietário',
   LOCALIZACAO:       'Localização',
+  FATURA:            'Fatura',
+  FATURA_ITEM:       'Item de fatura',
 };
 
 /**

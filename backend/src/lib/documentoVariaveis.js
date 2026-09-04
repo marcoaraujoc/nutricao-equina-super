@@ -31,7 +31,8 @@
 const prisma = require('../lib/prisma').default;
 const { formatarHoraNaEmpresa, formatarDataNaEmpresa, fusoDaEmpresa } = require('./fusoEmpresa');
 const { aplicarPerfil }   = require('./proprietarioPerfil');
-const { lerAssinatura }   = require('./usuarioEmpresa');
+const { lerAssinatura, aplicarVinculo, CAMPOS_CADASTRO } = require('./usuarioEmpresa');
+const { aplicarListasEmBlocos } = require('./documentoListas');
 
 // ── Formatação ──────────────────────────────────────────────────────────────
 
@@ -194,6 +195,86 @@ async function fatosClinicos(animalId, evolucaoId) {
 // ── Contexto ────────────────────────────────────────────────────────────────
 
 /**
+ * O CADASTRO DO CLIENTE NAQUELA EMPRESA — as duas tabelas, na ordem certa.
+ *
+ * 🔴 O cadastro do proprietário por empresa mora em DUAS tabelas que convivem: a
+ * legada `tb_proprietario_perfis` (§36) e a `tb_usuario_empresa` que a substitui
+ * (§36-f), gravadas em paralelo desde 08/08 enquanto os leitores migram. Este era um
+ * dos leitores que ficou na legada — e o resultado, medido numa base real: o cliente
+ * com endereço completo em `tb_usuario_empresa` e nada na legada saía com o endereço
+ * VAZIO no atestado, enquanto a tela do cadastro dele mostrava tudo preenchido.
+ *
+ * ⚠️ A LEGADA CONTINUA SENDO A AUTORIDADE, campo a campo: é ela que a tela de
+ * Proprietários exibe (`ProprietarioController.listar` usa `aplicarPerfil`), e trocar
+ * a ordem faria o papel discordar da tela justamente no nome do cliente. O vínculo
+ * só PREENCHE O QUE ESTÁ VAZIO — que é o caso do endereço e do município.
+ * ⚠️ Vazio aqui é `null`, `undefined` ou string em branco: uma coluna preenchida com
+ * espaços continua sendo um buraco no papel.
+ */
+async function cadastroDoCliente(user, empresaId) {
+  if (!user) return null;
+  const base = await aplicarPerfil(user, empresaId);
+  if (!empresaId) return base;
+
+  const doVinculo = await aplicarVinculo(user, empresaId).catch(() => null);
+  if (!doVinculo) return base;
+
+  const out = { ...base };
+  for (const campo of CAMPOS_CADASTRO) {
+    if (String(out[campo] ?? '').trim()) continue;
+    const v = doVinculo[campo];
+    if (v !== null && v !== undefined && String(v).trim()) out[campo] = v;
+  }
+  return out;
+}
+
+/**
+ * Endereço de um cadastro, montado sem repetir o que já está escrito.
+ *
+ * A base tem os dois casos: cadastro com TUDO numa string só ("RUA X, nº 10, BAIRRO -
+ * CIDADE/UF") e cadastro com bairro/complemento em colunas próprias. Acrescentar os
+ * extras sem olhar produziria "…, CENTRO - ITU/SP, CENTRO".
+ */
+function enderecoCompleto(p) {
+  const base = txt(p?.endereco);
+  const extras = [txt(p?.complemento), txt(p?.bairro)]
+    .filter(Boolean)
+    .filter((x) => !base.toLowerCase().includes(x.toLowerCase()));
+  return [base, ...extras].filter(Boolean).join(', ');
+}
+
+/**
+ * MUNICÍPIO A PARTIR DO ENDEREÇO DA PROPRIEDADE.
+ *
+ * `LocalizacaoAnimal` não tem colunas de cidade e estado — só `endereco` e `cep` —, e
+ * até 2026-09-03 o município do atestado saía do cadastro do CLIENTE, que costuma
+ * estar vazio (e, quando não está, é a cidade DELE, não a da propriedade).
+ *
+ * Os dois formatos que a base tem, os únicos reconhecidos:
+ *   "RUA X, nº 10, BAIRRO - CAMBORIU/SC"   → o do endereço importado
+ *   "Rua X, Bairro, Rio de Janeiro, RJ"     → o que o ViaCEP monta no cadastro
+ *
+ * ⚠️ Não reconheceu, devolve VAZIO — nunca um palpite. Município errado num atestado
+ * sanitário é declaração falsa sobre a origem do animal, e o vazio pelo menos aparece
+ * como campo a preencher na emissão.
+ * ⚠️ A grafia é a que está cadastrada (CAIXA ALTA na base atual): "corrigir" para
+ * capitalizada perderia acentos que ninguém digitou.
+ */
+function municipioDoEndereco(endereco) {
+  const t = String(endereco ?? '').trim().replace(/[;,.\s]+$/, '');
+  if (!t) return '';
+
+  // "… - CIDADE/UF"
+  let m = t.match(/-\s*([^-/,]{2,60}?)\s*\/\s*([A-Za-z]{2})$/);
+  // "…, Cidade, UF"
+  if (!m) m = t.match(/,\s*([^,]{2,60}?)\s*,\s*([A-Za-z]{2})$/);
+  if (!m) return '';
+
+  const cidade = m[1].trim();
+  return cidade ? `${cidade} / ${m[2].toUpperCase()}` : '';
+}
+
+/**
  * Monta o contexto de variáveis de UM animal.
  *
  * ⚠️ NÃO autoriza nada — quem chama é responsável por ter passado por
@@ -214,7 +295,7 @@ async function montarContexto(req, { animalId, evolucaoId = null } = {}) {
     // §36: o cadastro do cliente é POR EMPRESA. `aplicarPerfil` sobrepõe o `users`
     // com o `ProprietarioPerfil` da empresa do contexto — sem isso o atestado sairia
     // com o telefone que OUTRA clínica cadastrou.
-    animal.user ? aplicarPerfil(animal.user, empresaId) : null,
+    animal.user ? cadastroDoCliente(animal.user, empresaId) : null,
     empresaId ? configDaEmpresa(empresaId, req.equipeId ?? null) : { empresa: null, config: null },
     profissionalDaEmpresa(req.user?.id ?? null, empresaId),
     fatosClinicos(Number(animalId), evolucaoId ? Number(evolucaoId) : null),
@@ -230,6 +311,28 @@ async function montarContexto(req, { animalId, evolucaoId = null } = {}) {
 
   const localidade = animal.localizacao;
 
+  // A propriedade é a LOCALIDADE do animal; sem ela, o endereço do cliente. As duas
+  // variáveis (`endereco` e `municipio`) saem da MESMA fonte — ver o comentário no
+  // objeto abaixo.
+  // Endereço do CLIENTE, do cadastro dele nesta empresa (§36). É o que identifica o
+  // RESPONSÁVEL no documento — a propriedade, logo abaixo, é outra coisa: é onde o
+  // animal está, e pode ser de terceiro (o haras que hospeda).
+  const enderecoCliente = enderecoCompleto(cliente);
+  // Cidade e estado do cadastro; sem eles, o que o próprio endereço revelar — é o que
+  // faz o cliente cadastrado com o endereço numa string só ("... - CAMBORIU/SC")
+  // deixar de ter o município em branco no papel.
+  const doEndereco   = municipioDoEndereco(enderecoCliente);
+  const cidadeCliente = txt(cliente?.cidade) || doEndereco.split(' / ')[0] || '';
+  const estadoCliente = txt(cliente?.estado) || doEndereco.split(' / ')[1] || '';
+  const municipioCliente = [cidadeCliente, estadoCliente].filter(Boolean).join(' / ');
+
+  const enderecoPropriedade = txt(localidade?.endereco) || enderecoCliente;
+  // O município sai do PRÓPRIO endereço que vai ser impresso — venha ele da
+  // localidade ou do cadastro do cliente. É o que garante que as duas linhas do papel
+  // falem do MESMO lugar; e só quando o texto não revela a cidade é que se recorre ao
+  // cadastro do cliente.
+  const municipioPropriedade = municipioDoEndereco(enderecoPropriedade) || municipioCliente;
+
   const variaveis = {
     // ── Veterinário (quem assina) ──
     'veterinario.nome':      txt(profissional?.nome),
@@ -242,11 +345,30 @@ async function montarContexto(req, { animalId, evolucaoId = null } = {}) {
     'cliente.documento':     documentoDe(cliente),
     'cliente.telefone':      txt(cliente?.phone) || txt(cliente?.phone2),
     'cliente.email':         txt(cliente?.email),
+    // ── Endereço DO RESPONSÁVEL, campo a campo ──
+    // Os mesmos seis campos da tela de Proprietário (a pedido, 2026-09-03), e não uma
+    // string montada: no papel cada um tem o seu rótulo, e um endereço concatenado
+    // obrigaria quem lê a garimpar o bairro dentro da linha.
+    // ⚠️ NÃO confundir com `propriedade.*`, que é onde o ANIMAL está e pode ser de
+    // terceiro (o haras que hospeda).
+    'cliente.cep':           txt(cliente?.cep),
+    'cliente.endereco':      txt(cliente?.endereco),
+    'cliente.complemento':   txt(cliente?.complemento),
+    'cliente.bairro':        txt(cliente?.bairro),
+    'cliente.cidade':        cidadeCliente,
+    'cliente.estado':        estadoCliente,
+    // Conveniência para quem quer as duas numa linha só (o "Local e data" dos modelos).
+    'cliente.municipio':     municipioCliente,
 
     // ── Propriedade (onde o animal está) ──
     'propriedade.nome':      txt(localidade?.nome) || txt(animal.local),
-    'propriedade.endereco':  txt(localidade?.endereco) || txt(cliente?.endereco),
-    'propriedade.municipio': [txt(cliente?.cidade), txt(cliente?.estado)].filter(Boolean).join(' / '),
+    // ⚠️ ENDEREÇO E MUNICÍPIO SAEM DA MESMA STRING. Antes o endereço vinha da
+    // localidade (ou do cliente) e o município SEMPRE do cadastro do cliente — que
+    // costuma estar vazio, e quando não está é a cidade DELE. Resultado no papel:
+    // "Local e data: , 03/09/2026." ou, pior, a cidade errada ao lado do endereço
+    // certo. Ver `municipioDoEndereco`.
+    'propriedade.endereco':  enderecoPropriedade,
+    'propriedade.municipio': municipioPropriedade,
     // Inscrição estadual da propriedade rural não é cadastrada em lugar nenhum hoje.
     // Fica VAZIA — ver "NADA DE INVENTAR VALOR" no topo. O bloco correspondente do
     // atestado sanitário vira uma linha para preencher à mão.
@@ -380,8 +502,14 @@ function aplicarEmTexto(texto, variaveis, preenchimento = null) {
  * preservando `variavel` — sem isso o documento emitido perderia a informação de qual
  * variável originou aquele valor, que é o que permite auditar o papel depois.
  */
-function aplicarEmBlocos(blocos, variaveis, preenchimento = null) {
+function aplicarEmBlocos(blocos, variaveis, preenchimento = null, listas = null) {
   if (!Array.isArray(blocos)) return [];
+
+  // As LISTAS entram ANTES da resolução de variáveis, e a ordem importa: o que a
+  // pessoa digitou numa célula ("aplicar em {{animal.nome}}") tem de ser resolvido
+  // como qualquer outro texto da folha. Depois disto o bloco já é uma `tabela`
+  // comum, e o resto desta função o trata como sempre tratou.
+  const comListas = listas ? aplicarListasEmBlocos(blocos, listas) : blocos;
 
   // PREENCHER UMA VEZ VALE PARA O DOCUMENTO INTEIRO.
   //
@@ -396,7 +524,7 @@ function aplicarEmBlocos(blocos, variaveis, preenchimento = null) {
   // e alcança todo lugar onde ela é usada.
   const variaveisEfetivas = { ...variaveis };
   if (preenchimento) {
-    for (const b of blocos) {
+    for (const b of comListas) {
       if (b?.tipo !== 'campoAuto') continue;
       const chaveVar = String(b?.conteudo?.variavel ?? '').replace(/[{}]/g, '').trim();
       if (!chaveVar) continue;
@@ -409,7 +537,7 @@ function aplicarEmBlocos(blocos, variaveis, preenchimento = null) {
 
   const ap = (t) => aplicarEmTexto(t, variaveisEfetivas, preenchimento);
 
-  return blocos.map((b) => {
+  return comListas.map((b) => {
     const c = { ...(b?.conteudo ?? {}) };
     if (typeof c.texto  === 'string') c.texto  = ap(c.texto);
     // ⚠️ O RÓTULO NÃO recebe o preenchimento: ele é o NOME do campo ("Tatuagem"), e
@@ -490,14 +618,100 @@ function coletarCampos(blocos, variaveis) {
   return campos;
 }
 
+/**
+ * O QUE NÃO FOI PREENCHIDO NÃO VAI PARA O PAPEL (2026-09-03, a pedido).
+ *
+ * Roda DEPOIS de `aplicarEmBlocos`, sobre o snapshot do documento EMITIDO — nunca
+ * sobre o modelo. É o que separa as duas coisas: no MODELO o campo em branco é o
+ * espaço a preencher; no documento ENTREGUE ele é um buraco, e uma folha cheia de
+ * "Tatuagem: ____" que ninguém vai preencher só afasta o olho do que importa.
+ *
+ * ⚠️ CONSEQUÊNCIA ACEITA E DELIBERADA: some também a linha em branco que existia para
+ * ser preenchida À MÃO depois de impressa. Quem precisar dela informa qualquer coisa
+ * no campo na hora de emitir (um "—" basta) — ou o modelo deixa de ter o campo.
+ *
+ * ⚠️ Bloco de TEXTO só é descartado quando não sobrou NADA além do rótulo: `texto`
+ * carrega a declaração normativa do documento, e um descarte generoso apagaria
+ * justamente o que dá validade ao papel. Por isso o teste é `Rótulo:` e ponto — nunca
+ * "contém uma lacuna" nem "é curto".
+ *
+ * ⚠️ SUBTÍTULO SEM CONTEÚDO SOME JUNTO: uma seção inteira vazia deixaria no papel um
+ * cabeçalho de seção anunciando nada — é a mesma regra do cabeçalho da folha
+ * ("seção sem nenhum dado some inteira").
+ */
+const SO_ROTULO = /^[^:\n]{1,80}:\s*$/;
+
+function blocoSemConteudo(b) {
+  const c = b?.conteudo ?? {};
+  const t = String(c.texto ?? '').trim();
+  switch (b?.tipo) {
+    case 'campoAuto':
+    case 'observacoes':
+      return !t;
+    case 'texto':
+      return !t || SO_ROTULO.test(t);
+    // Lista repetível já virou `tabela` aqui (as linhas em branco foram descartadas
+    // por `aplicarListasEmBlocos`). Sem nenhuma linha, sobraria só o cabeçalho dela.
+    case 'tabela':
+      return Array.isArray(c.linhas) && c.linhas.length === 0;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Pontuação que a variável VAZIA deixou para trás.
+ *
+ * "Local e data: {{propriedade.municipio}}, {{sistema.dataEmissao}}." com o município
+ * em branco imprimia **"Local e data: , 03/09/2026."** — a vírgula órfã denuncia o
+ * buraco justamente no documento em que ele não deveria aparecer.
+ *
+ * ⚠️ Limpeza MÍNIMA e literal: só o separador que ficou grudado onde não há valor
+ * antes dele. Nada de "arrumar o texto" — o bloco `texto` carrega a declaração
+ * normativa, e reescrevê-la seria alterar o que o documento afirma.
+ */
+function limparPontuacaoOrfa(t) {
+  return String(t ?? '')
+    .replace(/:\s*,\s*/g, ': ')   // "Local e data: , 03/09" → "Local e data: 03/09"
+    .replace(/\s+,/g, ',')         // "A , B"                 → "A, B"
+    .replace(/,\s*\./g, '.')       // "A, ."                  → "A."
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function removerVazios(blocos) {
+  if (!Array.isArray(blocos)) return [];
+
+  const mantidos = blocos
+    .map((b) => (b?.tipo === 'texto' && typeof b?.conteudo?.texto === 'string'
+      ? { ...b, conteudo: { ...b.conteudo, texto: limparPontuacaoOrfa(b.conteudo.texto) } }
+      : b))
+    .filter((b) => !blocoSemConteudo(b));
+
+  // Segunda passada: subtítulo que ficou sem nenhum bloco de conteúdo até o próximo
+  // subtítulo. `linha` e `rodape` não contam como conteúdo — são separadores.
+  const NAO_CONTA = new Set(['subtitulo', 'linha', 'rodape']);
+  return mantidos.filter((b, i) => {
+    if (b?.tipo !== 'subtitulo') return true;
+    for (let j = i + 1; j < mantidos.length; j += 1) {
+      const t = mantidos[j]?.tipo;
+      if (t === 'subtitulo') return false;
+      if (!NAO_CONTA.has(t)) return true;
+    }
+    return false;
+  });
+}
+
 module.exports = {
   montarContexto,
   aplicarEmTexto,
   aplicarEmBlocos,
+  removerVazios,
   coletarCampos,
   chaveDaLacuna,
   RE_LACUNA,
   // exportados para teste
   idadeDe,
   resenhaDe,
+  municipioDoEndereco,
 };

@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { criarBloco, novoId } from './catalogo';
 import * as apiDocs from './api';
 import type { Bloco, DocumentoEmitido, Template, TipoBloco } from './types';
+import type { PreenchimentoListas } from './listas';
 
 const CHAVE_RECENTES = 's2vet_docs_recentes';
 
@@ -50,7 +51,7 @@ export interface UsoBiblioteca {
   alternarFavorito: (id: string) => Promise<Template | null>;
   registrarUso: (id: string) => void;
   carregarEmitidos: (animalId?: number | null) => Promise<void>;
-  emitir:      (t: Template, blocos: Bloco[], animalId: number, evolucaoId?: number | null, preenchimento?: Record<string, string>) => Promise<DocumentoEmitido | null>;
+  emitir:      (t: Template, blocos: Bloco[], animalId: number, evolucaoId?: number | null, preenchimento?: Record<string, string>, listas?: PreenchimentoListas) => Promise<DocumentoEmitido | null>;
 }
 
 /**
@@ -190,10 +191,11 @@ export function useBiblioteca(): UsoBiblioteca {
   const emitir = useCallback(async (
     t: Template, blocos: Bloco[], animalId: number,
     evolucaoId?: number | null, preenchimento?: Record<string, string>,
+    listas?: PreenchimentoListas,
   ) => {
     try {
       const doc = await apiDocs.emitirDocumento({
-        animalId, templateId: t.id, templateNome: t.nome, blocos, evolucaoId, preenchimento,
+        animalId, templateId: t.id, templateNome: t.nome, blocos, evolucaoId, preenchimento, listas,
       });
       setDocumentos(prev => [doc, ...prev]);
       registrarUso(t.id);

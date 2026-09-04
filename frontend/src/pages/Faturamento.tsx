@@ -91,8 +91,10 @@ interface FaturaLink {
 interface ProprietarioItem {
   id: number; fullName: string; email: string; phone?: string;
   valorAssistencia?: number; mensalista?: boolean;
-  // Proprietário inativado (removido da empresa) continua aparecendo aqui
-  // enquanto tiver fatura pendente de pagamento — ver FaturaController.listarProprietarios.
+  // Proprietário INATIVADO ainda aparece aqui quando tem PACIENTE ativo na empresa —
+  // e é por isso que o selo "Inativo" existe. ⚠️ Desde 2026-09-02 cliente SEM NENHUM
+  // paciente não entra na lista, nem com fatura pendente (a tela é por paciente) —
+  // ver o filtro em FaturaController.listarProprietarios.
   ativo?: boolean;
   animais: AnimalResumo[];
   faturaAtiva?:    FaturaResumo | null;
@@ -1438,9 +1440,32 @@ function PainelFatura({
         </div>
       </div>
 
+      {/* 🔴 Sem esta faixa, a fatura paga só aparece SEM os botões de editar e a
+          pessoa conclui que perdeu permissão — o mesmo motivo da faixa do paciente
+          inativo no shell de Atendimento. */}
+      {fatura.status === 'PAGA' && (
+        <div className="mb-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 flex-shrink-0">
+          <p className="text-sm font-semibold text-emerald-900">
+            Fatura paga — somente leitura.
+          </p>
+          <p className="text-xs text-emerald-800 mt-0.5">
+            Os itens não podem ser incluídos, alterados nem removidos. Imprimir, exportar
+            e enviar por e-mail/WhatsApp continuam disponíveis.
+            {isGestor
+              ? ' Para voltar a lançar, use Reabrir — a reabertura fica registrada na auditoria.'
+              : ' Reabrir uma fatura paga é ação do gestor.'}
+          </p>
+        </div>
+      )}
+
       {/* Ações da fatura — FORA do card */}
       <div className="flex flex-wrap items-center justify-end gap-2 mb-3 flex-shrink-0">
-        {(fatura.status === 'FECHADA' || fatura.status === 'ATRASADA') && (
+        {/* 🔴 FATURA PAGA É SOMENTE LEITURA. Reabrir continua existindo — sem saída,
+            um clique errado em "Marcar como Pago" congelaria a cobrança para sempre —
+            mas é ato de GESTOR, e o backend registra na auditoria quem destravou uma
+            fatura quitada (mesma escolha da reativação do paciente). */}
+        {(fatura.status === 'FECHADA' || fatura.status === 'ATRASADA'
+          || (fatura.status === 'PAGA' && isGestor)) && (
           <button onClick={() => handleStatus('ABERTA')} disabled={salvando}
             className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 disabled:opacity-60 transition-colors">
             {salvando ? <Loader2 size={11} className="animate-spin"/> : <RefreshCw size={11}/>} Reabrir
@@ -1617,7 +1642,7 @@ function PainelFatura({
                 </p>
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <FotoAnimal url={animal.photoUrl} nome={animal.nome}
+                    <FotoAnimal url={animal.photoUrl} nome={animal.nome} animalId={animal.id}
                       className="w-10 h-10 rounded-xl flex-shrink-0" iconSize={18} />
                     <div>
                       <p className="text-sm font-bold text-gray-900">{animal.nome}</p>
@@ -1956,14 +1981,16 @@ function CardProprietario({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
             <p className="text-sm font-semibold text-gray-900 truncate">{prop.fullName}</p>
-            {/* Proprietário inativado que só aparece aqui por causa de uma fatura
-                pendente (ver FaturaController.listarProprietarios) — sem o selo,
-                pareceria bug ele estar na lista sem nenhum animal ativo. */}
+            {/* Proprietário inativado na empresa que segue com paciente ativo — sem o
+                selo, pareceria bug ele estar na lista de cobrança. Cliente sem NENHUM
+                paciente já não chega aqui (filtro em listarProprietarios). */}
             {prop.ativo === false && (
               <span className="flex-shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-600">Inativo</span>
             )}
           </div>
           <p className="text-[10px] text-gray-400 truncate">
+            {/* O fallback ficou como rede: a lista já não traz cliente sem paciente,
+                mas exibir vazio seria pior que dizer o motivo se algum dia voltar. */}
             {prop.animais.map(a => a.nome).join(', ') || 'Sem animais'}
           </p>
         </div>

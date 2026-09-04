@@ -458,9 +458,11 @@ interface Props {
   onSalvo?:           () => void;
   openItemId?:        number;
   onViewConsumed?:    () => void;
+  /** Paciente INATIVO — prontuário em somente leitura (ver lib/animalInativo.js). */
+  pacienteInativo?:   boolean;
 }
 
-export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo, openItemId, onViewConsumed }: Props) {
+export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo, openItemId, onViewConsumed, pacienteInativo }: Props) {
   const { contextoAtivo } = useEmpresa();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const { user } = useAuth();
@@ -682,11 +684,17 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   const totalPags    = Math.ceil(historicoFiltrado.length / limit);
   const historicoPage = historicoFiltrado.slice((page - 1) * limit, page * limit);
 
-  const podeCriar     = isGestor || podeExecutar('atendimento.vacinas.criar');
-  const podeDeletar   = isGestor || podeExecutar('atendimento.vacinas.deletar');
+  // 🔴 PACIENTE INATIVO = SOMENTE LEITURA. O prontuário fica congelado na data e hora
+  // da inativação: tudo continua visível, nada mais é criado, alterado, finalizado ou
+  // cancelado até o gestor reativar. Entra AQUI, nas permissões, para alcançar todo
+  // botão de uma vez — o backend recusa igual (lib/animalInativo.js), e oferecer ação
+  // que vai dar 400 é a armadilha 28-d.
+  // ⚠️ `podeImprimir` fica de fora: imprimir e enviar são SAÍDA de conteúdo.
+  const podeCriar     = !pacienteInativo && (isGestor || podeExecutar('atendimento.vacinas.criar'));
+  const podeDeletar   = !pacienteInativo && (isGestor || podeExecutar('atendimento.vacinas.deletar'));
   const podeImprimir  = isGestor || podeExecutar('atendimento.vacinas.imprimir');
-  const podeFinalizar = isGestor || podeExecutar('atendimento.vacinas.finalizar');
-  const podeEditar    = isGestor || podeExecutar('atendimento.vacinas.editar');
+  const podeFinalizar = !pacienteInativo && (isGestor || podeExecutar('atendimento.vacinas.finalizar'));
+  const podeEditar    = !pacienteInativo && (isGestor || podeExecutar('atendimento.vacinas.editar'));
   // Só o gestor exclui/finaliza/altera vacina de outro; os demais só as que registraram.
   const podeExcluirVac = (v: VacinaClinica) => podeDeletar && (isGestor || v.veterinario?.id === user?.id);
   const podeEditarVac  = (v: VacinaClinica) => podeEditar  && (isGestor || v.veterinario?.id === user?.id);

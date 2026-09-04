@@ -84,32 +84,43 @@ const AuthController = {
       // Busca case-insensitive (funciona p/ cadastros antigos em maiúsculas)
       const user = await findUserByEmail(prisma, email);
 
-      // E-mail inexistente: responde igual ao caso de sucesso, sem enviar nada.
-      if (!user) return res.json(respostaGenerica);
-
-      const resetToken = jwt.sign({ id: user.id }, SECRET, { expiresIn: '1h' });
-
-      await prisma.user.update({
-        where: { id: user.id },
-        data: {
-          resetPasswordToken: resetToken,
-          resetPasswordExpires: new Date(Date.now() + 3600000),
-        },
-      });
-
-      const resetLink = `${process.env.APP_URL || 'http://localhost:5173'}/#/reset-password?token=${resetToken}`;
-
-      await transporter.sendMail({
-        from: `"Equipe Equine Nutrition" <${process.env.EMAIL_USER}>`,
-        to: email,
-        subject: 'Recuperação de Senha - Equine Nutrition Super',
-        html: `
-          <h2>Recupere sua senha</h2>
-          <p>Clique no link abaixo para redefinir sua senha:</p>
-          <a href="${resetLink}" style="background:#10b981;color:white;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block;">Redefinir Senha</a>
-          <p><small>O link é válido por 1 hora.</small></p>
-        `,
-      });
+      // 🔴 TEMPO DE RESPOSTA CONSTANTE — o caminho até a resposta é IDÊNTICO
+      // exista ou não a conta. Só o `findUserByEmail` acima (que roda nos dois
+      // casos) toca o banco antes de responder; TODO o resto — update do token e
+      // envio do e-mail — vai para segundo plano.
+      //
+      // POR QUÊ: o sendMail síncrono (~5,5s) e o update do token (~300ms) só
+      // rodavam quando o e-mail existia, então o tempo de resposta denunciava a
+      // existência da conta (enumeração por timing), apesar da mensagem já ser
+      // genérica. Agora "existe" e "não existe" respondem no mesmo tempo.
+      //
+      // Ordem preservada no background: PRIMEIRO persiste o token, DEPOIS envia o
+      // link — senão o e-mail poderia chegar com um token ainda não gravado. Falha
+      // (banco ou SMTP) é só logada: devolvê-la reintroduziria o sinal de existência.
+      if (user) {
+        const resetToken = jwt.sign({ id: user.id }, SECRET, { expiresIn: '1h' });
+        const resetLink = `${process.env.APP_URL || 'http://localhost:5173'}/#/reset-password?token=${resetToken}`;
+        (async () => {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: {
+              resetPasswordToken: resetToken,
+              resetPasswordExpires: new Date(Date.now() + 3600000),
+            },
+          });
+          await transporter.sendMail({
+            from: `"Equipe Equine Nutrition" <${process.env.EMAIL_USER}>`,
+            to: email,
+            subject: 'Recuperação de Senha - Equine Nutrition Super',
+            html: `
+              <h2>Recupere sua senha</h2>
+              <p>Clique no link abaixo para redefinir sua senha:</p>
+              <a href="${resetLink}" style="background:#10b981;color:white;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block;">Redefinir Senha</a>
+              <p><small>O link é válido por 1 hora.</small></p>
+            `,
+          });
+        })().catch(err => console.error('Erro ao processar recuperação de senha:', err?.message || err));
+      }
 
       res.json(respostaGenerica);
     } catch (error) {

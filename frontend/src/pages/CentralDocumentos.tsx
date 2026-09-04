@@ -20,6 +20,7 @@
 // clínica a cada pausa de digitação, sem ninguém ter pedido.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { PanelLeft, Layers, FileText, Braces, X, Sparkles, Loader2, ShieldCheck } from 'lucide-react';
 
@@ -44,6 +45,7 @@ import CentralMobile from '../modules/documentos/Mobile';
 import { carregarCampos, carregarContexto } from '../modules/documentos/api';
 import type { ContextoDocumento } from '../modules/documentos/api';
 import type { CampoDocumento, Preenchimento } from '../modules/documentos/campos';
+import type { ListaDocumento, PreenchimentoListas } from '../modules/documentos/listas';
 import { useBiblioteca, useBusca, useEditor } from '../modules/documentos/store';
 import { CATEGORIAS } from '../modules/documentos/catalogo';
 import type {
@@ -105,6 +107,27 @@ export default function CentralDocumentos() {
   const [filtro,  setFiltro]  = useState<FiltroBiblioteca>({ tipo: 'categoria', id: 'todos' });
   const [termo,   setTermo]   = useState('');
   const [ativoId, setAtivoId] = useState<string | null>(null);
+
+  /**
+   * `?templateId=` — abre o editor JÁ no modelo indicado.
+   *
+   * É o caminho de quem acabou de criar um documento na tela de emissão
+   * (`/documentos`): sem isso a pessoa cairia aqui e teria de procurar na biblioteca o
+   * modelo que acabou de criar. Só dispara quando o modelo aparece na lista carregada
+   * — antes disso `bib.templates` ainda está vazio e o id não casaria com nada.
+   *
+   * ⚠️ A dependência é a CONTAGEM de modelos, não o array: `bib.templates` é um objeto
+   * novo a cada recarga da biblioteca, e o efeito reimporia o id da URL a cada uma —
+   * puxando o vet de volta para este modelo toda vez que ele abrisse outro.
+   */
+  const [params] = useSearchParams();
+  const templateIdDaUrl = params.get('templateId');
+  const templatesCarregados = bib.templates.length;
+  useEffect(() => {
+    if (!templateIdDaUrl || !templatesCarregados) return;
+    if (bib.templates.some(t => t.id === templateIdDaUrl)) setAtivoId(templateIdDaUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templateIdDaUrl, templatesCarregados]);
   const [aba,     setAba]     = useState<'editor' | 'preview'>('editor');
   const [zoom,    setZoom]    = useState(100);
   const [varsAberto, setVarsAberto] = useState(false);
@@ -118,6 +141,8 @@ export default function CentralDocumentos() {
   const [emitindoTpl,   setEmitindoTpl]   = useState<Template | null>(null);
   const [blocosEmissao, setBlocosEmissao] = useState<Bloco[]>([]);
   const [camposEmissao, setCamposEmissao] = useState<CampoDocumento[]>([]);
+  /** Grupos REPETÍVEIS do documento em emissão, com a sugestão vinda do paciente. */
+  const [listasEmissao, setListasEmissao] = useState<ListaDocumento[]>([]);
   const [carregandoCampos, setCarregandoCampos] = useState(false);
   const [erroEmissao,   setErroEmissao]   = useState<string | null>(null);
   const [excluindo,  setExcluindo]  = useState<Template | null>(null);
@@ -310,14 +335,17 @@ export default function CentralDocumentos() {
     setEmitindoTpl(t);
     setBlocosEmissao(blocos);
     setCamposEmissao([]);
+    setListasEmissao([]);
     setErroEmissao(null);
     setCarregandoCampos(true);
     try {
       const r = await carregarCampos({ animalId, blocos, evolucaoId: contexto?.evolucaoId ?? null });
       setCamposEmissao(r.campos ?? []);
+      setListasEmissao(r.listas ?? []);
     } catch {
       // Falhar aqui não pode fechar a tela: sem a lista, ainda dá para conferir a
       // folha e emitir com os campos em branco — que é o comportamento do papel.
+      setListasEmissao([]);
       setErroEmissao('Não foi possível carregar os campos. Você ainda pode emitir com eles em branco.');
     } finally {
       setCarregandoCampos(false);
@@ -325,12 +353,12 @@ export default function CentralDocumentos() {
   }, [podeEmitir, animalId, ativoId, editor.blocos, contexto?.evolucaoId]);
 
   /** Confirmação da tela de preenchimento: aí sim emite. */
-  const confirmarEmissao = useCallback(async (preenchimento: Preenchimento) => {
+  const confirmarEmissao = useCallback(async (preenchimento: Preenchimento, listas: PreenchimentoListas) => {
     if (!emitindoTpl || animalId == null) return;
     setEmitindo(true);
     setErroEmissao(null);
     const doc = await bib.emitir(
-      emitindoTpl, blocosEmissao, animalId, contexto?.evolucaoId ?? null, preenchimento,
+      emitindoTpl, blocosEmissao, animalId, contexto?.evolucaoId ?? null, preenchimento, listas,
     );
     setEmitindo(false);
     if (!doc) { setErroEmissao('Não foi possível emitir o documento.'); return; }
@@ -507,12 +535,13 @@ export default function CentralDocumentos() {
           animalNome={animal?.nome ?? ''}
           blocos={blocosEmissao}
           campos={camposEmissao}
+          listas={listasEmissao}
           contexto={contexto?.variaveis ?? null}
           marca={contexto?.marca ?? null}
           carregando={carregandoCampos}
           emitindo={emitindo}
           erro={erroEmissao}
-          onEmitir={(p) => { void confirmarEmissao(p); }}
+          onEmitir={(p, l) => { void confirmarEmissao(p, l); }}
         />
       </>
     );
@@ -755,12 +784,13 @@ export default function CentralDocumentos() {
         animalNome={animal?.nome ?? ''}
         blocos={blocosEmissao}
         campos={camposEmissao}
+        listas={listasEmissao}
         contexto={contexto?.variaveis ?? null}
         marca={contexto?.marca ?? null}
         carregando={carregandoCampos}
         emitindo={emitindo}
         erro={erroEmissao}
-        onEmitir={(p) => { void confirmarEmissao(p); }}
+        onEmitir={(p, l) => { void confirmarEmissao(p, l); }}
       />
       <ModalJustificativa
         aberto={!!excluindo}

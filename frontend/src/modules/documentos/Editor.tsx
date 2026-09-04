@@ -11,7 +11,9 @@ import {
 } from 'lucide-react';
 import BlocoView from './BlocoView';
 import type { MarcaFolha } from './BlocoView';
-import { BLOCOS, GRUPOS_VARIAVEL, VARIAVEIS } from './catalogo';
+import CabecalhoFolha from './CabecalhoFolha';
+import { prepararFolha } from './cabecalho';
+import { assinaturaDoVeterinario, BLOCOS, GRUPOS_VARIAVEL, VARIAVEIS } from './catalogo';
 import type { ContextoVariaveis } from './catalogo';
 import type { Alinhamento, Bloco, Borda, PesoFonte, Template, TipoBloco } from './types';
 import type { UsoEditor } from './store';
@@ -318,12 +320,36 @@ export function PainelPropriedades({ editor, onFechar, onAbrirVariaveis }: {
               <label className={rotuloCls}>Papel</label>
               <input value={b.conteudo.rotulo ?? ''} onChange={e => setConteudo('rotulo', e.target.value)} className={campoCls} />
             </div>
-            <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
-              <input type="checkbox" checked={!!b.conteudo.mostrarCrmv}
-                onChange={e => setConteudo('mostrarCrmv', e.target.checked)}
-                className="w-3.5 h-3.5 rounded border-gray-300 text-emerald-600" />
-              Exibir CRMV
-            </label>
+            {/* 🔴 QUEM ASSINA decide se a folha recebe a assinatura escaneada, o nome
+                e o CRMV de quem emitiu. Em "outra pessoa" a linha sai VAZIA, para ser
+                assinada à mão — é o que impede o farmacêutico (ou o tutor, no termo de
+                consentimento) sair assinando com a assinatura do veterinário. */}
+            <div>
+              <label className={rotuloCls}>Quem assina</label>
+              <select
+                value={assinaturaDoVeterinario(b.conteudo) ? 'VETERINARIO' : 'OUTRO'}
+                onChange={e => setConteudo('assinante', e.target.value as 'VETERINARIO' | 'OUTRO')}
+                className={campoCls}
+              >
+                <option value="VETERINARIO">Veterinário que emite</option>
+                <option value="OUTRO">Outra pessoa (assina à mão)</option>
+              </select>
+              <p className="mt-1 text-[10px] text-gray-400 leading-snug">
+                {assinaturaDoVeterinario(b.conteudo)
+                  ? 'A assinatura cadastrada, o nome e o CRMV saem impressos sobre a linha.'
+                  : 'A linha sai em branco, com o papel embaixo, para assinar à mão.'}
+              </p>
+            </div>
+            {/* CRMV só existe para o veterinário: oferecê-lo na linha do farmacêutico
+                seria oferecer botão que não faz nada (armadilha 28-d). */}
+            {assinaturaDoVeterinario(b.conteudo) && (
+              <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+                <input type="checkbox" checked={!!b.conteudo.mostrarCrmv}
+                  onChange={e => setConteudo('mostrarCrmv', e.target.checked)}
+                  className="w-3.5 h-3.5 rounded border-gray-300 text-emerald-600" />
+                Exibir CRMV
+              </label>
+            )}
           </>
         )}
 
@@ -514,6 +540,11 @@ export function PreviewA4({ template, blocos, zoom, onZoom, refFolha, contexto, 
   /** Logomarca da clínica e assinatura de quem emite. */
   marca?:    MarcaFolha | null;
 }) {
+  // O bloco `titulo` do modelo é ABSORVIDO pelo cabeçalho (ver ./cabecalho.ts), por
+  // isso o corpo renderizado é `corpo` e não `blocos` — senão o título sairia duas
+  // vezes em todo modelo que traz o seu, como os 12 do CFMV.
+  const { cabecalho, corpo } = prepararFolha({ blocos, nome: template?.nome, contexto, marca });
+
   // A4 em milímetros. O navegador converte mm→px na impressão, então a folha na
   // tela tem a MESMA proporção do papel — é o que evita a surpresa no PDF.
   const folha: CSSProperties = {
@@ -543,26 +574,16 @@ export function PreviewA4({ template, blocos, zoom, onZoom, refFolha, contexto, 
 
       <div className="flex-1 overflow-auto p-6 flex justify-center">
         <div ref={refFolha} style={folha} className="shadow-lg rounded-sm">
-          {/* Timbre da clínica. Fica FORA dos blocos de propósito: é identidade da
-              empresa, não conteúdo do modelo — o vet não deve poder apagá-la sem
-              querer ao editar, e ela precisa sair igual em todos os documentos.
-              Sem logo cadastrada, cai no nome da empresa; sem nem isso, não
-              renderiza faixa nenhuma (melhor sem timbre que com um vazio). */}
-          {(marca?.logoUrl || marca?.empresaNome) && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, borderBottom: '1px solid #e5e7eb',
-                          paddingBottom: 10, marginBottom: 14 }}>
-              {marca.logoUrl && (
-                <img src={marca.logoUrl} alt="" style={{ maxHeight: 48, maxWidth: 170, objectFit: 'contain' }} />
-              )}
-              {!marca.logoUrl && marca.empresaNome && (
-                <p style={{ fontSize: 14, fontWeight: 700, color: '#111827' }}>{marca.empresaNome}</p>
-              )}
-            </div>
-          )}
-          {blocos.length === 0 ? (
+          {/* Cabeçalho padrão da folha: logo, título, veterinário, proprietário e
+              paciente. Fica FORA dos blocos de propósito — é a identidade da empresa
+              e do atendimento, não conteúdo do modelo: o vet não deve poder apagá-lo
+              sem querer ao editar, e ele precisa sair igual em TODOS os documentos.
+              Quem decide o que entra é `./cabecalho.ts`. */}
+          <CabecalhoFolha dados={cabecalho} />
+          {corpo.length === 0 ? (
             <p className="text-center text-gray-300 text-sm mt-20">Documento vazio</p>
           ) : (
-            blocos.map(b => <BlocoView key={b.id} bloco={b} contexto={contexto} marca={marca} />)
+            corpo.map(b => <BlocoView key={b.id} bloco={b} contexto={contexto} marca={marca} />)
           )}
         </div>
       </div>

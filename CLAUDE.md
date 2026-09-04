@@ -1,5 +1,558 @@
 # S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-09-03 (🔴 O EMITIDO EXIBIA DADO DE EXEMPLO + a folha e o
+#   Atestado de Vacinacao remodelados. OK SEED APLICADO (autorizado): os 12 modelos
+#   globais do CFMV foram reescritos; nenhuma clinica tinha copia propria, entao nada
+#   personalizado foi tocado. Backup dos 12 anteriores no scratchpad da sessao.
+#   1. 🔴 **O DOCUMENTO EMITIDO MOSTRAVA "Thor" E "Haras Boa Vista"** - os exemplos do
+#      catalogo - POR CIMA do dado correto do snapshot. `resolverVariaveis` cai no modo
+#      EXEMPLO quando o contexto e nulo, e dois pontos levavam a folha do EMITIDO ate
+#      la: (a) `BlocoView` no `campoAuto` IGNORAVA `conteudo.texto` (o valor que o
+#      backend resolveu e gravou) e reprocessava `conteudo.variavel`; (b) o corpo em
+#      `Emitidos.tsx` recebia `contexto={contexto ?? undefined}`. O cabecalho ja estava
+#      protegido desde 01/09; o corpo, nao. REGRA: **no `campoAuto` o valor GRAVADO
+#      vence** (e o que `utils/DocumentoPrint.ts` sempre fez - a impressao saia certa e
+#      so a TELA mentia), e a folha do emitido recebe `ctxFolha = contexto ??
+#      doc.contexto ?? {}`, NUNCA `undefined`.
+#   2. **O CABECALHO PERDEU AS TRES SECOES** (Veterinario / Proprietario / Paciente),
+#      em TODOS os documentos, e o TITULO passou a ser CENTRALIZADO. Elas nasceram em
+#      01/09 e repetiam no alto da folha o que os 12 modelos do CFMV trazem no corpo
+#      por exigencia da norma. ⚠ CONSEQUENCIA ACEITA: modelo que NAO repete esses
+#      dados no corpo sai sem identificar ninguem - quem monta precisa por os campos.
+#      `SECOES`/`valorDe`/`comPrefixoCrmv` sairam de `cabecalho.ts` (estao no git).
+#   3. 🔴 **O QUE NAO FOI PREENCHIDO NAO VAI PARA O PAPEL** -
+#      `documentoVariaveis.js#removerVazios`, aplicado ao SNAPSHOT na emissao (nunca ao
+#      modelo: no modelo o campo em branco e o espaco a preencher). Descarta `campoAuto`
+#      sem valor, `observacoes` em branco, `tabela` sem linha e SUBTITULO cuja secao
+#      ficou vazia. ⚠ Bloco `texto` so cai quando sobrou "Rotulo:" e nada mais - ele
+#      carrega a declaracao normativa, e descarte generoso apagaria o que da validade ao
+#      documento. `limparPontuacaoOrfa` tira o resto que a variavel vazia deixa ("Local
+#      e data: , 03/09/2026." -> "Local e data: 03/09/2026."). ⚠ Some tambem a linha em
+#      branco que existia para preencher A MAO depois de impressa - decisao do usuario.
+#   4. **ATESTADO DE VACINACAO (Anexo XI) remodelado**: fora Tatuagem, Brinco, Registro
+#      Genealogico e o bloco "Observacoes do(a) Medico(a) Veterinario(a)". "Proxima dose
+#      prevista" saiu; **Vacinacao contra** ficou, DIGITAVEL - a unica variavel
+#      disponivel (`vacinas.ultima`) devolve o NOME COMERCIAL com a data, e escreve-la
+#      nesse rotulo e afirmacao errada num documento com valor legal.
+#   5. **TUDO DA VACINA MORA NA LINHA DELA** - os dados do frasco viraram GRUPO
+#      REPETIVEL (`listaCampos`), e **"Vacinacao contra" e "Observacao" sao COLUNAS**,
+#      nao campos soltos na secao (a pedido, 2026-09-03): num atestado com duas vacinas,
+#      uma protege contra influenza e a outra contra tetano, e um campo unico obrigaria
+#      a escrever as duas coisas numa frase so - sem dizer qual e de qual. Colunas: Nome
+#      comercial / Vacinacao contra / Numero da partida / Fabricante / **Data de
+#      fabricacao** / **Data de validade** (eram um campo so) / Observacao.
+#      ⚠ A CELULA passou a aceitar 800 caracteres (era 500, corte silencioso no
+#      `DocumentoEmitidoController`) - o mesmo teto do campo de observacao
+#      (`CamposForm.MAX_MULTILINHA`), que agora e uma celula desta tabela.
+#      ⚠ SETE colunas numa A4 retrato ficam densas; se apertar, o caminho e a
+#      observacao virar uma segunda linha da tabela, nao encolher as outras.
+#      Novo `conteudo.fonteOpcoes` ('empresa.vacinas',
+#      `lib/documentoListas.js#OPCOES`): a PRIMEIRA coluna vira `<select>` do catalogo da
+#      empresa e o item escolhido traz Fabricante (catalogo) + Partida e Validade (lote
+#      FEFO), tudo editavel. ⚠ NAO confundir com `fonteDados`, que PREENCHE linhas com o
+#      que o PACIENTE tem; esta so OFERECE o que existe no cadastro da EMPRESA.
+#      ⚠ `preenche` e chaveado pelo NOME da coluna, nunca pelo indice - o modelo pode
+#      reordenar as colunas e a validade cairia na do fabricante. ⚠ Deduplica por nome:
+#      o catalogo e MISTO (global + empresa) e o mesmo produto saia duas vezes (426 -> 231).
+#      ⚠ Data de FABRICACAO fica vazia: o S2Vet nao guarda esse dado (`LoteVacina` tem
+#      lote e validade).
+#   6. **`estilo.colunas: 2`** - campo automatico em DUAS COLUNAS na folha, nos DOIS
+#      renderizadores. Aplicado aos 12 modelos (a identificacao e a mesma nos doze);
+#      Endereco fica em largura inteira, senao quebra em tres linhas.
+#   7. **O PACIENTE NASCE VAZIO** em `/documentos` e em `/clinica/vacina` (a pedido): o
+#      id vem SO da URL, e o `selectedAnimal` (global, persistido em localStorage) nao e
+#      mais adotado - abrir a tela trazia pre-escolhido um paciente que ninguem escolheu
+#      para AQUELE documento. ⚠ O efeito que le `?animalId=` **so IMPOE, nunca ZERA**:
+#      um `else setAnimalId(null)` transforma qualquer reexecucao dele (remontagem da
+#      rota, hot-reload) em "o paciente sumiu no meio do preenchimento". Sem paciente, a
+#      tela de Vacina NAO monta o `SubModuloVacina` (ele bateria em `/animal/0`), e o
+#      `SeletorAnimalInteligente` ganhou a `<option>` vazia - sem ela o `<select>` exibe
+#      a PRIMEIRA opcao e o campo parece preenchido.
+#   8. **Sairam da tela de emissao** o campo "Tipo de Documento" (era leitura: repetia a
+#      gaveta em que o modelo foi arquivado) e o campo "Categoria" do dialogo de envio.
+#      A categoria continua existindo no modelo (agrupa o combobox); o que saiu foi
+#      PEDI-LA e EXIBI-LA. Documento enviado nasce em `personalizados` (default da
+#      coluna) - o front nao manda `categoria`, e `saneia` ignora campo ausente.
+#   9. 🔴 **CAMPO VAZIO TAMBEM NAO E IMPRESSO, COMPARTILHADO NEM VISUALIZADO**
+#      (a pedido). O `removerVazios` do backend so limpa o que NASCE dali em diante;
+#      documento emitido ANTES continua com os blocos vazios no snapshot. Espelho novo
+#      no front - `modules/documentos/vazios.ts#semBlocosVazios` -, aplicado na
+#      VISUALIZACAO do emitido (`Emitidos.tsx`) e em `utils/DocumentoPrint.ts` (que
+#      atende impressao, download e o PDF do WhatsApp/e-mail).
+#      ⚠ Filtra o que se DESENHA, NUNCA o snapshot: o documento entregue e imutavel.
+#      ⚠ NAO vale para a PRE-VISUALIZACAO: `Emitidos` so filtra quando NAO recebe
+#      `contexto` (a prop que so a tela de emissao passa). Ali o traco em branco e o que
+#      liga a folha ao formulario - clicar nele foca o campo.
+#   10. **MUNICIPIO DEDUZIDO DO ENDERECO** (`documentoVariaveis.js#municipioDoEndereco`).
+#      `LocalizacaoAnimal` nao tem cidade/estado, e o municipio saia do cadastro do
+#      CLIENTE - vazio na maioria das bases e, quando preenchido, a cidade DELE. Agora
+#      **endereco e municipio saem da MESMA string**, a que vai impressa: le-se
+#      "... - CIDADE/UF" (endereco importado) ou "..., Cidade, UF" (o que o ViaCEP monta
+#      no cadastro), e so entao cai no cadastro do cliente.
+#      ⚠ Nao reconheceu o formato, devolve VAZIO - nunca um palpite: municipio errado
+#      num atestado sanitario e declaracao falsa sobre a origem do animal.
+#   11. **`DateInput` nos campos de data do documento** (§6: nunca `<input type="date">`,
+#      que segue o locale do NAVEGADOR e pedia MM/DD/AAAA). Vale para a lacuna solta e
+#      para as COLUNAS de data da lista (`ehColunaDeData`). ⚠ O valor GRAVADO e o texto
+#      BRASILEIRO, porque ele vai direto para o papel - com o ISO do input nativo a
+#      folha saia com "2027-08-16". Conversao na borda por `dateUtils.isoParaBR` /
+#      `brParaISO` (existem porque `formatDate` devolve "—" no vazio, o que iria para
+#      dentro do valor). `DateInput` ganhou `onFocus` e `inputRef` para o campo de data
+#      participar da ligacao folha <-> formulario. ⚠ Na CELULA da tabela ele vai
+#      `compacto`: a mensagem de erro abaixo empurraria a linha inteira e desalinharia
+#      as outras colunas.
+#   12. **Responsavel / CPF-CNPJ / Telefone lado a lado** (`colunas: 3`, a pedido);
+#      Endereco em largura inteira. E a folha do emitido abre no maior zoom que CABE na
+#      largura da tela - os 62% do padrao sao medida de desktop (794px x 0,62 = 492px,
+#      mais que qualquer celular) e o documento abria cortado. ⚠ O ajuste roda UMA VEZ,
+#      na abertura: reajustar a cada mudanca de tamanho tiraria da mao de quem ampliou
+#      de proposito para conferir uma linha.
+#   13. 🔴 **O CADASTRO DO CLIENTE ERA LIDO SÓ DA TABELA LEGADA.** O cadastro do
+#      proprietario por empresa mora em DUAS tabelas que convivem - `tb_proprietario_perfis`
+#      (§36) e `tb_usuario_empresa` (§36-f), gravadas em paralelo desde 08/08 enquanto os
+#      leitores migram -, e `documentoVariaveis` era um dos leitores que ficaram na
+#      legada. Medido numa base real: cliente com endereco completo em
+#      `tb_usuario_empresa` e nada na legada saia com o endereco VAZIO no atestado,
+#      enquanto a tela do cadastro dele mostrava tudo. Novo `cadastroDoCliente`:
+#      ⚠ a LEGADA continua sendo a AUTORIDADE campo a campo (e ela que a tela de
+#      Proprietarios exibe - trocar a ordem faria o papel discordar da tela no NOME do
+#      cliente); o vinculo so PREENCHE O QUE ESTA VAZIO.
+#   14. **A secao "Responsavel pelo animal" usa o cadastro do PROPRIETARIO** (a pedido):
+#      `cliente.endereco` / `cliente.municipio` / `cliente.cep`, variaveis NOVAS. Antes o
+#      endereco daquela secao vinha de `propriedade.*` - que e onde o ANIMAL esta e pode
+#      ser de terceiro (o haras que hospeda). As duas familias continuam existindo, e e o
+#      Atestado Sanitario que usa a da propriedade, na secao propria dele.
+#      ⚠ Variavel nova precisa entrar em TRES lugares: o contexto do backend, o
+#      `catalogo.ts` do editor e o `VARIAVEIS_VALIDAS` do `documentoLLMService` (senao a
+#      IA nao pode usa-la e o teste de resolvibilidade reprova).
+#   15. **IMPRESSAO EM 2 VIAS** (`DocumentoPrint.viasDoDocumento`) - a pedido. Cada via e
+#      uma folha completa (cabecalho, corpo e rodape), separada por quebra de pagina,
+#      com um SELO no alto a direita dizendo de quem ela e.
+#      🔴 A REGRA SAI DO PROPRIO PAPEL: le-se "Emitir em N vias: 1a via X; 2a via Y" do
+#      texto dos blocos - que os 12 modelos do CFMV ja trazem porque a Res. 1.321/2020
+#      exige. Assim um modelo da clinica que escreva o mesmo ganha as duas vias sozinho,
+#      e um documento que NAO pede duas nao sai duplicado.
+#      ⚠ Teto de 4 vias: o numero vem de texto livre, e um "em 20 vias" mandaria 20
+#      paginas para a impressora. ⚠ Sem o padrao, UMA via - nunca duas "por precaucao".
+#      ⚠ Vale para impressao, download e o PDF do WhatsApp/e-mail (todos saem do MESMO
+#      HTML); a VISUALIZACAO em tela mostra uma folha so.
+#   16. **Assinatura do veterinario**: ja funcionava e nao precisou de mudanca - conferido
+#      ponta a ponta. Ela e de QUEM EMITE (`profissionalDaEmpresa(req.user.id)`), nao do
+#      veterinario da evolucao: quem assina responde pelo que declara, e foi justamente
+#      "assinatura de um saindo na linha de outro" o que a sessao de 02/09 corrigiu.
+#      ⚠ Sem assinatura no vinculo DAQUELA empresa, a linha sai em branco para assinar
+#      a mao - e correto, nao defeito. Cadastra-se em `/cadastro-pessoal`.
+#   17. **O ENDERECO DO RESPONSAVEL SAI CAMPO A CAMPO** - CEP / Endereco / Complemento
+#      / Bairro / Cidade / Estado, os MESMOS da tela de Proprietario (a pedido). Seis
+#      variaveis novas `cliente.*`; `cliente.municipio` fica como conveniencia de quem
+#      quer "Cidade / UF" numa linha so. ⚠ Cidade e estado caem no que o ENDERECO
+#      revelar quando as colunas estao vazias - e o que faz o cliente cadastrado com
+#      tudo numa string ("... - CAMBORIU/SC") nao ficar sem municipio no papel.
+#   18. 🔴 **LISTA COM `formato: 'campos'`** - o grupo repetivel sai como os demais
+#      CARDS do documento ("Rotulo: valor", tres por linha) em vez de tabela. A vacina
+#      tem SETE dados, e sete colunas numa A4 retrato dao ~25mm cada: o nome comercial
+#      quebrava em tres linhas e a observacao ficava ilegivel.
+#      A conversao e do BACKEND (`documentoListas.js#linhaEmCampos`): cada celula vira
+#      um `campoAuto` SEM `variavel` (o valor ja esta resolvido, mora em `texto`), com
+#      `linha` separando um item do outro. Assim `removerVazios` limpa os brancos e os
+#      dois renderizadores desenham sem saber que aquilo veio de uma lista - vale de
+#      graca para tela, impressao e PDF do WhatsApp/e-mail.
+#      ⚠ A ULTIMA coluna ocupa a linha inteira: e onde cai a observacao, e em um terco
+#      de linha ela nao serve para escrever.
+#      ⚠ `BlocoView` espelha o formato para a PRE-VISUALIZACAO mostrar o que vai sair.
+#      ⚠ A ORDEM das colunas e a do PAPEL: Nome comercial / Vacinacao contra /
+#      Fabricante, depois Numero da partida / Data de fabricacao / Data de validade, e
+#      Observacao na linha inteira.
+#   19. **CEP AUTOPREENCHE O ENDERECO na emissao** (a pedido), como na tela de
+#      Proprietario: digitados os 8 digitos, `utils/viaCep.ts` busca e
+#      `CamposForm.preenchimentoPorCep` espalha nos campos de endereco que AQUELE
+#      documento pede - a decisao e por PISTA no rotulo (endereco/complemento/bairro/
+#      cidade/estado/municipio), nunca por uma lista fixa de nomes: o mesmo CEP serve a
+#      modelos escritos por gente diferente.
+#      ⚠ Busca ao completar os 8 digitos, NAO no `blur`: quem digita o CEP e vai direto
+#      ao campo seguinte veria o endereco aparecer por baixo do que esta escrevendo.
+#      ⚠ Falha do ViaCEP e SILENCIOSA e o campo que ele nao soube preencher NAO entra no
+#      mapa - apagar o que a pessoa digitou porque o servico devolveu vazio e pior do
+#      que nao preencher.
+#      ⚠ `utils/viaCep.ts` nasceu aqui; existem ~9 copias daquele `fetch` nas telas de
+#      cadastro. Ao tocar numa delas, troque a copia local pelo util - nao faca a decima.
+#   20. **A vacina sai UM CAMPO POR LINHA** (a pedido). Tres por linha foi tentado e
+#      recusado: os rotulos sao longos ("Nome comercial da vacina", "Data de
+#      fabricacao") e, em um terco de linha, rotulo e valor disputavam o espaco.
+#      **"Local e data" foi para a DIREITA**, que e onde ele fica no oficio brasileiro,
+#      logo acima da assinatura.
+#   21. 🔴 **A REGRA DO CAMPO VAZIO VALE TAMBEM NA PRE-VISUALIZACAO** (a pedido,
+#      reforcado): "campo sem preenchimento nao aparece na visualizacao, impressao ou
+#      encaminhamento" e regra de TODO documento. `vazios.ts#semBlocosVazios` passou a
+#      receber `{ contexto, preenchimento, listas }`: no MODELO o valor ainda mora em
+#      `{{variavel}}` e nao em `texto`, e filtrar por `texto` cru apagaria os campos
+#      PREENCHIDOS junto com os vazios.
+#      ⚠ O `ModalPreencher` do EDITOR fica de fora: la a folha esta ao lado do
+#      formulario e o traco em branco e CLICAVEL - e a unica pista de ONDE cada campo
+#      cai no papel. Na pre-visualizacao nao ha formulario ao lado, entao o traco nao
+#      levava a lugar nenhum.
+#   22. **HISTORICO MOSTRA OS CANCELADOS + FILTRO POR STATUS** (a pedido). O
+#      `GET /documentos/emitidos` nao filtra mais `ativo: true` - o historico e o
+#      registro do que a clinica emitiu, e o documento cancelado e justamente o que
+#      alguem vai querer conferir depois. Abas "Todos / Emitidos / Cancelados" com a
+#      contagem, e SO os status que existem na lista (aba vazia e ruido; mesma regra
+#      das abas da Prescricao e da Vacina). O filtro e da TELA: a lista ja vem inteira,
+#      e assim a contagem e exata sem uma ida a mais ao backend por clique.
+#      🔴 **CANCELADO NAO SE IMPRIME NEM SE ENVIA** - passou a importar agora que ele
+#      aparece na lista: reimprimir poe em circulacao um papel que a clinica revogou, e
+#      nada nele diria isso. VISUALIZAR fica (e assim que se confere o cancelamento e a
+#      justificativa); Imprimir, WhatsApp e E-mail nao sao renderizados (§6).
+#   23. **VACINA QUE NAO EXISTE E CADASTRADA NA HORA**, como na tela de Vacina: a coluna
+#      do catalogo virou COMBOBOX (digita para filtrar) e, sem correspondencia exata,
+#      oferece "Cadastrar X" - o MESMO `POST /medicamentos/garantir` de
+#      `SubModuloVacina.criarVacinaLivre`, que cria a vacina PRIVADA da empresa com a
+#      especie do paciente. Dali em diante ela e so mais um item do catalogo.
+#      ⚠ Nasce SEM lote: fabricante, partida e validade ficam para digitar - o sistema
+#      nao sabe nada de um frasco que nunca entrou no estoque.
+#      ⚠ So aparece sem correspondencia EXATA (mesmo criterio da tela de Vacina), senao
+#      convida a criar a duplicata de uma vacina que ja esta na lista.
+#      ⚠ `onCriarOpcao` ausente = a coluna aceita texto livre mas nao cadastra nada: e o
+#      caso do editor, onde nao ha paciente e o backend nao teria a especie para vincular.
+#   🔴 **PARA RE-SEMEAR O CATALOGO GLOBAL**: o client PRECISA ser o estendido de tenant
+#   E rodar DENTRO de `comEscopoPlataforma` - a extensao so carimba `app.plataforma`
+#   quando ha contexto no AsyncLocalStorage, e sem esse carimbo o RLS recusa a escrita em
+#   linha global (`empresa_id IS NULL`). Nem o dono do schema escapa: a tabela esta com
+#   FORCE ROW LEVEL SECURITY. `node backend/seed.js` ja faz isso (`comEscopoPlataforma(main)`);
+#   um `new PrismaClient()` puro morre com "new row violates row-level security policy".
+#   Suite: 428.)
+# Atualizado em: 2026-09-02 (parte 3) (🔴 A DESCRIÇÃO DO EXAME SUMIA AO ANEXAR O
+#   LAUDO + cliente sem paciente saiu do Faturamento.
+#   1. 🔴 **RESET + CLOSURE: o campo terminava VAZIO nos dois sentidos.** Na tela de
+#      Resultado de Exame (`ExamesSolicitadosPanel`, Laboratorial e Imagem), o modo
+#      SUBSTITUIR zerava o formulário ANTES de chamar a IA (`setDescricao('')`,
+#      `setLaboratorio('')`, `setDataExame('')`) — mas `manterSePreenchido` comparava
+#      com as variáveis da CLOSURE, que ainda guardavam o valor ANTERIOR. Ele concluía
+#      "já está preenchido", não gravava o que a IA leu, e o campo ficava com o vazio do
+#      reset: **perdia-se o valor velho E o novo**. Como Descrição é obrigatória, o vet
+#      anexava o laudo e via o nome do exame — que veio do PEDIDO — desaparecer.
+#      REGRA (a pedido): **descrição que veio de PESSOA é preservada; a que a IA leu de
+#      um arquivo ANTERIOR é substituída quando o arquivo é trocado.** Sem essa
+#      distinção, anexar o laudo errado e corrigir deixaria o nome errado para sempre.
+#      Quem separa os dois é `descricaoVeioDoArquivo` (useRef): digitar à mão e o
+#      "Não é este" da divergência devolvem a autoria à pessoa.
+#      ⚠️ `laboratorio`/`dataExame` continuam sendo zerados por lote (são dados LIDOS
+#      do arquivo), mas passaram a ser comparados com `aposReset(...)` — o vazio de
+#      depois do reset, não o valor de antes. Era o mesmo defeito neles.
+#      ⚠️ Descrição em branco só é preenchida com o que a IA achou NO ARQUIVO
+#      (`extracao.tipoExame` na Imagem, `nomeExame` no Laboratorial). Não achando nada,
+#      o campo fica vazio para digitar — o nome do ARQUIVO não vira nome de exame.
+#   2. **Cliente SEM PACIENTE não aparece mais no Faturamento** (`listarProprietarios`).
+#      A tela é por PACIENTE — lançamento, rateio e a seção "Informação do Cavalo" da
+#      fatura partem dele —, então cliente sem nenhum animal no escopo é linha em que
+#      não há o que cobrar. ⚠️ QUEM ISTO REMOVE é o cliente retido pela regra da FATURA
+#      PENDENTE (o desligado da empresa, ou aquele cujos pacientes foram todos
+#      excluídos): sem paciente e sem fatura pendente ele já não aparecia.
+#      CONSEQUÊNCIA ACEITA: fatura ABERTA/FECHADA/ATRASADA desse cliente deixa de ser
+#      alcançável por esta tela — para trazê-lo de volta, reative um paciente dele, ou
+#      troque o filtro por "sem paciente E sem fatura pendente".
+#      ⚠️ NÃO se aplica ao PROPRIETÁRIO vendo a própria fatura (o outro ramo do mesmo
+#      handler): ali o filtro esconderia a fatura dele dele mesmo. Suíte: 355.)
+# Atualizado em: 2026-09-02 (parte 2) (🔴 PACIENTE INATIVO = PRONTUÁRIO CONGELADO,
+#   NÃO PACIENTE ESCONDIDO. Decisão de produto desta sessão, e ela vale a distinção:
+#   `Animal.ativo` (exclusão lógica) faz o paciente SUMIR de tudo; `Animal.inativo`
+#   deixa TUDO visível — evolução, prescrição, exame, encaminhamento, vacina,
+#   agendamento, dieta, histórico e os cancelamentos — e CONGELA na data e hora da
+#   inativação: nada mais é criado, alterado, finalizado, executado, cancelado ou
+#   excluído até o gestor reativar. Reativado, o histórico segue o trâmite normal.
+#   🔴 **O ESTADO JÁ EXISTIA; O BLOQUEIO ESTAVA SÓ NOS `criar`.** Era um congelamento
+#   que descongelava: a evolução do paciente inativo continuava sendo reaberta e
+#   assumida, a prescrição finalizada, executada e cancelada, o agendamento remarcado,
+#   o exame finalizado e o encaminhamento concluído — o prontuário "congelado" mudava
+#   depois de congelado e nada acusava.
+#   GUARD ÚNICO `lib/animalInativo.js#bloquearSeAnimalInativo(res, animalId, opts)`,
+#   aplicado a **34 caminhos de escrita** de 8 controllers (Evolução — inclusive
+#   mídias e título —, PrescriçãoGrupo — inclusive item, execução, reabertura e o
+#   ajuste de hora pós-execução —, Vacina, Exame — inclusive resultado e imagem —,
+#   Encaminhamento, Agendamento, Dieta e a EMISSÃO de documento).
+#   ⚠️ Entra DEPOIS do gate de acesso ao animal: bloquear antes confirmaria a
+#   existência de um paciente de outra clínica. ⚠️ Responde **400**, não 403 — não é
+#   falta de permissão (o gestor também é barrado), é o ESTADO do registro. ⚠️ O
+#   formato da resposta é opção (`{ error }` × `{ sucesso, mensagem }`): devolver o
+#   errado faz a tela mostrar "undefined".
+#   ⚠️ FICAM DE FORA, de propósito: LEITURA (é o ponto da regra), `inativar`/`ativar`
+#   (trancariam o paciente para sempre) e o FINANCEIRO — fatura e orçamento são
+#   dinheiro já lançado, e travar o fechamento porque o paciente foi inativado prenderia
+#   a cobrança da clínica sem nenhum ganho clínico.
+#   **FRONT**: o estado entra nas MESMAS variáveis de permissão de cada submódulo
+#   (`podeCriar`/`podeEditar`/`podeFinalizar`/`podeDeletar` → `!pacienteInativo && (...)`),
+#   o que apaga todo botão de escrita de uma vez e cobre o botão que ainda vai nascer.
+#   `podeImprimir`/`podeCompartilhar` FICAM: imprimir e enviar são SAÍDA de conteúdo, e
+#   "fica para visualização" quer dizer exatamente isso. Faixa âmbar no shell de
+#   Atendimento e na tela de Vacina (sem ela os botões só somem e a pessoa conclui que
+#   perdeu permissão) e selo "Somente leitura" no card da lista de Pacientes.
+#   🔴 **O PACIENTE INATIVO CONTINUA NA FILA DO PLANTÃO — só SEM AÇÃO** (decisão do
+#   usuário; a primeira versão o excluía da fila e foi revertida). Sumir com ele
+#   esconderia da equipe que aquele tratamento existe e ficou parado. As duas
+#   `listarParaExecucao` passaram a devolver **`animalInativo`** em cada linha, e a tela
+#   apaga Executar/Aplicar e Cancelar, deixando Ver e Imprimir, com o selo "Somente
+#   leitura" (Execução de Prescrição E Painel Principal).
+#   ⚠️ Os DOIS modais de execução resolvem `soLeitura`/`soLeituraGrupo` por conta
+#   própria (`soVisualizacao || animalInativo`): eles são reusados por outras telas, e
+#   fiar-se só no botão da fila deixaria um caminho novo reabrir a ação que o backend
+#   recusa com 400.
+#   ⚠️ `animalInativo` é lido por SQL cru (`lerInativosEmLote`), não pelo `where` do
+#   Prisma: `Animal.inativo` é lida assim em todo o projeto porque o client pode não
+#   estar regenerado (§11), e `where` com campo desconhecido derruba a fila inteira.
+#   🔴 **FATURA PAGA TAMBÉM É SOMENTE LEITURA** (mesmo pedido). Item de fatura paga já
+#   era recusado (`FATURA_PAGA`), mas `atualizarStatus` deixava voltar PAGA → ABERTA, e
+#   daí tudo era editável de novo — a porta dos fundos do bloqueio inteiro. Agora sair
+#   de PAGA é ato de **GESTOR** e vai para a AUDITORIA (`ALTERACAO`/`FATURA`).
+#   ⚠️ Reabrir NÃO foi proibido de todo: sem saída, um clique errado em "Marcar como
+#   Pago" congelaria a cobrança para sempre — pior que o problema. É a mesma escolha da
+#   reativação do paciente (só o gestor). Faixa verde na tela + "Reabrir" só para o
+#   gestor; `ENTIDADE_LABEL` da Auditoria ganhou FATURA e FATURA_ITEM.
+#   **SEM MIGRATION** — as colunas são as de `20260818000000_animal_inativo`.
+#   GATE ESTRUTURAL novo: `__tests__/pacienteInativo.test.js` varre o CÓDIGO dos
+#   controllers e reprova o handler de escrita sem o guard — o modo de quebrar esta
+#   regra é ESQUECER o guard num caminho novo, e o sintoma é silencioso. Handler de
+#   escrita novo: acrescente-o à lista E ponha o guard nele. Suíte: 352.)
+# Atualizado em: 2026-09-02 (🔴 A ASSINATURA DO VETERINÁRIO SAÍA NA LINHA DE TODO
+#   MUNDO + RECEITUÁRIO DE CONTROLE ESPECIAL na Prescrição + lupa na visualização.
+#   1. 🔴 **O BLOCO `assinatura` CARIMBAVA A ASSINATURA ESCANEADA DO VETERINÁRIO EM
+#      QUALQUER LINHA**, fosse qual fosse o papel escrito embaixo. No receituário de
+#      controle especial o FARMACÊUTICO aparecia assinando com a assinatura do vet; nos
+#      8 TCLEs o tutor "consentia" com o NOME DO VETERINÁRIO sobre a linha. Documento
+#      falso, e nada no sistema acusaria. Campo novo `conteudo.assinante`
+#      ('VETERINARIO' | 'OUTRO'): só na linha do veterinário entram a imagem, o nome e
+#      o CRMV da MARCA; nas demais a linha sai VAZIA (o espaço de 42px FICA — é onde a
+#      pessoa assina). Regra em `catalogo.ts#assinaturaDoVeterinario`, FONTE ÚNICA dos
+#      dois espelhos (`BlocoView.tsx` e `utils/DocumentoPrint.ts`).
+#      ⚠️ **SEM MIGRATION E SEM RE-SEED**: bloco já gravado não tem `assinante`, e aí a
+#      regra cai em `mostrarCrmv` — que é `true` exatamente na linha do veterinário nos
+#      12 modelos do CFMV e na regra que o prompt de conversão sempre seguiu. O seed e o
+#      catálogo passaram a gravar o campo explícito para o que nascer daqui em diante.
+#      ⚠️ `assinante` entrou no WHITELIST de `documentoLLMService.normalizarBlocos` —
+#      fora dele o campo seria apagado em silêncio e a linha do farmacêutico voltaria a
+#      sair assinada pelo vet. O prompt `converter_documento` passou a exigi-lo.
+#      Editor ganhou o seletor "Quem assina"; "Exibir CRMV" só aparece no veterinário.
+#   2. **RECEITUÁRIO DE CONTROLE ESPECIAL — Imprimir/WhatsApp/E-mail da Prescrição.**
+#      Havendo medicamento CONTROLADO no documento, os três botões passam a produzir
+#      DOIS papéis: os itens comuns saem na receita de sempre e os controlados vão para
+#      o modelo **"Receita Controlada"** da Central, na tela de emissão, já apontada
+#      para o paciente e para AQUELA prescrição. Um papel só faria o remédio corriqueiro
+#      nascer num receituário especial; tudo no comum deixaria o controlado sem a via
+#      numerada que a norma exige.
+#      🔴 Quem classifica é o CATÁLOGO (`medicamentoCat.controlado`), NUNCA o texto de
+#      `medicamento` — o campo é livre. Item fora do catálogo conta como comum.
+#      ⚠️ **A ordem é imprimir → navegar**: sair da tela antes dispara e cancela o
+#      diálogo do navegador. ⚠️ Prescrição só de controlados NÃO imprime o papel comum
+#      (seria folha em branco).
+#      ⚠️ **SEM o modelo no acervo (ou sem permissão para ler a Central) NADA é
+#      recortado**: a ação faz o que fazia antes, com o grupo INTEIRO, e um toast diz o
+#      motivo. Recortar em silêncio faria o vet imprimir uma receita de onde o
+#      controlado sumiu sem ele perceber. O modelo é procurado PELO NOME
+#      (`receitaControlada.ts`), não por id: ele é criado por cada clínica.
+#      Fonte nova **`prescricao.controlados`** (`lib/documentoListas.js` + espelho em
+#      `listas.ts`): mesmos campos de `prescricao.medicamentos`, só os controlados —
+#      colunas IDÊNTICAS de propósito, senão a dose cairia na coluna errada ao trocar a
+#      fonte de um modelo já montado. `POST /documentos/campos` aceita
+#      `prescricaoGrupoId` e `/documentos` aceita `?templateId=` + `?prescricaoGrupoId=`
+#      — sem o id do grupo, o receituário de uma receita antiga nasceria com os
+#      medicamentos da mais recente.
+#   3. **Lupa na visualização do documento** (`Emitidos.tsx#VisualizarDocumentoModal`,
+#      que serve ao emitido E à pré-visualização): ZoomOut · % · ZoomIn no cabeçalho,
+#      passos discretos de 40% a 200%, abrindo nos 62% de sempre; o % clicado volta ao
+#      padrão. É CROMO, não ação de registro — paleta cinza do X (§6), não `AcaoRegistro`.
+#      ⚠️ A margem de compensação virou `297 * (zoom - 1)mm`: `transform` não muda a
+#      caixa do layout, então reduzindo sobra vão embaixo e ampliando o fim da folha
+#      fica fora do scroll. ⚠️ A centralização passou de `justify-center` para
+#      `margin: auto` no filho: em caixa que ROLA, `justify-content: center` corta o
+#      COMEÇO do conteúdo, e a folha ampliada ficaria com a margem esquerda
+#      inalcançável.
+#   3b. 🔴 **O CADASTRO PESSOAL ESCONDIA O CRMV E A ASSINATURA QUE ESTAVAM
+#      GRAVADOS.** O bloco "Dados Profissionais" era gateado só por `precisaCrmv`
+#      (= atua como vet OU declarou especialidade), e `especialidadesEscolhidas`, para
+#      quem tem equipe, sai dos LOCAIS DE TRABALHO do vínculo da empresa ATIVA. Vínculo
+#      cujos locais estão sem especialidade — o caso comum logo depois que o gestor
+#      inclui o membro — zerava a conta, e a tela abria SEM o CRMV e SEM a assinatura
+#      que existem no banco. Com outro contexto resolvido a mesma rota mostrava tudo, e
+#      parecia haver DUAS telas de cadastro (foi assim que o defeito foi relatado).
+#      Regra nova: **tendo dado profissional, a tela MOSTRA**
+#      (`mostrarDadosProfissionais` = `precisaCrmv` OU tem CRMV/assinatura/espécies/
+#      especialidade gravados). A OBRIGATORIEDADE não mudou de lugar: `precisaCrmv`
+#      continua governando a validação e o asterisco do CRMV (`required={precisaCrmv}`),
+#      senão quem tem só a assinatura passaria a ser barrado por um CRMV que ninguém
+#      pediu. ⚠️ A visibilidade tem de ser SUPERCONJUNTO da validação, nunca o
+#      contrário: campo exigido e não exibido é formulário que recusa salvar sem dizer
+#      onde. ⚠️ Só há UMA tela de cadastro pessoal (`/cadastro-pessoal`); o que
+#      variava era o BLOCO condicional dentro dela.
+#   4. Tela de emissão (`/documentos`): o `<option>` do paciente mostra só o NOME (não
+#      concatena mais o proprietário) e os campos Nome do Documento / Tipo de Documento
+#      abrem SEM texto de dica. ⚠️ Com isso o desempate de XARÁS que o `<option>` fazia
+#      deixou de existir — ver a pendência na §12. Suíte: 297.)
+# Atualizado em: 2026-09-01 (parte 2) (LISTAS REPETÍVEIS — medicamento, vacina, exame e
+#   procedimento deixaram de ser texto e viraram GRUPOS DE CAMPOS que se repetem.
+#   🔴 O QUE SE REPETE NÃO É LACUNA: uma lacuna é um campo e um valor, e o número de
+#   medicamentos de uma receita não é propriedade do MODELO, é de cada EMISSÃO — com
+#   lacunas, o quinto medicamento não teria onde entrar. Na tela vira um repetidor com
+#   "+ Adicionar"; no papel, uma tabela. Fonte única em `lib/documentoListas.js`,
+#   espelhada em `modules/documentos/listas.ts`.
+#   🔴 E A LISTA JÁ NASCE PREENCHIDA com o que o PACIENTE tem registrado (a prescrição
+#   do atendimento em curso, as vacinas aplicadas, os exames pedidos) — é o
+#   "autopreenchido" pedido em 01/09. ⚠️ As COLUNAS da fonte são CANÔNICAS, não as que o
+#   modelo declarou: é o que faz o dado alinhar em vez de a dose cair na coluna da
+#   quantidade. Lista sem fonte (`listaCampos`) usa as colunas do modelo e nasce vazia.
+#   ⚠️ Os quatro blocos clínicos que já existiam mostravam linha de EXEMPLO com a
+#   legenda "Preenchido na emissão" e no papel saíam VAZIOS — promessa que nada cumpria.
+#   Agora é verdade. ⚠️ No emitido a lista vira `tabela` LITERAL e o `fonteDados` é
+#   APAGADO: reimprimir daqui a dois anos não pode voltar ao banco e trazer a prescrição
+#   de hoje. Suíte: 293. Ver a sessão 2026-09-01 (parte 2) na §12.)
+# Atualizado em: 2026-09-01 (CABEÇALHO PADRÃO EM TODA FOLHA + DOCUMENTO ENVIADO VIRA
+#   MODELO DE VERDADE, com os campos identificados por IA.
+#   1. **TODO documento passa a abrir com o MESMO cabeçalho**: logomarca no canto
+#      superior esquerdo, TÍTULO abaixo dela, e então **Veterinário · Proprietário ·
+#      Paciente**, uma linha cada. Substitui o "timbre" anterior, que era só a logo.
+#      🔴 FONTE ÚNICA da REGRA em `modules/documentos/cabecalho.ts#prepararFolha` — o
+#      que entra, em que ordem e o que some vazio. O DESENHO continua duplicado nos
+#      dois espelhos de sempre: `CabecalhoFolha.tsx` (preview A4, emissão, mobile,
+#      visualização do emitido) e `utils/DocumentoPrint.ts#cabecalhoHtml` (impressão e
+#      PDF do Puppeteer, que recebem STRING). Ao mexer no visual, mexa nos dois.
+#      ⚠️ O PRIMEIRO bloco `titulo` visível é **ABSORVIDO** pelo cabeçalho, em vez de
+#      ele acrescentar um título próprio acima. Sem isso os 12 modelos do CFMV (que
+#      começam com "ATESTADO SANITÁRIO", como a norma exige) sairiam com o título
+#      IMPRESSO DUAS VEZES, e a ordem pedida — título antes dos dados — se inverteria.
+#      Por isso todo renderizador consome `corpo`, nunca `blocos` cru.
+#      ⚠️ Campo sem dado NÃO vira "—": ele some, e a seção some inteira quando nenhum
+#      dos seus campos resolveu (§12, 26/08 — "nada de inventar valor").
+#      ⚠️ No EMITIDO o cabeçalho sai do SNAPSHOT (`doc.contexto` + `doc.marca`), e o
+#      contexto é `?? {}` e **NUNCA `?? null`**: sem contexto, `resolverVariaveis` cai
+#      no modo EXEMPLO do catálogo e o papel REAL sairia com "Thor" no cabeçalho.
+#   2. 🔴 **O DOCUMENTO ENVIADO PELA CLÍNICA DEIXOU DE SER UMA FOTOGRAFIA.** Até aqui
+#      o arquivo virava blocos `imagem`, uma por página: imprimia, ia por WhatsApp e
+#      entrava no histórico como qualquer outro — mas era papel morto, sem UM campo e
+#      sem preencher nada sozinho. Agora o diálogo de envio traz **"Identificar os
+#      campos automaticamente"** (ligada por padrão): as páginas vão para a IA
+#      (`converter_documento@v1` + `services/documentoConversaoService.js`, MULTIMODAL
+#      — imagens + o texto embutido do PDF) e voltam como BLOCOS de verdade, com
+#      `{{variáveis}}` no que o S2Vet já sabe e `[[lacunas]]` no que ele não sabe. Daí
+#      em diante o resto do módulo já funcionava: `coletarCampos` monta o formulário e
+#      a emissão resolve as variáveis.
+#      ⚠️ **NENHUM DADO DO ARQUIVO DE EXEMPLO SOBREVIVE.** O que a clínica envia é uma
+#      via JÁ EMITIDA de outro paciente ("Billy", "Cláudia Gama", "CRMV 6263",
+#      "Gabapentina 150 mg"). Copiar qualquer valor para o modelo produziria documento
+#      FALSO EM SÉRIE, e nada acusaria. Regra no prompt, em caixa alta e repetida.
+#      ⚠️ REDE DE SEGURANÇA depois do modelo: chave de variável ALUCINADA vira
+#      `[[Rótulo]]` (`variaveisDesconhecidas`), nunca é apagada — chave desconhecida
+#      resolve VAZIO na emissão, então o campo sumiria do papel calado; virando lacuna,
+#      ele aparece no formulário e alguém decide o que escrever. Só UM bloco `titulo`
+#      sobrevive (`umTituloSo`), pelo motivo do item 1.
+#      ⚠️ A IA descreve CONTEÚDO, não aparência: o estilo padrão de cada tipo é
+#      aplicado na borda do front (`catalogo.ts#comEstiloPadrao`), senão um título
+#      viria com corpo de texto e uma tabela sem borda.
+#      ⚠️ **FALHA NÃO É ERRO DE TELA**: arquivo que não é documento, JSON inválido ou
+#      IA fora do ar respondem 200 com `ehDocumento: false`, e o envio CAI NO CAMINHO
+#      DA IMAGEM — que é o comportamento de sempre e nunca falha. Perder o envio por
+#      um 500 do modelo seria trocar documento sem campos por documento nenhum. O
+#      único erro propagado é o 429 de QUOTA, que é decisão do plano do cliente.
+#      Rota nova `POST /documentos/templates/converter` (multipart `paginas[]` + campo
+#      `texto`, gate `documentos.templates.criar`, `/converter` ANTES de `/:id`,
+#      `tenantRls` após o multer). NÃO grava nada: devolve a proposta, e quem cria o
+#      modelo é o `POST /templates` de sempre.
+#      ⚠️ MULTIMODAL não passa por `callAI` (que só aceita texto) — vai por
+#      `gerarConteudo`, então o log de uso E o **gate de quota** são feitos à mão no
+#      serviço. Esquecer o gate deixaria este caminho fora do teto do plano (§7).
+#      Teto de 4 páginas, espelhado no front (`api.ts#MAX_PAGINAS_IA`).
+#   3. `upload.ts` foi partido em `paginasDoArquivo` (arquivo → imagens + texto do PDF,
+#      o passo comum aos dois caminhos) e `blocosDeImagens` (o caminho reserva).
+#      `arquivoParaBlocos` continua existindo como atalho do reserva.
+#      ⚠️ O texto embutido viaja JUNTO das imagens para a IA, não no lugar delas: o
+#      texto dá a redação exata (nenhum OCR erra vírgula que já está lá) e a imagem dá
+#      a ESTRUTURA (o que é caixa, tabela, linha de assinatura). Um só perde metade.
+#      Suíte: 288 backend passando; `tsc -b` + `vite build` limpos.)
+# Atualizado em: 2026-08-30 (🔴 REGRESSÃO CORRIGIDA + `/documentos` REMODELADA.
+#   1. **AS AÇÕES VOLTARAM PARA UMA LINHA SÓ NO DESKTOP.** No módulo de Atendimento os
+#      ícones de ação saíam EMPILHADOS, um por linha. Causa: `AcoesRegistro` era
+#      `flex-wrap` também no `md:` — e com `flex-wrap` a largura MÍNIMA do contêiner é a
+#      de UM ícone, então a `<table className="w-full">` espremia a coluna "Ações" até
+#      isso (a Evolução tem 8 ações). Agora é `flex-wrap md:flex-nowrap`, no COMPONENTE
+#      (uma correção, todas as telas). ⚠️ `whitespace-nowrap` no `<td>` NÃO resolve:
+#      governa quebra de TEXTO, não de item flex. NÃO reintroduzir a quebra no desktop —
+#      a justificativa antiga ("celular deitado passa de 768px") caducou quando o rótulo
+#      passou a sumir no `md:`: de 768px para cima cada ação ocupa ~27px. Ver §6.
+#   2. **`/documentos` DEIXOU DE SER O EDITOR DE BLOCOS e virou a tela de EMISSÃO**
+#      (`pages/Documentos.tsx`, layout de `/agendamentos`): UMA LINHA com
+#      *Paciente · Tipo de Documento · Nome do Documento*, o card do paciente (o MESMO
+#      `AnimalCard` do Atendimento), os campos a preencher em LARGURA CHEIA (grid de até
+#      3 colunas) e o rodapé **Cancelar · Inserir · Salvar**. Montar modelo é
+#      configuração feita uma vez; EMITIR acontece a cada atendimento, e estava enterrado
+#      atrás de abrir um card, entrar no editor e achar o botão "Gerar".
+#      🔴 O EDITOR NÃO FOI REMOVIDO — mudou para **`/documentos/modelos`**
+#      (`CentralDocumentos.tsx`, intacta), alcançável pelo botão "Modelos" do cabeçalho.
+#      **INSERIR × SALVAR é o par de `SubModuloExames`** (a tela `/clinica/exames/:id`
+#      que serviu de referência): Inserir guarda o documento preenchido numa fila LOCAL
+#      (atestado + TCLE no mesmo atendimento é o caso comum), Salvar emite a fila
+#      inteira. Nada da fila existe no banco antes do Salvar. ⚠️ A emissão é SEQUENCIAL,
+#      nunca `Promise.all`: o `DOC-0001` é sequência POR EMPRESA sorteada dentro da
+#      transaction, e em paralelo duas transações disputam o mesmo número. ⚠️ O Salvar
+#      inclui o que está no FORMULÁRIO, sem exigir Inserir antes — o caso comum é um
+#      documento só, e um Salvar que não salva nada é o pior tipo de botão; ao começar a
+#      emitir, o formulário é MOVIDO para a fila (senão uma falha no meio devolveria o
+#      mesmo documento à fila E à tela, e o Salvar seguinte o emitiria duas vezes).
+#   3. **HISTÓRICO DE DOCUMENTOS com Visualizar · Imprimir · WhatsApp · E-mail**
+#      (+ Cancelar com justificativa, §33). Fonte ÚNICA em `modules/documentos/Emitidos.tsx`
+#      (`ListaDocumentosEmitidos`), reusada pelo **card "Documentos" da tela do paciente**
+#      (`/animal/:id`) — duas listas divergiriam na primeira correção (armadilha 28-g).
+#      O card responde a pergunta do balcão ("quais documentos este paciente tem, e me dá
+#      uma via"), que o Histórico, sendo linha do tempo, não responde.
+#      WhatsApp/E-mail saem por `CompartilharPdfBotoes`, e o DESTINO é o contato do
+#      cliente GRAVADO NO SNAPSHOT (`contexto['cliente.telefone'|'cliente.email']`), não o
+#      cadastro de hoje: é para quem o documento foi emitido.
+#   4. **NOVO `utils/DocumentoPrint.ts`** — HTML do emitido para impressão e PDF. É o
+#      espelho em string de `BlocoView.tsx` (o PDF do Puppeteer e a impressão por iframe
+#      recebem STRING, não DOM montado): ao mexer no visual de um bloco, mexa nos dois.
+#      NÃO resolve variável nenhuma — os blocos do emitido já vêm resolvidos; o que
+#      sobrar de `{{` ou `[[` é APAGADO, porque chave crua no papel é pior que vazio.
+#      ⚠️ Logo e assinatura passam por `carregarComoDataUri` (`useImagensDocumento`):
+#      o Puppeteer BLOQUEIA requisição que não seja `data:`, então `<img src="/api/midia/…">`
+#      imprime bem no navegador e nasce QUEBRADA no PDF do servidor.
+#   5. **O TIMBRE VIROU PARTE DO SNAPSHOT** — `DocumentoEmitido.marca` (logo, assinatura,
+#      nome e CRMV de quem assinou), gravado em `contexto._marca` (JSONB, SEM migration).
+#      Reimprimir daqui a dois anos tem de sair com a logo e a assinatura DAQUELE dia;
+#      buscar a marca de HOJE carimbaria no papel antigo a assinatura de quem estiver
+#      logado agora. `null` nos emitidos ANTERIORES: saem sem logo e com a linha de
+#      assinatura em branco — que é o correto, não um defeito.
+#   6. Extraído `modules/documentos/CamposForm.tsx` (`CampoInput` + `tipoDoCampo`), fonte
+#      única do campo a preencher, usada pela tela nova E pelo `ModalPreencher` do editor.
+#   7. **O SELETOR DE DOCUMENTO MOSTRA O ACERVO INTEIRO E DEFINE O TIPO** — o campo
+#      "Tipo de Documento" deixou de FILTRAR a lista (acertar a gaveta antes de achar o
+#      papel) e virou campo de LEITURA, preenchido pelo documento escolhido. O seletor
+#      de documento lista tudo, agrupado por `<optgroup>`.
+#   8. 🔴 **CATEGORIA DEIXOU DE SER LISTA FECHADA** — o `Set` de 11 slugs do
+#      `DocumentoTemplateController` (que DESCARTAVA em silêncio qualquer outro valor)
+#      virou `CATEGORIAS_PADRAO` + `normalizarCategoria`. SEM MIGRATION: a coluna já é
+#      `VARCHAR(30)` livre. ⚠️ **NÃO EXISTE TABELA DE CATEGORIAS** — a categoria é uma
+#      coluna de texto do modelo, logo **existe enquanto houver um documento nela**, e
+#      "criar categoria" É criar o primeiro documento dela (o modal diz isso). A tela
+#      reúne as categorias varrendo os modelos (`categoriasDisponiveis`). Criar
+#      documento/categoria é gateado por `documentos.templates.criar` e leva ao editor
+#      por `/documentos/modelos?templateId=`.
+#   9. Segundo seletor de paciente e `AnimalCard` REMOVIDOS da tela de emissão (o
+#      paciente já é escolhido na linha de cima, e os dois empurravam o formulário para
+#      baixo). O `<option>` mostra `Nome — Proprietário`, que cobre o desempate de xarás.
+#  10. Os botões "Modelos", "Novo documento" e "Nova categoria" foram REMOVIDOS a pedido.
+#      ⚠️ Consequência: `/documentos/modelos` (o editor) continua montada e funcional,
+#      mas HOJE NÃO TEM PORTA DE ENTRADA na interface — o Sidebar aponta para
+#      `/documentos`. Chega-se a ela pela URL. Para dar acesso, o lugar é o Sidebar.
+#  11. 🔴 **DOCUMENTO ENVIADO PELA CLÍNICA.** "Nome do Documento" virou COMBOBOX com
+#      digitação livre: nome que não existe no acervo oferece **Enviar "X"** → arquivo +
+#      nome + categoria. **O que sobe é sempre IMAGEM — PDF é convertido no NAVEGADOR,
+#      uma imagem por página** (`modules/documentos/upload.ts`, `pdfjs-dist` por
+#      `import()` dinâmico). POR QUÊ: a folha percorre quatro caminhos (preview A4,
+#      impressão, PDF do Puppeteer, snapshot) e PDF não se desenha em nenhum — cada um
+#      precisaria de um desvio, e o documento enviado viraria cidadão de segunda classe.
+#      Como imagem, ele segue as MESMAS regras, sem exceção em lugar nenhum.
+#      Rota nova `POST /documentos/templates/upload` (gate `documentos.templates.criar`,
+#      extensão E mimetype, 15 MB, `tenantRls` após o multer, `/upload` antes de `/:id`).
+#      MULTI-TENANT/RLS: contexto de dono no `storage.upload` e `empresaId` do CONTEXTO
+#      no `criar` — o documento é DA CLÍNICA (decisão de 30/08) e não vaza para outra.
+#      ⚠️ `estilo.altura === 0` = altura AUTOMÁTICA no bloco `imagem` (a imagem É a
+#      folha); `?? 160` não serve porque `0` não é nullish.
+#      Suíte: 283 backend passando; `tsc -b` + `vite build` limpos.)
 # Atualizado em: 2026-08-26 (CENTRAL DE DOCUMENTOS DEIXOU DE SER PROTÓTIPO. A tela
 #   `/documentos` guardava tudo em `localStorage` (`s2vet_docs_templates`), com
 #   templates SEMEADOS NO BUNDLE, variáveis resolvidas pelo campo `exemplo` do catálogo
@@ -1175,6 +1728,13 @@ ANIMAL · PROPRIETÁRIO · EMPRESA    → SOMEM. Não aparecem nem como "inativo
     pende deles some junto (evolução, prescrição, vacina, exame, agendamento, fatura,
     histórico). São o SUJEITO do atendimento.
 
+PACIENTE INATIVO (`Animal.inativo`) → NÃO É NADA DISSO. É um TERCEIRO estado,
+    de 2026-09-02: o paciente aparece INTEIRO, com todas as atividades visíveis, e o
+    prontuário fica CONGELADO na data/hora da inativação (somente leitura) até o gestor
+    reativar. Guard único em `lib/animalInativo.js#bloquearSeAnimalInativo`; gate
+    estrutural em `__tests__/pacienteInativo.test.js`. NÃO confundir com o `ativo`
+    acima, que é a exclusão lógica e faz o paciente sumir.
+
 PROFISSIONAL · FORNECEDOR · PRESTADOR → CONTINUAM aparecendo, marcados como INATIVOS.
     São o AUTOR do registro: esconder o autor apagaria a autoria de prontuário que segue
     válido — "quem prescreveu isto?" precisa ter resposta.
@@ -1345,8 +1905,17 @@ tamanho acompanha o breakpoint por classe (`w-3 h-3 md:w-[15px]`), que vence o
 cinza é o indisponível, e botão que só falha depois do clique é a armadilha 28-d.
 ⚠️ Sem rótulo visível no desktop, quem dá nome ao botão é `aria-label` + `title`,
 os dois vindos de `rotulo`/`titulo`. Por isso `rotulo` é obrigatório.
-⚠️ `AcoesRegistro` mantém `flex-wrap` TAMBÉM no desktop: celular DEITADO passa de
-768px, entra no `md:` e os ícones saíam para fora do card.
+🔴 `AcoesRegistro` é `flex-wrap md:flex-nowrap` — **no desktop as ações ficam TODAS
+NA MESMA LINHA**, e isso não é cosmético: com `flex-wrap`, a largura MÍNIMA do
+contêiner é a de UM ícone, então a `<table className="w-full">` espreme a coluna
+"Ações" até isso e as 8 ações da Evolução saem EMPILHADAS, uma por linha (defeito
+relatado em 2026-08-30, no módulo de Atendimento). Não adianta `whitespace-nowrap`
+no `<td>`: aquilo governa quebra de TEXTO, não de item flex — quem precisa de
+largura é o contêiner. A quebra continua valendo abaixo de `md`, que é onde serve
+para alguma coisa: ali a ação é PÍLULA COM RÓTULO e várias não cabem lado a lado.
+⚠️ NÃO reintroduzir `flex-wrap` no desktop. A justificativa antiga ("celular DEITADO
+passa de 768px e os ícones saíam do card") caducou quando o rótulo passou a sumir no
+`md:` — de 768px para cima cada ação ocupa ~27px, e as 8 juntas cabem em ~230px.
 ⚠️ Onde a tela tem os dois blocos (`hidden md:block` + `md:hidden`), extraia a
 lista para UMA função/componente (`acoesDoGrupo`, `AcoesEncaminhamento`…) e chame
 das duas — é isso que impede a divergência voltar. A autoria/permissão de cada
@@ -1715,6 +2284,7 @@ Regras obrigatórias para prompt novo ou editado:
 | `parse_composicao_visao` | v2 | NUTRICAO | `composicaoParserService` (multimodal) |
 | `parse_composicao_texto` | v2 | NUTRICAO | `composicaoParserService` |
 | `assistente_documento` | v1 | DOCUMENTOS | `documentoLLMService` — chat da Central de Documentos, ancorado no ACERVO |
+| `converter_documento` | v1 | DOCUMENTOS | `documentoConversaoService` — documento ENVIADO (PDF/foto) → blocos com variáveis e lacunas. MULTIMODAL |
 
 ### Metering de IA por cliente (2026-07-28)
 Modelo de mercado adotado: **conta única no Google + medição interna por tenant**
@@ -1967,6 +2537,603 @@ New-Item -ItemType Junction `
 ---
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
+
+### Sessao 2026-09-03 - Folha sem cabecalho, campo vazio fora do papel e Anexo XI remodelado
+
+- [x] 🔴 **O emitido exibia o EXEMPLO do catalogo por cima do dado real** - ver o item 1
+      do topo. O dado gravado estava CERTO nos dois documentos ja emitidos; era so
+      exibicao, e a impressao nunca errou (usa `conteudo.texto`).
+      ⚠ Padrao a nao repetir: renderizar um snapshot RESOLVENDO de novo o que ja foi
+      resolvido. Se o valor esta gravado, ele vence; e nenhuma folha real pode chegar ao
+      resolvedor sem contexto - `{}` mantem o modo real, `undefined` cai no exemplo.
+- [x] **Cabecalho sem as tres secoes, titulo centralizado**, em todos os documentos.
+- [x] 🔴 **`removerVazios` no snapshot da emissao** - o que nao foi preenchido nao vai
+      para o papel, em todos os documentos. 5 casos novos em `documentosCentral.test.js`
+      travam o LIMITE da regra (texto normativo fica; "Rotulo:" sai; assinatura e
+      linha ficam mesmo sem texto).
+- [x] **Anexo XI**: campos removidos, "Vacinacao contra" digitavel e o frasco em grupo
+      repetivel com seletor do catalogo. **"Vacinacao contra" e "Observacao" sao COLUNAS
+      da lista** (a pedido): pertencem a VACINA, nao a secao. Nao ha mais bloco
+      `observacoes` solto no modelo.
+- [x] **Duas colunas** (`estilo.colunas`) nos 12 modelos.
+- [x] **Paciente vazio** em `/documentos` e `/clinica/vacina`; "Tipo de Documento" e
+      "Categoria" fora da tela de emissao.
+- [x] **Campo vazio fora tambem da IMPRESSAO, do COMPARTILHAMENTO e da VISUALIZACAO**
+      (`modules/documentos/vazios.ts`) - inclusive nos documentos emitidos ANTES da
+      regra, cujo snapshot ainda tem os blocos vazios dentro.
+- [x] **Municipio deduzido do endereco** da propriedade (item 10 do topo).
+- [x] **`DateInput`** nas datas do documento; **tres colunas** no responsavel; **zoom
+      inicial que cabe** na tela do celular/tablet.
+- [x] **Cadastro do responsavel lido tambem de `tb_usuario_empresa`** e a secao dele
+      passou a usar `cliente.endereco`/`cliente.municipio` (itens 13 e 14 do topo).
+- [x] **Impressao em 2 vias**, com a contagem e os donos lidos do rodape do proprio
+      documento (item 15).
+- [x] **Endereco do responsavel campo a campo** e **lista de vacinas em CARDS**, nao em
+      tabela (itens 17 e 18) - com o que esta em branco fora da tela, do papel e do PDF.
+- [x] **CEP autopreenche o endereco** na tela de emissao (item 19); vacina **um campo
+      por linha** e "Local e data" a direita (item 20).
+- [x] **Campo vazio fora tambem da PRE-VISUALIZACAO** (item 21).
+- [x] **Historico com os cancelados e filtro por status**, e o cancelado deixou de ser
+      impresso/enviado (item 22).
+- [x] **Vacina inexistente cadastrada na hora**, como na tela de Vacina (item 23).
+- [ ] A visualizacao em TELA mostra uma folha so, mesmo quando o documento manda duas
+      vias. Duplicar ali dobraria a rolagem para conferir o mesmo conteudo; se um dia
+      fizer falta, `viasDoDocumento` ja e exportada.
+- [ ] A **pre-visualizacao** continua mostrando o campo vazio como lacuna clicavel (e a
+      ferramenta de preenchimento - e ela que liga a folha ao formulario), enquanto o
+      EMITIDO ja nao o traz. E deliberado; se incomodar, o lugar e a mesma chave que
+      `Emitidos.tsx` ja usa (a presenca de `contexto`).
+- [ ] `OPCOES` tem UMA fonte (`empresa.vacinas`). Medicamento, procedimento e exame
+      seguiriam o mesmo molde - falta so a consulta de cada um.
+- [ ] O catalogo de vacinas vem INTEIRO para a tela (231 nesta base) num `<select>`
+      simples. Passando de uns poucos milhares, o caminho e o combobox com busca que o
+      seletor de documento ja usa.
+- [ ] `exameParserService.chamarGeminiComLog` continua com o defeito latente de `modelo`
+      indefinido no log de FALHA (item aberto desde 01/09).
+
+### Sessão 2026-09-02 (parte 3) — Descrição do exame e cliente sem paciente
+
+- [x] 🔴 **A descrição do exame sumia ao anexar o laudo** — reset + closure, ver o item
+      1 do topo. O mesmo defeito atingia `laboratorio` e `dataExame`.
+      ⚠️ Padrão a não repetir: função que zera estado e, na MESMA passagem, decide algo
+      lendo aquele estado. O `setX('')` não muda a variável da closure — compare com o
+      valor de DEPOIS do reset (aqui, `aposReset(...)`), ou não zere.
+- [x] **Cliente sem paciente saiu da lista do Faturamento** — ver o item 2 do topo.
+- [ ] `descartarLoteDivergente` ("Não é este") devolve descrição/laboratório do PEDIDO,
+      e agora também zera `descricaoVeioDoArquivo`. Para o exame AVULSO (sem pedido) ele
+      devolve string vazia, que é o correto — não havia nada antes do arquivo.
+
+### Sessão 2026-09-02 (parte 2) — Paciente inativo: prontuário congelado, não escondido
+
+- [x] 🔴 **A regra que mudou.** Inativar o paciente NÃO o esconde: ele aparece como um
+      paciente normal e TODAS as atividades dele seguem visíveis. O que muda é que, da
+      data e hora da inativação em diante, nada mais pode ser criado, alterado,
+      finalizado, executado, cancelado ou excluído — até o gestor reativar, quando o
+      histórico volta a seguir o trâmite normal.
+      ⚠️ NÃO confundir com `Animal.ativo` (exclusão lógica, §5): ali o paciente e tudo
+      que pende dele SOMEM. São dois estados diferentes e continuam diferentes.
+- [x] 🔴 **O congelamento descongelava.** O estado `Animal.inativo` já existia (migration
+      `20260818000000`), mas o bloqueio estava só nos `criar`: a evolução seguia sendo
+      reaberta, assumida e cancelada; a prescrição, finalizada, executada e cancelada;
+      o agendamento, remarcado; o exame, finalizado; o encaminhamento, concluído.
+      Guard único `bloquearSeAnimalInativo` aplicado a **34 caminhos de escrita** em 8
+      controllers. Ver o topo para as armadilhas (ordem em relação ao gate de acesso,
+      400 × 403, formato da resposta) e para o que fica deliberadamente de fora.
+- [x] **No front, o bloqueio entra nas PERMISSÕES**, não em cada botão: `podeCriar`,
+      `podeEditar`, `podeFinalizar` e `podeDeletar` dos cinco submódulos passaram a ser
+      `!pacienteInativo && (...)`. É o que faz a regra alcançar todo botão de uma vez —
+      e cobrir o botão que ainda vai nascer. `podeImprimir`/`podeCompartilhar` ficam
+      inteiros: imprimir e enviar são saída de conteúdo, não escrita.
+- [x] **Faixa âmbar** no shell de Atendimento e na tela de Vacina (estado, desde quando,
+      por quem, motivo e a saída) + selo "Somente leitura" no card de Pacientes. Sem
+      isso os botões apenas SOMEM e quem olha conclui que perdeu permissão.
+- [x] **Gate estrutural** `__tests__/pacienteInativo.test.js` (55 casos): varre o código
+      dos controllers e reprova handler de escrita sem o guard. Verificado que ele
+      REPROVA de verdade — um handler sem guard foi acrescentado à lista de propósito e
+      o teste falhou, como tem de falhar. Suíte: 352.
+- [x] **O paciente inativo CONTINUA na fila do plantão, sem ação** — a primeira versão
+      o excluía da fila e foi REVERTIDA a pedido: sumir com ele esconderia da equipe que
+      o tratamento existe e ficou parado. As duas `listarParaExecucao` devolvem
+      `animalInativo` por linha; Execução de Prescrição e Painel Principal apagam
+      Executar/Aplicar e Cancelar e mostram o selo "Somente leitura". Ver e Imprimir
+      ficam. ⚠️ Não reintroduzir o filtro que tira a linha da fila.
+- [x] 🔴 **Fatura PAGA é somente leitura** — ver o item no topo. O buraco não era o
+      item (esse já era recusado), era `atualizarStatus`: PAGA → ABERTA reabria tudo.
+- [ ] O congelamento do PACIENTE não alcança o financeiro dele (fatura e orçamento de
+      paciente inativo seguem operáveis) — é dinheiro já lançado, e travar o fechamento
+      prenderia a cobrança da clínica. Diferente da fatura PAGA, que é somente leitura
+      por si. Se a regra tiver de alcançar o financeiro do paciente inativo, o guard já
+      está pronto para ser chamado lá.
+- [ ] `EvolucaoController.transcrever` e `interpretar` (IA sobre o texto digitado) não
+      recebem o guard: não gravam nada no prontuário. Se algum dia passarem a gravar,
+      entram na lista do gate.
+
+### Sessão 2026-09-02 — Assinatura por PAPEL, receituário de controle especial e lupa
+
+- [x] 🔴 **A assinatura escaneada do veterinário saía na linha de TODO mundo.** O bloco
+      `assinatura` lia a MARCA e desenhava imagem + nome + CRMV sem olhar o `rotulo`:
+      "Farmacêutico", "Comprador" e "Responsável pelo animal" saíam todos assinados
+      pelo veterinário que emitiu. Nos 8 TCLEs do CFMV isso já acontecia desde 26/08 —
+      o termo de consentimento saía com o vet no lugar do tutor.
+      Campo novo `conteudo.assinante` ('VETERINARIO' | 'OUTRO'), com a regra em
+      **`catalogo.ts#assinaturaDoVeterinario`** — fonte única de `BlocoView.tsx` e de
+      `utils/DocumentoPrint.ts` (duas cópias divergiriam, e divergir aqui volta a
+      falsificar papel).
+      ⚠️ **Sem migration e sem re-seed**: bloco gravado sem `assinante` cai em
+      `mostrarCrmv`, que é `true` exatamente na linha do veterinário nos 12 modelos e na
+      regra que o prompt sempre seguiu. O seed e o catálogo passaram a gravar o campo.
+      ⚠️ O espaço de 42px acima da linha FICA na linha de outra pessoa: é onde ela
+      assina. O que some é a identidade, não o lugar de assinar.
+      ⚠️ `assinante` entrou no whitelist de `normalizarBlocos` (`documentoLLMService`),
+      senão o campo seria descartado em silêncio nos blocos vindos da IA.
+      Editor: seletor "Quem assina" + "Exibir CRMV" só no veterinário (28-d).
+- [x] **Receituário de controle especial na Prescrição** — ver o item 2 do topo.
+      `receitaControlada.ts` (busca do modelo por NOME + rota da emissão) e
+      `receituarioControladoOuComum` em `SubModuloPrescricao`, função de MÓDULO usada
+      pela lista E pelo modal de visualização (28-g: os dois têm o mesmo Imprimir).
+- [x] **Lupa na visualização do documento** — ver o item 3 do topo.
+- [x] 🔴 **Cadastro Pessoal escondia CRMV e assinatura já gravados** — ver o item 3b
+      do topo. `mostrarDadosProfissionais` (VISIBILIDADE) passou a ser superconjunto de
+      `precisaCrmv` (OBRIGATORIEDADE), e o asterisco do CRMV acompanha a segunda.
+- [ ] O cadastro PESSOAL (nome, telefone, endereço) continua sendo POR EMPRESA
+      (`tb_usuario_empresa`, §36): vínculo com os campos nulos abre a tela em branco
+      NAQUELA empresa, de propósito — não é o mesmo defeito do bloco profissional, e
+      cair no cadastro de outra clínica violaria a regra 36-b. Se o relato de "abre
+      vazio" reaparecer com os campos pessoais, o lugar de olhar é a linha de
+      `tb_usuario_empresa` da empresa que o seletor resolveu.
+- [ ] O `ModalPreencher` do editor e o `Mobile.tsx` renderizam a folha com escala FIXA
+      e não ganharam a lupa. São a pré-visualização de quem MONTA o modelo, não a de
+      quem confere o papel emitido; se incomodar, o controle é o mesmo de `Emitidos`.
+- [ ] O `<option>` do paciente em `/documentos` perdeu o nome do proprietário (a
+      pedido), e com ele o desempate de XARÁS — dois pacientes homônimos de donos
+      diferentes viram duas linhas idênticas. O `SeletorAnimalInteligente` foi removido
+      da tela em 30/08 e não há outro distintivo. Se aparecer no uso, o caminho é pôr
+      baia/local no `<option>` ou trazer o seletor de volta.
+- [ ] `linhasDaFonte` para `prescricao.controlados` lê UM grupo (o pedido, o do
+      atendimento ou o último). Receituário que precise juntar os controlados de várias
+      prescrições não tem como pedir isso.
+
+### Sessão 2026-09-01 (parte 2) — Listas REPETÍVEIS: medicamento, vacina, exame e procedimento
+
+- [x] 🔴 **O QUE SE REPETE NÃO É LACUNA.** Uma lacuna (`[[Rótulo]]`) é um campo e um
+      valor — serve para "Nome do comprador", não para "os medicamentos da receita".
+      Uma receita pode sair com um medicamento ou com seis, e **isso não é propriedade
+      do MODELO, é de cada EMISSÃO**: com lacunas, o modelo teria de trazer escrito o
+      número máximo de itens, e o quinto medicamento não teria onde entrar.
+      Nasce a LISTA: um grupo de sub-campos (as colunas) repetido N vezes (as linhas),
+      com o N escolhido na hora de emitir. Na tela vira um repetidor com
+      **"+ Adicionar"**; no papel, uma tabela.
+      Fonte única: **`backend/src/lib/documentoListas.js`**, espelhada em
+      `frontend/src/modules/documentos/listas.ts` (a tela precisa saber a que grupo cada
+      bloco pertence para a pré-visualização ao vivo — mesma divisão de `campos.ts`,
+      onde o COLETOR é do servidor e só o APLICADOR é local).
+- [x] 🔴 **E A LISTA JÁ NASCE PREENCHIDA — é o "autopreenchido" do pedido.** Quando o
+      grupo aponta para uma FONTE clínica, as linhas vêm do que o paciente REALMENTE
+      tem no S2Vet: a última prescrição (a DO ATENDIMENTO em curso quando há
+      `evolucaoId`), as vacinas aplicadas, os exames pedidos. O vet confere, corrige e
+      acrescenta — não redigita o que o sistema já sabe.
+      ```
+      prescricao.medicamentos  → Medicamento · Dose · Via · Frequência · Duração
+      prescricao.procedimentos → Procedimento · Quantidade · Observação
+      vacinas.aplicadas        → Vacina · Lote · Aplicação · Próxima dose
+      exames.resultados        → Exame · Solicitado em · Resultado
+      ```
+      ⚠️ **AS COLUNAS DA FONTE SÃO CANÔNICAS**, não as que o modelo declarou. É isso que
+      faz o preenchimento ALINHAR: se o modelo pedisse ["Remédio", "Qtd"] e a consulta
+      devolvesse cinco campos, a dose cairia na coluna da quantidade. Há teste travando.
+      ⚠️ Lista SEM fonte (grupo genérico, `listaCampos`) usa as colunas do modelo e
+      nasce VAZIA — ali não há dado a alinhar.
+      ⚠️ "NADA DE INVENTAR VALOR" continua valendo: paciente sem prescrição abre uma
+      linha em branco, nunca um medicamento plausível.
+- [x] **Os quatro blocos clínicos que já existiam viraram listas de verdade.**
+      `medicamentos`, `vacinas`, `procedimentos` e `exames` mostravam linhas de EXEMPLO
+      no editor com a legenda *"Preenchido na emissão a partir de X"* — **promessa que
+      nada cumpria**: `aplicarEmBlocos` nunca os tocava e no papel eles saíam VAZIOS.
+      Agora a legenda é verdade. `tabelaDinamica` entrou junto, pelo mesmo motivo.
+- [x] **Bloco novo `listaCampos`** para o grupo repetível que o sistema NÃO tem (dados
+      do comprador, itens de um lote, produtos de uma nota): `conteudo.rotulo` nomeia o
+      grupo e `conteudo.colunas` são os campos de cada item.
+- [x] **O valor de uma lista é uma TABELA, não um texto** — por isso ele viaja num mapa
+      PRÓPRIO (`listas: Record<chave, string[][]>`), ao lado de `preenchimento`, e não
+      dentro dele. Encaixar linhas num `Record<string,string>` obrigaria a serializá-las
+      dentro de string, e a primeira vírgula digitada quebraria a leitura.
+      `POST /documentos/campos` devolve `listas[]` com `sugestao` já pronta;
+      `POST /documentos/emitidos` recebe `listas` e as aplica no snapshot.
+- [x] ⚠️ **As listas entram ANTES da resolução de variáveis** (`aplicarEmBlocos` ganhou
+      um 4º parâmetro). É o que faz "aplicar em {{animal.nome}}" digitado numa CÉLULA
+      sair com o nome do paciente, como qualquer outro texto da folha.
+- [x] ⚠️ **No emitido, a lista vira `tabela` LITERAL e o `fonteDados` é APAGADO.** O
+      documento é um snapshot: reimprimir daqui a dois anos não pode voltar ao banco e
+      trazer a prescrição de hoje. Linha totalmente em branco é descartada — tabela com
+      buraco impressa é pior que tabela curta.
+- [x] **Repetidor único** (`CamposForm.tsx#ListaCamposInput`), usado pela tela de
+      emissão (`pages/Documentos.tsx`) E pelo `ModalPreencher` do editor — duas cópias
+      divergiriam na primeira correção (28-g). Selo "do cadastro do paciente" quando a
+      linha veio sugerida: sem ele, a linha que apareceu sozinha parece dado inventado
+      pelo sistema. Campos e listas são agrupados na MESMA seção do formulário — para
+      quem emite, os dois são "o que falta preencher".
+- [x] **O prompt aprendeu a regra** (`converter_documento`): medicamento, vacina,
+      exame, procedimento e posologia NUNCA viram texto com o valor do exemplo nem par
+      de lacunas fixo — viram lista. Verificado numa conversão real da receita de
+      controle especial: o bloco "Gabapentina … 150 mg / Dose q.s.p … 120 un / Dar 1
+      dose a cada 12 hrs" saiu como UM bloco `medicamentos` (auto-preenchido), e a caixa
+      "Identificação do Comprador" como um `listaCampos` de Nome · RG · Endereço ·
+      Cidade e UF · Telefone.
+- [x] **Retentativa única para falha TRANSITÓRIA do provedor** (503 "high demand", 429,
+      5xx, UNAVAILABLE). O Gemini devolve 503 de vez em quando e a falha é do MINUTO,
+      não do documento: sem isto, um pico de demanda do Google empurra o envio para o
+      caminho da imagem e o vet perde os campos por um motivo que não tem nada a ver com
+      o arquivo dele. ⚠️ UMA só, e só transitória: erro de conteúdo não melhora
+      repetindo, e insistir dobraria a espera antes de cair no mesmo lugar.
+- [x] 🔴 **Bug encontrado no próprio log de IA**: quando a chamada multimodal FALHA,
+      `modelo` ficava `undefined` e `logAiUsage` morria com *"Argument `modelo` is
+      missing"* — perdendo justamente o registro da falha que se quer investigar. Agora
+      começa em `MODELO_PADRAO`. ⚠️ `exameParserService.chamarGeminiComLog` tem a MESMA
+      forma e o mesmo defeito latente; aplicar quando for tocado.
+      Testes: 5 casos novos (53 no arquivo, **293 na suíte**); `tsc -b` e `vite build`
+      limpos.
+- [ ] `linhasDaFonte` lê a ÚLTIMA prescrição/vacina/exame do paciente. Documento que
+      precise de uma janela ("as vacinas dos últimos 12 meses") não tem como pedir isso
+      — o gancho seria um parâmetro no `fonteDados`, e não foi pedido.
+- [ ] O `Mobile.tsx` renderiza a folha sem `listas` (é a pré-visualização do EDITOR, que
+      mostra os exemplos). Se o fluxo mobile passar a emitir, precisa receber os valores
+      como a tela de emissão recebe.
+
+### Sessão 2026-09-01 — Cabeçalho padrão da folha + documento enviado vira modelo com campos
+
+- [x] **Cabeçalho igual em TODO documento** — logo (canto superior esquerdo) → TÍTULO →
+      **Veterinário** → **Proprietário** → **Paciente**, uma linha cada, com os campos
+      separados por `·`. Substitui o "timbre", que mostrava só a logomarca.
+      🔴 A REGRA mora em `modules/documentos/cabecalho.ts#prepararFolha`: quais campos
+      entram, em que ordem, e o que acontece quando estão vazios. Os DESENHOS continuam
+      sendo dois, como toda a Central — `CabecalhoFolha.tsx` (JSX) e
+      `utils/DocumentoPrint.ts#cabecalhoHtml` (STRING, para a impressão por iframe e o
+      PDF do Puppeteer). O que não podia divergir era o CONTEÚDO, e é ele que está
+      centralizado.
+      Aplicado nos QUATRO renderizadores de folha, sem exceção: `PreviewA4` (editor),
+      `ModalPreencher` (emissão), `VisualizarDocumentoModal` (emitido e
+      pré-visualização) e `CentralMobile`.
+- [x] ⚠️ **O primeiro bloco `titulo` visível é ABSORVIDO pelo cabeçalho.** Sem isso, os
+      12 modelos do CFMV — que começam com "ATESTADO SANITÁRIO" e amigos, porque a
+      norma exige — sairiam com o título impresso DUAS VEZES, e a ordem pedida (título
+      antes dos dados) se inverteria. Por isso `prepararFolha` devolve `{ cabecalho,
+      corpo }` e **todo renderizador consome `corpo`, nunca `blocos` cru**.
+      Só o PRIMEIRO e só antes de qualquer conteúdo: `titulo` no meio da folha é
+      subtítulo de seção e continua onde está.
+- [x] ⚠️ **Campo sem dado SOME** — não vira "—" nem "N/A", e a seção inteira desaparece
+      quando nenhum dos seus campos resolveu. É a regra de 26/08 ("nada de inventar
+      valor") aplicada ao cabeçalho: um cabeçalho afirmando "Peso: 480 kg" porque o
+      cadastro está em branco é documento falso.
+- [x] ⚠️ **No EMITIDO, o cabeçalho sai do SNAPSHOT** (`doc.contexto` + `doc.marca`),
+      nunca do cadastro de hoje — reimprimir daqui a dois anos tem de devolver o
+      proprietário e o paciente COMO ESTAVAM.
+      🔴 E o contexto é `?? {}`, **NUNCA `?? null`**: sem contexto, `resolverVariaveis`
+      cai no modo EXEMPLO do catálogo e o papel REAL sairia com "Thor" e "Haras Boa
+      Vista" no cabeçalho. Objeto vazio mantém o modo real, com o que falta saindo
+      vazio. Vale nos dois espelhos.
+- [x] 🔴 **O DOCUMENTO ENVIADO PELA CLÍNICA DEIXOU DE SER UMA FOTOGRAFIA.** Desde
+      30/08 o arquivo virava blocos `imagem`, uma por página: imprimia, ia por
+      WhatsApp e entrava no histórico como qualquer documento — mas era papel morto,
+      sem UM campo para digitar e sem preencher nada sozinho.
+      O diálogo de envio ganhou **"Identificar os campos automaticamente"**, LIGADA por
+      padrão: as páginas vão para a IA e voltam como BLOCOS de verdade, com
+      `{{variáveis}}` no que o S2Vet já sabe (paciente, proprietário, veterinário,
+      datas) e `[[lacunas]]` no que ele não sabe (nome do comprador, RG, nº da partida,
+      tatuagem). **Daqui para a frente nada é novo**: `coletarCampos` já monta o
+      formulário da emissão e `aplicarEmBlocos` já resolve as variáveis — era só
+      produzir um modelo que os alimentasse.
+      Desligar existe para o papel que não tem nada a preencher (informativo, tabela de
+      referência) e para quem prefere a via digitalizada intacta.
+- [x] **`converter_documento@v1`** (`ai/prompts/converterDocumento.js`, arquivo próprio
+      como `assistenteDocumento`) + **`services/documentoConversaoService.js`**.
+      MULTIMODAL: as páginas vão anexadas (`inlineData`) junto do texto que o PDF
+      trazia embutido.
+      ⚠️ **NENHUM DADO DO ARQUIVO DE EXEMPLO SOBREVIVE.** O que a clínica envia é uma
+      via JÁ EMITIDA de outro paciente — traz "Billy", "Cláudia Gama", "CRMV 6263",
+      "Gabapentina 150 mg". Copiar qualquer um desses valores para o modelo produziria
+      documento FALSO EM SÉRIE: toda emissão futura sairia com o nome do animal de
+      outra pessoa, e nada no sistema acusaria. É a primeira regra do prompt.
+      ⚠️ O prompt **PROÍBE recriar o cabeçalho** (logo, endereço da clínica, caixas de
+      "Identificação do Emitente", "Animal" e "Tutor"): a folha já os desenha sozinha,
+      e recriá-los como blocos os imprimiria duas vezes.
+      ⚠️ Texto normativo (declaração, aviso legal, identificação da via) é VERBATIM.
+- [x] **REDE DE SEGURANÇA depois do modelo**, no serviço:
+      - `variaveisDesconhecidas` — chave de variável ALUCINADA vira `[[Rótulo]]`, nunca
+        é apagada. Chave desconhecida resolve VAZIO na emissão (regra de "nada de
+        inventar valor"), o que é correto no modelo feito à mão, onde alguém escolheu a
+        variável de uma lista; escrita pelo LLM, ela viraria um buraco SILENCIOSO no
+        papel. Virando lacuna, aparece no formulário e uma pessoa decide o que escrever.
+        ⚠️ `campoAuto` fica de fora: variável que não resolve ali já vira campo sozinha
+        (`coletarCampos`, origem CADASTRO, chaveada pelo rótulo).
+      - `umTituloSo` — só o primeiro bloco `titulo`, pelo motivo do item do cabeçalho.
+      - `normalizarBlocos` (reusado de `documentoLLMService`) — tipo desconhecido é
+        DESCARTADO, nunca convertido em `texto`.
+      - `catalogo.ts#comEstiloPadrao` (front, na borda) — a IA descreve CONTEÚDO e quase
+        nunca estilo (devolve `estilo: {}`); sem esta passada, o título viria com corpo
+        de texto e a tabela sem borda. O que ela mandar continua valendo por cima.
+- [x] ⚠️ **FALHA NÃO É ERRO DE TELA.** Arquivo que não é documento, JSON inválido, IA
+      fora do ar → 200 com `ehDocumento: false`, e o envio CAI NO CAMINHO DA IMAGEM,
+      que é o comportamento de sempre e nunca falha (com um `toast` dizendo o que
+      houve). Perder o envio por causa de um 500 do modelo seria trocar um documento
+      sem campos por documento nenhum. O ÚNICO erro propagado é o **429 de QUOTA**, que
+      é decisão do plano do cliente e precisa ser dita (`next(err)`, §7).
+- [x] 🔴 **MAS A FALHA SEMPRE DIZ O MOTIVO** (corrigido no mesmo dia, depois do primeiro
+      envio real). A primeira versão devolvia `ehDocumento: false` PELADO e o front
+      fazia `.catch(() => null)`: "sem empresa no contexto", "sem permissão", "a rota
+      não existe no servidor em execução", "as páginas não chegaram", "a IA está fora
+      do ar" e "isto não é um documento" viravam A MESMA frase na tela — e não sobrava
+      nada para depurar, nem no cliente nem no servidor (o `console.error` do
+      controller some no Winston de quem não está olhando o terminal).
+      Agora o backend devolve `motivo` em TODOS esses caminhos e loga com `logger.error`
+      (com stack); `api.ts#motivoDoErro` traduz 403/404/413/429/timeout em uma frase que
+      diz o que fazer; a tela mostra o motivo dentro do toast, por 8s.
+      ⚠️ **Fallback silencioso é armadilha**: cair no caminho da imagem é aceitável;
+      cair sem saber por quê, não. Vale para todo fallback novo.
+      Timeout EXPLÍCITO de 180s na chamada de conversão — ela carrega imagens e espera o
+      modelo ler a folha; sem timeout, um travamento de rede fica pendurado para sempre
+      e a tela nunca sai de "Identificando os campos…".
+- [x] **Rota `POST /api/documentos/templates/converter`** — multipart (`paginas[]` +
+      campo `texto` + `nome`), gate `documentos.templates.criar` (é um modelo da clínica
+      que vai nascer disto). **NÃO grava nada**: devolve a proposta, e quem cria o
+      modelo é o `POST /templates` de sempre — é o que permite mostrar o resultado antes
+      de comprometer o acervo, e o que faz a falha não deixar modelo pela metade.
+      ⚠️ `/templates/converter` ANTES de `/templates/:id` (armadilha 1) e `tenantRls`
+      REENTRA logo após o multer — as duas ordens do `/templates/upload`.
+      ⚠️ MULTIMODAL não passa por `callAI` (que só aceita texto): vai por
+      `gerarConteudo`, então o log de uso E o **gate de quota** são feitos à mão no
+      serviço. Esquecer o gate deixaria este caminho inteiro fora do teto do plano.
+      Teto de **4 páginas**, espelhado no front (`api.ts#MAX_PAGINAS_IA`) para não subir
+      megabytes de imagem que ninguém vai ler.
+- [x] **`upload.ts` partido em dois passos**: `paginasDoArquivo` (arquivo → imagens +
+      texto embutido do PDF) e `blocosDeImagens` (o caminho reserva). Converter uma vez
+      só serve aos DOIS caminhos e evita repetir a renderização, que é a parte cara.
+      `arquivoParaBlocos` continua existindo como atalho do reserva.
+      ⚠️ O texto do PDF viaja JUNTO das imagens, não no lugar delas: o texto dá a
+      redação EXATA (nenhum OCR erra uma vírgula que já está lá) e a imagem dá a
+      ESTRUTURA (o que é caixa, o que é tabela, onde está a linha de assinatura). Um
+      sozinho perde metade do documento. PDF escaneado devolve texto vazio e a IA lê só
+      as imagens — por isso a extração tem `catch` silencioso por página.
+      Testes: 5 casos novos em `documentosCentral.test.js` (48 no arquivo), incluindo o
+      elo que fecha a regra — a lacuna criada a partir de uma chave alucinada TEM de ser
+      coletada por `coletarCampos` como campo do formulário. Suíte: **288 passando**;
+      `tsc -b` + `vite build` limpos.
+- [ ] **Os 12 modelos do CFMV repetem a identificação do animal no CORPO** (blocos
+      `campoAuto` de nome, espécie, raça, pelagem…), e isso agora convive com as mesmas
+      informações no cabeçalho. **Não é defeito**: a Res. 1.321/2020 exige a
+      identificação DENTRO do documento, e o cabeçalho é identidade da folha, não
+      conteúdo normativo. Se um dia incomodar, o lugar de decidir é o seed — não o
+      cabeçalho, que é o que dá uniformidade a todos os outros documentos.
+- [ ] No EDITOR sem paciente escolhido o cabeçalho mostra os EXEMPLOS do catálogo
+      ("Thor", "Haras Boa Vista"), como o resto do preview já fazia — é o modo 2 de
+      `resolverVariaveis`, e serve para o vet ver a CARA da folha. Nada disso alcança
+      papel emitido: lá o contexto é sempre o snapshot.
+- [ ] A conversão só produz blocos ESTÁTICOS (`texto`, `tabela`, `checklist`,
+      `campoAuto`…). A tabela de medicamentos de um receituário vira `tabela` com
+      lacunas, não o bloco `medicamentos` (que puxaria a prescrição do atendimento).
+      Mapear os dois é possível — o vocabulário já existe —, mas exige decidir quando o
+      documento deve puxar dado clínico sozinho, e isso não foi pedido.
+- [ ] O modelo convertido nasce PUBLICADO e já fica selecionado na tela, pronto para
+      emitir. Revisá-lo bloco a bloco é no editor, por `/documentos/modelos?templateId=`
+      — que continua sem porta de entrada na interface (item conhecido de 30/08).
+
+### Sessão 2026-08-30 — Ações numa linha só + `/documentos` remodelada para EMISSÃO
+
+- [x] 🔴 **REGRESSÃO: as ações do Atendimento saíam UMA POR LINHA.** `AcoesRegistro`
+      era `flex-wrap` também no desktop; com `flex-wrap` a largura MÍNIMA do contêiner
+      flex é a de UM item, então a `<table className="w-full">` espremia a coluna
+      "Ações" até isso e as 8 ações da Evolução empilhavam. Corrigido no COMPONENTE
+      (`flex-wrap md:flex-nowrap`) — uma correção que vale para toda lista do sistema,
+      em vez de largura fixa em cada `<td>`.
+      ⚠️ `whitespace-nowrap` no `<td>` NÃO resolve: governa quebra de TEXTO, não de
+      item flex. ⚠️ Não reintroduzir a quebra no desktop — ver §6 para a justificativa
+      antiga e por que ela caducou.
+- [x] **`/documentos` virou a tela de EMISSÃO** (`pages/Documentos.tsx`), no layout de
+      `/agendamentos`: `PageContainer` + `BotaoVoltar` + cabeçalho com ícone + cards
+      brancos `rounded-2xl`. Ordem da tela: (1) UMA LINHA com *Paciente · Tipo de
+      Documento · Nome do Documento*; (2) o `AnimalCard` do paciente; (3) os campos a
+      preencher em LARGURA CHEIA, com **Cancelar · Inserir · Salvar**; (4) o
+      **Histórico de Documentos** do paciente.
+      O `SeletorAnimalInteligente` continua abaixo da linha, e só aparece com mais de
+      um paciente — é ele que desempata XARÁS pelo proprietário, que o `<select>`
+      simples não faz.
+      Campo multilinha ocupa a linha inteira do grid (`sm:col-span-2 lg:col-span-3`):
+      uma área de observações espremida em 1/3 da largura não serve para escrever.
+- [x] 🔴 **O EDITOR DE BLOCOS NÃO FOI REMOVIDO — mudou para `/documentos/modelos`**
+      (`CentralDocumentos.tsx`, sem alteração), com o botão "Modelos" no cabeçalho da
+      tela nova, gateado por `documentos.templates.editar`. Montar modelo é
+      CONFIGURAÇÃO, feita uma vez; emitir acontece a cada atendimento — e estava
+      enterrado atrás de abrir um card, entrar no editor e achar o "Gerar".
+- [x] **Inserir × Salvar**, o par de `SubModuloExames`: Inserir guarda o documento
+      preenchido numa fila LOCAL (atestado + TCLE no mesmo atendimento é o caso comum),
+      Salvar emite a fila inteira. Nada da fila existe no banco antes do Salvar.
+      ⚠️ **Emissão SEQUENCIAL, nunca `Promise.all`**: `DOC-0001` é sequência POR
+      EMPRESA sorteada dentro da transaction — em paralelo, duas transações disputam o
+      mesmo número.
+      ⚠️ **O Salvar inclui o formulário atual**, sem exigir Inserir antes: o caso comum
+      é UM documento, e um Salvar que não salva nada é o pior tipo de botão. Ao começar
+      a emitir, o formulário é MOVIDO para a fila — sem isso, uma falha no meio o
+      devolveria à fila E o deixaria selecionado na tela, e o Salvar seguinte o
+      emitiria duas vezes.
+      ⚠️ Falha parcial diz QUANTOS já saíram e mantém na fila só os que faltam: o que
+      já foi emitido TEM número e reemitir duplicaria o documento.
+- [x] **Histórico com Visualizar · Imprimir · WhatsApp · E-mail** (+ Cancelar com
+      justificativa, §33 — a via errada precisa ser revogável, e a rota já existia).
+      FONTE ÚNICA em `modules/documentos/Emitidos.tsx` (`ListaDocumentosEmitidos`,
+      `VisualizarDocumentoModal`, `AcoesDocumento`), reusada pelo **card "Documentos"
+      da tela do paciente** — duas listas divergiriam na primeira correção (28-g).
+      A prop `compacto` existe para a coluna estreita; para variar a forma, prop —
+      nunca uma segunda lista.
+      ⚠️ O destino do envio é o contato do cliente GRAVADO NO SNAPSHOT
+      (`contexto['cliente.telefone']` / `['cliente.email']`), não o cadastro de hoje: é
+      para quem o documento foi emitido.
+      ⚠️ `VisualizarDocumentoModal` só recebe `contexto`/`preenchimento` na
+      PRÉ-VISUALIZAÇÃO (blocos ainda do MODELO, com `{{}}`/`[[]]` crus). No emitido
+      fica ausente de propósito: aplicar o contexto de hoje reabriria a porta para o
+      papel antigo mudar sozinho.
+- [x] **Card "Documentos" em `/animal/:id`.** O documento já aparecia no Histórico como
+      EVENTO ("foi emitido tal dia"); o card responde outra pergunta, a do balcão —
+      "quais documentos este paciente tem, e me dá uma via" —, por isso ele traz
+      reimpressão e envio, que a linha do tempo não tem. "Emitir documento" leva a
+      `/documentos?animalId=<id>`.
+      ⚠️ A query é lida por `useSearchParams` (o ROUTER), nunca por
+      `window.location.search`: o app usa `HashRouter` e a query mora no FRAGMENTO —
+      `location.search` é sempre vazio (§14).
+      ⚠️ A carga tem `catch` que só esvazia a lista: tabela não migrada ou 403 não pode
+      derrubar a tela do paciente.
+- [x] **Novo `utils/DocumentoPrint.ts`** — `gerarHtmlDocumento` / `imprimirDocumento` /
+      `nomeArquivoDocumento`. Espelho em STRING de `BlocoView.tsx` (o PDF do Puppeteer e
+      a impressão por iframe recebem string, não DOM montado): **ao mexer no visual de
+      um bloco, mexa nos dois.** Não resolve variável — os blocos do emitido já vêm
+      resolvidos; o que sobrar de `{{`/`[[` é APAGADO, porque chave crua no papel é pior
+      que vazio. `qrcode` e `linhaTempo` não imprimem nada: são placeholders gráficos do
+      editor, e um QR decorativo finge ser código verificável.
+      ⚠️ Logo e assinatura passam por `carregarComoDataUri` (hook `useImagensDocumento`,
+      que resolve as URLs DISTINTAS da lista de uma vez): o Puppeteer BLOQUEIA
+      requisição que não seja `data:` — `<img src="/api/midia/…">` imprime bem no
+      navegador e nasce QUEBRADA no PDF do servidor.
+- [x] 🔴 **O TIMBRE VIROU PARTE DO SNAPSHOT** — `DocumentoEmitido.marca` (logo da
+      clínica, imagem da assinatura, nome e CRMV de quem assinou), gravado em
+      `contexto._marca`. **SEM MIGRATION**: `contexto` já é JSONB. Reimprimir daqui a
+      dois anos tem de sair com a logo e a assinatura DAQUELE dia — buscar a marca de
+      hoje carimbaria no papel antigo a assinatura de quem estiver logado agora.
+      `null` nos emitidos ANTERIORES: saem sem logo e com a linha de assinatura em
+      branco, que é o correto e não um defeito a "consertar" com a marca atual.
+- [x] Extraído `modules/documentos/CamposForm.tsx` (`CampoInput`, `tipoDoCampo`,
+      `AJUDA_ORIGEM`) — fonte única do campo a preencher, usada pela tela nova E pelo
+      `ModalPreencher` do editor. Sem isso seriam dois inputs iguais, e a primeira
+      correção de tipo (`date` × `time`) valeria para um só.
+      Suíte: 278 backend passando; `tsc -b` + `vite build` limpos.
+- [x] **O SELETOR DE DOCUMENTO MOSTRA O ACERVO INTEIRO, e é ele que define o TIPO**
+      (pedido de 2026-08-30). Antes o "Tipo de Documento" FILTRAVA a lista, o que
+      obrigava a acertar a gaveta antes de achar o papel — e quem procura "atestado de
+      vacinação" sabe o nome do documento, não em qual das 11 categorias ele foi
+      arquivado. Agora: **Nome do Documento** vem primeiro e lista TODOS os modelos,
+      agrupados por `<optgroup>` (o agrupamento preserva a organização que o filtro
+      dava, sem esconder nada); escolher o documento PREENCHE o **Tipo**, que virou
+      campo de LEITURA.
+      ⚠️ O Tipo não é editável ali de propósito: mudá-lo reclassificaria o MODELO da
+      clínica, e isso é edição de modelo — mora em `/documentos/modelos`.
+- [x] 🔴 **CATEGORIA DEIXOU DE SER LISTA FECHADA — a clínica cria as suas.** O
+      `CATEGORIAS` do `DocumentoTemplateController` era um `Set` de 11 slugs que
+      DESCARTAVA em silêncio qualquer outro valor; virou `CATEGORIAS_PADRAO` +
+      `normalizarCategoria(valor)`, que aceita texto livre.
+      **SEM MIGRATION**: `tb_documento_templates.categoria` já é `VARCHAR(30)` livre.
+      ⚠️ **NÃO EXISTE TABELA DE CATEGORIAS**, e por isso **a categoria existe enquanto
+      houver um documento nela**: ela é uma coluna de texto do próprio modelo. A tela
+      reúne as categorias varrendo os modelos (`categoriasDisponiveis`, em
+      `catalogo.ts`) — padrão + as em uso. Consequência aceita: "criar categoria" É
+      criar o primeiro documento dela, e o modal diz isso em vez de fingir que são duas
+      coisas. Categoria vazia não teria onde ser gravada e sumiria no refresh.
+      ⚠️ `normalizarCategoria` colapsa espaços ("Exames   de  compra" e "Exames de
+      compra" são a MESMA gaveta, senão viram duas idênticas na tela), corta em 30
+      (a coluna recusaria e daria 500 numa digitação longa) e devolve a PADRÃO no slug
+      canônico minúsculo — "Laudos" digitado à mão tem de cair em `laudos`, não criar
+      uma gaveta paralela. String vazia devolve `null` e **não apaga** a categoria que
+      o modelo já tem.
+      ⚠️ No front, `CategoriaId` virou `CategoriaPadrao | (string & {})` — o `& {}`
+      preserva o autocomplete das padrão; com `string` puro o editor pararia de sugerir
+      'laudos' e amigas. `rotuloCategoria` devolve o próprio valor quando não é padrão,
+      porque a criada pela clínica é gravada já com o nome que ela digitou.
+      Testes: 5 casos novos em `documentosCentral.test.js` (43 no arquivo, 283 na
+      suíte) — afrouxar validação pede teste, e o que eles travam é que "livre" não
+      vire "qualquer coisa".
+- [x] **Criar documento / categoria na própria tela de emissão**, gateado por
+      `documentos.templates.criar`. O que nasce ali é o CADASTRO (nome + tipo); o
+      CONTEÚDO é montado no editor, para onde a tela navega com
+      **`/documentos/modelos?templateId=<id>`** — sem esse parâmetro a pessoa cairia no
+      editor e teria de procurar na biblioteca o modelo que acabou de criar.
+      ⚠️ O modelo nasce com os blocos de **título e assinatura**, nunca com zero:
+      documento vazio é recusado na emissão (`SEM_BLOCOS`), então ele apareceria no
+      seletor e falharia só no Salvar.
+      ⚠️ O efeito do `?templateId=` depende da CONTAGEM de modelos, não do array:
+      `bib.templates` é objeto novo a cada recarga da biblioteca, e o efeito reimporia
+      o id da URL a cada uma — puxando o vet de volta àquele modelo toda vez que ele
+      abrisse outro.
+- [x] **Segundo seletor de paciente e card do animal REMOVIDOS da tela** (pedido de
+      2026-08-30). O paciente já é escolhido no campo da linha superior, e os dois
+      empurravam o formulário para baixo — que é o que a tela veio resolver. O
+      desempate de XARÁS que o `SeletorAnimalInteligente` fazia segue coberto: o
+      `<option>` mostra `Nome — Proprietário`. ⚠️ Não reintroduzir; o dado clínico do
+      paciente tem casa própria em `/animal/:id`.
+- [x] 🔴 **DOCUMENTO ENVIADO PELA CLÍNICA — "não achei" virou "cadastre agora".** O
+      campo **Nome do Documento** deixou de ser `<select>` e virou COMBOBOX com
+      digitação livre; nome que não existe no acervo oferece **Enviar “X”**, que abre o
+      diálogo de arquivo + nome + categoria. Gate: `documentos.templates.criar` (é um
+      MODELO da clínica que nasce ali, não uma emissão) — sem a permissão, o combo diz
+      "nenhum documento com esse nome" e não oferece botão que iria 403 (28-d).
+      ⚠️ Enquanto o texto for o NOME do já selecionado ele NÃO conta como busca: sem
+      isso, reabrir o combo depois de escolher mostraria "nenhum documento com esse
+      nome" para o PRÓPRIO item escolhido, e ofereceria enviá-lo de novo — a armadilha
+      do combo de animal da Agenda (§12, 2026-08-04).
+      ⚠️ O combo abre por `onClick` ALÉM de `onFocus`, e a opção é escolhida em
+      `onMouseDown` com `preventDefault`: o foco nunca sai do input, e `focus` não
+      dispara de novo num campo já focado — só com `onFocus` a lista não reabriria
+      depois da primeira escolha.
+- [x] 🔴 **O QUE SOBE É SEMPRE IMAGEM — PDF é convertido no NAVEGADOR, uma imagem por
+      página** (`modules/documentos/upload.ts`). POR QUÊ, já que guardar o PDF cru seria
+      mais simples: a folha percorre QUATRO caminhos — preview A4 (`BlocoView`),
+      impressão por iframe, PDF do Puppeteer para WhatsApp/e-mail (`DocumentoPrint`) e o
+      snapshot do emitido. PDF não se desenha em nenhum deles: cada um precisaria de um
+      desvio próprio (pdf.js no preview, abrir noutra aba na impressão, mandar o arquivo
+      em vez do HTML no envio) e o documento enviado viraria cidadão de segunda classe —
+      o oposto de "seguir as mesmas regras de todos os documentos". Convertido em
+      imagem, ele É um documento como qualquer outro, **sem uma linha de exceção em
+      nenhum dos quatro caminhos**.
+      Dependência nova: `pdfjs-dist`, por `import()` DINÂMICO (como `jspdf`/`html2canvas`
+      já são em `CentralDocumentos.exportarPdf`) — o bundle principal cresceu ~9 kB; o
+      pdf.js (483 kB) e o worker (1,2 MB) só descem para quem envia um PDF.
+      ⚠️ O worker precisa de `new URL('pdfjs-dist/build/pdf.worker.min.mjs',
+      import.meta.url)` — é a forma que o Vite entende para empacotá-lo; sem isso o
+      pdf.js busca um caminho que não existe no build e falha SÓ em produção.
+      ⚠️ Canvas pintado de BRANCO antes de desenhar, nos dois caminhos: JPEG não tem
+      alfa, e PDF/PNG transparente sai com o fundo PRETO no papel.
+      ⚠️ `destroy()` é da TAREFA de carregamento (`getDocument(...)`), não do documento.
+- [x] **`estilo.altura === 0` = ALTURA AUTOMÁTICA no bloco `imagem`** — convenção do
+      documento enviado, em que a imagem É a folha. O padrão de 160px é pensado para
+      uma foto de exame no meio do texto e entregaria uma TIRA do documento.
+      ⚠️ `?? 160` não serve: `0` não é nullish e viraria `height: 0`. Usar `|| 'auto'`.
+      Aplicado nos DOIS renderizadores (`BlocoView` e `DocumentoPrint`), que são
+      espelhos um do outro.
+- [x] **Rota nova `POST /api/documentos/templates/upload`** (multipart, campo
+      `arquivo`), gate `documentos.templates.criar`. Aceita só imagem, validando
+      **extensão E mimetype** (validar só o mimetype aceita um `.svg` renomeado, e SVG é
+      HTML executável — o XSS armazenado da varredura de 2026-06-11). Teto de 15 MB,
+      barrado também no cliente para não subir e receber 413.
+      **MULTI-TENANT/RLS**: o `storage.upload` leva o contexto de dono (§8) —
+      `empresaId` do CONTEXTO (nunca do corpo) e o autor. É ele que faz
+      `GET /api/midia/:chave` recusar o byte para outra clínica. O modelo é criado por
+      `POST /documentos/templates`, que carimba `req.empresaId` e ignora o corpo.
+      ⚠️ **`/templates/upload` ANTES de `/templates/:id`** (armadilha 1) e **`tenantRls`
+      REENTRA logo após o multer**: o parsing do busboy se intercala entre o
+      `authenticate` (que carimba o tenant) e o controller, e pode fazer o
+      `AsyncLocalStorage` não sobreviver até lá — mesma ordem de `routes/animais.js`.
+      ⚠️ O teste `documentosCentral` passou a precisar de `jest.mock('../storage')`: o
+      controller agora importa `storage/index.ts`, que o babel-jest não transpila (mesmo
+      motivo dos mocks de `lib/prisma` e `ai`).
+- [x] **Depois de enviado, ele é um documento como os outros**: nasce `PUBLICADO` (o
+      conteúdo é o arquivo, não há nada a montar depois), entra no seletor, já fica
+      SELECIONADO na tela (o passo seguinte é emitir), e daí em diante passa por
+      emissão numerada, snapshot, histórico, card do paciente, impressão e envio sem
+      nenhum caminho especial.
+      ⚠️ **Visibilidade decidida em 2026-08-30: o documento é DA CLÍNICA**, protegido
+      pelo RLS (não vaza para outra empresa) e visível a toda a equipe — foi a opção
+      escolhida entre "visível só para o autor" (que exigiria coluna nova) e esta. Se um
+      dia virar "só do autor", o gancho é `autorId`, já gravado.
+- [ ] O PDF convertido vira N imagens SEQUENCIAIS; a impressão flui as páginas em vez
+      de forçar uma quebra por página. Uma imagem A4 inteira já ocupa quase a folha, mas
+      documento com margem estreita pode escorregar para a página seguinte. Se
+      incomodar, o caminho é um `page-break-after` no bloco `imagem` de altura
+      automática — não em todo bloco `imagem`, que quebraria a foto no meio do laudo.
+- [ ] O botão "Pré-visualizar" exige `contexto` carregado (paciente selecionado). Sem
+      paciente não há o que pré-visualizar de verdade — a folha sairia com os exemplos
+      do catálogo, que é justamente o que a §12 de 26/08 proíbe mostrar como se fosse
+      dado do paciente.
+- [ ] O histórico da tela lista SÓ o paciente selecionado (`?animalId=`). Uma visão por
+      empresa (todos os documentos do mês) usaria o mesmo `GET /documentos/emitidos` sem
+      o filtro — falta decidir o recorte e a paginação.
+- [ ] `POST /documentos/{whatsapp,email}` continua recebendo o HTML montado na tela.
+      Agora que `DocumentoPrint` gera esse HTML a partir do emitido, ligar o envio ao
+      `DocumentoEmitido` pelo id (em vez de mandar o HTML do cliente) é o próximo passo.
 
 ### Sessão 2026-08-26 — Central de Documentos: de protótipo a módulo
 > ✅ **MIGRATION APLICADA** (autorizada nesta sessão) —
@@ -4857,6 +6024,9 @@ POST   /emitidos                         → emite (resolve as variáveis AQUI e
                                            snapshot). emitidos.criar
 GET    /emitidos/:id                     → emitidos.ler
 DELETE /emitidos/:id  { motivo }         → cancela (soft delete + auditoria). emitidos.criar
+POST   /templates/converter              → páginas do documento ENVIADO → blocos com
+                                           `{{variáveis}}` e `[[lacunas]]` (IA multimodal).
+                                           NÃO grava: devolve a proposta. templates.criar
 GET    /templates                        → globais + os da empresa. templates.ler
 POST   /templates                        → templates.criar
 GET    /templates/:id                    → templates.ler
@@ -4929,6 +6099,8 @@ POST   /lancar-na-fatura                 → { faturaId, itemIds } cria FaturaIt
 | `Analise.tsx` | `/analise` — análise NRC |
 | `Auditoria.tsx` | `/auditoria` — log de acesso legado (LOGIN/LOGOUT via AuthContext) |
 | `AuditoriaGeral.tsx` | `/auditoria-geral` — Auditoria (Sidebar > Geral, GESTOR/ADMIN). Exclusões/cancelamentos com justificativa: GET /api/audit/logs, filtros por categoria/entidade/busca/período, tabela desktop + cards mobile, paginação |
+| `Documentos.tsx` | `/documentos` — Central de Documentos, EMISSÃO (a tela do dia a dia). Layout de `/agendamentos`: uma linha com **Paciente · Nome do Documento · Tipo**, os campos a preencher em largura cheia com **Cancelar/Inserir/Salvar**, e o Histórico de Documentos do paciente. O seletor de documento lista o ACERVO INTEIRO (agrupado por `<optgroup>`) e é ele que preenche o Tipo, que é campo de leitura. Cria documento/categoria (`documentos.templates.criar`) e leva ao editor por `/documentos/modelos?templateId=`. Aceita `?animalId=`. Ver a sessão 2026-08-30 na §12 |
+| `CentralDocumentos.tsx` | `/documentos/modelos` — EDITOR de modelos por blocos (biblioteca · modelos · editor+preview), o chat da IA e o copy-on-write dos 12 anexos do CFMV. Era a rota `/documentos` até 2026-08-30; montar modelo é configuração feita uma vez, então saiu da frente do fluxo de emitir |
 | `Usuarios.tsx` | `/usuarios` — gestão de usuários (admin) |
 | `AiUsageDashboard.tsx` | `/ai-usage` — monitoramento de uso de IA |
 
@@ -4954,7 +6126,13 @@ POST   /lancar-na-fatura                 → { faturaId, itemIds } cria FaturaIt
 | `MemoriaClinicaPanel.tsx` | Memória Clínica do Paciente (IA) em AnimalDetail. Highlights clicáveis no topo (realçam e rolam até os tópicos que os comprovam) + resumo por tópicos; tópico abre o registro de origem via `onAbrirRef`. Ver seção 7. |
 | `relatorios/AnaliseFinanceiraIA.tsx` | IA Financeira em Relatórios > Financeiro. Highlights + análise textual do período; chamada SOB DEMANDA (botão), nunca no load. |
 | `FotoEditorModal.tsx` | Editor da foto do Cadastro Pessoal: ZOOM (slider) + ARRASTAR (pointer events — mouse e toque no mesmo código), devolvendo o arquivo já RECORTADO (512px). Sem biblioteca externa: preview e canvas usam a MESMA conta, só multiplicada por `SAIDA/lado`. ⚠️ O lado do quadro é MEDIDO (`ResizeObserver`), não constante — em tela estreita o quadro encolhe, e com valor fixo o canvas geraria um recorte diferente do que a pessoa enquadrou. |
-| `AcaoRegistro.tsx` | **Ação de um registro (Alterar/Ver/Imprimir/WhatsApp/E-mail/Executar/Cancelar…) — FONTE ÚNICA da forma.** Uma declaração, duas apresentações decididas por CSS: ícone pintado no desktop (≥md), botão com rótulo no mobile. Props: `rotulo` (obrigatório — vira o texto da pílula e o `aria-label` do ícone), `icone` (o COMPONENTE lucide, não o elemento), `tom` (escolhe a cor pela §6), `visivel` (false = não renderiza), `desabilitado`, `carregando`, `titulo`. Exporta também `AcoesRegistro`, o contêiner que envolve a lista (mantém `flex-wrap` no desktop porque celular deitado entra no `md:`). Ver a regra completa na §6. |
+| `AcaoRegistro.tsx` | **Ação de um registro (Alterar/Ver/Imprimir/WhatsApp/E-mail/Executar/Cancelar…) — FONTE ÚNICA da forma.** Uma declaração, duas apresentações decididas por CSS: ícone pintado no desktop (≥md), botão com rótulo no mobile. Props: `rotulo` (obrigatório — vira o texto da pílula e o `aria-label` do ícone), `icone` (o COMPONENTE lucide, não o elemento), `tom` (escolhe a cor pela §6), `visivel` (false = não renderiza), `desabilitado`, `carregando`, `titulo`. Exporta também `AcoesRegistro`, o contêiner que envolve a lista — `flex-wrap md:flex-nowrap`: quebra no mobile (pílulas com rótulo), TUDO NA MESMA LINHA no desktop. Ver a regra completa, e por que a quebra no desktop empilhava as ações da tabela, na §6. |
+| `modules/documentos/Emitidos.tsx` | **FONTE ÚNICA do documento JÁ EMITIDO**: `ListaDocumentosEmitidos` (cards mobile / tabela desktop; prop `compacto` para coluna estreita), `VisualizarDocumentoModal` (folha A4 pelo MESMO `BlocoView` do editor) e `AcoesDocumento` (Visualizar · Imprimir · WhatsApp · E-mail · Cancelar). Usado pelo histórico de `/documentos` E pelo card "Documentos" de `/animal/:id` — duas listas divergiriam (28-g). Exporta `useImagensDocumento`, que converte logo/assinatura em `data:` URI (sem isso o PDF do backend nasce sem imagem) |
+| `modules/documentos/cabecalho.ts` | **A REGRA do cabeçalho padrão da folha** (logo → título → Veterinário → Proprietário → Paciente): quais campos entram, em que ordem, o que some vazio, e a ABSORÇÃO do primeiro bloco `titulo`. `prepararFolha` devolve `{ cabecalho, corpo }` — todo renderizador consome `corpo`, nunca `blocos` cru. Consumida pelos DOIS desenhos: `CabecalhoFolha.tsx` e `utils/DocumentoPrint.ts` |
+| `modules/documentos/CabecalhoFolha.tsx` | O cabeçalho padrão desenhado em JSX (preview A4, emissão, mobile, visualização do emitido). Estilo INLINE: o PDF do editor é html2canvas fotografando este DOM |
+| `modules/documentos/CamposForm.tsx` | `CampoInput` + `tipoDoCampo` + `AJUDA_ORIGEM` — FONTE ÚNICA do campo a preencher de um documento, usada pela tela de emissão e pelo `ModalPreencher` do editor |
+| `modules/documentos/upload.ts` | Documento ENVIADO pela clínica → blocos do modelo. **O que sobe é sempre IMAGEM**: PDF é convertido no navegador (`pdfjs-dist`, `import()` dinâmico), uma imagem por página. É o que faz o documento enviado seguir as MESMAS regras dos outros — sem desvio no preview, na impressão, no PDF do Puppeteer nem no snapshot. Ver a sessão 2026-08-30 na §12 |
+| `utils/DocumentoPrint.ts` | HTML do documento EMITIDO para impressão e PDF (`gerarHtmlDocumento`/`imprimirDocumento`/`nomeArquivoDocumento`). Espelho em STRING de `BlocoView.tsx` — mexeu no visual de um bloco, mexa nos dois. Não resolve variável: os blocos do emitido já vêm resolvidos, e `{{`/`[[` que sobrar é apagado |
 | `ModalJustificativa.tsx` | Modal padrão de exclusão/cancelamento com justificativa OBRIGATÓRIA (textarea ≥3 chars, header vermelho). Props: `aberto`, `titulo`, `descricao?`, `acaoLabel?`, `onConfirmar(motivo)`, `onFechar`. Usar em toda ação destrutiva — o motivo é exigido pelo backend e vai para a Auditoria. |
 | `FormularioNovaSenha.tsx` | Formulário de definição de senha — fonte ÚNICA de aparência e regras (`REGRAS_SENHA`, checklist ao vivo, indicador de coincidência, `InlineError`). Usado por `AlterarSenhaObrigatoria` (sessão) e `ResetPassword` (token do e-mail). Só COLETA e valida — quem submete é a tela, com a credencial que tiver. Ver §14. |
 

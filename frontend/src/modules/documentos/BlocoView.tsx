@@ -7,10 +7,12 @@
 // editor.
 
 import type { CSSProperties } from 'react';
-import { resolverVariaveis } from './catalogo';
+import { assinaturaDoVeterinario, resolverVariaveis } from './catalogo';
 import type { ContextoVariaveis } from './catalogo';
 import { RE_LACUNA, chaveDaLacuna } from './campos';
 import type { Preenchimento } from './campos';
+import { colunasDaLista, linhasDoBloco, normalizarFonte } from './listas';
+import type { PreenchimentoListas } from './listas';
 import type { Bloco } from './types';
 
 /**
@@ -37,6 +39,20 @@ function estiloDe(b: Bloco): CSSProperties {
     marginTop:    e.espacamentoTopo ? `${e.espacamentoTopo}px` : undefined,
     marginBottom: e.espacamentoBase ? `${e.espacamentoBase}px` : undefined,
     width:        e.largura ? `${e.largura}%` : undefined,
+    // DUAS COLUNAS: o bloco vira meia largura e os vizinhos se acomodam ao lado.
+    // `inline-block` (e não grid/flex no pai) porque a folha é uma sequência plana de
+    // blocos — não há wrapper de seção para virar container, e criar um mudaria o
+    // contrato de todos os renderizadores. `padding-right` é a calha entre as colunas;
+    // `border-box` impede que ela empurre o segundo campo para a linha de baixo.
+    ...(e.colunas && e.colunas > 1
+      ? {
+          display:       'inline-block',
+          verticalAlign: 'top',
+          width:         `${100 / e.colunas}%`,
+          paddingRight:  12,
+          boxSizing:     'border-box' as const,
+        }
+      : {}),
   };
 }
 
@@ -162,12 +178,14 @@ function Lacuna({ rotulo, valor, focado, onClick }: {
  * `contexto` ausente = modo EXEMPLO (montando o modelo, sem paciente). Presente =
  * dados reais do paciente selecionado. Ver `resolverVariaveis` em ./catalogo.
  */
-export default function BlocoView({ bloco, contexto, marca, preenchimento, campoFocado, onFocarCampo }: {
+export default function BlocoView({ bloco, contexto, marca, preenchimento, listas, campoFocado, onFocarCampo }: {
   bloco:     Bloco;
   contexto?: ContextoVariaveis | null;
   marca?:    MarcaFolha | null;
   /** O que a pessoa digitou na tela de emissão, por chave de rótulo. */
   preenchimento?: Preenchimento | null;
+  /** As linhas dos grupos REPETÍVEIS (medicamento, vacina…), por chave de grupo. */
+  listas?:        PreenchimentoListas | null;
   /** Chave do campo em edição — fica destacado na folha. */
   campoFocado?:   string | null;
   /** Clicar numa lacuna da folha foca o campo correspondente no formulário. */
@@ -232,10 +250,19 @@ export default function BlocoView({ bloco, contexto, marca, preenchimento, campo
       return <hr style={{ ...st, border: 0, borderTop: '1px solid #e5e7eb' }} />;
 
     case 'campoAuto': {
-      // A variável vem do cadastro. Não resolvendo (animal sem microchip, cliente sem
-      // documento), o valor é o que a pessoa digitou na emissão — e enquanto ela não
-      // digita, mostra o traço, igual a uma lacuna.
-      const doCadastro = resolverVariaveis(c.variavel ?? '', contexto).trim();
+      // 🔴 O VALOR GRAVADO VENCE. No documento EMITIDO o backend resolveu a variável e
+      // guardou o resultado em `conteudo.texto`, PRESERVANDO a chave em `variavel` (é
+      // o que permite auditar de qual variável saiu cada valor). Resolver `variavel`
+      // de novo aqui exigiria o contexto DAQUELE dia — e sem contexto
+      // `resolverVariaveis` cai no modo EXEMPLO do catálogo: o papel real saía com
+      // "Thor" no nome do animal e "Haras Boa Vista" no responsável, por cima do dado
+      // correto que está no snapshot (defeito relatado em 2026-09-03).
+      // ⚠️ É também o que alinha esta tela ao `utils/DocumentoPrint.ts`, que sempre
+      // usou `texto` — a folha impressa saía certa e só a da TELA mentia.
+      // No MODELO o campoAuto não tem `texto` (o editor só edita rótulo e variável),
+      // então o caminho do editor e o da emissão continuam resolvendo pelo contexto.
+      const gravado    = (c.texto ?? '').trim();
+      const doCadastro = gravado || resolverVariaveis(c.variavel ?? '', contexto).trim();
       const digitado   = doRotulo(c.rotulo);
       return (
         <p data-focado={focadoNoRotulo(c.rotulo) ? '1' : undefined}
@@ -254,7 +281,13 @@ export default function BlocoView({ bloco, contexto, marca, preenchimento, campo
       return (
         <div style={{ ...st, textAlign: bloco.estilo.alinhamento ?? 'center' }}>
           {c.url ? (
-            <img src={c.url} alt={c.rotulo ?? ''} style={{ maxWidth: '100%', height: bloco.estilo.altura ?? 160, objectFit: 'contain' }} />
+            // `altura: 0` = ALTURA AUTOMÁTICA, e não "imagem de zero pixel". É a
+            // convenção do documento ENVIADO pela clínica (ver modules/documentos/
+            // upload.ts), em que a imagem É a folha: o padrão de 160px, pensado para
+            // uma foto de exame no meio do texto, entregaria uma tira do documento.
+            // ⚠️ `?? 160` sozinho não serve — `0` não é nullish e viraria `height: 0`.
+            <img src={c.url} alt={c.rotulo ?? ''}
+                 style={{ maxWidth: '100%', height: bloco.estilo.altura || 'auto', objectFit: 'contain' }} />
           ) : (
             <div style={{ height: bloco.estilo.altura ?? 160, border: '1px dashed #d1d5db', borderRadius: 8,
                           display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af', fontSize: 11 }}>
@@ -283,17 +316,71 @@ export default function BlocoView({ bloco, contexto, marca, preenchimento, campo
         </div>
       );
 
+    // LISTAS REPETÍVEIS — ver ./listas.ts. Dois estados, e a diferença é ter ou não
+    // alguém preenchendo:
+    //   COM `listas` (emissão / pré-visualização) → as linhas REAIS, já sugeridas a
+    //     partir do que o paciente tem e editadas no repetidor ao lado.
+    //   SEM (editor, montando o modelo) → a linha de EXEMPLO do catálogo e a legenda,
+    //     que é como o vet vê a cara da tabela antes de existir paciente.
+    // ⚠️ A legenda "Preenchido na emissão" era uma promessa que NADA cumpria até
+    // 2026-09-01: no papel estes blocos saíam vazios. Agora é verdade.
+    case 'listaCampos':
     case 'tabelaDinamica':
     case 'medicamentos':
     case 'vacinas':
     case 'procedimentos':
     case 'exames': {
-      const fonte = EXEMPLOS[c.fonteDados ?? ''] ?? { colunas: c.colunas ?? [], linhas: [] };
+      const colunas = colunasDaLista(bloco);
+      const preenchidas = linhasDoBloco(bloco, listas);
+      if (preenchidas) {
+        // Nenhuma linha preenchida ainda: uma linha em branco mostra a tabela que vai
+        // existir, em vez de um bloco que some da folha e reaparece ao digitar.
+        const linhas = preenchidas.length > 0 ? preenchidas : [colunas.map(() => '')];
+        // FORMATO `campos`: o grupo sai como os demais cards do documento ("Rótulo:
+        // valor", três por linha) em vez de uma tabela — sete colunas numa A4 retrato
+        // espremem o nome comercial em três linhas. ESPELHO de
+        // `lib/documentoListas.js#linhaEmCampos`, que faz o mesmo no papel emitido; o
+        // que se vê aqui é o que vai sair.
+        if (c.formato === 'campos') {
+          return (
+            <div style={st}>
+              {linhas.map((linha, iLinha) => (
+                <div key={iLinha}>
+                  {iLinha > 0 && (
+                    <hr style={{ border: 0, borderTop: '1px solid #e5e7eb', margin: '6px 0' }} />
+                  )}
+                  {colunas.map((coluna, i) => {
+                    const valor = String(linha[i] ?? '').trim();
+                    // Em branco não vira campo — a mesma regra do papel.
+                    if (!valor) return null;
+                    return (
+                      // UM POR LINHA (a pedido): os rótulos da vacina são longos e, em
+                      // fração de linha, rótulo e valor disputavam o mesmo espaço.
+                      <p key={coluna} style={{ fontSize: 11, margin: '0 0 3px' }}>
+                        <span style={{ color: '#6b7280' }}>{coluna}: </span>
+                        <span style={{ fontWeight: 600 }}>{resolverVariaveis(valor, contexto)}</span>
+                      </p>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          );
+        }
+        return (
+          <div style={st}>
+            <TabelaSimples b={bloco} colunas={colunas} linhas={linhas} contexto={contexto} />
+          </div>
+        );
+      }
+      const fonte = EXEMPLOS[normalizarFonte(c.fonteDados) ?? ''] ?? { colunas, linhas: [] };
       return (
         <div style={st}>
           <TabelaSimples b={bloco} colunas={fonte.colunas} linhas={fonte.linhas} contexto={contexto} />
           <p style={{ fontSize: 9, color: '#9ca3af', marginTop: 3 }}>
-            Preenchido na emissão a partir de {c.fonteDados}
+            {c.fonteDados
+              ? `Preenchido na emissão a partir de ${c.fonteDados}`
+              : 'Preenchido na emissão — permite acrescentar linhas'}
           </p>
         </div>
       );
@@ -337,20 +424,25 @@ export default function BlocoView({ bloco, contexto, marca, preenchimento, campo
     }
 
     case 'assinatura': {
+      // 🔴 A identidade da MARCA só entra na linha DO VETERINÁRIO. Farmacêutico,
+      // comprador e responsável pelo animal assinam à mão, em linha vazia — ver
+      // `assinaturaDoVeterinario` para o defeito que isto corrige.
+      const doVet = assinaturaDoVeterinario(c);
       // Nome e CRMV vêm da MARCA (o vínculo do profissional NESTA empresa) quando há
       // paciente carregado; sem paciente, caem na variável — que no modo exemplo
       // mostra o valor do catálogo, e é o que faz a folha ter cara de folha.
-      const nomeAssinante = marca?.assinanteNome || rv('{{veterinario.nome}}');
-      const crmvAssinante = marca?.crmv || rv('{{veterinario.crmv}}');
+      const nomeAssinante = doVet ? (marca?.assinanteNome || rv('{{veterinario.nome}}')) : '';
+      const crmvAssinante = doVet ? (marca?.crmv || rv('{{veterinario.crmv}}')) : '';
       const larguraLinha  = 240;
       return (
         <div style={{ ...st, textAlign: bloco.estilo.alinhamento ?? 'center', marginTop: bloco.estilo.espacamentoTopo ?? 30 }}>
           <div style={{ width: larguraLinha, margin: bloco.estilo.alinhamento === 'left' ? '0' : '0 auto' }}>
             {/* A imagem fica SOBRE a linha, encostada nela — é como a assinatura cai
                 no papel. Sem assinatura cadastrada, sobra o espaço em branco para
-                assinar à mão: nunca se desenha uma assinatura que não existe. */}
+                assinar à mão: nunca se desenha uma assinatura que não existe.
+                ⚠️ O espaço é MANTIDO na linha de outra pessoa: é onde ela assina. */}
             <div style={{ height: 42, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-              {marca?.assinaturaUrl && (
+              {doVet && marca?.assinaturaUrl && (
                 <img
                   src={marca.assinaturaUrl}
                   alt=""
@@ -359,9 +451,9 @@ export default function BlocoView({ bloco, contexto, marca, preenchimento, campo
               )}
             </div>
             <div style={{ borderTop: '1px solid #374151', paddingTop: 4 }}>
-              <p style={{ fontSize: 11, fontWeight: 600 }}>{nomeAssinante}</p>
+              {nomeAssinante && <p style={{ fontSize: 11, fontWeight: 600 }}>{nomeAssinante}</p>}
               <p style={{ fontSize: 10, color: '#6b7280' }}>{c.rotulo}</p>
-              {c.mostrarCrmv && crmvAssinante && (
+              {doVet && c.mostrarCrmv && crmvAssinante && (
                 <p style={{ fontSize: 10, color: '#6b7280' }}>{crmvAssinante}</p>
               )}
             </div>

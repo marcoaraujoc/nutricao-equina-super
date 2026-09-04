@@ -1,6 +1,10 @@
 # S2Vet — Especificação Funcional
 
-> Documento gerado por varredura do código-fonte em 2026-07-09 (atualizado em 2026-07-14).
+> Documento gerado por varredura do código-fonte em 2026-07-09.
+> **Atualização abrangente em 2026-08-29** — reflete as mudanças até 2026-08-28
+> (multi-tenancy por RLS, storage no banco, IA unificada no Gemini, Central de
+> Documentos, Orçamento, shell global + busca, 2FA por e-mail, sessão por inatividade,
+> premissa de autoria, fuso horário por empresa, entre outras).
 > Descreve fielmente o que está construído — sem propostas, sem melhorias.
 > Fontes: rotas do backend (`backend/src/routes/*`), controllers, seeds de permissão,
 > schema Prisma, páginas e componentes do frontend (`frontend/src/*`) e CLAUDE.md.
@@ -13,16 +17,33 @@ O **S2Vet** é uma plataforma hospitalar veterinária SaaS, mobile-first, com fo
 atendimento clínico e nutricional de **equinos** (estrutura preparada para multi-espécie).
 
 - **Frontend:** React 18 + TypeScript + Vite, Tailwind CSS, HashRouter (`/#/rota`).
+  Shell global com cabeçalho (marca, busca global, notificações, menu do usuário),
+  corpo (sidebar + conteúdo) e rodapé — ver §17.
 - **Backend:** Node.js + Express + Prisma, PostgreSQL (schema `schs2vet`), porta 3001.
-- **Autenticação:** JWT + refresh token (rotação) em **cookies HttpOnly**, login por
-  e-mail/senha e Google OAuth.
-- **IA:** Groq (LLM) para interpretação de textos clínicos, laudos e voz; Whisper para
-  transcrição offline; uso registrado em `AiUsageLog`.
-- Exclusão de registros clínicos é sempre **soft delete** (campo `ativo`).
-- **Modais arrastáveis no desktop:** qualquer modal da aplicação pode ser reposicionado
-  arrastando pelo cabeçalho ou título (hook global `useDraggableModals`, montado no
-  `App.tsx`). Só com mouse e viewport ≥ 768px; o backdrop não se move, o modal não pode
-  sair da tela e fechar/reabrir volta à posição original.
+- **Autenticação:** JWT (access curto) + refresh token (rotação) em **cookies HttpOnly**,
+  login por e-mail/senha (com **2FA por e-mail**) e Google OAuth. **Sessão por janela de
+  inatividade** (2h) — ver §3.
+- **Multi-tenant por Row-Level Security (RLS):** cada empresa é um tenant isolado no
+  próprio banco (Postgres, policies `FORCE` fail-closed). O `authenticate` carimba a
+  empresa do contexto ativo e o RLS impede que uma clínica leia/escreva dados de outra,
+  independentemente do código do controller — ver §22.
+- **Storage no banco:** todo arquivo (foto de paciente, laudo, logo, assinatura) mora em
+  `tb_midia_arquivos` (bytea) e sai por rota autenticada e autorizada por dono
+  (`/api/midia/:chave`); nada é servido do filesystem — ver §22.
+- **IA:** **Google Gemini** é o provedor único (texto, visão e transcrição de áudio);
+  toda inferência é logada em `AiUsageLog` com o módulo de origem e medida por empresa
+  (metering + quota) — ver §19.
+- Exclusão de registros é **soft delete** (campo `ativo`), com regra de **exclusão
+  lógica** que distingue quem **some** (animal, proprietário, empresa) de quem fica
+  **inativo e visível** (profissional, fornecedor, prestador — o autor do registro) — §6.
+- **Ação de registro responsiva** (`AcaoRegistro`): a mesma ação vira ícone pintado no
+  desktop e botão com rótulo no card mobile; a cor comunica o tipo (alterar laranja, ver/
+  executar verde, imprimir/e-mail azul, WhatsApp verde, cancelar vermelho). Cinza =
+  indisponível; ação sem permissão não é renderizada.
+- **Campo de data** (`DateInput`): sempre DD/MM/AAAA (nunca o nativo, que varia com o
+  locale do navegador), com validação e mensagem específica do erro.
+- **Modais arrastáveis no desktop:** qualquer modal pode ser reposicionado pelo cabeçalho
+  (hook global `useDraggableModals`). Só mouse e viewport ≥ 768px; o backdrop não se move.
 
 ---
 
@@ -63,16 +84,19 @@ atendimento clínico e nutricional de **equinos** (estrutura preparada para mult
 
 | Funcionalidade | Comportamento |
 |---|---|
-| Login e-mail/senha | `POST /api/auth/login` → JWT (24h) + refresh (JWT 30d) em **cookies HttpOnly** (`s2vet_at`/`s2vet_rt`). Rate limit 20 req/15min em `/auth`. |
+| Login e-mail/senha | `POST /api/auth/login` → access JWT (**30 min**) + refresh JWT em **cookies HttpOnly** (`s2vet_at`/`s2vet_rt`), dentro de uma **janela de inatividade de 2h** rotacionada a cada refresh (fonte única `lib/sessionTokens.js`). Rate limit 20 req/15min em `/auth`. Com 2FA ativo, a sessão só nasce após o 2º fator (ver abaixo). |
+| **2FA por e-mail** | Senha correta **não** emite sessão: gera um desafio e envia um código de 6 dígitos por e-mail (`POST /api/auth/2fa/verificar` cria a sessão; `POST /api/auth/2fa/reenviar` renova). Código CSPRNG, guardado só como SHA-256, comparação em tempo constante, 10 min de validade, 5 tentativas, 3 reenvios. Kill-switch `MFA_EMAIL_ENABLED`; seletor global do ADMIN em `/configuracao-alertas` (entregue **desativado**). Login Google **não** passa por 2FA (o Google já autenticou). |
+| **Bloqueio por tentativas** | 6 senhas erradas bloqueiam a conta (`tentativas_login`, `LOGIN_MAX_TENTATIVAS`); desbloqueio pelo gestor/ADMIN. E-mail inexistente e senha errada devolvem a **mesma** mensagem ("Usuário ou Senha Inválidos") e o **mesmo tempo de resposta** (bcrypt de isca no ramo sem conta) — sem enumeração por conteúdo nem por timing. |
 | Login Google | `useGoogleLogin` com `prompt: 'select_account'`; o backend valida o `access_token` no Google antes de emitir o JWT interno (também em cookies HttpOnly). |
-| Refresh automático | Interceptor Axios renova a sessão em 401 via `POST /api/auth/refresh` (refresh vem do cookie; rotaciona e reescreve os cookies) sem redirecionar para login. |
-| Esqueci minha senha | `POST /api/auth/forgot-password` — resposta sempre 200 genérica (não revela se o e-mail existe). Link por e-mail → `/#/reset-password?token=...`. |
-| Reset de senha | `POST /api/auth/reset-password` (mínimo 8 caracteres). |
+| Refresh automático | Interceptor Axios renova a sessão em 401 via `POST /api/auth/refresh` (refresh vem do cookie; rotaciona e reescreve os cookies) sem redirecionar para login. `sessionVersion` no token derruba na hora uma sessão antiga quando a pessoa loga de novo em outro dispositivo. |
+| Esqueci minha senha | `POST /api/auth/forgot-password` — resposta sempre 200 genérica e em **tempo constante** (o e-mail é enviado em segundo plano, não bloqueia a resposta); não revela se o e-mail existe. Confirma na tela e volta ao login com aviso. Link por e-mail → `/#/reset-password?token=...`. |
+| Reset de senha | `POST /api/auth/reset-password` (token de uso único, mínimo 8 caracteres). O formulário de senha (`FormularioNovaSenha`) é o **mesmo** da troca obrigatória e da tela do link de e-mail. |
 | Troca de senha obrigatória | Usuários criados com senha padrão `Inicial_001` têm `mustChangePassword` e são bloqueados na tela `/alterar-senha` até trocar. |
-| Logout por inatividade | 5 minutos sem interação → logout automático (frontend). |
+| Senha é da pessoa | Só o próprio dono (ou o ADMIN da plataforma) troca a própria senha; gestor **não** troca a senha de membro (403). Quem esqueceu usa "esqueci minha senha". |
+| Logout por inatividade | 2h sem interação → logout automático (frontend, espelhando a janela do servidor). |
 | Logout | Revoga o refresh token no backend, **limpa os cookies HttpOnly** e o contexto ativo do storage. |
-| Conta desativada | Qualquer request autenticado de conta com `ativo=false` é rejeitado com 401. |
-| Auditoria de sessão | LOGIN e LOGOUT são gravados em `AuditLog` (`POST /api/audit/log`) com o **IP de origem**. |
+| Conta desativada | Qualquer request autenticado de conta com `ativo=false` (global) ou sem acesso ao sistema na empresa é rejeitado com 401/403. |
+| Auditoria de sessão | LOGIN, LOGOUT e **tentativas de acesso negadas** (senha errada, conta bloqueada/desativada, 2FA inválido) são gravados em `AuditLog` com o **IP de origem** (categoria `ACESSO_NEGADO`). |
 
 ---
 
@@ -120,15 +144,18 @@ atendimento clínico e nutricional de **equinos** (estrutura preparada para mult
     (configurado por membro).
   - `MatrizPerfil[perfilSlug='PROPRIETARIO']` — permissões do proprietário, resolvidas
     pelas equipes vinculadas via `Animal.equipeId`/`empresaId` (união + deny-wins).
-- **Catálogo de módulos** (`ModuloSistema`, 124 slugs via seed): módulos `cadastro.*`
-  (proprietário, tratador, fornecedor, localização), `dashboard.geral`, `animais`,
-  `atendimento.*` (evoluções, prescrições, vacinas, encaminhamentos, exames,
-  agendamentos), `enfermagem.prescricao`, `exames.laboratorial/imagem` (órfãos — ver
-  §22), `nutricao.dietas/relatorios`, `financeiro.faturas`, `equipe.membros`,
+- **Catálogo de módulos** (`ModuloSistema`, via seed): módulos `cadastro.*`
+  (proprietário, tratador, fornecedor, **prestador**, localização), `dashboard.geral`,
+  `animais`, `atendimento.*` (evoluções, prescrições, vacinas, encaminhamentos, exames,
+  agendamentos), `enfermagem.prescricao` (executar + **cancelar pelo plantão**),
+  `exames.laboratorial/imagem` (usados no fluxo de RESULTADO — §8.4),
+  `nutricao.dietas/relatorios`, `financeiro.faturas` (inclui `fechar` e `lancar`),
+  `documentos.templates/emitidos` (Central de Documentos — §), `equipe.membros`,
   `vacina.estoque`, `farmacia.estoque/movimentacoes`, `medicamentos.catalogo`,
   `procedimentos.catalogo`, `relatorios.gerencial`.
   Ações possíveis: ler, criar, editar, deletar, imprimir, finalizar, executar, ativar,
-  exportar, compartilhar, desvincular, whatsapp, fechar, lancar.
+  exportar, compartilhar, desvincular, whatsapp, fechar, lancar, ajustar.
+  Re-sincronizar o catálogo: `node backend/seed.js`.
 
 ### 5.2 Tela Controle de Acesso (`/controle-acesso`)
 
@@ -169,21 +196,48 @@ atendimento clínico e nutricional de **equinos** (estrutura preparada para mult
   handlers de escrita e ocultação de botões sem permissão.
 - Interceptor Axios: `GET` com 403 resolve como `{ data: null }` (silencioso); mutações
   rejeitam com `isPermissionError: true`.
-- Regras de autoria em registros clínicos — **100% dirigidas pelo RBAC** (nenhuma regra
-  de cargo fixa no backend; a única exceção fixa é o bypass de ADMIN):
-  - O controller decide autoria pelo **nível efetivo da matriz** (`req.permissaoNivel`)
-    no slug da ação, via `podeOperarRegistro`: nível `PROPRIO` → só o próprio registro;
-    `EQUIPE`/`FULL` → qualquer registro da equipe.
-  - "Só o gestor finaliza uma evolução" é **configuração** (o seed dá VET/EST `NENHUM`
-    em `*.finalizar`), não código — o gestor pode conceder finalizar a qualquer perfil.
-  - Editar registro FINALIZADO (evolução) exige nível `FULL` em editar; excluir evolução
-    finalizada segue restrito a ADMIN.
-  - Aplicado em evolução, prescrição (item e grupo), exame clínico, encaminhamento e
-    agendamento. O escopo de dados do prestador (designação) permanece deny-by-default.
+- **Premissa de AUTORIA (2026-08-04):** o RBAC decide **se** a pessoa pode executar a
+  ação; a autoria decide **sobre qual registro**. A ação vale sobre o que a pessoa
+  **criou ou assumiu**; o **único** perfil que opera o registro de outro é o **GESTOR**
+  (e o ADMIN). `podeOperarRegistro(req, autorId)`: gestor no contexto → qualquer registro;
+  senão → só `autorId === req.user.id`; registro órfão (autor nulo) → só o gestor.
+  - "Só o gestor finaliza uma evolução" continua sendo **configuração** (o seed dá
+    VET/EST `NENHUM` em `*.finalizar`); "ninguém opera o registro de outro" é **código**.
+  - **Assumir** um registro/agendamento transfere a autoria e **arrasta o atendimento
+    inteiro** (`lib/transferenciaAtendimento.js`): agendamento → evolução em andamento →
+    prescrição (grupo + itens), exame, encaminhamento e vacina passam para quem assumiu.
+    Sem o arrasto, quem assume conduziria o atendimento sem poder operar os filhos.
+  - Editar registro FINALIZADO (evolução) é ato de gestor; excluir evolução finalizada
+    segue restrito a ADMIN. Editar **não** transfere autoria (a troca de dono tem caminho
+    próprio: assumir/transferir).
+  - Toda troca de responsável gera auditoria `TRANSFERENCIA` (dono anterior → novo) e toda
+    edição relevante gera `ALTERACAO` (antes → depois por campo), na mesma transação.
+  - Aplicado em evolução, prescrição (item e grupo), exame clínico, encaminhamento, vacina
+    e agendamento. O escopo de dados do prestador (designação) permanece deny-by-default.
+  - ⚠️ `req.permissaoNivel === 'FULL'` **não** é sinônimo de gestor: FULL é um nível da
+    matriz e não dá acesso ao registro alheio — só o cargo GESTOR (ou dono/ADMIN) dá.
 
 ---
 
 ## 6. Cadastros
+
+> **Isolamento por empresa (perfis por tenant).** O cadastro do **profissional**
+> (`UsuarioEmpresa`/`ProfissionalPerfil`) e do **proprietário** (`ProprietarioPerfil`) é
+> **por empresa**: o mesmo login pode ser gestor numa clínica, veterinário em outra e
+> cliente numa terceira, com telefone/endereço/CRMV/condição comercial **independentes**
+> em cada uma. No `users` ficam só a identidade (e-mail/senha), o `ativo` global e o
+> `userType` global. Nunca se lê nome/telefone/documento do `users` numa tela de empresa.
+>
+> **Exclusão lógica — quem some e quem fica inativo (2026-08-06).** Nada é apagado do
+> banco; o que muda é o que a aplicação mostra:
+> - **Animal · Proprietário · Empresa** → **SOMEM** (e tudo que pende deles some junto):
+>   são o *sujeito* do atendimento.
+> - **Profissional · Fornecedor · Prestador** → continuam **visíveis, marcados como
+>   inativos**: são o *autor* do registro; esconder o autor apagaria a autoria de um
+>   prontuário que segue válido.
+>
+> Inativar responde "aparece?"; a tenancy responde "de quem é?" — inativar **nunca** zera
+> o `empresaId` de um registro.
 
 ### 6.1 Cadastro Pessoal (`/cadastro-pessoal`)
 
@@ -252,8 +306,18 @@ atendimento clínico e nutricional de **equinos** (estrutura preparada para mult
 - O cadastro pode ser **vinculado a um login** (`Fornecedor.userId`, único) quando o
   prestador é incluído como membro da equipe — fornece a especialidade exibida nos
   encaminhamentos.
+- Inativar exige **justificativa** (coluna "Justificativa" na aba Inativos); reativar é
+  direto. Duplicata inativa oferece "Ativar cadastro existente".
 
-### 6.6 Localizações (`/cadastro/localizacoes`)
+### 6.6 Prestadores (`/cadastro/prestadores`)
+
+- Cadastro **independente** de Fornecedor (tabela e RLS próprios, `tb_prestadores`),
+  criado em 2026-08-21: nome, CPF/CNPJ, contato, tipo de serviço (texto livre), endereço.
+  Mais simples que Fornecedor — **sem** vínculo a login/estoque e sem catálogo de
+  especialidade. Entrada própria no Sidebar. Mesmo padrão de duplicidade e justificativa
+  de inativação dos demais cadastros.
+
+### 6.7 Localizações (`/cadastro/localizacoes`)
 
 - Cadastro **global** de localizações de animais (haras, clube hípico, clínica, fazenda,
   canil, gatil, petshop etc.), com espécies mapeadas por tipo, CEP/endereço via ViaCEP,
@@ -286,25 +350,41 @@ Ao aceitar vínculo, o animal recebe `empresaId`/`equipeId` do contexto do vet
 ## 8. Atendimento clínico (`/clinica/...`)
 
 Tela shell (`Atendimento.tsx`) com seletor inteligente de paciente (desambiguação de
-nomes duplicados por proprietário), card do animal, banner "**Atendimento EV-XXXX em
-andamento**" com botão **Finalizar Atendimento** (mesma ação do finalizar da aba
-Evolução: valida texto, finaliza a evolução ativa, gera título via LLM em best-effort;
-com confirmação; respeita permissão de finalizar e autoria de fornecedor), abas:
-**Agenda · Evolução · Prescrição · Vacina · Exames · Encaminhamento**, e painel lateral
-**Histórico do Paciente** (timeline agrupada por atendimento AG-/EV-, com expansão,
-impressão e pré-visualização do atendimento completo, e botão Editar/Continuar que
-carrega todos os registros do atendimento nas abas correspondentes). No mobile o
-histórico abre por botão flutuante.
+nomes duplicados por proprietário), card do animal, banner do **atendimento ativo** e
+abas: **Agenda · Evolução · Prescrição · Exames · Encaminhamento** (a **Vacina** virou
+tela apartada — §8.3), mais o painel lateral **Histórico do Paciente** (timeline agrupada
+por atendimento AG-/EV-, com expansão, impressão e pré-visualização do atendimento
+completo, e botão Editar/Continuar que carrega os registros do atendimento nas abas). No
+mobile o histórico abre por botão flutuante.
+
+- **Atendimento ativo é ESCOLHIDO, não adivinhado (2026-08-25).** O mesmo paciente pode
+  ter mais de uma evolução **em andamento** (consultas distintas no mesmo dia — ver
+  abaixo). O **Nº no card "Histórico de Evolução Clínica"** (AG-0013/EV-0007) vira um
+  **botão** que carrega aquele atendimento na tela; o banner passa a descrevê-lo
+  ("Atendimento AG-0013 de 25/08/2026 17:11 – Consulta clínica geral – Em andamento") e
+  **todo registro lançado nas abas se vincula a ele**. A escolha é persistida por paciente
+  (`s2vet_ev_sel_<animalId>`, lida também pela tela de Vacina); chegar com `?agendamentoId=`
+  na URL (o "Iniciar" da agenda) redefine a escolha. O banner é **um só** (a versão em
+  lista foi recusada). Fonte única da regra: `utils/evolucaoAtiva.ts`.
+- **Duas consultas do mesmo animal no mesmo dia** (ex.: Clínica + Dermatologia) são
+  atendimentos **distintos** mesmo com o mesmo profissional: o bloqueio de "evolução
+  própria já aberta" casa por `agendamentoId`, não pelo animal inteiro.
+- **Finalizar Atendimento** (botão do banner): finaliza a evolução ativa, gera título via
+  LLM (best-effort), com confirmação; respeita a permissão de finalizar **e a autoria** —
+  só aparece no atendimento que é da própria pessoa (ou para o gestor).
 
 ### 8.1 Evolução (prontuário)
 
 - Numeração `EV-0001` (avulsa) ou herdada do agendamento (`AG-XXXX`). Status:
-  `EM_ANDAMENTO`, `FINALIZADA`, `CANCELADA`. Apenas **uma evolução em andamento** por
-  animal (criar nova exige finalizar/cancelar a atual).
-- Campos: especialidade (15 opções: Acupuntura, Cardiologia, Cirurgia, Clínico,
-  Dermatologia, Diagnóstico por Imagem, Ferrageamento, Fisioterapia, Neurologia,
-  Nutrição, Odontologia, Oftalmologia, Patologia, Quiropraxia, Radiologia), texto livre,
-  título (opcional; sugerido por LLM ao finalizar), vínculo opcional a agendamento.
+  `EM_ANDAMENTO`, `FINALIZADA`, `CANCELADA`. A **própria** evolução aberta bloqueia abrir
+  outra para a **mesma consulta** (casa por `agendamentoId`); consultas **distintas** do
+  mesmo animal no mesmo dia (agendamentos diferentes) podem ter evoluções em andamento em
+  **paralelo** — o atendimento ativo é o escolhido no shell (§8).
+- **Assumir** evolução em andamento de **outro** profissional (§5.3): puxa para si, com
+  e-mail + WhatsApp ao anterior e arrasto do atendimento. A própria não se assume.
+- Campos: **especialidade** (do catálogo por espécie, `tb_especialidades` — não mais lista
+  fixa), texto livre, título (opcional; sugerido por LLM ao finalizar), vínculo opcional a
+  agendamento.
 - **Ditado por voz:** Web Speech API online + Whisper offline (modelo local, com fila de
   áudios pendentes e opção "transcrever ou apenas anexar").
 - **Rascunho automático (2026-07-14):** o texto da evolução **nova** é salvo em localStorage
@@ -334,8 +414,13 @@ histórico abre por botão flutuante.
   L→mL / kg→g), via (restrita às vias do catálogo), frequência (16 posologias: 1x/dia,
   12/12h, 8/8h, 6/6h, 4/4h, 1/1h, contínuo, dose única, se necessário, SOS, 1x/2dias,
   1x/3dias, 1x/semana, 1x/21dias, 1x/30dias, 1x/90dias), hora de início (gera
-  `horariosGerados`), duração em dias, data de início, observação, checkbox
-  "Medicamento fornecido pelo Cliente" (sem baixa de estoque).
+  `horariosGerados`), duração/**qtd de vezes**, data de início, observação. Nas
+  frequências "1x a cada N dias" o campo é **Qtd. de Vezes** (convertida para dias) e a
+  hora de início é obrigatória. Dois checkboxes **por item**: "fornecido pelo **Cliente**"
+  (sem baixa de estoque) e "aplicado pelo **Proprietário**" (não vai ao plantão). A matriz
+  "quem fornece × quem aplica" decide execução e fatura: medicamento aplicado pelo
+  proprietário é cobrado na **finalização**; procedimento executado pelo proprietário
+  **nunca** é cobrado.
 - Validações: campos obrigatórios por tipo, duplicidade de item no mesmo documento.
   Itens reordenáveis por drag-and-drop.
 - **Salvar** (botão único — absorveu o antigo Finalizar): salva e **finaliza** o
@@ -356,15 +441,28 @@ histórico abre por botão flutuante.
   restantes** (data de início vira hoje, duração = dias restantes); item totalmente
   executado é imutável; item executado não pode ser removido.
 
-### 8.3 Vacina
+### 8.3 Vacina (tela apartada — `/clinica/vacina[/:animalId]`)
 
-- Registro clínico de aplicação: vacina do catálogo de medicamentos (tipo vacina) com
-  seleção de **lote disponível** (validade e valor por dose) ou vacina avulsa; dose
-  (1ª/2ª/3ª, reforço anual, dose única, revacinação), via, quantidade, valor, data de
-  aplicação, data de reforço, observação, flag "fornecida pelo cliente".
-- Status derivado: `VIGENTE` / `VENCIDA` (reforço vencido) / `INATIVA`; filtros por status.
-- Registro lança item na fatura e dá baixa no lote; inativação exige motivo.
-- Numeração `VC-XXXX`; sem fluxo de rascunho/finalização (registro direto).
+- Deixou de ser aba do Atendimento e virou **tela própria** (mantém o seletor de paciente,
+  o card do animal e o vínculo à evolução em andamento do atendimento ativo — §8). O
+  Histórico do Paciente navega para ela; o item viaja na URL (`?item=`).
+- **Ciclo de vida `SALVA → FINALIZADA → EXECUTADA`** (mesma lógica da Prescrição): a
+  fatura e o débito de estoque só acontecem na **execução** (no plantão), não no registro.
+  - `registrar` cria SALVA (fixa o lote sugerido/valor de referência, sem debitar).
+  - **Finalizar** → FINALIZADA: a vacina passa a aparecer na Execução de Prescrição e
+    **reserva o lote** em FEFO (`ReservaEstoqueVacina`, espelho da prescrição).
+  - **Executar** (plantão) → EXECUTADA: consome a reserva, debita o lote e lança o
+    `FaturaItem`.
+- Campos: vacina do catálogo com **lote disponível** (validade/valor por dose) ou avulsa;
+  **Tipo Dose** e **Via** obrigatórios já ao inserir na lista; quantidade de doses, data de
+  aplicação, data de reforço, observação; flags "fornecida pelo cliente" e "aplicada pelo
+  **proprietário**" (dose que o dono aplica em casa não vai ao plantão e é cobrada na
+  finalização).
+- Selo por status (`SALVA`/`FINALIZADA`/`EXECUTADA`/`CANCELADA`) e abas de filtro por
+  status existente. Numeração `#074` (3 dígitos, `utils/numeroClinico.ts`). Cancelar exige
+  justificativa e estorna reserva/lote/fatura conforme o momento.
+- Também executável e cancelável pelo **plantão** (Execução de Prescrição / Painel
+  Principal), com as mesmas rotas e o slug `enfermagem.prescricao.*`.
 
 ### 8.4 Exames clínicos
 
@@ -373,15 +471,19 @@ histórico abre por botão flutuante.
   LACVET), tipo de amostra (11 tipos com tubo indicado), quantidade de amostras,
   data/hora da coleta, indicação clínica, observação. Vários grupos por requisição.
 - Imagem: catálogo dinâmico de grupos/exames de imagem por espécie.
-- Ações: criar (vinculado à evolução ativa), editar, **finalizar** (status → CONCLUIDO,
-  lança na fatura, regra de autoria), excluir (soft, sincroniza fatura), imprimir
-  requisição, compartilhar por e-mail/WhatsApp.
-- **Controle por tipo de exame (RBAC):** além do slug geral `atendimento.exames.*`,
-  criar/editar/excluir exige a permissão do tipo — Laboratorial/Bioquímico →
-  `exames.laboratorial.*`; Imagem → `exames.imagem.*` (Compra usa só o geral). O nível do
-  tipo é resolvido em runtime e combinado com o geral (o mais restritivo vence). Na tela,
-  a aba de um tipo sem permissão de criar nem é exibida. Antes de 2026-07-10 esses slugs
-  eram órfãos (apareciam no Controle de Acesso mas não controlavam nada).
+- Ações do **pedido**: criar (vinculado à evolução ativa), editar, **finalizar** (status
+  → CONCLUIDO, lança na fatura, regra de autoria), excluir (soft, sincroniza fatura),
+  imprimir requisição, compartilhar por e-mail/WhatsApp. O **pedido** é gateado por
+  `atendimento.exames.*` (mesmo padrão de evolução/prescrição).
+- **Resultado do exame (2026-08-02)** — tela `ExamesSolicitadosPanel`
+  (`/exames/:animalId?tipo=laboratorial|imagem`): os exames **pedidos** aparecem com dois
+  caminhos por linha — **Carregar resultado** (anexa o laudo, tabela lida por IA em
+  `tb_exame_clinico_resultado_itens`; imagens em anexos) e **Preencher manualmente**
+  (digita a tabela ou o laudo). Ambos caem em `PATCH /clinica/exames/:id/resultado` e
+  transitam o exame para **REALIZADO**. Existe também **Finalizar sem resultado**. O gate
+  do **resultado** é `exames.laboratorial.*` (Lab/Bioquímico) / `exames.imagem.*`
+  (Imagem), distinto do slug do pedido — esses slugs deixaram de ser órfãos. Resolve a
+  antiga limitação "resultados não anexados à requisição".
 
 ### 8.5 Encaminhamento
 
@@ -394,6 +496,41 @@ histórico abre por botão flutuante.
   excluir o encaminhamento **encerra o acesso**.
 - Criar lança item na fatura. Editar só em PENDENTE. Finalizar segue regra de autoria.
 
+### 8.6 Central de Documentos (`/documentos`)
+
+Módulo de emissão de documentos veterinários (atestados, TCLEs, termos), com backend real
+sob RLS desde 2026-08-26.
+
+- **Catálogo misto de modelos** (`tb_documento_templates`): modelo **global** do sistema
+  (`empresa_id` nulo) que toda clínica lê e nenhuma altera, e modelo **da clínica**. Os
+  **12 anexos da Res. CFMV nº 1.321/2020** (atestado sanitário/óbito/vacinação, 8 TCLEs,
+  termo de retirada sem alta) são o catálogo global, transcritos verbatim dos PDFs
+  oficiais; a linha pontilhada virou `{{variável}}` onde o S2Vet tem o dado.
+- **Copy-on-write:** salvar/favoritar um modelo global **não** o altera — cria a cópia da
+  empresa (`origem_id`) e a alteração vai para ela; a resposta traz `copiado: true` e o
+  front adota o id devolvido. Excluir global → 400 `MODELO_DO_SISTEMA`. Não há autosave em
+  modelo global (criaria uma cópia a cada pausa de digitação). Selo **CFMV** no card.
+- **Seletor de paciente + preenchimento automático:** usa o **mesmo** par da tela de
+  Atendimento (`SeletorAnimalInteligente` + `AnimalCard`); escolhido o animal,
+  `GET /documentos/contexto/:animalId` devolve as variáveis já resolvidas + a marca (logo,
+  assinatura, CRMV, quem assina). **Variável sem dado sai vazia**, nunca com o exemplo do
+  catálogo (um atestado com dado inventado seria documento falso).
+- **Quem resolve o que fica gravado é o backend** (`lib/documentoVariaveis.js`), nunca o
+  navegador — o documento tem valor legal. Cobre todo campo textual, inclusive células de
+  tabela; preserva a chave da variável para auditoria.
+- **O emitido é SNAPSHOT** (`tb_documentos_emitidos`, tenant direto): editar o modelo
+  depois não reescreve o papel já entregue. Numeração `DOC-0001` por empresa. Entra no
+  Histórico do paciente e na Memória Clínica (ref `documento-<id>`). Cancelar exige
+  justificativa (soft delete).
+- **Chat de IA multi-turno ancorado no acervo** (`assistente_documento@v1`): escolhe um
+  modelo do acervo (globais + os da clínica) ou ajusta o aberto — **não** redige do zero.
+  A resposta é validada contra o acervo (id/bloco alucinado é descartado).
+- **Assinatura do veterinário** (`UsuarioEmpresa.assinatura_url`, por empresa) enviada em
+  `/cadastro-pessoal`; renderizada sobre a linha com nome e CRMV. Sem assinatura, sobra o
+  espaço em branco para assinar à mão. Logomarca da clínica no timbre da folha.
+- Permissões separadas: `documentos.templates.*` (o modelo) × `documentos.emitidos.*` (o
+  documento entregue); o acesso ao paciente é verificado à parte.
+
 ---
 
 ## 9. Agenda e agendamentos
@@ -401,13 +538,31 @@ histórico abre por botão flutuante.
 ### 9.1 Agenda global (`/agendamentos`)
 
 - Calendário mensal com marcadores por dia e agenda diária por horário (00h–23h).
-- Agendamento: animal, tipo (`CONSULTA`, `VACINA`, `RETORNO`, `EXAME`, `PROCEDIMENTO`),
-  título, data/hora, veterinário responsável (membros da equipe), observação.
+- Agendamento: animal (o combobox mostra o **local** do animal, não a espécie — quem vai
+  atender precisa saber para onde ir), tipo (`CONSULTA`, `VACINA`, `RETORNO`, `EXAME`,
+  `PROCEDIMENTO`), **especialidade** (define a **duração** da consulta — §9.4), título,
+  data/hora, veterinário responsável, observação.
   Status: `AGENDADO`, `EM_ANDAMENTO`, `CONCLUIDO`, `FINALIZADO` (via evolução),
-  `CANCELADO` (com motivos pré-definidos). Detecção de conflito de horário (aviso).
+  `ATRASADA`, `REAGENDADO`, `CANCELADO` (com motivos) e `CANCELADO_AUTOMATICAMENTE`
+  (só a rotina noturna grava — recusado como input manual). Conflito de horário é por
+  **intervalo** `[início, fim)`, não só pelo horário de início.
+- **Reagendar** usa o mesmo calendário + grade de horários livres do profissional (não um
+  `datetime-local`); o registro antigo vira **REAGENDADO** (libera a grade, não é
+  cancelamento) com a observação "Reagendado para …". **Não** se agenda no passado.
+- **Assumir** atendimento/agenda: qualquer profissional puxa para si o agendamento de
+  outro (ou o "Não atribuído"), inclusive `EM_ANDAMENTO`, com e-mail + WhatsApp ao anterior
+  e **arrasto** do atendimento (§5.3). Rastro "Assumida de/por <Fulano>" na Minha Agenda.
+- **Autoria na agenda:** iniciar/reagendar/cancelar/transferir valem sobre a **própria**
+  agenda; **só o GESTOR** agenda ou transfere **para outro** (`podeAgendarParaOutro`) —
+  quem não é gestor usa o "assumir". A grade lista todos os profissionais da equipe (cada
+  um com sua coluna), incluindo estagiário.
 - **Agendamento por voz:** ditado interpretado por LLM
   (`POST /clinica/agendamentos/interpretar`) que pré-preenche o formulário.
-- **Transferir dia:** move todos os agendamentos de um dia para outra data.
+- **Transferir dia:** move todos os agendamentos de um dia (do próprio profissional, ou de
+  qualquer um se gestor) para outra data.
+- **Cancelamento automático (cron noturno):** agendamento `AGENDADO`/`ATRASADA`/
+  `EM_ANDAMENTO` com data no passado vira `CANCELADO_AUTOMATICAMENTE` (motivo distinto por
+  origem); a evolução em andamento que ele abriu **não** é encerrada junto.
 - **Expediente configurado (2026-07-14):** os horários livres são liberados apenas nos
   **dias** e na **faixa de horário** definidos em Configurações (§15.3) — ex.: Seg–Sex
   08:00–20:00 abre 08–19h de segunda a sexta. Fora do expediente aparece "0 Livres". O
@@ -422,9 +577,11 @@ histórico abre por botão flutuante.
 
 ### 9.2 Minha Agenda (aba do Atendimento)
 
-- Atendimentos **do dia** do profissional logado; botão "Iniciar" abre a evolução do
-  animal já vinculada ao agendamento (`?agendamentoId=`, persistido por animal em
-  localStorage entre navegações/re-login).
+- É a **mesma** tela de `/agendamentos` renderizada com a prop `modoMinhaAgenda` (não há
+  agenda paralela — `SubModuloMinhaAgenda` foi removido): mostra só o card
+  "Agendamentos do Dia", escopado ao próprio profissional (o gestor vê a equipe). Botão
+  "Iniciar" abre a evolução do animal já vinculada ao agendamento (`?agendamentoId=`,
+  persistido por animal em localStorage entre navegações/re-login).
 
 ### 9.3 Mapa de Atendimento (`/mapa-atendimento`)
 
@@ -436,6 +593,31 @@ histórico abre por botão flutuante.
     por localização e veterinário; status `AGENDADO / EM_ANDAMENTO / CONCLUIDO /
     FINALIZADO / EXECUTADO / CANCELADO / SEM_ATENDIMENTO`; abre execução de prescrição
     em modal (`ModalExecucao`) e navega para o atendimento.
+
+### 9.4 Tempo de consulta por especialidade
+
+- Cada **local de trabalho** do membro define um tempo por especialidade
+  (`MembroLocalTrabalho.temposConsulta`, múltiplos de 5, 5–480 min). O agendamento grava
+  um **snapshot** da duração (`AgendamentoClinico.duracaoMin`) — mudar o tempo depois não
+  reescreve a agenda do passado. A grade da Agenda e o cálculo de conflito usam essa
+  duração; sem configuração, cai no **padrão da empresa** (`tempoConsultaPadraoMin`) e,
+  na falta, 60 min.
+- Dias/horário/tempo em branco **herdam** dinamicamente o expediente da empresa (§15.3).
+- Quem tem especialidade e tempo: VETERINARIO (sem informar, assume Clínica Médica),
+  FORNECEDOR (aceita nula), GESTOR (opcional); demais perfis (estagiário, enfermeiro,
+  secretaria, financeiro) informam **só** local e horário.
+- **Restrição por local (2026-08-31):** o checkbox "Atender somente no local de trabalho"
+  no membro restringe a lista de pacientes do profissional aos animais cujo local bate com
+  um dos locais de trabalho dele válidos para o dia.
+
+### 9.5 Fuso horário por empresa
+
+- A aplicação roda em todo o Brasil (4 fusos). O fuso é **por empresa** e **deduzido do
+  endereço** (CEP/UF que o cadastro já coleta) — o gestor **não** escolhe fuso, e ele
+  **não** aparece em tela. "Hoje", o expediente, os horários de dose e os lembretes são
+  calculados no fuso da clínica, no backend (`lib/fusoEmpresa.js`) e no front
+  (`utils/dateUtils.ts`), sempre via `Intl` com `timeZone` explícito. Override raro por
+  `EmpresaConfiguracao.fusoHorario` (fora da UI).
 
 ---
 
@@ -615,11 +797,36 @@ histórico abre por botão flutuante.
   `(11) 98765-4321`; persistido somente com dígitos (`EmpresaConfiguracao.whatsapp`,
   validação 10–15 dígitos no backend); campo em branco remove o número. O campo apenas
   armazena o número — a integração de mensageria em si ainda não existe.
-- **Expediente de atendimento (2026-07-14)** — dias da semana (toggles Dom–Sáb) e faixa de
-  horário (abre/fecha) em que a clínica atende (`EmpresaConfiguracao.diasAtendimento` CSV
-  0-6, `horaInicioAtendimento`/`horaFimAtendimento` HH:MM; vazio = sem restrição). Usado
-  pela Agenda para liberar horários (§9.1). Ao salvar as Configurações, redireciona para o
-  Mapa de Atendimento.
+- **Expediente de atendimento** — dias da semana (toggles Dom–Sáb) e faixa de horário
+  (abre/fecha) em que a clínica atende (`EmpresaConfiguracao.diasAtendimento` CSV 0-6,
+  `horaInicioAtendimento`/`horaFimAtendimento` HH:MM). Usado pela Agenda (§9.1). Ao salvar,
+  redireciona para o Mapa de Atendimento.
+- **Espécies atendidas** e **expediente** viraram **obrigatórios** na tela (2026-08-01) —
+  o salvar recusa (400) com dia/hora/espécie vazios. A UI oferece Equino e Bovino
+  (`ESPECIES_PERMITIDAS`). As espécies filtram as especialidades oferecidas nos cadastros.
+- **Tempo de consulta padrão** da empresa (`tempoConsultaPadraoMin`) — herdado pelos
+  locais de trabalho sem tempo próprio (§9.4).
+- **Validade do orçamento** (`validadeOrcamentoDias`, `null` = não expira) — passado o
+  prazo desde a criação, o cron `cancelar_orcamentos_vencidos` cancela o orçamento (exceto
+  Aprovado/Aprovado Parcialmente) com o motivo acrescentado à observação.
+- O **fuso horário** não aparece nesta tela — é deduzido do endereço (§9.5).
+
+### 15.4 Orçamento (`/orcamento`) — etapa OPCIONAL
+
+- Orçamento por **proprietário** (`Orcamento`/`OrcamentoItem`), etapa opcional antes do
+  atendimento. Item de tipo **PROCEDIMENTO · COMBO · MEDICAMENTO · VACINA · OUTROS**,
+  rateado por animal (ou no nível do proprietário via "Não selecionar animais").
+- **Medicamento** captura posologia (dias + frequência) → a quantidade cobrada é derivada
+  e volta preenchida na importação para a Prescrição. **Vacina** captura Tipo Dose + Via
+  (obrigatórios) + nº de doses. **OUTROS** é cobrança avulsa (nome, qtd, valor).
+- Status: `RASCUNHO`, `ENVIADO`, `APROVADO`, `APROVADO_PARCIALMENTE`, `REJEITADO`,
+  `CANCELADO`. Envio por WhatsApp/e-mail (PDF). Cancelamento manual e por validade (§15.3).
+- **Importação clínica:** itens ACEITOS (exceto OUTROS) entram na Prescrição/Vacina do
+  atendimento (`GET /orcamentos/para-importar`), preenchendo posologia/dose. O item
+  **OUTROS** vai **direto para a fatura** em Financeiro (botão "Importar do orçamento") —
+  sem trava de "importar os demais antes" (removida em 2026-08-01; virou só aviso).
+- Desconto por item também existe na **fatura** (`FaturaItem.descontoTipo`/`descontoValor`,
+  PERCENTUAL ou VALOR) — o total é sempre a soma do **líquido**.
 
 ---
 
@@ -676,12 +883,26 @@ tabela no desktop e **cards empilhados no mobile** (rótulo:valor, via `Relatori
 endereço + CEP) **e** ao menos um animal; os demais perfis precisam apenas do cadastro
 completo. Banner com a mensagem correspondente ao perfil.
 
-**Sidebar:** accordions Geral (Mapa de Atendimento, Relatórios, Configurações, Cadastro:
-Cadastro Pessoal/Pacientes/Proprietários/Tratadores/Fornecedores/Localizações), Agenda,
-Clínica (abas do atendimento + Exames nutricionais), Enfermagem, Estoque
-(Farmácia/Vacina), Nutricional (Dieta, Relatório, e para ADMIN: Alimentos, Nutrientes,
-Composição), Financeiro, Equipe/Controle de Acesso, Admin. Cada item é exibido conforme
-`podeExecutar(slug.ler)`; badge do perfil (ADMIN/GESTOR/VET/EST) ao lado do usuário.
+**Shell global (2026-07-31).** A aplicação tem um **cabeçalho** (marca do produto, **busca
+global**, sino de notificações e menu do usuário — identidade, perfil, Cadastro Pessoal,
+Configurações do gestor e **Sair**), o corpo (Sidebar + conteúdo, único elemento que rola)
+e um **rodapé** (logomarca da clínica + marca do produto). O seletor de contexto ativo e o
+card da clínica (só o logo) ficam na Sidebar. Página institucional **pública** em `/`
+para quem não está logado (`Home.tsx`); logado, `/` cai no destino do perfil.
+
+**Busca global** (`GET /api/busca?q=`): pacientes, atendimentos (evoluções) e agendamentos
+da **empresa ativa**, cada resultado já com a rota de destino. Escopo intersectado com
+`req.empresaId` (nunca "todos os vínculos") e permissão **por grupo** (`animais.ler` /
+`atendimento.evolucoes.ler` / `atendimento.agendamentos.ler`), resolvida em runtime.
+
+**Sidebar:** Mapa de Atendimento; **Agendamento**; **Atendimento** (folha, leva à Agenda do
+paciente — Evolução/Prescrição/Exames/Encaminhamento são as abas de lá); **Vacina** e
+**Execução de Prescrição** no primeiro nível; **Painel Principal**; Geral (Relatórios,
+Configurações, Cadastro: Pessoal/Pacientes/Proprietários/Tratadores/Fornecedores/
+Prestadores/Localizações, Auditoria); Estoque (Farmácia/Vacina); Nutricional (Dieta,
+Relatório e, para ADMIN, Alimentos/Nutrientes/Composição); Financeiro (Faturamento,
+Orçamento); Documentos; Equipe/Controle de Acesso; Administração. Cada item aparece
+conforme `podeExecutar(slug.ler)`.
 
 ---
 
@@ -691,7 +912,7 @@ Composição), Financeiro, Equipe/Controle de Acesso, Admin. Cada item é exibid
 |---|---|---|
 | `useProprietarioNotificacoes` | PROPRIETARIO | Polling 15s em `/animais/minhas-solicitacoes`; toasts para aceite/recusa de vínculo, desvinculo iniciado pelo vet, novas solicitações V→P; janela retroativa de 10 min para eventos ocorridos fora da sessão. |
 | `useVetSolicitacaoMonitor` | VETERINARIO | Polling em `/veterinarios/solicitacoes`; detecta novas solicitações e cancelamentos. |
-| `useVetPendentes` | VETERINARIO | Badge de contagem de pendências no Sidebar. |
+| `useVetPendentes` | VETERINARIO | **Store único de módulo** — um só polling (30s) compartilhado pelo badge de Pacientes (Sidebar) **e** pelo sino do cabeçalho. Consumo em dois lugares com um estado cada daria polling dobrado e dois toasts para a mesma solicitação. |
 | `VetNotificationModal` | VETERINARIO | Modal bloqueante com solicitações recebidas (rastreio de vistos em localStorage; vets convidados não veem). |
 
 E-mails transacionais (`emailService`): solicitação de vínculo (para vet e para
@@ -702,19 +923,29 @@ proprietário, convite de equipe, reset de senha. Links de e-mail sempre com `/#
 
 ## 19. Inteligência Artificial
 
+**Provedor único: Google Gemini (2026-07-28).** Groq, OpenAI e Anthropic foram
+**removidos**. Todo acesso a LLM — texto, visão e transcrição de áudio — passa por
+`src/ai/geminiClient.ts` (modelo `GEMINI_MODEL`, default `gemini-3.1-flash-lite`). Toda
+chamada declara o **módulo de origem** (`MODULOS_IA`) e o **`empresaId`**.
+
 | Operação | Onde | Descrição |
 |---|---|---|
-| Interpretar evolução | Finalizar evolução / Finalizar Atendimento | Extrai ações clínicas estruturadas (encaminhamentos sugeridos) e sugere título. Degradação graciosa em falha. |
-| Transcrição de áudio | Evolução/Prescrição | Web Speech API (online) e Whisper local (offline), com fila de áudios e transcodificação no backend. |
-| Agendamento por voz | Agenda | LLM interpreta o ditado e pré-preenche o agendamento. |
-| Análise de laudo de exame | Exames nutricionais | Upload de laudo → extração de resultados por nutriente. |
-| Parser de composição alimentar | Composição (ADMIN) | Extração de tabela nutricional. |
-| Resumo do atendimento (laudo equino) | Relatório de Atendimento | Extrai mapa corporal + escores do texto da evolução; cache versionado (`resumoIaVersao`). |
-| Sugestão de dieta | Nutrição | Geração/sugestão de dietas. |
-| **AiUsageDashboard** (`/ai-usage`) | Todos autenticados (resumo e projeção mensal); detalhes por modelo e log recente só ADMIN | Tokens entrada/saída, custo USD, latência, sucesso, evolução diária. |
+| Interpretar evolução | Finalizar evolução / Atendimento | Extrai ações clínicas estruturadas e sugere título. Degradação graciosa. |
+| Transcrição de áudio | Evolução/Prescrição | Gemini no backend (WebM/Ogg transcodificados antes); Web Speech API online no cliente. |
+| Agendamento por voz | Agenda | Interpreta o ditado e pré-preenche o agendamento. |
+| Análise de laudo | Exames nutricionais / resultado de exame clínico | Upload → extração de resultados por parâmetro. |
+| Parser de composição | Composição (ADMIN) | Extração de tabela nutricional (texto e visão). |
+| Laudo equino (mapa corporal) | Relatório de Atendimento | Mapa corporal + escores; cache versionado. |
+| **Memória Clínica do paciente** | Tela do animal (`MemoriaClinicaPanel`) | `memoria_clinica@v1` — highlights factuais entre atendimentos + tópicos clicáveis até o registro de origem. Incremental (só recalcula com evento novo); anti-alucinação (ids atribuídos pelo serviço). Não sugere conduta nem diagnostica. |
+| **IA Financeira** | Relatórios > Financeiro (`AnaliseFinanceiraIA`) | `analise_financeira@v1` — análise gerencial do período **sob demanda** (botão). Descreve/quantifica; não recomenda ação. |
+| **Assistente de documentos** | Central de Documentos | `assistente_documento@v1` — chat ancorado no acervo de modelos (§8.6). |
+| **AiUsageDashboard** (`/ai-usage`) | Resumo p/ autenticados; detalhes/log e **planos por empresa** só ADMIN | Tokens entrada/saída, custo, latência, sucesso, consumo por módulo e **por empresa**. |
 
-Arquitetura: interface `AIProvider` (implementação Groq), prompts versionados
-(`operacao@vN`), toda inferência logada em `AiUsageLog`.
+**Metering e quota por empresa (2026-07-28):** conta única no Google + medição interna
+por tenant. `AiUsageLog.empresaId` e `IaPlanoEmpresa` (limite de tokens/chamadas por mês,
+`bloquearAoExceder`). O gate `garantirQuota` roda **dentro** de `callAI`, antes de gastar
+token; estouro com bloqueio → **HTTP 429** (`IA_QUOTA_EXCEDIDA`). Sem empresa (ADMIN, job)
+não bloqueia. Prompts versionados (`operacao@vN`); toda inferência logada em `AiUsageLog`.
 
 ---
 
@@ -739,10 +970,16 @@ Arquitetura: interface `AIProvider` (implementação Groq), prompts versionados
   animal, remoção manual de item de fatura e remoção de proprietário da empresa).
   O motivo é coletado pelo modal padrão
   `ModalJustificativa`, validado no backend (400 sem motivo) e gravado no `AuditLog`
-  estruturado (categoria EXCLUSAO/CANCELAMENTO, entidade, id, animal, motivo, detalhes,
-  usuário, empresa e **IP de origem**). A tela lista os registros com filtros por
-  categoria, tipo de registro, busca textual e período, com paginação (e coluna de IP);
-  GESTOR vê a empresa ativa e ADMIN vê tudo (`GET /api/audit/logs`).
+  estruturado (entidade, id, animal, motivo, detalhes, usuário, empresa e **IP de
+  origem**). A tela lista os registros com filtros por categoria, tipo de registro, busca
+  textual (inclusive por **nome do paciente**) e período, com paginação; GESTOR vê a
+  empresa ativa e ADMIN vê tudo (`GET /api/audit/logs`).
+- **Categorias de auditoria** (`lib/auditoria.js`): `CRIACAO`, `ALTERACAO`, `EXCLUSAO`,
+  `CANCELAMENTO`, `TRANSFERENCIA` (troca de responsável: dono anterior → novo, com a
+  origem da cascata), `ACESSO_NEGADO` (tentativa **bloqueada** — 403 de permissão/animal e
+  falha de login/2FA, em escopo de plataforma) e `CONFIGURACAO`. Cada uma tem badge e
+  filtro próprios; o modal Visualizar mostra o "antes → depois" por campo. As telas de
+  auditoria **não exibem referências numéricas** (`#65`) — o id já é coluna.
 - **query-adhoc** (`/query-adhoc`): página utilitária de consulta ad-hoc (dev).
 
 ### 20.1 Tarefas agendadas — Configuração, Monitoração e agenda dinâmica (2026-07-14)
@@ -766,6 +1003,15 @@ Tarefas de cron do sistema (globais): `crmv_sync` (SISCAD), `auto_aceite` (solic
   (expressão/estado por tarefa). Backend: `lib/cronManager.js` (registrar/iniciar/reagendar),
   `lib/cronAlert.js` (`reportarCron`), `MonitoracaoController`, rotas
   `GET/PUT /api/monitoracao/{config,execucoes,agendas}`.
+- **Execução manual com rastro (2026-08-23):** botão "Executar agora" na Configuração
+  (`POST /api/monitoracao/agendas/:chave/executar`, **ADMIN da plataforma** — o job varre
+  todas as empresas), `npm run job -- <chave>` na linha de comando, e trace passo-a-passo
+  (`lib/cronTrace.js`) que registra a **decisão** ("hoje não é dia"), não só o resultado.
+  ⚠️ Roda a tarefa **de verdade** (grava e dispara WhatsApp/e-mail — não há simulação).
+- **Jobs adicionais:** `cancelar_agendamentos_nao_realizados`, `cancelar_orcamentos_vencidos`,
+  `marcar_faturas_atrasadas`, `cancelar_doses_prescricao_perdidas`, `limpeza_desafios_2fa`,
+  além dos já citados. Dentro de `paraCadaEmpresa`/`comTenant`, todo acesso ao banco passa
+  pelo cliente da transação — sob RLS, o `prisma` global ali enxergaria **zero** linha.
 
 ---
 
@@ -789,56 +1035,70 @@ Impressões usam o **logotipo da empresa/equipe** quando configurado (fallback m
 
 ## 22. Segurança (implementado)
 
-- **Sessão por cookies HttpOnly** (2026-07-10): access (`s2vet_at`, JWT 24h) e refresh
-  (`s2vet_rt`, JWT 30d) em cookies `HttpOnly`, `SameSite=Lax`, `Secure` em produção — o
-  token não é legível por JavaScript nem armazenado em storage (defesa contra roubo via
-  XSS). O backend lê o cookie primeiro e aceita `Authorization: Bearer` só como fallback
-  (clientes não-navegador). Login/refresh/Google setam os cookies; logout limpa e revoga
-  o refresh no banco. A identidade do usuário no frontend vem de `/api/users/me`.
-- **`trust proxy`** configurado (`TRUST_PROXY_HOPS`, default 1) — resolve o IP real do
-  cliente atrás do proxy e elimina o erro do rate-limit com `X-Forwarded-For`.
-- Helmet, CORS com allowlist via `ALLOWED_ORIGINS` (com `credentials`), rate limiting
-  (200 req/min geral, 20 req/15min em `/auth`), validação de `JWT_SECRET` no startup (≥32).
-- Uploads: nomes gerados com `crypto.randomBytes` (capability URL), whitelist de
-  extensão + mimetype, servidos com `nosniff`, CSP sandbox e `Content-Disposition:
-  attachment` para tipos fora da whitelist de mídia.
-- Refresh token é JWT assinado com expiração 30d, rotacionado a cada uso e verificado
-  antes do lookup.
-- `forgot-password` com resposta genérica; registro restrito a
-  PROPRIETARIO/VETERINARIO; console suprimido em produção; correlation id
-  (`x-request-id`) em todos os requests; logs estruturados (Winston).
-- 403 de GET silencioso no frontend (sem vazamento de erro para o usuário).
-- **Auditoria com IP de origem** em login/logout e exclusões/cancelamentos
-  (`AuditLog.ip`, derivado do request no servidor).
+- **Isolamento multi-tenant por Row-Level Security (fail-closed).** 72 tabelas com RLS
+  `ENABLE + FORCE`; a role da aplicação (`zls2vetp1`) **não** é superusuária, não tem
+  `BYPASSRLS`, não é dona de tabela e não pode desligar policy. O `authenticate` carimba a
+  empresa do contexto ativo (`app.empresa_id`, via `AsyncLocalStorage` +
+  `lib/prismaTenant.js`) em toda operação; **sem** contexto declarado, toda tabela de
+  tenant devolve zero linha. Uma clínica não lê, escreve, atualiza nem exclui dados de
+  outra — nem pedindo explicitamente o `empresa_id` alheio (WITH CHECK barra o INSERT
+  cruzado). Header `x-empresa-id`/`x-equipe-id` é **validado** contra o vínculo antes de
+  virar contexto; valor alheio é ignorado. Catálogos globais (medicamentos, especialidades,
+  os 12 modelos CFMV) têm `empresa_id` nulo e são compartilhados por design.
+- **Storage no banco (2026-08-04).** Todo arquivo mora em `tb_midia_arquivos` (bytea);
+  **nada** é servido do filesystem (`express.static` removido). Download por
+  `GET /api/midia/:chave`, autenticado e autorizado por dono (animal/empresa/autor) —
+  negado responde 404. Teto de 150 MB no provider. Interface `StorageProvider` permite
+  trocar para S3/GCS mudando só `STORAGE_DRIVER`, sem tocar controller e mantendo o bucket
+  privado. Marca do produto pública por `GET /api/marca` (sem parâmetro).
+- **Sessão por cookies HttpOnly + janela de inatividade (2h).** Access JWT curto (30 min)
+  e refresh rotacionado a cada uso (fonte única `lib/sessionTokens.js`), em cookies
+  `HttpOnly`, `SameSite=Lax`, `Secure` em produção. `sessionVersion` revoga sessão antiga
+  no login novo. `JWT_SECRET` validado no startup por **entropia** (não só comprimento);
+  aviso se `JWT_REFRESH_SECRET` for derivado/ausente.
+- **2FA por e-mail** (código CSPRNG, SHA-256, tempo constante, rate limit próprio) — §3.
+- **Bloqueio por tentativas** (6 falhas) e **sem enumeração de usuário** por conteúdo nem
+  por **timing** (login com bcrypt de isca; forgot-password com envio em segundo plano).
+- **Rate limit** por **usuário** autenticado (`jwt.verify`, não decode; fallback por IP com
+  `ipKeyGenerator` para IPv6): 300/min geral, 20/15min em `/auth`, limites próprios no 2FA.
+- **`trust proxy`** (`TRUST_PROXY_HOPS`, default 1); Helmet (CSP, HSTS, nosniff, X-Frame);
+  CORS com allowlist via `ALLOWED_ORIGINS` (com `credentials`); a proteção CSRF é o
+  `SameSite=Lax` (front e back na mesma origem).
+- **Uploads** com whitelist de extensão + mimetype e `limits.fileSize` por rota; formato
+  não suportado → 415, tamanho → 413. Varredura de secrets no CI (`gitleaks`, job
+  `secret-scan`) impede reintroduzir chave no código.
+- **Auditoria com IP de origem** em login/logout, tentativas negadas e
+  exclusões/cancelamentos/transferências (`AuditLog.ip`, derivado no servidor).
+- Registro restrito a PROPRIETARIO/VETERINARIO (allowlist no `create` — `role`/`isAdmin` do
+  body são ignorados); console suprimido em produção; `x-request-id` em todo request; logs
+  estruturados (Winston); 403 de GET silencioso no frontend.
 
 ---
 
 ## 23. Limitações e comportamentos conhecidos (fiéis ao código atual)
 
-1. ~~Slugs órfãos `exames.laboratorial.*`/`exames.imagem.*`~~ — **resolvido
-   (2026-07-10)**: agora controlam de fato criar/editar/excluir por tipo de exame
-   (ver §8.4).
-2. **VacinaClinica não tem fluxo de finalização** (sem campo `status`); registro é
-   direto. Regras de autoria de edição para vacina dependem de migration futura.
-3. **Autoria clínica é 100% RBAC** (2026-07-10): não há mais regra de cargo hardcoded no
-   backend (só o bypass de ADMIN). Um FORNECEDOR com nível `EQUIPE`/`FULL` na matriz
-   passaria a operar registros de outros — é decisão do gestor no Controle de Acesso, não
-   do código. O deny-by-default de dados do prestador (designação) permanece.
-4. **Rastreio de correções de fatura** passou a existir em 2026-07-07; correções
-   anteriores não são contabilizadas no relatório gerencial.
-5. **Cadastro via Google** cria conta como PROPRIETARIO fixo.
-6. **Multi-tenant:** `empresaId` existe em Animal/AuditLog/Fornecedor/etc. e o
-   enforcement é por middleware/contexto; Fatura e EvolucaoClinica ainda não têm
-   `empresaId` próprio (escopo derivado do proprietário/animal). Sem Row-Level Security.
-7. **Visão ADMIN do Controle de Acesso sem equipe selecionada** (lista hierárquica de
-   todas as empresas) mostra apenas o cargo local do membro, sem os perfis globais.
-8. **Uploads em disco local** (`backend/uploads/`) atrás de `StorageProvider` abstrato
-   (implementação atual: LocalStorageProvider). Acesso à mídia não é vinculado à sessão
-   (capability URL não-enumerável).
-9. Arquivos residuais existem no repositório (`AuthContext copy.tsx`, `App copy.tsx`,
-   `query-adhoc.tsx`, scripts de teste soltos) — sem função no produto.
-10. i18n (`react-i18next`) está preparado, mas as telas usam strings em pt-BR
-    hardcoded.
+1. ~~Slugs órfãos `exames.laboratorial.*`/`exames.imagem.*`~~ — **resolvido**: controlam
+   o fluxo de **resultado** de exame (§8.4).
+2. ~~VacinaClinica sem fluxo de finalização~~ — **resolvido**: ciclo
+   `SALVA → FINALIZADA → EXECUTADA` com reserva de estoque (§8.3).
+3. ~~Autoria clínica 100% RBAC~~ — **revertido em 2026-08-04**: vale a **premissa de
+   autoria** (a ação vale sobre o que a pessoa criou/assumiu; só o gestor opera o de
+   outro), com arrasto do atendimento e auditoria de transferência/alteração (§5.3). Nível
+   `FULL` da matriz **não** dá acesso ao registro alheio.
+4. ~~Multi-tenant sem RLS~~ — **implementado**: Row-Level Security fail-closed em 72
+   tabelas; `EvolucaoClinica`/`Fatura`/documentos têm `empresa_id` próprio (§22).
+5. ~~Uploads em disco local~~ — **substituído**: arquivo no banco, download autorizado por
+   dono (§22). O acesso à mídia passou a ser vinculado à sessão.
+6. **Cadastro via Google** cria conta como PROPRIETARIO fixo.
+7. **Documento (CPF/CNPJ) da empresa é obrigatório e único** entre empresas (2026-08-16) —
+   só o ADMIN da plataforma cria empresa (com plano e gestores); o gestor não cria mais a
+   própria. Alguns caminhos legados de bootstrap ainda criam empresa sem documento.
+8. **WhatsApp:** integração real via Evolution API (`infra/evolution/`,
+   `WHATSAPP_PROVIDER=evolution`); webhook autenticado por token.
+9. **i18n** (`react-i18next`) está preparado, mas as telas usam strings em pt-BR hardcoded.
+10. **Push/notificação nativa** ainda não implementada (plano em `docs/NOTIFICACOES-PUSH-PLANO.md`).
+11. **2FA por empresa** não existe (só o 2FA global do ADMIN) — plano em
+    `docs/2FA-POR-EMPRESA-PLANO.md`. O bloco `qrcode` de documentos ainda é placeholder.
 
 ---
 
@@ -872,8 +1132,19 @@ Impressões usam o **logotipo da empresa/equipe** quando configurado (fallback m
 | `/api/resenha`, `/api/animais/:id/resenha` | resenha descritiva e gráfica |
 | `/api/mapa-atendimento` | resumo do mapa |
 | `/api/dashboard` | estatísticas |
-| `/api/ai-usage` | monitoramento de IA |
+| `/api/busca` | **busca global** do cabeçalho (pacientes/atendimentos/agenda, escopo por empresa) |
+| `/api/documentos` | Central de Documentos (templates, emitidos, contexto do paciente, chat IA, compartilhar) |
+| `/api/orcamentos` | orçamentos (importar p/ clínica, lançar OUTROS na fatura) |
+| `/api/midia`, `/api/marca` | download autorizado de arquivo / marca do produto (público) |
+| `/api/ai-usage` | monitoramento e **planos de IA por empresa** (ADMIN) |
+| `/api/monitoracao` | crons: config de alertas, execuções, agenda dinâmica, executar-agora |
+| `/api/planos`, `/api/empresas` | planos SaaS / cadastro do assinante (ADMIN) |
+| `/api/seguranca` | config global de 2FA (ADMIN) |
+| `/api/cadastro/prestadores`, `/api/cadastro/tipos-servico` | prestadores e catálogo de tipos de serviço |
+| `/api/admin/exportacao` | exportação de prontuário (gestor/ADMIN) |
+| `/api/fatura-publica`, `/api/l` | link público da fatura (token) / redirect curto — **sem** login |
+| `/api/webhooks` | webhook da Evolution API (token em query) |
 | `/api/audit` | log de auditoria |
 | `/api/crmv` | validação CRMV (CFMV) |
-| `/api/especies`, `/api/racas`, `/api/produtos` | apoio |
+| `/api/especies`, `/api/racas`, `/api/especialidades`, `/api/produtos` | apoio |
 | `/health` | health check (status do banco, uptime, versão) |

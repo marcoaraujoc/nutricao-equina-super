@@ -42,6 +42,16 @@ type AnimalExtended = SelectedAnimal & {
   raca?:           { nome: string } | null;
   user?:           { fullName: string; email: string } | null;
   logoUrl?:        string | null;
+  /**
+   * Paciente INATIVO — prontuário CONGELADO na data/hora da inativação.
+   * ⚠️ Nada a ver com `ativo` (exclusão lógica, em que o paciente SOME de tudo):
+   * aqui ele continua aparecendo inteiro, só que em somente leitura.
+   * Vem de `GET /animais/:id` (`anexarInativo`, backend/src/lib/animalInativo.js).
+   */
+  inativo?:        boolean;
+  inativoEm?:      string | null;
+  inativoMotivo?:  string | null;
+  inativoPor?:     { fullName: string } | null;
 };
 
 interface EvolucaoAtiva {
@@ -900,6 +910,21 @@ const Atendimento = () => {
   const animalIdNum = effectiveAnimalId ? Number(effectiveAnimalId) : 0;
 
   /**
+   * 🔴 Paciente INATIVO deixa o prontuário em SOMENTE LEITURA (2026-09-02).
+   *
+   * Tudo continua na tela — evolução, prescrição, exame, encaminhamento, agendamento,
+   * vacina, histórico e os cancelamentos —, mas nada mais pode ser criado, alterado,
+   * finalizado, executado ou cancelado a partir da data e hora da inativação. Reativado
+   * pelo gestor, o histórico volta a seguir o trâmite normal.
+   *
+   * O estado desce para os quatro submódulos e entra nas permissões DELES, o que apaga
+   * todo botão de escrita de uma vez. O backend recusa igual — `bloquearSeAnimalInativo`
+   * em `lib/animalInativo.js` — então o front aqui é a cortesia de não oferecer o que
+   * vai falhar (28-d), nunca a única defesa.
+   */
+  const pacienteInativo = !!animal?.inativo;
+
+  /**
    * Vai para um submódulo abrindo um item do Histórico do Paciente.
    *
    * VACINA é tela APARTADA: sair daqui desmonta este shell e leva o `openItemId` de
@@ -933,6 +958,7 @@ const Atendimento = () => {
           <SubModuloEvolucao
             key={`evtab-${evolucaoTabKey}`}
             animalId={animalIdNum}
+            pacienteInativo={pacienteInativo}
             animal={animal}
             faturaId={null}
             onFaturaAtualizada={() => {}}
@@ -959,6 +985,7 @@ const Atendimento = () => {
         return (
           <SubModuloPrescricao
             animalId={animalIdNum}
+            pacienteInativo={pacienteInativo}
             animal={animal ? {
               ...animal,
               photoUrl: animal.photoUrl ?? null,
@@ -984,6 +1011,7 @@ const Atendimento = () => {
         return (
           <SubModuloExames
             animalId={animalIdNum}
+            pacienteInativo={pacienteInativo}
             animal={animal}
             evolucaoId={evolucaoAtiva?.id}
             evolucaoDeOutro={!!evolucaoAtiva && !evolucaoAtivaEhMinha(evolucaoAtiva)}
@@ -997,6 +1025,7 @@ const Atendimento = () => {
         return (
           <SubModuloEncaminhamento
             animalId={animalIdNum}
+            pacienteInativo={pacienteInativo}
             evolucaoId={evolucaoAtiva?.id}
             evolucaoDeOutro={!!evolucaoAtiva && !evolucaoAtivaEhMinha(evolucaoAtiva)}
             atendimentoNumero={evolucaoAtiva?.atendimentoNumero ?? undefined}
@@ -1016,6 +1045,25 @@ const Atendimento = () => {
       <BotaoVoltar className="mb-4" />
 
       <InlineError message={erroInline} className="mb-4" />
+
+      {/* 🔴 O PRONTUÁRIO ESTÁ CONGELADO — sem este aviso, quem abre a tela vê os
+          botões de ação simplesmente AUSENTES e conclui que perdeu permissão. A
+          faixa diz o estado, desde quando, por quem, por quê e qual é a saída. */}
+      {pacienteInativo && (
+        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <p className="text-sm font-semibold text-amber-900">
+            Paciente inativo — prontuário em somente leitura
+            {animal?.inativoEm && <> desde {formatDataHora(animal.inativoEm)}</>}.
+          </p>
+          <p className="text-xs text-amber-800 mt-0.5">
+            Todo o histórico continua visível e pode ser impresso ou enviado. Nada pode
+            ser criado, alterado, finalizado ou cancelado até o gestor reativar o
+            paciente.
+            {animal?.inativoMotivo && <> Motivo: “{animal.inativoMotivo}”.</>}
+            {animal?.inativoPor?.fullName && <> Inativado por {animal.inativoPor.fullName}.</>}
+          </p>
+        </div>
+      )}
 
       {/* Cabeçalho — título acompanha o submódulo ativo */}
       <div className="mt-2 mb-4 flex items-center gap-3">

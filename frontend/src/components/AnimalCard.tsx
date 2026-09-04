@@ -93,7 +93,7 @@ export default function AnimalCard({ animal }: AnimalCardProps) {
           de imagens: o `picsum` que estava aqui mostrava o cavalo de outra pessoa
           como se fosse o do cliente). */}
       <div className="w-24 h-24 rounded-2xl overflow-hidden flex-shrink-0 bg-gray-100 border border-gray-100">
-        <FotoAnimal url={animal.photoUrl} nome={animal.nome} iconSize={28} />
+        <FotoAnimal url={animal.photoUrl} nome={animal.nome} iconSize={28} animalId={animal.id} />
       </div>
 
       {/* Info MOBILE (< md): nome completo na 1ª linha; Idade, Peso e Baia na 2ª */}

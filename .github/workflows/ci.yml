@@ -150,3 +150,29 @@ jobs:
         run: npm run build
         env:
           VITE_API_URL: http://localhost:3001
+
+  # Varredura de segredos — impede que uma chave/senha/token volte a ser commitado.
+  # POR QUÊ existe: um Google OAuth Client Secret já vazou no histórico deste repo
+  # (frontend/src/main.tsx, removido em e6ec280). Este gate é a defesa DEFINITIVA
+  # contra a REINTRODUÇÃO — o purge do histórico e a rotação do secret antigo são
+  # ações à parte (ver o runbook em docs/SEGURANCA-SECRET-HISTORICO.md).
+  #
+  # ⚠️ `--no-git`: escaneia os ARQUIVOS ATUAIS do checkout, NÃO o histórico. É
+  # deliberado — varrer o histórico faria o CI falhar para sempre por causa do
+  # secret já vazado (que não está mais no código). Aqui um secret só reprova se
+  # estiver no estado atual do repositório, que é o que impede um vazamento novo.
+  secret-scan:
+    name: Segurança — varredura de secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar gitleaks
+        run: |
+          VERSAO=8.21.2
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSAO}/gitleaks_${VERSAO}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Varredura do código atual (working tree, não o histórico)
+        run: gitleaks detect --no-git --source . --redact --verbose --exit-code 1

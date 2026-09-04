@@ -183,7 +183,7 @@ export default function ClinicaDashboard() {
               >
                 {/* Foto */}
                 <div className="w-10 h-10 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-                  <FotoAnimal url={animal.photoUrl} nome={animal.nome} />
+                  <FotoAnimal url={animal.photoUrl} nome={animal.nome} animalId={animal.id} />
                 </div>
 
                 {/* Nome + proprietário */}

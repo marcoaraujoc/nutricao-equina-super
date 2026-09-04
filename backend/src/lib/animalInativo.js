@@ -124,7 +124,64 @@ async function anexarInativo(item, client) {
   return item;
 }
 
+/**
+ * Mensagem única do bloqueio. Diz o ESTADO ("somente leitura") e a SAÍDA ("reative
+ * com o gestor") — sem os dois, quem esbarra nela não sabe se é defeito ou regra.
+ */
+const MSG_PACIENTE_INATIVO =
+  'Paciente inativo — o prontuário dele fica em SOMENTE LEITURA. '
+  + 'Reative o paciente com o gestor para voltar a registrar ou alterar.';
+
+/** O mesmo para o paciente EXCLUÍDO (`Animal.ativo = false`), que é outro estado. */
+const MSG_PACIENTE_EXCLUIDO =
+  'Paciente inativado — reative-o na tela de Pacientes antes de registrar algo novo.';
+
+/**
+ * GUARD ÚNICO DE ESCRITA do paciente inativo.
+ *
+ * 🔴 A REGRA (2026-09-02): inativar o paciente CONGELA o prontuário dele na data e
+ * hora da inativação. Tudo continua VISÍVEL — evolução, prescrição, exame,
+ * encaminhamento, agendamento, vacina, histórico e os cancelamentos —, mas nada mais
+ * pode ser criado, alterado, finalizado, executado, cancelado ou excluído até que o
+ * gestor reative. Reativado, o histórico volta a seguir o trâmite normal.
+ *
+ * ⚠️ Vale para TODA escrita, não só para a criação. Até aqui o bloqueio estava só
+ * nos `criar`, então o paciente inativo continuava tendo evolução reaberta,
+ * prescrição cancelada e agendamento remarcado — ou seja, o prontuário congelado
+ * mudava depois de congelado, que é exatamente o que a inativação existe para
+ * impedir.
+ *
+ * ⚠️ NÃO bloqueia LEITURA. A tela do paciente inativo abre inteira: é a diferença
+ * entre este estado e a exclusão lógica (`Animal.ativo`), em que ele some de tudo.
+ *
+ * @param {object} res      resposta do Express
+ * @param {number} animalId paciente do registro que está sendo escrito
+ * @param {object} [opts]
+ * @param {boolean} [opts.sucessoMensagem] usa `{ sucesso:false, mensagem }` em vez de
+ *   `{ error }` — os dois formatos convivem nos controllers, e devolver o errado faz
+ *   a tela mostrar "undefined".
+ * @param {object} [opts.client] cliente/transaction, quando já houver um aberto.
+ * @returns {Promise<boolean>} `true` quando BLOQUEOU (o caller deve `return` na hora).
+ */
+async function bloquearSeAnimalInativo(res, animalId, opts = {}) {
+  if (!animalId) return false;
+  const info = await lerInativo(animalId, opts.client);
+  if (!info?.inativo) return false;
+
+  const corpo = opts.sucessoMensagem
+    ? { sucesso: false, mensagem: MSG_PACIENTE_INATIVO, code: 'PACIENTE_INATIVO' }
+    : { error: MSG_PACIENTE_INATIVO, code: 'PACIENTE_INATIVO' };
+  // 400 e não 403: não é falta de permissão (o gestor também é barrado) nem falta de
+  // acesso ao paciente — é o ESTADO do registro que recusa a operação. É o mesmo
+  // status que os guards de criação já usavam, então nenhuma tela muda de tratamento.
+  res.status(400).json(corpo);
+  return true;
+}
+
 module.exports = {
+  MSG_PACIENTE_INATIVO,
+  MSG_PACIENTE_EXCLUIDO,
+  bloquearSeAnimalInativo,
   marcarInativo,
   marcarAtivo,
   lerInativo,

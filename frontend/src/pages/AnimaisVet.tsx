@@ -43,6 +43,14 @@ interface Animal {
   // (lib/cadastroAtivacao.js). O bloqueio de somente-leitura (Animal.inativo,
   // rotulado "Bloqueado") não é exibido nem alternado aqui.
   ativo?:           boolean;
+  /**
+   * Bloqueio SOMENTE LEITURA (`Animal.inativo`) — OUTRO recurso, e não a exclusão
+   * lógica acima: o paciente continua aparecendo em tudo, com o prontuário congelado
+   * na data/hora da inativação. Aqui ele só ganha o selo — quem inativa/reativa são
+   * as ações da tela do paciente.
+   */
+  inativo?:         boolean;
+  inativoEm?:       string | null;
   dataCadastro?:    string;
   ativoEm?:            string | null;
   ativoPorNome?:        string | null;
@@ -125,7 +133,7 @@ function AnimalCardMobile({
     }`}>
       <div className="flex items-center gap-3">
       <div className="w-14 h-14 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-        <FotoAnimal url={animal.photoUrl} nome={animal.nome} />
+        <FotoAnimal url={animal.photoUrl} nome={animal.nome} animalId={animal.id} />
       </div>
 
       <div className="flex-1 min-w-0" onClick={onDashboard}>
@@ -156,6 +164,15 @@ function AnimalCardMobile({
             </span>
           )}
         </div>
+        {/* 🔴 SELO do prontuário congelado. Sem ele o paciente inativo é
+            indistinguível de um normal na lista, e a pessoa só descobre ao abrir o
+            atendimento e não achar os botões. */}
+        {animal.inativo && !excluido && (
+          <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 mt-1 inline-block">
+            Somente leitura
+            {animal.inativoEm ? ` — inativado em ${formatDate(animal.inativoEm)}` : ''}
+          </p>
+        )}
         {isGestor && filtroAtivo === 'ativo' && !excluido && (
           <p className="text-[11px] text-gray-400 mt-1">
             Criado em {formatDate(animal.dataCadastro)}
@@ -531,7 +548,7 @@ const AnimaisVet = () => {
                       >
                         <td className="pl-5 py-3.5">
                           <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-                            <FotoAnimal url={animal.photoUrl} nome={animal.nome} />
+                            <FotoAnimal url={animal.photoUrl} nome={animal.nome} animalId={animal.id} />
                           </div>
                         </td>
                         <td className="px-3 py-3.5 max-w-0">

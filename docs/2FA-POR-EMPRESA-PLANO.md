@@ -11,6 +11,11 @@
 > (`--create-only`), nunca **aplicada**, sem autorização explícita do Marco.
 >
 > Levantamento feito em 2026-08-18 contra o código em `feature/mvp-v1.0`.
+>
+> **Nota (2026-08-29):** o **2FA por e-mail GLOBAL** (com seletor único do ADMIN da
+> plataforma) já está implementado — ver EFA-01 §RN-01-008 e §3 da Especificação
+> Funcional. Este documento trata do **2FA por EMPRESA** (cada clínica exige ou não o
+> segundo fator dos seus membros), que continua **não implementado**.
 
 ---
 

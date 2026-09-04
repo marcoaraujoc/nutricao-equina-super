@@ -15,12 +15,40 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { storage } = require('../storage');
 const { registrarAuditoria } = require('../lib/auditoria');
+const logger = require('../lib/logger');
+const documentoConversaoService = require('../services/documentoConversaoService');
 
-const CATEGORIAS = new Set([
+/**
+ * Categorias PADRÃO — as que têm rótulo no catálogo do front (`modules/documentos/
+ * catalogo.ts`) e nascem com o sistema.
+ *
+ * 🔴 NÃO É MAIS UMA LISTA FECHADA (2026-08-30). A clínica cria as suas categorias na
+ * tela de emissão, e a categoria nova é gravada aqui mesmo, como TEXTO — não existe
+ * tabela de categorias, e criar uma exigiria migration. Consequência aceita e
+ * deliberada: **a categoria existe enquanto houver um documento nela.** A tela reúne
+ * as categorias varrendo os modelos (padrão + as em uso), então uma categoria sem
+ * nenhum documento simplesmente não aparece — que é o comportamento correto para algo
+ * que só existe como rótulo de agrupamento.
+ *
+ * `normalizarCategoria` é o que impede o campo virar lixo: a coluna é VARCHAR(30) e o
+ * banco recusaria valor maior — cortar aqui evita 500 numa digitação longa.
+ */
+const CATEGORIAS_PADRAO = new Set([
   'atendimento', 'receituarios', 'laudos', 'reproducao', 'cirurgias', 'sanidade',
   'rebanho', 'transporte', 'consentimentos', 'financeiro', 'personalizados',
 ]);
+
+function normalizarCategoria(valor) {
+  // Espaços colapsados: "Exames   de  compra" e "Exames de compra" são a MESMA
+  // categoria, e sem isso virariam dois grupos idênticos na tela.
+  const limpo = String(valor ?? '').trim().replace(/\s+/g, ' ').slice(0, 30);
+  if (!limpo) return null;
+  // A padrão volta no slug canônico (minúsculo), venha como vier do cliente.
+  const baixo = limpo.toLowerCase();
+  return CATEGORIAS_PADRAO.has(baixo) ? baixo : limpo;
+}
 const ESPECIES = new Set(['EQUINO', 'BOVINO', 'AMBOS']);
 const STATUS   = new Set(['RASCUNHO', 'PUBLICADO', 'ARQUIVADO']);
 
@@ -69,7 +97,12 @@ function saneia(body = {}) {
   const dados = {};
   if (typeof body.nome === 'string')      dados.nome      = body.nome.trim().slice(0, 160) || 'Novo modelo';
   if (typeof body.descricao === 'string') dados.descricao = body.descricao.trim().slice(0, 400);
-  if (typeof body.categoria === 'string' && CATEGORIAS.has(body.categoria)) dados.categoria = body.categoria;
+  if (typeof body.categoria === 'string') {
+    const c = normalizarCategoria(body.categoria);
+    // Só grava categoria não-vazia: string em branco no corpo NÃO apaga a que o
+    // modelo já tem — apagar aqui tiraria o modelo do grupo sem ninguém ter pedido.
+    if (c) dados.categoria = c;
+  }
   if (typeof body.especie === 'string'   && ESPECIES.has(body.especie))     dados.especie   = body.especie;
   if (typeof body.status === 'string'    && STATUS.has(body.status))        dados.status    = body.status;
   if (Array.isArray(body.tags))   dados.tags   = body.tags.map(t => String(t).trim().slice(0, 40)).filter(Boolean).slice(0, 12);
@@ -150,6 +183,108 @@ const DocumentoTemplateController = {
     } catch (err) {
       console.error('Erro ao obter template:', err);
       return res.status(500).json({ sucesso: false, error: 'Erro ao obter modelo' });
+    }
+  },
+
+  /**
+   * POST /api/documentos/templates/upload   (multipart, campo `arquivo`)
+   *
+   * Guarda a IMAGEM de um documento enviado pela clínica e devolve a URL, que a tela
+   * transforma num bloco `imagem` do modelo. É o que permite subir um formulário que
+   * a clínica já usa em papel e emiti-lo pelo sistema como qualquer outro documento.
+   *
+   * 🔴 SÓ IMAGEM chega aqui. PDF é convertido em imagem NO NAVEGADOR, uma por página,
+   * antes de subir (ver `modules/documentos/upload.ts`) — é o que faz o documento
+   * enviado seguir EXATAMENTE o mesmo caminho dos outros: preview A4, impressão, PDF
+   * do WhatsApp/e-mail e snapshot do emitido. Guardar o PDF cru obrigaria cada um
+   * desses caminhos a ter um desvio próprio.
+   *
+   * MULTI-TENANT: o contexto de dono vai no `storage.upload` (§8) — `empresaId` do
+   * CONTEXTO (nunca do corpo) e o autor. É ele que faz `GET /api/midia/:chave` exigir
+   * a mesma empresa para devolver o byte; sem contexto o arquivo nasceria sem dono e
+   * só o ADMIN o alcançaria.
+   */
+  enviarArquivo: async (req, res) => {
+    try {
+      if (!req.empresaId) {
+        return res.status(400).json({ sucesso: false, error: 'Selecione a empresa antes de enviar o arquivo.', code: 'SEM_EMPRESA' });
+      }
+      if (!req.file) {
+        return res.status(400).json({ sucesso: false, error: 'Envie o arquivo do documento.', code: 'ARQUIVO_OBRIGATORIO' });
+      }
+      const url = await storage.upload(req.file, 'documentos', {
+        empresaId:   req.empresaId,
+        criadoPorId: req.user?.id ?? null,
+      });
+      return res.status(201).json({ sucesso: true, dados: { url } });
+    } catch (err) {
+      if (err?.code === 'ARQUIVO_GRANDE_DEMAIS') {
+        return res.status(413).json({ sucesso: false, error: 'Arquivo grande demais.', code: err.code });
+      }
+      console.error('Erro ao enviar arquivo do modelo:', err);
+      return res.status(500).json({ sucesso: false, error: 'Erro ao enviar o arquivo' });
+    }
+  },
+
+  /**
+   * POST /api/documentos/templates/converter
+   *
+   * As PÁGINAS de um documento enviado pela clínica → os BLOCOS de um modelo, com as
+   * variáveis e as lacunas já identificadas pela IA. NÃO cria nem grava nada: devolve
+   * a proposta, e quem cria o modelo é o `POST /templates` de sempre, com o corpo que
+   * a tela montar. Separar assim é o que deixa a tela mostrar o resultado antes de
+   * comprometer o acervo — e o que faz a falha da IA não deixar modelo pela metade.
+   *
+   * ⚠️ FALHA NÃO INTERROMPE O ENVIO. Quando a conversão não produz blocos (arquivo que
+   * não é documento, JSON inválido, IA fora do ar), a resposta é 200 com
+   * `ehDocumento: false` e o front cai no envio como IMAGEM — o comportamento que
+   * sempre existiu e que nunca falha. O único caminho que responde erro é a QUOTA
+   * estourada, que é decisão do plano do cliente e precisa ser dita.
+   *
+   * 🔴 MAS FALHA SEMPRE DIZ O MOTIVO. A primeira versão devolvia `ehDocumento: false`
+   * pelado, e a tela mostrava "não deu para identificar os campos" para TUDO — sem
+   * empresa, sem permissão, arquivo recusado pelo multer, IA fora do ar e "isto não é
+   * um documento" ficavam indistinguíveis, inclusive para quem fosse depurar. O
+   * `motivo` viaja junto e a tela o exibe: cair no caminho da imagem é aceitável;
+   * cair sem saber por quê, não.
+   */
+  converter: async (req, res, next) => {
+    try {
+      if (!req.empresaId) {
+        return res.json({
+          sucesso: true,
+          dados: { ehDocumento: false, titulo: null, categoria: null, blocos: [],
+                   motivo: 'Nenhuma empresa selecionada no contexto.' },
+        });
+      }
+      const paginas = Array.isArray(req.files) ? req.files : [];
+      if (paginas.length === 0) {
+        // Sem arquivo aqui quase nunca é "esqueceram de anexar": o `fileFilter` do
+        // multer DESCARTA em silêncio o que não for jpg/png/webp, então a lista chega
+        // vazia quando o tipo foi recusado. Dizer isso poupa a caçada.
+        return res.json({
+          sucesso: true,
+          dados: { ehDocumento: false, titulo: null, categoria: null, blocos: [],
+                   motivo: 'O servidor não recebeu nenhuma página em formato de imagem.' },
+        });
+      }
+
+      const dados = await documentoConversaoService.converter(req, {
+        paginas: paginas.map(f => ({ buffer: f.buffer, mimetype: f.mimetype })),
+        texto:   typeof req.body?.texto === 'string' ? req.body.texto : '',
+        nome:    typeof req.body?.nome  === 'string' ? req.body.nome  : '',
+      });
+      return res.json({ sucesso: true, dados });
+    } catch (err) {
+      // 429 do teto de IA do cliente — o error handler global traduz (§7).
+      if (err?.code === 'IA_QUOTA_EXCEDIDA') return next(err);
+      logger.error(`[documentos] conversão falhou: ${err?.message}`, { stack: err?.stack });
+      // Ver a nota acima: a tela cai no caminho da imagem, mas mostrando o motivo.
+      return res.json({
+        sucesso: true,
+        dados: { ehDocumento: false, titulo: null, categoria: null, blocos: [],
+                 motivo: err?.message ? String(err.message).slice(0, 200) : 'Falha na leitura do documento.' },
+      });
     }
   },
 
@@ -350,3 +485,5 @@ module.exports = DocumentoTemplateController;
 module.exports.serializar = serializar;
 module.exports.SELECT_COMPLETO = SELECT_COMPLETO;
 module.exports.garantirCopiaDaEmpresa = garantirCopiaDaEmpresa;
+module.exports.normalizarCategoria = normalizarCategoria;
+module.exports.CATEGORIAS_PADRAO = CATEGORIAS_PADRAO;

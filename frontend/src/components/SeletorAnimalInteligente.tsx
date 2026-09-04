@@ -41,7 +41,12 @@ export default function SeletorAnimalInteligente<T extends AnimalSelecionavel>({
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  if (animais.length <= 1) return null;
+  // Some com o seletor só quando não há o que escolher: nenhum paciente, ou um único
+  // paciente JÁ escolhido. Sem paciente escolhido ele PRECISA aparecer — desde
+  // 2026-09-03 a tela de Vacina abre vazia (a pedido), e escondê-lo numa clínica de um
+  // paciente só deixaria a tela sem nenhuma forma de escolher.
+  if (animais.length === 0) return null;
+  if (animais.length === 1 && animalAtual) return null;
 
   const nomesCount = animais.reduce<Record<string, number>>((acc, a) => {
     acc[a.nome] = (acc[a.nome] ?? 0) + 1; return acc;
@@ -63,6 +68,10 @@ export default function SeletorAnimalInteligente<T extends AnimalSelecionavel>({
             if (sel) { onSelecionar(sel); setFiltroDono(''); }
           }}
           className="w-full border border-gray-200 rounded-2xl px-4 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600 shadow-sm">
+          {/* O vazio PRECISA ser uma <option> de verdade: com `value=""` e sem ela, o
+              navegador exibe a PRIMEIRA opção da lista e o campo parece preenchido com
+              um paciente que ninguém escolheu. */}
+          {!animalAtual && <option value="">Selecione o paciente</option>}
           {animais.map(a => (
             <option key={a.id} value={a.id}>
               {a.nome}{(nomesCount[a.nome] ?? 0) > 1 ? ` — ${a.user?.fullName ?? '?'}` : ''}

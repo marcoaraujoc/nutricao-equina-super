@@ -191,7 +191,7 @@ const MeusAnimais = () => {
                 <div className="flex items-center gap-3 p-3 sm:p-4">
                   {/* Foto */}
                   <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-                    <FotoAnimal url={animal.photoUrl} nome={animal.nome} iconSize={26} />
+                    <FotoAnimal url={animal.photoUrl} nome={animal.nome} iconSize={26} animalId={animal.id} />
                   </div>
 
                   {/* Info */}

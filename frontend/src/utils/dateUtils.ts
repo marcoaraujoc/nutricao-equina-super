@@ -95,6 +95,31 @@ export const formatDate = (d: string | Date | null | undefined): string => {
   return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
 };
 
+/**
+ * ISO → BR e BR → ISO, para quem GRAVA a data no formato brasileiro.
+ *
+ * POR QUÊ existem, já que `formatDate` faz metade disso: `formatDate` devolve **"—"**
+ * quando não há data — perfeito para EXIBIR, desastroso para GRAVAR (o travessão iria
+ * para dentro do valor e sairia impresso no documento). Aqui o vazio é `''`.
+ *
+ * Uso: campos cujo VALOR ARMAZENADO é o texto que sai no papel (as lacunas e as
+ * células de lista dos documentos), enquanto o `DateInput` fala ISO. A conversão fica
+ * na borda, e nem o componente nem o papel precisam saber do outro formato.
+ */
+export const isoParaBR = (iso: string | null | undefined): string => {
+  const p = String(iso ?? '').split('T')[0].split('-');
+  if (p.length !== 3) return '';
+  const [a, m, d] = p;
+  if (!/^\d{4}$/.test(a) || !/^\d{1,2}$/.test(m) || !/^\d{1,2}$/.test(d)) return '';
+  return `${d.padStart(2, '0')}/${m.padStart(2, '0')}/${a}`;
+};
+
+/** "16/08/2027" → "2027-08-16". Texto que não seja uma data completa → `''`. */
+export const brParaISO = (br: string | null | undefined): string => {
+  const m = String(br ?? '').trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : '';
+};
+
 /** DD/MM de uma DATA PURA — versão curta para gráficos e resumos.
  *  Não converte fuso. Para um INSTANTE use `formatDiaMes`. */
 export const formatDateShort = (d: string | Date | null | undefined): string => {

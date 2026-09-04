@@ -128,6 +128,8 @@ interface Props {
    *  O backend já recusa com 403 (ExameClinicoController.criar); isto só evita o
    *  formulário inteiro preenchido pra falhar no fim. */
   evolucaoDeOutro?:   boolean;
+  /** Paciente INATIVO — prontuário em somente leitura (ver animalInativo.js). */
+  pacienteInativo?:  boolean;
   atendimentoNumero?: string;
   onSalvo?:           () => void;
   openItemId?:        number;
@@ -641,8 +643,7 @@ function PendingGroupCard({ group, onRemove }: { group: PendingExamGroup; onRemo
 // ─── SubModuloExames ──────────────────────────────────────────────────────────
 
 export default function SubModuloExames({
-  animalId, animal, evolucaoId, evolucaoDeOutro, atendimentoNumero: _atendimentoNumero, onSalvo, openItemId, onViewConsumed,
-}: Props) {
+  animalId, animal, evolucaoId, evolucaoDeOutro, atendimentoNumero: _atendimentoNumero, onSalvo, openItemId, onViewConsumed, pacienteInativo,}: Props) {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const { user } = useAuth();
 
@@ -728,9 +729,15 @@ export default function SubModuloExames({
     { SALVA: 0, FINALIZADA: 0, REALIZADA: 0, CANCELADA: 0 } as Record<StatusExameUI, number>,
   );
 
-  const podeCriar     = isGestor || podeExecutar('atendimento.exames.criar');
-  const podeEditar    = isGestor || podeExecutar('atendimento.exames.editar');
-  const podeDeletar   = isGestor || podeExecutar('atendimento.exames.deletar');
+  // 🔴 PACIENTE INATIVO = SOMENTE LEITURA. O prontuário fica congelado na data
+  // e hora da inativação: tudo continua visível, nada mais é criado, alterado,
+  // finalizado ou cancelado até o gestor reativar. Entra AQUI, nas permissões, para
+  // alcançar todo botão de uma vez — o backend recusa igual (lib/animalInativo.js),
+  // e oferecer ação que vai dar 400 é a armadilha 28-d.
+  // ⚠️ Imprimir/compartilhar ficam de fora: são SAÍDA de conteúdo, não escrita.
+  const podeCriar     = !pacienteInativo && (isGestor || podeExecutar('atendimento.exames.criar'));
+  const podeEditar    = !pacienteInativo && (isGestor || podeExecutar('atendimento.exames.editar'));
+  const podeDeletar   = !pacienteInativo && (isGestor || podeExecutar('atendimento.exames.deletar'));
   // Imprimir a requisição e compartilhá-la (WhatsApp/e-mail) são a mesma coisa:
   // conteúdo saindo do sistema. Quem só tem VER não faz nenhum dos três.
   const podeImprimir  = isGestor || podeExecutar('atendimento.exames.imprimir');

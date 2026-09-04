@@ -5,7 +5,7 @@ const { Prisma } = require('@prisma/client');
 const fs     = require('fs');
 const path   = require('path');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
-const { animalEstaInativo } = require('../lib/animalInativo');
+const { animalEstaInativo, bloquearSeAnimalInativo } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const { storage } = require('../storage');
 const { escopoEvolucaoWhere }   = require('../lib/clinicalScope');
@@ -558,6 +558,9 @@ const EvolucaoController = {
       const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // alterado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, existente.animalId, { sucessoMensagem: true })) return;
 
       // Autoria dirigida pela matriz RBAC (nível efetivo em atendimento.evolucoes.editar):
       // PROPRIO → só registros próprios; EQUIPE/FULL → qualquer registro da equipe.
@@ -776,6 +779,9 @@ const EvolucaoController = {
       const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // excluído até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, existente.animalId, { sucessoMensagem: true })) return;
 
       // Autoria via RBAC (nível efetivo em atendimento.evolucoes.deletar)
       if (!podeOperarRegistro(req, existente.veterinarioId)) {
@@ -857,6 +863,9 @@ const EvolucaoController = {
       const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // cancelado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, existente.animalId, { sucessoMensagem: true })) return;
 
       if (existente.status === 'CANCELADA') {
         return res.status(400).json({ sucesso: false, mensagem: 'Evolução já está cancelada' });
@@ -946,6 +955,9 @@ const EvolucaoController = {
       const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // assumido até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, existente.animalId, { sucessoMensagem: true })) return;
 
       if (existente.status !== 'EM_ANDAMENTO') {
         return res.status(400).json({
@@ -1090,6 +1102,9 @@ const EvolucaoController = {
       const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // finalizado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, existente.animalId, { sucessoMensagem: true })) return;
 
       // Autoria via RBAC (nível efetivo em atendimento.evolucoes.finalizar):
       // PROPRIO → só finaliza o que criou; EQUIPE/FULL → qualquer da equipe.
@@ -1216,6 +1231,9 @@ const EvolucaoController = {
       const acesso = await verificarAcessoAnimal({ animalId: evolucaoParaTitulo.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // renomeado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, evolucaoParaTitulo.animalId, { sucessoMensagem: true })) return;
 
       await prisma.evolucaoClinica.update({
         where: { id: Number(id) },
@@ -1263,6 +1281,9 @@ const EvolucaoController = {
         fs.unlink(file.path, () => {});
         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
       }
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // anexado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, evolucao.animalId, { sucessoMensagem: true })) return;
 
       // Áudio em formato que o Safari/iOS não reproduz (Ogg/Opus/WebM — ex:
       // nota de voz do WhatsApp) → converte para MP3 no upload, garantindo
@@ -1347,6 +1368,9 @@ const EvolucaoController = {
         const acesso = await verificarAcessoAnimal({ animalId: evolucaoParaMidia.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
         if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
         if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+        // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+        // removido até o gestor reativar. Ver lib/animalInativo.js.
+        if (await bloquearSeAnimalInativo(res, evolucaoParaMidia.animalId, { sucessoMensagem: true })) return;
       }
 
       // Mídia no banco: storage.delete apaga a linha de tb_midia_arquivos.
@@ -1471,6 +1495,9 @@ const EvolucaoController = {
       const acesso = await verificarAcessoAnimal({ animalId: existente.animalId, userId, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+      // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
+      // gravado até o gestor reativar. Ver lib/animalInativo.js.
+      if (await bloquearSeAnimalInativo(res, existente.animalId, { sucessoMensagem: true })) return;
 
       // Mesma regra de autoria do atualizar — dirigida pela matriz RBAC
       if (!podeOperarRegistro(req, existente.veterinarioId)) {

@@ -41,6 +41,16 @@ interface DateInputProps {
    * campos vizinhos. Em formulário (o padrão) a mensagem aparece abaixo do campo.
    */
   compacto?: boolean;
+  /**
+   * Foco e referência do input de TEXTO (o visível).
+   *
+   * Existem para a Central de Documentos: clicar numa lacuna da folha foca o campo
+   * correspondente no formulário, e o campo focado é realçado na folha. Sem eles, um
+   * campo de data ficaria fora dessa ligação — o único da tela que não responde ao
+   * clique no papel.
+   */
+  onFocus?: () => void;
+  inputRef?: (el: HTMLInputElement | null) => void;
   'aria-label'?: string;
 }
 
@@ -70,7 +80,7 @@ const maskBR = (raw: string, withTime: boolean): string => {
 
 export default function DateInput({
   value, onChange, withTime = false, className = '', min, max, disabled, id,
-  compacto = false, ...rest
+  compacto = false, onFocus, inputRef, ...rest
 }: DateInputProps) {
   const [text, setText] = useState<string>(isoToBR(value, withTime));
   const [erro, setErro] = useState<string | null>(null);
@@ -117,11 +127,13 @@ export default function DateInput({
       title={compacto && erro ? erro : undefined}
     >
       <input
+        ref={el => inputRef?.(el)}
         type="text"
         inputMode="numeric"
         placeholder={withTime ? 'dd/mm/aaaa hh:mm' : 'dd/mm/aaaa'}
         value={text}
         onChange={e => handleText(e.target.value)}
+        onFocus={onFocus}
         onBlur={handleBlur}
         disabled={disabled}
         id={id}
