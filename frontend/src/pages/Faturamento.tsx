@@ -1014,6 +1014,7 @@ function PainelFatura({
     return {
       gerarHtml:   () => gerarHtmlFatura(fatura, prop.animais, logoUrl),
       nomeArquivo: `fatura-${inv}-${nomeDestino.replace(/\s+/g, '-')}.pdf`,
+      documento:   'Fatura',
       texto:       montarTextoFatura(fatura, prop),
       titulo:      `Fatura — ${nomeDestino}`,
     };
@@ -1366,7 +1367,16 @@ function PainelFatura({
       };
       toast.success(MSG[status] ?? 'Status atualizado');
       onStatusChange();
-    } catch { setErroInline('Erro ao atualizar status'); }
+    } catch (err: unknown) {
+      // ⚠️ O motivo REAL vem do servidor e precisa chegar à tela: "Erro ao
+      // atualizar status" sozinho não distingue falta de permissão, fatura de
+      // outra clínica e fatura paga em somente leitura — foi assim que o 403 do
+      // nível da rota (corrigido em 2026-09-04) ficou meses sem diagnóstico.
+      // O interceptor de `api.ts` preserva `response.data.error` justamente
+      // para isto (CLAUDE.md §6).
+      const e = err as { response?: { data?: { error?: string } } };
+      setErroInline(e.response?.data?.error ?? 'Erro ao atualizar status');
+    }
     finally { setSalvando(false); }
   };
 

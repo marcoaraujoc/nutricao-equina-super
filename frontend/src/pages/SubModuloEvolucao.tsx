@@ -4,14 +4,12 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
+import { Pencil, Trash2, Printer, Mic, MicOff, Check, X, ChevronLeft, ChevronRight, AlertTriangle, Share2, FileText, CheckCircle2, Loader2, User, Filter, Eye, Ban, Paperclip, Image, Film, Volume2, Lock, UserCheck, CircleDot } from 'lucide-react';
+import CompartilharPdfBotoes from '../components/CompartilharPdfBotoes';
 import {
-  Pencil, Trash2, Printer, Mic, MicOff,
-  Check, X, ChevronLeft, ChevronRight, AlertTriangle,
-  Share2, FileText, CheckCircle2, Loader2,
-  User, Filter, Eye, Ban, Paperclip,
-  Image, Film, Volume2, Lock, MessageCircle, Mail, UserCheck, CircleDot,
-} from 'lucide-react';
-import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
+  gerarHtmlEvolucao, prepararEvolucao,
+  type PrintEvolucao, type PrintAnimal as PrintAnimalEvolucao,
+} from '../utils/EvolucaoPrint';
 import { buscarRelatorioAtendimento, type RelatorioAtendimentoDados } from '../utils/RelatorioAtendimento';
 import RelatorioAtendimentoModal from '../components/RelatorioAtendimentoModal';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -27,6 +25,7 @@ import {
 import InlineError from '../components/InlineError';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
+import JanelaLista from '../components/JanelaLista';
 
 
 // ─── Speech Recognition types ────────────────────────────────────────────────
@@ -147,6 +146,27 @@ interface EvolucaoItem {
   justificativaExclusao?: string | null;
 }
 
+/**
+ * `EvolucaoItem` (o que a tela carrega) → `PrintEvolucao` (o que a folha pede).
+ * ⚠️ `veterinario` é NULO quando o autor foi removido do sistema, e a folha exige o
+ * campo: cai em "—" em vez de imprimir "undefined" na linha do responsável.
+ */
+function paraImpressao(ev: EvolucaoItem): PrintEvolucao {
+  return {
+    id: ev.id, especialidade: ev.especialidade, status: ev.status,
+    titulo: ev.titulo, texto: ev.texto,
+    dataInicio: ev.dataInicio, dataFim: ev.dataFim, dataModificacao: ev.dataModificacao,
+    veterinario:   { fullName: ev.veterinario?.fullName ?? '—' },
+    modificadoPor: ev.modificadoPor ? { fullName: ev.modificadoPor.fullName } : null,
+    midias: ev.midias,
+  };
+}
+
+function nomeArquivoEvolucao(ev: EvolucaoItem): string {
+  const id = ev.atendimentoNumero?.trim() || String(ev.id);
+  return `evolucao-${id.replace(/[^\w.-]/g, '_')}.pdf`;
+}
+
 function montarTextoEvolucao(ev: EvolucaoItem): string {
   const titulo = ev.titulo?.trim() || 'Evolução clínica';
   return [
@@ -179,7 +199,8 @@ export interface AnimalInfo {
   nome:       string;
   photoUrl?:  unknown;
   raca?:      { nome: string } | null;
-  user?:      { fullName: string; email: string } | null;
+  /** Contato do cliente — destino do PDF enviado por WhatsApp / e-mail. */
+  user?:      { fullName: string; email: string; phone?: string | null } | null;
   idadeAnos?: number | null;
   logoUrl?:   string | null;
 }
@@ -1170,7 +1191,16 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   // Formulário e botão "Nova Evolução" são mutuamente exclusivos: um só existe
   // quando o outro não está na tela (senão a tela ficava sem os dois — o form
   // escondido pela evolução aberta e o botão escondido pelo showModal).
-  const formularioVisivel  = showModal && (!temEvolucaoAberta || !!editingEv || criandoConcorrente);
+  // 🔴 PACIENTE INATIVO → SÓ O HISTÓRICO, como em Prescrição/Exames/Encaminhamento
+  // (onde o formulário inteiro é gateado por `podeCriar`). Aqui o gate não podia ser
+  // só o botão: o RASCUNHO salvo em localStorage também abre o formulário sozinho, e
+  // ele nascia editável num prontuário congelado — com o Salvar já desabilitado, ou
+  // seja, um formulário que não salva.
+  // ⚠️ `editingEv` fica FORA da trava: abrir um registro do histórico É consultar o
+  // histórico, e nesse caso o formulário já vem em somente leitura (`formLeitura`).
+  const formularioVisivel  = showModal
+    && (!temEvolucaoAberta || !!editingEv || criandoConcorrente)
+    && (!!editingEv || podeCriar);
 
   // ── Loaders ────────────────────────────────────────────────────────────────
 
@@ -1331,6 +1361,13 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   useEffect(() => {
     if (loadingPerms) return;
     if (rascunhoRestauradoAnimal.current === animalId) return;
+    // 🔴 Paciente INATIVO (ou sem permissão de criar): o rascunho NÃO é restaurado
+    // — a aba mostra só o histórico.
+    // ⚠️ E sai ANTES de marcar o `ref`, de propósito: isso mantém o AUTOSAVE abaixo
+    // desligado. Com o formulário fora da tela `form.texto` está vazio, e o autosave
+    // cai no `removeItem` — abrir a aba de um paciente congelado APAGARIA o rascunho
+    // que a pessoa tem guardado para quando ele voltar.
+    if (!podeCriar) return;
     // Fluxo de editar/visualizar via prop tem prioridade — não restaura, mas
     // libera o autosave para as próximas evoluções novas deste animal.
     if (!editItemId && !openItemId) {
@@ -1347,7 +1384,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       }
     }
     rascunhoRestauradoAnimal.current = animalId;
-  }, [loadingPerms, animalId, editItemId, openItemId, rascunhoKey]);
+  }, [loadingPerms, podeCriar, animalId, editItemId, openItemId, rascunhoKey]);
 
   // Persiste o rascunho a cada alteração — só após a restauração ter rodado.
   useEffect(() => {
@@ -1827,12 +1864,24 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
           visivel={podeImprimir} carregando={imprimindoId === ev.id}
           onClick={() => handleImprimir(ev)} />
-        {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
-        <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp" titulo="Enviar por WhatsApp"
-          visivel={podeImprimir} onClick={() => abrirWhatsApp(montarTextoEvolucao(ev))} />
-        <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail" titulo="Enviar por e-mail"
-          visivel={podeImprimir}
-          onClick={() => abrirEmail(`Evolução - ${ev.titulo?.trim() || ev.especialidade}`, montarTextoEvolucao(ev))} />
+        {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR.
+            🔴 Manda a FOLHA em PDF, anexada — não o texto colado na conversa. O
+            `gerarHtml` é SÍNCRONO (é ele que roda dentro da janela de "user
+            activation" do navegador), por isso `prepararEvolucao` resolve as
+            imagens ANTES, no clique: sem isso a foto do paciente e as mídias
+            nascem quebradas no PDF do servidor (ver EvolucaoPrint). */}
+        {podeImprimir && (
+          <CompartilharPdfBotoes
+            gerarHtml={() => gerarHtmlEvolucao(paraImpressao(ev), animal as PrintAnimalEvolucao | null)}
+            aoPreparar={() => prepararEvolucao(paraImpressao(ev), animal as PrintAnimalEvolucao | null)}
+            nomeArquivo={nomeArquivoEvolucao(ev)}
+            texto={montarTextoEvolucao(ev)}
+            documento="Evolução"
+            titulo={`Evolução - ${ev.titulo?.trim() || ev.especialidade}`}
+            telefone={animal?.user?.phone}
+            emailPara={animal?.user?.email}
+          />
+        )}
         {/* Cancelar finalizada usa o slug de EXCLUIR (rota PATCH /cancelar). */}
         <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar" titulo="Cancelar evolução"
           visivel={(emAndamento && podeCancelarPropria) || (ev.status === 'FINALIZADA' && podeDeletar)}
@@ -1940,7 +1989,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
       <div ref={formTopRef} />
 
-      {criandoConcorrente && !editingEv && (
+      {/* Anuncia uma criação em paralelo — não cabe no prontuário congelado, onde
+          nada novo nasce. */}
+      {criandoConcorrente && !editingEv && !pacienteInativo && (
         <div className="mx-4 mt-3 flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
           <AlertTriangle size={13} className="text-amber-600 flex-shrink-0 mt-0.5" />
           <p className="text-[11px] text-amber-800 leading-snug">
@@ -1995,7 +2046,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       ) : (
         <>
           {/* Mobile — cards no padrão do histórico de prescrição (cabe na tela, sem rolagem lateral) */}
-          <div className="md:hidden divide-y divide-gray-50">
+          <JanelaLista className="md:hidden divide-y divide-gray-50">
             {evolucoes.map(ev => {
               const emAndamento = ev.status === 'EM_ANDAMENTO';
               // A autoria/permissão de cada ação é resolvida uma vez só, dentro de
@@ -2006,7 +2057,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
               const temMidia = (ev.midias ?? []).length > 0;
 
               return (
-                <div key={ev.id} className={`px-4 py-3 ${!ev.aprovado ? 'bg-amber-50/40' : ''}`}>
+                <div key={ev.id} data-item-lista className={`px-4 py-3 ${!ev.aprovado ? 'bg-amber-50/40' : ''}`}>
                   <div className="flex items-center justify-between gap-2 mb-1">
                     <button onClick={() => setViewingEv(ev)}
                       className="flex items-center gap-1.5 min-w-0 text-sm font-semibold text-emerald-700 hover:underline text-left">
@@ -2052,10 +2103,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                 </div>
               );
             })}
-          </div>
+          </JanelaLista>
 
           {/* Desktop — tabela */}
-          <div className="hidden md:block overflow-x-auto">
+          <JanelaLista className="hidden md:block">
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-100">
@@ -2143,7 +2194,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
               })}
             </tbody>
           </table>
-          </div>
+          </JanelaLista>
 
           {totalPaginas > 1 && (
             <div className="flex items-center justify-between px-4 py-3 border-t border-gray-50">
@@ -2165,7 +2216,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       )}
 
       {/* Modais */}
-      {evolucaoAbertaInfo && (
+      {/* Decisão "assumir × abrir uma nova" — as duas são ESCRITA, e o backend recusa
+          as duas no prontuário congelado (400). Com paciente inativo a aba fica só
+          com o histórico. */}
+      {evolucaoAbertaInfo && !pacienteInativo && (
         <EvolucaoAbertaModal
           info={evolucaoAbertaInfo}
           animalNome={animal?.nome}

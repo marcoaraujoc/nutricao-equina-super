@@ -42,8 +42,9 @@
 import api from '../services/api';
 import { htmlParaPdfBlob } from './gerarPdf';
 import { abrirWhatsApp, abrirEmail } from './compartilhar';
-import { mostrarProgresso, fecharProgresso, type CanalEnvio } from '../components/ProgressoEnvio';
-import toast from 'react-hot-toast';
+import {
+  mostrarProgresso, fecharProgresso, mostrarResultado, fraseEnvio, type CanalEnvio,
+} from '../components/ProgressoEnvio';
 
 const TIMEOUT_ENVIO_MS = 60000; // envio real — cobre Puppeteer + retries da Evolution (~46s no pior caso)
 const TIMEOUT_PDF_MS   = 1200;  // PDF do fallback via backend — curto, precede o abrirWhatsApp/abrirEmail
@@ -57,6 +58,13 @@ export interface CompartilharPdfOpcoes {
   texto:        string;
   /** Assunto do e-mail (fallback: o próprio nome do arquivo). Não usado pelo WhatsApp. */
   titulo?:      string;
+  /**
+   * Nome do DOCUMENTO como o usuário o chama — "Prescrição", "Vacina", "Pedido de
+   * Exames". É o que dá a frase da confirmação ("Prescrição enviada por WhatsApp
+   * com Sucesso"); sem ele a mensagem cai em "Documento", que não diz qual dos
+   * registros da tela acabou de sair.
+   */
+  documento?:   string;
 }
 
 export interface ResultadoCompartilhar {
@@ -304,24 +312,8 @@ export async function enviarPdfWhatsAppComAviso(
   opts: CompartilharPdfOpcoes,
   telefone?: string | null,
 ): Promise<boolean> {
-  try {
-    const r = await compartilharPdfWhatsApp(opts, telefone);
-    if (r.cancelado) { toast('Envio cancelado.', { icon: '✋' }); return false; }
-    if (r.enviado) {
-      toast.success(r.simulado ? 'Envio simulado (WhatsApp em modo de teste).' : 'PDF enviado por WhatsApp.');
-      return true;
-    }
-    toast(
-      r.motivo
-        ? `PDF baixado — anexe-o na conversa: ${r.motivo}`
-        : 'PDF baixado — anexe-o na conversa do WhatsApp.',
-      { icon: '📎', duration: 8000 },
-    );
-    return false;
-  } catch {
-    toast.error('Erro ao gerar o PDF para o WhatsApp.');
-    return false;
-  }
+  return avisar('whatsapp', opts, () => compartilharPdfWhatsApp(opts, telefone),
+    'anexe-o na conversa do WhatsApp.');
 }
 
 /** Devolve `true` quando o PDF foi realmente enviado pelo backend. */
@@ -329,22 +321,43 @@ export async function enviarPdfEmailComAviso(
   opts: CompartilharPdfOpcoes,
   para?: string | null,
 ): Promise<boolean> {
+  return avisar('email', opts, () => compartilharPdfEmail(opts, para),
+    'anexe-o no e-mail antes de enviar.');
+}
+
+/**
+ * Veredito ÚNICO dos dois canais, no CENTRO da tela — o mesmo lugar onde a barra de
+ * progresso estava (a pedido). Antes saía como toast no topo: a pessoa acompanhava o
+ * envio no meio e a resposta nascia no canto oposto, fora de onde ela olhava.
+ * ⚠️ Nunca lança: uma exceção escapando daqui derrubaria o handler da tela no meio
+ * da ação.
+ */
+async function avisar(
+  canal: CanalEnvio,
+  opts: CompartilharPdfOpcoes,
+  executar: () => Promise<ResultadoCompartilhar>,
+  comoAnexar: string,
+): Promise<boolean> {
   try {
-    const r = await compartilharPdfEmail(opts, para);
-    if (r.cancelado) { toast('Envio cancelado.', { icon: '✋' }); return false; }
+    const r = await executar();
+    if (r.cancelado) {
+      mostrarResultado(canal, 'aviso', 'Envio cancelado');
+      return false;
+    }
     if (r.enviado) {
-      toast.success('PDF enviado por e-mail, já anexado.');
+      mostrarResultado(canal, 'sucesso', fraseEnvio(opts.documento, canal),
+        r.simulado ? 'Modo de teste: nada foi entregue de verdade.' : undefined);
       return true;
     }
-    toast(
-      r.motivo
-        ? `PDF baixado — anexe-o no e-mail: ${r.motivo}`
-        : 'PDF baixado — anexe-o no e-mail antes de enviar.',
-      { icon: '📎', duration: 8000 },
-    );
+    // Fallback manual: o PDF foi baixado e o app abriu com o texto pronto. O motivo
+    // vem junto — sem ele, "a clínica nunca conectou", "a sessão caiu" e "o cliente
+    // não tem telefone" chegavam ao usuário como o mesmo silêncio.
+    mostrarResultado(canal, 'aviso', 'PDF baixado — o envio automático não foi possível',
+      r.motivo ? `${comoAnexar.replace(/\.$/, '')} — ${r.motivo}` : comoAnexar);
     return false;
   } catch {
-    toast.error('Erro ao gerar o PDF para o e-mail.');
+    mostrarResultado(canal, 'aviso', 'Não foi possível gerar o PDF',
+      'Tente novamente; se persistir, use o botão Imprimir.');
     return false;
   }
 }

@@ -16,6 +16,7 @@ import { Eye, Printer, Ban, FileText, X, Loader2, ZoomIn, ZoomOut } from 'lucide
 
 import AcaoRegistro, { AcoesRegistro } from '../../components/AcaoRegistro';
 import CompartilharPdfBotoes from '../../components/CompartilharPdfBotoes';
+import JanelaLista from '../../components/JanelaLista';
 import JustificativaCancelamento from '../../components/JustificativaCancelamento';
 import { formatDataHora } from '../../utils/dateUtils';
 import { carregarComoDataUri } from '../../utils/printUrl';
@@ -316,6 +317,7 @@ export function AcoesDocumento({ doc, imagens, onVisualizar, onCancelar, podeCan
   const opcoesPdf = {
     gerarHtml:   () => gerarHtmlDocumento(doc, imagens),
     nomeArquivo: nomeArquivoDocumento(doc),
+    documento:   doc.titulo?.trim() || doc.templateNome?.trim() || 'Documento',
     titulo:      doc.titulo || doc.templateNome,
     texto:       `${doc.titulo || doc.templateNome}${doc.numeroFmt ? ` (${doc.numeroFmt})` : ''} — ${doc.animalNome}`,
   };
@@ -478,9 +480,9 @@ export default function ListaDocumentosEmitidos({
         </p>
       )}
       {/* Mobile */}
-      <div className="md:hidden divide-y divide-gray-50">
+      <JanelaLista className="md:hidden divide-y divide-gray-50">
         {lista.map(d => (
-          <div key={d.id} className={`px-4 py-3 ${d.ativo ? '' : 'opacity-60'}`}>
+          <div key={d.id} data-item-lista className={`px-4 py-3 ${d.ativo ? '' : 'opacity-60'}`}>
             <div className="flex items-center justify-between gap-2">
               <span className="text-[11px] font-mono font-bold text-emerald-700">{d.numeroFmt ?? '—'}</span>
               {!d.ativo && (
@@ -506,10 +508,10 @@ export default function ListaDocumentosEmitidos({
             </div>
           </div>
         ))}
-      </div>
+      </JanelaLista>
 
       {/* Desktop */}
-      <div className="hidden md:block overflow-x-auto">
+      <JanelaLista className="hidden md:block">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-100">
@@ -556,7 +558,7 @@ export default function ListaDocumentosEmitidos({
             ))}
           </tbody>
         </table>
-      </div>
+      </JanelaLista>
 
       {modal}
     </>

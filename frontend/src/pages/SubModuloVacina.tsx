@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Syringe, Ban, Eye, Loader2, X, ChevronLeft, ChevronRight, ChevronDown, AlertCircle, CheckCircle2, Clock, Printer, MessageCircle, Mail, Receipt, Pencil, Check, Plus } from 'lucide-react';
-import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import api from '../services/api';
 import ImportarOrcamentoModal, { type OrcamentoItemImport, marcarOrcamentoImportado } from '../components/ImportarOrcamentoModal';
 import DateInput from '../components/DateInput';
@@ -13,13 +12,15 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import type { AnimalInfo } from './SubModuloEvolucao';
 import {
-  imprimirPrescricao as imprimirPrescricaoPrint,
+  imprimirPrescricao as imprimirPrescricaoPrint, prepararPrescricao, gerarHtmlPrescricao,
   type PrintAnimalPrescricao, type PrintGrupoPrescricao, type PrintItemPrescricao,
 } from '../utils/PrescricaoPrint';
 import InlineError from '../components/InlineError';
 import ErroAcao, { classeErro, type ErroAcaoDados } from '../components/ErroAcao';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
+import JanelaLista from '../components/JanelaLista';
+import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
 import { formatNumeroClinico, numeroClinicoComHash } from '../utils/numeroClinico';
 import { DOSES, INTERVALO_REFORCO_MESES, VIAS_PADRAO, normalizeVia } from '../utils/vacina';
 
@@ -116,7 +117,7 @@ const STATUS_ORDER: StatusVacina[] = ['SALVA', 'FINALIZADA', 'EXECUTADA', 'CANCE
 // Impressão da vacina reutiliza o MESMO gerador de HTML da prescrição
 // (gerarHtmlPrescricao/imprimirPrescricao em PrescricaoPrint.ts) — a vacina vira
 // um "grupo" de um único item, para sair com o mesmo layout/cabeçalho/rodapé.
-function imprimirVacina(v: VacinaClinica, animal: AnimalInfo | null) {
+function montarGrupoVacina(v: VacinaClinica, animal: AnimalInfo | null): PrintGrupoPrescricao {
   const vcNum   = formatVcNum(v.numero);
   const status  = getStatus(v);
 
@@ -155,12 +156,24 @@ function imprimirVacina(v: VacinaClinica, animal: AnimalInfo | null) {
     finalizadoEm:    null,
     finalizadoPor:   null,
     executadoPor:    v.veterinario ? { fullName: v.veterinario.fullName } : null,
-    veterinario:     v.veterinario ? { fullName: v.veterinario.fullName } : { fullName: '—' },
+    // `id` junto: é o que traz a assinatura escaneada DESTE profissional para a
+    // linha dele — ver utils/print/assinaturaProfissional.ts.
+    veterinario:     v.veterinario ? { id: v.veterinario.id, fullName: v.veterinario.fullName } : { fullName: '—' },
     animal:          animalPrint,
     itens:           [item],
   };
 
-  imprimirPrescricaoPrint(grupo);
+  return grupo;
+}
+
+function imprimirVacina(v: VacinaClinica, animal: AnimalInfo | null) {
+  void imprimirPrescricaoPrint(montarGrupoVacina(v, animal));
+}
+
+function nomeArquivoVacina(v: VacinaClinica, animal: AnimalInfo | null): string {
+  const num      = formatVcNum(v.numero);
+  const paciente = animal?.nome ? `-${animal.nome.trim().replace(/\s+/g, '-').toLowerCase()}` : '';
+  return `vacina${num ? `-${num.replace(/[^\w-]/g, '')}` : ''}${paciente}.pdf`;
 }
 
 // `hojeISO()` (utils/dateUtils) e nao `toISOString().slice(0,10)`: este ultimo
@@ -531,6 +544,8 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   const [erroForm, setErroForm] = useState<ErroAcaoDados | null>(null);
   // Erro de AÇÃO da LISTA — pertence à LINHA cujo botão foi clicado, não ao topo.
   const [erroLinha, setErroLinha] = useState<{ id: number; mensagem: string } | null>(null);
+  // Envio do PDF em curso — o spinner é do BOTÃO clicado (linha + canal), nunca de todos.
+  const [enviandoPdf, setEnviandoPdf] = useState<{ id: number; canal: 'whatsapp' | 'email' } | null>(null);
   const erroDaLinha = (id: number) => (erroLinha?.id === id ? erroLinha.mensagem : null);
 
   // Rascunho das vacinas importadas — persiste ao trocar de tela (mesmo padrão da
@@ -1072,6 +1087,28 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   // FORMA por CSS — ícone no desktop, botão com rótulo no mobile.
   // ⚠️ Não há ALTERAR fora de SALVA: depois de finalizada a vacina já reservou
   // estoque, e a rota de edição recusa.
+  // WhatsApp / E-mail mandam o PDF da MESMA folha do Imprimir, anexado de verdade
+  // pelo backend — ver utils/compartilharPdf.ts. `prepararPrescricao` roda antes
+  // para resolver a assinatura e converter as imagens em `data:` (o PDF do
+  // servidor bloqueia qualquer outra origem).
+  const compartilharVacina = async (v: VacinaClinica, canal: 'whatsapp' | 'email') => {
+    setEnviandoPdf({ id: v.id, canal });
+    try {
+      const pronto = await prepararPrescricao(montarGrupoVacina(v, animal));
+      const opts = {
+        gerarHtml:   () => gerarHtmlPrescricao(pronto),
+        nomeArquivo: nomeArquivoVacina(v, animal),
+        documento:   'Vacina',
+        texto:       montarTextoVacina(v),
+        titulo:      `Vacina - ${v.nome}`,
+      };
+      if (canal === 'whatsapp') await enviarPdfWhatsAppComAviso(opts, animal?.user?.phone);
+      else                      await enviarPdfEmailComAviso(opts, animal?.user?.email);
+    } finally {
+      setEnviandoPdf(null);
+    }
+  };
+
   const acoesDaVacina = (v: VacinaClinica) => (
     <AcoesRegistro>
       <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Alterar" titulo="Alterar vacina"
@@ -1082,10 +1119,14 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
       <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir" titulo="Imprimir vacina"
         visivel={podeImprimir} onClick={() => imprimirVacina(v, animal)} />
       {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
-      <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp" titulo="Enviar por WhatsApp"
-        visivel={podeImprimir} onClick={() => abrirWhatsApp(montarTextoVacina(v))} />
-      <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail" titulo="Enviar por e-mail"
-        visivel={podeImprimir} onClick={() => abrirEmail(`Vacina - ${v.nome}`, montarTextoVacina(v))} />
+      <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp" titulo="Enviar o PDF por WhatsApp"
+        visivel={podeImprimir} desabilitado={enviandoPdf !== null}
+        carregando={enviandoPdf?.id === v.id && enviandoPdf.canal === 'whatsapp'}
+        onClick={() => void compartilharVacina(v, 'whatsapp')} />
+      <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail" titulo="Enviar o PDF por e-mail"
+        visivel={podeImprimir} desabilitado={enviandoPdf !== null}
+        carregando={enviandoPdf?.id === v.id && enviandoPdf.canal === 'email'}
+        onClick={() => void compartilharVacina(v, 'email')} />
       <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar" titulo="Cancelar vacina"
         visivel={podeExcluirVac(v) && v.ativo} onClick={() => handleExcluirSolicitado(v.id)} />
     </AcoesRegistro>
@@ -1543,12 +1584,12 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
       ) : (
         <>
           {/* Mobile */}
-          <div className="md:hidden divide-y divide-gray-50">
+          <JanelaLista className="md:hidden divide-y divide-gray-50">
             {historicoPage.map(v => {
               const vcNum  = formatVcNum(v.numero);
               const status = getStatus(v);
               return (
-                <div key={v.id} className={`px-4 py-3 ${!v.ativo ? 'opacity-60' : ''}`}>
+                <div key={v.id} data-item-lista className={`px-4 py-3 ${!v.ativo ? 'opacity-60' : ''}`}>
                   <div className="flex items-center justify-between gap-2 mb-1">
                     <div className="flex items-center gap-1.5 min-w-0">
                       {vcNum && (
@@ -1592,10 +1633,10 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                 </div>
               );
             })}
-          </div>
+          </JanelaLista>
 
           {/* Desktop */}
-          <div className="hidden md:block overflow-x-auto">
+          <JanelaLista className="hidden md:block">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
@@ -1684,7 +1725,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                 })}
               </tbody>
             </table>
-          </div>
+          </JanelaLista>
 
           {totalPags > 1 && (
             <div className="flex items-center justify-between px-4 py-3 border-t border-gray-50">

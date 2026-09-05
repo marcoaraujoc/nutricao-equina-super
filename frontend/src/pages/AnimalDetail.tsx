@@ -13,6 +13,7 @@ import {
   Scan, Activity, Building2, ArrowLeftRight, FileSignature,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import JanelaLista from '../components/JanelaLista';
 import BotaoVoltar from '../components/BotaoVoltar';
 import ModalJustificativa from '../components/ModalJustificativa';
 import ProprietarioFormModal from '../components/ProprietarioFormModal';
@@ -216,7 +217,9 @@ const BADGE_ORIGEM: Record<OrigemEvento, string> = {
 // O Histórico abre mostrando os 3 atendimentos mais recentes. Paciente antigo tem
 // dezenas, e a lista inteira empurrava a Memória Clínica e os Agendamentos para
 // fora da tela — o resto da página ficava inalcançável sem rolar o histórico todo.
-const HISTORICO_VISIVEL_PADRAO = 3;
+// 5 = o que a JanelaLista deixa visível sem rolar; manter os dois em sincronia
+// evita o estado esquisito de a lista fechada já nascer com barra de rolagem.
+const HISTORICO_VISIVEL_PADRAO = 5;
 
 type FiltroAgendamento = 'TODOS' | 'AGENDADO' | 'CONCLUIDO' | 'CANCELADO' | 'REAGENDADO';
 
@@ -791,7 +794,7 @@ function GrupoHistoricoItem({
 
   if (!ev) {
     return (
-      <div className="border border-gray-100 rounded-2xl bg-white shadow-sm overflow-hidden">
+      <div data-item-lista className="border border-gray-100 rounded-2xl bg-white shadow-sm overflow-hidden">
         <button onClick={() => onToggle(grupo.key)}
           className="w-full flex items-start gap-3 p-3 sm:p-4 hover:bg-gray-50 text-left transition-colors">
           <div className="flex flex-col items-center justify-center w-12 h-14 border border-gray-200 rounded-xl flex-shrink-0">
@@ -1355,15 +1358,19 @@ const AnimalDetail = () => {
               </p>
             ) : (
               <>
-                {gruposVisiveis.map(g => (
-                  <GrupoHistoricoItem
-                    key={g.key}
-                    grupo={g}
-                    expandido={expandidos.has(g.key)}
-                    onToggle={toggleExpand}
-                    onClickEvento={handleAbrirDetalhe}
-                  />
-                ))}
+                {/* Janela de 5: o histórico de um paciente antigo tem dezenas de
+                    atendimentos e empurrava o resto da tela para fora da dobra. */}
+                <JanelaLista className="space-y-2.5 pr-1">
+                  {gruposVisiveis.map(g => (
+                    <GrupoHistoricoItem
+                      key={g.key}
+                      grupo={g}
+                      expandido={expandidos.has(g.key)}
+                      onToggle={toggleExpand}
+                      onClickEvento={handleAbrirDetalhe}
+                    />
+                  ))}
+                </JanelaLista>
                 {/* Só aparece quando há mais do que os 3 mostrados — botão que
                     revelaria nada é ruído. */}
                 {gruposFiltrados.length > HISTORICO_VISIVEL_PADRAO && (

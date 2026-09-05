@@ -10,10 +10,13 @@ import {
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import DateInput from '../components/DateInput';
-import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
-import { imprimirPrescricao as imprimirPrescricaoPrint, type PrintAnimalPrescricao } from '../utils/PrescricaoPrint';
+import {
+  imprimirPrescricao as imprimirPrescricaoPrint, prepararPrescricao, gerarHtmlPrescricao,
+  type PrintAnimalPrescricao, type PrintGrupoPrescricao,
+} from '../utils/PrescricaoPrint';
+import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
 import ModalJustificativa from '../components/ModalJustificativa';
 import ConfirmModal from '../components/ConfirmModal';
 import ImportarOrcamentoModal, { type OrcamentoItemImport, marcarOrcamentoImportado } from '../components/ImportarOrcamentoModal';
@@ -24,6 +27,7 @@ import {
 } from '../modules/documentos/receitaControlada';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
+import JanelaLista from '../components/JanelaLista';
 
 
 
@@ -120,9 +124,18 @@ interface FormItem {
   especialidade?:     string | null;
 }
 
+/**
+ * Paciente da folha + o CONTATO do cliente, que é para quem o PDF da prescrição
+ * é enviado (WhatsApp / e-mail). Vem do cadastro do proprietário na empresa do
+ * contexto — ver §36.
+ */
+type AnimalPrescricao = PrintAnimalPrescricao & {
+  user?: { fullName?: string; email?: string | null; phone?: string | null } | null;
+};
+
 interface Props {
   animalId:           number;
-  animal?:            PrintAnimalPrescricao | null;
+  animal?:            AnimalPrescricao | null;
   onFaturaAtualizada: () => void;
   evolucaoId?:        number;
   /** Evolução ativa existe, mas pertence a OUTRO profissional (não assumida por
@@ -372,15 +385,20 @@ function itemDiasRestantes(item: { dataInicio: string; duracaoDias: number }): n
   return Math.max(item.duracaoDias - diaAtualDoItem(item.dataInicio), 0);
 }
 
-function imprimirPrescricao(grupo: PrescricaoGrupo, animal?: PrintAnimalPrescricao | null) {
-  imprimirPrescricaoPrint({
+// Converte a prescrição da tela no formato da FOLHA. Fonte única do Imprimir e
+// do PDF que vai por WhatsApp/e-mail — dois montadores divergiriam, e o papel
+// impresso deixaria de ser igual ao papel enviado ao cliente.
+// ⚠️ `veterinario.id` vai junto: é o que permite buscar a assinatura escaneada
+// de QUEM PRESCREVEU (nunca a de quem está imprimindo).
+function montarGrupoPrint(grupo: PrescricaoGrupo, animal?: PrintAnimalPrescricao | null): PrintGrupoPrescricao {
+  return {
     numero:          grupo.numero,
     numeroFormatado: grupo.numeroFormatado,
     status:          grupo.status,
     finalizadoEm:    null,
     finalizadoPor:   null,
     executadoPor:    null,
-    veterinario:     { fullName: grupo.veterinario.fullName },
+    veterinario:     { id: grupo.veterinario.id, fullName: grupo.veterinario.fullName },
     animal:          animal ?? { nome: '—', photoUrl: null, peso: null, baia: null, especie: null, raca: null },
     itens:           grupo.itens.map(i => ({
       id:              i.id,
@@ -396,7 +414,16 @@ function imprimirPrescricao(grupo: PrescricaoGrupo, animal?: PrintAnimalPrescric
       observacao:      i.observacao,
       dataInicio:      i.dataInicio,
     })),
-  });
+  };
+}
+
+function imprimirPrescricao(grupo: PrescricaoGrupo, animal?: PrintAnimalPrescricao | null) {
+  void imprimirPrescricaoPrint(montarGrupoPrint(grupo, animal));
+}
+
+function nomeArquivoPrescricao(g: PrescricaoGrupo, animal?: PrintAnimalPrescricao | null): string {
+  const paciente = animal?.nome ? `-${animal.nome.trim().replace(/\s+/g, '-').toLowerCase()}` : '';
+  return `prescricao-${g.numeroFormatado.replace(/[^\w-]/g, '')}${paciente}.pdf`;
 }
 
 /**
@@ -532,7 +559,7 @@ function AlertaEstoqueModal({
 
 interface GrupoModalProps {
   animalId:             number;
-  animal?:              PrintAnimalPrescricao | null;
+  animal?:              AnimalPrescricao | null;
   grupo:                PrescricaoGrupo | null; // null = creating new
   canEdit:              boolean;
   canFinalizarCancelar: boolean;
@@ -2272,6 +2299,9 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   // Erro de ação da LISTA: pertence à linha cujo botão foi clicado, não ao topo da
   // página — de onde o usuário não vê o retorno do que acabou de acionar.
   const [erroLinha, setErroLinha] = useState<{ id: number; mensagem: string } | null>(null);
+  // Envio do PDF em curso — o spinner tem de ser do BOTÃO clicado, não de todos:
+  // é preciso saber a linha E o canal. Mesma lição do `execItemId` do plantão.
+  const [enviandoPdf, setEnviandoPdf] = useState<{ id: number; canal: 'whatsapp' | 'email' } | null>(null);
   const erroDaLinha = (id: number) => (erroLinha?.id === id ? erroLinha.mensagem : null);
   const semPermissao = (acao: string, grupoId?: number) => {
     const msg = `Sem permissão para ${acao}. Verifique com o responsável da equipe.`;
@@ -2436,6 +2466,35 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   // `AcaoRegistro` decide a forma por CSS (ícone no desktop, botão com rótulo no
   // mobile), então os dois blocos chamam a MESMA função. Antes eram duas listas
   // paralelas que já haviam divergido: o card mobile não tinha o Finalizar.
+  // WhatsApp / E-mail mandam o PDF da MESMA folha do Imprimir, anexado de verdade
+  // (Puppeteer no backend) — ver utils/compartilharPdf.ts. Sem telefone/e-mail do
+  // cliente, ou sem provider configurado, cai no fallback: baixa o PDF e abre o
+  // app com o texto pronto, para a pessoa anexar.
+  // ⚠️ `prepararPrescricao` roda ANTES: ele resolve a assinatura do veterinário e
+  // converte logo/foto/assinatura para `data:` — o PDF do servidor bloqueia
+  // qualquer outra origem e a folha nasceria sem imagem nenhuma.
+  const opcoesPdfPrescricao = async (gr: PrescricaoGrupo) => {
+    const pronto = await prepararPrescricao(montarGrupoPrint(gr, animal));
+    return {
+      gerarHtml:   () => gerarHtmlPrescricao(pronto),
+      nomeArquivo: nomeArquivoPrescricao(gr, animal),
+      documento:   'Prescrição',
+      texto:       montarTextoPrescricao(gr),
+      titulo:      `Prescrição ${gr.numeroFormatado}`,
+    };
+  };
+
+  const compartilharPrescricao = async (gr: PrescricaoGrupo, canal: 'whatsapp' | 'email') => {
+    setEnviandoPdf({ id: gr.id, canal });
+    try {
+      const opts = await opcoesPdfPrescricao(gr);
+      if (canal === 'whatsapp') await enviarPdfWhatsAppComAviso(opts, animal?.user?.phone);
+      else                      await enviarPdfEmailComAviso(opts, animal?.user?.email);
+    } finally {
+      setEnviandoPdf(null);
+    }
+  };
+
   const acoesDoGrupo = (g: PrescricaoGrupo) => {
     // AUTORIA (2026-08-04): a prescrição é do profissional que a criou ou assumiu —
     // só o gestor mexe na de outro. O slug continua sendo o de EDITAR (não o de
@@ -2464,11 +2523,15 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           onClick={() => void receituarioControladoOuComum(g, animalId, navigate, gr => imprimirPrescricao(gr, animal))} />
         {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
         <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp"
-          titulo="Enviar por WhatsApp" visivel={podeImprimir}
-          onClick={() => void receituarioControladoOuComum(g, animalId, navigate, gr => abrirWhatsApp(montarTextoPrescricao(gr)))} />
+          titulo="Enviar o PDF por WhatsApp" visivel={podeImprimir}
+          carregando={enviandoPdf?.id === g.id && enviandoPdf.canal === 'whatsapp'}
+          desabilitado={enviandoPdf !== null}
+          onClick={() => void receituarioControladoOuComum(g, animalId, navigate, gr => compartilharPrescricao(gr, 'whatsapp'))} />
         <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail"
-          titulo="Enviar por e-mail" visivel={podeImprimir}
-          onClick={() => void receituarioControladoOuComum(g, animalId, navigate, gr => abrirEmail(`Prescrição ${gr.numeroFormatado}`, montarTextoPrescricao(gr)))} />
+          titulo="Enviar o PDF por e-mail" visivel={podeImprimir}
+          carregando={enviandoPdf?.id === g.id && enviandoPdf.canal === 'email'}
+          desabilitado={enviandoPdf !== null}
+          onClick={() => void receituarioControladoOuComum(g, animalId, navigate, gr => compartilharPrescricao(gr, 'email'))} />
         <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
           titulo="Cancelar prescrição" visivel={cancelavel}
           onClick={() => { setErroLinha(null); setDeletingId(g.id); }} />
@@ -2679,8 +2742,9 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
       ) : (
       <>
 
-      {/* Desktop table */}
-      <div className="hidden md:block overflow-x-auto">
+      {/* Desktop table — janela de 5 linhas: o histórico cresce sem empurrar o
+          resto da tela para fora da dobra (ver components/JanelaLista). */}
+      <JanelaLista className="hidden md:block">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-100">
@@ -2758,13 +2822,13 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
             })}
           </tbody>
         </table>
-      </div>
+      </JanelaLista>
 
       {/* Mobile cards */}
-      <div className="md:hidden divide-y divide-gray-50">
+      <JanelaLista className="md:hidden divide-y divide-gray-50">
         {grupos.map(g => {
           return (
-          <div key={g.id} className="px-4 py-3">
+          <div key={g.id} data-item-lista className="px-4 py-3">
             <div className="flex items-center justify-between mb-1">
               <div className="flex items-center gap-2 min-w-0">
                 <button onClick={() => abrirVisualizacao(g)}
@@ -2796,7 +2860,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           </div>
           );
         })}
-      </div>
+      </JanelaLista>
 
       {/* Paginação */}
       {totalPaginas > 1 && (

@@ -2915,6 +2915,66 @@ New-Item -ItemType Junction `
       pct nunca recuando, veredito na linha `fim`, contrato antigo intacto, a
       mensagem NÃO sendo entregue após desistência, e o fim normal não sendo
       confundido com desistência. Suíte: 466.
+- [x] **O RESULTADO DO ENVIO FOI PARA O CENTRO, e nomeia o DOCUMENTO** (a pedido).
+      Ele saía como toast no TOPO: a pessoa acompanhava o progresso no meio da tela e
+      a resposta nascia no canto oposto, fora de onde ela estava olhando. Agora usa o
+      mesmo card central (`ProgressoEnvio.mostrarResultado`), e a frase é
+      **"Prescrição enviada por WhatsApp com Sucesso"** — `fraseEnvio(documento,
+      canal)`. Campo novo `CompartilharPdfOpcoes.documento`, preenchido por cada tela
+      (Prescrição · Vacina · Pedido de Exames · Resultado de Exame · Encaminhamento ·
+      Evolução · Laudo de Exame de Compra · Fatura · o nome do documento emitido).
+      ⚠️ Ausente, cai em "Documento" — nunca em "PDF": quem clicou sabe o que mandou,
+      e a confirmação genérica não diz QUAL dos registros da tela acabou de sair.
+      ⚠️ Fecha sozinho em 4s: é confirmação, não decisão. Card que exige clique
+      interrompe quem está no meio de um atendimento; o botão Fechar existe para quem
+      quiser tirá-lo antes.
+- [x] 🔴 **O ENVIO POR PDF CHEGOU ÀS DUAS ÚLTIMAS TELAS QUE MANDAVAM TEXTO PURO**
+      (a pedido): **Evolução** e **Encaminhamento**. Eram as duas exceções registradas
+      em 05/09 ("ficam de fora"), e agora não são mais.
+      - **Evolução**: `gerarHtmlEvolucao` já existia (o que não existia era o uso —
+        o botão Imprimir dela abre o relatório comparativo de IA, que é outro
+        caminho). 🔴 Mas o gerador montava `<img src="${animal.photoUrl}">` CRU:
+        no PDF do servidor a foto e as mídias nasceriam quebradas (o Puppeteer só
+        aceita `data:`). Passou por `srcImpressao`, e nasceu `prepararEvolucao`.
+      - **Encaminhamento**: não tinha folha nenhuma — nasceu `EncaminhamentoPrint.ts`
+        no padrão do `PrintShell` (cabeçalho, cards de conteúdo, rodapé com
+        assinatura). A tela passou a receber `animal` do shell, como Vacina e
+        Prescrição já recebiam: encaminhamento que não identifica o paciente é
+        documento fraco. Sem `animal`, a folha sai sem o card do paciente.
+      ⚠️ Prop nova `CompartilharPdfBotoes.aoPreparar`: **`gerarHtml` continua
+      SÍNCRONO** porque é ele que roda dentro da janela de "user activation" do
+      navegador, de que o fallback manual depende para abrir o app. Todo preparo
+      assíncrono (assinatura, imagens em `data:`) mora nessa prop, separado.
+      ⚠️ FICA de fora, de propósito: o envio EM LOTE do fechamento de faturas
+      (`Faturamento.tsx`, lista de faturas fechadas) — ali é uma linha por fatura e
+      migrar exigiria gerar N PDFs; o envio da fatura INDIVIDUAL já usa o pipeline.
+- [x] **HISTÓRICO MOSTRA 5 ITENS, COM ROLAGEM NOS DOIS EIXOS** (a pedido) —
+      `components/JanelaLista.tsx`, aplicado em **10 telas**: Prescrição, Vacina,
+      Exames, Encaminhamento, Evolução, Exame de Compra, Documentos Emitidos,
+      Histórico do Paciente (`AnimalDetail`), Histórico do shell de Atendimento e o
+      Histórico do plantão (`ExecucaoPrescricao`).
+      🔴 **A ALTURA É MEDIDA, não estimada.** Um `max-h` fixo em `rem` erraria em
+      quase todo lugar: a linha de tabela do desktop tem ~40px, o card do mobile
+      passa de 120px, e o MESMO card cresce quando o registro tem justificativa de
+      cancelamento. O componente soma a altura real dos N primeiros itens (mais o
+      `thead`, que é `sticky` e não conta como item) — é isso que faz "5 primeiros"
+      significar cinco itens em qualquer uma dessas situações.
+      ⚠️ `ResizeObserver` + `MutationObserver`: a altura de um item muda com o
+      conteúdo e a lista muda com filtro/paginação. Sem remedir, a janela congela na
+      medida da primeira renderização.
+      ⚠️ **Lista com menos itens que o teto não vira janela** — um `max-height` ali
+      só criaria espaço vazio embaixo de uma lista que já cabia inteira.
+      ⚠️ O cabeçalho da tabela é preso no topo por `[&_thead_th]:sticky` **dentro do
+      componente**: nenhuma das tabelas precisou ser alterada para isso.
+      ⚠️ O seletor padrão cobre linha de tabela e card marcado com `data-item-lista`;
+      **sem nenhum casamento, cai nos filhos DIRETOS** — o histórico do shell de
+      Atendimento alterna `<button>` (item avulso) e `<div>` (grupo com evolução), e
+      exigir marcador em cada forma espalharia detalhe da janela por dentro das telas.
+      ⚠️ `overscroll-contain` para a rolagem da janela não encadear na página.
+      ⚠️ `AnimalDetail` já mostrava 3 com "Ver todos": o padrão subiu para 5, para a
+      lista fechada não nascer já com barra de rolagem. O `ExecucaoPrescricao` tinha
+      janela PRÓPRIA (`max-h-[50vh]`) que cobria cabeçalho e filtros junto — agora a
+      janela vale só para as listas.
 - [ ] O envio real depende do WhatsApp da clínica provisionado/conectado na Evolution
       API e de SMTP configurado. Sem isso TODO clique cai no fallback (baixa o PDF) —
       e o toast diz isso, mas vale confirmar num envio de verdade antes de anunciar a

@@ -19,7 +19,7 @@
 // `<body>`. Os toasts de RESULTADO (sucesso / "PDF baixado, anexe…") continuam
 // saindo pelo react-hot-toast, em `utils/compartilharPdf.ts`.
 import { createRoot, type Root } from 'react-dom/client';
-import { MessageCircle, Mail, X } from 'lucide-react';
+import { MessageCircle, Mail, X, CheckCircle2, AlertCircle } from 'lucide-react';
 
 export type CanalEnvio = 'whatsapp' | 'email';
 
@@ -96,6 +96,88 @@ function CardProgresso({ canal, pct, etapa, onCancelar }: Props) {
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 
+// ── Resultado ────────────────────────────────────────────────────────────────
+//
+// O veredito do envio aparece no MESMO lugar em que a barra estava — o centro da
+// tela (a pedido). Antes ele saía como toast no topo: a pessoa acompanhava o
+// progresso no meio e, no fim, a resposta nascia no canto oposto, fora de onde ela
+// estava olhando.
+//
+// ⚠️ O texto nomeia O DOCUMENTO ("Prescrição enviada por WhatsApp com Sucesso"),
+// não "PDF": quem clicou sabe o que mandou, e a confirmação genérica não deixa
+// claro QUAL dos documentos da tela acabou de sair.
+
+/** Rótulo do canal como o usuário o conhece — nunca a chave interna. */
+const NOME_CANAL: Record<CanalEnvio, string> = { whatsapp: 'WhatsApp', email: 'E-mail' };
+
+export type TipoResultado = 'sucesso' | 'aviso';
+
+interface PropsResultado {
+  canal:     CanalEnvio;
+  tipo:      TipoResultado;
+  titulo:    string;
+  detalhe?:  string;
+  onFechar:  () => void;
+}
+
+function CardResultado({ canal, tipo, titulo, detalhe, onFechar }: PropsResultado) {
+  const ok = tipo === 'sucesso';
+  const Icone = ok ? CheckCircle2 : AlertCircle;
+  const tint  = ok ? 'text-emerald-600' : 'text-amber-500';
+  const CanalIcone = canal === 'whatsapp' ? MessageCircle : Mail;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center pointer-events-none"
+         role="status" aria-live="polite">
+      <div className="pointer-events-auto bg-white rounded-2xl shadow-2xl ring-1 ring-black/5
+                      px-6 py-5 w-[24rem] max-w-[90vw] text-center">
+        <div className="flex justify-center mb-3">
+          <Icone className={`w-11 h-11 ${tint}`} />
+        </div>
+        <p className="text-[15px] font-semibold text-gray-800 leading-snug">{titulo}</p>
+        {detalhe && <p className="mt-1.5 text-sm text-gray-500 leading-snug">{detalhe}</p>}
+        <button type="button" onClick={onFechar}
+          className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-gray-100 hover:bg-gray-200
+                     px-4 py-1.5 text-sm font-medium text-gray-700 transition-colors">
+          <CanalIcone className="w-4 h-4" />
+          Fechar
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Mostra o veredito no centro e some sozinho. Devolve o texto exibido — é o que
+ * permite testar a frase sem montar a árvore React.
+ * ⚠️ Fecha sozinho em `MS_RESULTADO`: é confirmação, não decisão. Um card que exige
+ * clique para sumir interrompe quem está no meio de um atendimento. O botão Fechar
+ * existe para quem quiser tirá-lo antes.
+ */
+const MS_RESULTADO = 4000;
+let timerResultado: ReturnType<typeof setTimeout> | null = null;
+
+export function mostrarResultado(
+  canal: CanalEnvio, tipo: TipoResultado, titulo: string, detalhe?: string,
+): string {
+  if (!host) {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+  }
+  if (timerResultado) clearTimeout(timerResultado);
+  const fechar = () => { if (timerResultado) clearTimeout(timerResultado); desmontar(); };
+  root!.render(<CardResultado canal={canal} tipo={tipo} titulo={titulo} detalhe={detalhe} onFechar={fechar} />);
+  timerResultado = setTimeout(fechar, MS_RESULTADO);
+  return titulo;
+}
+
+/** Frase única do sucesso — "Prescrição enviada por WhatsApp com Sucesso". */
+export function fraseEnvio(documento: string | undefined, canal: CanalEnvio): string {
+  const nome = (documento ?? 'Documento').trim() || 'Documento';
+  return `${nome} enviada por ${NOME_CANAL[canal]} com Sucesso`;
+}
+
 /**
  * Cria/atualiza o card de progresso. Devolve um id que deve ser passado de volta nas
  * chamadas seguintes — quem tem id em mãos sabe que precisa chamar `fecharProgresso`.
@@ -118,9 +200,14 @@ export function mostrarProgresso(
  * ⚠️ O `unmount` é adiado num `setTimeout(0)`: chamá-lo durante o próprio ciclo de
  * render do React 18 dispara aviso e pode perder a atualização final (o 100%).
  */
-export function fecharProgresso(id?: string): void {
-  if (!id || !root) return;
+function desmontar(): void {
+  if (!root) return;
   const r = root, h = host;
   root = null; host = null;
   setTimeout(() => { r.unmount(); h?.remove(); }, 0);
+}
+
+export function fecharProgresso(id?: string): void {
+  if (!id) return;
+  desmontar();
 }

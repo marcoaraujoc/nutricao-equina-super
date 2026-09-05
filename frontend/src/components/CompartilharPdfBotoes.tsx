@@ -8,8 +8,7 @@
 // verde (cor da própria marca), e-mail azul.
 import { useState } from 'react';
 import { MessageCircle, Mail } from 'lucide-react';
-import toast from 'react-hot-toast';
-import { compartilharPdfWhatsApp, compartilharPdfEmail, type CompartilharPdfOpcoes } from '../utils/compartilharPdf';
+import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso, type CompartilharPdfOpcoes } from '../utils/compartilharPdf';
 import AcaoRegistro from './AcaoRegistro';
 
 export interface CompartilharPdfBotoesProps extends CompartilharPdfOpcoes {
@@ -17,6 +16,17 @@ export interface CompartilharPdfBotoesProps extends CompartilharPdfOpcoes {
   telefone?:   string | null;
   /** E-mail do destinatário — preenche o "Para" do fallback mailto:. */
   emailPara?:  string | null;
+  /**
+   * Roda ANTES de `gerarHtml`, no clique. É onde a tela resolve o que o HTML precisa
+   * ter pronto e não pode buscar sozinho: a assinatura do profissional e as imagens
+   * convertidas para `data:` (o PDF sai do Puppeteer, que bloqueia toda requisição
+   * que não seja `data:` — sem isso a foto e a logo nascem quebradas no arquivo que
+   * chega ao cliente).
+   * ⚠️ `gerarHtml` é SÍNCRONO de propósito: é ele que roda dentro da janela de "user
+   * activation" do navegador, de que o fallback manual depende para abrir o app.
+   * O preparo assíncrono mora aqui, separado.
+   */
+  aoPreparar?: () => Promise<void>;
   /** Desabilita os dois botões (ex.: enquanto o documento ainda não existe). */
   disabled?:   boolean;
   size?:       number;
@@ -24,40 +34,27 @@ export interface CompartilharPdfBotoesProps extends CompartilharPdfOpcoes {
 }
 
 export default function CompartilharPdfBotoes({
-  telefone, emailPara, disabled, size = 14, className = '', ...opts
+  telefone, emailPara, disabled, aoPreparar, size = 14, className = '', ...opts
 }: CompartilharPdfBotoesProps) {
   const [enviando, setEnviando] = useState<'whatsapp' | 'email' | null>(null);
 
+  // Os avisos vivem em utils/compartilharPdf.ts para que este componente e as
+  // telas com fluxo próprio (ex.: o receituário de controle especial da
+  // Prescrição) digam exatamente a mesma coisa ao usuário.
   const handleWhatsApp = async () => {
     setEnviando('whatsapp');
     try {
-      const r = await compartilharPdfWhatsApp(opts, telefone);
-      if (r.enviado) {
-        toast.success(r.simulado ? 'Envio simulado (WhatsApp em modo de teste).' : 'PDF enviado por WhatsApp.');
-      } else {
-        toast('PDF baixado — anexe-o na conversa do WhatsApp.', { icon: '📎', duration: 5000 });
-      }
-    } catch {
-      toast.error('Erro ao gerar o PDF para o WhatsApp.');
-    } finally {
-      setEnviando(null);
-    }
+      await aoPreparar?.();
+      await enviarPdfWhatsAppComAviso(opts, telefone);
+    } finally { setEnviando(null); }
   };
 
   const handleEmail = async () => {
     setEnviando('email');
     try {
-      const r = await compartilharPdfEmail(opts, emailPara);
-      if (r.enviado) {
-        toast.success('PDF enviado por e-mail, já anexado.');
-      } else {
-        toast('PDF baixado — anexe-o no e-mail antes de enviar.', { icon: '📎', duration: 5000 });
-      }
-    } catch {
-      toast.error('Erro ao gerar o PDF para o e-mail.');
-    } finally {
-      setEnviando(null);
-    }
+      await aoPreparar?.();
+      await enviarPdfEmailComAviso(opts, emailPara);
+    } finally { setEnviando(null); }
   };
 
   // Os dois saem por `AcaoRegistro`: ícone no desktop, botão com rótulo no mobile —

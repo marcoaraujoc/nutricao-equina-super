@@ -27,8 +27,11 @@ import SubModuloEncaminhamento from './SubModuloEncaminhamento';
 import Agendamentos from './Agendamentos';
 import { imprimirAtendimento, gerarHtmlAtendimento, type PrintAtendimento, type PrintAnimal, type PrintAtendimentoItem } from '../utils/AtendimentoPrint';
 import InlineError from '../components/InlineError';
+import FaixaPacienteInativo from '../components/FaixaPacienteInativo';
 import { formatDataHora } from '../utils/dateUtils';
 import { escolherEvolucaoAtiva, lerEvolucaoSelecionada, salvarEvolucaoSelecionada } from '../utils/evolucaoAtiva';
+import { animalParaAutoSelecao } from '../utils/animalInfo';
+import JanelaLista from '../components/JanelaLista';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -384,7 +387,7 @@ function HistoricoResumidoPanel({
             {termo ? `Nenhum resultado para “${termo}”` : 'Nenhum registro encontrado'}
           </p>
         ) : (
-          <div className="px-3 space-y-2">
+          <JanelaLista className="px-3 space-y-2">
             {grupos.map(grupo => {
               // Avulso (sem evolução vinculada) — item único, sem cabeçalho AG-/EV-
               if (!grupo.evolucao) {
@@ -447,7 +450,7 @@ function HistoricoResumidoPanel({
                 </div>
               );
             })}
-          </div>
+          </JanelaLista>
         )}
       </div>
 
@@ -868,7 +871,12 @@ const Atendimento = () => {
   useEffect(() => {
     if (effectiveAnimalId || activeTab === 'agenda') return;
     if (empresaLoading || carregandoLista) return;
-    if (todosAnimais.length > 0) setSelectedAnimal(todosAnimais[0]);
+    // Prefere um paciente ATIVO; o INATIVO continua elegível, só como último recurso
+    // (a pedido) — ver `animalParaAutoSelecao`. Sem isso a tela podia abrir sozinha
+    // num prontuário congelado, sem nenhum botão de escrita, só porque aquele foi o
+    // último paciente cadastrado (a lista vem por `dataCadastro desc`).
+    const autoSelecionado = animalParaAutoSelecao(todosAnimais);
+    if (autoSelecionado) setSelectedAnimal(autoSelecionado);
   }, [effectiveAnimalId, activeTab, empresaLoading, carregandoLista, todosAnimais, setSelectedAnimal]);
 
   const handleSelecionarAnimalFromAgenda = useCallback(async (animalId: number) => {
@@ -1025,6 +1033,11 @@ const Atendimento = () => {
         return (
           <SubModuloEncaminhamento
             animalId={animalIdNum}
+            animal={animal ? {
+              nome: animal.nome, raca: animal.raca ?? null,
+              user: animal.user ?? null, idadeAnos: animal.idadeAnos ?? null,
+              logoUrl: animal.logoUrl ?? null,
+            } : null}
             pacienteInativo={pacienteInativo}
             evolucaoId={evolucaoAtiva?.id}
             evolucaoDeOutro={!!evolucaoAtiva && !evolucaoAtivaEhMinha(evolucaoAtiva)}
@@ -1046,25 +1059,6 @@ const Atendimento = () => {
 
       <InlineError message={erroInline} className="mb-4" />
 
-      {/* 🔴 O PRONTUÁRIO ESTÁ CONGELADO — sem este aviso, quem abre a tela vê os
-          botões de ação simplesmente AUSENTES e conclui que perdeu permissão. A
-          faixa diz o estado, desde quando, por quem, por quê e qual é a saída. */}
-      {pacienteInativo && (
-        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
-          <p className="text-sm font-semibold text-amber-900">
-            Paciente inativo — prontuário em somente leitura
-            {animal?.inativoEm && <> desde {formatDataHora(animal.inativoEm)}</>}.
-          </p>
-          <p className="text-xs text-amber-800 mt-0.5">
-            Todo o histórico continua visível e pode ser impresso ou enviado. Nada pode
-            ser criado, alterado, finalizado ou cancelado até o gestor reativar o
-            paciente.
-            {animal?.inativoMotivo && <> Motivo: “{animal.inativoMotivo}”.</>}
-            {animal?.inativoPor?.fullName && <> Inativado por {animal.inativoPor.fullName}.</>}
-          </p>
-        </div>
-      )}
-
       {/* Cabeçalho — título acompanha o submódulo ativo */}
       <div className="mt-2 mb-4 flex items-center gap-3">
         <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
@@ -1083,6 +1077,11 @@ const Atendimento = () => {
       />
 
       {animal && <AnimalCard animal={animal} />}
+
+      {/* 🔴 O PRONTUÁRIO ESTÁ CONGELADO. Fica DEPOIS do card (a pedido, e como na
+          tela de Vacina): o aviso é sobre o paciente que está logo acima — no topo da
+          página ele chegava antes de a pessoa saber de quem se trata. */}
+      <FaixaPacienteInativo animal={animal} />
 
       {/* UM banner só: o atendimento CARREGADO na tela. Havendo outros em andamento
           (consultas distintas — ex.: Clínica e Dermatologia no mesmo dia), a troca é

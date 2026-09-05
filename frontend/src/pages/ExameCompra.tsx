@@ -11,6 +11,7 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import PageContainer from '../components/PageContainer';
 import AnimalCard from '../components/AnimalCard';
 import CompartilharPdfBotoes from '../components/CompartilharPdfBotoes';
+import JanelaLista from '../components/JanelaLista';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import { imprimirExameCompra, gerarHtmlExameCompra } from '../utils/ExameCompraPrint';
 import InlineError from '../components/InlineError';
@@ -1231,7 +1232,7 @@ export default function ExameCompra() {
             ) : historicoCompra.length === 0 ? (
               <p className="text-center text-sm text-gray-300 py-6">Nenhum exame de compra registrado</p>
             ) : (
-              <div className="space-y-2">
+              <JanelaLista className="space-y-2 pr-1">
                 {historicoCompra.map(ex => {
                   const laudo = parseLaudo(ex.observacao);
                   // `editingId` é "o laudo carregado nos campos" — `modoForm` diz se ele
@@ -1239,7 +1240,7 @@ export default function ExameCompra() {
                   const emEdicao   = modoForm  && editingId === ex.id;
                   const emExibicao = !modoForm && editingId === ex.id;
                   return (
-                    <div key={ex.id}
+                    <div key={ex.id} data-item-lista
                       className={`bg-white rounded-2xl border shadow-sm px-4 py-3 flex items-start gap-3 ${
                         emEdicao   ? 'border-amber-300 bg-amber-50/40'
                         : emExibicao ? 'border-emerald-300 bg-emerald-50/30'
@@ -1291,6 +1292,7 @@ export default function ExameCompra() {
                           gerarHtml={() => gerarHtmlExameCompra(ex, selectedAnimal ?? undefined)}
                           nomeArquivo={nomeArquivoLaudo(ex)}
                           texto={textoCompartilhar(ex)}
+                          documento="Laudo de Exame de Compra"
                           titulo={`Laudo de Exame de Compra${selectedAnimal ? ` — ${selectedAnimal.nome}` : ''}`}
                           telefone={selectedAnimal?.user?.phone}
                           emailPara={selectedAnimal?.user?.email}
@@ -1299,7 +1301,7 @@ export default function ExameCompra() {
                     </div>
                   );
                 })}
-              </div>
+              </JanelaLista>
             )}
           </div>
         )}

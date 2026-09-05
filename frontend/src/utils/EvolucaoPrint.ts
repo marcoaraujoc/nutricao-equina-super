@@ -1,7 +1,9 @@
 // frontend/src/utils/EvolucaoPrint.ts
 // Utilitário de impressão para Evolução Clínica — segue o padrão de Dietaprint.ts
 
-import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura } from './print/PrintShell';
+import {
+  PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura, srcImpressao, prepararImagensImpressao,
+} from './print/PrintShell';
 import { imprimirHtml } from './print/imprimirHtml';
 
 export interface PrintAnimal {
@@ -94,7 +96,7 @@ export function gerarHtmlEvolucao(
       <div class="card-grid">
         ${animal.photoUrl ? `
           <div class="animal-photo-wrap" style="grid-row:1/3">
-            <img src="${animal.photoUrl}" alt="${escaparHtml(animal.nome)}" class="animal-photo" />
+            <img src="${srcImpressao(animal.photoUrl) ?? ''}" alt="${escaparHtml(animal.nome)}" class="animal-photo" />
           </div>
         ` : ''}
         <div><span class="lbl">Animal</span><span class="val">${escaparHtml(animal.nome)}</span></div>
@@ -116,7 +118,7 @@ export function gerarHtmlEvolucao(
       <div class="media-grid">
         ${imagens.map(m => `
           <div class="media-item">
-            <img src="${m.url}" alt="${escaparHtml(m.nome)}" class="media-img" />
+            <img src="${srcImpressao(m.url) ?? ''}" alt="${escaparHtml(m.nome)}" class="media-img" />
             <p class="media-nome">${escaparHtml(m.nome)}</p>
           </div>
         `).join('')}
@@ -264,6 +266,25 @@ export function gerarHtmlEvolucao(
 }
 
 // ─── Função principal ─────────────────────────────────────────────────────────
+
+/**
+ * Resolve as imagens da folha (logo, foto do paciente, mídias) para `data:` ANTES
+ * de gerar o HTML.
+ * 🔴 Obrigatório em quem vai mandar a folha por WhatsApp/e-mail: o PDF sai do
+ * Puppeteer, que BLOQUEIA toda requisição que não seja `data:` (anti-SSRF, ver
+ * printUrl.ts). Sem isto a foto e as mídias imprimem bem na tela e nascem
+ * QUEBRADAS no PDF que chega ao cliente. A impressão do navegador não precisa
+ * (tem rede e cookie de sessão), mas chamar não custa: o resultado é cacheado.
+ */
+export async function prepararEvolucao(
+  ev:     PrintEvolucao,
+  animal: PrintAnimal | null,
+): Promise<void> {
+  await prepararImagensImpressao([
+    animal?.logoUrl, animal?.photoUrl,
+    ...(ev.midias ?? []).filter(m => m.tipo === 'IMAGEM').map(m => m.url),
+  ]);
+}
 
 export function imprimirEvolucao(
   ev:     PrintEvolucao,

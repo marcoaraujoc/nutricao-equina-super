@@ -15,11 +15,13 @@ import ModalJustificativa from '../components/ModalJustificativa';
 import ConfirmModal from '../components/ConfirmModal';
 import DateInput from '../components/DateInput';
 import type { AnimalInfo } from './SubModuloEvolucao';
-import { imprimirExame as imprimirExameUtil } from '../utils/ExamePrint';
-import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
+import { imprimirExame as imprimirExameUtil, gerarHtmlExame } from '../utils/ExamePrint';
+import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
+import { prepararImagensImpressao } from '../utils/print/PrintShell';
 import InlineError from '../components/InlineError';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
+import JanelaLista from '../components/JanelaLista';
 import LaudoTexto from '../components/LaudoTexto';
 
 
@@ -335,7 +337,7 @@ function ViewModal({ ex, onFechar }: { ex: ExameClinico; onFechar: () => void })
               {extra.dataHoraColeta   && <Row label="Data/Hora Coleta"  value={new Date(extra.dataHoraColeta).toLocaleString('pt-BR')} />}
               {extra.tipoAmostra      && <Row label="Tipo de Amostra"   value={extra.tipoAmostra} />}
               {ex.qtdAmostra != null && (ex.tipo === 'Imagem'
-                ? <Row label="Qtd. de Imagens"  value={`${ex.qtdAmostra} imagem${ex.qtdAmostra !== 1 ? 's' : ''}`} />
+                ? <Row label="Qtd. de Imagens"  value={`${ex.qtdAmostra} ${ex.qtdAmostra !== 1 ? 'imagens' : 'imagem'}`} />
                 : <Row label="Qtd. de Amostras" value={`${ex.qtdAmostra} amostra${ex.qtdAmostra !== 1 ? 's' : ''}`} />)}
               {extra.indicacaoClinica && <Row label="Indicação Clínica" value={extra.indicacaoClinica} />}
               {extra.obs              && <Row label="Preparo / Obs."    value={extra.obs} />}
@@ -660,6 +662,8 @@ export default function SubModuloExames({
   const [showProcDrop, setShowProcDrop] = useState(false);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Envio do PDF em curso — o spinner e do BOTAO clicado (linha + canal), nunca de todos.
+  const [enviandoPdf, setEnviandoPdf] = useState<{ id: number; canal: 'whatsapp' | 'email' } | null>(null);
   const [procSearch,   setProcSearch]   = useState('');
 
   // ── Catálogo dinâmico de laboratórios ─────────────────────────────────────
@@ -1290,10 +1294,14 @@ export default function SubModuloExames({
       <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir" titulo="Imprimir requisição"
         visivel={podeImprimir} onClick={() => imprimirExame(ex)} />
       {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
-      <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp" titulo="Enviar por WhatsApp"
-        visivel={podeImprimir} onClick={() => compartilharWhatsApp(ex)} />
-      <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail" titulo="Enviar por e-mail"
-        visivel={podeImprimir} onClick={() => compartilharEmail(ex)} />
+      <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp" titulo="Enviar o PDF por WhatsApp"
+        visivel={podeImprimir} desabilitado={enviandoPdf !== null}
+        carregando={enviandoPdf?.id === ex.id && enviandoPdf.canal === 'whatsapp'}
+        onClick={() => void compartilharExame(ex, 'whatsapp')} />
+      <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail" titulo="Enviar o PDF por e-mail"
+        visivel={podeImprimir} desabilitado={enviandoPdf !== null}
+        carregando={enviandoPdf?.id === ex.id && enviandoPdf.canal === 'email'}
+        onClick={() => void compartilharExame(ex, 'email')} />
       <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar" titulo="Cancelar exame"
         visivel={podeCancelarEx(ex) && ex.ativo} onClick={() => handleExcluirSolicitado(ex.id)} />
     </AcoesRegistro>
@@ -1318,11 +1326,16 @@ export default function SubModuloExames({
     imprimirExameUtil(ex, animal);
   };
 
-  const compartilharWhatsApp = (ex: ExameClinico) => {
-    if (!podeImprimir) { semPermissao('compartilhar exame'); return; }
+  // -- Compartilhar: vai o PDF da MESMA folha do Imprimir ---------------------
+  // O texto abaixo deixou de ser o CONTEUDO enviado e passou a ser so a LEGENDA
+  // da mensagem: o documento em si vai ANEXADO (PDF pelo Puppeteer no backend,
+  // ver utils/compartilharPdf.ts). Sem telefone/e-mail do cliente, ou sem
+  // provider configurado, cai no fallback -- baixa o PDF e abre o app com o
+  // texto pronto, para a pessoa anexar.
+  const legendaExame = (ex: ExameClinico) => {
     const extra = parseExtra(ex.observacao);
     const examList = ex.descricao.split(', ');
-    const texto = [
+    return [
       `*Requisição de Exame Clínico*`,
       `Tipo: ${ex.tipo}`,
       `Data: ${formatDate(ex.dataSolicitacao)}`,
@@ -1333,27 +1346,36 @@ export default function SubModuloExames({
       ...examList.map(e => `• ${e}`),
       extra.obs ? `\n${extra.obs}` : '',
     ].filter(Boolean).join('\n');
-    abrirWhatsApp(texto);
   };
 
-  const compartilharEmail = (ex: ExameClinico) => {
+  const nomeArquivoExame = (ex: ExameClinico) => {
+    const paciente = animal?.nome ? `-${animal.nome.trim().replace(/\s+/g, '-').toLowerCase()}` : '';
+    return `exame-${ex.tipo.toLowerCase()}-${ex.id}${paciente}.pdf`;
+  };
+
+  const compartilharExame = async (ex: ExameClinico, canal: 'whatsapp' | 'email') => {
     if (!podeImprimir) { semPermissao('compartilhar exame'); return; }
-    const extra = parseExtra(ex.observacao);
-    const examList = ex.descricao.split(', ');
-    const assunto = `Requisição de Exame - ${ex.tipo} - ${formatDate(ex.dataSolicitacao)}`;
-    const corpo = [
-      `Requisição de Exame Clínico`,
-      `Tipo: ${ex.tipo}`,
-      `Data: ${formatDate(ex.dataSolicitacao)}`,
-      extra.laboratorio      ? `Laboratório: ${extra.laboratorio}` : '',
-      extra.dataHoraColeta   ? `Data/Hora coleta: ${new Date(extra.dataHoraColeta).toLocaleString('pt-BR')}` : '',
-      extra.tipoAmostra      ? `Tipo de amostra: ${extra.tipoAmostra}` : '',
-      extra.indicacaoClinica ? `Indicação clínica: ${extra.indicacaoClinica}` : '',
-      extra.obs              ? `Instruções/Preparo: ${extra.obs}` : '',
-      `\nExames Solicitados (${examList.length}):`,
-      ...examList.map(e => `• ${e}`),
-    ].filter(Boolean).join('\n');
-    abrirEmail(assunto, corpo);
+    setEnviandoPdf({ id: ex.id, canal });
+    try {
+      // ANTES de montar o HTML: o PDF e gerado no SERVIDOR e o Puppeteer bloqueia
+      // toda imagem que nao seja `data:` -- sem isto a logo da clinica e a foto do
+      // paciente nascem QUEBRADAS no arquivo que chega ao cliente.
+      await prepararImagensImpressao([
+        animal?.logoUrl,
+        typeof animal?.photoUrl === 'string' ? animal.photoUrl : null,
+      ]);
+      const opts = {
+        gerarHtml:   () => gerarHtmlExame(ex, animal),
+        nomeArquivo: nomeArquivoExame(ex),
+        documento:   'Pedido de Exames',
+        texto:       legendaExame(ex),
+        titulo:      `Requisição de Exame - ${ex.tipo} - ${formatDate(ex.dataSolicitacao)}`,
+      };
+      if (canal === 'whatsapp') await enviarPdfWhatsAppComAviso(opts, animal?.user?.phone);
+      else                      await enviarPdfEmailComAviso(opts, animal?.user?.email);
+    } finally {
+      setEnviandoPdf(null);
+    }
   };
 
   // ── Guard ──────────────────────────────────────────────────────────────────
@@ -2156,7 +2178,7 @@ export default function SubModuloExames({
       ) : (
         <>
           {/* Mobile */}
-          <div className="md:hidden divide-y divide-gray-50">
+          <JanelaLista className="md:hidden divide-y divide-gray-50">
             {historicoPage.map(ex => {
               const extra    = parseExtra(ex.observacao);
               const examCount = (ex.descricao.match(/,/g) ?? []).length + 1;
@@ -2164,7 +2186,7 @@ export default function SubModuloExames({
                 ? [...new Set(extra.grupos.map(g => g.tipo))]
                 : [ex.tipo];
               return (
-                <div key={ex.id} className={`px-4 py-3 ${!ex.ativo ? 'opacity-60' : ''}`}>
+                <div key={ex.id} data-item-lista className={`px-4 py-3 ${!ex.ativo ? 'opacity-60' : ''}`}>
                   <div className="flex items-center justify-between gap-2">
                     <button onClick={() => setViewingEx(ex)}
                       className="text-[11px] font-bold text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded-full border border-gray-200 flex-shrink-0 hover:bg-gray-200 hover:text-gray-800 transition-colors">
@@ -2202,10 +2224,10 @@ export default function SubModuloExames({
                 </div>
               );
             })}
-          </div>
+          </JanelaLista>
 
           {/* Desktop */}
-          <div className="hidden md:block overflow-x-auto">
+          <JanelaLista className="hidden md:block">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
@@ -2284,7 +2306,7 @@ export default function SubModuloExames({
                 })}
               </tbody>
             </table>
-          </div>
+          </JanelaLista>
 
           {totalPags > 1 && (
             <div className="flex items-center justify-between px-4 py-3 border-t border-gray-50">

@@ -12,6 +12,7 @@ import BotaoVoltar from '../components/BotaoVoltar';
 import ModalJustificativa from '../components/ModalJustificativa';
 import ConfirmModal from '../components/ConfirmModal';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
+import JanelaLista from '../components/JanelaLista';
 import { regimeExigeResumo, gerarResumoDoses, DOSES_POR_DIA } from '../utils/posologia';
 import toast from 'react-hot-toast';
 import api from '../services/api';
@@ -140,6 +141,15 @@ export interface VacinaExecucao {
    * prontuário congelado é para ser lido.
    */
   animalInativo?:  boolean;
+  /**
+   * QUANDO a vacina foi executada (ou cancelada) — vem do AuditLog, porque
+   * `VacinaClinica` não tem coluna de data de execução: o ciclo dela é só `status`.
+   * É o que permite o Histórico escrever "Executada em 04/09 às 20:08", como já
+   * fazia para medicamento e procedimento.
+   */
+  executadoEm?:    string | null;
+  /** Cancelada NA DATA consultada — vai para a aba "Cancelado" do Histórico. */
+  cancelada?:      boolean;
 }
 
 interface AlertaEstoque {
@@ -230,8 +240,39 @@ export function itemPendenteEm(
   item: Pick<ItemExecucao, 'diaAtual' | 'duracaoDias' | 'executadoEm' | 'dosesExecutadas' | 'dosesTotaisEsperadas' | 'proximaDoseEm'>,
   data: string,
 ): boolean {
+  // Executado NA DATA continua "pendente" AQUI de propósito (ver o comentário
+  // acima): é o que mantém a linha visível no modal e alimenta o Histórico de
+  // doses dele. Quem precisa da outra pergunta — "ainda falta dose HOJE?" — usa
+  // `itemDeveDoseEm`, logo abaixo, e NUNCA esta função.
+  if (item.dosesTotaisEsperadas != null && diaISO(item.executadoEm) === data) return true;
+  return itemDeveDoseEm(item, data);
+}
+
+/**
+ * "Ainda falta dose do item NESTA data?" — a pergunta que decide se ele fica na
+ * fila **a executar** ou desce para o **Histórico**.
+ *
+ * 🔴 É `itemPendenteEm` SEM o atalho "executado na data conta como pendente", e é
+ * essa diferença que existe o dia inteiro. Com o atalho, TODO item executado hoje
+ * respondia "sim, ainda falta" até a virada do dia: o card nunca migrava para o
+ * Histórico e continuava na fila com um botão Executar que já não tinha o que
+ * fazer. Foi o defeito relatado em 2026-09-04 ("executei um procedimento e não
+ * abriu o histórico com o procedimento executado abaixo") — reproduzido com a
+ * prescrição 147: `1xDia × 2 dias`, 1 dose dada hoje e `proximaDoseEm` AMANHÃ, ou
+ * seja, nada mais a fazer hoje, e mesmo assim o item seguia em "a executar".
+ * Vale igual para MEDICAMENTO; o procedimento só foi por onde apareceu.
+ *
+ * ⚠️ NÃO resolver isto com `!itemExecutadoNaData(i)` por fora: `executadoEm` é a
+ * data da ÚLTIMA execução, então num "12 em 12h" a 1ª dose marcaria o item como
+ * resolvido pelo resto do dia e a 2ª, ainda devida, sumiria da fila. Quem sabe se
+ * sobrou dose HOJE é `proximaDoseEm` (o rolling schedule real), e é ele que manda
+ * aqui — por isso a decisão mora nesta função, e não numa guarda no chamador.
+ */
+export function itemDeveDoseEm(
+  item: Pick<ItemExecucao, 'diaAtual' | 'duracaoDias' | 'executadoEm' | 'dosesExecutadas' | 'dosesTotaisEsperadas' | 'proximaDoseEm'>,
+  data: string,
+): boolean {
   if (item.dosesTotaisEsperadas != null) {
-    if (diaISO(item.executadoEm) === data) return true;
     if ((item.dosesExecutadas ?? 0) >= item.dosesTotaisEsperadas) return false;
     // 🔴 Item elegível SEM âncora de horário — Hora Início em branco e nenhuma
     // dose dada, então o backend manda `proximaDoseEm: null`. Não há data de
@@ -1939,6 +1980,13 @@ function LinhaGrupo({
   );
 }
 
+// Abas do card Histórico. "Paciente inativo" existe porque o prontuário CONGELADO
+// (§ Animal.inativo) não é nem executado nem cancelado: é um tratamento que ficou
+// parado por decisão do gestor. Chamá-lo de "Executado" mentiria sobre a dose, e de
+// "Cancelado" mentiria sobre a prescrição — que continua válida e volta a andar
+// quando o paciente for reativado.
+type FiltroHistorico = 'EXECUTADO' | 'CANCELADO' | 'INATIVO';
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ExecucaoPrescricao() {
@@ -1968,7 +2016,7 @@ export default function ExecucaoPrescricao() {
   // fila "a executar" acima, porque a pessoa costuma procurar ali por outro motivo
   // (conferir o que já foi feito ou entender por que algo foi cancelado).
   const [buscaHistorico,   setBuscaHistorico]   = useState('');
-  const [filtroHistorico,  setFiltroHistorico]  = useState<'EXECUTADO' | 'CANCELADO'>('EXECUTADO');
+  const [filtroHistorico,  setFiltroHistorico]  = useState<FiltroHistorico>('EXECUTADO');
   const [modal,    setModal]    = useState<GrupoExecucao | null>(null);
   // Intenção da abertura do modal: "Ver" (olho) força SOMENTE LEITURA mesmo em
   // prescrição de hoje ainda executável — só o botão "Executar" abre em modo de execução.
@@ -1995,7 +2043,9 @@ export default function ExecucaoPrescricao() {
       const res = await api.get(`/animais/${g.animal.id}/logo-empresa`);
       logoUrl = res.data?.dados?.logoUrl ?? null;
     } catch { /* silencioso — fallback: marca S2Vet no template */ }
-    imprimirPrescricao({ ...g, animal: { ...g.animal, logoUrl } });
+    // `void`: a impressão é assíncrona porque busca a assinatura escaneada do
+    // veterinário que prescreveu (ver utils/PrescricaoPrint.ts).
+    void imprimirPrescricao({ ...g, animal: { ...g.animal, logoUrl } });
   };
 
   const formatDataSel = (iso: string) => {
@@ -2114,7 +2164,7 @@ export default function ExecucaoPrescricao() {
       finalizadoEm:    null,
       finalizadoPor:   null,
       executadoPor:    null,
-      veterinario:     v.veterinario ? { fullName: v.veterinario.fullName } : { fullName: '—' },
+      veterinario:     v.veterinario ? { id: v.veterinario.id, fullName: v.veterinario.fullName } : { fullName: '—' },
       animal: {
         nome:     v.animal.nome,
         photoUrl: v.animal.photoUrl,
@@ -2126,10 +2176,13 @@ export default function ExecucaoPrescricao() {
       },
       itens: [item],
     };
-    imprimirPrescricao(grupo);
+    void imprimirPrescricao(grupo);
   };
 
-  const vacinasFiltradas = vacinas.filter(busca.trim()
+  // Mesma regra dos medicamentos/procedimentos: a vacina de paciente INATIVO sai da
+  // fila "a aplicar" e desce para a aba "Paciente inativo" do Histórico.
+  const vacinasInativasBase = vacinas.filter(v => v.animalInativo);
+  const vacinasFiltradas = vacinas.filter(v => !v.animalInativo).filter(busca.trim()
     ? (v => {
         const q = busca.toLowerCase();
         return (
@@ -2204,24 +2257,31 @@ export default function ExecucaoPrescricao() {
   // migrava para o Histórico, mesmo com a dose de hoje já dada. "Ainda precisa
   // ação" exclui explicitamente o que já foi resolvido NESTA data.
   //
-  // 🔴 BUG (corrigido): o `!itemExecutadoNaData(i)` acima só faz sentido para item
-  // LEGADO (`dosesTotaisEsperadas == null`), cuja pendência (`janelaDoItem`) é o
-  // DIA INTEIRO e por isso não sabe, sozinha, que a execução de hoje já resolveu o
-  // dia. Para item ELEGÍVEL ao rolling schedule (12em12h..1em1h, várias doses no
-  // MESMO dia) essa guarda quebra tudo: `item.executadoEm` é a data da ÚLTIMA
-  // execução, então dar a 1ª dose de 6 ("12 em 12h × 3 dias") já marca
-  // `itemExecutadoNaData=true` pelo resto do dia — e a 2ª dose, ainda pendente
-  // (`proximaDoseEm` = hoje à noite, `itemPendenteHoje` já retornaria `true`
-  // sozinho), era descartada aqui e o item sumia da fila de "a executar" e ia
-  // pro Histórico como se o dia inteiro já tivesse sido dado. `itemPendenteHoje`
-  // (via `itemPendenteEm`) JÁ decide sozinha se ainda falta dose HOJE nesse caso
-  // (olha `dosesExecutadas`/`dosesTotaisEsperadas`/`proximaDoseEm`, não a mera
-  // presença de uma execução anterior) — não precisa do `!itemExecutadoNaData`.
+  // 🔴 QUEM RESPONDE AQUI E' `itemDeveDoseEm`, NUNCA `itemPendenteHoje`
+  // (corrigido em 2026-09-04). `itemPendenteEm` — de onde `itemPendenteHoje` sai —
+  // trata "executado NA DATA" como pendente de propósito, para a linha continuar
+  // visível no modal. Para ESTA decisão isso é o oposto do necessário: o item
+  // executado hoje respondia "ainda precisa ação" até a virada do dia, então
+  // `tipoConcluidoEm` nunca ficava verdadeiro, o card jamais migrava para o
+  // Histórico e a fila seguia oferecendo um Executar sem nada para executar.
+  // Foi o defeito relatado ("executei um procedimento e o histórico não abriu
+  // embaixo") — e atingia MEDICAMENTO do mesmo jeito.
+  //
+  // ⚠️ A tentativa óbvia — devolver o `!itemExecutadoNaData(i)` que existia aqui —
+  // é a que NÃO pode voltar: `executadoEm` guarda só a ÚLTIMA execução, então num
+  // "12 em 12h" a 1ª dose marcaria o item como resolvido pelo resto do dia e a 2ª,
+  // ainda devida, sumiria da fila. `itemDeveDoseEm` olha
+  // `dosesExecutadas`/`dosesTotaisEsperadas`/`proximaDoseEm` — o rolling schedule
+  // real —, então acerta os dois casos sem guarda nenhuma por fora.
+  //
+  // Data FUTURA continua caindo na prévia teórica do regime: ali não existe
+  // `proximaDoseEm` calculado (ele só nasce depois da dose anterior), e o item
+  // aparece como PREVISTO — com a execução bloqueada pelo `soVisualizacao`.
   const itemAindaPrecisaAcaoHoje = (i: ItemExecucao): boolean =>
     i.status === 'CANCELADA' ? false
-      : i.dosesTotaisEsperadas != null
-        ? itemPendenteHoje(i)
-        : !itemExecutadoNaData(i) && itemPendenteHoje(i);
+      : dataSel > hojeISO()
+        ? itemPrevistoParaDataFutura(i, dataSel)
+        : itemDeveDoseEm(i, dataSel);
 
   const tipoConcluidoEm = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO'): boolean => {
     const itensDoTipo = g.itens.filter(i => i.tipo === tipo);
@@ -2238,8 +2298,19 @@ export default function ExecucaoPrescricao() {
   // cobre também o item parcialmente aplicado cujo `proximaDoseEm` ainda cairia hoje,
   // que sem esta guarda seguiria contando como pendente. Item já executado hoje não
   // conta (ver `itemAindaPrecisaAcaoHoje`), senão ficaria nos DOIS cards depois de resolvido.
-  const tipoPendenteEm = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO'): boolean =>
+  // "Tem dose devida nesta data", SEM olhar o estado do paciente — é o que separa
+  // a fila do dia da linha que apenas ficou parada.
+  const tipoPendenteBruto = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO'): boolean =>
     g.status !== 'CANCELADO' && g.itens.some(i => i.tipo === tipo && itemAindaPrecisaAcaoHoje(i));
+
+  // 🔴 PACIENTE INATIVO SAI DA FILA "A EXECUTAR" e desce para o Histórico, na aba
+  // "Paciente inativo" (a pedido, 2026-09-05). REVERTE a decisão de 2026-09-02, que
+  // o mantinha na fila só sem ação: a linha ficava no alto da tela oferecendo um
+  // trabalho que ninguém pode fazer, competindo com as doses do dia. Ele NÃO some
+  // do plantão — some da FILA; a equipe continua vendo que o tratamento existe e
+  // ficou parado, que era o motivo de não escondê-lo em 02/09.
+  const tipoPendenteEm = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO'): boolean =>
+    !g.animalInativo && tipoPendenteBruto(g, tipo);
 
   // Hora da execução para o badge do Histórico — só entre os itens do TIPO daquele
   // card (senão o horário do medicamento vazava para o card de procedimento e
@@ -2314,9 +2385,29 @@ export default function ExecucaoPrescricao() {
   const canceladosProcedimentosBase = grupos.filter(g =>
     g.status === 'CANCELADO' && grupoTemTipo(g, 'PROCEDIMENTO'));
 
-  const totalExecutados = historicoMedicamentosBase.length + historicoProcedimentosBase.length + vacinasExecutadasHoje.length;
-  const totalCancelados = canceladosMedicamentosBase.length + canceladosProcedimentosBase.length;
-  const temHistorico = totalExecutados > 0 || totalCancelados > 0;
+  // Aba "Paciente inativo": o que TERIA dose devida hoje mas está com o prontuário
+  // congelado. `tipoPendenteBruto` (e não `tipoPendenteEm`) porque é justamente a
+  // pendência que estas linhas têm — o que muda é que ninguém pode executá-la.
+  // ⚠️ CANCELADO fica de fora: a aba "Cancelado" é mais específica, e o mesmo
+  // documento em duas abas confundiria a contagem.
+  // ⚠️ Prescrição de paciente inativo JÁ concluída continua em "Executado" — a dose
+  // foi dada de verdade, antes da inativação, e mudá-la de aba reescreveria o
+  // histórico.
+  const inativosMedicamentosBase = grupos.filter(g =>
+    g.animalInativo && g.status !== 'CANCELADO'
+    && grupoTemTipo(g, 'MEDICAMENTO') && tipoPendenteBruto(g, 'MEDICAMENTO'));
+  const inativosProcedimentosBase = grupos.filter(g =>
+    g.animalInativo && g.status !== 'CANCELADO'
+    && grupoTemTipo(g, 'PROCEDIMENTO') && tipoPendenteBruto(g, 'PROCEDIMENTO'));
+
+  // A contagem das abas separa a vacina cancelada da executada — antes TODA vacina
+  // devolvida pela rota entrava em "Executado", e a cancelada nem chegava aqui.
+  const vacinasExecutadasBase = vacinasExecutadasHoje.filter(v => !v.cancelada);
+  const vacinasCanceladasBase = vacinasExecutadasHoje.filter(v =>  v.cancelada);
+  const totalExecutados = historicoMedicamentosBase.length + historicoProcedimentosBase.length + vacinasExecutadasBase.length;
+  const totalCancelados = canceladosMedicamentosBase.length + canceladosProcedimentosBase.length + vacinasCanceladasBase.length;
+  const totalInativos   = inativosMedicamentosBase.length + inativosProcedimentosBase.length + vacinasInativasBase.length;
+  const temHistorico = totalExecutados > 0 || totalCancelados > 0 || totalInativos > 0;
 
   // Busca PRÓPRIA do card Histórico — filtra só o que está sendo exibido ali,
   // independente da busca da fila "a executar" acima.
@@ -2343,12 +2434,38 @@ export default function ExecucaoPrescricao() {
   // abas de status já usado na Vacina (CLAUDE.md §12, sessão 2026-08-18).
   const historicoMedicamentos   = filtroHistorico === 'EXECUTADO' ? aplicarBuscaHistorico(historicoMedicamentosBase)  : [];
   const historicoProcedimentos  = filtroHistorico === 'EXECUTADO' ? aplicarBuscaHistorico(historicoProcedimentosBase) : [];
-  const vacinasHistExibidas     = filtroHistorico === 'EXECUTADO' ? vacinasExecutadasFiltradas : [];
+  // A vacina CANCELADA vai para a outra aba — o backend passou a devolvê-la junto
+  // (antes ela não vinha, e a aba "Cancelado" ficava sempre vazia para vacina).
+  const vacinasHistExibidas   = filtroHistorico === 'EXECUTADO'
+    ? vacinasExecutadasFiltradas.filter(v => !v.cancelada) : [];
+  const vacinasCanceladas     = filtroHistorico === 'CANCELADO'
+    ? vacinasExecutadasFiltradas.filter(v => v.cancelada)  : [];
   const canceladosMedicamentos  = filtroHistorico === 'CANCELADO' ? aplicarBuscaHistorico(canceladosMedicamentosBase)  : [];
   const canceladosProcedimentos = filtroHistorico === 'CANCELADO' ? aplicarBuscaHistorico(canceladosProcedimentosBase) : [];
+  const inativosMedicamentos    = filtroHistorico === 'INATIVO'   ? aplicarBuscaHistorico(inativosMedicamentosBase)    : [];
+  const inativosProcedimentos   = filtroHistorico === 'INATIVO'   ? aplicarBuscaHistorico(inativosProcedimentosBase)   : [];
+  const vacinasInativas         = filtroHistorico === 'INATIVO'
+    ? vacinasInativasBase.filter(buscaHistorico.trim() ? (v => {
+        const q = buscaHistorico.toLowerCase();
+        return (
+          v.animal.nome.toLowerCase().includes(q) ||
+          v.nome.toLowerCase().includes(q) ||
+          (v.veterinario?.fullName ?? '').toLowerCase().includes(q)
+        );
+      }) : () => true)
+    : [];
   const abaHistoricoVazia = filtroHistorico === 'EXECUTADO'
     ? historicoMedicamentos.length === 0 && historicoProcedimentos.length === 0 && vacinasHistExibidas.length === 0
-    : canceladosMedicamentos.length === 0 && canceladosProcedimentos.length === 0;
+    : filtroHistorico === 'CANCELADO'
+    ? canceladosMedicamentos.length === 0 && canceladosProcedimentos.length === 0 && vacinasCanceladas.length === 0
+    : inativosMedicamentos.length === 0 && inativosProcedimentos.length === 0 && vacinasInativas.length === 0;
+  // A aba "Paciente inativo" só é RENDERIZADA quando existe algo nela. Navegar para
+  // outra data (ou reativar o paciente) pode zerá-la com ela selecionada — e aí o
+  // card ficaria preso num filtro sem botão para sair dele. Volta ao padrão.
+  useEffect(() => {
+    if (filtroHistorico === 'INATIVO' && totalInativos === 0) setFiltroHistorico('EXECUTADO');
+  }, [filtroHistorico, totalInativos]);
+
   // Rótulo do card de Histórico segue a data selecionada no calendário — antes dizia
   // sempre "hoje", mesmo navegando para um dia anterior.
   const rotuloHistorico = isHoje ? 'executadas hoje' : `executadas em ${formatDataSel(dataSel)}`;
@@ -2399,6 +2516,54 @@ export default function ExecucaoPrescricao() {
     />
   );
 
+  /**
+   * Linha da VACINA no Histórico — UMA função para as duas abas ("Executado" e
+   * "Cancelado"), como já se faz com `renderGrupoHistorico`/`renderGrupoCancelado`.
+   * Duas cópias divergiriam na primeira correção (28-g).
+   *
+   * 🔴 O selo diz DIA E HORA ("Executada em 04/09 às 20:08"), igual ao de medicamento
+   * e procedimento. Antes a vacina exibia só "Executada", sem quando — e as três
+   * linhas ficavam lado a lado no mesmo card dizendo coisas diferentes. O instante
+   * vem de `executadoEm`, que o backend lê do AuditLog (`VacinaClinica` não tem
+   * coluna de data de execução).
+   * ⚠️ `formatDiaMesHora` (INSTANTE, §6), nunca `formatDate`: a aplicação da noite
+   * sairia com a data do dia seguinte.
+   */
+  const renderVacinaHistorico = (v: VacinaExecucao) => (
+    <LinhaExecucao
+      key={v.id}
+      animal={v.animal}
+      detalhe={[
+        v.nome,
+        v.dose,
+        v.via,
+        v.quantidade && v.quantidade > 1 ? `${v.quantidade} doses` : null,
+      ].filter(Boolean).join(' · ')}
+      numeroLabel="Nº Vacina"
+      numeroFormatado={formatNumeroClinico(v.numero)}
+      onNumero={() => navigate(`/clinica/vacina/${v.animal.id}?item=${v.id}`)}
+      tituloNumero="Ir para a vacina original"
+      veterinarioNome={v.veterinario?.fullName ?? '—'}
+    >
+      <AcoesRegistro className="ml-auto">
+        {v.cancelada ? (
+          <span className="flex items-center gap-1 px-2.5 py-1 bg-red-50 border border-red-200 text-red-700 text-[10px] font-bold rounded-full whitespace-nowrap">
+            <Ban size={11} /> Cancelada{v.executadoEm ? ` em ${formatDiaMesHora(v.executadoEm)}` : ''}
+          </span>
+        ) : (
+          <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold rounded-full whitespace-nowrap">
+            <CheckCircle2 size={11} /> Executada{v.executadoEm ? ` em ${formatDiaMesHora(v.executadoEm)}` : ''}
+          </span>
+        )}
+        <AcaoRegistro tom="ver" icone={Eye} rotulo="Ver" titulo="Ver vacina"
+          onClick={() => { setVacModoVer(true); setVacModal(v); }} />
+        <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
+          titulo="Imprimir vacina" visivel={podeImprimir}
+          onClick={() => imprimirVacinaExec(v)} />
+      </AcoesRegistro>
+    </LinhaExecucao>
+  );
+
   // Aba "Cancelado" do Histórico — mesma linha, sem o selo "Executada" (o "Cancelada"
   // já vem sozinho de dentro do LinhaGrupo, por `g.status === 'CANCELADO'`).
   const renderGrupoCancelado = (tipo: 'MEDICAMENTO' | 'PROCEDIMENTO') => (g: GrupoExecucao) => (
@@ -2412,6 +2577,56 @@ export default function ExecucaoPrescricao() {
       podeImprimir={podeImprimir}
       soVisualizacao
     />
+  );
+
+  // Aba "Paciente inativo" — a MESMA linha, sem selo de execução: quem explica por
+  // que ela está aqui é o "Somente leitura" que o próprio `LinhaGrupo` desenha a
+  // partir de `g.animalInativo`. Ver e Imprimir ficam (são SAÍDA de conteúdo, não
+  // escrita); Executar e Cancelar não são renderizados — o backend os recusa com
+  // 400 enquanto o prontuário estiver congelado (lib/animalInativo.js).
+  const renderGrupoInativo = (tipo: 'MEDICAMENTO' | 'PROCEDIMENTO') => (g: GrupoExecucao) => (
+    <LinhaGrupo
+      key={g.id}
+      g={g}
+      onExecutar={() => {}}
+      onVer={() => { setModalVer(true); setModalTipo(tipo); setModal(g); }}
+      onImprimir={() => podeImprimir ? handleImprimirGrupo(g) : semPermissao('imprimir prescrição')}
+      podeExecutarAcao={false}
+      podeImprimir={podeImprimir}
+      soVisualizacao
+    />
+  );
+
+  // Vacina na aba "Paciente inativo" — não passa por `renderVacinaHistorico`, que
+  // carimba "Executada"/"Cancelada": esta NÃO foi aplicada, só ficou parada.
+  const renderVacinaInativa = (v: VacinaExecucao) => (
+    <LinhaExecucao
+      key={v.id}
+      animal={v.animal}
+      detalhe={[
+        v.nome,
+        v.dose,
+        v.via,
+        v.quantidade && v.quantidade > 1 ? `${v.quantidade} doses` : null,
+      ].filter(Boolean).join(' · ')}
+      numeroLabel="Nº Vacina"
+      numeroFormatado={formatNumeroClinico(v.numero)}
+      onNumero={() => navigate(`/clinica/vacina/${v.animal.id}?item=${v.id}`)}
+      tituloNumero="Ir para a vacina original"
+      veterinarioNome={v.veterinario?.fullName ?? '—'}
+    >
+      <AcoesRegistro className="ml-auto">
+        <span className="flex items-center gap-1 px-2.5 py-1 bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold rounded-full whitespace-nowrap"
+          title="Paciente inativo — o prontuário está em somente leitura. Reative com o gestor para voltar a aplicar.">
+          <Lock size={11} /> Somente leitura
+        </span>
+        <AcaoRegistro tom="ver" icone={Eye} rotulo="Ver" titulo="Ver vacina"
+          onClick={() => { setVacModoVer(true); setVacModal(v); }} />
+        <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
+          titulo="Imprimir vacina" visivel={podeImprimir}
+          onClick={() => imprimirVacinaExec(v)} />
+      </AcoesRegistro>
+    </LinhaExecucao>
   );
 
   if (loadingPerm) return (
@@ -2617,7 +2832,7 @@ export default function ExecucaoPrescricao() {
             sai da fila e desce pra cá. Card com scroll interno para não esticar
             a página quando o histórico do dia é longo. */}
         {!loading && temHistorico && (
-          <div className="bg-white rounded-2xl border border-gray-200 p-3 max-h-[50vh] overflow-y-auto space-y-3">
+          <div className="bg-white rounded-2xl border border-gray-200 p-3 space-y-3">
             <p className="px-1 text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
               <CheckCircle2 size={13} className="text-emerald-600" /> Histórico — {rotuloHistorico}
             </p>
@@ -2637,15 +2852,24 @@ export default function ExecucaoPrescricao() {
                 />
               </div>
               <div className="flex items-center gap-1.5 flex-shrink-0">
-                {(['EXECUTADO', 'CANCELADO'] as const).map(key => {
+                {/* "Paciente inativo" só aparece QUANDO EXISTE — aba permanentemente
+                    vazia é ruído no plantão (mesma regra das abas da Vacina e do
+                    histórico de Documentos). "Executado" e "Cancelado" ficam fixas:
+                    são os dois desfechos normais de qualquer dia. */}
+                {(['EXECUTADO', 'CANCELADO', 'INATIVO'] as const)
+                  .filter(key => key !== 'INATIVO' || totalInativos > 0)
+                  .map(key => {
                   const isActive = filtroHistorico === key;
-                  const count = key === 'EXECUTADO' ? totalExecutados : totalCancelados;
+                  const count = key === 'EXECUTADO' ? totalExecutados
+                    : key === 'CANCELADO' ? totalCancelados : totalInativos;
+                  const rotulo = key === 'EXECUTADO' ? 'Executado'
+                    : key === 'CANCELADO' ? 'Cancelado' : 'Paciente inativo';
                   return (
                     <button key={key} onClick={() => setFiltroHistorico(key)}
                       className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors whitespace-nowrap ${
                         isActive ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
                       }`}>
-                      {key === 'EXECUTADO' ? 'Executado' : 'Cancelado'}
+                      {rotulo}
                       <span className={isActive ? 'text-emerald-100' : 'text-gray-400'}>({count})</span>
                     </button>
                   );
@@ -2659,7 +2883,9 @@ export default function ExecucaoPrescricao() {
                   ? 'Nenhum resultado para a busca'
                   : filtroHistorico === 'EXECUTADO'
                   ? `Nada executado ${isHoje ? 'hoje' : `em ${formatDataSel(dataSel)}`}`
-                  : `Nada cancelado ${isHoje ? 'hoje' : `em ${formatDataSel(dataSel)}`}`}
+                  : filtroHistorico === 'CANCELADO'
+                  ? `Nada cancelado ${isHoje ? 'hoje' : `em ${formatDataSel(dataSel)}`}`
+                  : 'Nenhum paciente inativo com tratamento parado'}
               </p>
             )}
 
@@ -2673,9 +2899,9 @@ export default function ExecucaoPrescricao() {
                     {historicoMedicamentos.length} prescrição{historicoMedicamentos.length !== 1 ? 'ões' : ''}
                   </span>
                 </div>
-                <div className="space-y-2">
+                <JanelaLista className="space-y-2">
                   {historicoMedicamentos.map(renderGrupoHistorico('MEDICAMENTO'))}
-                </div>
+                </JanelaLista>
               </div>
             )}
 
@@ -2689,9 +2915,9 @@ export default function ExecucaoPrescricao() {
                     {historicoProcedimentos.length} prescrição{historicoProcedimentos.length !== 1 ? 'ões' : ''}
                   </span>
                 </div>
-                <div className="space-y-2">
+                <JanelaLista className="space-y-2">
                   {historicoProcedimentos.map(renderGrupoHistorico('PROCEDIMENTO'))}
-                </div>
+                </JanelaLista>
               </div>
             )}
 
@@ -2706,34 +2932,7 @@ export default function ExecucaoPrescricao() {
                   </span>
                 </div>
                 <div className="space-y-2">
-                  {vacinasHistExibidas.map(v => (
-                    <LinhaExecucao
-                      key={v.id}
-                      animal={v.animal}
-                      detalhe={[
-                        v.nome,
-                        v.dose,
-                        v.via,
-                        v.quantidade && v.quantidade > 1 ? `${v.quantidade} doses` : null,
-                      ].filter(Boolean).join(' · ')}
-                      numeroLabel="Nº Vacina"
-                      numeroFormatado={formatNumeroClinico(v.numero)}
-                      onNumero={() => navigate(`/clinica/vacina/${v.animal.id}?item=${v.id}`)}
-                      tituloNumero="Ir para a vacina original"
-                      veterinarioNome={v.veterinario?.fullName ?? '—'}
-                    >
-                      <AcoesRegistro className="ml-auto">
-                        <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold rounded-full whitespace-nowrap">
-                          <CheckCircle2 size={11} /> Executada
-                        </span>
-                        <AcaoRegistro tom="ver" icone={Eye} rotulo="Ver" titulo="Ver vacina"
-                          onClick={() => { setVacModoVer(true); setVacModal(v); }} />
-                        <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
-                          titulo="Imprimir vacina" visivel={podeImprimir}
-                          onClick={() => imprimirVacinaExec(v)} />
-                      </AcoesRegistro>
-                    </LinhaExecucao>
-                  ))}
+                  {vacinasHistExibidas.map(renderVacinaHistorico)}
                 </div>
               </div>
             )}
@@ -2766,6 +2965,81 @@ export default function ExecucaoPrescricao() {
                 </div>
                 <div className="space-y-2">
                   {canceladosProcedimentos.map(renderGrupoCancelado('PROCEDIMENTO'))}
+                </div>
+              </div>
+            )}
+
+            {vacinasCanceladas.length > 0 && (
+              <div className="space-y-2 opacity-90">
+                <div className="flex items-center justify-between px-1 pb-1">
+                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
+                    <Syringe size={12} className="text-red-500" /> Vacinas
+                  </p>
+                  <span className="text-xs text-gray-400">
+                    {vacinasCanceladas.length} vacina{vacinasCanceladas.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {vacinasCanceladas.map(renderVacinaHistorico)}
+                </div>
+              </div>
+            )}
+
+            {/* ── Aba "Paciente inativo" — tratamento que existe e está PARADO ──
+                Ele desce para cá em vez de ficar na fila do dia (a pedido,
+                2026-09-05), mas segue visível: esconder faria a equipe perder de
+                vista que o tratamento ficou parado. */}
+            {filtroHistorico === 'INATIVO' && !abaHistoricoVazia && (
+              <p className="px-1 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg py-1.5">
+                Prontuário congelado: estes tratamentos não podem ser executados nem
+                cancelados até o gestor reativar o paciente.
+              </p>
+            )}
+
+            {inativosMedicamentos.length > 0 && (
+              <div className="space-y-2 opacity-90">
+                <div className="flex items-center justify-between px-1 pb-1">
+                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
+                    <Pill size={12} className="text-amber-600" /> Medicamentos
+                  </p>
+                  <span className="text-xs text-gray-400">
+                    {inativosMedicamentos.length} prescrição{inativosMedicamentos.length !== 1 ? 'ões' : ''}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {inativosMedicamentos.map(renderGrupoInativo('MEDICAMENTO'))}
+                </div>
+              </div>
+            )}
+
+            {inativosProcedimentos.length > 0 && (
+              <div className="space-y-2 opacity-90">
+                <div className="flex items-center justify-between px-1 pb-1">
+                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
+                    <Stethoscope size={12} className="text-amber-600" /> Procedimentos
+                  </p>
+                  <span className="text-xs text-gray-400">
+                    {inativosProcedimentos.length} prescrição{inativosProcedimentos.length !== 1 ? 'ões' : ''}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {inativosProcedimentos.map(renderGrupoInativo('PROCEDIMENTO'))}
+                </div>
+              </div>
+            )}
+
+            {vacinasInativas.length > 0 && (
+              <div className="space-y-2 opacity-90">
+                <div className="flex items-center justify-between px-1 pb-1">
+                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
+                    <Syringe size={12} className="text-amber-600" /> Vacinas
+                  </p>
+                  <span className="text-xs text-gray-400">
+                    {vacinasInativas.length} vacina{vacinasInativas.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {vacinasInativas.map(renderVacinaInativa)}
                 </div>
               </div>
             )}

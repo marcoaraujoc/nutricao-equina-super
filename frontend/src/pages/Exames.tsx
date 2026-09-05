@@ -21,8 +21,9 @@ import ConfirmModal from '../components/ConfirmModal';
 import ExamesSolicitadosPanel, { ResultadoModal, type ExameSolicitado, type ItemManual } from '../components/ExamesSolicitadosPanel';
 import LaudoTexto from '../components/LaudoTexto';
 import { temResultadoExame } from '../utils/exameClinico';
-import { imprimirResultadoExame, textoResultadoExame } from '../utils/ResultadoExamePrint';
-import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
+import { imprimirResultadoExame, gerarHtmlResultado, textoResultadoExame } from '../utils/ResultadoExamePrint';
+import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
+import { prepararImagensImpressao } from '../utils/print/PrintShell';
 
 interface ArquivoNavegavel { nome: string; arquivoUrl: string }
 
@@ -394,6 +395,8 @@ const Exames = () => {
 
   const [exames, setExames] = useState<any[]>([]);
   const [currentAnimal, setCurrentAnimal] = useState<any>(null);
+  // Envio do PDF em curso — o spinner e do BOTAO clicado (linha + canal).
+  const [enviandoPdf, setEnviandoPdf] = useState<{ id: number; canal: 'whatsapp' | 'email' } | null>(null);
   const [animaisDoProprietario, setAnimaisDoProprietario] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId,  setEditingId]  = useState<number | null>(null);
@@ -646,14 +649,31 @@ const Exames = () => {
     imprimirResultadoExame(ex, currentAnimal);
   };
 
-  const compartilharResultadoWhatsApp = (ex: ExameSolicitado) => {
+  // WhatsApp / E-mail mandam o PDF do MESMO laudo do Imprimir, anexado de verdade
+  // (Puppeteer no backend, ver utils/compartilharPdf.ts). O texto virou a LEGENDA
+  // da mensagem, não mais o conteúdo enviado.
+  const compartilharResultado = async (ex: ExameSolicitado, canal: 'whatsapp' | 'email') => {
     if (!podeImprimirResultado) { semPermissao('compartilhar resultado'); return; }
-    abrirWhatsApp(textoResultadoExame(ex));
-  };
-
-  const compartilharResultadoEmail = (ex: ExameSolicitado) => {
-    if (!podeImprimirResultado) { semPermissao('compartilhar resultado'); return; }
-    abrirEmail(`Resultado de Exame - ${ex.tipo} - ${ex.descricao}`, textoResultadoExame(ex));
+    setEnviandoPdf({ id: ex.id, canal });
+    try {
+      // O PDF é gerado no SERVIDOR e o Puppeteer bloqueia toda imagem que não seja
+      // `data:` — a logo E as imagens do laudo precisam ser resolvidas ANTES.
+      await prepararImagensImpressao([
+        currentAnimal?.logoUrl,
+        ...(ex.imagens ?? []).map((i: { arquivoUrl: string }) => i.arquivoUrl),
+      ]);
+      const opts = {
+        gerarHtml:   () => gerarHtmlResultado(ex, currentAnimal),
+        nomeArquivo: `resultado-exame-${ex.id}.pdf`,
+        documento:   'Resultado de Exame',
+        texto:       textoResultadoExame(ex),
+        titulo:      `Resultado de Exame - ${ex.tipo} - ${ex.descricao}`,
+      };
+      if (canal === 'whatsapp') await enviarPdfWhatsAppComAviso(opts, currentAnimal?.user?.phone);
+      else                      await enviarPdfEmailComAviso(opts, currentAnimal?.user?.email);
+    } finally {
+      setEnviandoPdf(null);
+    }
   };
 
   const getStatus = (ex: any) => {
@@ -877,11 +897,15 @@ const Exames = () => {
                       <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
                         visivel={podeImprimirResultado} onClick={() => imprimirResultado(ex)} />
                       <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp"
-                        titulo="Enviar por WhatsApp" visivel={podeImprimirResultado}
-                        onClick={() => compartilharResultadoWhatsApp(ex)} />
+                        titulo="Enviar o PDF por WhatsApp" visivel={podeImprimirResultado}
+                        desabilitado={enviandoPdf !== null}
+                        carregando={enviandoPdf?.id === ex.id && enviandoPdf.canal === 'whatsapp'}
+                        onClick={() => void compartilharResultado(ex, 'whatsapp')} />
                       <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail"
-                        titulo="Enviar por e-mail" visivel={podeImprimirResultado}
-                        onClick={() => compartilharResultadoEmail(ex)} />
+                        titulo="Enviar o PDF por e-mail" visivel={podeImprimirResultado}
+                        desabilitado={enviandoPdf !== null}
+                        carregando={enviandoPdf?.id === ex.id && enviandoPdf.canal === 'email'}
+                        onClick={() => void compartilharResultado(ex, 'email')} />
                       <AcaoRegistro tom="cancelar" icone={Trash2} rotulo="Excluir"
                         titulo="Excluir exame" visivel={podeDeletar}
                         onClick={() => excluirClinico(ex)} />

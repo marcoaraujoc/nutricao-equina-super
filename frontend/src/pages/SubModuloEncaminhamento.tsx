@@ -13,18 +13,19 @@
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
-import {
-  Share2, Loader2, Check, Ban, CheckSquare,
-  UserCheck, ExternalLink, ShieldCheck, AlertTriangle, FileText,
-  ChevronLeft, ChevronRight, MessageCircle, Mail,
-} from 'lucide-react';
+import { Share2, Loader2, Check, Ban, CheckSquare, UserCheck, ExternalLink, ShieldCheck, AlertTriangle, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
 import api from '../services/api';
-import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
+import CompartilharPdfBotoes from '../components/CompartilharPdfBotoes';
+import {
+  gerarHtmlEncaminhamento, prepararEncaminhamento,
+  type PrintAnimalEncaminhamento,
+} from '../utils/EncaminhamentoPrint';
 import { usePermissoes } from '../hooks/usePermissoes';
 import ModalJustificativa from '../components/ModalJustificativa';
 import ErroAcao, { classeErro, temErro, type ErroAcaoDados } from '../components/ErroAcao';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
+import JanelaLista from '../components/JanelaLista';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -53,6 +54,11 @@ interface Prestador {
 const servicosDoPrestador = (p: Prestador): string[] =>
   p.servicos ?? (p.tipoServico ? p.tipoServico.split(',').map(s => s.trim()).filter(Boolean) : []);
 
+/** O que a folha e o envio precisam do paciente — ver EncaminhamentoPrint. */
+export interface AnimalEncaminhamento extends PrintAnimalEncaminhamento {
+  user?: { fullName: string; email?: string | null; phone?: string | null } | null;
+}
+
 interface Encaminhamento {
   id:                 number;
   especialidade:      string;
@@ -74,6 +80,9 @@ interface Encaminhamento {
 
 interface Props {
   animalId:           number;
+  /** Paciente do atendimento — identifica a folha e dá o destino do envio
+   *  (telefone/e-mail do cliente). Ausente, a folha sai sem o card do paciente. */
+  animal?:            AnimalEncaminhamento | null;
   evolucaoId?:        number;
   /** Evolução ativa existe, mas pertence a OUTRO profissional (não assumida por
    *  mim, e eu não sou gestor) — bloqueia a CRIAÇÃO de encaminhamento nela. O
@@ -127,12 +136,35 @@ const montarTextoEncaminhamento = (enc: Encaminhamento): string => {
   ].filter(Boolean).join('\n');
 };
 
+/** `Encaminhamento` (o que a tela carrega) → o que a folha pede. */
+function paraImpressao(enc: Encaminhamento) {
+  const { destino, interno } = getDestino(enc);
+  return {
+    id: enc.id, especialidade: enc.especialidade, motivo: enc.motivo,
+    destino, interno,
+    urgencia:      enc.urgencia,
+    urgenciaLabel: (URGENCIA_BADGE[enc.urgencia] ?? URGENCIA_BADGE.NORMAL).label,
+    status:        enc.status,
+    statusLabel:   STATUS_FOLHA[enc.status] ?? enc.status,
+    dataEncaminhamento: enc.dataEncaminhamento,
+    observacao:  enc.observacao,
+    veterinario: enc.veterinario ? { fullName: enc.veterinario.fullName } : null,
+  };
+}
+
+// O status no PAPEL é escrito por extenso: a folha vai para fora do sistema, e
+// "PENDENTE" em caixa alta é vocabulário de banco, não de documento.
+const STATUS_FOLHA: Record<string, string> = {
+  PENDENTE: 'Pendente', CONCLUIDO: 'Concluído', CANCELADO: 'Cancelado',
+};
+
 // ─── Ações do encaminhamento — UMA declaração para o card e para a tabela ──────
 // `AcaoRegistro` decide a forma por CSS (ícone no desktop, botão com rótulo no
 // mobile), então card e linha renderizam o MESMO componente. Antes eram duas listas
 // idênticas em dois componentes — e divergiam a cada correção.
-function AcoesEncaminhamento({ enc, podeEditar, podeFinalizar, podeCompartilhar, finalizando, onStatus, onFinalizar }: {
+function AcoesEncaminhamento({ enc, animal, podeEditar, podeFinalizar, podeCompartilhar, finalizando, onStatus, onFinalizar }: {
   enc:              Encaminhamento;
+  animal:           AnimalEncaminhamento | null;
   podeEditar:       boolean;
   podeFinalizar:    boolean;
   podeCompartilhar: boolean;
@@ -141,17 +173,29 @@ function AcoesEncaminhamento({ enc, podeEditar, podeFinalizar, podeCompartilhar,
   onFinalizar:      (id: number) => void;
 }) {
   const texto = montarTextoEncaminhamento(enc);
+  const paraFolha = () => paraImpressao(enc);
   return (
     <AcoesRegistro>
       <AcaoRegistro tom="finalizar" icone={CheckSquare} rotulo="Concluir"
         visivel={enc.status === 'PENDENTE' && podeFinalizar} carregando={finalizando}
         onClick={() => onFinalizar(enc.id)} />
-      {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR */}
-      <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp"
-        visivel={podeCompartilhar} onClick={() => abrirWhatsApp(texto)} />
-      <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail"
-        visivel={podeCompartilhar}
-        onClick={() => abrirEmail(`Encaminhamento - ${enc.especialidade}`, texto)} />
+      {/* Compartilhar é saída de conteúdo do sistema: segue IMPRIMIR.
+          🔴 Manda a FOLHA em PDF, anexada — o encaminhamento era o último registro
+          clínico que ainda saía como texto colado na conversa. `gerarHtml` é
+          SÍNCRONO (roda dentro da janela de "user activation" do navegador), então
+          o preparo das imagens vai em `aoPreparar`. */}
+      {podeCompartilhar && (
+        <CompartilharPdfBotoes
+          gerarHtml={() => gerarHtmlEncaminhamento(paraFolha(), animal)}
+          aoPreparar={() => prepararEncaminhamento(animal)}
+          nomeArquivo={`encaminhamento-${enc.id}.pdf`}
+          texto={texto}
+          documento="Encaminhamento"
+          titulo={`Encaminhamento - ${enc.especialidade}`}
+          telefone={animal?.user?.phone}
+          emailPara={animal?.user?.email}
+        />
+      )}
       <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
         visivel={enc.status === 'PENDENTE' && podeEditar}
         onClick={() => onStatus(enc.id, 'CANCELADO')} />
@@ -161,8 +205,9 @@ function AcoesEncaminhamento({ enc, podeEditar, podeFinalizar, podeCompartilhar,
 
 // ─── Card mobile (padrão do Histórico de Evolução Clínica) ─────────────────────
 
-function EncaminhamentoCard({ enc, podeEditar, podeFinalizar, podeCompartilhar, finalizando, erro, onStatus, onFinalizar }: {
+function EncaminhamentoCard({ enc, animal, podeEditar, podeFinalizar, podeCompartilhar, finalizando, erro, onStatus, onFinalizar }: {
   enc:              Encaminhamento;
+  animal:           AnimalEncaminhamento | null;
   podeEditar:       boolean;
   podeFinalizar:    boolean;
   podeCompartilhar: boolean;
@@ -176,7 +221,8 @@ function EncaminhamentoCard({ enc, podeEditar, podeFinalizar, podeCompartilhar, 
   const { destino, interno } = getDestino(enc);
 
   return (
-    <div className="px-4 py-3">
+    // `data-item-lista`: e por ele que a JanelaLista mede a altura de 5 cards.
+    <div data-item-lista className="px-4 py-3">
       <div className="flex items-center justify-between gap-2 mb-1">
         <span className="text-sm font-semibold text-gray-900 truncate">{enc.especialidade}</span>
         <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -214,7 +260,7 @@ function EncaminhamentoCard({ enc, podeEditar, podeFinalizar, podeCompartilhar, 
 
       <div className="mt-2">
         <AcoesEncaminhamento
-          enc={enc} podeEditar={podeEditar} podeFinalizar={podeFinalizar}
+          enc={enc} animal={animal} podeEditar={podeEditar} podeFinalizar={podeFinalizar}
           podeCompartilhar={podeCompartilhar} finalizando={finalizando}
           onStatus={onStatus} onFinalizar={onFinalizar}
         />
@@ -227,8 +273,9 @@ function EncaminhamentoCard({ enc, podeEditar, podeFinalizar, podeCompartilhar, 
 
 // ─── Linha da tabela desktop (padrão do Histórico de Evolução Clínica) ─────────
 
-function EncaminhamentoRow({ enc, podeEditar, podeFinalizar, podeCompartilhar, finalizando, onStatus, onFinalizar }: {
+function EncaminhamentoRow({ enc, animal, podeEditar, podeFinalizar, podeCompartilhar, finalizando, onStatus, onFinalizar }: {
   enc:              Encaminhamento;
+  animal:           AnimalEncaminhamento | null;
   podeEditar:       boolean;
   podeFinalizar:    boolean;
   podeCompartilhar: boolean;
@@ -272,7 +319,7 @@ function EncaminhamentoRow({ enc, podeEditar, podeFinalizar, podeCompartilhar, f
       </td>
       <td className="px-4 py-3">
         <AcoesEncaminhamento
-          enc={enc} podeEditar={podeEditar} podeFinalizar={podeFinalizar}
+          enc={enc} animal={animal} podeEditar={podeEditar} podeFinalizar={podeFinalizar}
           podeCompartilhar={podeCompartilhar} finalizando={finalizando}
           onStatus={onStatus} onFinalizar={onFinalizar}
         />
@@ -693,7 +740,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
 
 // ─── SubModuloEncaminhamento ──────────────────────────────────────────────────
 
-export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucaoDeOutro, onSalvo, pacienteInativo}: Props) {
+export default function SubModuloEncaminhamento({ animalId, animal, evolucaoId, evolucaoDeOutro, onSalvo, pacienteInativo}: Props) {
   const { user } = useAuth();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
 
@@ -876,13 +923,14 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucao
       ) : (
         <>
           {/* Mobile — cards no padrão do Histórico de Evolução Clínica */}
-          <div className="md:hidden divide-y divide-gray-50">
+          <JanelaLista className="md:hidden divide-y divide-gray-50">
             {pageItems.map(enc => {
               const eAutor = enc.veterinario?.id === (user?.id ?? 0);
               return (
                 <EncaminhamentoCard
                   key={enc.id}
                   enc={enc}
+                  animal={animal ?? null}
                   podeEditar={podeEditar && (isGestor || eAutor)}
                   podeFinalizar={podeFinalizar && (isGestor || eAutor)}
                   podeCompartilhar={podeCompartilhar}
@@ -893,10 +941,10 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucao
                 />
               );
             })}
-          </div>
+          </JanelaLista>
 
           {/* Desktop — tabela */}
-          <div className="hidden md:block overflow-x-auto">
+          <JanelaLista className="hidden md:block">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
@@ -919,6 +967,7 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucao
                     <Fragment key={enc.id}>
                       <EncaminhamentoRow
                         enc={enc}
+                        animal={animal ?? null}
                         podeEditar={podeEditar && (isGestor || eAutor)}
                         podeFinalizar={podeFinalizar && (isGestor || eAutor)}
                         podeCompartilhar={podeCompartilhar}
@@ -938,7 +987,7 @@ export default function SubModuloEncaminhamento({ animalId, evolucaoId, evolucao
                 })}
               </tbody>
             </table>
-          </div>
+          </JanelaLista>
 
           {totalPags > 1 && (
             <div className="flex items-center justify-between px-4 py-3 border-t border-gray-50">
