@@ -249,6 +249,52 @@ function coletarListas(blocos) {
   return listas;
 }
 
+// ── Lista OBRIGATÓRIA ───────────────────────────────────────────────────────
+
+/**
+ * A lista precisa de pelo menos UMA linha preenchida para o documento ser emitido.
+ *
+ * 🔴 REGRA PEDIDA em 2026-09-04 para o Atestado de Vacinação (Anexo XI): "obrigar a
+ * preencher pelo menos 1 vacina". Um atestado de vacinação sem nenhuma vacina não é
+ * um documento incompleto — é um documento que NÃO DECLARA NADA, assinado por um
+ * veterinário. Pior ainda depois de `removerVazios` (2026-09-03): a lista vazia é
+ * descartada do snapshot, então o papel sai sem sequer o rótulo, e nada nele acusa
+ * que faltou alguma coisa.
+ *
+ * O gatilho é `fonteOpcoes` — a lista que OFERECE o catálogo da empresa é a lista que
+ * dá razão de ser ao documento (hoje só as vacinas; medicamento/procedimento/exame
+ * seguirão o mesmo molde e a mesma conclusão: receituário sem medicamento é papel em
+ * branco). ⚠️ NÃO vale para toda lista: grupo repetível sem catálogo — "Identificação
+ * do Comprador", itens de uma nota — é acessório em muitos modelos, e exigi-lo
+ * travaria a emissão dos 12 modelos do CFMV por um dado que a norma não pede.
+ *
+ * ⚠️ `conteudo.obrigatoria` VENCE, quando o modelo o traz: é o gancho para o editor
+ * marcar (ou desmarcar) qualquer lista sem depender deste heurístico. Nenhum modelo
+ * grava o campo hoje, e por isso NÃO houve migration nem re-seed.
+ */
+function listaObrigatoria(lista) {
+  if (typeof lista?.obrigatoria === 'boolean') return lista.obrigatoria;
+  return !!lista?.fonteOpcoes;
+}
+
+/**
+ * Linha preenchida = a PRIMEIRA coluna tem conteúdo — é ela que NOMEIA o item (a
+ * vacina, o medicamento). Linha só com observação digitada não é um item: iria para
+ * o papel como um registro sem sujeito.
+ */
+function temLinhaPreenchida(linhas) {
+  return (Array.isArray(linhas) ? linhas : []).some(l => String(l?.[0] ?? '').trim() !== '');
+}
+
+/**
+ * Devolve a PRIMEIRA lista obrigatória que ficou sem nenhuma linha preenchida, ou
+ * `null` quando está tudo certo. `linhasPorChave` é o mapa que a emissão recebe.
+ */
+function listaObrigatoriaVazia(listas, linhasPorChave) {
+  return (Array.isArray(listas) ? listas : [])
+    .find(l => listaObrigatoria(l) && !temLinhaPreenchida(linhasPorChave?.[l.chave])) ?? null;
+}
+
 // ── Preenchimento automático ────────────────────────────────────────────────
 
 const txt = (v) => (v === null || v === undefined ? '' : String(v).trim());
@@ -451,6 +497,9 @@ module.exports = {
   colunasDaLista,
   normalizarFonte,
   coletarListas,
+  listaObrigatoria,
+  temLinhaPreenchida,
+  listaObrigatoriaVazia,
   linhasDaFonte,
   sugerirListas,
   sugerirOpcoes,

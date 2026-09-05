@@ -67,3 +67,53 @@ export function linhaInfoAnimal(
     .filter(Boolean)
     .join(' • ');
 }
+
+export interface AnimalInativavel {
+  nome:     string;
+  /**
+   * Paciente INATIVO — prontuário CONGELADO, em somente leitura.
+   * ⚠️ Nada a ver com `Animal.ativo` (exclusão lógica), em que o paciente SOME de
+   * tudo e por isso nem chega às listas.
+   */
+  inativo?: boolean | null;
+  user?:    { fullName?: string | null } | null;
+}
+
+/**
+ * Rótulo do paciente dentro de um `<option>`: o nome, o proprietário quando pedido
+ * (desempate de XARÁS) e o selo de INATIVO.
+ *
+ * 🔴 O paciente inativo CONTINUA no seletor — ele não some, fica em SOMENTE
+ * LEITURA. Mas sem marca na lista ele é indistinguível de um paciente normal, e a
+ * pessoa só descobre depois de escolher, ao não achar os botões: é a mesma razão do
+ * selo "Somente leitura" no card da lista de Pacientes.
+ * ⚠️ No `<option>` o selo tem de ser TEXTO — o elemento não aceita filho nem estilo
+ * de forma confiável entre navegadores. Onde a lista é desenhada à mão, use badge.
+ */
+export function rotuloOpcaoAnimal(
+  a: AnimalInativavel,
+  { comProprietario = false }: { comProprietario?: boolean } = {},
+): string {
+  let rotulo = a.nome;
+  if (comProprietario) rotulo += ' — ' + (a.user?.fullName ?? '?');
+  if (a.inativo)       rotulo += ' · Inativo';
+  return rotulo;
+}
+
+/**
+ * Paciente que a tela adota SOZINHA quando ninguém escolheu: o primeiro ATIVO da
+ * lista e, não havendo nenhum, o primeiro INATIVO.
+ *
+ * 🔴 O inativo NÃO sai da auto-seleção (a pedido): a clínica cujos pacientes
+ * estão todos congelados abriria a tela sem paciente nenhum, e "nenhum paciente" é
+ * lido como "não tenho pacientes" — que é falso. Ele apenas perde a PREFERÊNCIA:
+ * abrir direto num prontuário congelado, com todos os botões de escrita apagados,
+ * parece defeito de permissão para quem chega na tela.
+ * ⚠️ A ordem da lista continua mandando dentro de cada grupo — este helper escolhe
+ * o GRUPO, não reordena nada.
+ */
+export function animalParaAutoSelecao<T extends { inativo?: boolean | null }>(
+  animais: T[],
+): T | null {
+  return animais.find(a => !a.inativo) ?? animais[0] ?? null;
+}

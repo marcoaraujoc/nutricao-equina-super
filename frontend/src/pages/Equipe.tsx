@@ -292,10 +292,11 @@ const badgeCargo = (cargo: string): string => ({
 
 export default function Equipe() {
   const { user }                                          = useAuth();
-  // Backend (EquipeController.atualizarMembro) bloqueia gestor editando OUTRO gestor —
-  // a própria linha é liberada, e ADMIN da plataforma passa por cima da regra toda.
-  // Mostrar o botão Editar num membro GESTOR alheio para quem não é ADMIN abriria o
-  // modal para um salvar que sempre volta 403.
+  // ⚠️ O backend NÃO bloqueia mais gestor editando OUTRO gestor (2026-09-05): a trava
+  // não protegia nada — o mesmo gestor já podia INCLUIR e INATIVAR outro gestor —, e
+  // só produzia a incoerência relatada ("permite inativar mas não alterar").
+  // `isAdminPlataforma` continua sendo usado no DESBLOQUEIO de conta travada, cuja
+  // regra é outra (`lib/bloqueioLogin.js`) e não mudou.
   const isAdminPlataforma = (user?.role ?? user?.userType ?? '').toUpperCase() === 'ADMIN';
   const [membros,       setMembros]                       = useState<Membro[]>([]);
   // Erro de ação exibido inline (substitui o toast de erro)
@@ -418,15 +419,15 @@ export default function Equipe() {
   };
 
   const handleToggle = (membro: Membro) => {
-    // Inativar exige justificativa; ativar continua direto.
-    if (membro.user.ativo !== false) { setInativando(membro); return; }
-    confirmarToggle(membro);
+    // Os DOIS sentidos exigem justificativa (2026-09-04). Reativar devolve o acesso
+    // de alguém que a clínica tinha tirado — a trilha precisa dizer por quê.
+    setInativando(membro);
   };
 
-  const confirmarToggle = async (membro: Membro, motivo?: string) => {
+  const confirmarToggle = async (membro: Membro, motivo: string) => {
     setTogglingId(membro.id);
     try {
-      await api.patch(`/equipes/membros/${membro.id}/toggle`, motivo ? { motivo } : undefined);
+      await api.patch(`/equipes/membros/${membro.id}/toggle`, { motivo });
       toast.success(membro.user.ativo === false ? 'Usuário ativado' : 'Usuário inativado');
       setInativando(null);
       carregarMembros();
@@ -528,8 +529,10 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
   // conta" — quem administra a equipe pelo celular não conseguia destravar ninguém.
   const acoesDoMembro = (m: Membro) => {
     const ativo      = m.user.ativo !== false;
-    const podeEditarMembro = isGestor
-      && (m.cargo !== 'GESTOR' || isAdminPlataforma || m.user.id === user?.id);
+    // Editar alcança QUALQUER membro da equipe, inclusive outro gestor — espelha o
+    // backend. A senha segue fora disso: o campo só aparece na auto-edição
+    // (`permitirSenha`, mais abaixo), e o backend recusa 403 para terceiros.
+    const podeEditarMembro = isGestor;
     const podeAlternar = podeGerenciarMembros && m.user.id !== user?.id;
     if (!podeEditarMembro && !podeDesbloquearMembro(m) && !podeAlternar) return null;
     return (
@@ -1010,11 +1013,18 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
         />
       )}
 
+      {/* O MESMO modal serve aos dois sentidos — só troca rótulo e tom. Dois modais
+          quase iguais divergiriam na primeira correção (28-g). */}
       <ModalJustificativa
         aberto={!!inativando}
-        titulo="Inativar usuário?"
-        descricao={inativando ? `${inativando.user.fullName} deixa de aparecer como ativo na equipe.` : undefined}
-        acaoLabel="Inativar"
+        titulo={inativando?.user.ativo === false ? 'Reativar usuário?' : 'Inativar usuário?'}
+        descricao={inativando
+          ? (inativando.user.ativo === false
+            ? `${inativando.user.fullName} volta a aparecer como ativo na equipe e recupera o acesso que tinha.`
+            : `${inativando.user.fullName} deixa de aparecer como ativo na equipe.`)
+          : undefined}
+        acaoLabel={inativando?.user.ativo === false ? 'Reativar' : 'Inativar'}
+        tom={inativando?.user.ativo === false ? 'neutro' : 'perigo'}
         processando={togglingId === inativando?.id}
         onConfirmar={(motivo) => { if (inativando) confirmarToggle(inativando, motivo); }}
         onFechar={() => setInativando(null)}

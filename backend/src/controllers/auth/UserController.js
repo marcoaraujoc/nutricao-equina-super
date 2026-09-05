@@ -149,7 +149,14 @@ class UserController {
         await registrarAcessoNegado(req, {
           motivo: 'Login: conta desativada', entidade: 'LOGIN', entidadeId: user.id, emailTentativa: email,
         });
-        return res.status(403).json({ error: 'Conta desativada. Entre em contato com o administrador da equipe.' });
+      // 🔴 MENSAGEM GENÉRICA PARA CONTA DESATIVADA (2026-09-04, a pedido).
+      // "Conta desativada" confirmava a EXISTÊNCIA do e-mail para quem só chutou o
+      // endereço — a mesma enumeração de usuário que o "Usuário ou Senha Inválidos"
+      // do e-mail inexistente existe para evitar. Quem foi desligado de verdade
+      // descobre com o gestor, não pela tela de login.
+      // ⚠️ 401, e não 403: precisa ser indistinguível dos outros dois casos, e o
+      // status faz parte da resposta.
+        return res.status(401).json({ error: 'Usuário ou Senha Inválidos' });
       }
 
       // ── Conta travada por senha errada ───────────────────────────────────
@@ -274,7 +281,14 @@ class UserController {
       // Revalidado aqui: a conta pode ter sido desativada entre a senha e o código.
       if (user.ativo === false) {
         await registrarAcessoNegado(req, { motivo: '2FA: conta desativada', entidade: 'LOGIN', entidadeId: user.id });
-        return res.status(403).json({ error: 'Conta desativada. Entre em contato com o administrador da equipe.' });
+      // 🔴 MENSAGEM GENÉRICA PARA CONTA DESATIVADA (2026-09-04, a pedido).
+      // "Conta desativada" confirmava a EXISTÊNCIA do e-mail para quem só chutou o
+      // endereço — a mesma enumeração de usuário que o "Usuário ou Senha Inválidos"
+      // do e-mail inexistente existe para evitar. Quem foi desligado de verdade
+      // descobre com o gestor, não pela tela de login.
+      // ⚠️ 401, e não 403: precisa ser indistinguível dos outros dois casos, e o
+      // status faz parte da resposta.
+        return res.status(401).json({ error: 'Usuário ou Senha Inválidos' });
       }
       if (await acessoBloqueado(user)) {
         await registrarAcessoNegado(req, { motivo: '2FA: acesso ao sistema desativado pelo gestor', entidade: 'LOGIN', entidadeId: user.id });

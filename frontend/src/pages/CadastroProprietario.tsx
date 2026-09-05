@@ -191,8 +191,15 @@ export default function CadastroProprietario() {
     } finally { setSaving(false); }
   };
 
+  // Inativar junto os animais do cliente — pergunta feita NO MESMO gesto da
+  // inativação (2026-09-04). Antes era automático e ninguém era consultado.
+  const [inativarAnimais, setInativarAnimais] = useState(true);
+
   const handleRemoverDaEmpresa = (p: Proprietario) => {
     if (!podeRemover) { semPermissao('inativar proprietário'); return; }
+    // Volta ao padrão (marcado) a cada abertura: a escolha é DESTE cliente, e herdar
+    // a da inativação anterior é o caminho curto para inativar animais sem querer.
+    setInativarAnimais(true);
     setConfirmRemov(p);
   };
 
@@ -202,7 +209,7 @@ export default function CadastroProprietario() {
     setConfirmRemov(null);
     try {
       // Inativação exige justificativa (registrada na Auditoria)
-      await api.delete(`/cadastro/proprietarios/${p.id}`, { data: { motivo } });
+      await api.delete(`/cadastro/proprietarios/${p.id}`, { data: { motivo, inativarAnimais } });
       toast.success('Proprietário inativado');
       carregar();
     } catch (err: unknown) {
@@ -531,8 +538,27 @@ export default function CadastroProprietario() {
         aberto={confirmRemov != null}
         titulo="Inativar proprietário"
         descricao={confirmRemov
-          ? `${confirmRemov.fullName} — todos os animais deste proprietário cadastrados na empresa serão inativados e ele não aparecerá mais nesta lista. Ele continuará existindo no sistema e poderá ser re-associado via novos cadastros de animais.`
+          ? `${confirmRemov.fullName} não aparecerá mais nesta lista. Ele continuará existindo no sistema e poderá ser re-associado via novos cadastros de animais.`
           : undefined}
+        extra={
+          <label className="flex items-start gap-2.5 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={inativarAnimais}
+              onChange={e => setInativarAnimais(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-red-600"
+            />
+            <span className="text-xs text-gray-700">
+              <span className="font-semibold">Inativar também os animais deste proprietário</span>
+              <span className="block text-gray-500 mt-0.5">
+                Marcado, todos os pacientes dele nesta empresa são inativados e as
+                pendências em aberto (agendamento, prescrição, vacina, exame e
+                encaminhamento) são canceladas. Desmarcado, os animais continuam
+                ativos e nada do prontuário é tocado.
+              </span>
+            </span>
+          </label>
+        }
         acaoLabel="Inativar"
         onConfirmar={handleRemoverConfirmado}
         onFechar={() => setConfirmRemov(null)}
@@ -545,6 +571,7 @@ export default function CadastroProprietario() {
           ? `${confirmReativ.fullName} volta a aparecer normalmente na empresa. Os animais dele que foram inativados junto na remoção NÃO são reativados automaticamente — cada um se reativa separadamente, em Pacientes.`
           : undefined}
         acaoLabel="Reativar"
+        tom="neutro"
         onConfirmar={handleReativarConfirmado}
         onFechar={() => setConfirmReativ(null)}
       />

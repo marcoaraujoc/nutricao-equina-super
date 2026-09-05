@@ -239,7 +239,9 @@ const TratadorController = {
       // Mesma auditoria de Fornecedor/Prestador (lib/auditoria.js) — quem foi
       // (in)ativado, quando (timestamp da própria linha) e quem fez a ação.
       await registrarAuditoria(prisma, req, {
-        categoria: 'ALTERACAO',
+        // A categoria diz O QUE ACONTECEU: (in)ativar um cadastro não é a mesma
+        // coisa que editar um campo dele, e ALTERACAO misturava os dois.
+        categoria: vaiInativar ? 'INATIVACAO' : 'ATIVACAO',
         entidade:  'TRATADOR',
         entidadeId: existe.id,
         motivo:    vaiInativar ? motivo.trim() : null,

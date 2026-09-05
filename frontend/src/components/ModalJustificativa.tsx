@@ -14,7 +14,7 @@
 // responde "por que perdemos pacientes?". O que chega ao backend continua sendo UMA
 // string (o contrato não muda), composta como `Motivo — descrição`.
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import ErroAcao, { type ErroAcaoDados } from './ErroAcao';
 import { AlertTriangle, X, ChevronDown } from 'lucide-react';
 
@@ -40,6 +40,23 @@ interface ModalJustificativaProps {
       no topo da página ficaria atrás deste overlay e o usuário não veria. */
   erro?: ErroAcaoDados | string | null;
   /**
+   * Conteúdo EXTRA acima da justificativa — uma decisão que acompanha a ação e
+   * precisa ser tomada no mesmo gesto (ex.: "inativar também os animais deste
+   * proprietário?"). Fica no CALLER: é ele que sabe o que perguntar e o que fazer
+   * com a resposta; o modal só reserva o lugar.
+   * ⚠️ Perguntar em DOIS diálogos seguidos (um confirm + este) foi descartado —
+   * duas caixas para uma decisão só é o caminho curto para alguém confirmar no
+   * automático sem ler a segunda.
+   */
+  extra?: ReactNode;
+  /**
+   * `perigo` (padrão) = vermelho, para excluir/cancelar/inativar.
+   * `neutro` = emerald, para a ação que NÃO destrói nada mas ainda exige motivo —
+   * hoje a REATIVAÇÃO de um cadastro. Vermelho ali diria à pessoa que ela está
+   * prestes a apagar alguma coisa.
+   */
+  tom?: 'perigo' | 'neutro';
+  /**
    * `motivo` = a DESCRIÇÃO livre. `motivoTipo` = a CATEGORIA escolhida no seletor
    * (undefined no modo texto livre).
    *
@@ -62,6 +79,8 @@ export default function ModalJustificativa({
   motivoLabel = 'Motivo',
   processando = false,
   erro = null,
+  extra,
+  tom = 'perigo',
   onConfirmar,
   onFechar,
 }: ModalJustificativaProps) {
@@ -83,12 +102,17 @@ export default function ModalJustificativa({
     ? (!!selecionado && (!descricaoObrigatoria || temDescricao))
     : temDescricao;
 
+  const perigo = tom === 'perigo';
+  const clsCabecalho = perigo ? 'bg-red-600' : 'bg-emerald-600';
+  const clsAcao      = perigo ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700';
+  const clsFoco      = perigo ? 'focus:ring-red-500' : 'focus:ring-emerald-500';
+
 
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md flex flex-col max-h-[88vh] overflow-hidden">
-        <div className="bg-red-600 px-5 py-3.5 rounded-t-2xl flex items-center justify-between flex-shrink-0">
+        <div className={`${clsCabecalho} px-5 py-3.5 rounded-t-2xl flex items-center justify-between flex-shrink-0`}>
           <div className="flex items-center gap-2">
             <AlertTriangle size={15} className="text-white/90" />
             <p className="font-bold text-sm text-white">{titulo}</p>
@@ -98,6 +122,8 @@ export default function ModalJustificativa({
 
         <div className="p-5 space-y-4 overflow-y-auto">
           {descricao && <p className="text-sm text-gray-700">{descricao}</p>}
+
+          {extra}
 
           {usaSeletor && (
             <div>
@@ -109,7 +135,7 @@ export default function ModalJustificativa({
                   autoFocus
                   value={selecionado}
                   onChange={(e) => setSelecionado(e.target.value)}
-                  className="w-full appearance-none border border-gray-300 rounded-xl px-3 py-2 pr-9 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className={`w-full appearance-none border border-gray-300 rounded-xl px-3 py-2 pr-9 text-sm bg-white focus:outline-none focus:ring-2 ${clsFoco}`}
                 >
                   <option value="">Selecione o motivo...</option>
                   {motivos!.map(m => <option key={m.valor} value={m.valor}>{m.valor}</option>)}
@@ -137,7 +163,7 @@ export default function ModalJustificativa({
                   ? (descricaoObrigatoria ? 'Descreva o motivo (obrigatório)...' : 'Detalhe, se quiser (opcional)...')
                   : placeholder
               }
-              className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 resize-none"
+              className={`w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 ${clsFoco} resize-none`}
             />
             <p className="text-[10px] text-gray-400 mt-1">
               {usaSeletor && !descricaoObrigatoria
@@ -163,7 +189,7 @@ export default function ModalJustificativa({
           <button
             onClick={() => onConfirmar(motivo.trim(), usaSeletor ? selecionado : undefined)}
             disabled={processando || !motivoValido}
-            className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold disabled:opacity-50">
+            className={`px-6 py-2.5 ${clsAcao} text-white rounded-xl text-sm font-semibold disabled:opacity-50`}>
             {processando ? 'Processando...' : acaoLabel}
           </button>
           </div>

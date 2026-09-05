@@ -76,7 +76,7 @@ async function seedProcedimentos(prisma) {
          "tipoProcedimento", duracao, "requerAnestesia", "requerInternacao",
          risco, "valorCusto", "valorVenda", especie, ativo,
          "createdAt", "updatedAt")
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW(),NOW())
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW() AT TIME ZONE 'UTC',NOW() AT TIME ZONE 'UTC')
       ON CONFLICT (codigo) WHERE codigo IS NOT NULL DO UPDATE SET
         nome             = EXCLUDED.nome,
         "nomeAbreviado"  = EXCLUDED."nomeAbreviado",
@@ -92,7 +92,7 @@ async function seedProcedimentos(prisma) {
         "valorVenda"     = EXCLUDED."valorVenda",
         especie          = EXCLUDED.especie,
         ativo            = EXCLUDED.ativo,
-        "updatedAt"      = NOW()
+        "updatedAt"      = NOW() AT TIME ZONE 'UTC'
     `,
       row.codigo,
       row.nome,

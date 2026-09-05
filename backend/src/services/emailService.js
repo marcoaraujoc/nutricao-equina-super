@@ -4,11 +4,15 @@
 // método abaixo) mora em messaging/emailProvider.js — mesmo princípio do
 // whatsappProvider.js/StorageProvider. `getEmailProvider().enviar(opts)` aceita
 // o MESMO shape que nodemailer.sendMail sempre recebeu aqui.
-const { getEmailProvider } = require('../messaging/emailProvider');
+const { getEmailProvider, remetente } = require('../messaging/emailProvider');
 const { FUSO_PADRAO } = require('../lib/fusoEmpresa');
 
-// Checagem síncrona ("dá pra enviar?") — delega ao provider ativo; hoje é o
+// Checagem síncrona ("dá pra enviar?") — delega ao provider ativo; no SMTP é o
 // mesmo teste de EMAIL_USER/EMAIL_PASS que sempre foi.
+//
+// 🔴 O REMETENTE sai de `remetente()`, NUNCA de `process.env.EMAIL_USER`: com o
+// Gmail os dois coincidiam, mas Brevo/SES/Mailgun geram um LOGIN SMTP que não é
+// endereço de envio. Ver messaging/emailProvider.js.
 const podeEnviar = () => getEmailProvider().estaConfigurado();
 
 const emailService = {
@@ -16,7 +20,7 @@ const emailService = {
   // Checagem RÁPIDA e síncrona (sem rede) — "o SMTP está configurado?" Usada
   // por quem gera um PDF (Puppeteer, caro) antes de tentar mandar por e-mail,
   // para não pagar o custo do PDF só para descobrir depois que não há como
-  // enviar (mesmo padrão de WhatsAppProvider#estaProntoParaEnviar).
+  // enviar (mesmo padrão de WhatsAppProvider#prontidaoParaEnviar).
   estaConfigurado: podeEnviar,
 
   // ── Código de verificação em duas etapas (2FA) ────────────────────────────
@@ -29,7 +33,7 @@ const emailService = {
     const primeiroNome = String(nome ?? '').trim().split(' ')[0] || 'você';
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      email,
       subject: `${codigo} é o seu código de acesso S2Vet`,
       text:    `Seu código de acesso S2Vet é ${codigo}. Ele expira em ${validadeMin} minutos. Se não foi você que tentou entrar, troque sua senha.`,
@@ -81,7 +85,7 @@ const emailService = {
       : `<pre style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px;color:#991b1b;white-space:pre-wrap;font-size:13px;margin:0;">${erro ?? 'Erro desconhecido.'}</pre>`;
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      destinatarios,
       subject: `[S2Vet] Cron ${ok ? 'OK' : 'ERRO'} — ${nome}`,
       html: `
@@ -117,7 +121,7 @@ const emailService = {
     const destinatarios = Array.isArray(para) ? para.join(',') : para;
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      destinatarios,
       subject: `[S2Vet] CRMV não encontrado no CFMV — ${nome ?? 'cadastro'}`,
       html: `
@@ -205,7 +209,7 @@ const emailService = {
          deste animal na plataforma.`;
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      proprietarioEmail,
       subject: assuntoEmail,
       html: `
@@ -275,7 +279,7 @@ const emailService = {
       : '';
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      email,
       subject: `[S2Vet] Você foi convidado para a equipe — ${equipeNome}`,
       html: `
@@ -359,7 +363,7 @@ const emailService = {
     `;
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      email,
       subject: `[S2Vet] Você foi convidado para acessar a plataforma`,
       html: `
@@ -433,7 +437,7 @@ const emailService = {
     ` : '';
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      email,
       subject: `[S2Vet] Seu acesso de Gestor está pronto`,
       html: `
@@ -482,7 +486,7 @@ const emailService = {
     const loginUrl = `${appUrl}/#/login`;
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      destinatarioEmail,
       subject: '[S2Vet] Sua conta foi criada — bem-vindo(a)!',
       html: `
@@ -541,7 +545,7 @@ const emailService = {
     const appUrl = process.env.APP_URL || 'http://localhost:5173';
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      destinatarioEmail,
       subject: `[S2Vet] ${nomeAnimal} agora está sob sua responsabilidade`,
       html: `
@@ -583,7 +587,7 @@ const emailService = {
     const pdfBuffer = Buffer.from(pdfBase64, 'base64');
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      emailDestinatario,
       subject: `[S2Vet] Plano de Dieta — ${nomeAnimal}`,
       html: `
@@ -637,7 +641,7 @@ const emailService = {
     const pdfBuffer = Buffer.from(pdfBase64, 'base64');
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      emailDestinatario,
       subject: assunto,
       html: `
@@ -692,7 +696,7 @@ const emailService = {
       : '';
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      email,
       subject: `[S2Vet] Você foi adicionado à equipe — ${equipeNome}`,
       html: `
@@ -750,7 +754,7 @@ const emailService = {
       : null;
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      vetEmail,
       subject: `[S2Vet] Novo agendamento — ${animalNome} · ${horaFmt}`,
       html: `
@@ -825,7 +829,7 @@ const emailService = {
       </tr>`).join('');
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      paraEmail,
       subject: assunto,
       html: `
@@ -894,7 +898,7 @@ const emailService = {
       : `[S2Vet] Nova evolução aberta em paralelo — ${paciente}`;
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      paraEmail,
       subject: assunto,
       html: `
@@ -956,7 +960,7 @@ const emailService = {
     const paciente = animalNome ?? 'Paciente';
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      paraEmail,
       subject: `[S2Vet] Atendimento assumido fora do expediente — ${paciente}`,
       html: `
@@ -1008,7 +1012,7 @@ const emailService = {
       : null;
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      proprietarioEmail,
       subject: `[S2Vet] Lembrete: consulta de ${animalNome} amanhã às ${horaFmt}`,
       html: `
@@ -1063,7 +1067,7 @@ const emailService = {
     if (!podeEnviar()) return;
 
     await getEmailProvider().enviar({
-      from:    `"S2Vet" <${process.env.EMAIL_USER}>`,
+      from:    remetente(),
       to:      proprietarioEmail,
       subject: assunto || `[S2Vet] Sua fatura está disponível`,
       text:    `${corpo ? corpo + '\n\n' : ''}Abra sua fatura em: ${url}`,

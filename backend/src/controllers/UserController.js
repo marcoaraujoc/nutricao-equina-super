@@ -871,6 +871,52 @@ const UserController = {
     }
   },
 
+  /**
+   * GET /api/users/:id/assinatura-profissional
+   * Identidade de quem ASSINA um documento clínico impresso/PDF (prescrição,
+   * vacina, exame): nome, CRMV e a imagem da assinatura escaneada — sempre do
+   * VÍNCULO com a empresa do contexto (§36-f), nunca de `users`.
+   *
+   * POR QUÊ existe: o documento clínico é assinado pelo profissional que o
+   * PRESCREVEU, e não por quem está imprimindo — então não serve o `marca` de
+   * `GET /documentos/contexto/:animalId`, que devolve o do usuário logado.
+   *
+   * ⚠️ Escopo é a empresa ATIVA: sem vínculo nela, responde 404 (o mesmo que
+   * "não existe"), nunca a assinatura que a pessoa tem em outra clínica —
+   * carimbar num papel a assinatura cadastrada noutro lugar é falsificação.
+   * ⚠️ Sem assinatura cadastrada devolve `assinaturaUrl: null`, e a folha sai
+   * com a linha em branco para assinar à mão. É o correto, não defeito.
+   */
+  assinaturaProfissional: async (req, res) => {
+    try {
+      const userId = Number(req.params.id);
+      if (!Number.isInteger(userId) || userId <= 0) {
+        return res.status(400).json({ success: false, error: 'Profissional inválido.' });
+      }
+      if (!req.empresaId) {
+        return res.status(200).json({ success: true, dados: null });
+      }
+
+      const [vinculo, assinaturaUrl] = await Promise.all([
+        perfilDaEmpresa(userId, req.empresaId).catch(() => null),
+        lerAssinatura(userId, req.empresaId).catch(() => null),
+      ]);
+      if (!vinculo) return res.status(404).json({ success: false, error: 'Profissional sem cadastro nesta empresa.' });
+
+      return res.json({
+        success: true,
+        dados: {
+          nome:          vinculo.fullName ?? null,
+          crmv:          vinculo.crmv ?? null,
+          assinaturaUrl: assinaturaUrl ?? null,
+        },
+      });
+    } catch (error) {
+      console.error('Erro em assinaturaProfissional:', error);
+      return res.status(500).json({ success: false, error: 'Erro ao carregar a assinatura do profissional' });
+    }
+  },
+
 alterarSenha: async (req, res) => {
     const { senhaAtual, novaSenha } = req.body;
 

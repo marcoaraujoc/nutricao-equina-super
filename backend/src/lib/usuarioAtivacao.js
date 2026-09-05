@@ -62,13 +62,23 @@ async function temColunaMotivo() {
  * silencioso (o usuário nunca ativava/inativava, sem erro nenhum). A trilha
  * (quem/quando) é só um EXTRA best-effort por cima do estado real.
  */
-async function registrarAtivacao(client, userId, porUserId) {
+/**
+ * ⚠️ `global: false` grava SÓ a trilha (quem/quando), sem tocar `users.ativo`.
+ *
+ * 🔴 É o modo da (in)ativação POR EMPRESA (2026-09-04). `users.ativo` é a identidade
+ * global: usá-lo para tirar alguém de UMA clínica fechava o login em TODAS — inclusive
+ * naquelas em que a pessoa é GESTORA. Quem passa `global: false` grava o estado onde
+ * ele pertence (`tb_usuario_empresa.ativo` + `tb_profissional_perfis.ativo`) e usa
+ * estes helpers apenas pelo rastro. O modo global continua sendo o do ADMIN da
+ * plataforma, que desliga a CONTA.
+ */
+async function registrarAtivacao(client, userId, porUserId, { global = true } = {}) {
   if (!(await temColunas())) {
-    await client.$executeRawUnsafe(`UPDATE schs2vet.users SET ativo = true WHERE id = $1`, Number(userId));
+    if (global) await client.$executeRawUnsafe(`UPDATE schs2vet.users SET ativo = true WHERE id = $1`, Number(userId));
     return;
   }
   await client.$executeRawUnsafe(
-    `UPDATE schs2vet.users SET ativo = true, ativo_em = now(), ativo_por_id = $1 WHERE id = $2`,
+    `UPDATE schs2vet.users SET ${global ? 'ativo = true, ' : ''}ativo_em = now(), ativo_por_id = $1 WHERE id = $2`,
     Number(porUserId), Number(userId),
   );
 }
@@ -78,20 +88,21 @@ async function registrarAtivacao(client, userId, porUserId) {
  * exigida por `EquipeController.toggleMembro`). Mesma garantia de best-effort
  * acima para a trilha básica; `motivo` só é gravado quando a coluna já existe.
  */
-async function registrarInativacao(client, userId, porUserId, motivo = null) {
+async function registrarInativacao(client, userId, porUserId, motivo = null, { global = true } = {}) {
+  const setAtivo = global ? 'ativo = false, ' : '';
   if (!(await temColunas())) {
-    await client.$executeRawUnsafe(`UPDATE schs2vet.users SET ativo = false WHERE id = $1`, Number(userId));
+    if (global) await client.$executeRawUnsafe(`UPDATE schs2vet.users SET ativo = false WHERE id = $1`, Number(userId));
     return;
   }
   if (motivo != null && (await temColunaMotivo())) {
     await client.$executeRawUnsafe(
-      `UPDATE schs2vet.users SET ativo = false, inativo_em = now(), inativo_por_id = $1, inativo_motivo = $2 WHERE id = $3`,
+      `UPDATE schs2vet.users SET ${setAtivo}inativo_em = now(), inativo_por_id = $1, inativo_motivo = $2 WHERE id = $3`,
       Number(porUserId), motivo, Number(userId),
     );
     return;
   }
   await client.$executeRawUnsafe(
-    `UPDATE schs2vet.users SET ativo = false, inativo_em = now(), inativo_por_id = $1 WHERE id = $2`,
+    `UPDATE schs2vet.users SET ${setAtivo}inativo_em = now(), inativo_por_id = $1 WHERE id = $2`,
     Number(porUserId), Number(userId),
   );
 }

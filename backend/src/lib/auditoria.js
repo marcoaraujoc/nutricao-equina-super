@@ -34,7 +34,11 @@ const { comEscopoPlataforma } = require('./prismaTenant');
 //                  capability URL (ex.: link público de fatura) e o token era válido.
 //                  Registrado por `registrarAcessoPublico`, mesmo molde fire-and-forget
 //                  em escopo de plataforma — não há req.user/req.empresaId aqui.
-const CATEGORIAS = ['EXCLUSAO', 'CANCELAMENTO', 'AJUSTE', 'CONFIGURACAO', 'TRANSFERENCIA', 'ALTERACAO', 'CRIACAO', 'EXECUCAO', 'ACESSO_NEGADO', 'EXPORTACAO', 'ACESSO_PUBLICO'];
+// ⚠️ INATIVACAO/ATIVACAO nasceram em 2026-09-05: inativar e ATIVAR um paciente
+// gravavam os dois como 'CANCELAMENTO', então a auditoria dizia "CANCELAMENTO ANIMAL"
+// para quem tinha acabado de REATIVAR o prontuário — o oposto do que aconteceu.
+// A ação exibida na tela é `${categoria} ${entidade}`, ou seja, a categoria É o rótulo.
+const CATEGORIAS = ['EXCLUSAO', 'CANCELAMENTO', 'INATIVACAO', 'ATIVACAO', 'AJUSTE', 'CONFIGURACAO', 'TRANSFERENCIA', 'ALTERACAO', 'CRIACAO', 'EXECUCAO', 'ACESSO_NEGADO', 'EXPORTACAO', 'ACESSO_PUBLICO'];
 
 /**
  * Extrai o IP de origem do request de forma consistente com o `trust proxy`

@@ -729,3 +729,61 @@ describe('fonte prescricao.controlados', () => {
     expect(rotuloDaLista(b)).toBe('Medicamentos sujeitos a controle especial');
   });
 });
+
+// ─── Lista obrigatória ───────────────────────────────────────────────────────
+// "Obrigar a preencher pelo menos 1 vacina" no Atestado de Vacinação (2026-09-04).
+// O que estes casos travam é o LIMITE da regra: ela vale para a lista que oferece o
+// catálogo da empresa e NÃO para todo grupo repetível — exigi-la de "Identificação
+// do Comprador" travaria a emissão de modelos que a norma não obriga a preencher.
+describe('lista obrigatória', () => {
+  const {
+    listaObrigatoria, temLinhaPreenchida, listaObrigatoriaVazia, coletarListas: coletar,
+  } = require('../lib/documentoListas');
+
+  const blocoVacinas = {
+    id: 'lv', tipo: 'listaCampos', visivel: true, estilo: {},
+    conteudo: {
+      rotulo: 'Vacinas aplicadas', formato: 'campos', fonteOpcoes: 'empresa.vacinas',
+      colunas: ['Nome comercial da vacina', 'Vacinação contra', 'Observação'],
+    },
+  };
+  const blocoComprador = {
+    id: 'lc', tipo: 'listaCampos', visivel: true, estilo: {},
+    conteudo: { rotulo: 'Identificação do Comprador', colunas: ['Nome', 'RG'] },
+  };
+
+  it('🔴 a lista com catálogo da empresa é obrigatória; o grupo repetível comum, não', () => {
+    const [vac] = coletar([blocoVacinas]);
+    const [com] = coletar([blocoComprador]);
+    expect(listaObrigatoria(vac)).toBe(true);
+    expect(listaObrigatoria(com)).toBe(false);
+  });
+
+  it('`obrigatoria` declarada no modelo VENCE o heurístico, nos dois sentidos', () => {
+    expect(listaObrigatoria({ fonteOpcoes: 'empresa.vacinas', obrigatoria: false })).toBe(false);
+    expect(listaObrigatoria({ fonteOpcoes: null, obrigatoria: true })).toBe(true);
+  });
+
+  it('linha preenchida é a que tem a PRIMEIRA coluna — só observação não é uma vacina', () => {
+    expect(temLinhaPreenchida([])).toBe(false);
+    expect(temLinhaPreenchida([['', '', '']])).toBe(false);
+    expect(temLinhaPreenchida([['', '', 'aplicada no pescoço']])).toBe(false);
+    expect(temLinhaPreenchida([['Influenza equina', '', '']])).toBe(true);
+  });
+
+  it('acusa a lista vazia pelo RÓTULO, e libera assim que uma vacina é informada', () => {
+    const listas = coletar([blocoVacinas, blocoComprador]);
+    const vazio = listaObrigatoriaVazia(listas, {});
+    expect(vazio && vazio.rotulo).toBe('Vacinas aplicadas');
+
+    const preenchido = listaObrigatoriaVazia(listas, {
+      [listas[0].chave]: [['Influenza equina', 'Influenza', '']],
+    });
+    expect(preenchido).toBeNull();
+  });
+
+  it('o comprador em branco NÃO impede a emissão', () => {
+    const listas = coletar([blocoComprador]);
+    expect(listaObrigatoriaVazia(listas, {})).toBeNull();
+  });
+});

@@ -121,6 +121,36 @@ export const linhaTemAlgo = (l: string[]): boolean => l.some(c => String(c ?? ''
 /** Uma linha vazia do tamanho certo, para o repetidor abrir com algo onde digitar. */
 export const linhaVazia = (colunas: string[]): string[] => colunas.map(() => '');
 
+// ── Lista OBRIGATÓRIA ────────────────────────────────────────────────────────
+// ⚠️ ESPELHO de `backend/src/lib/documentoListas.js` — a regra é a MESMA nos dois
+// lados e o backend é a autoridade (ele recusa a emissão com `LISTA_OBRIGATORIA`).
+// Aqui ela existe para a tela avisar ANTES, com o campo à vista: descobrir que
+// faltou a vacina só depois do Salvar custa o formulário inteiro de volta.
+
+/**
+ * A lista precisa de ao menos UMA linha preenchida para o documento ser emitido.
+ * Gatilho: `fonteOpcoes` — a lista que oferece o catálogo da empresa é a que dá razão
+ * de ser ao documento (o Atestado de Vacinação sem vacina não declara nada). Grupo
+ * repetível sem catálogo continua opcional. `obrigatoria` no modelo vence, quando vier.
+ */
+export const listaObrigatoria = (l: ListaDocumento & { obrigatoria?: boolean }): boolean =>
+  typeof l.obrigatoria === 'boolean' ? l.obrigatoria : !!l.fonteOpcoes;
+
+/**
+ * Linha preenchida = a PRIMEIRA coluna tem conteúdo — é ela que NOMEIA o item. Linha
+ * só com a observação digitada não é uma vacina.
+ */
+export const temLinhaPreenchida = (linhas?: string[][]): boolean =>
+  (linhas ?? []).some(l => String(l?.[0] ?? '').trim() !== '');
+
+/** A primeira lista obrigatória que ficou sem nenhuma linha, ou `null`. */
+export function listaObrigatoriaVazia(
+  listas: ListaDocumento[],
+  valores: PreenchimentoListas,
+): ListaDocumento | null {
+  return listas.find(l => listaObrigatoria(l) && !temLinhaPreenchida(valores[l.chave])) ?? null;
+}
+
 /**
  * As linhas de um bloco para a PRÉ-VISUALIZAÇÃO: o que já foi preenchido, ajustado ao
  * número de colunas. Sem valores (editor, sem paciente) devolve `null` — quem chama

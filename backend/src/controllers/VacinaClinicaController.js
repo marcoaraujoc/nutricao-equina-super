@@ -773,11 +773,14 @@ async function listarParaExecucao(req, res) {
       // Ela já foi cobrada (e o lote debitado) na finalização — ver a matriz em `finalizar`.
       .filter((v) => v.status === 'FINALIZADA' && v.aplicadaPeloProprietario !== true);
 
-    // 🔴 O PACIENTE INATIVO CONTINUA NA FILA — só SEM AÇÃO. O prontuário dele está
-    // congelado e `executar`/`cancelar` respondem 400 (lib/animalInativo.js), mas
-    // sumir com ele da fila esconderia da equipe que aquele tratamento existe e ficou
-    // parado. Então ele aparece, marcado, e a tela apaga os botões — que é a mesma
-    // regra do resto do sistema: nada que vá falhar é oferecido (28-d).
+    // 🔴 O PACIENTE INATIVO CONTINUA SENDO DEVOLVIDO — sumir com ele daqui
+    // esconderia da equipe que aquela vacina existe e ficou parada.
+    // ⚠️ Quem decide ONDE ele aparece é a TELA, e mudou em 2026-09-05: a vacina de
+    // paciente inativo saiu da fila "a aplicar" e passou a sair no HISTÓRICO, na aba
+    // "Paciente inativo" (ExecucaoPrescricao.tsx#vacinasInativasBase).
+    // NÃO filtrar aqui: sem estas linhas a aba nova nasceria vazia.
+    // O prontuário segue congelado — `executar`/`cancelar` respondem 400
+    // (lib/animalInativo.js) — e a tela não renderiza esses botões (28-d).
     // ⚠️ `animalInativo` é lido por SQL cru (`lerInativosEmLote`), NUNCA pelo `where`
     // do Prisma: `Animal.inativo` é lida assim em todo o projeto porque o client pode
     // não estar regenerado (CLAUDE.md §11), e `where` com campo desconhecido derruba a
@@ -824,15 +827,42 @@ async function listarExecutadasHoje(req, res) {
     const inicioDia = new Date(ano, mes - 1, dia, 0, 0, 0, 0);
     const fimDia     = new Date(ano, mes - 1, dia + 1, 0, 0, 0, 0);
 
+    // 🔴 EXECUÇÃO **E** CANCELAMENTO (2026-09-04). Antes só `EXECUCAO` era lido, e a
+    // vacina cancelada não aparecia em lugar nenhum do Histórico — nem na aba
+    // "Cancelado", que ficava sempre vazia para vacina. Medicamento e procedimento já
+    // apareciam ali; a vacina era a única sem rastro do cancelamento do dia.
+    // ⚠️ O AuditLog é a ÚNICA fonte do QUANDO: `VacinaClinica` não tem coluna de
+    // "executada em" nem de "cancelada em" — o ciclo dela é só o campo `status`.
+    // Por isso o `timestamp` vem daqui e é devolvido como `executadoEm`, que é o que
+    // permite ao Histórico escrever "Executada em 04/09 às 20:08" (a linha da vacina
+    // dizia só "Executada", sem dia nem hora, ao lado das outras duas que diziam).
     const logs = await prisma.auditLog.findMany({
-      where: { categoria: 'EXECUCAO', entidade: 'VACINA', timestamp: { gte: inicioDia, lt: fimDia } },
-      select: { entidadeId: true },
+      where: {
+        categoria: { in: ['EXECUCAO', 'CANCELAMENTO'] },
+        entidade:  'VACINA',
+        timestamp: { gte: inicioDia, lt: fimDia },
+      },
+      select: { entidadeId: true, categoria: true, timestamp: true },
+      orderBy: { timestamp: 'asc' },
     });
     const ids = [...new Set(logs.map((l) => l.entidadeId).filter((v) => v != null))];
     if (ids.length === 0) return res.json({ dados: [] });
 
+    // Quando houve os dois no mesmo dia (executada e depois cancelada), o
+    // CANCELAMENTO é o estado final e é ele que a linha deve mostrar.
+    const quando = {};
+    for (const l of logs) {
+      const atual = quando[l.entidadeId];
+      if (!atual || (l.categoria === 'CANCELAMENTO' && atual.categoria !== 'CANCELAMENTO')) {
+        quando[l.entidadeId] = { categoria: l.categoria, timestamp: l.timestamp };
+      }
+    }
+
+    // ⚠️ SEM `ativo: true` e SEM `status: 'EXECUTADA'` no `where`: cancelar a vacina
+    // faz `ativo: false` (exclusão lógica), então esses dois filtros eram justamente o
+    // que escondia a cancelada. O recorte passou a ser feito abaixo, item a item.
     const vacinas = await prisma.vacinaClinica.findMany({
-      where: { id: { in: ids }, ativo: true, status: 'EXECUTADA' },
+      where: { id: { in: ids } },
       include: {
         ...INCLUDE_VACINA,
         animal: {
@@ -858,7 +888,23 @@ async function listarExecutadasHoje(req, res) {
     );
     const extrasMap = Object.fromEntries(extras.map((e) => [e.id, e]));
 
-    res.json({ dados: vacinas.map((v) => ({ ...v, ...extrasMap[v.id] })) });
+    // Recorte final: entra a vacina EXECUTADA que ainda está ativa, e a CANCELADA
+    // naquele dia (que está inativa por definição). Fica de fora o registro que
+    // apenas passou pelo log e não está em nenhum dos dois estados.
+    const dados = vacinas
+      .map((v) => {
+        const extra = extrasMap[v.id] ?? {};
+        const reg   = quando[v.id] ?? null;
+        return {
+          ...v,
+          ...extra,
+          cancelada:   reg?.categoria === 'CANCELAMENTO',
+          executadoEm: reg?.timestamp ?? null,
+        };
+      })
+      .filter((v) => (v.cancelada ? true : v.ativo && v.status === 'EXECUTADA'));
+
+    res.json({ dados });
   } catch (err) {
     console.error('listarExecutadasHoje vacinas:', err);
     res.status(500).json({ error: 'Erro ao listar vacinas executadas hoje' });

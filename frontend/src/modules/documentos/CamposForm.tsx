@@ -7,7 +7,8 @@
 // controle, e a primeira correção de tipo (`date` × `time`) valeria para uma só.
 
 import { Plus, Trash2 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import DateInput from '../../components/DateInput';
 import { brParaISO, isoParaBR } from '../../utils/dateUtils';
 import { buscarEnderecoPorCep, digitosDoCep, mascaraCep } from '../../utils/viaCep';
@@ -255,6 +256,69 @@ export function ListaCamposInput({
   const [aberto, setAberto] = useState<number | null>(null);
   const [busca, setBusca] = useState('');
   const [criando, setCriando] = useState(false);
+
+  // 🔴 O DROPDOWN VAI PARA UM PORTAL, fora da tabela (corrigido em 2026-09-04).
+  // Ele era `absolute` dentro da célula e a lista abria RECORTADA "dentro do card":
+  // os dois contêineres acima da tabela criam contexto de recorte
+  // (`overflow-hidden` na moldura e `overflow-x-auto` no rolamento horizontal das
+  // sete colunas), e recorte de overflow vence z-index — não existe `z-*` que
+  // resolva. Sair para `document.body` com `position: fixed` é o mesmo remédio já
+  // usado no seletor da tela de Faturamento.
+  // ⚠️ Preço do portal: a lista deixa de acompanhar o campo sozinha. Daí as duas
+  // coisas abaixo — remedir a cada scroll/resize e fechar no clique fora (ela não é
+  // mais descendente do input, então nenhum `blur` a alcança).
+  const [caixa, setCaixa] = useState<{ topo: number; esquerda: number; largura: number; altura: number } | null>(null);
+  const inputsRef = useRef<Record<number, HTMLInputElement | null>>({});
+  const listaRef  = useRef<HTMLDivElement>(null);
+
+  const medir = (i: number) => {
+    const el = inputsRef.current[i];
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    // Abre para CIMA quando não sobra espaço embaixo — na última linha da tabela a
+    // lista nasceria fora da janela e a pessoa não veria opção nenhuma.
+    const abaixo = window.innerHeight - r.bottom - 8;
+    const acima  = r.top - 8;
+    const paraCima = abaixo < 180 && acima > abaixo;
+    const altura = Math.max(120, Math.min(224, paraCima ? acima : abaixo));
+    setCaixa({
+      topo:     paraCima ? r.top - 4 - altura : r.bottom + 4,
+      esquerda: r.left,
+      largura:  r.width,
+      altura,
+    });
+  };
+
+  const abrirEm = (i: number) => { setAberto(i); medir(i); };
+
+  // `true` no listener de scroll: a tabela e o modal do documento rolam por dentro,
+  // e esse scroll não borbulha até `window` sem a fase de captura — sem isso a
+  // lista ficaria parada no lugar enquanto o campo desce.
+  useEffect(() => {
+    if (aberto === null) return;
+    const remedir = () => medir(aberto);
+    remedir();
+    window.addEventListener('scroll', remedir, true);
+    window.addEventListener('resize', remedir);
+    return () => {
+      window.removeEventListener('scroll', remedir, true);
+      window.removeEventListener('resize', remedir);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aberto]);
+
+  // Clique fora fecha — checa os DOIS nós (campo + lista), porque no portal a lista
+  // não é mais descendente do input no DOM.
+  useEffect(() => {
+    if (aberto === null) return;
+    const onClickFora = (e: MouseEvent) => {
+      const alvo = e.target as Node;
+      if (inputsRef.current[aberto]?.contains(alvo) || listaRef.current?.contains(alvo)) return;
+      setAberto(null);
+    };
+    document.addEventListener('mousedown', onClickFora);
+    return () => document.removeEventListener('mousedown', onClickFora);
+  }, [aberto]);
   // Opções cadastradas AGORA — entram na lista sem esperar a tela recarregar, que é
   // o que faz a vacina recém-criada aparecer já selecionada.
   const [novas, setNovas] = useState<OpcaoLista[]>([]);
@@ -366,47 +430,20 @@ export function ListaCamposInput({
                            CADASTRA — o mesmo gesto da tela de Vacina. Um `<select>`
                            puro deixava a vacina que a empresa ainda não tem fora do
                            alcance de quem está emitindo o atestado dela. */
-                        <div className="relative min-w-[14rem]">
+                        <div className="min-w-[14rem]">
                           <input
+                            ref={el => { inputsRef.current[i] = el; }}
                             value={aberto === i ? busca : (linha[0] ?? '')}
-                            onChange={e => { setBusca(e.target.value); setAberto(i); alterar(i, 0, e.target.value); }}
-                            onFocus={e => { setAberto(i); setBusca(linha[0] ?? ''); e.target.select(); }}
+                            onChange={e => { setBusca(e.target.value); abrirEm(i); alterar(i, 0, e.target.value); }}
+                            onFocus={e => { abrirEm(i); setBusca(linha[0] ?? ''); e.target.select(); }}
                             // `focus` não dispara de novo num campo já focado, e a
                             // opção é escolhida em `mousedown` — sem o `onClick` a
                             // lista não reabriria depois da primeira escolha
                             // (armadilha do combo da Agenda, §12).
-                            onClick={() => setAberto(i)}
+                            onClick={() => abrirEm(i)}
                             placeholder={`Selecione ou digite`}
                             className="w-full border border-transparent hover:border-gray-200 focus:border-emerald-500 rounded-lg px-2 py-1.5 text-sm transition-colors focus:outline-none"
                           />
-                          {aberto === i && (
-                            <div className="absolute z-30 mt-1 w-full max-h-56 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg">
-                              {filtradas(busca).slice(0, 60).map(o => (
-                                <button
-                                  key={o.rotulo}
-                                  type="button"
-                                  onMouseDown={e => { e.preventDefault(); escolherOpcao(i, o.rotulo); setAberto(null); setBusca(''); }}
-                                  className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-emerald-50"
-                                >
-                                  {o.rotulo}
-                                </button>
-                              ))}
-                              {onCriarOpcao && podeCriar(busca) && (
-                                <button
-                                  type="button"
-                                  disabled={criando}
-                                  onMouseDown={e => { e.preventDefault(); void criarEEscolher(i, busca); }}
-                                  className="w-full flex items-center gap-1.5 px-3 py-2 text-left text-sm font-semibold text-emerald-700 border-t border-gray-100 hover:bg-emerald-50 disabled:opacity-50"
-                                >
-                                  <Plus size={13} />
-                                  {criando ? 'Cadastrando…' : `Cadastrar “${busca.trim()}”`}
-                                </button>
-                              )}
-                              {filtradas(busca).length === 0 && !(onCriarOpcao && podeCriar(busca)) && (
-                                <p className="px-3 py-2 text-xs text-gray-400">Nenhum item encontrado.</p>
-                              )}
-                            </div>
-                          )}
                         </div>
                       ) : ehColunaDeData(col) ? (
                         /* Mesma regra do campo solto (§6): DD/MM/AAAA sempre, e o
@@ -461,6 +498,53 @@ export function ListaCamposInput({
           <Plus size={13} /> Adicionar {lista.rotulo.toLowerCase()}
         </button>
       </div>
+
+      {/* Lista do combobox — UMA só, fora da tabela, ancorada por `caixa` na linha
+          aberta (`aberto` é o índice, e só uma abre por vez). No portal ela escapa
+          do recorte dos contêineres de overflow e passa por cima do modal do
+          documento — daí o `z-[80]`, acima do `z-[70]` de `ModalPreencher`. */}
+      {aberto !== null && caixa && createPortal(
+        <div
+          ref={listaRef}
+          style={{
+            position:  'fixed',
+            top:       caixa.topo,
+            left:      caixa.esquerda,
+            width:     caixa.largura,
+            maxHeight: caixa.altura,
+          }}
+          className="z-[80] overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg"
+        >
+          {filtradas(busca).slice(0, 60).map(o => (
+            <button
+              key={o.rotulo}
+              type="button"
+              // `mousedown` + `preventDefault`: o foco nunca sai do campo, então
+              // escolher no catálogo não fecha a lista por blur antes do clique
+              // registrar (mesmo motivo do combo da Agenda).
+              onMouseDown={e => { e.preventDefault(); escolherOpcao(aberto, o.rotulo); setAberto(null); setBusca(''); }}
+              className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-emerald-50"
+            >
+              {o.rotulo}
+            </button>
+          ))}
+          {onCriarOpcao && podeCriar(busca) && (
+            <button
+              type="button"
+              disabled={criando}
+              onMouseDown={e => { e.preventDefault(); void criarEEscolher(aberto, busca); }}
+              className="w-full flex items-center gap-1.5 px-3 py-2 text-left text-sm font-semibold text-emerald-700 border-t border-gray-100 hover:bg-emerald-50 disabled:opacity-50"
+            >
+              <Plus size={13} />
+              {criando ? 'Cadastrando…' : `Cadastrar “${busca.trim()}”`}
+            </button>
+          )}
+          {filtradas(busca).length === 0 && !(onCriarOpcao && podeCriar(busca)) && (
+            <p className="px-3 py-2 text-xs text-gray-400">Nenhum item encontrado.</p>
+          )}
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

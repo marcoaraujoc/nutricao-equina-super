@@ -6,6 +6,7 @@ const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
 const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
 const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
+const { definirAtivoNaEmpresa } = require('../lib/usuarioEmpresa');
 
 // Whitelist fixa SAIU (2026-08-25) — o tipo de fornecedor agora vem do catálogo
 // tenant-scoped (tb_catalogo_tipo_servico, CatalogoTipoServicoController), que
@@ -373,10 +374,28 @@ const FornecedorController = {
         await registrarAtivacao(prisma, 'fornecedor', existe.id, req.user.id);
       }
 
+      // 🔴 O FORNECEDOR COM LOGIN PERDE (E RECUPERA) O ACESSO À EMPRESA JUNTO
+      // (2026-09-04, a pedido: "o fornecedor que for desativado não poderá mais
+      // acessar os dados da empresa"). Até aqui o toggle mexia só em
+      // `tb_fornecedores.ativo` — o cadastro sumia da lista, mas o vínculo de
+      // `tb_usuario_empresa` continuava valendo e ele seguia entrando na clínica e
+      // enxergando os pacientes designados a ele.
+      // ⚠️ Vale SÓ para o cadastro ligado a um login (`Fornecedor.userId`): fornecedor
+      // que é só um cadastro de compras não tem acesso nenhum a tirar.
+      // ⚠️ O que ele JÁ FEZ na empresa não é tocado — encaminhamento, exame e
+      // designação continuam como estão, e é assim que o histórico se mantém íntegro.
+      //   A designação inativa sozinha quando o encaminhamento é concluído; inativá-la
+      //   aqui reescreveria registro clínico por causa de uma mudança de cadastro.
+      if (existe.userId && existe.empresaId) {
+        await definirAtivoNaEmpresa(prisma, existe.userId, existe.empresaId, !vaiInativar);
+      }
+
       // Mesma auditoria de Equipe (lib/auditoria.js) — quem foi (in)ativado, quando
       // (timestamp da própria linha) e quem fez (userId/userName/email da linha).
       await registrarAuditoria(prisma, req, {
-        categoria: 'ALTERACAO',
+        // A categoria diz O QUE ACONTECEU: (in)ativar um cadastro não é a mesma
+        // coisa que editar um campo dele, e ALTERACAO misturava os dois.
+        categoria: vaiInativar ? 'INATIVACAO' : 'ATIVACAO',
         entidade:  'FORNECEDOR',
         entidadeId: existe.id,
         motivo:    vaiInativar ? motivo.trim() : null,

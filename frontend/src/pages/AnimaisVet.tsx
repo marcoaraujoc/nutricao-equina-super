@@ -37,20 +37,28 @@ interface Animal {
   raca?:            { nome: string } | null;
   especie?:         { nome: string } | null;
   user?:            { fullName: string; email: string } | null;
-  // Exclusão lógica (Animal.ativo) — abas Ativos/Inativos/Todos, só para gestor/
-  // admin. Paciente inativo some de qualquer outra tela do sistema. É o ÚNICO
-  // status exibido nesta tela — mesmo padrão de Fornecedor/Tratador/Prestador
-  // (lib/cadastroAtivacao.js). O bloqueio de somente-leitura (Animal.inativo,
-  // rotulado "Bloqueado") não é exibido nem alternado aqui.
+  /**
+   * Exclusão lógica (`Animal.ativo = false`) — o paciente some de TODAS as telas.
+   *
+   * 🔴 **PREMISSA: ANIMAL NUNCA É EXCLUÍDO** (decisão de 2026-09-05). Esta tela
+   * não cria mais esse estado — o botão "Inativar" passou a CONGELAR o prontuário
+   * (`inativo`, abaixo). O campo continua aqui porque a base tem pacientes excluídos
+   * ANTES da premissa: sem o "Ativar" deles, ficariam presos nesse estado para
+   * sempre. Eles dividem a aba "Inativos" com os congelados.
+   * ⚠️ Não reintroduzir ação de excluir paciente em tela nenhuma.
+   */
   ativo?:           boolean;
   /**
-   * Bloqueio SOMENTE LEITURA (`Animal.inativo`) — OUTRO recurso, e não a exclusão
-   * lógica acima: o paciente continua aparecendo em tudo, com o prontuário congelado
-   * na data/hora da inativação. Aqui ele só ganha o selo — quem inativa/reativa são
-   * as ações da tela do paciente.
+   * INATIVO (`Animal.inativo`) — prontuário CONGELADO na data/hora da inativação:
+   * o paciente continua aparecendo INTEIRO em todas as telas (inclusive no seletor
+   * de paciente do Atendimento, marcado), com o histórico visível, mas nada novo é
+   * criado, alterado, finalizado ou cancelado até o gestor reativar.
+   * É o estado que o botão "Inativar" desta tela produz.
    */
   inativo?:         boolean;
   inativoEm?:       string | null;
+  inativoMotivo?:   string | null;
+  inativoPor?:      { fullName?: string | null } | null;
   dataCadastro?:    string;
   ativoEm?:            string | null;
   ativoPorNome?:        string | null;
@@ -87,33 +95,115 @@ const idadeDisplay = (animal: Animal): string => {
 // ─── Ações do paciente — UMA declaração p/ a tabela E p/ o card ───────────────
 // `AcaoRegistro` decide a forma por CSS: ícone no desktop, botão com rótulo no
 // mobile (onde antes eram ícones soltos, empilhados na lateral do card).
-// ⚠️ Paciente INATIVO só oferece "Ativar" — editar um registro inativo é o caminho
-// errado: primeiro se reativa, aí se edita.
-function AcoesAnimalVet({ animal, podeEditar, podeExcluir, podeReativarExcluido, onEditar, onExcluir, onReativarExcluido }: {
+// ⚠️ Paciente INATIVO só oferece "Ativar" — editar o cadastro de um paciente
+// congelado é recusado pelo backend (400): primeiro se reativa, aí se edita.
+// 🔴 NÃO existe ação de EXCLUIR aqui — animal nunca é excluído. O "Ativar" do
+// paciente excluído fica porque a base tem exclusões anteriores à premissa, e sem
+// ele não haveria como trazê-las de volta.
+function AcoesAnimalVet({
+  animal, podeEditar, podeInativar, podeAtivar, podeReativarExcluido,
+  onEditar, onInativar, onAtivar, onReativarExcluido,
+}: {
   animal:               Animal;
   podeEditar:           boolean;
-  podeExcluir:          boolean;
+  podeInativar:         boolean;
+  podeAtivar:           boolean;
   podeReativarExcluido: boolean;
   onEditar:             () => void;
-  onExcluir:            () => void;
+  onInativar:           () => void;
+  onAtivar:             () => void;
   onReativarExcluido:   () => void;
 }) {
   const excluido = animal.ativo === false;
+  const congelado = !excluido && animal.inativo === true;
   return (
     <AcoesRegistro>
-      <AcaoRegistro tom="ativar" icone={ToggleLeft} rotulo="Ativar" titulo="Ativar paciente"
+      {/* Excluído (legado): o único caminho é desfazer a exclusão. */}
+      <AcaoRegistro tom="ativar" icone={ToggleLeft} rotulo="Ativar"
+        titulo="Trazer o paciente de volta às listagens"
         visivel={excluido && podeReativarExcluido} onClick={onReativarExcluido} />
+      {/* Congelado: reativa o prontuário. */}
+      <AcaoRegistro tom="ativar" icone={ToggleLeft} rotulo="Ativar"
+        titulo="Reativar o prontuário — volta a aceitar registros"
+        visivel={congelado && podeAtivar} onClick={onAtivar} />
       <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
-        visivel={!excluido && podeEditar} onClick={onEditar} />
-      <AcaoRegistro tom="ativar" icone={ToggleRight} rotulo="Inativar" titulo="Inativar paciente"
-        visivel={!excluido && podeExcluir} onClick={onExcluir} />
+        visivel={!excluido && !congelado && podeEditar} onClick={onEditar} />
+      <AcaoRegistro tom="ativar" icone={ToggleRight} rotulo="Inativar"
+        titulo="Inativar — o paciente continua visível, em somente leitura"
+        visivel={!excluido && !congelado && podeInativar} onClick={onInativar} />
     </AcoesRegistro>
   );
 }
 
+/**
+ * Os TRÊS estados possíveis do paciente, cada um com o seu selo.
+ *
+ * ⚠️ O selo diz o STATUS, e o status de quem foi inativado é **"Inativo"** — a ação
+ * chama "Inativar" e o resultado tem de usar a mesma palavra (a pedido, 2026-09-05;
+ * uma versão com "Somente leitura" no selo foi recusada — isso é a CONSEQUÊNCIA, e
+ * ela continua dita na faixa âmbar do Atendimento e no chip do card).
+ * ⚠️ O CONGELADO (`inativo`, âmbar) e o `ativo = false` (vermelho) não são o mesmo
+ * estado: o primeiro continua visível em todo o sistema, o segundo não aparece em
+ * tela nenhuma. Como os dois vivem na aba "Inativos" (ver `pacienteInativo`), o que
+ * os separa é a COR e o `title`.
+ * ⚠️ A palavra "Excluído" NÃO aparece na interface: animal nunca é excluído, e
+ * nomear o estado assim contradiria a premissa na única tela em que ele sobrevive.
+ */
+function seloStatus(animal: Animal): { texto: string; classe: string; titulo: string } {
+  if (animal.ativo === false) {
+    return {
+      texto:  'Inativo',
+      classe: 'bg-red-100 text-red-700',
+      titulo: 'Fora das listagens — este paciente não aparece em nenhuma outra tela.',
+    };
+  }
+  if (animal.inativo) {
+    return {
+      texto:  'Inativo',
+      classe: 'bg-amber-100 text-amber-700',
+      titulo: 'Prontuário em somente leitura — o paciente continua visível em todo o sistema.',
+    };
+  }
+  return { texto: 'Ativo', classe: 'bg-emerald-100 text-emerald-700', titulo: 'Paciente ativo.' };
+}
+
+/**
+ * O paciente conta como INATIVO para as abas e para a transparência da linha?
+ *
+ * 🔴 Os DOIS estados entram (a pedido, 2026-09-05): o CONGELADO (`inativo`, que é o
+ * que o botão "Inativar" produz hoje) e o `ativo = false` legado. Quem clica em
+ * "Inativar" procura o paciente na aba **Inativos** — e o congelado é `ativo = true`,
+ * então até aqui ele ficava na aba Ativos, onde ninguém ia procurá-lo.
+ * ⚠️ Por isso a aba deixou de ser o parâmetro `?ativo=` do backend e virou filtro DE
+ * TELA: as duas condições moram em colunas diferentes e nenhuma query única as cobre.
+ */
+function pacienteInativo(a: Animal): boolean {
+  return a.ativo === false || !!a.inativo;
+}
+
+/**
+ * O rastro da inativação — de qual das duas colunas ele vem.
+ * O congelamento grava `inativo_em`/`inativo_motivo`/`inativo_por`; a exclusão lógica
+ * (legado) grava `desativado_em`/`desativado_motivo`/`desativado_por_nome`.
+ */
+function rastroInativacao(a: Animal): { em: string | null; por: string | null; motivo: string } {
+  if (a.inativo) {
+    return {
+      em:     a.inativoEm ?? null,
+      por:    a.inativoPor?.fullName ?? null,
+      motivo: a.inativoMotivo?.trim() ?? '',
+    };
+  }
+  return {
+    em:     a.desativadoEm ?? null,
+    por:    a.desativadoPorNome ?? null,
+    motivo: justificativaDe(a),
+  };
+}
+
 function AnimalCardMobile({
   animal, filtroAtivo, isGestor, onDashboard, onEditar, podeEditar,
-  podeExcluir, podeReativarExcluido, onExcluir, onReativarExcluido,
+  podeInativar, podeAtivar, podeReativarExcluido, onInativar, onAtivar, onReativarExcluido,
 }: {
   animal:        Animal;
   filtroAtivo:   FiltroAtivo;
@@ -121,16 +211,21 @@ function AnimalCardMobile({
   onDashboard:   () => void;
   onEditar:      () => void;
   podeEditar:    boolean;
-  podeExcluir:          boolean;
+  podeInativar:         boolean;
+  podeAtivar:           boolean;
   podeReativarExcluido: boolean;
-  onExcluir:            () => void;
+  onInativar:           () => void;
+  onAtivar:             () => void;
   onReativarExcluido:   () => void;
 }) {
-  const excluido = animal.ativo === false;
+  const inativo = pacienteInativo(animal);
+  const selo    = seloStatus(animal);
+  const rastro  = rastroInativacao(animal);
   return (
-    <div className={`bg-white rounded-2xl border shadow-sm p-4 ${
-      excluido ? 'border-red-200 bg-red-50/30 opacity-75' : 'border-gray-100'
-    }`}>
+    // Transparência do inativado — a MESMA de `/equipe` (`opacity-60`, sem tingir o
+    // fundo). Vinha em dois tons próprios (vermelho e âmbar) que não existiam em
+    // nenhuma outra lista de cadastro.
+    <div className={`bg-white rounded-2xl border border-gray-100 shadow-sm p-4 ${inativo ? 'opacity-60' : ''}`}>
       <div className="flex items-center gap-3">
       <div className="w-14 h-14 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
         <FotoAnimal url={animal.photoUrl} nome={animal.nome} animalId={animal.id} />
@@ -139,10 +234,9 @@ function AnimalCardMobile({
       <div className="flex-1 min-w-0" onClick={onDashboard}>
         <div className="flex items-center gap-1.5 flex-wrap">
           <p className="font-semibold text-gray-900 truncate">{animal.nome}</p>
-          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${
-            excluido ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'
-          }`}>
-            {excluido ? 'Inativo' : 'Ativo'}
+          <span title={selo.titulo}
+            className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${selo.classe}`}>
+            {selo.texto}
           </span>
         </div>
         {animal.user?.fullName && (
@@ -164,26 +258,17 @@ function AnimalCardMobile({
             </span>
           )}
         </div>
-        {/* 🔴 SELO do prontuário congelado. Sem ele o paciente inativo é
-            indistinguível de um normal na lista, e a pessoa só descobre ao abrir o
-            atendimento e não achar os botões. */}
-        {animal.inativo && !excluido && (
-          <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 mt-1 inline-block">
-            Somente leitura
-            {animal.inativoEm ? ` — inativado em ${formatDate(animal.inativoEm)}` : ''}
-          </p>
-        )}
-        {isGestor && filtroAtivo === 'ativo' && !excluido && (
+        {isGestor && filtroAtivo === 'ativo' && !inativo && (
           <p className="text-[11px] text-gray-400 mt-1">
             Criado em {formatDate(animal.dataCadastro)}
             {animal.ativoPorNome ? ` · Ativado em ${formatDate(animal.ativoEm ?? animal.dataCadastro)} por ${animal.ativoPorNome}` : ''}
           </p>
         )}
-        {isGestor && filtroAtivo === 'inativo' && excluido && (
+        {isGestor && filtroAtivo === 'inativo' && inativo && (
           <p className="text-[11px] text-gray-400 mt-1">
-            Inativado em {formatDate(animal.desativadoEm)}
-            {animal.desativadoPorNome ? ` por ${animal.desativadoPorNome}` : ''}
-            {justificativaDe(animal) ? <> — <JustificativaCancelamento texto={justificativaDe(animal)} className="inline" /></> : ''}
+            Inativado em {formatDate(rastro.em)}
+            {rastro.por ? ` por ${rastro.por}` : ''}
+            {rastro.motivo ? <> — <JustificativaCancelamento texto={rastro.motivo} className="inline" /></> : ''}
           </p>
         )}
       </div>
@@ -194,9 +279,11 @@ function AnimalCardMobile({
           espremiam o nome do paciente assim que ganharam rótulo. */}
       <div className="mt-3 pt-3 border-t border-gray-50">
         <AcoesAnimalVet
-          animal={animal} podeEditar={podeEditar} podeExcluir={podeExcluir}
+          animal={animal} podeEditar={podeEditar}
+          podeInativar={podeInativar} podeAtivar={podeAtivar}
           podeReativarExcluido={podeReativarExcluido}
-          onEditar={onEditar} onExcluir={onExcluir} onReativarExcluido={onReativarExcluido}
+          onEditar={onEditar} onInativar={onInativar} onAtivar={onAtivar}
+          onReativarExcluido={onReativarExcluido}
         />
       </div>
     </div>
@@ -221,11 +308,13 @@ const AnimaisVet = () => {
   const { podeExecutar, isGestor, temEquipe, loading: loadingPerms } = usePermissoes();
   const podeCriarAnimal                              = podeExecutar('animais.criar');
   const podeEditarAnimal                             = podeExecutar('animais.editar');
-  // Inativar/Ativar (exclusão lógica — Animal.ativo, some de toda tela do sistema):
-  // inativar segue o slug de exclusão; ativar (desfazer) é SEMPRE gestor — mesma
-  // regra fixa do backend (AnimalController.reativarExcluido). É o ÚNICO status
-  // desta tela, no mesmo padrão de Fornecedor/Tratador/Prestador.
-  const podeExcluirAnimal                            = podeExecutar('animais.deletar');
+  // 🔴 Inativar = CONGELAR o prontuário (`Animal.inativo`), não excluir: o paciente
+  // continua em todas as telas, em somente leitura. Segue `animais.ativar`, que é o
+  // slug que a rota `PATCH /animais/:id/inativar` exige.
+  // Reativar (os dois casos) é SEMPRE gestor — regra fixa do backend, não
+  // configurável pela matriz (AnimalController.ativar / .reativarExcluido).
+  const podeInativarAnimal                           = podeExecutar('animais.ativar');
+  const podeAtivarAnimal                             = isGestor;
   const podeReativarExcluido                         = isGestor;
   const navigate                                     = useNavigate();
 
@@ -239,7 +328,7 @@ const AnimaisVet = () => {
   const [filtroLocal,    setFiltroLocal]    = useState(searchParams.get('local') ?? '');
   const [filtroCampo,    setFiltroCampo]    = useState<FiltroCampo>('animal');
   const [loading,        setLoading]        = useState(true);
-  // Abas Todos/Ativos/Inativos (Animal.ativo) — só o gestor/admin enxerga; para
+  // Abas Todos/Ativos/Inativos (congelado OU `ativo=false`) — só o gestor enxerga; para
   // qualquer outro perfil a lista é sempre só os ativos (backend também trava isso).
   const [filtroAtivo,    setFiltroAtivo]    = useState<FiltroAtivo>('ativo');
   // Erro de ação exibido inline (substitui o toast de erro)
@@ -248,29 +337,53 @@ const AnimaisVet = () => {
   // veterinário e animal para desfazer. O paciente pertence à EMPRESA, e quem deixa de
   // atendê-lo é quem sai da equipe.
 
-  // ── Inativar / Ativar paciente (exclusão lógica — Animal.ativo) ─────────────
-  const [modalExcluir,  setModalExcluir]  = useState<Animal | null>(null);
+  // ── Inativar / Ativar paciente (congelamento — Animal.inativo) ─────────────
+  const [modalInativar, setModalInativar] = useState<Animal | null>(null);
+  const [modalAtivar,   setModalAtivar]   = useState<Animal | null>(null);
+  // Desfazer a EXCLUSÃO de um paciente excluído antes da premissa "animal nunca é
+  // excluído" — nada nesta tela cria mais esse estado, mas é preciso poder sair dele.
   const [modalReativar, setModalReativar] = useState<Animal | null>(null);
   const [processandoAtivo, setProcessandoAtivo] = useState(false);
   const [erroModalAtivo,   setErroModalAtivo]   = useState<ErroAcaoDados | null>(null);
 
   const fecharModaisAtivo = () => {
-    setModalExcluir(null); setModalReativar(null); setErroModalAtivo(null);
+    setModalInativar(null); setModalAtivar(null); setModalReativar(null);
+    setErroModalAtivo(null);
   };
 
-  const confirmarExcluir = async (motivo: string, motivoTipo?: string) => {
-    if (!modalExcluir) return;
+  const confirmarInativar = async (motivo: string, motivoTipo?: string) => {
+    if (!modalInativar) return;
     setProcessandoAtivo(true); setErroModalAtivo(null);
     try {
-      // `motivoTipo` vai SEPARADO da descrição: é a categoria que o relatório agrupa,
-      // e no banco ela tem coluna e índice próprios.
-      await api.delete(`/animais/${modalExcluir.id}`, { data: { motivo, motivoTipo } });
-      toast.success('Paciente inativado com sucesso');
+      // ⚠️ Categoria e descrição vão COMPOSTAS num texto só: `Animal.inativo_motivo`
+      // é uma coluna única (diferente de `desativado_motivo`/`_tipo`, da exclusão, que
+      // são duas). Sem compor, escolher "Falecimento" sem escrever nada mandaria
+      // `motivo` VAZIO e o backend recusaria com "é obrigatório informar o motivo".
+      const texto = [motivoTipo, motivo].map(t => t?.trim()).filter(Boolean).join(' — ');
+      // CONGELA o prontuário — não exclui. O paciente continua em todas as telas
+      // (inclusive no seletor do Atendimento, marcado como "Inativo"), só que nada
+      // novo pode ser registrado nem alterado até o gestor reativar.
+      await api.patch(`/animais/${modalInativar.id}/inativar`, { motivo: texto });
+      toast.success('Paciente inativado — prontuário em somente leitura');
       fecharModaisAtivo();
       await loadAnimais();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
       setErroModalAtivo({ mensagem: msg ?? 'Erro ao inativar paciente' });
+    } finally { setProcessandoAtivo(false); }
+  };
+
+  const confirmarAtivar = async (motivo: string) => {
+    if (!modalAtivar) return;
+    setProcessandoAtivo(true); setErroModalAtivo(null);
+    try {
+      await api.patch(`/animais/${modalAtivar.id}/ativar`, { motivo });
+      toast.success('Paciente ativado — o prontuário voltou a aceitar registros');
+      fecharModaisAtivo();
+      await loadAnimais();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
+      setErroModalAtivo({ mensagem: msg ?? 'Erro ao ativar paciente' });
     } finally { setProcessandoAtivo(false); }
   };
 
@@ -290,9 +403,11 @@ const AnimaisVet = () => {
 
   const loadAnimais = async () => {
     try {
-      const params = isGestor
-        ? { ativo: filtroAtivo === 'all' ? 'all' : filtroAtivo === 'ativo' ? 'true' : 'false' }
-        : undefined;
+      // ⚠️ O gestor recebe TODOS (`ativo=all`) e as abas filtram na TELA — elas
+      // passaram a misturar dois estados que moram em colunas diferentes
+      // (`inativo` e `ativo`), e nenhum valor de `?ativo=` cobre os dois. Bônus:
+      // trocar de aba deixou de custar uma ida ao backend.
+      const params = isGestor ? { ativo: 'all' } : undefined;
       const animaisRes = await api.get('/animais', { params });
       setAnimais(animaisRes.data?.dados ?? animaisRes.data ?? []);
     } catch {
@@ -302,13 +417,19 @@ const AnimaisVet = () => {
     }
   };
 
-  useEffect(() => { if (user?.id && !loadingPerms) loadAnimais(); }, [user?.id, loadingPerms, isGestor, filtroAtivo]);
+  // ⚠️ `filtroAtivo` saiu das dependências: a aba é filtro DE TELA desde que passou a
+  // misturar congelado e `ativo = false` — recarregar a cada clique só gastaria
+  // requisição para reordenar a mesma lista.
+  useEffect(() => { if (user?.id && !loadingPerms) loadAnimais(); }, [user?.id, loadingPerms, isGestor]);
 
   /** Mesma regra do `nomeLocalizacao` do relatório gerencial — as duas telas
    *  precisam concordar sobre o nome do local, senão o link não acha nada. */
   const localDoAnimal = (a: Animal) => a.localizacao?.nome ?? a.local ?? SEM_LOCALIZACAO;
 
   const animaisFiltrados = animais.filter(a => {
+    // Abas Todos/Ativos/Inativos — ver `pacienteInativo`. Só o gestor as vê; para os
+    // demais o backend já devolve só os ativos.
+    if (isGestor && filtroAtivo !== 'all' && (filtroAtivo === 'inativo') !== pacienteInativo(a)) return false;
     // Casa com o nome que o relatório agrupa: catálogo → texto legado → "Sem
     // localização". Comparação EXATA (e não `includes`), senão "Haras H." traria
     // junto o "Haras H. P." e a contagem da tela nunca bateria com a do relatório.
@@ -463,6 +584,10 @@ const AnimaisVet = () => {
                   className={`px-4 py-2.5 font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
                     filtroAtivo === v ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
                   }`}>
+                  {/* ⚠️ "Inativos" reúne os DOIS estados — o CONGELADO (o que o botão
+                      "Inativar" produz) e o `ativo = false` legado. É filtro de TELA,
+                      não o `?ativo=` do backend: eles moram em colunas diferentes.
+                      Ver `pacienteInativo`. */}
                   {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
                 </button>
               ))}
@@ -497,9 +622,11 @@ const AnimaisVet = () => {
                   onDashboard={() => irParaAnimal(animal)}
                   onEditar={() => irParaEditar(animal)}
                   podeEditar={podeEditarAnimal}
-                  podeExcluir={podeExcluirAnimal}
+                  podeInativar={podeInativarAnimal}
+                  podeAtivar={podeAtivarAnimal}
                   podeReativarExcluido={podeReativarExcluido}
-                  onExcluir={() => setModalExcluir(animal)}
+                  onInativar={() => setModalInativar(animal)}
+                  onAtivar={() => setModalAtivar(animal)}
                   onReativarExcluido={() => setModalReativar(animal)}
                 />
               ))}
@@ -537,14 +664,15 @@ const AnimaisVet = () => {
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {animaisFiltrados.map(animal => {
-                      const excluido = animal.ativo === false;
+                      const inativo = pacienteInativo(animal);
+                      const selo    = seloStatus(animal);
+                      const rastro  = rastroInativacao(animal);
                       return (
                       <tr
                         key={animal.id}
                         onClick={() => irParaAnimal(animal)}
-                        className={`hover:bg-gray-50 cursor-pointer transition-colors group ${
-                          excluido ? 'bg-red-50/30 opacity-75' : ''
-                        }`}
+                        /* Transparência do inativado — a MESMA de `/equipe`. */
+                        className={`hover:bg-gray-50 cursor-pointer transition-colors group ${inativo ? 'opacity-60' : ''}`}
                       >
                         <td className="pl-5 py-3.5">
                           <div className="w-11 h-11 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
@@ -577,10 +705,9 @@ const AnimaisVet = () => {
                           <p className="text-sm text-gray-600">{animal.sexo || '—'}</p>
                         </td>
                         <td className="px-3 py-3.5">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                            excluido ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-700'
-                          }`}>
-                            {excluido ? 'Inativo' : 'Ativo'}
+                          <span title={selo.titulo}
+                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${selo.classe}`}>
+                            {selo.texto}
                           </span>
                         </td>
                         {isGestor && filtroAtivo === 'ativo' && (
@@ -592,19 +719,21 @@ const AnimaisVet = () => {
                         )}
                         {isGestor && filtroAtivo === 'inativo' && (
                           <>
-                            <td className="px-3 py-3.5 whitespace-nowrap text-gray-600 text-sm">{formatDate(animal.desativadoEm)}</td>
-                            <td className="px-3 py-3.5 whitespace-nowrap text-gray-600 text-sm">{animal.desativadoPorNome ?? '—'}</td>
-                            <td className="px-3 py-3.5 text-sm"><JustificativaCancelamento texto={justificativaDe(animal)} /></td>
+                            <td className="px-3 py-3.5 whitespace-nowrap text-gray-600 text-sm">{formatDate(rastro.em)}</td>
+                            <td className="px-3 py-3.5 whitespace-nowrap text-gray-600 text-sm">{rastro.por ?? '—'}</td>
+                            <td className="px-3 py-3.5 text-sm"><JustificativaCancelamento texto={rastro.motivo} /></td>
                           </>
                         )}
                         <td className="pr-5 py-3.5" onClick={e => e.stopPropagation()}>
                           <AcoesAnimalVet
                             animal={animal}
                             podeEditar={podeEditarAnimal}
-                            podeExcluir={podeExcluirAnimal}
+                            podeInativar={podeInativarAnimal}
+                            podeAtivar={podeAtivarAnimal}
                             podeReativarExcluido={podeReativarExcluido}
                             onEditar={() => irParaEditar(animal)}
-                            onExcluir={() => setModalExcluir(animal)}
+                            onInativar={() => setModalInativar(animal)}
+                            onAtivar={() => setModalAtivar(animal)}
                             onReativarExcluido={() => setModalReativar(animal)}
                           />
                         </td>
@@ -633,10 +762,10 @@ const AnimaisVet = () => {
       </PageContainer>
 
       <ModalJustificativa
-        aberto={!!modalExcluir}
+        aberto={!!modalInativar}
         titulo="Inativar paciente?"
-        descricao={modalExcluir
-          ? `${modalExcluir.nome} deixa de aparecer em qualquer tela do sistema (agenda, busca, relatórios, orçamento...) — igual a uma exclusão, mas reversível. Só o gestor consegue reverter, na aba Inativos.`
+        descricao={modalInativar
+          ? `${modalInativar.nome} continua aparecendo em todo o sistema — inclusive no seletor de paciente —, com o histórico inteiro visível, mas em SOMENTE LEITURA: nada novo pode ser registrado, alterado, finalizado ou cancelado até o gestor reativar.`
           : undefined}
         acaoLabel="Inativar"
         // Motivo padronizado + descrição; a descrição só é obrigatória em "Outro".
@@ -644,17 +773,33 @@ const AnimaisVet = () => {
         motivoLabel="Motivo da inativação"
         processando={processandoAtivo}
         erro={erroModalAtivo}
-        onConfirmar={confirmarExcluir}
+        onConfirmar={confirmarInativar}
+        onFechar={fecharModaisAtivo}
+      />
+
+      <ModalJustificativa
+        aberto={!!modalAtivar}
+        titulo="Ativar paciente?"
+        descricao={modalAtivar
+          ? `O prontuário de ${modalAtivar.nome} volta a aceitar registros e alterações.`
+          : undefined}
+        acaoLabel="Ativar"
+        tom="neutro"
+        placeholder="Descreva o motivo da ativação (obrigatório)..."
+        processando={processandoAtivo}
+        erro={erroModalAtivo}
+        onConfirmar={confirmarAtivar}
         onFechar={fecharModaisAtivo}
       />
 
       <ModalJustificativa
         aberto={!!modalReativar}
-        titulo="Ativar paciente?"
+        titulo="Trazer o paciente de volta?"
         descricao={modalReativar
-          ? `${modalReativar.nome} volta a aparecer normalmente em todo o sistema.`
+          ? `${modalReativar.nome} está fora das listagens — não aparece em nenhuma tela. Ativar traz ele e todo o histórico de volta ao sistema.`
           : undefined}
         acaoLabel="Ativar"
+        tom="neutro"
         placeholder="Descreva o motivo da ativação (obrigatório)..."
         processando={processandoAtivo}
         erro={erroModalAtivo}

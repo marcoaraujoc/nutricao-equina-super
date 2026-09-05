@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Pencil, Trash2, Printer, Mic, MicOff, Check, X, ChevronLeft, ChevronRight, AlertTriangle, Share2, FileText, CheckCircle2, Loader2, User, Filter, Eye, Ban, Paperclip, Image, Film, Volume2, Lock, UserCheck, CircleDot } from 'lucide-react';
+import { Pencil, Trash2, Printer, Mic, MicOff, Check, X, ChevronLeft, ChevronRight, AlertTriangle, Share2, FileText, CheckCircle2, Loader2, User, Eye, Ban, Paperclip, Image, Film, Volume2, Lock, UserCheck, CircleDot } from 'lucide-react';
 import CompartilharPdfBotoes from '../components/CompartilharPdfBotoes';
 import {
   gerarHtmlEvolucao, prepararEvolucao,
@@ -207,10 +207,33 @@ export interface AnimalInfo {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const STATUS_OPTIONS: { value: EvolucaoStatus; label: string }[] = [
-  { value: 'EM_ANDAMENTO', label: 'Em Andamento' },
-  { value: 'FINALIZADA',   label: 'Finalizada'   },
-  { value: 'CANCELADA',    label: 'Cancelada'    },
+/**
+ * Abas de STATUS da lista — o mesmo padrão de Prescrição, Vacina e do histórico de
+ * Documentos. Substituem o `<select>` "Status", que era `hidden md:flex`: no celular
+ * não havia filtro de status nenhum, e no desktop ele se perdia entre os outros
+ * controles da barra.
+ *
+ * 🔴 O PADRÃO É "EM ANDAMENTO" (as SALVAS — `FILTRO_STATUS_PADRAO`, a pedido): é a
+ * evolução que o "Salvar" deixa aberta e a única sobre a qual ainda se age. Abrir na
+ * lista inteira misturava o atendimento em curso com o histórico já fechado.
+ * ⚠️ Não há CONTAGEM nas abas (ao contrário de Prescrição/Vacina, que filtram uma
+ * lista já inteira em memória): aqui a lista é PAGINADA e o filtro é do SERVIDOR
+ * (`params.set('status', …)`), então um número tirado da página em tela mentiria.
+ * ⚠️ EM_ANDAMENTO é tolerado por `retratoConfiavel` — é o que permite este padrão sem
+ * quebrar o banner do atendimento ativo no shell. Padrão diferente exigiria rever lá.
+ */
+const FILTRO_STATUS_PADRAO = 'EM_ANDAMENTO';
+
+// "Todas" PRIMEIRO, como em Prescrição e Exames — o que muda entre as três telas é
+// qual aba nasce selecionada, nunca a ordem.
+const STATUS_FILTROS: { value: string; label: string; tomAtivo: string }[] = [
+  { value: '',             label: 'Todas',        tomAtivo: 'bg-emerald-600 text-white border-emerald-600' },
+  { value: 'EM_ANDAMENTO', label: 'Em andamento', tomAtivo: 'bg-emerald-600 text-white border-emerald-600' },
+  // Finalizada AZUL e Cancelada VERMELHA (a pedido, 2026-09-05): a barra passa a dizer
+  // pela cor o que está filtrado — antes toda aba ativa era emerald, e "Canceladas"
+  // selecionada ficava verde.
+  { value: 'FINALIZADA',   label: 'Finalizadas',  tomAtivo: 'bg-blue-600 text-white border-blue-600' },
+  { value: 'CANCELADA',    label: 'Canceladas',   tomAtivo: 'bg-red-600  text-white border-red-600'  },
 ];
 
 const STATUS_CONFIG: Record<EvolucaoStatus, { label: string; cls: string }> = {
@@ -1125,7 +1148,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [page,           setPage]           = useState(1);
   const [limit,          setLimit]          = useState(10);
 
-  const [filterStatus,      setFilterStatus]      = useState('');
+  const [filterStatus,      setFilterStatus]      = useState<string>(FILTRO_STATUS_PADRAO);
   const [filtroDataInicio,  setFiltroDataInicio]  = useState('');
   const [filtroDataFim,     setFiltroDataFim]     = useState('');
   const [filtroResponsavel, setFiltroResponsavel] = useState('');
@@ -1178,7 +1201,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
   const totalPaginas       = Math.ceil(total / limit);
   const temEvolucaoAberta  = !loading && evolucoes.some(e => e.status === 'EM_ANDAMENTO');
-  const filtrosAtivos      = !!(filtroDataInicio || filtroDataFim || filtroResponsavel || filterStatus);
+  // O status tem padrão próprio, então "filtro ativo" é DIVERGIR dele — senão o botão
+  // "Limpar" nasceria aceso em toda abertura da tela, sem nada a limpar.
+  const filtrosAtivos      = !!(filtroDataInicio || filtroDataFim || filtroResponsavel)
+    || filterStatus !== FILTRO_STATUS_PADRAO;
   // Evolução aberta PELO PRÓPRIO usuário × por OUTRO profissional — os dois casos
   // seguem caminhos opostos: a própria BLOQUEIA abrir outra (finalize/cancele antes)
   // e não é assumível; a do outro abre a decisão (assumir × nova em paralelo).
@@ -1968,19 +1994,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           </select>
         </div>
 
-        <div className="hidden md:flex items-center gap-1.5 border border-gray-200 rounded-xl bg-white px-3 py-2 flex-shrink-0">
-          <Filter size={14} className="text-gray-400 flex-shrink-0" />
-          <select value={filterStatus}
-            onChange={e => { setFilterStatus(e.target.value); setPage(1); }}
-            className="text-sm text-gray-700 bg-transparent focus:outline-none">
-            <option value="">Status</option>
-            {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-          </select>
-        </div>
 
         {filtrosAtivos && (
           <button
-            onClick={() => { setFiltroDataInicio(''); setFiltroDataFim(''); setFiltroResponsavel(''); setFilterStatus(''); setPage(1); }}
+            onClick={() => { setFiltroDataInicio(''); setFiltroDataFim(''); setFiltroResponsavel(''); setFilterStatus(FILTRO_STATUS_PADRAO); setPage(1); }}
             className="hidden md:block px-3 py-2 text-xs text-gray-500 hover:text-red-500 border border-gray-200 rounded-xl bg-white transition-colors flex-shrink-0">
             Limpar ×
           </button>
@@ -2032,6 +2049,28 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Histórico de Evolução Clínica</p>
         <span className="text-xs text-gray-400">{total} registro{total !== 1 ? 's' : ''}</span>
+      </div>
+
+      {/* Filtros por status — logo abaixo do título do HISTÓRICO, o mesmo lugar e a
+          mesma pílula de Prescrição e Exames (a pedido). Antes viviam na barra de ação
+          do topo, junto do "Nova Evolução": ali eles filtravam uma lista que só começa
+          bem mais abaixo, e no celular o `<select>` de status nem era renderizado. */}
+      <div className="flex flex-wrap gap-1.5 px-4 py-3 border-b border-gray-50">
+        {STATUS_FILTROS.map(f => {
+          const ativo = filterStatus === f.value;
+          return (
+            <button
+              key={f.value || 'todas'}
+              type="button"
+              onClick={() => { setFilterStatus(f.value); setPage(1); }}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                ativo ? f.tomAtivo
+                      : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+              }`}>
+              {f.label}
+            </button>
+          );
+        })}
       </div>
 
       {loading ? (

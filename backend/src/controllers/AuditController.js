@@ -1,4 +1,19 @@
 const prisma = require('../lib/prisma').default;
+const { aplicarVinculoEmLista } = require('../lib/usuarioEmpresa');
+
+// De qual cadastro sai o NOME do registro que a ação atingiu. `AuditLog.entidadeId`
+// é solto (sem FK — o log sobrevive à exclusão do registro), então não há include a
+// fazer: resolve-se por tipo, com os ids DA PÁGINA, do mesmo jeito que `animalNome`.
+// ⚠️ Entidade que não está aqui devolve `alvoNome: null` e a tela não mostra nada —
+// nunca um palpite. Entidade nova (um cadastro novo, por exemplo) entra nesta tabela.
+const FONTE_DO_ALVO = {
+  USUARIO:      'user',
+  PROPRIETARIO: 'user',
+  FORNECEDOR:   'fornecedor',
+  PRESTADOR:    'prestador',
+  TRATADOR:     'tratador',
+  ANIMAL:       'animal',
+};
 
 class AuditController {
   // ⚠️ `registrar` REMOVIDO em 2026-08-05 junto com a rota pública `POST /api/audit/log`.
@@ -11,7 +26,7 @@ class AuditController {
   // ADMIN: todos os logs (filtro ?empresaId= opcional).
   // GESTOR/dono de empresa: apenas os logs da empresa ativa (req.empresaId).
   // Demais perfis: 403.
-  // Filtros: ?categoria=EXCLUSAO|CANCELAMENTO|AJUSTE|CONFIGURACAO|TRANSFERENCIA|ALTERACAO|CRIACAO|EXECUCAO|ACESSO_NEGADO,
+  // Filtros: ?categoria=EXCLUSAO|CANCELAMENTO|INATIVACAO|ATIVACAO|AJUSTE|CONFIGURACAO|TRANSFERENCIA|ALTERACAO|CRIACAO|EXECUCAO|ACESSO_NEGADO,
   //          ?entidade=, ?busca=, ?dataInicio=, ?dataFim=, ?page=, ?limit=
   async listar(req, res) {
     try {
@@ -99,10 +114,47 @@ class AuditController {
         : [];
       const nomePorId = new Map(animais.map(a => [a.id, a.nome]));
 
-      const dados = logs.map(l => ({
-        ...l,
-        animalNome: l.animalId != null ? (nomePorId.get(l.animalId) ?? null) : null,
+      // Nome do REGISTRO ALVO — QUEM/O QUE a ação atingiu. Sem isto a linha dizia só
+      // quem executou (coluna Usuário): "Fulana inativou" sem dizer inativou quem.
+      // O texto de `detalhes` já trazia o nome, mas ele só aparece no modal Visualizar.
+      const idsPorFonte = new Map();
+      for (const l of logs) {
+        const fonte = l.entidade ? FONTE_DO_ALVO[l.entidade] : null;
+        if (!fonte || l.entidadeId == null) continue;
+        if (!idsPorFonte.has(fonte)) idsPorFonte.set(fonte, new Set());
+        idsPorFonte.get(fonte).add(l.entidadeId);
+      }
+
+      // Chave `fonte:id` — o mesmo id existe em cadastros diferentes, e um mapa só
+      // por id faria o tratador nº 7 aparecer como nome do fornecedor nº 7.
+      const alvoPorChave = new Map();
+      await Promise.all([...idsPorFonte].map(async ([fonte, set]) => {
+        const ids = [...set];
+        if (fonte === 'user') {
+          // §36: o nome do usuário é POR EMPRESA — lê-se o vínculo da empresa do
+          // escopo, nunca o `users.fullName` cru (que é a cópia da criação da conta).
+          // O ADMIN da plataforma não tem empresa no escopo e cai no cadastro global.
+          const users = await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true, ativo: true } });
+          const comVinculo = empresaScope !== undefined ? await aplicarVinculoEmLista(users, empresaScope) : users;
+          for (const u of comVinculo) alvoPorChave.set(`user:${u.id}`, u.fullName || null);
+          return;
+        }
+        const registros = await prisma[fonte].findMany({ where: { id: { in: ids } }, select: { id: true, nome: true } });
+        for (const r of registros) alvoPorChave.set(`${fonte}:${r.id}`, r.nome || null);
       }));
+
+      const dados = logs.map(l => {
+        const fonte = l.entidade ? FONTE_DO_ALVO[l.entidade] : null;
+        return {
+          ...l,
+          animalNome: l.animalId != null ? (nomePorId.get(l.animalId) ?? null) : null,
+          // Registro já excluído de vez fica sem nome: a tela mostra "excluído" em vez
+          // de deixar a linha muda sobre quem foi atingido.
+          alvoNome: fonte && l.entidadeId != null
+            ? (alvoPorChave.get(`${fonte}:${l.entidadeId}`) ?? null)
+            : null,
+        };
+      });
 
       res.json({ dados, meta: { total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) } });
     } catch (error) {

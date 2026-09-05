@@ -713,7 +713,10 @@ export default function SubModuloExames({
     nomes: string[]; resolve: (ok: boolean) => void;
   } | null>(null);
   const [confirmId,    setConfirmId]    = useState<number | null>(null);
-  const [filtroStatus, setFiltroStatus] = useState<FiltroStatusExame>('todos');
+  // Padrão "Solicitados" (`SALVA`), a pedido: é o pedido que ainda espera resultado —
+  // o que a tela existe para acompanhar. "Todos" abria com o histórico inteiro por cima
+  // do que está pendente.
+  const [filtroStatus, setFiltroStatus] = useState<FiltroStatusExame>('SALVA');
   // Visualização vinda do Histórico de Evolução Clínica: popula os campos do
   // formulário da página em SOMENTE LEITURA (sem abrir popup).
   const [exameVisualizando, setExameVisualizando] = useState<ExameClinico | null>(null);
@@ -2132,8 +2135,16 @@ export default function SubModuloExames({
           {FILTROS_EXAME.map(f => {
             const isActive = filtroStatus === f.key;
             let activeClass = 'bg-blue-600 text-white border-blue-600';
-            if (f.key === 'SALVA'     && isActive) activeClass = 'bg-amber-500 text-white border-amber-500';
+            // "Solicitados" ativa em VERDE (a pedido, 2026-09-05): é a aba PADRÃO da
+            // tela, e o emerald é a cor de "em curso" no módulo. O contador âmbar dela
+            // (quando NÃO está ativa) fica: ali o âmbar é o aviso de pendência.
+            if (f.key === 'SALVA'     && isActive) activeClass = 'bg-emerald-600 text-white border-emerald-600';
             if (f.key === 'CANCELADA' && isActive) activeClass = 'bg-red-600 text-white border-red-600';
+            // "Realizados" em AMARELO com texto BRANCO (a pedido), como as demais abas.
+            // ⚠️ Amarelo claro com texto branco não se lê: por isso o fundo é `yellow-600`
+            // e não `yellow-400` — é o tom que mantém o amarelo e ainda deixa o rótulo
+            // legível em branco.
+            if (f.key === 'REALIZADA' && isActive) activeClass = 'bg-yellow-600 text-white border-yellow-600';
             return (
               <button
                 key={f.key}

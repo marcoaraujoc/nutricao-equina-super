@@ -18,13 +18,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
-import toast from 'react-hot-toast';
-import { Pencil, Trash2, MapPin, Search } from 'lucide-react';
+import { Pencil, MapPin, Search } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
-import ModalJustificativa from '../components/ModalJustificativa';
-import { MOTIVOS_INATIVACAO_ANIMAL } from '../utils/motivosInativacao';
 import InlineError from '../components/InlineError';
-import { type ErroAcaoDados } from '../components/ErroAcao';
 import FotoAnimal from '../components/FotoAnimal';
 
 
@@ -67,21 +63,19 @@ const idadeDisplay = (animal: Animal): string => {
 
 const MeusAnimais = () => {
   const { user }                                     = useAuth();
-  const { setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
+  const { setSelectedAnimal }                        = useSelectedAnimal();
   const navigate                                     = useNavigate();
   const { podeExecutar, loading: loadingPerms }      = usePermissoes();
   const podeCriarAnimal  = podeExecutar('animais.criar');
   const podeEditarAnimal = podeExecutar('animais.editar');
-  const podeDeletarAnimal = podeExecutar('animais.deletar');
 
   const [animais,        setAnimais]        = useState<Animal[]>([]);
   const [search,         setSearch]         = useState('');
   const [loading,        setLoading]        = useState(true);
-  const [animalToDelete, setAnimalToDelete] = useState<Animal | null>(null);
   // Erro de CARGA — topo da tela (não veio de clique nenhum)
   const [erroInline, setErroInline] = useState<string | null>(null);
-  // Erro de AÇÃO (excluir): vai para o modal que o disparou
-  const [erroAcao,   setErroAcao]   = useState<ErroAcaoDados | null>(null);
+  // ⚠️ Não há mais estado de erro de AÇÃO aqui: a única ação desta tela é Editar,
+  // que navega para outra página. A de excluir saiu — animal nunca é excluído.
 
   const loadAnimais = async () => {
     try {
@@ -114,22 +108,6 @@ const MeusAnimais = () => {
       raca:            animal.raca            ?? undefined,
     });
     navigate(`/animais/${animal.id}`);
-  };
-
-  const confirmDelete = async (motivo: string, motivoTipo?: string) => {
-    if (!animalToDelete) return;
-    try {
-      // Exclusão exige justificativa (registrada na Auditoria). `motivoTipo` é a
-      // CATEGORIA — vai separada porque tem coluna e índice próprios no banco.
-      await api.delete(`/animais/${animalToDelete.id}`, { data: { motivo, motivoTipo } });
-      setAnimalToDelete(null);
-      await refreshSelectedAnimal();
-      loadAnimais();
-      toast.success('Animal excluído.');
-    } catch (error) {
-      console.error(error);
-      setErroAcao({ mensagem: 'Erro ao excluir animal.' });
-    }
   };
 
   return (
@@ -244,16 +222,12 @@ const MeusAnimais = () => {
                       </button>
                     )}
 
-                    {podeDeletarAnimal && (
-                      <button
-                        onClick={() => setAnimalToDelete(animal)}
-                        className="flex items-center gap-1.5 bg-red-500 hover:bg-red-600
-                                   text-white px-3 py-2 rounded-xl text-xs font-medium transition-colors"
-                      >
-                        <Trash2 size={13} />
-                        <span className="hidden sm:inline">Excluir</span>
-                      </button>
-                    )}
+                    {/* 🔴 A ação "Excluir" SAIU daqui (2026-09-05): animal nunca é
+                        excluído. O que existe é INATIVAR (congelar o prontuário, o
+                        paciente segue visível em somente leitura), e isso é ato da
+                        clínica — na tela de Pacientes, com `animais.ativar`. O
+                        proprietário não tem esse slug (seed: NENHUM), então um botão
+                        aqui só falharia depois do clique. */}
                   </div>
                 </div>
               </div>
@@ -262,22 +236,6 @@ const MeusAnimais = () => {
         )}
       </div>
 
-      {/* Modal — Excluir (justificativa obrigatória → Auditoria) */}
-      <ModalJustificativa
-        erro={erroAcao}
-        aberto={!!animalToDelete}
-        titulo="Excluir animal?"
-        descricao={animalToDelete
-          ? `${animalToDelete.nome}${animalToDelete.raca?.nome ? ` (${animalToDelete.raca.nome})` : ''} será removido das listagens. O histórico clínico e nutricional é preservado.`
-          : undefined}
-        // MESMA lista de `AnimaisVet`: as duas telas chamam `DELETE /animais/:id` e
-        // gravam na MESMA coluna. Listas diferentes deixariam a base com dois
-        // formatos de justificativa para o mesmo fato.
-        motivos={MOTIVOS_INATIVACAO_ANIMAL}
-        motivoLabel="Motivo da inativação"
-        onConfirmar={confirmDelete}
-        onFechar={() => setAnimalToDelete(null)}
-      />
     </PageContainer>
   );
 };

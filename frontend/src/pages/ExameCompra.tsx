@@ -10,6 +10,8 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import PageContainer from '../components/PageContainer';
 import AnimalCard from '../components/AnimalCard';
+import FaixaPacienteInativo from '../components/FaixaPacienteInativo';
+import SeletorAnimalInteligente from '../components/SeletorAnimalInteligente';
 import CompartilharPdfBotoes from '../components/CompartilharPdfBotoes';
 import JanelaLista from '../components/JanelaLista';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
@@ -29,6 +31,12 @@ interface AnimalSimples {
   dataNascimento?: string | null; idadeAnos?: number | null;
   raca?: { nome: string } | null; especie?: { nome: string } | null;
   user?: { fullName: string; email: string } | null;
+  inativo?:       boolean;
+  inativoEm?:     string | null;
+  inativoMotivo?: string | null;
+  // `fullName` opcional para casar com o que as telas já tipam (AnimaisVet) e com
+  // `PacienteInativavel` de components/FaixaPacienteInativo.
+  inativoPor?:    { fullName?: string | null } | null;
 }
 
 // ─── Field definitions ────────────────────────────────────────────────────────
@@ -359,7 +367,21 @@ export default function ExameCompra() {
   const [conclusao,      setConclusao]      = useState('');
   const [justificativa,  setJustificativa]  = useState('');
 
-  const podeCriar = isGestor || podeExecutar('atendimento.exames.criar');
+  /**
+   * 🔴 PACIENTE INATIVO = PRONTUÁRIO CONGELADO (CLAUDE.md, 2026-09-02). Esta tela é
+   * APARTADA do shell de Atendimento (saiu de `SubModuloExames` em 2026-08-02) e
+   * ficou de fora quando a regra foi aplicada aos submódulos: dava para preencher as
+   * 4 abas inteiras e só descobrir no Salvar, com o 400 do backend
+   * (`ExameClinicoController.criar` → `PACIENTE_INATIVO`) — o formulário longo
+   * perdido por um estado que a tela sabia desde a abertura.
+   * ⚠️ O estado entra na variável de PERMISSÃO, como nos submódulos, e não em cada
+   * botão: `podeCriar` gateia os dois "Novo Exame", o lápis do histórico e o
+   * `handleSalvar` de uma vez — e cobre o botão que ainda vier a nascer.
+   * ⚠️ Visualizar e Imprimir FICAM: são saída de conteúdo, não escrita, e "fica para
+   * visualização" quer dizer exatamente isso.
+   */
+  const pacienteInativo = !!selectedAnimal?.inativo;
+  const podeCriar = !pacienteInativo && (isGestor || podeExecutar('atendimento.exames.criar'));
 
   // ── Estado do histórico ───────────────────────────────────────────────────
   const [historicoCompra,   setHistoricoCompra]   = useState<ExameCompraItem[]>([]);
@@ -1026,33 +1048,45 @@ export default function ExameCompra() {
           </h1>
         </div>
 
-        {/* Paciente — seletor logo após o título (padrão da aplicação).
-            A DATA não é mais campo de tela: exame novo nasce com a data de hoje e a
-            edição preserva a data com que o laudo foi registrado (ver `hoje()` no
-            estado inicial e `handleEditar`). */}
+        {/* Paciente — O MESMO seletor das telas clínicas (`SeletorAnimalInteligente`,
+            usado por Atendimento e Vacina), a pedido. Era um `<select>` simples, que
+            só listava o NOME: numa clínica com centenas de pacientes obrigava a rolar
+            até "Zeus", não desempatava XARÁS (dois "Thor" viravam duas linhas
+            idênticas) e não marcava o paciente INATIVO — o estado só se descobria
+            depois de escolher, ao não achar os botões. O componente traz busca (sem
+            acento e por proprietário), foto, o dono na linha e o selo "Inativo".
+            ⚠️ Uma tela nova NÃO deve montar o seu próprio seletor de paciente
+            (armadilha 28-g): duas cópias divergem na primeira correção.
+            A DATA não é campo de tela: exame novo nasce com a data de hoje e a edição
+            preserva a data com que o laudo foi registrado (ver `hoje()` no estado
+            inicial e `handleEditar`). */}
         {animais.length > 0 && (
-          <div>
-            <div>
-              <label className="block text-sm font-medium text-gray-500 mb-1">Paciente</label>
-              <select value={effectiveAnimalId ?? ''}
-                onChange={e => {
-                  if (e.target.value === '__novo__') { navigate('/animais', { state: { returnTo: '/exame-compra' } }); return; }
-                  const a = animais.find(x => x.id === Number(e.target.value));
-                  if (!a) return;
-                  setSelectedAnimal(a as Parameters<typeof setSelectedAnimal>[0]);
-                  navigate(`/exame-compra/${a.id}`);
-                }}
-                className="w-full border border-gray-200 rounded-2xl px-4 py-2.5 text-sm bg-white focus:outline-none focus:border-emerald-600 shadow-sm"
-              >
-                <option value="__novo__">+ Cadastrar novo paciente</option>
-                <option disabled>──────────────</option>
-                {animais.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
-              </select>
-            </div>
-          </div>
+          <>
+            <SeletorAnimalInteligente
+              animais={animais}
+              animalAtual={animais.find(a => a.id === Number(effectiveAnimalId)) ?? null}
+              onSelecionar={a => {
+                setSelectedAnimal(a as Parameters<typeof setSelectedAnimal>[0]);
+                navigate(`/exame-compra/${a.id}`);
+              }}
+            />
+            {/* ⚠️ O "+ Cadastrar novo paciente" era uma `<option>` do `<select>` antigo.
+                Ele NÃO cabe dentro do combobox (a lista é de pacientes a escolher, e
+                uma linha que navega para outra tela no meio dela é armadilha), mas
+                também não podia sumir: era a única porta de cadastro desta tela. */}
+            <button type="button"
+              onClick={() => navigate('/animais', { state: { returnTo: '/exame-compra' } })}
+              className="-mt-2 mb-4 inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-800">
+              <PlusCircle size={13} /> Cadastrar novo paciente
+            </button>
+          </>
         )}
 
         {selectedAnimal && <AnimalCard animal={selectedAnimal} />}
+
+        {/* Sem a faixa, os botões apenas SOMEM e quem olha conclui que perdeu
+            permissão — ela diz o estado, desde quando, por quê e por quem. */}
+        <FaixaPacienteInativo animal={selectedAnimal} className="mt-3" />
 
         {!loadingAnimais && animais.length === 0 && (
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-10 text-center">

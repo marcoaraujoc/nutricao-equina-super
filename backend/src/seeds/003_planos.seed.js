@@ -51,7 +51,7 @@ async function seedPlanos(prisma) {
     // regenerado ainda (no Windows o `generate` falha com o backend rodando).
     const r = await prisma.$executeRawUnsafe(
       `INSERT INTO schs2vet.tb_planos (slug, nome, limite_usuarios, limite_animais, preco_mensal, ordem, ativo, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, true, NOW(), NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, true, NOW() AT TIME ZONE 'UTC', NOW() AT TIME ZONE 'UTC')
        ON CONFLICT (slug) DO NOTHING`,
       p.slug, p.nome, p.limiteUsuarios, p.limiteAnimais, p.precoMensal, p.ordem,
     );

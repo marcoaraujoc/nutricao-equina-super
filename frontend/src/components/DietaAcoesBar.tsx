@@ -1,5 +1,7 @@
 // frontend/src/components/DietaAcoesBar.tsx
-// Barra de ações da dieta: WhatsApp · E-mail | Imprimir | Exportar (PDF / Excel)
+// Barra de ações da dieta: WhatsApp · E-mail · Imprimir · Exportar (PDF / Excel) — todos com rótulo
+// ⚠️ Duas variantes: a COMPLETA usa botões próprios (rótulo visível, a pedido) e a
+// COMPACTA (cabeçalho mobile) segue no `CompartilharPdfBotoes` de sempre.
 // Reutilizável em Dieta.tsx e outras páginas futuras.
 //
 // 🔴 O botão "Compartilhar" (2026-09-05) DEIXOU DE EXISTIR: ele abria um modal que
@@ -12,9 +14,10 @@
 
 import { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
-import { Printer, Download, ChevronDown, Loader2 } from 'lucide-react';
+import { Printer, Download, ChevronDown, Loader2, MessageCircle, Mail } from 'lucide-react';
 import { gerarHtmlDieta, prepararDieta, type PrintAnimal, type PrintPlan, type PrintItem, type PrintUser } from '../utils/Dietaprint';
 import CompartilharPdfBotoes from './CompartilharPdfBotoes';
+import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
 import { htmlParaPdfBlob } from '../utils/gerarPdf';
 import { imprimirHtml } from '../utils/print/imprimirHtml';
 import InlineError from './InlineError';
@@ -61,6 +64,7 @@ export default function DietaAcoesBar({
   podeImprimir = true, podeCompartilhar = true, podeExportar = true,
 }: DietaAcoesBarProps) {
   const [exportandoPdf,        setExportandoPdf]        = useState(false);
+  const [enviando,             setEnviando]             = useState<'whatsapp' | 'email' | null>(null);
   const [showExportMenu,       setShowExportMenu]       = useState(false);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline,           setErroInline]           = useState<string | null>(null);
@@ -95,6 +99,22 @@ export default function DietaAcoesBar({
     texto:       `Segue o plano alimentar de ${animal.nome} — ${plano.nome}.`,
     documento:   'Dieta',
     titulo:      `Plano Alimentar — ${animal.nome}`,
+  };
+
+  // Na variante COMPLETA os dois saem como BOTÃO COM RÓTULO (a pedido, 2026-09-05),
+  // no mesmo formato do Imprimir — e não pelo `CompartilharPdfBotoes`, que é
+  // ícone-no-desktop e é usado por todas as outras telas. Só a FORMA muda: o envio
+  // continua sendo o mesmo par de `utils/compartilharPdf.ts` (PDF do Puppeteer
+  // anexado, barra de progresso e resultado no centro da tela).
+  // ⚠️ `aoPreparar` (imagens em `data:`) roda ANTES de `gerarHtml`, como no
+  // componente compartilhado — sem isso a foto e a logo nascem quebradas no PDF.
+  const enviarPor = async (canal: 'whatsapp' | 'email') => {
+    setEnviando(canal);
+    try {
+      await prepararDieta(animal);
+      if (canal === 'whatsapp') await enviarPdfWhatsAppComAviso(opcoesEnvio, animal.user?.phone);
+      else                      await enviarPdfEmailComAviso(opcoesEnvio, animal.user?.email);
+    } finally { setEnviando(null); }
   };
 
   // ── Exportar PDF ────────────────────────────────────────────────────────
@@ -171,12 +191,28 @@ export default function DietaAcoesBar({
       <InlineError message={erroInline} className="mb-2" />
 
       {podeCompartilhar && (
-        <CompartilharPdfBotoes
-          {...opcoesEnvio}
-          aoPreparar={() => prepararDieta(animal)}
-          telefone={animal.user?.phone}
-          emailPara={animal.user?.email}
-        />
+        <>
+          <button
+            onClick={() => enviarPor('whatsapp')}
+            disabled={enviando !== null}
+            title="Enviar por WhatsApp"
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-green-600 hover:bg-green-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            {enviando === 'whatsapp'
+              ? <Loader2 size={13} className="animate-spin" />
+              : <MessageCircle size={13} />}
+            WhatsApp
+          </button>
+          <button
+            onClick={() => enviarPor('email')}
+            disabled={enviando !== null}
+            title="Enviar por e-mail"
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-blue-600 hover:bg-blue-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            {enviando === 'email'
+              ? <Loader2 size={13} className="animate-spin" />
+              : <Mail size={13} />}
+            E-mail
+          </button>
+        </>
       )}
 
       <button
@@ -192,10 +228,10 @@ export default function DietaAcoesBar({
       <div className="relative" ref={el => { exportMenuRef.current = el; }}>
         <button
           onClick={podeExportar ? () => setShowExportMenu(v => !v) : () => semPermissao('exportar dieta')}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+          className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs font-semibold transition-colors ${
             podeExportar
-              ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
-              : 'bg-gray-100 text-gray-300 cursor-not-allowed'
+              ? 'bg-white border-amber-200 text-amber-800 hover:bg-amber-50'
+              : 'bg-white border-gray-100 text-gray-300 cursor-not-allowed'
           }`}>
           {exportandoPdf
             ? <Loader2 size={13} className="animate-spin" />
@@ -205,11 +241,11 @@ export default function DietaAcoesBar({
         {showExportMenu && podeExportar && (
           <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-1 min-w-[150px]">
             <button onClick={exportarPdf}
-              className="w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+              className="w-full text-left px-4 py-2 text-xs text-amber-800 hover:bg-amber-50 flex items-center gap-2">
               <Printer size={13} /> PDF
             </button>
             <button onClick={exportarExcel}
-              className="w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+              className="w-full text-left px-4 py-2 text-xs text-amber-800 hover:bg-amber-50 flex items-center gap-2">
               <Download size={13} /> Excel (.xlsx)
             </button>
           </div>

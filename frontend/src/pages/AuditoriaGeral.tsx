@@ -13,6 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   ScrollText, Search, RefreshCw, ChevronLeft, ChevronRight, Trash2, Ban, ShieldCheck,
   ArrowLeftRight, PencilLine, PlusCircle, Eye, X, CheckCircle2, ShieldAlert, FileDown,
+  ToggleLeft, ToggleRight,
 } from 'lucide-react';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -29,6 +30,10 @@ interface LogAuditoria {
   animalId:   number | null;
   /** Nome do paciente resolvido pelo backend. null = animal excluído (cai no id). */
   animalNome: string | null;
+  /** Nome do registro ATINGIDO pela ação (o membro inativado, o fornecedor ativado…),
+   *  resolvido pelo backend a partir de `entidade` + `entidadeId`. `null` quando a
+   *  entidade não tem cadastro com nome ou quando o registro já foi excluído de vez. */
+  alvoNome:   string | null;
   motivo:     string | null;
   detalhes:   string | null;
   ip:         string | null;
@@ -36,7 +41,22 @@ interface LogAuditoria {
 
 interface Meta { total: number; page: number; limit: number; totalPages: number }
 
-type FiltroCategoria = '' | 'EXCLUSAO' | 'CANCELAMENTO' | 'CONFIGURACAO' | 'TRANSFERENCIA' | 'ALTERACAO' | 'CRIACAO' | 'EXECUCAO' | 'ACESSO_NEGADO' | 'EXPORTACAO';
+type FiltroCategoria = '' | 'EXCLUSAO' | 'CANCELAMENTO' | 'INATIVACAO' | 'ATIVACAO' | 'CONFIGURACAO' | 'TRANSFERENCIA' | 'ALTERACAO' | 'CRIACAO' | 'EXECUCAO' | 'ACESSO_NEGADO' | 'EXPORTACAO';
+
+/**
+ * O registro EXECUTADO pela ação, em uma expressão só — a coluna "Paciente" foi
+ * removida a pedido (2026-09-05) e sobrou esta.
+ * ⚠️ O paciente entra como RESERVA, e não por capricho: entidade sem cadastro com nome
+ * próprio (evolução, prescrição, exame…) não tem `alvoNome`, e sem a reserva a linha
+ * ficaria sem dizer sobre O QUE a ação incidiu — que é justamente o que a coluna
+ * "Paciente" respondia. Registro apagado de vez devolve `excluido`.
+ */
+function alvoDaLinha(log: LogAuditoria): { nome: string | null; excluido: boolean } {
+  if (log.alvoNome)   return { nome: log.alvoNome, excluido: false };
+  if (log.animalNome) return { nome: log.animalNome, excluido: false };
+  if (log.entidadeId != null || log.animalId != null) return { nome: null, excluido: true };
+  return { nome: null, excluido: false };
+}
 
 const ENTIDADE_LABEL: Record<string, string> = {
   ANIMAL:            'Paciente',
@@ -105,6 +125,18 @@ function BadgeCategoria({ categoria }: { categoria: string | null }) {
   if (categoria === 'CANCELAMENTO') return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700">
       <Ban size={9} /> CANCELAMENTO
+    </span>
+  );
+  // Inativar/ativar um cadastro — nada é apagado, o registro muda de estado. Âmbar e
+  // emerald pela mesma razão do resto do sistema: inativo é aviso, ativo é normal.
+  if (categoria === 'INATIVACAO') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+      <ToggleLeft size={9} /> INATIVAÇÃO
+    </span>
+  );
+  if (categoria === 'ATIVACAO') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
+      <ToggleRight size={9} /> ATIVAÇÃO
     </span>
   );
   if (categoria === 'CONFIGURACAO') return (
@@ -214,15 +246,16 @@ function ModalLog({ log, onFechar }: { log: LogAuditoria; onFechar: () => void }
                 {log.entidade ? (ENTIDADE_LABEL[log.entidade] ?? log.entidade) : '—'}
               </p>
             </Campo>
-            <Campo rotulo="Paciente">
-              {/* Nome vem do backend (`animalNome`). Animal já excluído fica sem nome —
-                  o id NÃO é exibido no lugar, por decisão: a tela não mostra referência
-                  numérica. O `animalId` continua na coluna do banco para rastreio. */}
-              <p className="text-sm text-gray-800">
-                {log.animalNome ?? (log.animalId != null ? 'Paciente excluído' : '—')}
+            <Campo rotulo="Executado">
+              {/* O QUE a ação atingiu — distinto de "Executor", que é quem a fez.
+                  Registro já excluído fica sem nome; o id NÃO é exibido no lugar, por
+                  decisão: a tela não mostra referência numérica. As colunas
+                  `entidadeId`/`animalId` continuam no banco para rastreio. */}
+              <p className="text-sm text-gray-800 break-words">
+                {alvoDaLinha(log).nome ?? (alvoDaLinha(log).excluido ? 'Registro excluído' : '—')}
               </p>
             </Campo>
-            <Campo rotulo="Usuário">
+            <Campo rotulo="Executor">
               <p className="text-sm text-gray-800 break-words">{log.userName || '—'}</p>
               {log.email && <p className="text-xs text-gray-500 break-words">{log.email}</p>}
             </Campo>
@@ -348,7 +381,7 @@ export default function AuditoriaGeral() {
         {/* Filtros */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-3">
           <div className="flex flex-wrap gap-2">
-            {([['', 'Todas'], ['ACESSO_NEGADO', 'Acesso negado'], ['EXCLUSAO', 'Exclusões'], ['CANCELAMENTO', 'Cancelamentos'], ['TRANSFERENCIA', 'Transferências'], ['ALTERACAO', 'Alterações'], ['CRIACAO', 'Criações'], ['EXECUCAO', 'Execuções'], ['EXPORTACAO', 'Exportações'], ['CONFIGURACAO', 'Configuração']] as [FiltroCategoria, string][]).map(([key, label]) => (
+            {([['', 'Todas'], ['ACESSO_NEGADO', 'Acesso negado'], ['EXCLUSAO', 'Exclusões'], ['CANCELAMENTO', 'Cancelamentos'], ['INATIVACAO', 'Inativações'], ['ATIVACAO', 'Ativações'], ['TRANSFERENCIA', 'Transferências'], ['ALTERACAO', 'Alterações'], ['CRIACAO', 'Criações'], ['EXECUCAO', 'Execuções'], ['EXPORTACAO', 'Exportações'], ['CONFIGURACAO', 'Configuração']] as [FiltroCategoria, string][]).map(([key, label]) => (
               <button key={key} onClick={() => setCategoria(key)}
                 className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
                   categoria === key
@@ -418,12 +451,16 @@ export default function AuditoriaGeral() {
                       <th className="py-3 px-4 whitespace-nowrap">Data / Hora</th>
                       <th className="py-3 px-4">Ação</th>
                       <th className="py-3 px-4">Tipo</th>
-                      <th className="py-3 px-4">Paciente</th>
-                      {/* "Registro" (detalhes) e "Justificativa" saíram da grade: eram
-                          textos longos cortados em duas linhas, que não se liam nem na
-                          tabela nem no card. Continuam inteiros no modal Visualizar e
-                          continuam alcançáveis pela busca. */}
-                      <th className="py-3 px-4">Usuário</th>
+                      {/* "Executado" é O QUE a ação atingiu; "Executor" é quem a
+                          executou. Sem o primeiro, a linha dizia "Fulana inativou" sem
+                          dizer inativou quem.
+                          ⚠️ NÃO é a antiga coluna "Registro", que exibia o texto longo de
+                          `detalhes`: aqui é só o nome. Detalhes e "Justificativa" seguem
+                          fora da grade — eram textos longos cortados em duas linhas, que
+                          não se liam nem na tabela nem no card. Continuam inteiros no
+                          modal Visualizar e alcançáveis pela busca. */}
+                      <th className="py-3 px-4">Executado</th>
+                      <th className="py-3 px-4">Executor</th>
                       <th className="py-3 px-4 whitespace-nowrap">IP</th>
                       <th className="py-3 px-4 whitespace-nowrap text-center">Ações</th>
                     </tr>
@@ -437,8 +474,8 @@ export default function AuditoriaGeral() {
                           {log.entidade ? (ENTIDADE_LABEL[log.entidade] ?? log.entidade) : '—'}
                         </td>
                         <td className="py-3 px-4 text-xs text-gray-700 whitespace-nowrap">
-                          {log.animalNome ?? (log.animalId != null
-                            ? <span className="text-gray-400 italic">Paciente excluído</span>
+                          {alvoDaLinha(log).nome ?? (alvoDaLinha(log).excluido
+                            ? <span className="text-gray-400 italic">Registro excluído</span>
                             : <span className="text-gray-300">—</span>)}
                         </td>
                         <td className="py-3 px-4 text-xs text-gray-500 whitespace-nowrap">{log.userName || log.email || '—'}</td>
@@ -466,16 +503,20 @@ export default function AuditoriaGeral() {
                     <p className="text-sm font-medium text-gray-800">
                       {log.entidade ? (ENTIDADE_LABEL[log.entidade] ?? log.entidade) : 'Sistema'}
                     </p>
-                    {(log.animalNome || log.animalId != null) && (
-                      <p className="text-xs text-gray-600">
-                        <span className="text-gray-400">Paciente: </span>
-                        {log.animalNome ?? <span className="italic text-gray-400">excluído</span>}
-                      </p>
-                    )}
+                    {(() => {
+                      const alvo = alvoDaLinha(log);
+                      if (!alvo.nome && !alvo.excluido) return null;
+                      return (
+                        <p className="text-xs text-gray-600">
+                          <span className="text-gray-400">Executado: </span>
+                          {alvo.nome ?? <span className="italic text-gray-400">excluído</span>}
+                        </p>
+                      );
+                    })()}
                     {/* Detalhes e justificativa moram no modal Visualizar — ver a nota
                         no cabeçalho da tabela. */}
                     <p className="text-[11px] text-gray-400">
-                      por {log.userName || log.email || '—'}
+                      executado por {log.userName || log.email || '—'}
                       {log.ip && <span className="font-mono"> · {log.ip}</span>}
                     </p>
                     <button onClick={() => setLogAberto(log)}

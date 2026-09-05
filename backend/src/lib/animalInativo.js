@@ -22,8 +22,15 @@ const TABELA = 'schs2vet.tb_animais';
 async function marcarInativo(client, animalId, { motivo, porId }) {
   const db = client || prismaPadrao;
   await db.$executeRawUnsafe(
+    // 🔴 `NOW() AT TIME ZONE 'UTC'`, NUNCA `NOW()` puro. A coluna é
+    // `timestamp WITHOUT time zone`, que o Prisma lê e escreve como UTC NAIVE; o
+    // `NOW()` é `timestamptz` e, ao ser gravado, o Postgres o converte para o fuso da
+    // SESSÃO (America/Sao_Paulo nesta base). Resultado: a hora local ia para o banco
+    // com cara de UTC e voltava 3h ATRASADA na tela — inativado às 07:34, a faixa
+    // dizia "desde 04:34".
     `UPDATE ${TABELA}
-        SET "inativo" = true, "inativo_em" = NOW(), "inativo_motivo" = $2, "inativo_por_id" = $3
+        SET "inativo" = true, "inativo_em" = NOW() AT TIME ZONE 'UTC',
+            "inativo_motivo" = $2, "inativo_por_id" = $3
       WHERE id = $1`,
     Number(animalId),
     String(motivo ?? '').trim() || null,

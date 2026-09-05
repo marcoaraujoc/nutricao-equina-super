@@ -432,7 +432,13 @@ export default function CadastroEmpresa() {
   // erro na última tentativa de conectar/desconectar) SEMPRE vence e pinta de
   // vermelho — mesmo que `op.waStatus` ainda diga outra coisa. Âmbar só na espera do
   // QR (transitório). Carregando fica cinza parado — ainda não se sabe a cor certa.
-  const waFalhou      = !op.waDisponivel || Boolean(op.erroAcao);
+  // 🔴 `SERVIDOR_INDISPONIVEL` (Evolution fora do ar) conta como FALHA — luz
+  // vermelha. Até 2026-09-05 a tela mostrava VERDE nesse caso, porque o backend
+  // devolvia o último status GRAVADO ("CONECTADO") quando não conseguia falar com
+  // a Evolution; o gestor via "WhatsApp conectado" e nenhuma mensagem saía.
+  // Ver whatsappService.obterStatus.
+  const waForaDoAr    = op.waStatus === 'SERVIDOR_INDISPONIVEL';
+  const waFalhou      = !op.waDisponivel || waForaDoAr || Boolean(op.erroAcao);
   const waConectado   = !waFalhou && op.waStatus === 'CONECTADO';
   const waAguardando  = !waFalhou && op.waStatus === 'AGUARDANDO_QR';
   const waCarregando  = !waFalhou && op.waStatus === 'CARREGANDO';
@@ -449,7 +455,11 @@ export default function CadastroEmpresa() {
   // "de dentro para fora, como uma onda" — anel que se expande e desaparece por
   // cima do ponto sólido (padrão `animate-ping` do Tailwind), repetindo.
   const waPulsa = !waCarregando;
-  const waDotTitulo = waFalhou
+  const waDotTitulo = waForaDoAr && !op.erroAcao
+    // Mensagem PRÓPRIA: "reconecte" não serve aqui — não há servidor para gerar o
+    // QR Code. Dizer o que está errado de verdade evita o chamado.
+    ? 'Serviço de WhatsApp fora do ar — o servidor não respondeu. Não é preciso reconectar; tente novamente em alguns minutos.'
+    : waFalhou
     ? (op.erroAcao?.mensagem ?? 'Falha ao conectar com o serviço de WhatsApp')
     : waConectado
     ? 'WhatsApp conectado'
@@ -643,6 +653,15 @@ export default function CadastroEmpresa() {
                     )}
                   </div>
                 </div>
+
+                {/* Serviço fora do ar: a luz vermelha sozinha não diz POR QUE, e o
+                    título do ponto só aparece no hover (some no celular). Como o
+                    sintoma relatado foi exatamente "a tela diz que está conectado",
+                    o estado precisa estar ESCRITO. Só quando não há erro de ação —
+                    senão apareceriam duas mensagens dizendo a mesma coisa. */}
+                {waForaDoAr && !op.erroAcao && (
+                  <p className="mt-2 text-xs text-red-600">Serviço de WhatsApp fora do ar</p>
+                )}
 
                 {/* Erro da AÇÃO (conectar/desconectar) logo abaixo da linha que a
                     disparou (§6 do CLAUDE.md) — antes só aparecia lá embaixo, perto do

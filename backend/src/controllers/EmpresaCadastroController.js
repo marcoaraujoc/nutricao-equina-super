@@ -319,16 +319,19 @@ module.exports = {
         return res.status(400).json({ sucesso: false, mensagem: `Situação inválida. Use: ${STATUS_VALIDOS.join(', ')}` });
       }
 
+      // As colunas de data aqui são `timestamp WITHOUT time zone`, que o Prisma lê
+      // como UTC naive — daí `NOW() AT TIME ZONE 'UTC'` e nunca `NOW()` puro, que
+      // gravaria a hora do fuso da SESSÃO e voltaria 3h atrasado (ver animalInativo.js).
       await prisma.$executeRawUnsafe(
         `INSERT INTO schs2vet.tb_assinaturas_empresa
            (empresa_id, plano_id, status, limite_usuarios_override, observacao, inicio_em, created_at, updated_at)
-         VALUES ($1, $2, COALESCE($3, 'TRIAL'), $4, $5, NOW(), NOW(), NOW())
+         VALUES ($1, $2, COALESCE($3, 'TRIAL'), $4, $5, NOW() AT TIME ZONE 'UTC', NOW() AT TIME ZONE 'UTC', NOW() AT TIME ZONE 'UTC')
          ON CONFLICT (empresa_id) DO UPDATE SET
            plano_id = EXCLUDED.plano_id,
            status   = EXCLUDED.status,
            limite_usuarios_override = EXCLUDED.limite_usuarios_override,
            observacao = EXCLUDED.observacao,
-           updated_at = NOW()`,
+           updated_at = NOW() AT TIME ZONE 'UTC'`,
         empresaId, Number(planoId), status ?? null,
         limiteUsuariosOverride != null ? Number(limiteUsuariosOverride) : null,
         texto(observacao, 500),

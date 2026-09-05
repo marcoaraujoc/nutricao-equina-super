@@ -1039,12 +1039,14 @@ class AnimalController {
       await prisma.$transaction(async (tx) => {
         await registrarAtivacaoAnimal(tx, animalId, req.user.id);
         await registrarAuditoria(tx, req, {
-          categoria:  'ALTERACAO',
+          // Desfaz a EXCLUSÃO lógica — mesma família do `ativar` acima, e por isso a
+          // mesma categoria; o `detalhes` distingue os dois atos.
+          categoria:  'ATIVACAO',
           entidade:   'ANIMAL',
           entidadeId: animalId,
           animalId,
           motivo,
-          detalhes:   `Paciente reativado — ${animal.nome}`,
+          detalhes:   `Paciente trazido de volta às listagens — ${animal.nome}`,
         });
       });
 
@@ -1084,7 +1086,10 @@ class AnimalController {
       await prisma.$transaction(async (tx) => {
         await marcarInativo(tx, animalId, { motivo, porId: req.user.id });
         await registrarAuditoria(tx, req, {
-          categoria:  'CANCELAMENTO',
+          // Inativar NÃO é cancelar nem excluir: o paciente continua visível, com o
+          // prontuário congelado. Categoria própria porque ela vira o RÓTULO da ação
+          // na tela de Auditoria (`INATIVACAO ANIMAL`).
+          categoria:  'INATIVACAO',
           entidade:   'ANIMAL',
           entidadeId: animalId,
           animalId,
@@ -1127,7 +1132,9 @@ class AnimalController {
       await prisma.$transaction(async (tx) => {
         await marcarAtivo(tx, animalId);
         await registrarAuditoria(tx, req, {
-          categoria:  'CANCELAMENTO',
+          // 🔴 Era 'CANCELAMENTO' — a auditoria dizia "CANCELAMENTO ANIMAL" para
+          // quem tinha acabado de REATIVAR o paciente.
+          categoria:  'ATIVACAO',
           entidade:   'ANIMAL',
           entidadeId: animalId,
           animalId,

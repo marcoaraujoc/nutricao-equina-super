@@ -1085,6 +1085,13 @@ const AgendamentoController = {
       let disponivel = true;
       let conflito   = null;
 
+      // 🔴 A agenda é para o FUTURO: horário que já passou não é nem oferecido. Sem
+      // isto o fluxo por voz respondia `disponivel: true` (e listava alternativas já
+      // vencidas) para um pedido de hoje mais cedo, e a recusa só vinha do `criar`
+      // (400 DATA_PASSADA) depois de a pessoa confirmar. Mesma tolerância de 1 min.
+      const noPassado = (quando) => quando.getTime() < Date.now() - 60_000;
+      if (noPassado(dataHoraISO)) disponivel = false;
+
       if (vetIdFinal) {
         const existente = await prisma.agendamentoClinico.findFirst({
           where: {
@@ -1122,7 +1129,8 @@ const AgendamentoController = {
         const d = new Date(h.dataHora);
         return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
       }));
-      const horariosLivres = HORARIOS_PADRAO.filter(h => !ocupadosSet.has(h));
+      const horariosLivres = HORARIOS_PADRAO.filter(h =>
+        !ocupadosSet.has(h) && !noPassado(new Date(`${data}T${h}:00`)));
 
       // Detalhes do animal
       const animalDetalhado = await prisma.animal.findUnique({

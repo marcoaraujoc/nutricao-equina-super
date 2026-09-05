@@ -1,6 +1,5 @@
 ﻿const jwt      = require('jsonwebtoken');
 const bcrypt   = require('bcryptjs');
-const nodemailer = require('nodemailer');
 
 const prisma = require('../lib/prisma').default;
 const { setAuthCookies, clearAuthCookies, getRefreshTokenFromCookie } = require('../lib/authCookies');
@@ -8,19 +7,21 @@ const { normalizeEmail, findUserByEmail } = require('../lib/email');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 const { podeAcessarSistema } = require('../lib/usuarioEmpresa');
 const { registrarAcesso } = require('../lib/auditoria');
+// Transporte de e-mail: provider ÚNICO (SMTP hoje, Resend por env). O remetente
+// sai de `remetente()` — `EMAIL_USER` é credencial, não endereço de envio.
+const { getEmailProvider, remetente } = require('../messaging/emailProvider');
 // Duração da sessão e assinatura dos tokens: fonte única em lib/sessionTokens.js
 const {
   SECRET, REFRESH_SECRET,
   assinarAccessToken, gerarRefreshToken: generateRefreshToken,
 } = require('../lib/sessionTokens');
 
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+// 🔴 Este arquivo tinha um `nodemailer.createTransport({ service: 'gmail' })`
+// PRÓPRIO — o único ponto do sistema que não passava por `messaging/emailProvider.js`.
+// `service: 'gmail'` IGNORA `EMAIL_HOST`, então o "esqueci minha senha" continuaria
+// batendo no Gmail depois de a instalação trocar para Brevo/SES/Resend: todo o
+// resto enviaria normal e SÓ a recuperação de senha falharia com "Invalid login" —
+// no fluxo em que a pessoa já está trancada para fora. Agora usa o provider único.
 
 const AuthController = {
 
@@ -108,8 +109,8 @@ const AuthController = {
               resetPasswordExpires: new Date(Date.now() + 3600000),
             },
           });
-          await transporter.sendMail({
-            from: `"Equipe Equine Nutrition" <${process.env.EMAIL_USER}>`,
+          await getEmailProvider().enviar({
+            from: remetente(),
             to: email,
             subject: 'Recuperação de Senha - Equine Nutrition Super',
             html: `

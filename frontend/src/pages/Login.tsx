@@ -6,7 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { AlertCircle, Eye, EyeOff } from 'lucide-react';
 import InlineError from '../components/InlineError';
 import LinkMarcaS2Vet from '../components/LinkMarcaS2Vet';
-import VitrineLogin from '../components/login/VitrineLogin';
+import VitrineLogin, { FundoVitrineMobile } from '../components/login/VitrineLogin';
 import Verificacao2FA from '../components/Verificacao2FA';
 import type { DesafioMfa } from '../components/Verificacao2FA';
 
@@ -162,18 +162,47 @@ export default function Login() {
       tudo na viewport no desktop. No mobile continua `overflow-auto`, porque a
       vitrine empilhada deixa o conteudo mais alto que a tela.
     */
-    <div className="h-full overflow-auto bg-white text-gray-900 lg:overflow-hidden">
+    <div className="relative h-full overflow-auto bg-white text-gray-900 lg:overflow-hidden">
+
+      {/* MOBILE: a foto da vitrine vira PLANO DE FUNDO atrás do formulário, bem
+          suave (2026-09-04). Antes ela ficava EMPILHADA abaixo do login e a página
+          rolava; o pedido é uma TELA SÓ. `absolute` sobre o wrapper `relative`, e o
+          conteúdo abaixo sobe com `relative` para ficar por cima. */}
+      {!desafio2fa && <FundoVitrineMobile />}
 
       {/* Margem de 0,5cm em volta de TODA a pagina. Em `cm` mesmo (o Tailwind
           aceita a unidade no valor arbitrario): foi a medida pedida, e traduzi-la
           para px aqui perderia a intencao no primeiro ajuste de escala. */}
-      <div className="flex min-h-full flex-col gap-10 p-[0.5cm] lg:h-full lg:min-h-0 lg:flex-row lg:gap-8">
+      {/* ⚠️ A margem da DIREITA e' o DOBRO das outras (1cm x 0,5cm), a pedido em
+          2026-09-05: e' o lado em que a foto encosta na borda, e com a margem
+          uniforme ela parecia colada na tela. So' no desktop — no mobile a foto e'
+          plano de fundo e nao ha borda para respeitar. */}
+      <div className="relative flex min-h-full flex-col gap-10 p-[0.5cm] lg:h-full lg:min-h-0 lg:flex-row lg:gap-8 lg:pr-[1cm]">
 
-      {/* Coluna do LOGIN — 30% da largura no desktop.
+      {/* Coluna do LOGIN — TODO o espaco que a foto nao usa (2026-09-05).
+          Era `lg:w-[30%]` fixo, com a foto centralizada nos 70% restantes: a sobra
+          daquela coluna ficava ENTRE o formulario e a foto, e o login parecia
+          deslocado para a esquerda (em janela baixa a sobra passava de 300px, porque
+          a largura da foto e' calculada a partir da ALTURA). Agora a coluna da foto
+          encolhe ate ela e esta aqui fica com o resto — o `mx-auto` do miolo entao
+          centraliza o formulario exatamente no vao entre a borda da tela e a foto.
+          ⚠️ `lg:min-w-[20rem]` e' o piso: sem ele, uma janela muito alta faria a
+          foto (que cresce com a altura) espremer o formulario ate ele ficar
+          inutilizavel. Com o piso, quem cede e' a foto — ela tem `lg:min-w-0` e
+          encolhe pelo flex.
+          🔴 `lg:max-w-[30rem]` e' o TETO, e existe pela proporcao (2026-09-05: "a
+          foto precisa ser maior que a parte do login"). Sem ele a coluna do login
+          engolia toda a sobra da linha e, em janela BAIXA — onde a foto encolhe,
+          porque a largura dela vem da altura —, os dois lados chegavam a ficar do
+          mesmo tamanho: ~860px de formulario ao lado de ~990px de foto. Com o teto,
+          o formulario para em 480px e a foto continua sendo o dobro dele.
+          O formulario em si tem `max-w-md` (28rem); os 30rem dao a folga lateral.
+          (A faixa vazia que sobrava na direita foi resolvida do outro lado: a coluna
+          da foto agora absorve todo o resto da linha — ver o bloco dela abaixo.)
           `overflow-y-auto` + `my-auto` no miolo: centraliza quando sobra altura e
           rola quando falta. `justify-center` no lugar do `my-auto` cortaria o topo
           do formulario em tela baixa, que e' o bug classico dessa combinacao. */}
-      <div className="w-full lg:flex lg:w-[30%] lg:flex-shrink-0 lg:flex-col lg:overflow-y-auto">
+      <div className="w-full lg:flex lg:min-w-[20rem] lg:max-w-[30rem] lg:flex-1 lg:flex-col lg:overflow-y-auto">
       <div className="mx-auto w-full max-w-md lg:my-auto">
 
         {/* A marca vem do banco por `GET /api/marca` — rota publica, que e' o que
@@ -332,11 +361,21 @@ export default function Login() {
       </div>
       </div>
 
-      {/* Telas do produto — 70% da largura no desktop, bloco abaixo no mobile.
-          Escondidas durante o 2FA: ali a unica coisa a fazer e' digitar o codigo.
+      {/* Telas do produto — 70% da largura, SÓ no desktop (o componente já se
+          esconde abaixo de `lg`; no mobile a mesma foto entra como plano de fundo,
+          acima). Some tambem durante o 2FA: ali a unica coisa a fazer e' digitar o
+          codigo.
           ⚠️ `min-w-0` e obrigatorio num filho de flex que contem imagem — sem ele
-          a captura (1230px de largura) empurra a coluna e estoura o layout. */}
-      {!desafio2fa && <VitrineLogin className="lg:w-[70%] lg:min-w-0" />}
+          a foto empurra a coluna e estoura o layout. */}
+      {/* A coluna da FOTO fica com TODO o espaco que o formulario nao usa
+          (2026-09-05). Era uma largura calculada a partir da altura da janela, e
+          sobrava uma faixa vazia na borda direita sempre que a janela era baixa —
+          a foto nao podia crescer para ocupa-la sem estourar a altura. Agora ela
+          preenche a coluna e o excesso de proporcao e' resolvido por `object-cover`
+          la dentro (ver VitrineLogin).
+          ⚠️ `lg:min-w-0` e' obrigatorio num filho de flex que contem imagem: sem ele
+          a largura intrinseca da foto (2000px) vira o piso e estoura a linha. */}
+      {!desafio2fa && <VitrineLogin className="lg:min-w-0 lg:flex-1" />}
 
       </div>
 

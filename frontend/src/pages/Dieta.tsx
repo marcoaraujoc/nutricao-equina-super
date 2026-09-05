@@ -948,9 +948,18 @@ const Dieta = () => {
 
         {animal && <AnimalCard animal={animal} />}
 
-        {/* Status da dieta + ações (Compartilhar/Imprimir/Exportar) — abaixo do animal, à direita */}
+        {/* Ações (WhatsApp/E-mail/Imprimir/Exportar) + status da dieta — abaixo do animal,
+            à direita. O STATUS fica por ÚLTIMO, na ponta direita (a pedido, 2026-09-05):
+            ele é o ESTADO do plano, não uma ação, e no início da linha competia com os
+            botões que a pessoa vem clicar. */}
         {planoSelecionado && (
           <div className="flex items-center justify-end gap-2 flex-wrap mt-3 mb-4">
+            {animal && (
+              <DietaAcoesBar
+                animal={animal} plano={planoSelecionado} itens={itens} user={user}
+                podeImprimir={podeImprimir} podeCompartilhar={podeCompartilhar} podeExportar={podeExportar}
+              />
+            )}
             <button onClick={handleTogglePlano}
               className={`text-xs font-semibold px-2.5 py-1 rounded-full transition-colors ${
                 planoSelecionado.ativo
@@ -959,12 +968,6 @@ const Dieta = () => {
               }`}>
               • {planoSelecionado.ativo ? 'ATIVO' : 'INATIVO'}
             </button>
-            {animal && (
-              <DietaAcoesBar
-                animal={animal} plano={planoSelecionado} itens={itens} user={user}
-                podeImprimir={podeImprimir} podeCompartilhar={podeCompartilhar} podeExportar={podeExportar}
-              />
-            )}
           </div>
         )}
 

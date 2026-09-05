@@ -48,6 +48,7 @@ import InlineError from '../components/InlineError';
 import ErroAcao from '../components/ErroAcao';
 import ModalJustificativa from '../components/ModalJustificativa';
 import api from '../services/api';
+import { rotuloOpcaoAnimal } from '../utils/animalInfo';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 
@@ -61,6 +62,7 @@ import type { ContextoDocumento } from '../modules/documentos/api';
 import { contarPreenchidos } from '../modules/documentos/campos';
 import type { CampoDocumento, Preenchimento } from '../modules/documentos/campos';
 import type { ListaDocumento, PreenchimentoListas } from '../modules/documentos/listas';
+import { listaObrigatoriaVazia } from '../modules/documentos/listas';
 import { categoriasDisponiveis } from '../modules/documentos/catalogo';
 import { blocosDeImagens, ehPdf, paginasDoArquivo, TIPOS_ACEITOS } from '../modules/documentos/upload';
 import type { Bloco, CategoriaId, DocumentoEmitido, Template } from '../modules/documentos/types';
@@ -75,9 +77,11 @@ import type { Bloco, CategoriaId, DocumentoEmitido, Template } from '../modules/
  * `/animal/:id`.
  */
 interface AnimalDoc {
-  id:    number;
-  nome:  string;
-  user?: { fullName: string; email: string } | null;
+  id:       number;
+  nome:     string;
+  user?:    { fullName: string; email: string } | null;
+  /** Paciente INATIVO (somente leitura) — aparece na lista, marcado. */
+  inativo?: boolean | null;
 }
 
 /**
@@ -473,10 +477,27 @@ export default function Documentos() {
     setPendentes([]);
   }, [limparFormulario]);
 
+  /**
+   * Lista obrigatória sem nenhuma linha → não deixa seguir, e diz QUAL falta.
+   *
+   * 🔴 Pedido de 2026-09-04: "no atestado de vacinação obrigar a preencher pelo menos
+   * 1 vacina". O backend também recusa (`LISTA_OBRIGATORIA`) — ele é a autoridade —,
+   * mas barrar aqui é o que evita descobrir a falta depois do Salvar, quando o
+   * formulário já foi esvaziado. Ver `modules/documentos/listas.ts#listaObrigatoria`
+   * para QUAIS listas entram na regra.
+   */
+  const faltaListaObrigatoria = useCallback((): boolean => {
+    const faltando = listaObrigatoriaVazia(listas, valListas);
+    if (!faltando) return false;
+    mostrarErro(`Preencha ao menos um item em "${faltando.rotulo}".`);
+    return true;
+  }, [listas, valListas, mostrarErro]);
+
   const handleInserir = useCallback(() => {
     if (!podeEmitir)  { mostrarErro('Sem permissão para emitir documentos.'); return; }
     if (animalId == null) { mostrarErro('Selecione o paciente.'); return; }
     if (!template)    { mostrarErro('Selecione o documento.'); return; }
+    if (faltaListaObrigatoria()) return;
     setPendentes(prev => [...prev, {
       localId:      `${template.id}-${Date.now()}`,
       templateId:   template.id,
@@ -487,7 +508,8 @@ export default function Documentos() {
       emBranco,
     }]);
     limparFormulario();
-  }, [podeEmitir, animalId, template, valores, valListas, emBranco, limparFormulario, mostrarErro]);
+  }, [podeEmitir, animalId, template, valores, valListas, emBranco, limparFormulario, mostrarErro,
+      faltaListaObrigatoria]);
 
   /**
    * Emite tudo: a fila do Inserir mais o que estiver no formulário agora.
@@ -499,6 +521,10 @@ export default function Documentos() {
   const handleSalvar = useCallback(async () => {
     if (!podeEmitir)      { mostrarErro('Sem permissão para emitir documentos.'); return; }
     if (animalId == null) { mostrarErro('Selecione o paciente antes de salvar.'); return; }
+
+    // Só o que está NO FORMULÁRIO precisa desta checagem: o que está na fila já
+    // passou por ela no Inserir.
+    if (template && faltaListaObrigatoria()) return;
 
     const fila: DocumentoPendente[] = [...pendentes];
     if (template) {
@@ -543,20 +569,25 @@ export default function Documentos() {
       toast.success(emitidosAgora.length === 1
         ? `${emitidosAgora[0].numeroFmt ?? 'Documento'} emitido para ${emitidosAgora[0].animalNome}`
         : `${emitidosAgora.length} documentos emitidos`);
-    } catch {
+    } catch (err: unknown) {
       // Emissão é uma por uma: o que já saiu ESTÁ emitido e tem número. Dizer isso é
       // o que evita o vet reemitir tudo e duplicar os documentos que deram certo.
       const jaEmitidos = emitidosAgora.length;
       setPendentes(fila.slice(jaEmitidos));
       await recarregarHistorico(animalId);
+      // ⚠️ O MOTIVO do servidor vai junto: recusas de regra ("Preencha ao menos um
+      // item em X", paciente inativo, sem empresa) são acionáveis, e engoli-las num
+      // "não foi possível" deixa a pessoa sem saber o que corrigir.
+      const e = err as { response?: { data?: { error?: string } } };
+      const motivo = e.response?.data?.error;
       mostrarErro(jaEmitidos > 0
-        ? `${jaEmitidos} documento(s) foram emitidos; o seguinte falhou. Os que faltam continuam na lista abaixo.`
-        : 'Não foi possível emitir o documento.');
+        ? `${jaEmitidos} documento(s) foram emitidos; o seguinte falhou${motivo ? `: ${motivo}` : '.'} Os que faltam continuam na lista abaixo.`
+        : (motivo ?? 'Não foi possível emitir o documento.'));
     } finally {
       setSalvando(false);
     }
   }, [podeEmitir, animalId, pendentes, template, valores, valListas, emBranco, contexto?.evolucaoId,
-      limparFormulario, recarregarHistorico, mostrarErro]);
+      limparFormulario, recarregarHistorico, mostrarErro, faltaListaObrigatoria]);
 
   /** Abre o envio já com o nome que a pessoa digitou e não encontrou. */
   const abrirEnvio = useCallback(() => {
@@ -735,7 +766,10 @@ export default function Documentos() {
                   // concatenava o proprietário e a linha ficava longa demais para o
                   // campo. O proprietário segue visível no cabeçalho da folha e no
                   // histórico logo abaixo.
-                  <option key={a.id} value={a.id}>{a.nome}</option>
+                  // ⚠️ O selo de INATIVO não é exceção a isso: aquela decisão foi
+                  // sobre não repetir a IDENTIDADE do dono, e este é o ESTADO do
+                  // paciente — emissão para paciente congelado o backend recusa.
+                  <option key={a.id} value={a.id}>{rotuloOpcaoAnimal(a)}</option>
                 ))}
               </select>
               <ChevronDown size={13} className="absolute right-3 top-3.5 text-gray-400 pointer-events-none" />

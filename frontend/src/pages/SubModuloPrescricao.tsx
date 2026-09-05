@@ -252,6 +252,23 @@ const statusDoGrupo = (g: PrescricaoGrupo): { label: string; cls: string } => {
 // Ordem das abas de filtro por status no histórico
 const STATUS_ORDER: StatusGrupo[] = ['SALVO', 'FINALIZADO', 'EXECUTADO', 'CANCELADO_PARCIALMENTE', 'CANCELADO'];
 
+/**
+ * Cor da ABA de status quando ela está SELECIONADA. Antes toda aba ativa era emerald,
+ * então a barra não dizia NADA sobre o que estava filtrado — "Cancelado" selecionado
+ * ficava verde.
+ * 🔴 A cor sai do SELO do próprio status (`STATUS_GRUPO`), não de uma paleta paralela:
+ * é o que faz a aba e o badge de cada linha concordarem — cancelado VERMELHO, concluído
+ * AZUL, em execução emerald, salvo âmbar. Duas paletas divergiriam na primeira mudança.
+ */
+const TOM_ABA_ATIVA: Record<'todos' | StatusGrupo, string> = {
+  todos:                  'bg-emerald-600 text-white border-emerald-600',
+  SALVO:                  'bg-amber-500   text-white border-amber-500',
+  FINALIZADO:             'bg-emerald-600 text-white border-emerald-600',
+  EXECUTADO:              'bg-blue-600    text-white border-blue-600',
+  CANCELADO_PARCIALMENTE: 'bg-orange-500  text-white border-orange-500',
+  CANCELADO:              'bg-red-600     text-white border-red-600',
+};
+
 // Categoria de uma prescrição a partir dos seus itens — espelha o agrupamento do
 // backend (`categoriaPara` em PrescricaoGrupoController): medicamento comum e
 // procedimento convivem no MESMO documento ('Geral'); só o CONTROLADO se separa,
@@ -2314,7 +2331,12 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   const [total,              setTotal]              = useState(0);
   const [salvos,             setSalvos]             = useState(0);
   const [contagens,          setContagens]          = useState<Record<string, number>>({});
-  const [filtroStatus,       setFiltroStatus]       = useState<'todos' | StatusGrupo>('todos');
+  // Padrão "Em Execução" (`FINALIZADO`), a pedido: é a prescrição que está VALENDO —
+  // finalizada pelo vet e em curso no plantão. Abrir em "Todos" misturava o que está
+  // rodando com o rascunho e com o histórico já executado.
+  // ⚠️ A aba do status ATIVO é renderizada mesmo com contagem 0 (`|| filtroStatus === s`),
+  // então o padrão nunca deixa a barra sem a aba selecionada.
+  const [filtroStatus,       setFiltroStatus]       = useState<'todos' | StatusGrupo>('FINALIZADO');
   const [page,               setPage]               = useState(1);
   const [limit]                                     = useState(10);
   const [editingGrupo,       setEditingGrupo]       = useState<PrescricaoGrupo | null>(null);
@@ -2715,7 +2737,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
               return (
                 <button key={key} onClick={() => { setFiltroStatus(key); setPage(1); }}
                   className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${
-                    isActive ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+                    isActive ? TOM_ABA_ATIVA[key] : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
                   }`}>
                   {label}
                   <span className={isActive ? 'text-emerald-100' : 'text-gray-400'}>({count})</span>

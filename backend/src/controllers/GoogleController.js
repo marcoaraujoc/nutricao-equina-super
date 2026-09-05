@@ -75,7 +75,14 @@ const GoogleController = {
           });
 
       if (user.ativo === false) {
-        return res.status(403).json({ error: 'Conta desativada. Entre em contato com o administrador da equipe.' });
+      // 🔴 MENSAGEM GENÉRICA PARA CONTA DESATIVADA (2026-09-04, a pedido).
+      // "Conta desativada" confirmava a EXISTÊNCIA do e-mail para quem só chutou o
+      // endereço — a mesma enumeração de usuário que o "Usuário ou Senha Inválidos"
+      // do e-mail inexistente existe para evitar. Quem foi desligado de verdade
+      // descobre com o gestor, não pela tela de login.
+      // ⚠️ 401, e não 403: precisa ser indistinguível dos outros dois casos, e o
+      // status faz parte da resposta.
+        return res.status(401).json({ error: 'Usuário ou Senha Inválidos' });
       }
 
       // Mesmo gate do login por senha: sem acesso concedido por nenhuma empresa, não entra.

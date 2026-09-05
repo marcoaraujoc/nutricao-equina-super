@@ -81,8 +81,19 @@ export const maskWhatsapp = (v: string) => {
   return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
 };
 
-/** Status de conexão do WhatsApp — ver `WhatsAppStatusField` para o mapeamento em cor. */
-export type WaStatus = 'CARREGANDO' | 'CONECTADO' | 'AGUARDANDO_QR' | 'DESCONECTADO';
+/**
+ * Status de conexão do WhatsApp — ver `CadastroEmpresa.tsx` para o mapeamento em cor.
+ *
+ * 🔴 `SERVIDOR_INDISPONIVEL` é o servidor da Evolution FORA DO AR — diferente de
+ * `DESCONECTADO` (a sessão do WhatsApp caiu e se resolve lendo o QR). Sem esta
+ * distinção a tela mostrava a luz VERDE com a Evolution desligada, porque o
+ * backend caía no último status GRAVADO, que era "CONECTADO" (corrigido em
+ * 2026-09-05, `whatsappService.obterStatus`). Não colapsar os dois: o gestor não
+ * tem o que fazer com "reconecte" quando não há servidor para gerar o QR.
+ */
+export type WaStatus =
+  | 'CARREGANDO' | 'CONECTADO' | 'AGUARDANDO_QR' | 'DESCONECTADO'
+  | 'SERVIDOR_INDISPONIVEL' | 'NAO_PROVISIONADO';
 
 export function useConfiguracaoOperacional() {
   const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);

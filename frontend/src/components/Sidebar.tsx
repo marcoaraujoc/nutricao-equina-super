@@ -46,6 +46,17 @@ const ROTAS_ADMIN = [
 const ehRotaAdmin = (pathname: string) => ROTAS_ADMIN.some(r => pathname.startsWith(r));
 
 // ─── Detectar seção ativa ─────────────────────────────────────────────────────
+/**
+ * 🔴 MAPA DE ATENDIMENTO ESCONDIDO DO MENU (a pedido, 2026-09-05) — desligado, NÃO
+ * removido. A rota `/mapa-atendimento`, a tela (`pages/MapaAtendimento.tsx`), o
+ * controller e a permissão `dashboard.geral.ler` continuam montados e funcionando:
+ * chega-se a ela pela URL, como ao editor de modelos de documento (§12, 30/08).
+ * ⚠️ Para voltar a exibir, basta `true` aqui — nenhuma outra linha precisa mudar.
+ * ⚠️ Não apagar o item nem o gate `podeVerDashboard` enquanto isto for `false`: é o
+ * que mantém a volta em uma palavra em vez de uma reconstrução.
+ */
+const MOSTRAR_MAPA_ATENDIMENTO = false;
+
 type ActiveSection = 'geral' | 'agenda' | 'clinica' | 'nutricional' | 'admin' | 'estoque' | 'exames' | 'enfermagem' | 'cadastro' | 'mapa';
 
 function detectSection(pathname: string): ActiveSection {
@@ -321,8 +332,8 @@ export default function Sidebar() {
             </div>
           )}
 
-          {/* ── 2. Mapa de Atendimento ─────────────────────────────────────── */}
-          {podeVerDashboard && (
+          {/* ── 2. Mapa de Atendimento ─── ESCONDIDO (ver MOSTRAR_MAPA_ATENDIMENTO) ─ */}
+          {MOSTRAR_MAPA_ATENDIMENTO && podeVerDashboard && (
             <div className="space-y-0.5">
               {navLink('/mapa-atendimento', <LayoutDashboard size={20} />, 'Mapa de Atendimento', isMapaActive)}
             </div>

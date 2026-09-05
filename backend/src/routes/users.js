@@ -36,6 +36,12 @@ router.put   ('/me/assinatura',   authenticate, uploadFoto.single('assinatura'),
 router.delete('/me/assinatura',   authenticate, UserController.salvarAssinaturaMe);
 router.patch ('/me/senha',  authenticate, UserController.alterarSenha);
 
+// Assinatura de OUTRO profissional (quem assina o documento clínico impresso).
+// Rota literal específica ANTES do CRUD ADMIN de /:id — e SEM `authorize('ADMIN')`:
+// quem imprime a prescrição de um colega é a equipe da clínica, não o admin da
+// plataforma. O isolamento é a empresa do contexto (ver o controller).
+router.get   ('/:id/assinatura-profissional', authenticate, UserController.assinaturaProfissional);
+
 // Admin CRUD (somente ADMIN)
 router.get   ('/',             authenticate, authorize('ADMIN'), UserAdminController.listar);
 router.post  ('/',             authenticate, authorize('ADMIN'), UserAdminController.criar);

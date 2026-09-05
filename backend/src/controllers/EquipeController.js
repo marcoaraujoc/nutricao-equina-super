@@ -24,12 +24,14 @@ const { normalizeEmail, findUserByEmail, whereEmailInsensitive } = require('../l
 // direto no User (vaza entre clínicas). Ver lib/profissionalPerfil.js.
 const {
   salvarPerfil:           salvarPerfilProfissional,
+  aplicarPerfil:          aplicarPerfilProfissional,
   aplicarPerfilEmRelacao: aplicarPerfilProfEmRelacao,
 } = require('../lib/profissionalPerfil');
 // Tabela de ligação usuário × empresa — PERFIL + cadastro por empresa (fonte nova)
 const { salvarVinculo, vincularMembro, normalizarPagamento, salvarPagamentoEAcesso,
         lerPagamentoEAcesso,
-        anexarPagamentoEmRelacao, anexarFotoEmRelacao, empresasSemAcesso } = require('../lib/usuarioEmpresa');
+        anexarPagamentoEmRelacao, anexarFotoEmRelacao, empresasSemAcesso,
+        definirAtivoNaEmpresa } = require('../lib/usuarioEmpresa');
 // Limite de usuários do plano — fonte única da conta de assentos (fase 2 do multi-tenancy)
 const { garantirVagaDeUsuario, consomeAssento } = require('../lib/planoEmpresa');
 // Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — ver toggleMembro/listarMembros
@@ -2151,15 +2153,22 @@ const EquipeController = {
         if (!empresa || membro.equipe?.empresaId !== empresa.id) {
           return res.status(403).json({ sucesso: false, mensagem: 'Apenas gestores da equipe podem editar membros.' });
         }
-        // Gestor não edita OUTRO gestor (inclui troca de senha) — a própria linha
-        // segue liberada, é o caminho de "editar a mim mesmo" pela lista da equipe.
-        // Conceder o cargo GESTOR a um membro NÃO-gestor não entra nessa trava: é o
-        // mesmo gestor incluindo um novo gestor, que "Cadastro da Empresa > Incluir
-        // gestor" (incluirMembroDireto) já permite sem exigir ADMIN — a exigência de
-        // ADMIN aqui era inconsistente com aquele fluxo.
-        if (membro.cargo === 'GESTOR' && Number(req.user.id) !== Number(membro.userId)) {
-          return res.status(403).json({ sucesso: false, mensagem: 'Gestores não podem ser editados por outros gestores.' });
-        }
+        // 🔴 A TRAVA "gestor não edita outro gestor" FOI REMOVIDA (2026-09-05, a pedido).
+        // Ela não protegia nada e produzia uma incoerência relatada da tela de Equipe:
+        // o MESMO gestor podia INCLUIR outro gestor (`incluirMembroDireto`, sem exigir
+        // ADMIN) e podia INATIVÁ-LO (`toggleMembro`, que nunca teve essa trava —
+        // inativar tira o acesso da pessoa à empresa, ação bem mais forte), mas não
+        // podia corrigir o telefone dele. Quem quisesse contornar a trava simplesmente
+        // inativava o colega; o que a regra entregava era só o botão "Editar" ausente.
+        // ⚠️ O QUE CONTINUA VALENDO, e é o que de fato protege:
+        //   · SENHA — só o ADMIN da plataforma e o próprio dono da conta (bloco abaixo);
+        //   · DESBLOQUEIO de conta travada — conta de GESTOR escala para o ADMIN
+        //     (`lib/bloqueioLogin.js`), regra própria, não tocada aqui;
+        //   · o gestor só alcança membro da PRÓPRIA empresa (checagem logo acima).
+        // ⚠️ Consequência aceita: um gestor pode rebaixar o cargo de outro. Isso já era
+        // possível por outro caminho (inativar), e a premissa "empresa nunca existe sem
+        // gestor" (§36-d) não tem guarda de último gestor em NENHUM dos dois — se for
+        // para ter, o lugar é aqui E no toggleMembro, juntos.
       }
 
       if (email !== undefined) {
@@ -2470,30 +2479,66 @@ const EquipeController = {
     try {
       const { id }  = req.params;
       const { motivo } = req.body ?? {};
-      const membro  = await prisma.membroEquipe.findUnique({ where: { id: Number(id) }, include: { user: true } });
+      const membro  = await prisma.membroEquipe.findUnique({
+        where:   { id: Number(id) },
+        include: { user: true, equipe: { select: { empresaId: true } } },
+      });
       if (!membro) return res.status(404).json({ sucesso: false, mensagem: 'Membro não encontrado' });
 
-      const vaiInativar = membro.user.ativo;
+      // 🔴 A (IN)ATIVAÇÃO É DA EMPRESA DESTE VÍNCULO — nunca da conta (2026-09-04).
+      // Ver o bloco abaixo para o porquê; a empresa sai da EQUIPE do membro, e não do
+      // contexto de quem clicou, porque é aquele vínculo que está sendo alterado.
+      const empresaDoVinculo = membro.equipe?.empresaId ?? null;
+      const estadoAtual = await aplicarPerfilProfissional(membro.user, empresaDoVinculo);
+      const vaiInativar = estadoAtual.ativo !== false;
 
-      // Justificativa obrigatória só para INATIVAR (ativar não pede motivo) —
-      // mesmo padrão de Fornecedor/Prestador/Tratador/Proprietário.
-      if (vaiInativar && !motivo?.trim()) {
-        return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da inativação' });
+      // 🔴 JUSTIFICATIVA NOS DOIS SENTIDOS (2026-09-04, a pedido). Antes só a
+      // INATIVAÇÃO pedia motivo, e a reativação passava direto: a trilha respondia
+      // "por que tiraram fulano da equipe" mas não "por que devolveram o acesso a
+      // ele" — que é a pergunta mais sensível das duas, porque devolve poder.
+      if (!motivo?.trim()) {
+        return res.status(400).json({
+          sucesso:  false,
+          mensagem: `É obrigatório informar o motivo da ${vaiInativar ? 'inativação' : 'reativação'}`,
+        });
       }
 
+      // 🔴 O ESTADO VAI PARA A EMPRESA, NÃO PARA A CONTA (2026-09-04).
+      //
+      // Antes isto escrevia `users.ativo` — a identidade GLOBAL. Efeito relatado:
+      // inativar alguém numa clínica FECHAVA O LOGIN dela em todas as outras, inclusive
+      // onde é GESTORA, com a mensagem "Conta desativada". Agora o desligamento é
+      // gravado nos dois lugares que o descrevem POR EMPRESA:
+      //   · `tb_usuario_empresa.ativo`  → login e seletor de contexto
+      //     (`podeAcessarSistema` / `empresasSemAcesso`): a empresa some da lista e o
+      //     `auth` recusa o header dela, então ele não vê dado nenhum de lá;
+      //   · `tb_profissional_perfis.ativo` → o que a tela de Equipe exibe
+      //     (`ativo` efetivo = User.ativo && perfil.ativo, ver lib/profissionalPerfil).
+      // `users.ativo` continua existindo e é do ADMIN da plataforma: ali se desliga a
+      // CONTA, o que é outra decisão.
+      //
+      // ⚠️ Sem empresa resolvida (vínculo legado sem equipe) cai no comportamento
+      // antigo — melhor global que NO-OP silencioso, que deixaria o botão sem efeito.
+      if (empresaDoVinculo) {
+        await definirAtivoNaEmpresa(prisma, membro.userId, empresaDoVinculo, !vaiInativar);
+        await salvarPerfilProfissional(prisma, membro.userId, empresaDoVinculo, { ativo: !vaiInativar });
+      }
+      const soTrilha = { global: !empresaDoVinculo };
       if (vaiInativar) {
-        await registrarInativacao(prisma, membro.userId, req.user.id, motivo.trim());
+        await registrarInativacao(prisma, membro.userId, req.user.id, motivo.trim(), soTrilha);
       } else {
-        await registrarAtivacao(prisma, membro.userId, req.user.id);
+        await registrarAtivacao(prisma, membro.userId, req.user.id, soTrilha);
       }
 
       // Auditoria: quem foi (in)ativado, quando (timestamp da própria linha) e
       // quem fez (userId/userName/email da própria linha, gravados pelo helper).
       await registrarAuditoria(prisma, req, {
-        categoria: 'ALTERACAO',
+        // A categoria diz O QUE ACONTECEU: (in)ativar um cadastro não é a mesma
+        // coisa que editar um campo dele, e ALTERACAO misturava os dois.
+        categoria: vaiInativar ? 'INATIVACAO' : 'ATIVACAO',
         entidade:  'USUARIO',
         entidadeId: membro.userId,
-        motivo:    vaiInativar ? motivo.trim() : null,
+        motivo:    motivo.trim(),
         detalhes:  `${req.user.fullName ?? req.user.email} ${vaiInativar ? 'inativou' : 'ativou'} o usuário ${membro.user.fullName}`,
       });
 

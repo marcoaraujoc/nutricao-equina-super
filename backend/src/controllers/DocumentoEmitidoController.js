@@ -21,7 +21,7 @@
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { montarContexto, aplicarEmBlocos, removerVazios, coletarCampos, chaveDaLacuna } = require('../lib/documentoVariaveis');
-const { coletarListas, sugerirListas, sugerirOpcoes } = require('../lib/documentoListas');
+const { coletarListas, sugerirListas, sugerirOpcoes, listaObrigatoriaVazia } = require('../lib/documentoListas');
 const { bloquearSeAnimalInativo } = require('../lib/animalInativo');
 const { fusoDaEmpresa } = require('../lib/fusoEmpresa');
 const { registrarAuditoria } = require('../lib/auditoria');
@@ -245,6 +245,22 @@ const DocumentoEmitidoController = {
           // 2026-09-03 a observação da vacina é uma CÉLULA desta tabela — com o corte
           // antigo de 500 ela seria truncada em silêncio no meio da frase.
           .map(l => l.slice(0, 12).map(c => (typeof c === 'string' ? c.trim().slice(0, 800) : '')));
+      }
+
+      // 🔴 LISTA OBRIGATÓRIA SEM NENHUMA LINHA = NÃO EMITE (2026-09-04, a pedido:
+      // "no atestado de vacinação obrigar a preencher pelo menos 1 vacina").
+      // A checagem é AQUI, e não só na tela, porque é `removerVazios` que torna a
+      // falha invisível: a lista vazia é descartada do snapshot e o papel sai sem
+      // sequer o rótulo — um atestado de vacinação assinado que não declara vacina
+      // nenhuma. Ver `lib/documentoListas.js#listaObrigatoria` para QUAIS listas
+      // entram nesta regra e por quê.
+      const faltando = listaObrigatoriaVazia(coletarListas(blocos), listas);
+      if (faltando) {
+        return res.status(400).json({
+          sucesso: false,
+          error:   `Preencha ao menos um item em "${faltando.rotulo}".`,
+          code:    'LISTA_OBRIGATORIA',
+        });
       }
 
       const doc = await prisma.$transaction(async (tx) => {

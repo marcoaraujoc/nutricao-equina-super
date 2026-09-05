@@ -936,6 +936,33 @@ function ModalNovoTipoItem({ faturaId, animalId, tipoInicial, onFechar, onLancad
 
 type MesFatura = { id: number; mesReferencia?: string; status: string };
 
+// ─── Cores das ações (CLAUDE.md §6) ──────────────────────────────────────────
+// A barra de ações da fatura nascia TODA cinza — e cinza, na aplicação, é a cor do
+// INDISPONÍVEL: uma linha inteira de botões habilitados parecia desabilitada. Aqui
+// eles passam a usar a mesma paleta dos ícones do módulo de Atendimento, que é a
+// que os ícones de editar (laranja) e excluir (vermelho) do ITEM já seguiam nesta
+// mesma tela.
+// ⚠️ Ao acrescentar ação nova, escolha o TOM pelo significado — nunca uma cor nova.
+const BTN_ACAO = 'flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs font-semibold transition-colors disabled:opacity-60';
+
+const TOM_ACAO = {
+  /** alterar / reabrir — muda o estado do que já está fechado */
+  alterar:   'border-orange-200  text-orange-600  hover:bg-orange-50',
+  /** ver / finalizar / executar */
+  ver:       'border-emerald-200 text-emerald-700 hover:bg-emerald-50',
+  finalizar: 'border-emerald-200 text-emerald-700 hover:bg-emerald-50',
+  /** saída de conteúdo: imprimir, exportar e e-mail dividem o azul */
+  imprimir:  'border-blue-200    text-blue-600    hover:bg-blue-50',
+  email:     'border-blue-200    text-blue-600    hover:bg-blue-50',
+  /** WhatsApp usa a cor da própria marca */
+  whatsapp:  'border-green-200   text-green-600   hover:bg-green-50',
+  /** exportar tem tom PRÓPRIO (marrom): baixa arquivo, não põe o documento em
+   *  circulação como o imprimir/e-mail azuis ao lado */
+  exportar:  'border-amber-300   text-amber-800   hover:bg-amber-50',
+  /** links enviados — revela o que já foi mandado ao cliente */
+  links:     'border-yellow-200  text-yellow-600  hover:bg-yellow-50',
+} as const;
+
 function PainelFatura({
   prop, onStatusChange, faturaId, mes = null, onMeta,
 }: {
@@ -1478,47 +1505,47 @@ function PainelFatura({
         {(fatura.status === 'FECHADA' || fatura.status === 'ATRASADA'
           || (fatura.status === 'PAGA' && isGestor)) && (
           <button onClick={() => handleStatus('ABERTA')} disabled={salvando}
-            className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 disabled:opacity-60 transition-colors">
+            className={`${BTN_ACAO} ${TOM_ACAO.alterar}`}>
             {salvando ? <Loader2 size={11} className="animate-spin"/> : <RefreshCw size={11}/>} Reabrir
           </button>
         )}
         {canEdit && (
           <button onClick={handleFechar} disabled={salvando}
-            className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 disabled:opacity-60 transition-colors">
+            className={`${BTN_ACAO} ${TOM_ACAO.finalizar}`}>
             {salvando ? <Loader2 size={11} className="animate-spin"/> : <Check size={13}/>} Fechar Fatura
           </button>
         )}
         {(canEdit || fatura.status === 'FECHADA' || fatura.status === 'ATRASADA') && (
           <button onClick={() => handleStatus('PAGA')} disabled={salvando}
-            className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 disabled:opacity-60 transition-colors">
+            className={`${BTN_ACAO} ${TOM_ACAO.finalizar}`}>
             {salvando ? <Loader2 size={11} className="animate-spin"/> : <CheckCircle2 size={11}/>} Marcar como Pago
           </button>
         )}
         <button onClick={handleEmail} disabled={enviandoEmail}
-          className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 disabled:opacity-60 transition-colors">
+          className={`${BTN_ACAO} ${TOM_ACAO.email}`}>
           {enviandoEmail ? <Loader2 size={13} className="animate-spin"/> : <Mail size={13}/>} E-mail
         </button>
         <button onClick={handleShare} disabled={compartilhando}
-          className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 disabled:opacity-60 transition-colors">
+          className={`${BTN_ACAO} ${TOM_ACAO.whatsapp}`}>
           {compartilhando ? <Loader2 size={13} className="animate-spin"/> : <MessageCircle size={13}/>} WhatsApp
         </button>
         <button onClick={toggleLinks}
-          className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 transition-colors">
+          className={`${BTN_ACAO} ${TOM_ACAO.links}`}>
           <Link2 size={13}/> Links enviados
         </button>
         <button onClick={handlePDF}
-          className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 transition-colors">
+          className={`${BTN_ACAO} ${TOM_ACAO.imprimir}`}>
           <Printer size={13}/> Imprimir
         </button>
         <div className="relative" ref={exportMenuRef}>
           <button onClick={() => setShowExportMenu(v => !v)}
-            className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 transition-colors">
+            className={`${BTN_ACAO} ${TOM_ACAO.exportar}`}>
             <Download size={13}/> Exportar <ChevronDown size={11}/>
           </button>
           {showExportMenu && (
             <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-1 min-w-[150px]">
               <button onClick={handleCSV}
-                className="w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+                className="w-full text-left px-4 py-2 text-xs text-amber-800 hover:bg-amber-50 flex items-center gap-2">
                 <Download size={13}/> CSV (.csv)
               </button>
             </div>
@@ -2129,7 +2156,7 @@ function ModalFechamentoLote({ proprietarios, onClose, onDone }: {
                           </button>
                         )}
                         <button onClick={() => abrirEmail(`Fatura — ${nomeDestino}`, texto, emailDestino)}
-                          className="flex items-center gap-1 px-2.5 py-1 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-lg text-xs font-semibold transition-colors">
+                          className="flex items-center gap-1 px-2.5 py-1 border border-blue-200 text-blue-600 hover:bg-blue-50 rounded-lg text-xs font-semibold transition-colors">
                           <Mail size={12}/> E-mail
                         </button>
                       </div>

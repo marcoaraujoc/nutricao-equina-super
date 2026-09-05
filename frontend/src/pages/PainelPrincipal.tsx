@@ -25,7 +25,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Loader2, Search, MapPin, AlertTriangle, Clock, Syringe,
   ClipboardList, PackageCheck, Stethoscope, RefreshCw,
-  CheckCircle2, Ban, Pill, Lock,
+  CheckCircle2, Ban, Pill,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
@@ -57,6 +57,8 @@ interface AnimalLista {
   localizacao?: { id: number; nome: string } | null;
   especie?:    { nome: string } | null;
   raca?:       { nome: string } | null;
+  /** Prontuário CONGELADO (`Animal.inativo`) — `GET /animais` já devolve o campo. */
+  inativo?:    boolean;
 }
 
 interface Agendamento {
@@ -233,6 +235,28 @@ export default function PainelPrincipal() {
   );
 
   /**
+   * 🔴 PACIENTE INATIVO NÃO APARECE NESTE PAINEL (a pedido, 2026-09-05) — nem na fila,
+   * nem no resumo de farmácia, nem na agenda do dia, nem na busca de pacientes.
+   * Este é o painel do QUE FAZER HOJE, e o prontuário congelado não permite executar
+   * nada: a linha ocupava o alto da tela oferecendo trabalho que o backend recusa com
+   * 400 (`lib/animalInativo.js`).
+   * ⚠️ REVERTE, só para ESTA tela, a decisão de 2026-09-02 ("continua na fila, sem
+   * ação"). Consequência aceita: some daqui a pista de que aquele tratamento existe e
+   * ficou parado — quem quiser vê-la usa a aba "Paciente inativo" do histórico de
+   * `/execucao-prescricao`, que é onde essa linha passou a morar em 2026-09-05.
+   * ⚠️ O BACKEND NÃO MUDA: as duas `listarParaExecucao` seguem devolvendo a linha com
+   * `animalInativo` — é ela que alimenta aquela aba na outra tela.
+   * ⚠️ Só esconde o que se SABE inativo: animal fora da lista de `/animais` e sem a
+   * flag na própria linha continua aparecendo. Esconder no escuro seria pior — some da
+   * fila um paciente que ninguém inativou.
+   */
+  const pacienteInativo = useCallback(
+    (animalId: number | undefined, flagDaLinha?: boolean | null) =>
+      !!flagDaLinha || animalPorId.get(Number(animalId))?.inativo === true,
+    [animalPorId],
+  );
+
+  /**
    * Fila agrupada por LOCALIDADE — o roteiro do dia é geográfico. Traz a execução do dia
    * INTEIRA: prescrições (só com o que ainda falta hoje, `itemPendenteEm` — a MESMA
    * regra do plantão) e vacinas FINALIZADAS aguardando aplicação.
@@ -262,17 +286,19 @@ export default function PainelPrincipal() {
 
     for (const g of grupos) {
       if (g.status === 'CANCELADO') continue;
+      if (pacienteInativo(g.animal?.id, g.animalInativo)) continue;
       const itens = g.itens.filter(i => itemPendenteEm(i, hojeISO()));
       if (itens.length === 0) continue;
       add(rotuloLocalidade(ondeEsta(g.animal)), { kind: 'PRESC', id: `p-${g.id}`, animal: g.animal, grupo: g, itens });
     }
 
     for (const v of vacinas) {
+      if (pacienteInativo(v.animal?.id, v.animalInativo)) continue;
       add(rotuloLocalidade(ondeEsta(v.animal)), { kind: 'VAC', id: `v-${v.id}`, animal: v.animal, vacina: v });
     }
 
     return [...mapa.entries()].sort((a, b) => a[0].localeCompare(b[0], 'pt-BR'));
-  }, [grupos, vacinas, animalPorId]);
+  }, [grupos, vacinas, animalPorId, pacienteInativo]);
 
   const totalPendentes = useMemo(
     () => filaPorLocalidade.reduce((s, [, es]) => s + es.length, 0),
@@ -348,7 +374,9 @@ export default function PainelPrincipal() {
 
   const animaisFiltrados = useMemo(() => {
     const q = busca.trim().toLowerCase();
-    const base = [...animais].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    const base = [...animais]
+      .filter(a => a.inativo !== true)
+      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
     if (!q) return base.slice(0, 30);
     return base.filter(a =>
       a.nome.toLowerCase().includes(q) ||
@@ -362,8 +390,12 @@ export default function PainelPrincipal() {
       // CANCELADO_AUTOMATICAMENTE sai daqui pelo mesmo motivo que CANCELADO: a rotina
       // noturna também é uma desistência do atendimento, só que do sistema.
       .filter(a => a.status !== 'CANCELADO' && a.status !== 'CANCELADO_AUTOMATICAMENTE')
+      // O agendamento não carrega o estado do paciente (o `include` do
+      // AgendamentoController não traz `inativo`, que é lido por SQL cru no projeto):
+      // quem responde é a lista de `/animais`, que a tela já tem em memória.
+      .filter(a => !pacienteInativo(a.animal?.id))
       .sort((a, b) => a.dataHora.localeCompare(b.dataHora)),
-    [agenda],
+    [agenda, pacienteInativo],
   );
 
   // ── Cancelamento (mesmas rotas de plantão da tela de execução) ─────────────
@@ -571,11 +603,6 @@ export default function PainelPrincipal() {
                         {itensLocal.map(entrada => {
                           const ehVac  = entrada.kind === 'VAC';
                           const animal = entrada.animal;
-                          // Prontuário congelado (Animal.inativo) — vem do backend na
-                          // própria linha da fila, para a tela não precisar consultar.
-                          const congelado = ehVac
-                            ? !!entrada.vacina.animalInativo
-                            : !!entrada.grupo.animalInativo;
                           const resumo = ehVac
                             ? [entrada.vacina.nome, entrada.vacina.dose, entrada.vacina.via]
                                 .filter(Boolean).join(' · ')
@@ -634,24 +661,17 @@ export default function PainelPrincipal() {
                                 Como o popup abre SOBRE esta tela, executar pelo painel
                                 volta ao painel — a tela de retorno é sempre a chamadora. */}
                             <AcoesRegistro className="flex-shrink-0">
-                              {/* 🔴 Paciente INATIVO: a parada CONTINUA na fila (a equipe
-                                  precisa saber que existe e ficou parada), mas sem ação —
-                                  executar e cancelar respondem 400 (lib/animalInativo.js).
-                                  O selo é o que evita "sumiu o botão". */}
-                              {congelado && (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-[9px] font-bold whitespace-nowrap"
-                                  title="Paciente inativo — prontuário em somente leitura. Reative com o gestor.">
-                                  <Lock size={9} /> Somente leitura
-                                </span>
-                              )}
+                              {/* Sem selo "Somente leitura" aqui: o paciente inativo não
+                                  chega a esta lista (`pacienteInativo`, nas derivações),
+                                  então um selo para ele seria código inalcançável. */}
                               <AcaoRegistro tom="executar" icone={CheckCircle2}
                                 rotulo={ehVac ? 'Aplicar' : 'Executar'}
                                 titulo={ehVac ? 'Aplicar vacina' : 'Executar prescrição'}
-                                visivel={podeExecutarAcao && !congelado}
+                                visivel={podeExecutarAcao}
                                 onClick={() => ehVac ? setModalVacina(entrada.vacina) : setModalGrupo(entrada.grupo)} />
                               <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
                                 titulo={ehVac ? 'Cancelar vacina' : 'Cancelar prescrição'}
-                                visivel={podeCancelar && !congelado}
+                                visivel={podeCancelar}
                                 onClick={() => {
                                   setErroInline(null);
                                   if (ehVac) setCancelarVacina(entrada.vacina);
@@ -669,21 +689,12 @@ export default function PainelPrincipal() {
             </Painel>
 
             <Painel
-              titulo="Resumo de farmácia (para carregar no carro)"
+              titulo="Resumo de farmácia"
               icone={<PackageCheck size={13} />}
-              badge={
-                resumoFarmacia.length > 0 ? (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 bg-emerald-100 text-emerald-700">
-                    {resumoFarmacia.filter(m => separados.has(m.chave)).length}/{resumoFarmacia.length}
-                  </span>
-                ) : undefined
-              }
-              acao={
-                <button type="button" onClick={() => navigate('/farmacia')}
-                  className="text-[10px] font-bold text-emerald-700 hover:text-emerald-800 uppercase tracking-wide flex-shrink-0">
-                  Lista completa
-                </button>
-              }
+              // Contagem no MESMO formato dos demais cards (`Contador`), a pedido. Era
+              // "separados/total" (2/7), o progresso da conferência — que sobrevive nos
+              // checkboxes da lista, o único lugar onde ele é acionável.
+              badge={<Contador n={resumoFarmacia.length} />}
               className="bg-emerald-50/40"
             >
               {resumoFarmacia.length === 0 ? (

@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
+import { rotuloOpcaoAnimal } from '../utils/animalInfo';
 
 interface AnimalOpcao {
   id:              number;
@@ -11,6 +12,8 @@ interface AnimalOpcao {
   raca?:           { nome: string } | null;
   especie?:        { nome: string } | null;
   user?:           { id?: number; fullName: string; email: string } | null;
+  /** Paciente INATIVO (somente leitura) — continua na lista, mas marcado. */
+  inativo?:        boolean | null;
 }
 
 interface SeletorAnimalProps {
@@ -74,7 +77,7 @@ export default function SeletorAnimal({
       >
         {animais.map(a => (
           <option key={a.id} value={a.id}>
-            {a.nome}{(nomesCount[a.nome] ?? 0) > 1 ? ` — ${a.user?.fullName ?? '?'}` : ''}
+            {rotuloOpcaoAnimal(a, { comProprietario: (nomesCount[a.nome] ?? 0) > 1 })}
           </option>
         ))}
       </select>

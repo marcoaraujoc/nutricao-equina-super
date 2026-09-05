@@ -16,7 +16,7 @@ const { cancelarPendenciasDoAnimal } = require('../lib/cancelamentoPendencias');
 // Localidades atendidas do cliente, com a frequência de visitas de CADA uma
 const localidadesProp = require('../lib/proprietarioLocalidades');
 // Tabela de ligação usuário × empresa — perfil PROPRIETARIO + cadastro da empresa
-const { salvarVinculo, ehProfissionalNaEmpresa } = require('../lib/usuarioEmpresa');
+const { salvarVinculo, ehProfissionalNaEmpresa, definirAtivoNaEmpresa } = require('../lib/usuarioEmpresa');
 
 // Dia de vencimento da fatura: obrigatório, inteiro entre 1 e 25
 // (rejeita vazio, 0, negativo e > 25 — espelha a validação inline do frontend).
@@ -588,6 +588,15 @@ const ProprietarioController = {
   removerDaEmpresa: async (req, res) => {
     const { id } = req.params;
     const { motivo } = req.body ?? {};
+    // 🔴 INATIVAR OS ANIMAIS É ESCOLHA DE QUEM REMOVE (2026-09-04, a pedido:
+    // "quando inativar um proprietário perguntar se quer inativar os animais").
+    // Antes era automático e silencioso — e o caso do cliente que sai da clínica
+    // deixando os animais aos cuidados de outro tutor não tinha como ser registrado
+    // sem sumir com o prontuário deles.
+    // ⚠️ Default `true`: é o comportamento que esta rota sempre teve, e é o que vale
+    // para qualquer chamador que não conheça o campo novo. Só o `false` EXPLÍCITO
+    // preserva os animais.
+    const inativarAnimais = req.body?.inativarAnimais !== false;
     const isAdmin = req.user?.role === 'ADMIN';
 
     if (!motivo?.trim()) {
@@ -620,15 +629,20 @@ const ProprietarioController = {
         // cancelamento das pendências dele (agendamento/vacina/prescrição/exame/
         // encaminhamento em aberto) — sem isso ficavam "fantasmas": sumidos das telas
         // enquanto o cliente está inativo, mas com status de pendente ainda gravado.
-        const animaisAfetados = await tx.animal.findMany({
-          where: {
-            userId:    Number(id),
-            empresaId: req.empresaId,
-            ativo:     true,
-            ...(equipeScope ? { OR: [{ equipeId: { in: equipeScope } }, { equipeId: null }] } : {}),
-          },
-          select: { id: true },
-        });
+        const animaisAfetados = inativarAnimais
+          ? await tx.animal.findMany({
+            where: {
+              userId:    Number(id),
+              empresaId: req.empresaId,
+              ativo:     true,
+              ...(equipeScope ? { OR: [{ equipeId: { in: equipeScope } }, { equipeId: null }] } : {}),
+            },
+            select: { id: true },
+          })
+          // Escolheu MANTER os animais: nenhum é tocado, e por consequência nenhuma
+          // pendência clínica é cancelada em cascata. O cadastro do cliente NESTA
+          // empresa é inativado do mesmo jeito — as duas coisas são independentes.
+          : [];
 
         const motivoCascata = `Cancelado automaticamente: proprietário removido da empresa — ${motivo}`;
         const pendencias = { agendamentos: 0, evolucoes: 0, vacinas: 0, prescricoes: 0, encaminhamentos: 0, exames: 0 };
@@ -646,6 +660,16 @@ const ProprietarioController = {
         // empresa) e devolve o `id` do PERFIL — é ele, não o userId, que
         // `registrarInativacao` grava na trilha (cadastroAtivacao.js).
         const perfilAtualizado = await perfilProp.salvarPerfil(tx, Number(id), req.empresaId, { ativo: false });
+        // 🔴 O CLIENTE INATIVO NÃO ENTRA MAIS NOS DADOS DESTA EMPRESA (2026-09-04).
+        // `ProprietarioPerfil.ativo` governa a LISTA de clientes; quem governa o
+        // portal do proprietário é `tb_usuario_empresa` — é dela que saem
+        // `empresasSemAcesso` (o seletor) e a recusa do contexto no `auth`. Sem esta
+        // linha ele continuava abrindo a clínica pelo portal, e o buraco ficou maior
+        // com a opção de PRESERVAR os animais (mesma sessão): `validarEmpresaContexto`
+        // aceita quem tem animal ativo na empresa, então o cliente inativado com os
+        // animais mantidos seguiria com acesso completo.
+        // ⚠️ Nas OUTRAS empresas nada muda — é por isso que o estado mora no vínculo.
+        await definirAtivoNaEmpresa(tx, Number(id), req.empresaId, false);
         if (perfilAtualizado) {
           await registrarInativacao(tx, 'proprietario', perfilAtualizado.id, req.user.id, motivo);
         }
@@ -730,6 +754,8 @@ const ProprietarioController = {
 
       await prisma.$transaction(async (tx) => {
         const perfilAtualizado = await perfilProp.salvarPerfil(tx, Number(id), req.empresaId, { ativo: true });
+        // Devolve o acesso ao portal junto com o cadastro (ver o comentário na inativação).
+        await definirAtivoNaEmpresa(tx, Number(id), req.empresaId, true);
         if (perfilAtualizado) {
           await registrarAtivacao(tx, 'proprietario', perfilAtualizado.id, req.user.id);
         }

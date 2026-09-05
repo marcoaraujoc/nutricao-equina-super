@@ -20,6 +20,16 @@ interface Animal {
   especie?: { nome: string };
   user?: { fullName: string; email: string; phone?: string | null };
   logoUrl?: string | null;
+  // Prontuário CONGELADO (`Animal.inativo`) — `GET /animais` e `GET /animais/:id` já
+  // devolvem os quatro campos (`lib/animalInativo.js#anexarInativoEmLista`). Sem eles
+  // aqui, toda tela que usa o paciente do contexto precisaria de uma consulta própria
+  // só para saber se pode escrever.
+  inativo?:       boolean;
+  inativoEm?:     string | null;
+  inativoMotivo?: string | null;
+  // `fullName` opcional para casar com o que as telas já tipam (AnimaisVet) e com
+  // `PacienteInativavel` de components/FaixaPacienteInativo.
+  inativoPor?:    { fullName?: string | null } | null;
 }
 
 interface SelectedAnimalContextType {

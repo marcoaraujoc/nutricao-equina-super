@@ -40,7 +40,21 @@ router.post('/fechar-lote', authenticate, checkPermission('financeiro.faturas.fe
 router.patch('/:faturaId/fechar', authenticate, checkPermission('financeiro.faturas.fechar', 'PROPRIO'), Ctrl.fecharFatura);
 
 // Status da fatura (uso geral: PAGA, ABERTA, CANCELADA)
-router.patch('/:faturaId/status', authenticate, checkPermission('financeiro.faturas.editar', 'EQUIPE'), Ctrl.atualizarStatus);
+//
+// 🔴 NIVEL 'PROPRIO', NAO 'EQUIPE' (2026-09-04). Exigir EQUIPE aqui devolvia 403
+// para quem via o botao: o seed da VETERINARIO **PROPRIO** em
+// `financeiro.faturas.editar`, e o front libera "Marcar como Pago" com qualquer
+// nivel a partir de LEITURA (`podeExecutar` sem minimo). Resultado relatado:
+// clicar em Marcar como Pago dava "Erro ao atualizar status", sem dizer o motivo.
+// ⚠️ O nivel PROPRIO nao vira EQUIPE sozinho: o `PermCheck` do Controle de Acesso
+// e BINARIO (NENHUM -> EQUIPE -> NEGADO), entao o valor PROPRIO so existe em
+// perfil que NUNCA foi tocado na tela — exatamente o caso comum. Rota que exija
+// EQUIPE nasce quebrada para o padrao do seed.
+// ⚠️ PROPRIO tambem e o nivel de `adicionarItem`, `atualizarItem` e `fecharFatura`:
+// marcar como paga nao pode ser mais restrito que FECHAR a fatura.
+// A protecao que importa continua no controller — sair de PAGA e' ato de GESTOR
+// (`ehGestorNoContexto`) e vai para a auditoria.
+router.patch('/:faturaId/status', authenticate, checkPermission('financeiro.faturas.editar', 'PROPRIO'), Ctrl.atualizarStatus);
 
 // Legado
 router.get('/animal/:animalId',   authenticate, checkPermission('financeiro.faturas.ler',    'LEITURA'), exigirAcessoAnimal(), Ctrl.obterFaturaAberta);

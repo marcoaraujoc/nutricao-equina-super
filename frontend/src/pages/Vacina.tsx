@@ -19,6 +19,7 @@ import { useEmpresa } from '../contexts/EmpresaContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import AnimalCard from '../components/AnimalCard';
+import FaixaPacienteInativo from '../components/FaixaPacienteInativo';
 import BotaoVoltar from '../components/BotaoVoltar';
 import PageContainer from '../components/PageContainer';
 import SeletorAnimalInteligente from '../components/SeletorAnimalInteligente';
@@ -192,21 +193,9 @@ export default function Vacina() {
 
       {animal && <AnimalCard animal={animal} />}
 
-      {/* Mesma faixa do shell de Atendimento: sem ela, os botões apenas somem e quem
-          olha conclui que perdeu permissão. */}
-      {animal?.inativo && (
-        <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
-          <p className="text-sm font-semibold text-amber-900">
-            Paciente inativo — prontuário em somente leitura.
-          </p>
-          <p className="text-xs text-amber-800 mt-0.5">
-            O histórico de vacinas continua visível e pode ser impresso ou enviado. Nada
-            pode ser registrado, finalizado, executado ou cancelado até o gestor reativar
-            o paciente.
-            {animal.inativoMotivo && <> Motivo: “{animal.inativoMotivo}”.</>}
-          </p>
-        </div>
-      )}
+      {/* MESMA faixa do shell de Atendimento — agora literalmente a mesma: o texto
+          daqui já divergia do de lá e não mostrava a data nem quem inativou. */}
+      <FaixaPacienteInativo animal={animal} />
 
       {/* Sem paciente escolhido, o submódulo NÃO é montado: ele carrega catálogo e
           histórico por animal e sairia batendo em `/animal/0`. */}

@@ -27,6 +27,9 @@ const brlSimples = (v) => Number(v ?? 0).toLocaleString('pt-BR', { style: 'curre
 const MSG_ERRO_WA = {
   WHATSAPP_NAO_PROVISIONADO: 'WhatsApp da clínica ainda não foi configurado.',
   WHATSAPP_DESCONECTADO:     'WhatsApp da clínica está desconectado. Reconecte em Configurações.',
+  // Distinto do acima de propósito: aqui não adianta reconectar — não há servidor
+  // para gerar o QR. Mandar o gestor a Configurações seria mandá-lo a lugar nenhum.
+  WHATSAPP_SERVIDOR_INDISPONIVEL: 'Serviço de WhatsApp fora do ar. Tente novamente em alguns minutos.',
   TELEFONE_INVALIDO:         'Telefone do proprietário é inválido.',
   TELEFONE_AUSENTE:          'Proprietário sem telefone cadastrado.',
   CLINICA_NAO_ENCONTRADA:    'Clínica não encontrada no contexto ativo.',

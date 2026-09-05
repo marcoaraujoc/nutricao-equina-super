@@ -1,210 +1,111 @@
 // components/login/VitrineLogin.tsx
 //
-// Painel de destaques ao LADO do formulário de login (70% da tela no desktop),
-// no formato do modelo gravado em 2026-08-29: ABAS no topo, título, subtítulo e
-// a captura da tela ocupando todo o resto — trocando sozinha.
+// Painel de destaque ao LADO do formulário de login (70% da tela no desktop).
 //
-// ⚠️ São DUAS abas, não três. A referência (app.simples.vet) tem três; aqui o par
-// cobre o que o S2Vet quer mostrar de cara — como se registra (Praticidade) e o
-// que se enxerga depois (Históricos Analíticos). Slide novo entra em `SLIDES`;
-// nada mais precisa mudar.
-import { useEffect, useRef, useState } from 'react';
-import evolucao from '../../assets/login/evolucao.png';
-import painel from '../../assets/login/painel.png';
+// ⚠️ ERA UM CARROSSEL de duas abas com rotação automática e barra de progresso
+// (modelo de 2026-08-29). Virou UMA FOTO SÓ a pedido do usuário em 2026-09-04:
+// a imagem é um mockup de uso (o produto na mão de quem atende), e não uma
+// captura de tela — trocá-la a cada 5s com uma segunda captura misturava dois
+// registros visuais na mesma vitrine. Saíram as abas, o cronômetro e o deslize;
+// nada aqui anima, então o tratamento de `prefers-reduced-motion` também saiu.
+// Para voltar a rodar mais de um destaque, o histórico do git tem a versão com
+// abas; não reintroduzir carrossel para exibir um único slide.
+//
+// ⚠️ NO MOBILE ESTE PAINEL NÃO APARECE (2026-09-04): a foto vira PLANO DE FUNDO
+// atrás do formulário (`FundoVitrineMobile`, abaixo), para o login caber em UMA
+// TELA. Empilhar a vitrine embaixo do formulário era o que fazia a página rolar.
+import destaque from '../../assets/login/atendimento-mobile.jpg';
 
-interface Slide {
-  chave:  string;
-  aba:    string;   // rótulo curto, na aba
-  titulo: string;   // manchete do painel
-  texto:  string;   // uma linha explicando
-  img:    string;
-  alt:    string;
+const TITULO    = 'A sua clínica em movimento';
+const SUBTITULO =
+  'Todo o atendimento em uma tela só - Evolução, prescrição, exames e encaminhamento no mesmo lugar';
+
+const ALT =
+  'Profissional segurando um celular com a tela de Evolução Clínica do S2Vet: '
+  + 'card do paciente, abas do atendimento e histórico ao lado';
+
+/**
+ * A MESMA foto como plano de fundo, para o mobile.
+ *
+ * ⚠️ `opacity` bem baixa + véu branco por cima: é FUNDO, e o que tem de ser legível
+ * são os campos de login. Foto a plena carga atrás de um formulário derruba o
+ * contraste do texto e dos rótulos — e aqui não há como o usuário desligar.
+ * ⚠️ `aria-hidden` + `pointer-events-none`: é decoração, não conteúdo. O alt da
+ * versão desktop já descreve a imagem para quem usa leitor de tela.
+ */
+export function FundoVitrineMobile() {
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden lg:hidden">
+      <img
+        src={destaque}
+        alt=""
+        className="h-full w-full object-cover opacity-[0.09]"
+      />
+      {/* Véu de cima para baixo: mais opaco onde ficam os campos, mais leve nas
+          bordas — sem ele a foto compete com o texto no meio da tela. */}
+      <div className="absolute inset-0 bg-gradient-to-b from-white/80 via-white/60 to-white/85" />
+    </div>
+  );
 }
 
-const SLIDES: Slide[] = [
-  {
-    chave:  'praticidade',
-    aba:    'Praticidade',
-    titulo: 'Todo o atendimento em uma tela só',
-    texto:  'Evolução, prescrição, exames e encaminhamento no mesmo lugar — com ditado por voz e anexos, sem sair do paciente.',
-    img:    evolucao,
-    alt:    'Tela de Evolução Clínica do S2Vet, com as abas do atendimento e o histórico do paciente ao lado',
-  },
-  {
-    chave:  'historicos',
-    aba:    'Históricos Analíticos',
-    titulo: 'O histórico do paciente, analisado',
-    texto:  'Linha do tempo completa e a Memória Clínica destacando os padrões entre um atendimento e outro.',
-    img:    painel,
-    alt:    'Tela de Detalhamento do Animal do S2Vet, com histórico, memória clínica e agendamentos',
-  },
-];
-
-const INTERVALO_MS = 5000;
-
-// `className` fica a cargo de QUEM POSICIONA: no login é a coluna de 70% (>= lg)
-// e o bloco empilhado abaixo do formulário (< lg). Fixar largura aqui dentro
-// brigaria com o flex do pai.
+// `className` fica a cargo de QUEM POSICIONA: no login é a coluna de 70% (>= lg).
+// Fixar largura aqui dentro brigaria com o flex do pai.
 export default function VitrineLogin({ className = '' }: { className?: string }) {
-  const [atual, setAtual] = useState(0);
-  const [semAnimacao, setSemAnimacao] = useState(false);
-  const barraRef = useRef<HTMLSpanElement>(null);
-
-  // ⚠️ A rotação é SEMPRE automática (pedido de 2026-08-29). Havia aqui uma
-  // pausa ao passar o mouse — o padrão de carrossel — e ela era um tiro no pé
-  // NESTA tela: o painel ocupa 70% da largura, então o cursor parado em
-  // qualquer lugar congelava a troca e a vitrine parecia quebrada.
-  useEffect(() => {
-    const t = setInterval(() => setAtual(i => (i + 1) % SLIDES.length), INTERVALO_MS);
-    return () => clearInterval(t);
-    // `atual` na lista reinicia a contagem quando alguém escolhe uma aba na mão:
-    // sem isso o próximo salto automático poderia vir no instante seguinte ao
-    // clique, tirando da tela o slide que a pessoa acabou de pedir.
-  }, [atual]);
-
-  // ── Relógio da barra ───────────────────────────────────────────────
-  // A barra enche por JS, escrevendo `transform` DIRETO no nó a cada quadro.
-  //
-  // ⚠️ Era uma animação de keyframe do CSS e NÃO enchia na máquina do usuário
-  // (relatado em 2026-08-29). Animação de CSS morre calada por vários motivos —
-  // `prefers-reduced-motion` ligado no sistema, o nó sendo reaproveitado em vez
-  // de remontado, a classe não chegando ao CSS gerado. O relógio em JS não
-  // depende de nada disso: ou o quadro roda, ou a página inteira travou.
-  //
-  // ⚠️ Escreve no DOM por `ref`, NÃO por estado: `setState` a 60fps
-  // re-renderizaria a vitrine inteira — imagens e tudo — sessenta vezes por
-  // segundo, para mexer 2px de barra.
-  //
-  // A barra é CRONÔMETRO, não enfeite: responde "quanto falta para trocar". Por
-  // isso corre mesmo com `prefers-reduced-motion`; o que aquele ajuste desliga
-  // aqui é o DESLIZE do slide, no efeito abaixo.
-  useEffect(() => {
-    const el = barraRef.current;
-    if (!el) return;
-    let quadro = 0;
-    const inicio = performance.now();
-    const passo = (agora: number) => {
-      const fracao = Math.min((agora - inicio) / INTERVALO_MS, 1);
-      el.style.transform = `scaleX(${fracao})`;
-      if (fracao < 1) quadro = requestAnimationFrame(passo);
-    };
-    el.style.transform = 'scaleX(0)';
-    quadro = requestAnimationFrame(passo);
-    return () => cancelAnimationFrame(quadro);
-    // `atual` reinicia o relógio junto com o slide — inclusive quando a troca
-    // vem de um clique na aba, e não do temporizador.
-  }, [atual]);
-
-  // Quem pediu menos movimento no sistema continua vendo os dois destaques — o
-  // que sai é o DESLIZE, não a troca. Parar a rotação esconderia conteúdo; tirar
-  // a animação atende o pedido de acessibilidade sem custo nenhum.
-  useEffect(() => {
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const aplicar = () => setSemAnimacao(mq.matches);
-    aplicar();
-    mq.addEventListener('change', aplicar);
-    return () => mq.removeEventListener('change', aplicar);
-  }, []);
-
   return (
     <section
-      aria-roledescription="carrossel"
-      aria-label="Destaques do S2Vet"
-      className={`flex flex-col lg:h-full lg:min-h-0 ${className}`}
+      aria-label="Destaque do S2Vet"
+      className={`hidden lg:flex lg:h-full lg:min-h-0 lg:flex-col lg:overflow-hidden ${className}`}
     >
-      {/* ── Abas ───────────────────────────────────────────────────
-          São a navegação do carrossel (o modelo usa abas, não pontinhos): dizem
-          QUAIS são os destaques mesmo sem esperar a rotação chegar neles.
+      {/* 🔴 TEXTO E FOTO NO MESMO BLOCO, e é o BLOCO que é centralizado — não cada
+          um por si. É isso que alinha o começo do título e do subtítulo com a
+          BORDA ESQUERDA da foto (pedido de 2026-09-04). Centralizar a foto sozinha
+          (`justify-center`) a deslocava para dentro da coluna enquanto o texto
+          continuava colado na margem, e os dois começavam em pontos diferentes.
+          ⚠️ A largura vem do BLOCO e a foto é `w-full` dele: assim os três
+          compartilham exatamente a mesma caixa, em qualquer tamanho de tela.
+          Amarrar a foto pela ALTURA (`max-h-full`) quebraria isso — ela encolheria
+          sozinha e o texto ficaria mais largo que ela.
 
-          Cada aba ocupa METADE da largura (`flex-1`) e leva o próprio pedaço da
-          barra embaixo — juntos os dois trilhos formam uma linha contínua de
-          ponta a ponta, dividida ao meio. O título fica alinhado à ESQUERDA do
-          seu pedaço, como no modelo gravado. */}
-      <div role="tablist" aria-label="Destaques" className="flex flex-shrink-0">
-        {SLIDES.map((s, i) => (
-          <button
-            key={s.chave}
-            type="button"
-            role="tab"
-            aria-selected={i === atual}
-            onClick={() => setAtual(i)}
-            className={`relative flex-1 pb-3 pr-4 text-left text-sm transition-colors ${
-              i === atual
-                ? 'font-semibold text-emerald-700'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {s.aba}
+          🔴 A FOTO PREENCHE A COLUNA INTEIRA — largura E altura (2026-09-05).
+          Antes a largura dela saía de um cálculo sobre a altura da janela
+          (`(100vh-13rem)*1.43`), o que deixava uma FAIXA VAZIA na borda direita
+          sempre que a janela era baixa: a foto não podia crescer para ocupá-la sem
+          estourar a altura. Agora a coluna toma todo o espaço que o formulário não
+          usa e a foto ocupa a coluna; o que sobra de proporção é resolvido por
+          `object-cover`, recortando o mínimo necessário.
+          ⚠️ `object-cover` aqui é seguro porque o recorte é PEQUENO e simétrico — a
+          caixa fica perto da proporção da foto (1,43). O que se corta é o fundo
+          desfocado em cima e a manga do jaleco embaixo; o celular está centralizado.
+          NÃO usar `cover` numa caixa muito mais larga que alta (foi por isso que ele
+          foi recusado quando a foto vivia numa coluna fixa de 70%): ali o recorte
+          passava de 40% e cortava o celular ao meio.
+          ⚠️ Texto e foto continuam `w-full` do MESMO bloco — é o que mantém o
+          começo do título alinhado com a borda esquerda da foto. */}
+      <div className="flex w-full flex-col lg:h-full lg:min-h-0">
+        {/* Fonte de título (Instrument Serif, `font-display`) — a mesma da página
+            institucional; esta tela é pública e pertence ao mesmo conjunto. */}
+        <h2 className="font-display text-3xl leading-tight text-gray-900 sm:text-4xl">
+          {TITULO}
+        </h2>
+        <p className="mt-2 text-sm italic leading-relaxed text-gray-500 sm:text-base">
+          {SUBTITULO}
+        </p>
 
-            {/* Trilho da metade. `aria-hidden`: é cronômetro visual, e o leitor de
-                tela já sabe qual aba está ativa pelo `aria-selected`. */}
-            <span
-              aria-hidden="true"
-              className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden rounded-full bg-gray-200"
-            >
-              {i === atual && (
-                // `scaleX` a partir da esquerda — transform não dispara layout,
-                // então a barra corre sem concorrer com o deslize do slide.
-                // Começa em 0 no próprio atributo: se o primeiro quadro demorar,
-                // a barra aparece VAZIA e enche — nunca cheia voltando ao zero.
-                <span
-                  ref={barraRef}
-                  className="block h-full w-full origin-left bg-emerald-600"
-                  style={{ transform: 'scaleX(0)' }}
-                />
-              )}
-            </span>
-          </button>
-        ))}
-      </div>
-
-      {/* ── Conteúdo ──────────────────────────────────────────────────────────
-          A janela recorta; a esteira desliza. `translateX` por índice mantém os
-          dois slides montados, então a imagem do seguinte já vem carregada e a
-          troca não pisca.
-          ⚠️ `lg:min-h-0` é o que permite a imagem encolher para caber na altura
-          da coluna: sem ele o item de flex assume `min-height:auto` e estoura. */}
-      <div className="overflow-hidden pt-6 lg:min-h-0 lg:flex-1">
-        <div
-          className={`flex lg:h-full ${
-            semAnimacao ? '' : 'transition-transform duration-700 ease-out'
-          }`}
-          style={{ transform: `translateX(-${atual * 100}%)` }}
-        >
-          {SLIDES.map((s, i) => (
-            <div
-              key={s.chave}
-              className="flex w-full min-w-0 flex-shrink-0 flex-col px-1 lg:h-full"
-              // O slide fora de vista sai da ordem de tabulação e do leitor de
-              // tela: sem isto, o Tab some para dentro de um conteúdo invisível.
-              aria-hidden={i !== atual}
-              {...(i !== atual ? { inert: '' } : {})}
-            >
-              <h2 className="flex-shrink-0 text-xl font-semibold text-gray-900 sm:text-2xl">
-                {s.titulo}
-              </h2>
-              <p className="mt-2 flex-shrink-0 text-sm leading-relaxed text-gray-500">
-                {s.texto}
-              </p>
-
-              {/* Caixa da captura. No MOBILE a altura vem da proporção da imagem
-                  (`aspect-*`) — ali o pai não tem altura definida e `flex-1` daria
-                  zero. No desktop ela ocupa a sobra da coluna. */}
-              <div className="mt-5 aspect-[1231/730] overflow-hidden rounded-2xl border border-gray-200 bg-gray-50 shadow-sm lg:aspect-auto lg:min-h-0 lg:flex-1">
-                {/* `object-contain`: a captura é a tela INTEIRA do produto, e
-                    recortá-la para preencher esconderia justamente o que se quer
-                    mostrar. `loading` só no segundo — adiar o primeiro atrasaria
-                    o que já está visível. */}
-                <img
-                  src={s.img}
-                  alt={s.alt}
-                  loading={i === 0 ? 'eager' : 'lazy'}
-                  className="h-full w-full object-contain"
-                />
-              </div>
-            </div>
-          ))}
-        </div>
+        {/* 🔴 A CAIXA É A PRÓPRIA FOTO — sem moldura com fundo por baixo. Com um
+            retângulo esticando junto da coluna, o `object-contain` deixava uma
+            faixa do fundo de cada lado (a coluna de 70% é mais larga que a
+            proporção da foto): era a "margem de branco nas laterais" relatada.
+            ⚠️ O ARQUIVO NÃO É RECORTADO. Recortar foi tentado e RECUSADO — o
+            enquadramento do mockup está certo como veio. Ao TROCAR a foto, meça
+            antes se ela tem faixa lisa nas bordas e reduza o arquivo (a atual veio
+            com 1,9 MB e foi reamostrada para 2000px / ~180 kB; a tela nunca passa
+            de ~1400px e a vitrine carrega com `eager`, na primeira tela). */}
+        <img
+          src={destaque}
+          alt={ALT}
+          loading="eager"
+          className="mt-5 w-full flex-1 rounded-2xl object-cover shadow-sm lg:min-h-0"
+        />
       </div>
     </section>
   );

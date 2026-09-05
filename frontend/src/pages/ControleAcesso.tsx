@@ -34,6 +34,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { isValidEmail } from '../utils/validators';
 import FieldError, { inputErrCls } from '../components/FieldError';
 import ConfirmModal from '../components/ConfirmModal';
+import ModalJustificativa from '../components/ModalJustificativa';
 import InlineError from '../components/InlineError';
 import FotoAnimal from '../components/FotoAnimal';
 
@@ -1100,6 +1101,8 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
   const [, setAlterandoCargo] = useState<number | null>(null);
   const [editandoCargos, setEditandoCargos] = useState<{ membroId: number; userId: number; atual: string[] } | null>(null);
   const [togglingId,     setTogglingId]     = useState<number | null>(null);
+  /** Membro em (in)ativação — abre o modal de justificativa, exigida nos dois sentidos. */
+  const [alvoToggle,     setAlvoToggle]     = useState<Membro | null>(null);
   const [proprietarios,  setProprietarios]  = useState<ProprietarioEquipe[]>([]);
 
   interface ConviteEnviado {
@@ -1428,16 +1431,24 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
     } finally { setRemovendo(null); }
   };
 
-  const handleToggle = async (m: Membro) => {
+  // Inativar E reativar exigem justificativa (2026-09-04) — o backend recusa 400 sem
+  // ela. O clique abre o modal; quem chama a rota é `confirmarToggle`.
+  const handleToggle = (m: Membro) => setAlvoToggle(m);
+
+  const confirmarToggle = async (m: Membro, motivo: string) => {
     setTogglingId(m.id);
     try {
-      await api.patch(`/equipes/membros/${m.id}/toggle`);
+      await api.patch(`/equipes/membros/${m.id}/toggle`, { motivo });
       const novoAtivo = m.user.ativo === false;
       setMembros(prev => prev.map(mb => mb.id === m.id
         ? { ...mb, user: { ...mb.user, ativo: novoAtivo } }
         : mb));
       toast.success(`${m.user.fullName} ${novoAtivo ? 'ativado' : 'desativado'}`);
-    } catch { setErroInline('Erro ao alterar status'); }
+      setAlvoToggle(null);
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem;
+      setErroInline(msg ?? 'Erro ao alterar status');
+    }
     finally  { setTogglingId(null); }
   };
 
@@ -2185,6 +2196,24 @@ function TabProfissionais({ equipeId, isGestor, isAdmin, onEmpresasChange }: {
         />
       )}
 
+
+      {/* (In)ativação de membro — justificativa obrigatória NOS DOIS SENTIDOS
+          (2026-09-04). Mesmo modal e mesmos rótulos da tela de Equipe. */}
+      <ModalJustificativa
+        aberto={!!alvoToggle}
+        titulo={alvoToggle?.user.ativo === false ? 'Reativar usuário?' : 'Inativar usuário?'}
+        descricao={alvoToggle
+          ? (alvoToggle.user.ativo === false
+            ? `${alvoToggle.user.fullName} volta a aparecer como ativo na equipe e recupera o acesso que tinha.`
+            : `${alvoToggle.user.fullName} deixa de aparecer como ativo na equipe.`)
+          : undefined}
+        acaoLabel={alvoToggle?.user.ativo === false ? 'Reativar' : 'Inativar'}
+        tom={alvoToggle?.user.ativo === false ? 'neutro' : 'perigo'}
+        processando={togglingId === alvoToggle?.id}
+        onConfirmar={(motivo) => { if (alvoToggle) confirmarToggle(alvoToggle, motivo); }}
+        onFechar={() => setAlvoToggle(null)}
+      />
+
       {/* Seção — Proprietários */}
       {!isAdmin && isGestor && proprietarios.length > 0 && (
         <div className="mt-4 bg-white rounded-2xl border border-amber-100 shadow-sm overflow-hidden">
@@ -2914,6 +2943,8 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
   const [, setAlterandoCargo] = useState<number | null>(null);
   const [editandoCargos, setEditandoCargos] = useState<{ membroId: number; userId: number; atual: string[] } | null>(null);
   const [togglingId,     setTogglingId]     = useState<number | null>(null);
+  /** Membro em (in)ativação — abre o modal de justificativa, exigida nos dois sentidos. */
+  const [alvoToggle,     setAlvoToggle]     = useState<Membro | null>(null);
   const [perfisDisponiveis, setPerfisDisponiveis] = useState<Array<{ slug: string; label: string }>>([]);
 
   // Modal de gerenciamento de acesso do prestador
@@ -3028,16 +3059,24 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
     } finally { setRemovendo(null); }
   };
 
-  const handleToggle = async (m: Membro) => {
+  // Inativar E reativar exigem justificativa (2026-09-04) — o backend recusa 400 sem
+  // ela. O clique abre o modal; quem chama a rota é `confirmarToggle`.
+  const handleToggle = (m: Membro) => setAlvoToggle(m);
+
+  const confirmarToggle = async (m: Membro, motivo: string) => {
     setTogglingId(m.id);
     try {
-      await api.patch(`/equipes/membros/${m.id}/toggle`);
+      await api.patch(`/equipes/membros/${m.id}/toggle`, { motivo });
       const novoAtivo = m.user.ativo === false;
       setMembros(prev => prev.map(mb => mb.id === m.id
         ? { ...mb, user: { ...mb.user, ativo: novoAtivo } }
         : mb));
       toast.success(`${m.user.fullName} ${novoAtivo ? 'ativado' : 'desativado'}`);
-    } catch { setErroInline('Erro ao alterar status'); }
+      setAlvoToggle(null);
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem;
+      setErroInline(msg ?? 'Erro ao alterar status');
+    }
     finally  { setTogglingId(null); }
   };
 
@@ -3294,6 +3333,23 @@ function TabEquipe({ equipeId, isGestor }: { equipeId: number; isGestor: boolean
           onFechar={() => setEditandoCargos(null)}
         />
       )}
+
+      {/* (In)ativação de membro — justificativa obrigatória NOS DOIS SENTIDOS
+          (2026-09-04). Mesmo modal e mesmos rótulos da tela de Equipe. */}
+      <ModalJustificativa
+        aberto={!!alvoToggle}
+        titulo={alvoToggle?.user.ativo === false ? 'Reativar usuário?' : 'Inativar usuário?'}
+        descricao={alvoToggle
+          ? (alvoToggle.user.ativo === false
+            ? `${alvoToggle.user.fullName} volta a aparecer como ativo na equipe e recupera o acesso que tinha.`
+            : `${alvoToggle.user.fullName} deixa de aparecer como ativo na equipe.`)
+          : undefined}
+        acaoLabel={alvoToggle?.user.ativo === false ? 'Reativar' : 'Inativar'}
+        tom={alvoToggle?.user.ativo === false ? 'neutro' : 'perigo'}
+        processando={togglingId === alvoToggle?.id}
+        onConfirmar={(motivo) => { if (alvoToggle) confirmarToggle(alvoToggle, motivo); }}
+        onFechar={() => setAlvoToggle(null)}
+      />
     </div>
   );
 }

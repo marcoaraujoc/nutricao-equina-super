@@ -28,7 +28,10 @@ const TABELA = 'schs2vet.tb_agendamentos_clinicos';
 async function marcarAssumido(client, agendamentoId, deVetId) {
   const db = client || prismaPadrao;
   await db.$executeRawUnsafe(
-    `UPDATE ${TABELA} SET "assumido_de_id" = $2, "assumido_em" = NOW() WHERE id = $1`,
+    // `NOW() AT TIME ZONE 'UTC'`: a coluna é `timestamp` (UTC naive, convenção do
+    // Prisma) e o `NOW()` puro gravaria a hora do fuso da SESSÃO — o registro nasceria
+    // 3h atrasado. Ver `lib/animalInativo.js#marcarInativo`.
+    `UPDATE ${TABELA} SET "assumido_de_id" = $2, "assumido_em" = NOW() AT TIME ZONE 'UTC' WHERE id = $1`,
     Number(agendamentoId),
     deVetId == null ? null : Number(deVetId),
   );

@@ -4,6 +4,9 @@ const { getAccessTokenFromCookie, getContextCookies, setContextCookies } = requi
 const { resolverTipoNoContexto }   = require('../lib/tipoContexto');
 // Contexto de tenant da requisição (fase 7b do multi-tenancy) — ver lib/prismaTenant.js
 const { comEmpresa, comEscopoPlataforma } = require('../lib/prismaTenant');
+// Empresas que somem do seletor deste usuário (inativo, sem acesso, ou empresa
+// suspensa) — a MESMA fonte que `meusContextos` usa, para tela e API não divergirem.
+const { empresasSemAcesso } = require('../lib/usuarioEmpresa');
 
 const SECRET = process.env.JWT_SECRET;
 
@@ -98,10 +101,25 @@ const authenticate = async (req, res, next) => {
       req.equipeId  = null;
       let contextoVeioDeHeader = false;
 
+      // 🔴 EMPRESA EM QUE O USUÁRIO FOI INATIVADO NÃO VIRA CONTEXTO (2026-09-04).
+      // O seletor já não a oferece (`meusContextos` filtra por `empresasSemAcesso`),
+      // mas o `x-empresa-id` vem do CLIENTE — sem esta guarda bastava a chave antiga
+      // no localStorage (ou um header forjado) para continuar lendo os dados de uma
+      // clínica que desligou a pessoa. O dono é a exceção de sempre: ninguém tranca o
+      // gestor para fora da própria empresa.
+      const bloqueadas = await empresasSemAcesso(decoded.id);
+      const contextoProibido = async (empresaId) => {
+        if (!bloqueadas.has(Number(empresaId))) return false;
+        const dono = await prisma.empresa.findFirst({
+          where: { id: Number(empresaId), ownerId: decoded.id }, select: { id: true },
+        });
+        return !dono;
+      };
+
       const headerEquipeId = Number(req.headers['x-equipe-id']);
       if (Number.isInteger(headerEquipeId) && headerEquipeId > 0) {
         const equipe = await validarEquipeContexto(headerEquipeId, decoded);
-        if (equipe) {
+        if (equipe && !(await contextoProibido(equipe.empresaId))) {
           req.equipeId  = equipe.id;
           req.empresaId = equipe.empresaId;
           contextoVeioDeHeader = true;
@@ -111,7 +129,7 @@ const authenticate = async (req, res, next) => {
       const headerEmpresaId = Number(req.headers['x-empresa-id']);
       if (!req.empresaId && Number.isInteger(headerEmpresaId) && headerEmpresaId > 0) {
         const vinculo = await validarEmpresaContexto(headerEmpresaId, decoded);
-        if (vinculo) {
+        if (vinculo && !(await contextoProibido(vinculo.id))) {
           req.empresaId = vinculo.id;
           contextoVeioDeHeader = true;
         }

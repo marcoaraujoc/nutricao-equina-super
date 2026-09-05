@@ -249,6 +249,30 @@ async function salvarPagamentoEAcesso(client, userId, empresaId, { tipoPagamento
   } catch { /* colunas ainda não migradas */ }
 }
 
+/**
+ * Liga/desliga o vínculo do profissional NAQUELA empresa (`tb_usuario_empresa.ativo`).
+ *
+ * 🔴 É o que substitui `User.ativo` na (in)ativação de membro (2026-09-04). `User.ativo`
+ * é a identidade GLOBAL — mexer nele para tirar alguém de UMA clínica fechava o login
+ * dela em TODAS, inclusive nas que ela gerencia (defeito relatado). Aqui o efeito fica
+ * onde a decisão foi tomada: a empresa some do seletor (`empresasSemAcesso`) e o
+ * contexto dela é recusado no `auth`, enquanto as demais seguem intactas.
+ * ⚠️ NÃO toca `acesso_sistema`: são coisas diferentes — "não trabalha mais aqui" ×
+ * "trabalha, mas sem login". Desligar as duas juntas impediria reativar só uma.
+ */
+async function definirAtivoNaEmpresa(client, userId, empresaId, ativo) {
+  if (!userId || !empresaId) return false;
+  try {
+    const n = await client.$executeRawUnsafe(
+      `UPDATE schs2vet.tb_usuario_empresa SET ativo = $1 WHERE user_id = $2 AND empresa_id = $3`,
+      ativo === true, Number(userId), Number(empresaId),
+    );
+    return n > 0;
+  } catch {
+    return false; // coluna/linha ainda não existe — o caller cai no comportamento antigo
+  }
+}
+
 /** Remuneração + acesso de vários usuários numa empresa: Map(userId → dados). */
 async function lerPagamentoEAcesso(client, userIds, empresaId) {
   const ids = [...new Set((userIds ?? []).map(Number).filter(Number.isInteger))];
@@ -481,8 +505,13 @@ async function podeAcessarSistema(userId, client = prisma) {
   if (!temEmpresa && !temPrestador) return true;
   try {
     const partes = [];
+    // 🔴 `ue.ativo` ENTRA NA CONTA (2026-09-04). Inativar alguém numa empresa é ato
+    // DAQUELA empresa e não pode fechar o login dele nas outras — era o defeito
+    // relatado: o membro inativado numa clínica não conseguia mais entrar em lugar
+    // nenhum, inclusive onde é GESTOR. Aqui basta UM vínculo bom para entrar; qual
+    // empresa ele enxerga depois é decidido por `empresasSemAcesso`.
     if (temEmpresa) partes.push(`
-      SELECT ue.acesso_sistema AND ${EMPRESA_ATIVA_SQL} AS liberado
+      SELECT ue.acesso_sistema AND COALESCE(ue.ativo, true) AND ${EMPRESA_ATIVA_SQL} AS liberado
         FROM schs2vet.tb_usuario_empresa ue
         JOIN schs2vet.tb_empresas e ON e.id = ue.empresa_id
        WHERE ue.user_id = $1`);
@@ -504,8 +533,14 @@ async function podeAcessarSistema(userId, client = prisma) {
 }
 
 /**
- * Ids das empresas que somem do seletor de contexto deste usuário: as em que ele está
- * sem acesso **e** as que estão suspensas/canceladas (D3).
+ * Ids das empresas que somem do seletor de contexto deste usuário: aquelas em que ele
+ * está **inativo** ou **sem acesso**, e as que estão suspensas/canceladas (D3).
+ *
+ * 🔴 É esta lista que faz a inativação ser POR EMPRESA de verdade (2026-09-04): quem foi
+ * inativado numa clínica continua entrando no sistema pelas outras, mas aquela some do
+ * seletor e o contexto dela é recusado no `auth` — ele não vê dado nenhum de lá.
+ * ⚠️ O DONO nunca é escondido pelo chamador (ver `meusContextos`): trancar o gestor
+ * para fora da própria empresa não teria como ser desfeito por ninguém.
  */
 async function empresasSemAcesso(userId, client = prisma) {
   const bloqueadas = new Set();
@@ -517,7 +552,9 @@ async function empresasSemAcesso(userId, client = prisma) {
          FROM schs2vet.tb_usuario_empresa ue
          JOIN schs2vet.tb_empresas e ON e.id = ue.empresa_id
         WHERE ue.user_id = $1
-          AND (ue.acesso_sistema = false OR NOT (${EMPRESA_ATIVA_SQL}))`,
+          AND (ue.acesso_sistema = false
+               OR COALESCE(ue.ativo, true) = false
+               OR NOT (${EMPRESA_ATIVA_SQL}))`,
       Number(userId),
     ));
     for (const r of rows) bloqueadas.add(r.empresa_id);
@@ -536,6 +573,7 @@ module.exports = {
   anexarPagamentoEmRelacao,
   podeAcessarSistema,
   empresasSemAcesso,
+  definirAtivoNaEmpresa,
   lerFoto,
   lerFotos,
   salvarFoto,

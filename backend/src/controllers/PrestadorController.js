@@ -7,6 +7,7 @@ const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
 const { normalizarPagamento } = require('../lib/usuarioEmpresa');
 const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
+const { definirAtivoNaEmpresa } = require('../lib/usuarioEmpresa');
 const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 const emailService = require('../services/emailService');
 
@@ -481,10 +482,21 @@ const PrestadorController = {
         await registrarAtivacao(prisma, 'prestador', existe.id, req.user.id);
       }
 
+      // 🔴 MESMA REGRA DO FORNECEDOR (2026-09-04): prestador inativado perde o acesso
+      // aos dados da empresa, e reativado o recupera. Sem isto o cadastro sumia da
+      // lista mas o login continuava valendo e ele seguia enxergando os pacientes
+      // designados. ⚠️ O que ele já fez na empresa não é tocado — encaminhamentos,
+      // exames e designações ficam como estão.
+      if (existe.userId && existe.empresaId) {
+        await definirAtivoNaEmpresa(prisma, existe.userId, existe.empresaId, !vaiInativar);
+      }
+
       // Mesma auditoria de Equipe (lib/auditoria.js) — quem foi (in)ativado, quando
       // (timestamp da própria linha) e quem fez (userId/userName/email da linha).
       await registrarAuditoria(prisma, req, {
-        categoria: 'ALTERACAO',
+        // A categoria diz O QUE ACONTECEU: (in)ativar um cadastro não é a mesma
+        // coisa que editar um campo dele, e ALTERACAO misturava os dois.
+        categoria: vaiInativar ? 'INATIVACAO' : 'ATIVACAO',
         entidade:  'PRESTADOR',
         entidadeId: existe.id,
         motivo:    vaiInativar ? motivo.trim() : null,

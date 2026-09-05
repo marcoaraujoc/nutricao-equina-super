@@ -2320,8 +2320,15 @@ const listarParaExecucao = async (req, res) => {
             raca:    { select: { nome: true } },
           },
         },
+        // 🔴 SEM `where: { ativo: true }` (2026-09-04). Cancelar pelo plantão marca
+        // `ativo: false` em TODO item ainda não executado (`cancelarNaExecucao`), então
+        // a prescrição cancelada sem nenhuma execução ficava com ZERO item ativo, caía
+        // no `.filter(g => g.itens.length > 0)` logo abaixo e NUNCA chegava à tela — a
+        // aba "Cancelado" do Histórico estava sempre vazia para medicamento e
+        // procedimento. O recorte por `ativo` passou a ser feito por GRUPO em
+        // `itensVisiveis`: no cancelado o item inativo É o registro; nos demais ele é
+        // item removido da prescrição e continua escondido.
         itens: {
-          where:   { ativo: true },
           include: {
             medicamentoCat: { select: { id: true, nome: true } },
             // Executor da dose — existe por ITEM mesmo quando o GRUPO inteiro ainda
@@ -2357,10 +2364,15 @@ const listarParaExecucao = async (req, res) => {
     // "Se necessário"/"SOS" também saem da fila pelo mesmo corte por item — não têm
     // agenda prevista (ver FREQUENCIAS_FORA_DA_EXECUCAO), então não pertencem à lista
     // de pendências do plantão.
+    // Item inativo só é registro no grupo CANCELADO (ver o `include` acima); em
+    // qualquer outro status ele foi removido da prescrição e não deve aparecer.
+    const itensVisiveis = g => (g.status === 'CANCELADO' ? g.itens : g.itens.filter(i => i.ativo));
+
     const grupos = (await anexarFlagEmGrupos(prisma, gruposCrus))
       .map(g => ({
         ...g,
-        itens: g.itens.filter(i => !i.aplicadaPeloProprietario && !FREQUENCIAS_FORA_DA_EXECUCAO.has(i.frequencia)),
+        itens: itensVisiveis(g)
+          .filter(i => !i.aplicadaPeloProprietario && !FREQUENCIAS_FORA_DA_EXECUCAO.has(i.frequencia)),
       }))
       .filter(g => g.itens.length > 0);
 
@@ -2439,11 +2451,16 @@ const listarParaExecucao = async (req, res) => {
       }),
     }));
 
-    // 🔴 O PACIENTE INATIVO CONTINUA NA FILA — só SEM AÇÃO. O prontuário dele está
-    // congelado e `executar`/`cancelar` respondem 400 (lib/animalInativo.js), mas
-    // sumir com ele da fila esconderia da equipe que aquele tratamento existe e ficou
-    // parado. Então ele aparece, marcado, e a tela apaga os botões — que é a mesma
-    // regra do resto do sistema: nada que vá falhar é oferecido (28-d).
+    // 🔴 O PACIENTE INATIVO CONTINUA SENDO DEVOLVIDO — sumir com ele daqui
+    // esconderia da equipe que aquele tratamento existe e ficou parado.
+    // ⚠️ Quem decide ONDE ele aparece é a TELA, e mudou em 2026-09-05: ele saiu da
+    // fila "a executar" e passou a sair no HISTÓRICO, na aba "Paciente inativo"
+    // (ExecucaoPrescricao.tsx#tipoPendenteEm). A regra de 02/09 — manter na fila,
+    // só sem ação — deixava a linha no alto da tela oferecendo trabalho que ninguém
+    // pode fazer, competindo com as doses do dia.
+    // NÃO filtrar aqui: sem estas linhas a aba nova nasceria vazia.
+    // O prontuário segue congelado — `executar`/`cancelar` respondem 400
+    // (lib/animalInativo.js) — e a tela não renderiza esses botões (28-d).
     // ⚠️ `animalInativo` é lido por SQL cru (`lerInativosEmLote`), NUNCA pelo `where`
     // do Prisma: `Animal.inativo` é lida assim em todo o projeto porque o client pode
     // não estar regenerado (CLAUDE.md §11), e `where` com campo desconhecido derruba a
