@@ -23,18 +23,34 @@ function tokenConfere(recebido, esperado) {
 // Evolution envia eventos como 'connection.update' / 'CONNECTION_UPDATE'
 const normalizarEvento = (e) => String(e ?? '').toLowerCase().replace(/_/g, '.');
 
+// O token vem na QUERY, então dá para conferi-lo ANTES de ler o corpo — e é por isso
+// que ele é o primeiro middleware: o teto de 60 MB abaixo nunca é gasto com quem não
+// provou conhecer o segredo.
+function confereToken(req, res, next) {
+  const esperado = process.env.EVOLUTION_WEBHOOK_TOKEN || '';
+  // ⚠️ FAIL-OPEN conhecido: sem `EVOLUTION_WEBHOOK_TOKEN` configurado o webhook fica
+  // aberto (aceita qualquer chamada). Mantido para não quebrar ambiente de dev sem o
+  // token — mas em produção o token DEVE estar definido; avisamos alto se não estiver.
+  if (!esperado) {
+    logger.warn('[Webhook:Evolution] EVOLUTION_WEBHOOK_TOKEN não configurado — webhook ACEITANDO sem autenticação.');
+    return next();
+  }
+  if (!tokenConfere(req.query.token, esperado)) return res.status(401).json({ error: 'Token inválido' });
+  return next();
+}
+
+// 🔴 TETO PRÓPRIO, MAIOR QUE O DA APLICAÇÃO (15 MB). Este é o único endpoint cujo
+// tamanho do corpo quem decide é um serviço EXTERNO, e um 413 aqui não é uma
+// requisição perdida: a Evolution repete o POST até 10 vezes com backoff exponencial
+// (413 não está entre os status que ela trata como definitivos) e os eventos que
+// IMPORTAM — connection.update, qrcode.updated — ficam na fila atrás do que não
+// coube; foi assim que o status da instância parou de ser atualizado no banco.
+// A causa raiz (mídia em base64 dentro do evento) está desligada em
+// `EvolutionService.WEBHOOK_BASE64`; este teto é a rede de segurança.
+router.use(confereToken, express.json({ limit: '60mb' }));
+
 router.post('/evolution', async (req, res) => {
   try {
-    const esperado = process.env.EVOLUTION_WEBHOOK_TOKEN || '';
-    // ⚠️ FAIL-OPEN conhecido: sem `EVOLUTION_WEBHOOK_TOKEN` configurado o webhook fica
-    // aberto (aceita qualquer chamada). Mantido para não quebrar ambiente de dev sem o
-    // token — mas em produção o token DEVE estar definido; avisamos alto se não estiver.
-    if (!esperado) {
-      logger.warn('[Webhook:Evolution] EVOLUTION_WEBHOOK_TOKEN não configurado — webhook ACEITANDO sem autenticação.');
-    } else if (!tokenConfere(req.query.token, esperado)) {
-      return res.status(401).json({ error: 'Token inválido' });
-    }
-
     const body     = req.body ?? {};
     const evento   = normalizarEvento(body.event);
     const instancia = body.instance ?? body.instanceName ?? null;

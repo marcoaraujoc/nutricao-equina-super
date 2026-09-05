@@ -43,12 +43,18 @@ class WhatsAppProvider {
    * cada chamada — não é rápido): sem instância conectada, gerar o PDF só para
    * descartar o resultado é desperdício e, no chamador, atraso que pode custar
    * o gesto do usuário que abriria o WhatsApp no fallback manual.
+   *
+   * ⚠️ Devolve o MOTIVO, não um booleano. Um `false` pelado obrigava o chamador a
+   * responder sempre `PROVIDER_INDISPONIVEL`, e a tela dizia só "PDF baixado —
+   * anexe na conversa": "a clínica nunca conectou o WhatsApp", "a sessão caiu" e
+   * "o servidor da Evolution está fora do ar" viravam a MESMA frase, sem nada no
+   * log do backend. Quem cai no fallback tem de saber por quê.
    * @param {{ empresaId?: number, equipeId?: number }} escopo
-   * @returns {Promise<boolean>}
+   * @returns {Promise<{ pronto: boolean, motivo?: string }>}
    */
   // eslint-disable-next-line no-unused-vars
-  async estaProntoParaEnviar(escopo) {
-    return true;
+  async prontidaoParaEnviar(escopo) {
+    return { pronto: true };
   }
 }
 
@@ -104,14 +110,18 @@ class EvolutionWhatsAppProvider extends WhatsAppProvider {
     return res;
   }
 
-  async estaProntoParaEnviar({ empresaId, equipeId } = {}) {
-    if (!empresaId) return false;
+  async prontidaoParaEnviar({ empresaId, equipeId } = {}) {
+    if (!empresaId) return { pronto: false, motivo: 'SEM_EMPRESA' };
     const whatsappService = require('../services/whatsappService');
     try {
       const { status } = await whatsappService.obterStatus(empresaId, equipeId ?? null);
-      return status === 'CONECTADO';
-    } catch {
-      return false;
+      if (status === 'CONECTADO') return { pronto: true };
+      // O status É o motivo: NAO_PROVISIONADO, DESCONECTADO, AGUARDANDO_QR ou
+      // SERVIDOR_INDISPONIVEL — cada um pede uma ação diferente do gestor.
+      return { pronto: false, motivo: status };
+    } catch (err) {
+      logger.warn(`[WhatsApp:evolution] Não foi possível consultar o status (empresa ${empresaId}): ${err.message}`);
+      return { pronto: false, motivo: 'SERVIDOR_INDISPONIVEL' };
     }
   }
 }

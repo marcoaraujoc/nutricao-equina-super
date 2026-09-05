@@ -1,5 +1,28 @@
 # S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-09-05 (WhatsApp/E-mail passaram a mandar o PDF em Prescrição,
+#   Vacina, Pedido e Resultado de Exames — mesma folha do Imprimir, anexada de verdade
+#   (Puppeteer). 🔴 A logo e a foto nasciam QUEBRADAS no PDF do servidor: o Puppeteer só
+#   aceita `data:`, e agora `print/PrintShell.ts#prepararImagensImpressao` +
+#   `srcImpressao` resolvem isso para TODOS os documentos. 🔴 A ASSINATURA DO VETERINÁRIO
+#   nunca saía na prescrição (a folha só tinha a linha): rota nova
+#   `GET /users/:id/assinatura-profissional` (vínculo da EMPRESA DO CONTEXTO, §36-f) +
+#   `renderAssinaturas` — a imagem entra SÓ na linha do veterinário, a do executor fica
+#   em branco. Card "Informações da Prescrição" removido da folha. Exame de IMAGEM passou
+#   a dizer "Qtd. de Imagens". 🔴 PACIENTE INATIVO SAIU DA FILA de
+#   `/execucao-prescricao` e desce para o Histórico, na aba nova "Paciente inativo" —
+#   reverte a posição decidida em 02/09 (mas NÃO some do plantão, e o backend continua
+#   devolvendo a linha). 🔴 E-MAIL: `EMAIL_USER` era usado como REMETENTE em 19 pontos —
+#   com Gmail coincide, com Brevo/SES/Resend NÃO (o login não é caixa de e-mail). Novo
+#   `EMAIL_FROM` + `remetente()`; `AuthController` tinha transporte próprio preso ao
+#   Gmail (`service:'gmail'` ignora EMAIL_HOST) e foi para o provider único;
+#   `ResendEmailProvider` implementado (era comentado), com require LAZY;
+#   `npm run email:testar` envia de verdade com anexo. Ausência de `EMAIL_FROM` cai em
+#   `EMAIL_USER` — instalação Gmail existente NÃO muda. 🔴 WHATSAPP: a tela dizia
+#   "conectado" com a Evolution FORA DO AR (o `catch` de `obterStatus` caía no status
+#   PERSISTIDO, que era CONECTADO) — e o envio chegava a gerar o PDF antes de falhar.
+#   Estado novo `SERVIDOR_INDISPONIVEL`, que não é persistido e não vira DESCONECTADO.
+#   Detalhes e armadilhas na §12, sessão 2026-09-05. Suíte: 456.)
 # Atualizado em: 2026-09-03 (🔴 O EMITIDO EXIBIA DADO DE EXEMPLO + a folha e o
 #   Atestado de Vacinacao remodelados. OK SEED APLICADO (autorizado): os 12 modelos
 #   globais do CFMV foram reescritos; nenhuma clinica tinha copia propria, entao nada
@@ -291,6 +314,11 @@
 #   `listarParaExecucao` passaram a devolver **`animalInativo`** em cada linha, e a tela
 #   apaga Executar/Aplicar e Cancelar, deixando Ver e Imprimir, com o selo "Somente
 #   leitura" (Execução de Prescrição E Painel Principal).
+#   ⚠️ **SUPERADO EM PARTE por 2026-09-05**: em `/execucao-prescricao` a linha do
+#   paciente inativo saiu da FILA "a executar" e desce para o HISTÓRICO, na aba
+#   "Paciente inativo". Ele NÃO some do plantão — muda de lugar. O que continua
+#   valendo aqui: o backend devolve a linha (não filtrar lá), Ver e Imprimir ficam, e
+#   Executar/Cancelar não são renderizados. O Painel Principal não mudou.
 #   ⚠️ Os DOIS modais de execução resolvem `soLeitura`/`soLeituraGrupo` por conta
 #   própria (`soVisualizacao || animalInativo`): eles são reusados por outras telas, e
 #   fiar-se só no botão da fila deixaria um caminho novo reabrir a ação que o backend
@@ -1720,6 +1748,23 @@ Perfil PRESTADOR adicionado ao seed (002_permissoes_padrao.seed.js) — todos os
 
 ### 🔴 EXCLUSÃO LÓGICA — quem SOME e quem fica INATIVO (2026-08-06)
 
+> 🔴 **PREMISSA (2026-09-05): ANIMAL NUNCA É EXCLUÍDO.** Nenhuma tela cria mais
+> `Animal.ativo = false`. O que a interface chama de "Inativar paciente" é o
+> CONGELAMENTO (`Animal.inativo`, `PATCH /animais/:id/inativar`): o paciente continua
+> aparecendo INTEIRO em todo o sistema — inclusive no seletor de paciente, marcado
+> "· Inativo" —, em somente leitura, até o gestor reativar.
+> A ação de excluir saiu de `AnimaisVet.tsx` (tela de Pacientes) e de `MeusAnimais.tsx`
+> (tela do proprietário), que eram os dois únicos `DELETE /animais/:id` do front.
+> ⚠️ O estado e a rota CONTINUAM existindo, e a aba **"Inativos"** (`?ativo=false`,
+> gestor) também: a base tem pacientes excluídos ANTES da premissa, e sem a aba e sem o
+> "Ativar" deles ficariam presos nesse estado para sempre.
+> ⚠️ **A palavra "Excluído" não aparece na interface** — nomear o estado assim
+> contradiria a premissa. Na tela de Pacientes o selo do `ativo = false` diz "Inativo"
+> (vermelho) e o do congelado diz **"Somente leitura"** (âmbar), que é o que distingue
+> os dois.
+> ⚠️ **Não reintroduzir ação de excluir paciente em tela nenhuma.** O bloco abaixo
+> descreve o que a exclusão lógica FAZ — e segue valendo para PROPRIETÁRIO e EMPRESA.
+
 Fonte única: **`backend/src/lib/visibilidade.js`**. Nada é apagado do banco; o que muda é
 o que a aplicação MOSTRA, e isso depende de quem foi inativado:
 
@@ -2035,6 +2080,24 @@ quem não passa mantém o comportamento antigo).
   23:30 roda 22:30 em Manaus. Para cada clínica fechar no próprio fim de dia, o
   caminho é agendar por empresa (ou rodar de hora em hora filtrando por
   `hojeNaEmpresa`) — decisão de produto em aberto.
+
+#### 🔴 SQL CRU: `NOW() AT TIME ZONE 'UTC'`, NUNCA `NOW()` puro (2026-09-05)
+Toda coluna de data/hora do schema é **`timestamp WITHOUT time zone`** (é o que o
+`DateTime` do Prisma gera), e o Prisma a lê e escreve como **UTC NAIVE**. Já o `NOW()`
+do Postgres é `timestamptz`: gravado numa coluna `timestamp`, ele é convertido para o
+fuso da **SESSÃO** — `America/Sao_Paulo` nesta base. Resultado: a hora LOCAL vai para o
+banco com cara de UTC e volta **3h ATRASADA** na tela.
+```sql
+SET "inativo_em" = NOW()                     -- ❌ grava 07:34 (local) como se fosse UTC
+SET "inativo_em" = NOW() AT TIME ZONE 'UTC'  -- ✅ grava 10:34, o instante de verdade
+```
+Foi assim que a faixa do paciente inativo dizia *"somente leitura desde 04:34"* para
+quem havia inativado às **07:34**. Corrigido em `lib/animalInativo.js#marcarInativo`,
+`lib/agendamentoAssumido.js#marcarAssumido`, `EmpresaCadastroController` (assinatura) e
+nos seeds 003/004.
+⚠️ Vale só para SQL CRU — escrita pelo client Prisma (`new Date()`) já vai em UTC.
+⚠️ Linha gravada ANTES da correção continua com o valor errado: o `NOW()` não volta
+atrás sozinho.
 
 #### CAMPO DE DATA — `DateInput`, NUNCA `<input type="date">` (2026-08-28)
 ```
@@ -2538,6 +2601,261 @@ New-Item -ItemType Junction `
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
 
+### Sessão 2026-09-05 — PDF no WhatsApp/e-mail, assinatura na prescrição e paciente inativo fora da fila
+
+- [x] 🔴 **WhatsApp e E-mail passaram a mandar o PDF, anexado de verdade**, em
+      Prescrição, Vacina, Pedido de Exames e Resultado de Exames. Até aqui essas quatro
+      telas mandavam TEXTO puro (`abrirWhatsApp`/`abrirEmail`), enquanto o Exame de
+      Compra e os Documentos Emitidos já mandavam o documento. Nada de infraestrutura
+      nova: é o mesmo `utils/compartilharPdf.ts` → `POST /documentos/{whatsapp,email}`
+      → Puppeteer, com o MESMO HTML do botão Imprimir de cada tela.
+      Destino = telefone/e-mail do proprietário; o texto que ANTES era o conteúdo virou
+      a LEGENDA da mensagem. Sem destino ou sem provider, cai no fallback de sempre
+      (baixa o PDF + abre o app).
+      ⚠️ **Toasts de resultado saíram de `CompartilharPdfBotoes` para
+      `compartilharPdf.ts`** (`enviarPdfWhatsAppComAviso`/`enviarPdfEmailComAviso`): a
+      Prescrição não podia usar o componente porque passa antes pelo recorte do
+      receituário de controle especial, e duas cópias das mensagens divergiriam.
+      ⚠️ FICAM DE FORA: Evolução (imprime por um relatório comparativo gerado por IA
+      num modal, não por um `gerarHtml`) e Encaminhamento (não tem gerador de folha).
+- [x] 🔴 **A LOGO E A FOTO NASCIAM QUEBRADAS NO PDF DO SERVIDOR.** O Puppeteer bloqueia
+      toda requisição que não seja `data:` (anti-SSRF, ver `printUrl.ts`), então
+      `<img src="/api/midia/…">` imprime bem no NAVEGADOR e some no PDF que chega ao
+      cliente — defeito que o Exame de Compra já tinha desde 08/02 sem ninguém notar.
+      Novo par em `print/PrintShell.ts`: **`prepararImagensImpressao(urls)`** (async,
+      resolve para `data:` e guarda em cache de módulo) + **`srcImpressao(url)`**
+      (síncrono, usa o `data:` quando existe e cai na URL absoluta quando não).
+      ⚠️ Os geradores continuam SÍNCRONOS de propósito — o `gerarHtml` de
+      `compartilharPdf.ts` é síncrono, e é ele que roda dentro da janela de "user
+      activation" do navegador. Quem vai gerar PDF chama `prepararImagensImpressao`
+      ANTES; a impressão em tela não precisa de nada.
+      `renderCabecalho` passou a usar `srcImpressao`, então a logo se conserta em TODOS
+      os documentos de uma vez.
+- [x] 🔴 **A ASSINATURA DO VETERINÁRIO NUNCA SAÍA NA PRESCRIÇÃO** — a folha só desenhava
+      a LINHA com o nome. A prescrição não carrega assinatura nem CRMV (`include` do
+      `PrescricaoGrupoController` traz só `id`/`fullName`), e o `marca` de
+      `GET /documentos/contexto/:animalId` é do USUÁRIO LOGADO, não de quem prescreveu.
+      Rota nova **`GET /users/:id/assinatura-profissional`** → nome, CRMV e
+      `assinaturaUrl` do vínculo com a **empresa do contexto** (§36-f); sem vínculo
+      nela, 404 — carimbar num papel a assinatura cadastrada em OUTRA clínica é
+      falsificação. Sem `authorize('ADMIN')` de propósito: quem imprime a prescrição de
+      um colega é a equipe, e o isolamento é o `req.empresaId`.
+      Front: `utils/print/assinaturaProfissional.ts` (cache por usuário, guarda a
+      PROMESSA para dois cliques no mesmo tick não virarem duas requisições) +
+      `PrintShell.renderAssinaturas`, que põe a imagem SOBRE a linha, com nome e CRMV.
+      ⚠️ A imagem entra **só na linha do VETERINÁRIO**. A do executor sai em branco —
+      é a mesma regra do bloco `assinatura` da Central (02/09): carimbar a assinatura
+      escaneada do vet na linha de outro produz documento falso.
+      ⚠️ Sem assinatura cadastrada em `/cadastro-pessoal`, a linha sai em branco para
+      assinar à mão. É o correto, não defeito.
+      ⚠️ `imprimirPrescricao` virou **async** (busca a assinatura antes de montar a
+      folha). Não custa o clique: a impressão sai por iframe, que não depende da janela
+      de user activation — ao contrário do `window.open` do WhatsApp.
+      ⚠️ `rotuloCrmv` não prefixa quando o valor já começa com "CRMV" — o campo é
+      cadastrado como "CRMV-SP 12345" na maioria das bases, e prefixar sempre daria
+      "CRMV CRMV-SP 12345".
+- [x] **Card "Informações da Prescrição" REMOVIDO da folha** (a pedido) — Veterinário
+      Responsável / Executor / Finalizado por / Finalizado em. O CSS `.assinatura*` e o
+      `fmt()` que só ele usava saíram junto (o `tsc -b` reprova variável não lida).
+      ⚠️ `finalizadoEm`/`finalizadoPor` continuam no TIPO: os callers os preenchem.
+- [x] **Exame de IMAGEM: "Qtd. de Imagens" no lugar de "Qtd. de Amostras"**
+      (`ExamePrint.ts`). A coluna `qtdAmostra` guarda os dois — é o mesmo campo que a
+      tela já chaveia por `tipo === 'Imagem'`; rotular "amostras" num raio-x é dizer o
+      que não foi coletado. De passagem, o plural na TELA dizia "2 imagems".
+- [x] 🔴 **PACIENTE INATIVO SAIU DA FILA "A EXECUTAR"** em `/execucao-prescricao` (a
+      pedido) — medicamento, procedimento E vacina. Ele desce para o **HISTÓRICO**, na
+      aba nova **"Paciente inativo"**. REVERTE a decisão de 2026-09-02 ("continua na
+      fila, só sem ação"), que deixava a linha no alto da tela oferecendo um trabalho
+      que ninguém pode fazer, competindo com as doses do dia.
+      ⚠️ **Ele NÃO some do plantão — muda de lugar.** O motivo de 02/09 (a equipe
+      precisa ver que o tratamento existe e ficou parado) continua valendo, e é por
+      isso que a saída foi uma aba, não um filtro.
+      ⚠️ **Aba PRÓPRIA, não "Executado" nem "Cancelado"**: o tratamento não foi
+      executado (mentiria sobre a dose) nem cancelado (mentiria sobre a prescrição, que
+      volta a andar quando o gestor reativar).
+      ⚠️ A aba só é RENDERIZADA quando tem conteúdo (aba vazia é ruído no plantão —
+      mesma regra da Vacina e do histórico de Documentos), e um `useEffect` devolve o
+      filtro a "Executado" quando ela zera com ela selecionada; sem isso o card ficaria
+      preso num filtro cujo botão não existe mais.
+      ⚠️ **O BACKEND NÃO MUDOU** — as duas `listarParaExecucao` continuam devolvendo a
+      linha com `animalInativo`. Filtrar lá faria a aba nova nascer vazia.
+      ⚠️ Prescrição de paciente inativo JÁ concluída continua em "Executado": a dose foi
+      dada de verdade, antes da inativação.
+      ⚠️ `tipoPendenteBruto` (sem olhar o paciente) × `tipoPendenteEm` (= bruto &&
+      !animalInativo) — a aba nova usa o BRUTO, porque é justamente a pendência que
+      essas linhas têm; o que muda é que ninguém pode executá-la.
+      ⚠️ O **Painel Principal** NÃO foi tocado: lá o paciente inativo segue na fila,
+      sem ação. Se a regra tiver de valer nas duas telas, o lugar é o mesmo par de
+      predicados.
+- [ ] `renderRodapeAssinatura` (rodapé fixo de Exame, Evolução, Dieta e Encaminhamento)
+      continua desenhando só a LINHA com o nome — a imagem da assinatura entrou apenas
+      na prescrição, que foi o pedido. `renderAssinaturas` já está pronto para os
+      outros.
+- [x] **E-MAIL: provedor trocável por variável, e Brevo como padrão recomendado.**
+      O S2Vet é CLIENTE de SMTP, não servidor — não há nada a instalar na VPS. O que
+      faltava era o caminho estar realmente aberto:
+      🔴 **`EMAIL_USER` É CREDENCIAL, NÃO REMETENTE.** 19 pontos escreviam
+      `from: "S2Vet" <${process.env.EMAIL_USER}>`. Com o Gmail os dois coincidem (o
+      login É o endereço) e ninguém notava; no Brevo/SES/Mailgun o login é gerado pelo
+      provedor (`9a1b2c001@smtp-brevo.com`) e NÃO é caixa de e-mail — o e-mail sairia
+      com um "De:" inexistente, recusado ou direto no spam. Novo **`EMAIL_FROM`**
+      (+ `EMAIL_FROM_NAME`), com `remetente()` como fonte única em
+      `messaging/emailProvider.js`. Ausente, cai em `EMAIL_USER`: **nenhuma instalação
+      Gmail existente muda de comportamento.**
+      🔴 **`AuthController` tinha transporte PRÓPRIO**, o único ponto fora do provider:
+      `nodemailer.createTransport({ service: 'gmail' })` — e `service:'gmail'` IGNORA
+      `EMAIL_HOST`. Depois de migrar para o Brevo, TUDO enviaria normal e só o
+      "esqueci minha senha" falharia com "Invalid login" — no fluxo em que a pessoa já
+      está trancada para fora. Agora usa `getEmailProvider()`.
+      ⚠️ Efeito colateral aceito: o e-mail de reset deixou de assinar "Equipe Equine
+      Nutrition" e passou a assinar "S2Vet", como os outros 18.
+      **`ResendEmailProvider` IMPLEMENTADO** (era classe comentada). Ativar = `npm
+      install resend` + `EMAIL_PROVIDER=resend` + `RESEND_API_KEY` + `EMAIL_FROM`.
+      ⚠️ O `require('resend')` é LAZY, dentro do construtor: no topo do arquivo, quem
+      não instalou a dependência não conseguiria nem CARREGAR o módulo — e ele sustenta
+      2FA, boas-vindas e reset de senha. E se a env pedir resend sem a lib, cai no SMTP
+      com log de erro em vez de derrubar o boot.
+      ⚠️ `host` explícito no nodemailer, NUNCA `service:`, senão `EMAIL_HOST` vira
+      enfeite. ⚠️ `EMAIL_SECURE=true` só na porta 465; na 587 (STARTTLS) trava a
+      conexão até o timeout, sem erro que explique.
+      **`npm run email:testar destino@x.com`** (`scripts/testarEmail.js`) envia DE
+      VERDADE, com anexo em PDF, e traduz os três erros que respondem por quase toda
+      falha em VPS: porta bloqueada (25/465/587 saem fechadas por padrão em
+      DigitalOcean/Vultr/Oracle/Azure), credencial e remetente não verificado.
+      Gate estrutural em `__tests__/emailProvider.test.js` (12 casos): reprova
+      transporte SMTP criado fora do provider e `from:` montado com `EMAIL_USER`.
+      ⚠️ A varredura IGNORA COMENTÁRIOS — sem isso ela acusa os próprios comentários
+      que explicam a regra, e o teste vira ruído que se aprende a ignorar.
+      Verificado que reprova de verdade (arquivo-isca temporário). Suíte: 446.
+- [x] 🔴 **O PDF SAÍA COMO TEXTO com o WhatsApp CONECTADO** (relatado 2026-09-05, parte 2).
+      Três defeitos independentes, todos terminando no MESMO fallback manual e todos
+      SILENCIOSOS — a tela de Configurações mostrava a luz verde e nada explicava por quê:
+      1. 🔴 **`webhookBase64: true` na instância** (gravado por `createInstance` desde
+         2026-07-18). Ele cobra dois preços que NADA aqui aproveita — `routes/webhooks.js`
+         só LOGA `messages.upsert`, nenhum byte de mídia é usado:
+         (a) no ENVIO, a Evolution **BAIXA a mídia de volta** do WhatsApp antes de
+             responder (`downloadMediaMessage`, `whatsapp.baileys.service.ts`), somando
+             segundos a cada PDF — era isso que estourava o timeout do nosso lado;
+         (b) o corpo do webhook passa de 15 MB, o `express.json` responde **413**, e a
+             Evolution repete o POST **10 vezes com backoff exponencial** (413 não está
+             entre os status que ela trata como definitivos) — com CONNECTION_UPDATE e
+             QRCODE_UPDATED na fila atrás do evento que não coube.
+         Agora `EvolutionService.WEBHOOK_BASE64 = false`. ⚠️ **NUNCA religar.**
+         ⚠️ `createInstance` roda UMA vez na vida da clínica, então instância antiga
+         ficaria com `base64: true` para sempre: novo `EvolutionService.setWebhook`,
+         chamado por `garantirInstancia` (best-effort) a cada conectar/provisionar.
+      2. 🔴 **Timeout de ENVIO era o das CONSULTAS (15s), e ainda REPETIA.**
+         `/message/sendMedia` não devolve quando o WhatsApp aceita a mídia — a Evolution
+         ainda grava a mensagem e (item 1) rebaixa o arquivo. Estourado o teto, `chamar()`
+         classificava como transitório e **reenviava o mesmo PDF até 3x** antes de
+         desistir com `EVOLUTION_INDISPONIVEL`. Agora rota de envio tem
+         `SEND_TIMEOUT_MS` (45s, `EVOLUTION_SEND_TIMEOUT_MS`) e **`repetir: false`**.
+         ⚠️ Timeout de POST de envio é do NOSSO lado: a mensagem pode ter saído. Repetir
+         entrega o documento duas vezes ao cliente — nunca re-tentar envio.
+      3. 🔴 **`estaProntoParaEnviar` NÃO resolvia o escopo da clínica.** A configuração
+         mora em (empresaId, equipeId) com regra própria — CNPJ grava `equipeId: null`,
+         empresa pessoal grava a equipe — e `req.equipeId` (header `x-equipe-id`) NÃO é
+         essa chave: falta em caminhos legítimos (asset sem XHR, primeiro request antes
+         de o EmpresaContext resolver, ADMIN) e SOBRA em empresa com CNPJ. Sem resolver,
+         `buscarConfigDoEscopo` não achava a linha e devolvia `NAO_PROVISIONADO` — a tela
+         de Configurações (que resolve por conta própria, via `resolverEscopoConfiguracao`)
+         dizia CONECTADO enquanto o envio respondia NÃO. `resolverEscopoClinica` passou
+         para dentro de `obterStatus`: agora as três leituras (tela, pré-checagem e
+         `prepararEnvio`) concordam por construção. Medido na base: empresa 58 com
+         `equipeId=null` ia de `NAO_PROVISIONADO/pronto=false` para `CONECTADO/pronto=true`.
+- [x] 🔴 **E O QUARTO DEFEITO, QUE SÓ APARECEU DEPOIS DE A FALHA FALAR: o PDF nunca
+      era base64.** A partir do **Puppeteer 23**, `page.pdf()` devolve **`Uint8Array`,
+      não `Buffer`** (o projeto está no 25), e `Uint8Array.prototype.toString('base64')`
+      **IGNORA o argumento** e devolve os bytes separados por vírgula —
+      `"37,80,68,70,45,49,..."`. Não lança nada: cada consumidor recebia uma string
+      plausível que não é base64 de coisa nenhuma. A Evolution recusava com
+      **400 `Owned media must be a url or base64`** (`isBase64` do class-validator, em
+      `sendMessage.controller.ts`), e o e-mail seguia com o anexo corrompido.
+      Corrigido NA FONTE — `htmlParaPdf` devolve `Buffer.from(pdf)` —, o que conserta de
+      uma vez os quatro consumidores (WhatsApp, e-mail, `POST /documentos/pdf` e o link
+      público da fatura em `FaturaController.gerarLinkPublicoDaFatura`, que passava o
+      `Uint8Array` como `buffer` para o `storage.upload`).
+      ⚠️ `Buffer.from(uint8)` COPIA os bytes; `Buffer.from(u8.buffer)` compartilha o
+      ArrayBuffer e pode carregar bytes de fora da view.
+      ⚠️ **Este era o defeito que impedia o envio de verdade** — os três acima eram
+      reais, mas o que fazia o WhatsApp recusar todo PDF era este. E ele estava
+      INVISÍVEL: só apareceu porque o item seguinte fez a falha dizer o motivo.
+      ⚠️ Ao subir o Puppeteer, conferir o tipo de retorno de `page.pdf()`/`page.screenshot()`
+      antes de confiar em método de `Buffer`.
+      ✅ Verificado com envio REAL: `{sucesso:true, id:'3EB03A6B9E90B795174183'}` em 6,8s,
+      com `equipeId: null` (o caso que antes nem chegava a gerar o PDF).
+      Gate novo `__tests__/documentoPdf.test.js` (3 casos, sem Chromium — `puppeteer`
+      é mockado): trava o contrato "sai daqui como Buffer" e o `finally` que fecha o
+      navegador. Verificado que REPROVA de verdade (a normalização foi removida de
+      propósito e o caso do base64 falhou). Suíte: 459.
+- [x] **A FALHA PASSOU A DIZER O MOTIVO — em toda a corrente.** Era o que impedia
+      diagnosticar: `prontidaoParaEnviar` (era `estaProntoParaEnviar`) devolve
+      `{ pronto, motivo }` em vez de um booleano pelado; `documentoWhatsappService` LOGA
+      e propaga o motivo em vez de colapsar tudo em `PROVIDER_INDISPONIVEL`;
+      `DocumentoCompartilharController` acrescenta um `motivo` LEGÍVEL à resposta (mapa
+      `MOTIVO_WHATSAPP`) e um `logger.warn`; e o `catch {}` mudo de
+      `utils/compartilharPdf.ts` virou `motivoDaFalha(err)`, que aparece no toast do
+      fallback. "A clínica nunca conectou", "a sessão caiu", "o servidor está fora" e "o
+      cliente não tem telefone" eram a MESMA frase — e não deixavam rastro nem no log.
+      ⚠️ Fallback silencioso é armadilha: cair no manual é aceitável; cair sem saber por
+      quê, não. (Mesma lição de 2026-09-01, item da conversão de documento.)
+- [x] **Teto de corpo PRÓPRIO no webhook (60 MB), com o token ANTES do parser.**
+      É o único endpoint cujo tamanho do corpo quem decide é um serviço EXTERNO, e o 413
+      ali não é uma requisição perdida (ver item 1b). `routes/webhooks.js` aplica
+      `confereToken` e só então `express.json({ limit: '60mb' })` — o token vem na QUERY,
+      então corpo grande só é lido de quem provou conhecer o segredo; e a rota é montada
+      em `server.ts` ANTES do `express.json` global de 15 MB.
+      ⚠️ Consequência aceita: por entrar antes, o webhook não passa pelo rate limit geral
+      (que é definido depois). Quem o protege é o token, conferido em tempo constante.
+      Verificado ao vivo: 20 MB sem token → 401 (corpo nem lido); com token → 200.
+- [x] **6 instâncias ÓRFÃS no servidor Evolution — APAGADAS (autorizado nesta sessão)** — `s2vet_e41`, `s2vet_e33_q30`,
+      `s2vet_e37_q34`, `s2vet_e40_q37`, `s2vet_e52_q51`, `s2vet_e53_q52`: existem na
+      Evolution mas NÃO em `tb_empresa_configuracoes` desta base (resquício de bases
+      anteriores). Ficam em `connecting`, seguem disparando webhook para a nossa URL e
+      continuam com `base64: true` — nenhuma correção do código as alcança, porque
+      `garantirInstancia` só reconfigura instância que o BANCO conhece. Removidas por
+      `DELETE /instance/delete/{nome}`; sobraram no servidor apenas as duas que o banco
+      conhece (`s2vet_e58_q57` e `s2vet_e59_q58`).
+- [ ] O envio real depende do WhatsApp da clínica provisionado/conectado na Evolution
+      API e de SMTP configurado. Sem isso TODO clique cai no fallback (baixa o PDF) —
+      e o toast diz isso, mas vale confirmar num envio de verdade antes de anunciar a
+      função ao cliente (`npm run email:testar` cobre o lado do e-mail).
+- [x] 🔴 **A TELA DIZIA "WHATSAPP CONECTADO" COM A EVOLUTION FORA DO AR.**
+      `whatsappService.obterStatus` tinha um `catch` que, ao falhar a consulta AO
+      VIVO, devolvia o status PERSISTIDO — e o último valor gravado é justamente
+      `CONECTADO`. A luz ficava verde e nenhuma mensagem saía.
+      ⚠️ **Não era só cosmético**: `provider.estaProntoParaEnviar` compara com
+      'CONECTADO' e respondia SIM, então `enviarDocumentoWhatsApp` subia um Chromium
+      e gerava o PDF INTEIRO (segundos) só para falhar no envio depois — queimando a
+      janela de "user activation" do navegador de que o fallback manual precisa
+      (`frontend/src/utils/compartilharPdf.ts`). Sintoma para o usuário: o botão de
+      WhatsApp "não faz nada". E `prepararEnvio` liberava cada mensagem para morrer
+      no timeout.
+      Estado NOVO **`SERVIDOR_INDISPONIVEL`**: "não sei" nunca mais se disfarça de
+      "sim". Devolvido quando a Evolution não responde OU responde sem estado
+      (instância removida do servidor).
+      ⚠️ **NÃO persiste** o estado degradado — a Evolution cair por 30s não pode
+      apagar do banco o fato de a clínica ter uma sessão pareada. O valor conhecido
+      volta em `statusPersistido`, como contexto.
+      ⚠️ **NÃO existe fallback para o persistido em estado nenhum**, nem
+      DESCONECTADO: sem alcançar a Evolution não há envio possível, e "o servidor
+      está fora" é problema DIFERENTE de "a sessão caiu" (que se resolve com QR).
+      Devolver DESCONECTADO mandaria o gestor ler um QR Code que ninguém pode gerar.
+      Pelo mesmo motivo, `prepararEnvio` responde com o código PRÓPRIO
+      `WHATSAPP_SERVIDOR_INDISPONIVEL`, não `WHATSAPP_DESCONECTADO`.
+      Front: o novo estado conta como FALHA (luz vermelha) e ganhou texto VISÍVEL na
+      tela — o `title` do ponto só aparece no hover, e some no celular; como o
+      sintoma relatado foi "a tela diz que está conectado", o estado precisa estar
+      escrito.
+      `__tests__/whatsappStatus.test.js` (10 casos) trava a regra; verificado que
+      REPROVA de verdade — o `catch` antigo foi reintroduzido de propósito e 2 casos
+      falharam. Suíte: 456.
+- [ ] **Nada de Postfix próprio na VPS**: IP novo não tem reputação e Gmail/Outlook
+      mandam direto para spam. O caminho é sempre um relay (Brevo, SES, Resend…).
+- [ ] O domínio de `EMAIL_FROM` precisa de **SPF + DKIM** publicados para não cair em
+      spam. Isso é DNS, fora do código — mas sem isso o PDF que a clínica manda ao
+      cliente não chega na caixa de entrada.
+
 ### Sessao 2026-09-03 - Folha sem cabecalho, campo vazio fora do papel e Anexo XI remodelado
 
 - [x] 🔴 **O emitido exibia o EXEMPLO do catalogo por cima do dado real** - ver o item 1
@@ -2636,7 +2954,9 @@ New-Item -ItemType Junction `
       o tratamento existe e ficou parado. As duas `listarParaExecucao` devolvem
       `animalInativo` por linha; Execução de Prescrição e Painel Principal apagam
       Executar/Aplicar e Cancelar e mostram o selo "Somente leitura". Ver e Imprimir
-      ficam. ⚠️ Não reintroduzir o filtro que tira a linha da fila.
+      ficam. ⚠️ Não reintroduzir o filtro que tira a linha da RESPOSTA DO BACKEND.
+      ⚠️ **A posição na TELA mudou em 2026-09-05** — ver a sessão daquele dia: em
+      `/execucao-prescricao` a linha desceu da fila "a executar" para o Histórico.
 - [x] 🔴 **Fatura PAGA é somente leitura** — ver o item no topo. O buraco não era o
       item (esse já era recusado), era `atualizarStatus`: PAGA → ABERTA reabria tudo.
 - [ ] O congelamento do PACIENTE não alcança o financeiro dele (fatura e orçamento de

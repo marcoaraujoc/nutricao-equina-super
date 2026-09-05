@@ -42,6 +42,7 @@
 import api from '../services/api';
 import { htmlParaPdfBlob } from './gerarPdf';
 import { abrirWhatsApp, abrirEmail } from './compartilhar';
+import toast from 'react-hot-toast';
 
 const TIMEOUT_ENVIO_MS = 60000; // envio real — cobre Puppeteer + retries da Evolution (~46s no pior caso)
 const TIMEOUT_PDF_MS   = 1200;  // PDF do fallback via backend — curto, precede o abrirWhatsApp/abrirEmail
@@ -62,6 +63,26 @@ export interface ResultadoCompartilhar {
   enviado:   boolean;
   /** Envio "bem-sucedido" mas em modo de teste (provider noop) — nada chegou de fato. */
   simulado?: boolean;
+  /**
+   * POR QUE caiu no fallback manual, em uma frase pronta para a tela.
+   * ⚠️ Sem isto, "a clínica nunca conectou o WhatsApp", "a sessão caiu", "o servidor
+   * da Evolution está fora do ar" e "o cliente não tem telefone" chegavam ao usuário
+   * como o MESMO toast ("PDF baixado — anexe na conversa"), e o `catch {}` desta
+   * função apagava até o rastro no console. Com o WhatsApp da clínica aparecendo
+   * como conectado na tela de Configurações, não sobrava nada para investigar.
+   */
+  motivo?:   string;
+}
+
+/** Extrai o motivo legível que o backend manda em `motivo` — ou traduz a falha de rede. */
+function motivoDaFalha(err: unknown): string | undefined {
+  const e = err as { code?: string; response?: { status?: number; data?: { motivo?: string; error?: string } } };
+  const doServidor = e?.response?.data?.motivo ?? e?.response?.data?.error;
+  if (doServidor) return doServidor;
+  if (e?.code === 'ECONNABORTED') return 'o envio demorou demais e foi interrompido.';
+  if (e?.response?.status === 403) return 'você não tem permissão para enviar este documento.';
+  if (e?.response?.status) return `o servidor respondeu ${e.response.status}.`;
+  return 'não foi possível falar com o servidor.';
 }
 
 /**
@@ -116,17 +137,19 @@ export async function compartilharPdfWhatsApp(
   opts: CompartilharPdfOpcoes,
   telefone?: string | null,
 ): Promise<ResultadoCompartilhar> {
+  let motivo = telefone ? undefined : 'o cliente está sem telefone cadastrado.';
   if (telefone) {
     try {
       const r = await api.post('/documentos/whatsapp', {
         telefone, html: opts.gerarHtml(), nomeArquivo: opts.nomeArquivo, legenda: opts.texto,
       }, { timeout: TIMEOUT_ENVIO_MS });
       if (r.data?.sucesso) return { enviado: true, simulado: !!r.data.simulado };
-    } catch { /* cai no manual abaixo */ }
+      motivo = r.data?.motivo ?? r.data?.error;
+    } catch (err) { motivo = motivoDaFalha(err); }
   }
   await baixarPdfNoNavegador(opts);
   abrirWhatsApp(opts.texto, foneIntl(telefone));
-  return { enviado: false };
+  return { enviado: false, motivo };
 }
 
 /**
@@ -140,6 +163,7 @@ export async function compartilharPdfEmail(
   opts: CompartilharPdfOpcoes,
   para?: string | null,
 ): Promise<ResultadoCompartilhar> {
+  let motivo = para ? undefined : 'o cliente está sem e-mail cadastrado.';
   if (para) {
     try {
       const r = await api.post('/documentos/email', {
@@ -147,9 +171,69 @@ export async function compartilharPdfEmail(
         html: opts.gerarHtml(), nomeArquivo: opts.nomeArquivo,
       }, { timeout: TIMEOUT_ENVIO_MS });
       if (r.data?.sucesso) return { enviado: true };
-    } catch { /* cai no manual abaixo */ }
+      motivo = r.data?.motivo ?? r.data?.error;
+    } catch (err) { motivo = motivoDaFalha(err); }
   }
   await baixarPdfNoNavegador(opts);
   abrirEmail(opts.titulo ?? opts.nomeArquivo, opts.texto, para ?? undefined);
-  return { enviado: false };
+  return { enviado: false, motivo };
+}
+
+// ─── Envio com aviso ao usuário ───────────────────────────────────────────────
+//
+// Mesmo par de chamadas acima, já com os toasts de resultado. Existe para que
+// `CompartilharPdfBotoes` (o caso comum) e as telas que precisam de um fluxo
+// PRÓPRIO antes do envio — a Prescrição passa pelo recorte do receituário de
+// controle especial, por exemplo — digam a MESMA coisa ao usuário. Duas cópias
+// dessas mensagens divergiriam na primeira correção.
+//
+// ⚠️ Nunca lança: o resultado do envio é comunicado por toast, e uma exceção
+// escapando daqui derrubaria o handler da tela no meio da ação.
+
+/** Devolve `true` quando o PDF foi realmente enviado pelo backend. */
+export async function enviarPdfWhatsAppComAviso(
+  opts: CompartilharPdfOpcoes,
+  telefone?: string | null,
+): Promise<boolean> {
+  try {
+    const r = await compartilharPdfWhatsApp(opts, telefone);
+    if (r.enviado) {
+      toast.success(r.simulado ? 'Envio simulado (WhatsApp em modo de teste).' : 'PDF enviado por WhatsApp.');
+      return true;
+    }
+    toast(
+      r.motivo
+        ? `PDF baixado — anexe-o na conversa: ${r.motivo}`
+        : 'PDF baixado — anexe-o na conversa do WhatsApp.',
+      { icon: '📎', duration: 8000 },
+    );
+    return false;
+  } catch {
+    toast.error('Erro ao gerar o PDF para o WhatsApp.');
+    return false;
+  }
+}
+
+/** Devolve `true` quando o PDF foi realmente enviado pelo backend. */
+export async function enviarPdfEmailComAviso(
+  opts: CompartilharPdfOpcoes,
+  para?: string | null,
+): Promise<boolean> {
+  try {
+    const r = await compartilharPdfEmail(opts, para);
+    if (r.enviado) {
+      toast.success('PDF enviado por e-mail, já anexado.');
+      return true;
+    }
+    toast(
+      r.motivo
+        ? `PDF baixado — anexe-o no e-mail: ${r.motivo}`
+        : 'PDF baixado — anexe-o no e-mail antes de enviar.',
+      { icon: '📎', duration: 8000 },
+    );
+    return false;
+  } catch {
+    toast.error('Erro ao gerar o PDF para o e-mail.');
+    return false;
+  }
 }

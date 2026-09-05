@@ -97,7 +97,16 @@ async function garantirInstancia(empresaId, equipeId = null) {
   let config = await buscarConfigDoEscopo(empresaId, equipeId);
   if (!config) config = await criarConfigVazia(empresaId, equipeId);
   if (!config) throw new Error('Configuração da clínica não encontrada');
-  if (config.waInstance) return { config, instanceName: config.waInstance };
+  if (config.waInstance) {
+    // Instância JÁ existe → `createInstance` nunca mais roda para ela, e a
+    // configuração de webhook gravada na Evolution ficaria congelada como nasceu.
+    // Instâncias criadas antes de 2026-09-05 têm `base64: true`, que estoura o
+    // corpo do webhook (413) e atrasa cada envio de mídia — ver EvolutionService.
+    // Best-effort: falhar aqui não pode impedir conectar/enviar.
+    try { await EvolutionService.setWebhook(config.waInstance); }
+    catch (err) { logger.warn(`[WhatsappService] Não foi possível reconfigurar o webhook de ${config.waInstance}: ${err.message}`); }
+    return { config, instanceName: config.waInstance };
+  }
 
   const instanceName = nomeInstancia(empresaId, equipeId);
   try {
@@ -126,22 +135,74 @@ async function provisionarPorEmpresa(empresaId) {
   }
 }
 
-/** Status persistido + estado ao vivo (sincroniza o banco). */
+/**
+ * Status persistido + estado AO VIVO (sincroniza o banco).
+ *
+ * 🔴 EVOLUTION FORA DO AR NÃO É "CONECTADO". Até 2026-09-05 o `catch` daqui
+ * devolvia o status PERSISTIDO quando a consulta ao vivo falhava — e o último
+ * valor gravado costuma ser justamente `CONECTADO`. Resultado relatado: a tela
+ * de Configurações mostrava a luz VERDE e "WhatsApp conectado" com o servidor
+ * Evolution desligado. E o estrago não era só cosmético:
+ *   - `provider.prontidaoParaEnviar` comparava com 'CONECTADO' e respondia SIM,
+ *     então `enviarDocumentoWhatsApp` subia um Chromium e gerava o PDF inteiro
+ *     (segundos) só para falhar no envio depois — queimando a janela de "user
+ *     activation" do navegador de que o fallback manual precisa (ver
+ *     frontend/src/utils/compartilharPdf.ts). Sintoma: o botão "não faz nada".
+ *   - `prepararEnvio` liberava o envio, e cada mensagem morria no timeout.
+ * Agora a indisponibilidade é um ESTADO PRÓPRIO, `SERVIDOR_INDISPONIVEL`:
+ * "não sei" nunca mais se disfarça de "sim".
+ *
+ * ⚠️ O status persistido NÃO é sobrescrito nesse caminho: a Evolution cair por
+ * 30s não pode apagar do banco o fato de a clínica ter uma sessão pareada. O
+ * valor conhecido volta em `statusPersistido`, para a tela poder dizer "estava
+ * conectado na última verificação".
+ * ⚠️ NÃO existe fallback para o persistido em NENHUM estado — nem
+ * DESCONECTADO. Sem alcançar a Evolution não há envio possível, e o motivo
+ * ("o servidor está fora") é diferente de "a sessão caiu" (que se resolve com
+ * QR). Devolver DESCONECTADO mandaria o gestor ler um QR Code que ninguém
+ * pode gerar.
+ */
 async function obterStatus(empresaId, equipeId = null) {
-  const config = await buscarConfigDoEscopo(empresaId, equipeId);
+  // 🔴 RESOLVER O ESCOPO AQUI, e não só em `prepararEnvio`. A configuração da
+  // clínica mora em (empresaId, equipeId) com uma regra própria — CNPJ grava
+  // `equipeId: null`, empresa pessoal grava a equipe — e o `req.equipeId` do
+  // contexto ativo NÃO é essa chave: ele vem do header `x-equipe-id`, que está
+  // ausente em vários caminhos legítimos (asset sem XHR, primeiro request antes de
+  // o EmpresaContext resolver, ADMIN da plataforma) e está PRESENTE mesmo em
+  // empresa com CNPJ, cuja linha de configuração tem `equipeId` nulo.
+  // Sem esta normalização, `buscarConfigDoEscopo` não achava a linha e devolvia
+  // NAO_PROVISIONADO: a tela de Configurações (que resolve o escopo por conta
+  // própria) mostrava "conectado" enquanto `prontidaoParaEnviar` respondia NÃO e
+  // todo envio de documento caía calado no fallback manual do front.
+  const escopo = await resolverEscopoClinica(empresaId, equipeId);
+  const config = escopo
+    ? await buscarConfigDoEscopo(escopo.empresaId, escopo.equipeId)
+    : await buscarConfigDoEscopo(empresaId, equipeId);
   if (!config?.waInstance) {
     return { status: 'NAO_PROVISIONADO', temTelefone: Boolean(config?.whatsapp), atualizadoEm: null };
   }
-  let status = config.waStatus ?? 'DESCONECTADO';
+  const persistido = config.waStatus ?? 'DESCONECTADO';
   try {
     const live   = await EvolutionService.getStatus(config.waInstance);
     const estado = live?.instance?.state ?? live?.state;
-    if (estado) {
-      status = mapearEstado(estado);
-      if (status !== config.waStatus) await salvarStatus(config.id, status);
+    // Resposta SEM estado = a Evolution respondeu, mas não sobre esta instância
+    // (instância removida do servidor, por exemplo). Também não é "conectado".
+    if (!estado) {
+      return {
+        status: 'SERVIDOR_INDISPONIVEL', statusPersistido: persistido,
+        temTelefone: Boolean(config.whatsapp), atualizadoEm: config.waStatusEm,
+      };
     }
-  } catch { /* Evolution fora do ar → mantém o status persistido */ }
-  return { status, temTelefone: Boolean(config.whatsapp), atualizadoEm: config.waStatusEm };
+    const status = mapearEstado(estado);
+    if (status !== config.waStatus) await salvarStatus(config.id, status);
+    return { status, temTelefone: Boolean(config.whatsapp), atualizadoEm: config.waStatusEm };
+  } catch (err) {
+    logger.warn(`[WhatsappService] Evolution não respondeu (${config.waInstance}): ${err.message}`);
+    return {
+      status: 'SERVIDOR_INDISPONIVEL', statusPersistido: persistido,
+      temTelefone: Boolean(config.whatsapp), atualizadoEm: config.waStatusEm,
+    };
+  }
 }
 
 /** Conectar: garante instância, busca QR e marca AGUARDANDO_QR. */
@@ -222,6 +283,12 @@ async function prepararEnvio(clinic, phone) {
   if (!config?.waInstance) return { ok: false, erro: 'WHATSAPP_NAO_PROVISIONADO' };
 
   const { status } = await obterStatus(escopo.empresaId, escopo.equipeId);
+  // Código PRÓPRIO para "o servidor da Evolution não respondeu": o gestor não tem
+  // o que fazer com um "reconecte lendo o QR" quando não há servidor para gerar o
+  // QR. São problemas diferentes e a mensagem na tela precisa dizer qual é.
+  if (status === 'SERVIDOR_INDISPONIVEL') {
+    return { ok: false, erro: 'WHATSAPP_SERVIDOR_INDISPONIVEL', status };
+  }
   if (status !== 'CONECTADO') return { ok: false, erro: 'WHATSAPP_DESCONECTADO', status };
 
   const numero = formatPhone(phone);

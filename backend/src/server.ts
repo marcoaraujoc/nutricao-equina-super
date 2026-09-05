@@ -145,6 +145,20 @@ app.use(cors({
   maxAge: 3600,
 }));
 
+// 🔴 O WEBHOOK DA EVOLUTION ENTRA ANTES, COM TETO PRÓPRIO. Ele é o único endpoint
+// cujo tamanho do corpo quem decide é um serviço EXTERNO, e um 413 ali não é só uma
+// requisição perdida: a Evolution repete o POST até 10 vezes com backoff exponencial
+// (413 não está entre os status que ela considera definitivos), e os eventos úteis —
+// CONNECTION_UPDATE, QRCODE_UPDATED — ficam na fila atrás do evento que não cabe. Foi
+// assim que o status da instância parou de ser atualizado no banco.
+// A causa raiz (mídia em base64 dentro do evento) está desligada em
+// `EvolutionService.WEBHOOK_BASE64`; este teto é a rede de segurança para o que vier
+// grande por outro motivo — a lista de eventos é da Evolution, não nossa.
+// ⚠️ O teto maior vive DENTRO de `routes/webhooks`, DEPOIS do confere-token: corpo
+// de 60 MB só é lido de quem provou conhecer o segredo.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+app.use('/api/webhooks', require('./routes/webhooks')); // Evolution API (token via query)
+
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
@@ -356,8 +370,6 @@ app.use('/api/clinica/imagem-exames',  imagemExamesRoutes);
 app.use('/api/resenha',               resenhaRoutes);
 app.use('/api/animais/:animalId/resenha', resenhaGraficaRoutes);
 app.use('/api/clinica',               agendaRoutes); // /historico e /agendamentos
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-app.use('/api/webhooks',              require('./routes/webhooks')); // Evolution API (token via query)
 app.use('/api/crmv',                  crmvRoutes);
 app.use('/api/ai-usage',              aiUsageRoutes);
 app.use('/api/planos',                require('./routes/planos'));

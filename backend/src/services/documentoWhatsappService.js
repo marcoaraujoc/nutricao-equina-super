@@ -41,6 +41,20 @@ function foneIntl(telefone) {
  * nunca para uma requisição de saída). JavaScript também fica desligado: os
  * templates são estáticos e não precisam dele.
  *
+ * ── 🔴 O RETORNO É NORMALIZADO PARA `Buffer` NA FONTE ────────────────────────
+ * A partir do Puppeteer 23, `page.pdf()` devolve **`Uint8Array`, não `Buffer`** — e
+ * `Uint8Array.prototype.toString('base64')` IGNORA o argumento e devolve os bytes
+ * separados por vírgula (`"37,80,68,70,..."`). Não lança nada: cada consumidor
+ * recebia uma string plausível que não é base64 de coisa alguma.
+ *   - WhatsApp: a Evolution recusava com 400 "Owned media must be a url or base64",
+ *     e a tela caía no fallback manual — o sintoma "manda como texto, não anexo".
+ *   - E-mail: o anexo seguia com conteúdo corrompido.
+ * Normalizar AQUI, e não em cada chamador, é o que faz `.toString('base64')`,
+ * `.length` e `storage.upload({ buffer })` voltarem a significar o que aparentam —
+ * inclusive nos caminhos que ainda não existem.
+ * ⚠️ `Buffer.from(uint8)` COPIA os bytes; não use `Buffer.from(u8.buffer)`, que
+ * compartilha o ArrayBuffer e pode carregar bytes de fora da view.
+ *
  * @param {string} html
  * @returns {Promise<Buffer>}
  */
@@ -68,7 +82,7 @@ async function htmlParaPdf(html) {
 
     // Sem rede não há o que aguardar além do parse do documento
     await page.setContent(html, { waitUntil: 'domcontentloaded' });
-    return await page.pdf({
+    const pdf = await page.pdf({
       format: 'A4',
       // `printBackground: false` (o padrão do próprio Puppeteer) — de propósito
       // IGUAL ao "Imprimir → Salvar como PDF" do navegador, que por padrão NÃO
@@ -81,6 +95,7 @@ async function htmlParaPdf(html) {
       printBackground: false,
       margin: { top: '12mm', right: '10mm', bottom: '12mm', left: '10mm' },
     });
+    return Buffer.isBuffer(pdf) ? pdf : Buffer.from(pdf);
   } finally {
     await browser.close();
   }
@@ -110,13 +125,18 @@ async function enviarDocumentoWhatsApp({
 
   const provider = getWhatsAppProvider();
 
-  // Checagem RÁPIDA antes do Puppeteer — ver WhatsAppProvider#estaProntoParaEnviar.
+  // Checagem RÁPIDA antes do Puppeteer — ver WhatsAppProvider#prontidaoParaEnviar.
   // Sem ela, toda clínica sem instância conectada pagava o custo de gerar o PDF
   // (segundos) só para o envio falhar em seguida por outro motivo — e esse atraso
   // extra, somado ao do fallback manual do front, arriscava perder o gesto do
   // usuário que abriria o WhatsApp (window.open silenciosamente bloqueado).
-  if (!(await provider.estaProntoParaEnviar({ empresaId, equipeId }))) {
-    return { sucesso: false, erro: 'PROVIDER_INDISPONIVEL' };
+  const prontidao = await provider.prontidaoParaEnviar({ empresaId, equipeId });
+  if (!prontidao.pronto) {
+    // O motivo VIAJA até a tela (e vai para o log): sem ele, "a clínica nunca
+    // conectou", "a sessão caiu" e "a Evolution está fora do ar" chegavam ao
+    // usuário como o mesmo silêncio.
+    logger.warn(`[DocumentoWhatsApp] Envio não realizado (empresa ${empresaId}, equipe ${equipeId ?? '—'}): ${prontidao.motivo}`);
+    return { sucesso: false, erro: prontidao.motivo ?? 'PROVIDER_INDISPONIVEL' };
   }
 
   let base64;
