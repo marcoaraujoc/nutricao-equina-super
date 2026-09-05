@@ -60,6 +60,21 @@ function querStream(req) {
   return String(req.headers.accept ?? '').includes('application/x-ndjson');
 }
 
+/**
+ * "O cliente desistiu?" — o botão Cancelar da barra aborta a requisição, e é aqui
+ * que o servidor fica sabendo. Sem isto o cancelamento seria só de fachada: o front
+ * pararia de esperar, o Chromium continuaria gerando o PDF e a mensagem sairia
+ * mesmo assim, com a tela dizendo "cancelado".
+ * ⚠️ `close` no request dispara TAMBÉM no fim normal da resposta; o que separa
+ * "acabou" de "abortou" é `res.writableEnded`. Sem essa checagem, todo envio
+ * bem-sucedido seria marcado como cancelado no final.
+ */
+function detectorDeDesistencia(req, res) {
+  let saiu = false;
+  req.on('close', () => { if (!res.writableEnded) saiu = true; });
+  return () => saiu;
+}
+
 function abrirStream(res) {
   res.status(200);
   res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
@@ -92,6 +107,7 @@ const DocumentoCompartilharController = {
     }
 
     const stream = querStream(req) ? abrirStream(res) : null;
+    const desistiu = detectorDeDesistencia(req, res);
     stream?.progresso(5, 'Preparando o envio');
 
     try {
@@ -104,7 +120,14 @@ const DocumentoCompartilharController = {
         legenda: legenda ?? '',
         contexto: { userId: req.user?.id },
         onProgresso: stream ? stream.progresso : null,
+        cancelado:   desistiu,
       });
+      // Cancelado = o cliente já foi embora; não há a quem responder, e escrever num
+      // socket fechado só produziria ruído de erro no log.
+      if (r.erro === 'CANCELADO') {
+        logger.info(`[DocumentoCompartilhar] Envio cancelado pelo usuário (empresa ${req.empresaId}, ${nomeArquivo}).`);
+        return;
+      }
       if (!r.sucesso) {
         // ERRO_PDF é bug nosso (500); os demais (SEM_EMPRESA/TELEFONE_AUSENTE/falha
         // do provider) são "não dá para mandar assim" — o front decide o fallback.

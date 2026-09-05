@@ -29,11 +29,12 @@ const controller   = require('../controllers/DocumentoCompartilharController');
 function resFalso() {
   const r = {
     chunks: [], statusCode: 200, headers: {}, encerrado: false, corpoJson: null,
+    writableEnded: false,
     status(c) { this.statusCode = c; return this; },
     setHeader(k, v) { this.headers[k.toLowerCase()] = v; return this; },
     flushHeaders() {},
     write(c) { this.chunks.push(c); return true; },
-    end() { this.encerrado = true; },
+    end() { this.encerrado = true; this.writableEnded = true; },
     json(o) { this.corpoJson = o; return this; },
   };
   return r;
@@ -43,7 +44,8 @@ const linhas = (res) => res.chunks.join('').trim().split('\n').filter(Boolean).m
 
 const reqBase = (extra = {}) => ({
   body: { telefone: '21999998888', html: '<html></html>', nomeArquivo: 'doc.pdf', legenda: 'oi' },
-  empresaId: 58, equipeId: 57, user: { id: 1 }, headers: {}, ...extra,
+  empresaId: 58, equipeId: 57, user: { id: 1 }, headers: {},
+  on() { /* sem ouvinte por padrao */ }, ...extra,
 });
 
 beforeEach(() => jest.clearAllMocks());
@@ -95,6 +97,58 @@ describe('WhatsApp — progresso por marcos reais', () => {
 
     expect(res.chunks).toHaveLength(0);
     expect(res.corpoJson).toEqual({ sucesso: true, simulado: false });
+  });
+});
+
+describe('Cancelamento — o servidor precisa parar de verdade', () => {
+  test('🔴 cliente que desiste ANTES do envio nao tem a mensagem entregue', async () => {
+    // Sem esta consulta, "Cancelar" seria de fachada: o front pararia de esperar,
+    // o PDF continuaria sendo gerado e o documento chegaria ao cliente com a tela
+    // dizendo "cancelado".
+    let entregue = false;
+    enviarDocumentoWhatsApp.mockImplementation(async ({ cancelado }) => {
+      // Cede o controle antes de consultar: no envio real, o clique em Cancelar cai
+      // no meio dos segundos do Puppeteer, nunca no mesmo tick da chamada.
+      await new Promise(r => setImmediate(r));
+      if (cancelado()) return { sucesso: false, erro: 'CANCELADO' };
+      entregue = true;
+      return { sucesso: true };
+    });
+
+    const res = resFalso();
+    const req = reqBase({ headers: { accept: 'application/x-ndjson' } });
+    const ouvintes = {};
+    req.on = (ev, fn) => { ouvintes[ev] = fn; };
+
+    const p = controller.whatsapp(req, res);
+    ouvintes.close?.();          // o usuario clicou em Cancelar: o socket fechou
+    await p;
+
+    expect(entregue).toBe(false);
+    // Cliente ja foi embora — nao se escreve veredito num socket fechado.
+    expect(linhas(res).some(l => l.tipo === 'fim')).toBe(false);
+  });
+
+  test('o fim NORMAL da resposta nao e confundido com desistencia', async () => {
+    // `close` no request dispara tambem no fim normal; quem separa os dois e
+    // `res.writableEnded`. Sem isso, TODO envio bem-sucedido viraria "cancelado".
+    let viuCancelado = null;
+    enviarDocumentoWhatsApp.mockImplementation(async ({ cancelado }) => {
+      viuCancelado = cancelado();
+      return { sucesso: true };
+    });
+
+    const res = resFalso();
+    const req = reqBase({ headers: { accept: 'application/x-ndjson' } });
+    const ouvintes = {};
+    req.on = (ev, fn) => { ouvintes[ev] = fn; };
+
+    await controller.whatsapp(req, res);
+    res.writableEnded = true;    // a resposta terminou normalmente
+    ouvintes.close?.();          // e so entao o socket fechou
+
+    expect(viuCancelado).toBe(false);
+    expect(linhas(res).at(-1).sucesso).toBe(true);
   });
 });
 

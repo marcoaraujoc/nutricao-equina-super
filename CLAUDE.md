@@ -2877,9 +2877,44 @@ New-Item -ItemType Junction `
       `duration: Infinity`, fechado no `finally`), na cor da ação (§6): WhatsApp
       verde, e-mail azul. Como mora dentro de `enviarPdf*ComAviso`, as 5 telas que
       compartilham PDF ganharam a barra sem nenhuma alteração.
-      Gate: `__tests__/documentoProgresso.test.js` (5 casos) — ordem dos marcos,
-      pct nunca recuando, veredito na linha `fim` e o contrato antigo intacto.
-      Suíte: 464.
+      🔴 **A BARRA FICA NO CENTRO DA TELA, e por isso NÃO usa `react-hot-toast`**
+      (a pedido). O toast é renderizado dentro de um wrapper com `transform` (a
+      animação de entrada), e `position: fixed` dentro de um elemento transformado
+      passa a ser relativo a ELE, não à viewport — não existe CSS que centralize o
+      card a partir de lá. O componente monta o próprio portal no `<body>`
+      (`createRoot`, um host reaproveitado entre envios). Os toasts de RESULTADO
+      continuam saindo pelo react-hot-toast.
+      ⚠️ O overlay é `pointer-events-none` (só o card recebe clique): um overlay que
+      captura clique vira armadilha se algum caminho de erro deixar de fechá-lo — a
+      tela inteira ficaria travada. Não há clique duplo a impedir, os botões de envio
+      já se desabilitam sozinhos.
+      ⚠️ `unmount` adiado em `setTimeout(0)`: chamá-lo dentro do ciclo de render do
+      React 18 dispara aviso e pode perder a atualização final (o 100%).
+- [x] **BOTÃO CANCELAR na barra — e o cancelamento é REAL** (a pedido). São duas
+      metades: o front aborta a requisição (`AbortController`) e o BACKEND percebe o
+      cliente sair (`req.on('close')` + `res.writableEnded`) e consulta isso nos dois
+      pontos irreversíveis — antes de subir o Chromium e, principalmente, antes de
+      entregar a mensagem. Só a primeira metade seria cancelamento de FACHADA: o
+      front pararia de esperar, o PDF continuaria sendo gerado e o documento chegaria
+      ao cliente com a tela dizendo "cancelado".
+      🔴 **O botão SOME no marco 85** (`PCT_SEM_VOLTA`), que é "Enviando ao
+      WhatsApp": dali em diante a mensagem está a caminho e mensagem entregue não se
+      desfaz. Oferecer o botão ali produziria o pior resultado possível — a tela
+      afirmando "cancelado" enquanto o cliente recebe o documento. No lugar dele
+      entra a frase "Não é mais possível cancelar"; botão DESABILITADO seria pior,
+      porque convida ao clique e depois não explica nada.
+      ⚠️ `close` no request dispara TAMBÉM no fim normal da resposta — quem separa
+      "acabou" de "abortou" é `res.writableEnded`. Sem essa checagem, TODO envio
+      bem-sucedido seria marcado como cancelado. Há teste para os dois lados.
+      ⚠️ Cancelado NÃO cai no fallback manual: baixar o PDF e abrir o WhatsApp seria
+      exatamente a continuação que o usuário acabou de recusar. Resultado próprio
+      (`cancelado: true`) e toast neutro, nunca "PDF baixado, anexe na conversa".
+      ⚠️ Cancelado o envio, o servidor NÃO escreve o veredito: o cliente já foi
+      embora e escrever num socket fechado só produz ruído de erro no log.
+      Gate: `__tests__/documentoProgresso.test.js` (7 casos) — ordem dos marcos,
+      pct nunca recuando, veredito na linha `fim`, contrato antigo intacto, a
+      mensagem NÃO sendo entregue após desistência, e o fim normal não sendo
+      confundido com desistência. Suíte: 466.
 - [ ] O envio real depende do WhatsApp da clínica provisionado/conectado na Evolution
       API e de SMTP configurado. Sem isso TODO clique cai no fallback (baixa o PDF) —
       e o toast diz isso, mas vale confirmar num envio de verdade antes de anunciar a

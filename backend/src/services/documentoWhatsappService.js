@@ -112,6 +112,13 @@ async function htmlParaPdf(html) {
  * @param {string}  p.nomeArquivo — ex: 'orcamento-0007.pdf'
  * @param {string} [p.legenda]    — texto que acompanha o documento
  * @param {object} [p.contexto]   — metadados livres para log/rastreio
+ * @param {() => boolean} [p.cancelado] — "o cliente desistiu?". Consultado nos DOIS
+ *   pontos caros e irreversíveis: antes de subir o Chromium e, principalmente, antes
+ *   de entregar a mensagem. Sem esta consulta, o "Cancelar" da tela apenas pararia de
+ *   ESPERAR: o PDF seguiria sendo gerado e o documento chegaria ao cliente com a tela
+ *   dizendo "cancelado". Depois do envio não há mais o que consultar — mensagem
+ *   entregue não se desfaz, e é por isso que o botão some no marco 85 (ver
+ *   components/ProgressoEnvio.tsx).
  * @param {(pct:number, etapa:string) => void} [p.onProgresso] — marcos REAIS do envio.
  *   Só é chamado onde algo de fato aconteceu (prontidão conferida, PDF pronto com o
  *   tamanho medido, mensagem aceita). Quem exibe a barra não inventa número nenhum:
@@ -120,9 +127,10 @@ async function htmlParaPdf(html) {
  */
 async function enviarDocumentoWhatsApp({
   empresaId, equipeId = null, telefone, html, nomeArquivo, legenda = '', contexto = {},
-  onProgresso = null,
+  onProgresso = null, cancelado = null,
 }) {
   const marco = (pct, etapa) => { try { onProgresso?.(pct, etapa); } catch { /* nunca derruba o envio */ } };
+  const desistiu = () => { try { return !!cancelado?.(); } catch { return false; } };
   if (!empresaId)  return { sucesso: false, erro: 'SEM_EMPRESA' };
   if (!html)       return { sucesso: false, erro: 'SEM_CONTEUDO' };
 
@@ -146,6 +154,8 @@ async function enviarDocumentoWhatsApp({
     return { sucesso: false, erro: prontidao.motivo ?? 'PROVIDER_INDISPONIVEL' };
   }
 
+  if (desistiu()) return { sucesso: false, erro: 'CANCELADO' };
+
   marco(25, 'Gerando o PDF');
   let base64;
   try {
@@ -156,6 +166,9 @@ async function enviarDocumentoWhatsApp({
     logger.error(`[DocumentoWhatsApp] Falha ao gerar PDF (${nomeArquivo}): ${err.message}`);
     return { sucesso: false, erro: 'ERRO_PDF' };
   }
+
+  // ÚLTIMA janela: daqui para a frente a mensagem sai e não volta.
+  if (desistiu()) return { sucesso: false, erro: 'CANCELADO' };
 
   marco(85, 'Enviando ao WhatsApp');
   const envio = await provider.enviarDocumento({

@@ -73,6 +73,13 @@ export interface ResultadoCompartilhar {
    * como conectado na tela de Configurações, não sobrava nada para investigar.
    */
   motivo?:   string;
+  /**
+   * O usuário CANCELOU pelo botão da barra de progresso. Distinto de "falhou":
+   * cancelar significa "não quero este envio", então NÃO se baixa o PDF nem se
+   * abre o WhatsApp/e-mail em seguida — o fallback manual seria justamente a
+   * continuação que ele acabou de recusar.
+   */
+  cancelado?: boolean;
 }
 
 /**
@@ -126,24 +133,45 @@ function resultadoDoCorpo(data: unknown): Record<string, unknown> {
   return {};
 }
 
-/** Envio com barra: mesma chamada, pedindo NDJSON e desenhando cada marco. */
+/** Erro sinalizando que o próprio usuário abortou o envio pelo botão da barra. */
+class EnvioCancelado extends Error {}
+
+/**
+ * Envio com barra: mesma chamada, pedindo NDJSON e desenhando cada marco.
+ *
+ * O botão "Cancelar" aborta a requisição (`AbortController`). Isso é metade do
+ * cancelamento — a outra metade é do servidor, que percebe o cliente sair e não
+ * chega a chamar o provider (ver DocumentoCompartilharController). Sem essa segunda
+ * metade, abortar aqui só deixaria de ESPERAR: o PDF continuaria sendo gerado e a
+ * mensagem sairia assim mesmo, com a tela dizendo "cancelado".
+ */
 async function postComProgresso(
   url: string, corpo: object, canal: CanalEnvio,
 ): Promise<Record<string, unknown>> {
   let idToast: string | undefined;
+  const controle = new AbortController();
+  let cancelouAqui = false;
+  const cancelar = () => { cancelouAqui = true; controle.abort(); };
+
   try {
     const r = await api.post(url, corpo, {
       timeout: TIMEOUT_ENVIO_MS,
       headers: { Accept: 'application/x-ndjson' },
+      signal: controle.signal,
       // `responseType: 'text'` é o que garante o `responseText` incremental do XHR;
       // com o padrão ('json'), o axios só entrega o corpo já parseado, no fim.
       responseType: 'text',
       onDownloadProgress: lerNdjson((l) => {
         if (l.tipo !== 'progresso' || typeof l.pct !== 'number') return;
-        idToast = mostrarProgresso(canal, l.pct, l.etapa ?? 'Enviando...', idToast);
+        idToast = mostrarProgresso(canal, l.pct, l.etapa ?? 'Enviando...', idToast, cancelar);
       }),
     });
     return resultadoDoCorpo(r.data);
+  } catch (err) {
+    // Cancelamento do usuário não é falha de envio: sobe como erro PRÓPRIO para o
+    // chamador não confundi-lo com "não deu para mandar" e cair no fallback manual.
+    if (cancelouAqui) throw new EnvioCancelado();
+    throw err;
   } finally {
     fecharProgresso(idToast);
   }
@@ -220,7 +248,10 @@ export async function compartilharPdfWhatsApp(
       }, 'whatsapp');
       if (r.sucesso) return { enviado: true, simulado: !!r.simulado };
       motivo = (r.motivo ?? r.error) as string | undefined;
-    } catch (err) { motivo = motivoDaFalha(err); }
+    } catch (err) {
+      if (err instanceof EnvioCancelado) return { enviado: false, cancelado: true };
+      motivo = motivoDaFalha(err);
+    }
   }
   await baixarPdfNoNavegador(opts);
   abrirWhatsApp(opts.texto, foneIntl(telefone));
@@ -247,7 +278,10 @@ export async function compartilharPdfEmail(
       }, 'email');
       if (r.sucesso) return { enviado: true };
       motivo = (r.motivo ?? r.error) as string | undefined;
-    } catch (err) { motivo = motivoDaFalha(err); }
+    } catch (err) {
+      if (err instanceof EnvioCancelado) return { enviado: false, cancelado: true };
+      motivo = motivoDaFalha(err);
+    }
   }
   await baixarPdfNoNavegador(opts);
   abrirEmail(opts.titulo ?? opts.nomeArquivo, opts.texto, para ?? undefined);
@@ -272,6 +306,7 @@ export async function enviarPdfWhatsAppComAviso(
 ): Promise<boolean> {
   try {
     const r = await compartilharPdfWhatsApp(opts, telefone);
+    if (r.cancelado) { toast('Envio cancelado.', { icon: '✋' }); return false; }
     if (r.enviado) {
       toast.success(r.simulado ? 'Envio simulado (WhatsApp em modo de teste).' : 'PDF enviado por WhatsApp.');
       return true;
@@ -296,6 +331,7 @@ export async function enviarPdfEmailComAviso(
 ): Promise<boolean> {
   try {
     const r = await compartilharPdfEmail(opts, para);
+    if (r.cancelado) { toast('Envio cancelado.', { icon: '✋' }); return false; }
     if (r.enviado) {
       toast.success('PDF enviado por e-mail, já anexado.');
       return true;
