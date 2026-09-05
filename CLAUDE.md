@@ -2816,6 +2816,70 @@ New-Item -ItemType Junction `
       `garantirInstancia` só reconfigura instância que o BANCO conhece. Removidas por
       `DELETE /instance/delete/{nome}`; sobraram no servidor apenas as duas que o banco
       conhece (`s2vet_e58_q57` e `s2vet_e59_q58`).
+- [x] 🔴 **A FOLHA "PARECIA UM A5 DEITADO"** (relatado 2026-09-05, parte 3). O papel
+      SEMPRE foi A4 e o Puppeteer sempre respeitou o `@page` — medido: folha
+      210x297mm nas duas saídas. O problema era a MANCHA: `@page { margin: 5mm 5mm
+      15mm }` no `PrintShell` somado ao `padding` lateral do body de cada gerador
+      (mais 5mm) dava **190mm de texto numa folha de 210mm**, e o corpo estava em
+      **7,5pt** — ~140 caracteres por linha, o dobro do confortável (65-75). Texto
+      miúdo de borda a borda lê como meia folha deitada.
+      ```
+      antes:  mancha 190mm | margens esq 10,0 dir 10,2 topo 13,8 | fonte 7,5pt
+      agora:  mancha 175mm | margens esq 18,7 dir 16,4 topo 20,0 | fonte 9,1pt
+      ```
+      Duas mudanças: `@page { size: A4; margin: 12mm 14mm 20mm }` e a tipografia dos
+      5 geradores que ainda usavam **px** (9-11px = 6,75-8,25pt) escalada ×1,30 —
+      `EvolucaoPrint`, `ExameCompraPrint`, `ExamePrint`, `PrescricaoPrint`,
+      `ResultadoExamePrint`. Os que já usam **pt** (`AtendimentoPrint`, `Dietaprint`,
+      `VetPrint`) ficaram como estavam: 8-10pt é legível, e inflá-los mudaria a
+      paginação de documentos que ninguém reclamou.
+      ⚠️ **A base de 20mm não é estética**: `.ps-signature` é `position: fixed;
+      bottom: 0` e ocupa o pé de TODA página; quem reserva o espaço para ela é o
+      `padding-bottom` do body de cada gerador. Encurtar um sem o outro faz o texto
+      passar por baixo da assinatura.
+      ⚠️ A prescrição de 6 itens passou de 1 para 2 páginas. Medido: **é a área útil,
+      não a fonte** — os fatores 1,15 / 1,20 / 1,25 / 1,30 quebram todos igual, então
+      o 1,30 entrega a melhor legibilidade pelo mesmo custo. Documento bem diagramado
+      não se espreme para caber.
+      ⚠️ Ao mexer nas margens, MEÇA em vez de olhar: `pdfjs-dist` (já no frontend) dá
+      a bounding box do texto e o tamanho de fonte por página a partir do PDF gerado.
+- [x] **BARRA DE PROGRESSO COM PERCENTUAL REAL no envio** (a pedido). O envio é uma
+      requisição só de ~7s (Puppeteer + upload da mídia pela Evolution) e o cliente
+      não tinha sinal nenhum no meio. As rotas `POST /documentos/{whatsapp,email}`
+      passaram a responder **NDJSON, uma linha por marco**, quando o cliente manda
+      `Accept: application/x-ndjson`: `{tipo:'progresso', pct, etapa}` … e fecha com
+      `{tipo:'fim', sucesso, motivo?}`. Marcos: 5 preparando · 15 verificando o
+      WhatsApp · 25 gerando o PDF · 70 PDF pronto (com o tamanho MEDIDO do buffer) ·
+      85 enviando · 100 enviado.
+      🔴 **Cada pct é um fato, não relógio.** Entre marcos a barra não anda — a opção
+      "preencher por estimativa de tempo" foi apresentada e RECUSADA: o número
+      ficaria bonito e mentiria, e é a mesma regra do "nada de inventar valor" (§12,
+      26/08). A transição de 300ms suaviza o salto sem forjar valor intermediário.
+      ⚠️ **Sem o header, a resposta continua sendo o JSON único** — contrato antigo
+      preservado, e há teste travando isso.
+      ⚠️ **Em streaming o HTTP é SEMPRE 200**: o status vai junto do primeiro chunk e
+      não pode ser trocado depois. Quem ler o código HTTP em vez da linha `fim`
+      conclui "deu certo" numa falha.
+      ⚠️ `res.flushHeaders()` + `X-Accel-Buffering: no` são obrigatórios: sem eles o
+      Node/proxy segura os bytes e todos os marcos chegam juntos no fim — uma barra
+      que salta de 0 a 100 é pior que barra nenhuma, porque promete acompanhamento
+      que não existe.
+      ⚠️ **O front lê o stream pelo `onDownloadProgress` do axios, NÃO por `fetch`
+      cru**: é o que mantém o envio dentro da instância `api` — cookie de sessão,
+      renovação automática no 401 e os headers `x-empresa-id`/`x-equipe-id`. Com
+      `fetch` seria preciso reproduzir os quatro, e o primeiro que divergisse
+      quebraria o envio de um jeito difícil de achar. Exige `responseType: 'text'`
+      (com `'json'` o axios só entrega o corpo no fim) e um cursor sobre
+      `responseText`, que é ACUMULADO — sem ele cada marco seria reprocessado. A
+      última linha pode vir partida ao meio: só se processa até o último `
+`.
+      UI em `components/ProgressoEnvio.tsx` — um toast que se ATUALIZA (id fixo,
+      `duration: Infinity`, fechado no `finally`), na cor da ação (§6): WhatsApp
+      verde, e-mail azul. Como mora dentro de `enviarPdf*ComAviso`, as 5 telas que
+      compartilham PDF ganharam a barra sem nenhuma alteração.
+      Gate: `__tests__/documentoProgresso.test.js` (5 casos) — ordem dos marcos,
+      pct nunca recuando, veredito na linha `fim` e o contrato antigo intacto.
+      Suíte: 464.
 - [ ] O envio real depende do WhatsApp da clínica provisionado/conectado na Evolution
       API e de SMTP configurado. Sem isso TODO clique cai no fallback (baixa o PDF) —
       e o toast diz isso, mas vale confirmar num envio de verdade antes de anunciar a

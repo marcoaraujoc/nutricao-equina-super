@@ -112,11 +112,17 @@ async function htmlParaPdf(html) {
  * @param {string}  p.nomeArquivo — ex: 'orcamento-0007.pdf'
  * @param {string} [p.legenda]    — texto que acompanha o documento
  * @param {object} [p.contexto]   — metadados livres para log/rastreio
+ * @param {(pct:number, etapa:string) => void} [p.onProgresso] — marcos REAIS do envio.
+ *   Só é chamado onde algo de fato aconteceu (prontidão conferida, PDF pronto com o
+ *   tamanho medido, mensagem aceita). Quem exibe a barra não inventa número nenhum:
+ *   entre um marco e o seguinte ela simplesmente não anda. Ver §"progresso" abaixo.
  * @returns {Promise<{sucesso:boolean, erro?:string, simulado?:boolean, id?:string}>}
  */
 async function enviarDocumentoWhatsApp({
   empresaId, equipeId = null, telefone, html, nomeArquivo, legenda = '', contexto = {},
+  onProgresso = null,
 }) {
+  const marco = (pct, etapa) => { try { onProgresso?.(pct, etapa); } catch { /* nunca derruba o envio */ } };
   if (!empresaId)  return { sucesso: false, erro: 'SEM_EMPRESA' };
   if (!html)       return { sucesso: false, erro: 'SEM_CONTEUDO' };
 
@@ -125,6 +131,7 @@ async function enviarDocumentoWhatsApp({
 
   const provider = getWhatsAppProvider();
 
+  marco(15, 'Verificando o WhatsApp da clínica');
   // Checagem RÁPIDA antes do Puppeteer — ver WhatsAppProvider#prontidaoParaEnviar.
   // Sem ela, toda clínica sem instância conectada pagava o custo de gerar o PDF
   // (segundos) só para o envio falhar em seguida por outro motivo — e esse atraso
@@ -139,21 +146,26 @@ async function enviarDocumentoWhatsApp({
     return { sucesso: false, erro: prontidao.motivo ?? 'PROVIDER_INDISPONIVEL' };
   }
 
+  marco(25, 'Gerando o PDF');
   let base64;
   try {
     const pdf = await htmlParaPdf(html);
     base64 = pdf.toString('base64');
+    marco(70, `PDF pronto (${Math.max(1, Math.round(pdf.length / 1024))} KB)`);
   } catch (err) {
     logger.error(`[DocumentoWhatsApp] Falha ao gerar PDF (${nomeArquivo}): ${err.message}`);
     return { sucesso: false, erro: 'ERRO_PDF' };
   }
 
-  return provider.enviarDocumento({
+  marco(85, 'Enviando ao WhatsApp');
+  const envio = await provider.enviarDocumento({
     para,
     arquivo: { base64, nome: nomeArquivo },
     legenda,
     contexto: { ...contexto, empresaId, equipeId },
   });
+  if (envio.sucesso) marco(100, 'Enviado');
+  return envio;
 }
 
 module.exports = { enviarDocumentoWhatsApp, htmlParaPdf, foneIntl };

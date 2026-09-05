@@ -42,6 +42,7 @@
 import api from '../services/api';
 import { htmlParaPdfBlob } from './gerarPdf';
 import { abrirWhatsApp, abrirEmail } from './compartilhar';
+import { mostrarProgresso, fecharProgresso, type CanalEnvio } from '../components/ProgressoEnvio';
 import toast from 'react-hot-toast';
 
 const TIMEOUT_ENVIO_MS = 60000; // envio real — cobre Puppeteer + retries da Evolution (~46s no pior caso)
@@ -72,6 +73,80 @@ export interface ResultadoCompartilhar {
    * como conectado na tela de Configurações, não sobrava nada para investigar.
    */
   motivo?:   string;
+}
+
+/**
+ * PROGRESSO REAL, LIDO DO STREAM — o servidor manda uma linha NDJSON por marco
+ * (`{tipo:'progresso', pct, etapa}`) e fecha com `{tipo:'fim', sucesso, ...}`.
+ *
+ * A leitura é feita pelo `onDownloadProgress` do axios, e NÃO por `fetch` cru, de
+ * propósito: é o que mantém o envio dentro da instância `api` — cookie de sessão,
+ * renovação automática no 401 e os headers `x-empresa-id`/`x-equipe-id` do contexto
+ * ativo. Com `fetch` seria preciso reproduzir os quatro, e o primeiro que
+ * divergisse quebraria o envio de um jeito difícil de achar.
+ *
+ * ⚠️ O `responseText` do XHR é ACUMULADO: a cada evento ele traz tudo o que chegou
+ * até ali, não só o pedaço novo. Por isso o cursor `lidos` — sem ele, cada marco
+ * seria reprocessado a cada evento seguinte.
+ * ⚠️ A última linha pode estar PELA METADE quando o evento dispara (o chunk foi
+ * cortado no meio do JSON). Só se processa até o último `
+`; o resto fica para o
+ * próximo evento.
+ * ⚠️ Em streaming o HTTP é SEMPRE 200 (o status vai junto do primeiro chunk e não
+ * pode ser trocado depois) — o veredito está na linha `fim`, nunca no código.
+ */
+interface LinhaStream { tipo?: string; pct?: number; etapa?: string; [k: string]: unknown }
+
+function lerNdjson(onLinha: (l: LinhaStream) => void) {
+  let lidos = 0;
+  return (e: { event?: unknown }) => {
+    const xhr = (e?.event as { target?: XMLHttpRequest } | undefined)?.target;
+    const txt = xhr?.responseText;
+    if (typeof txt !== 'string') return;   // adapter sem XHR: sem progresso, o envio segue igual
+    const corte = txt.lastIndexOf('\n');
+    if (corte < lidos) return;
+    for (const linha of txt.slice(lidos, corte).split('\n')) {
+      if (!linha.trim()) continue;
+      try { onLinha(JSON.parse(linha)); } catch { /* linha partida: ignora */ }
+    }
+    lidos = corte + 1;
+  };
+}
+
+/** Resultado final = a ÚLTIMA linha do NDJSON; sem streaming, o corpo JSON de sempre. */
+function resultadoDoCorpo(data: unknown): Record<string, unknown> {
+  if (typeof data !== 'string') return (data ?? {}) as Record<string, unknown>;
+  const linhas = data.trim().split('\n').filter(Boolean);
+  for (let i = linhas.length - 1; i >= 0; i--) {
+    try {
+      const o = JSON.parse(linhas[i]) as LinhaStream;
+      if (o.tipo === 'fim') return o as Record<string, unknown>;
+    } catch { /* ignora */ }
+  }
+  return {};
+}
+
+/** Envio com barra: mesma chamada, pedindo NDJSON e desenhando cada marco. */
+async function postComProgresso(
+  url: string, corpo: object, canal: CanalEnvio,
+): Promise<Record<string, unknown>> {
+  let idToast: string | undefined;
+  try {
+    const r = await api.post(url, corpo, {
+      timeout: TIMEOUT_ENVIO_MS,
+      headers: { Accept: 'application/x-ndjson' },
+      // `responseType: 'text'` é o que garante o `responseText` incremental do XHR;
+      // com o padrão ('json'), o axios só entrega o corpo já parseado, no fim.
+      responseType: 'text',
+      onDownloadProgress: lerNdjson((l) => {
+        if (l.tipo !== 'progresso' || typeof l.pct !== 'number') return;
+        idToast = mostrarProgresso(canal, l.pct, l.etapa ?? 'Enviando...', idToast);
+      }),
+    });
+    return resultadoDoCorpo(r.data);
+  } finally {
+    fecharProgresso(idToast);
+  }
 }
 
 /** Extrai o motivo legível que o backend manda em `motivo` — ou traduz a falha de rede. */
@@ -140,11 +215,11 @@ export async function compartilharPdfWhatsApp(
   let motivo = telefone ? undefined : 'o cliente está sem telefone cadastrado.';
   if (telefone) {
     try {
-      const r = await api.post('/documentos/whatsapp', {
+      const r = await postComProgresso('/documentos/whatsapp', {
         telefone, html: opts.gerarHtml(), nomeArquivo: opts.nomeArquivo, legenda: opts.texto,
-      }, { timeout: TIMEOUT_ENVIO_MS });
-      if (r.data?.sucesso) return { enviado: true, simulado: !!r.data.simulado };
-      motivo = r.data?.motivo ?? r.data?.error;
+      }, 'whatsapp');
+      if (r.sucesso) return { enviado: true, simulado: !!r.simulado };
+      motivo = (r.motivo ?? r.error) as string | undefined;
     } catch (err) { motivo = motivoDaFalha(err); }
   }
   await baixarPdfNoNavegador(opts);
@@ -166,12 +241,12 @@ export async function compartilharPdfEmail(
   let motivo = para ? undefined : 'o cliente está sem e-mail cadastrado.';
   if (para) {
     try {
-      const r = await api.post('/documentos/email', {
+      const r = await postComProgresso('/documentos/email', {
         email: para, assunto: opts.titulo ?? opts.nomeArquivo, corpo: opts.texto,
         html: opts.gerarHtml(), nomeArquivo: opts.nomeArquivo,
-      }, { timeout: TIMEOUT_ENVIO_MS });
-      if (r.data?.sucesso) return { enviado: true };
-      motivo = r.data?.motivo ?? r.data?.error;
+      }, 'email');
+      if (r.sucesso) return { enviado: true };
+      motivo = (r.motivo ?? r.error) as string | undefined;
     } catch (err) { motivo = motivoDaFalha(err); }
   }
   await baixarPdfNoNavegador(opts);

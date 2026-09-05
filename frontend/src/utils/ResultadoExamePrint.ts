@@ -5,8 +5,7 @@
 // Distinto de utils/ExamePrint.ts, que imprime a REQUISIÇÃO (Pedido de Exames) — aqui
 // o conteúdo é o que voltou do laboratório, não o que foi pedido.
 
-import { resolverUrlAbsoluta } from './printUrl';
-import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura } from './print/PrintShell';
+import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura, srcImpressao } from './print/PrintShell';
 import { imprimirHtml } from './print/imprimirHtml';
 
 export interface ResultadoItemPrint {
@@ -60,40 +59,40 @@ export function numeroExamePrint(ex: { numero: number | null; id: number }): str
 
 // ─── Impressão ──────────────────────────────────────────────────────────────
 
-function gerarHtmlResultado(ex: ExameParaPrint, animal?: AnimalParaPrint | null): string {
+export function gerarHtmlResultado(ex: ExameParaPrint, animal?: AnimalParaPrint | null): string {
   const tabela = ex.resultadoItens.length > 0 ? `
     <table style="width:100%;border-collapse:collapse;margin-top:10px;">
       <thead>
         <tr style="background:#f9fafb;">
-          <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;">Parâmetro</th>
-          <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;">Valor</th>
-          <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;">Unidade</th>
-          <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;">Referência</th>
+          <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;font-size:11.7px;font-weight:700;color:#6b7280;text-transform:uppercase;">Parâmetro</th>
+          <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;font-size:11.7px;font-weight:700;color:#6b7280;text-transform:uppercase;">Valor</th>
+          <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;font-size:11.7px;font-weight:700;color:#6b7280;text-transform:uppercase;">Unidade</th>
+          <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;font-size:11.7px;font-weight:700;color:#6b7280;text-transform:uppercase;">Referência</th>
         </tr>
       </thead>
       <tbody>
         ${ex.resultadoItens.map((it, i) => `
           <tr style="${i % 2 === 1 ? 'background:#fafafa;' : ''}">
-            <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:10px;color:#111;">${esc(it.parametro)}</td>
-            <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:10px;font-weight:600;color:#111;">${esc(it.valor ?? '—')}</td>
-            <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:10px;color:#6b7280;">${esc(it.unidade ?? '—')}</td>
-            <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:10px;color:#6b7280;">${esc(it.referencia ?? '—')}</td>
+            <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:13px;color:#111;">${esc(it.parametro)}</td>
+            <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:13px;font-weight:600;color:#111;">${esc(it.valor ?? '—')}</td>
+            <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:13px;color:#6b7280;">${esc(it.unidade ?? '—')}</td>
+            <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:13px;color:#6b7280;">${esc(it.referencia ?? '—')}</td>
           </tr>`).join('')}
       </tbody>
     </table>` : '';
 
   const laudo = ex.resultado ? `
     <div style="margin-top:14px;padding:12px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;">
-      <p style="font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:6px;">Laudo</p>
-      <p style="font-size:11px;color:#111;white-space:pre-line;">${esc(ex.resultado)}</p>
+      <p style="font-size:11.7px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:6px;">Laudo</p>
+      <p style="font-size:14.3px;color:#111;white-space:pre-line;">${esc(ex.resultado)}</p>
     </div>` : '';
 
   const imagens = ex.imagens.length > 0 ? `
     <div style="margin-top:14px;">
-      <p style="font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:6px;">Imagens (${ex.imagens.length})</p>
+      <p style="font-size:11.7px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:6px;">Imagens (${ex.imagens.length})</p>
       <div style="display:flex;flex-wrap:wrap;gap:8px;">
         ${ex.imagens.map(img => `
-          <img src="${esc(resolverUrlAbsoluta(img.arquivoUrl) ?? img.arquivoUrl)}" alt="${esc(img.nome ?? 'Imagem')}"
+          <img src="${esc(srcImpressao(img.arquivoUrl) ?? img.arquivoUrl)}" alt="${esc(img.nome ?? 'Imagem')}"
             style="width:140px;height:140px;object-fit:cover;border-radius:6px;border:1px solid #e5e7eb;" />`).join('')}
       </div>
     </div>` : '';
@@ -106,13 +105,13 @@ function gerarHtmlResultado(ex: ExameParaPrint, animal?: AnimalParaPrint | null)
 <style>
   ${PRINT_SHELL_CSS}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; font-size: 11px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
+  body { font-family: Arial, sans-serif; font-size: 14.3px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
   .doc-info-row { display: flex; justify-content: flex-end; margin-bottom: 12px; }
   .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
-  .card-title { font-size: 10px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; border-bottom: 1px solid #f3f4f6; padding-bottom: 6px; }
+  .card-title { font-size: 13px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; border-bottom: 1px solid #f3f4f6; padding-bottom: 6px; }
   .card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 16px; }
-  .lbl { display: block; font-size: 9px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
-  .val { font-size: 11px; font-weight: 600; color: #111; }
+  .lbl { display: block; font-size: 11.7px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
+  .val { font-size: 14.3px; font-weight: 600; color: #111; }
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 </style>
 </head>
@@ -121,8 +120,8 @@ function gerarHtmlResultado(ex: ExameParaPrint, animal?: AnimalParaPrint | null)
 
   <div class="doc-info-row">
     <div style="text-align:right;">
-      <p style="font-size:10px;color:#9ca3af;margin-bottom:4px;">RESULTADO DE EXAME</p>
-      <span style="display:inline-block;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:700;color:#065f46;background:#d1fae5;">${esc(ex.tipo)}</span>
+      <p style="font-size:13px;color:#9ca3af;margin-bottom:4px;">RESULTADO DE EXAME</p>
+      <span style="display:inline-block;padding:3px 12px;border-radius:20px;font-size:14.3px;font-weight:700;color:#065f46;background:#d1fae5;">${esc(ex.tipo)}</span>
     </div>
   </div>
 

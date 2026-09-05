@@ -1,6 +1,6 @@
 // frontend/src/utils/ExamePrint.ts
 
-import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura } from './print/PrintShell';
+import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura, srcImpressao } from './print/PrintShell';
 import { imprimirHtml } from './print/imprimirHtml';
 
 export interface LaudoCompra {
@@ -103,16 +103,16 @@ const TIPO_BADGE: Record<string, { color: string; bg: string }> = {
 const CSS = `
   ${PRINT_SHELL_CSS}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; font-size: 11px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
+  body { font-family: Arial, sans-serif; font-size: 14.3px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
   .exam-page { }
   .page-break { page-break-before: always; break-before: page; }
   .doc-info-row { display: flex; justify-content: flex-end; margin-bottom: 12px; }
   .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
-  .card-title { font-size: 10px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; border-bottom: 1px solid #f3f4f6; padding-bottom: 6px; }
+  .card-title { font-size: 13px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; border-bottom: 1px solid #f3f4f6; padding-bottom: 6px; }
   .card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 16px; }
-  .lbl { display: block; font-size: 9px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
-  .val { font-size: 11px; font-weight: 600; color: #111; }
-  .section-title { font-size: 10px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 8px; }
+  .lbl { display: block; font-size: 11.7px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
+  .val { font-size: 14.3px; font-weight: 600; color: #111; }
+  .section-title { font-size: 13px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 8px; }
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 `;
 
@@ -125,12 +125,12 @@ function renderAchadoTable(titulo: string, dados: Record<string, string>, primei
     const color = isNormal ? '#374151' : '#92400e';
     const bold  = isNormal ? '' : 'font-weight:700;';
     return `<tr>
-      <td style="padding:5px 10px;border:1px solid #e5e7eb;font-size:10px;color:#374151;">${esc(label)}</td>
-      <td style="padding:5px 10px;border:1px solid #e5e7eb;font-size:10px;${bg}color:${color};${bold}">${esc(valor)}</td>
+      <td style="padding:5px 10px;border:1px solid #e5e7eb;font-size:13px;color:#374151;">${esc(label)}</td>
+      <td style="padding:5px 10px;border:1px solid #e5e7eb;font-size:13px;${bg}color:${color};${bold}">${esc(valor)}</td>
     </tr>`;
   }).join('');
   return `<div style="margin-bottom:12px;">
-    <p style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#6b7280;margin-bottom:4px;">${esc(titulo)}</p>
+    <p style="font-size:11.7px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#6b7280;margin-bottom:4px;">${esc(titulo)}</p>
     <table style="width:100%;border-collapse:collapse;"><tbody>${rows}</tbody></table>
   </div>`;
 }
@@ -143,12 +143,12 @@ function renderFlexaoTable(dados: Record<string, string>): string {
     const color = idx === 0 ? '#374151' : idx === 1 ? '#92400e' : '#991b1b';
     const bold  = idx === 0 ? '' : 'font-weight:700;';
     return `<tr>
-      <td style="padding:5px 10px;border:1px solid #e5e7eb;font-size:10px;color:#374151;">${esc(label)}</td>
-      <td style="padding:5px 10px;border:1px solid #e5e7eb;font-size:10px;${bg}color:${color};${bold}">${esc(valor)}</td>
+      <td style="padding:5px 10px;border:1px solid #e5e7eb;font-size:13px;color:#374151;">${esc(label)}</td>
+      <td style="padding:5px 10px;border:1px solid #e5e7eb;font-size:13px;${bg}color:${color};${bold}">${esc(valor)}</td>
     </tr>`;
   }).join('');
   return `<div style="margin-bottom:12px;">
-    <p style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#6b7280;margin-bottom:4px;">Testes de Flexão</p>
+    <p style="font-size:11.7px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#6b7280;margin-bottom:4px;">Testes de Flexão</p>
     <table style="width:100%;border-collapse:collapse;"><tbody>${rows}</tbody></table>
   </div>`;
 }
@@ -157,15 +157,15 @@ function formField(label: string, content: string | null | undefined, lines = 1)
   const lineH = 22;
   if (content) {
     return `<div style="margin-bottom:12px;">
-      <p style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#6b7280;margin-bottom:4px;">${esc(label)}</p>
-      <p style="font-size:11px;color:#111;padding:4px 0;border-bottom:1px solid #d1d5db;">${esc(content)}</p>
+      <p style="font-size:11.7px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#6b7280;margin-bottom:4px;">${esc(label)}</p>
+      <p style="font-size:14.3px;color:#111;padding:4px 0;border-bottom:1px solid #d1d5db;">${esc(content)}</p>
     </div>`;
   }
   const blanks = Array.from({ length: lines }, () =>
     `<div style="height:${lineH}px;border-bottom:1px solid #d1d5db;margin-bottom:${lines > 1 ? '2px' : '0'};"></div>`
   ).join('');
   return `<div style="margin-bottom:12px;">
-    <p style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#6b7280;margin-bottom:4px;">${esc(label)}</p>
+    <p style="font-size:11.7px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#6b7280;margin-bottom:4px;">${esc(label)}</p>
     ${blanks}
   </div>`;
 }
@@ -215,6 +215,7 @@ function gerarPaginaExame(
   const tipo       = opts?.tipo ?? ex.tipo;
   const badge      = TIPO_BADGE[tipo] ?? { color: '#374151', bg: '#f3f4f6' };
   const isCompra   = tipo === 'Compra';
+  const isImagem   = tipo === 'Imagem';
 
   // Valores resolvidos (opts sobrescrevem extra)
   const laboratorio      = opts !== undefined && 'laboratorio'      in opts ? opts.laboratorio      : extra.laboratorio;
@@ -233,9 +234,14 @@ function gerarPaginaExame(
     <div class="card">
       <div class="card-title">Animal</div>
       <div style="display:flex;align-items:flex-start;gap:14px;">
-        ${typeof animal.photoUrl === 'string' && animal.photoUrl
-          ? `<img src="${esc(animal.photoUrl)}" alt="${esc(animal.nome)}" style="width:56px;height:56px;object-fit:cover;border-radius:8px;border:1px solid #e5e7eb;flex-shrink:0;" />`
-          : ''}
+        ${(() => {
+          // `srcImpressao`: `data:` quando pré-resolvida (PDF do servidor bloqueia
+          // qualquer outra origem), URL absoluta na impressão do navegador.
+          const foto = typeof animal.photoUrl === 'string' ? srcImpressao(animal.photoUrl) : null;
+          return foto
+            ? `<img src="${esc(foto)}" alt="${esc(animal.nome)}" style="width:56px;height:56px;object-fit:cover;border-radius:8px;border:1px solid #e5e7eb;flex-shrink:0;" />`
+            : '';
+        })()}
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px 16px;flex:1;">
           <div><span class="lbl">Nome</span><span class="val">${esc(animal.nome)}</span></div>
           ${animal.raca      ? `<div><span class="lbl">Raça</span><span class="val">${esc(animal.raca.nome)}</span></div>` : ''}
@@ -250,7 +256,14 @@ function gerarPaginaExame(
     laboratorio    ? `<div><span class="lbl">Laboratório / Local</span><span class="val">${esc(laboratorio)}</span></div>` : '',
     dataHoraColeta ? `<div><span class="lbl">Data/Hora da Coleta</span><span class="val">${fmt(dataHoraColeta)}</span></div>` : '',
     tipoAmostra    ? `<div><span class="lbl">Tipo de Amostra</span><span class="val">${esc(tipoAmostra!)}</span></div>` : '',
-    qtdAmostra != null ? `<div><span class="lbl">Qtd. de Amostras</span><span class="val">${qtdAmostra} amostra${qtdAmostra !== 1 ? 's' : ''}</span></div>` : '',
+    // No exame de IMAGEM a mesma coluna `qtdAmostra` guarda o nº de IMAGENS
+    // (ver SubModuloExames.tsx — "Qtd. Imagens" e "Qtd. Amostras" dividem o
+    // campo). Rotular "amostras" num raio-x é dizer o que não foi coletado.
+    qtdAmostra != null
+      ? (isImagem
+          ? `<div><span class="lbl">Qtd. de Imagens</span><span class="val">${qtdAmostra} ${qtdAmostra !== 1 ? 'imagens' : 'imagem'}</span></div>`
+          : `<div><span class="lbl">Qtd. de Amostras</span><span class="val">${qtdAmostra} amostra${qtdAmostra !== 1 ? 's' : ''}</span></div>`)
+      : '',
   ].filter(Boolean).join('');
 
   // ── Lista de exames ───────────────────────────────────────────────────────
@@ -269,9 +282,9 @@ function gerarPaginaExame(
               <div style="margin-bottom:14px;">
                 ${grp.nome
                   ? `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;padding:5px 10px;background:#eff6ff;border-left:3px solid #1d4ed8;border-radius:0 6px 6px 0;">
-                       <span style="font-size:11px;font-weight:700;color:#1d4ed8;flex:1;">${esc(grp.nome)}</span>
+                       <span style="font-size:14.3px;font-weight:700;color:#1d4ed8;flex:1;">${esc(grp.nome)}</span>
                        ${grp.tipoAmostra
-                         ? `<span style="font-size:9px;color:#6b7280;">Amostra: ${esc(grp.tipoAmostra)}${grp.qtdAmostra ? ` · ${grp.qtdAmostra} unid.` : ''}</span>`
+                         ? `<span style="font-size:11.7px;color:#6b7280;">Amostra: ${esc(grp.tipoAmostra)}${grp.qtdAmostra ? ` · ${grp.qtdAmostra} unid.` : ''}</span>`
                          : ''}
                      </div>`
                   : ''
@@ -280,13 +293,13 @@ function gerarPaginaExame(
                   <tbody>
                     ${grp.exames.map((e, i) => `
                       <tr style="${i % 2 === 1 ? 'background:#fafafa;' : ''}">
-                        <td style="padding:5px 10px;border:1px solid #e5e7eb;font-size:10px;color:#9ca3af;width:28px;">${i + 1}</td>
-                        <td style="padding:5px 10px;border:1px solid #e5e7eb;font-size:11px;font-weight:500;color:#111;">${esc(e)}</td>
+                        <td style="padding:5px 10px;border:1px solid #e5e7eb;font-size:13px;color:#9ca3af;width:28px;">${i + 1}</td>
+                        <td style="padding:5px 10px;border:1px solid #e5e7eb;font-size:14.3px;font-weight:500;color:#111;">${esc(e)}</td>
                       </tr>`).join('')}
                   </tbody>
                 </table>
-                ${grp.indicacaoClinica ? `<p style="font-size:10px;color:#6b7280;margin-top:4px;padding-left:2px;">Indicação: ${esc(grp.indicacaoClinica)}</p>` : ''}
-                ${grp.obs ? `<p style="font-size:10px;color:#6b7280;margin-top:2px;padding-left:2px;">Obs.: ${esc(grp.obs)}</p>` : ''}
+                ${grp.indicacaoClinica ? `<p style="font-size:13px;color:#6b7280;margin-top:4px;padding-left:2px;">Indicação: ${esc(grp.indicacaoClinica)}</p>` : ''}
+                ${grp.obs ? `<p style="font-size:13px;color:#6b7280;margin-top:2px;padding-left:2px;">Obs.: ${esc(grp.obs)}</p>` : ''}
               </div>`;
           }).join('')}
         </div>`;
@@ -298,22 +311,22 @@ function gerarPaginaExame(
     return `
       <div style="margin-top:14px;">
         ${extra.grupoNome
-          ? `<p style="font-size:13px;font-weight:700;color:#111;margin-bottom:4px;">${esc(extra.grupoNome)}</p>
+          ? `<p style="font-size:16.9px;font-weight:700;color:#111;margin-bottom:4px;">${esc(extra.grupoNome)}</p>
              <p class="section-title" style="margin-top:0;">Exames Solicitados (${examList.length})</p>`
           : `<p class="section-title">Exames Solicitados (${examList.length})</p>`
         }
         <table style="width:100%;border-collapse:collapse;">
           <thead>
             <tr style="background:#f9fafb;">
-              <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;">#</th>
-              <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;">Procedimento</th>
+              <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;font-size:11.7px;font-weight:700;color:#6b7280;text-transform:uppercase;">#</th>
+              <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;font-size:11.7px;font-weight:700;color:#6b7280;text-transform:uppercase;">Procedimento</th>
             </tr>
           </thead>
           <tbody>
             ${examList.map((e, i) => `
               <tr style="${i % 2 === 1 ? 'background:#fafafa;' : ''}">
-                <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:10px;color:#9ca3af;width:32px;">${i + 1}</td>
-                <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:11px;font-weight:500;color:#111;">${esc(e)}</td>
+                <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:13px;color:#9ca3af;width:32px;">${i + 1}</td>
+                <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:14.3px;font-weight:500;color:#111;">${esc(e)}</td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -348,8 +361,8 @@ function gerarPaginaExame(
       ${renderFlexaoTable(laudoParaRender.flexao)}
       ${laudoParaRender.obs ? `
         <div style="margin-top:8px;padding:10px 14px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;">
-          <p style="font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:4px;">Observações / Parecer Final</p>
-          <p style="font-size:11px;color:#111;white-space:pre-line;">${esc(laudoParaRender.obs)}</p>
+          <p style="font-size:11.7px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:4px;">Observações / Parecer Final</p>
+          <p style="font-size:14.3px;color:#111;white-space:pre-line;">${esc(laudoParaRender.obs)}</p>
         </div>` : ''}
     </div>` : '';
 
@@ -358,8 +371,8 @@ function gerarPaginaExame(
 
   <div class="doc-info-row">
     <div style="text-align:right;">
-      <p style="font-size:10px;color:#9ca3af;margin-bottom:4px;">REQUISIÇÃO DE EXAME</p>
-      <span style="display:inline-block;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:700;color:${badge.color};background:${badge.bg};">${esc(tipo)}</span>
+      <p style="font-size:13px;color:#9ca3af;margin-bottom:4px;">REQUISIÇÃO DE EXAME</p>
+      <span style="display:inline-block;padding:3px 12px;border-radius:20px;font-size:14.3px;font-weight:700;color:${badge.color};background:${badge.bg};">${esc(tipo)}</span>
     </div>
   </div>
 

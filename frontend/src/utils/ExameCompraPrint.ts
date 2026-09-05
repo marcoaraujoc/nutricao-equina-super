@@ -135,24 +135,24 @@ export interface ExameCompraPrintAnimal {
 const CSS = `
   ${PRINT_SHELL_CSS}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; font-size: 10.5px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
+  body { font-family: Arial, sans-serif; font-size: 13.7px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
   .page-break { page-break-before: always; break-before: page; }
   .doc-info-row { display: flex; justify-content: flex-end; margin-bottom: 12px; }
   .card { border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; }
-  .card-title { font-size: 9.5px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; border-bottom: 1px solid #f3f4f6; padding-bottom: 5px; }
-  .section-h { font-size: 9.5px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: .05em; margin: 14px 0 8px; padding: 5px 8px; background: #f9fafb; border-left: 3px solid #d97706; border-radius: 0 4px 4px 0; }
-  .sub-h { font-size: 8.5px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: .05em; margin: 10px 0 4px; }
-  .lbl { display: block; font-size: 8.5px; color: #9ca3af; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
-  .val { font-size: 10.5px; font-weight: 600; color: #111; }
+  .card-title { font-size: 12.3px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; border-bottom: 1px solid #f3f4f6; padding-bottom: 5px; }
+  .section-h { font-size: 12.3px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: .05em; margin: 14px 0 8px; padding: 5px 8px; background: #f9fafb; border-left: 3px solid #d97706; border-radius: 0 4px 4px 0; }
+  .sub-h { font-size: 11.1px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: .05em; margin: 10px 0 4px; }
+  .lbl { display: block; font-size: 11.1px; color: #9ca3af; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
+  .val { font-size: 13.7px; font-weight: 600; color: #111; }
   .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 14px; }
   .grid2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 14px; }
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  th { padding: 4px 8px; border: 1px solid #e5e7eb; text-align: left; font-size: 8px; font-weight: 700; color: #9ca3af; text-transform: uppercase; background: #f9fafb; }
-  td { padding: 4px 8px; border: 1px solid #e5e7eb; font-size: 10px; }
+  th { padding: 4px 8px; border: 1px solid #e5e7eb; text-align: left; font-size: 10.4px; font-weight: 700; color: #9ca3af; text-transform: uppercase; background: #f9fafb; }
+  td { padding: 4px 8px; border: 1px solid #e5e7eb; font-size: 13px; }
   .normal { color: #166534; }
   .anormal { color: #92400e; background: #fffbeb; font-weight: 700; }
-  .obs-cell { color: #6b7280; font-style: italic; font-size: 9.5px; }
-  .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 10.5px; font-weight: 700; color: #92400e; background: #fef3c7; }
+  .obs-cell { color: #6b7280; font-style: italic; font-size: 12.3px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 13.7px; font-weight: 700; color: #92400e; background: #fef3c7; }
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 `;
 
@@ -244,7 +244,7 @@ function renderFerrageamento(
   }).join('');
   return `<div style="margin-bottom:8px;">
     <p class="sub-h">Ferrageamento</p>
-    <p style="font-size:10px;margin-bottom:5px;">Tipo: <strong>${esc(tipo) || 'Normal'}</strong></p>
+    <p style="font-size:13px;margin-bottom:5px;">Tipo: <strong>${esc(tipo) || 'Normal'}</strong></p>
     <table style="width:50%;border-collapse:collapse;"><tbody>${patasRows}</tbody></table>
   </div>`;
 }
@@ -267,7 +267,7 @@ function renderLocomocao(
         <td class="obs-cell">${esc(o)}</td>
       </tr>`;
     }).join('');
-    return `<p style="font-size:8.5px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;margin:6px 0 3px;">${esc(g.titulo)}</p>
+    return `<p style="font-size:11.1px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;margin:6px 0 3px;">${esc(g.titulo)}</p>
     <table style="width:100%;border-collapse:collapse;margin-bottom:4px;">
       <thead><tr><th>Marcha / Condição</th><th style="width:22%;">Resultado</th><th>Observações</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -333,11 +333,11 @@ function renderImagem(img: any): string {
   if (img.raioX || temRadioAval || img.raioXLaudo) {
     parts.push(`<p class="sub-h">Raio-X</p>`);
     if (img.raioX && img.raioX !== 'LAUDO EM ANEXO') {
-      parts.push(`<p style="font-size:10px;margin-bottom:5px;">${esc(img.raioX)}</p>`);
+      parts.push(`<p style="font-size:13px;margin-bottom:5px;">${esc(img.raioX)}</p>`);
     }
     if (temRadioAval) parts.push(renderRadioAval(img.radioAval));
     if (img.raioXLaudo) {
-      parts.push(`<p style="font-size:10px;color:#374151;white-space:pre-line;background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:6px 10px;margin-bottom:6px;">${esc(img.raioXLaudo)}</p>`);
+      parts.push(`<p style="font-size:13px;color:#374151;white-space:pre-line;background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:6px 10px;margin-bottom:6px;">${esc(img.raioXLaudo)}</p>`);
     }
   }
 
@@ -345,23 +345,23 @@ function renderImagem(img: any): string {
   if (img.ultrassom || img.ultrassomLaudo) {
     parts.push(`<p class="sub-h">Ultrassonografia</p>`);
     if (img.ultrassom && img.ultrassom !== 'IMAGENS MAD E MAE – LAUDO EM ANEXO') {
-      parts.push(`<p style="font-size:10px;margin-bottom:5px;">${esc(img.ultrassom)}</p>`);
+      parts.push(`<p style="font-size:13px;margin-bottom:5px;">${esc(img.ultrassom)}</p>`);
     }
     if (img.ultrassomLaudo) {
-      parts.push(`<p style="font-size:10px;color:#374151;white-space:pre-line;background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:6px 10px;margin-bottom:6px;">${esc(img.ultrassomLaudo)}</p>`);
+      parts.push(`<p style="font-size:13px;color:#374151;white-space:pre-line;background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:6px 10px;margin-bottom:6px;">${esc(img.ultrassomLaudo)}</p>`);
     }
   }
 
   // Endoscopia
   if (img.endoscopia) {
     parts.push(`<p class="sub-h">Endoscopia</p>`);
-    parts.push(`<p style="font-size:10px;margin-bottom:6px;">${esc(img.endoscopia)}</p>`);
+    parts.push(`<p style="font-size:13px;margin-bottom:6px;">${esc(img.endoscopia)}</p>`);
   }
 
   // Outros
   if (img.outros) {
     parts.push(`<p class="sub-h">Outros</p>`);
-    parts.push(`<p style="font-size:10px;margin-bottom:6px;">${esc(img.outros)}</p>`);
+    parts.push(`<p style="font-size:13px;margin-bottom:6px;">${esc(img.outros)}</p>`);
   }
 
   // Comportamento / Anti-dopping
@@ -375,7 +375,7 @@ function renderImagem(img: any): string {
     }`);
   }
   if (extras.length > 0) {
-    parts.push(`<p style="font-size:10px;margin-top:4px;">${extras.join(' &nbsp;|&nbsp; ')}</p>`);
+    parts.push(`<p style="font-size:13px;margin-top:4px;">${extras.join(' &nbsp;|&nbsp; ')}</p>`);
   }
 
   if (parts.length === 0) return '';
@@ -433,8 +433,8 @@ export function gerarHtmlExameCompra(
   // ── Justificativa de alteração ──────────────────────────────────────────────
   const justificativaBlock = laudo?.justificativa ? `
     <div style="margin-top:10px;padding:8px 12px;background:#fffbeb;border:1px solid #fcd34d;border-radius:4px;">
-      <p style="font-size:8.5px;font-weight:700;color:#d97706;text-transform:uppercase;margin-bottom:3px;">Justificativa de Alteração</p>
-      <p style="font-size:10px;color:#374151;">${esc(laudo.justificativa)}</p>
+      <p style="font-size:11.1px;font-weight:700;color:#d97706;text-transform:uppercase;margin-bottom:3px;">Justificativa de Alteração</p>
+      <p style="font-size:13px;color:#374151;">${esc(laudo.justificativa)}</p>
     </div>` : '';
 
   // ── Corpo ───────────────────────────────────────────────────────────────────
@@ -443,7 +443,7 @@ export function gerarHtmlExameCompra(
 
   <div class="doc-info-row">
     <div style="text-align:right;">
-      <p style="font-size:9.5px;color:#9ca3af;margin-bottom:4px;">LAUDO DE EXAME DE COMPRA</p>
+      <p style="font-size:12.3px;color:#9ca3af;margin-bottom:4px;">LAUDO DE EXAME DE COMPRA</p>
       <span class="badge">Compra Equina</span>
     </div>
   </div>
@@ -496,7 +496,7 @@ export function gerarHtmlExameCompra(
   ${laudo?.conclusao ? `
   <div class="section-h">Conclusão / Parecer Final</div>
   <div class="card">
-    <p style="font-size:11px;color:#111;line-height:1.6;white-space:pre-line;">${esc(laudo.conclusao)}</p>
+    <p style="font-size:14.3px;color:#111;line-height:1.6;white-space:pre-line;">${esc(laudo.conclusao)}</p>
   </div>` : ''}
 
   <div class="ps-footer">

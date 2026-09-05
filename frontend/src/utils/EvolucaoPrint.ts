@@ -152,29 +152,29 @@ export function gerarHtmlEvolucao(
   <style>
     ${PRINT_SHELL_CSS}
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: Arial, sans-serif; font-size: 12px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
+    body { font-family: Arial, sans-serif; font-size: 15.6px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
 
     /* Cards */
     .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }
     .card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px; align-items: start; }
 
     /* Labels e valores */
-    .lbl { display: block; font-size: 9px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
-    .val { font-size: 12px; font-weight: 600; color: #111; }
+    .lbl { display: block; font-size: 11.7px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
+    .val { font-size: 15.6px; font-weight: 600; color: #111; }
 
     /* Animal photo */
     .animal-photo-wrap { display: flex; align-items: center; justify-content: center; }
     .animal-photo { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; border: 1px solid #e5e7eb; }
 
     /* Título da evolução */
-    .evolucao-titulo { font-size: 15px; font-weight: 700; color: #111; margin-bottom: 8px; }
+    .evolucao-titulo { font-size: 19.5px; font-weight: 700; color: #111; margin-bottom: 8px; }
 
     /* Status badge */
     .badge {
       display: inline-block;
       padding: 3px 10px;
       border-radius: 20px;
-      font-size: 10px;
+      font-size: 13px;
       font-weight: 700;
       color: ${statusColor};
       background: ${statusBg};
@@ -183,7 +183,7 @@ export function gerarHtmlEvolucao(
     /* Texto da evolução */
     .texto {
       white-space: pre-wrap;
-      font-size: 12px;
+      font-size: 15.6px;
       line-height: 1.8;
       border: 1px solid #e5e7eb;
       border-radius: 8px;
@@ -193,12 +193,12 @@ export function gerarHtmlEvolucao(
     }
 
     /* Seções de mídia */
-    .section-title { font-size: 11px; font-weight: 700; color: #374151; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .section-title { font-size: 14.3px; font-weight: 700; color: #374151; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
     .media-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
     .media-item { text-align: center; }
     .media-img { width: 100%; max-height: 130px; object-fit: cover; border-radius: 6px; border: 1px solid #e5e7eb; }
-    .media-nome { font-size: 9px; color: #6b7280; margin-top: 3px; word-break: break-all; }
-    .obs { font-size: 9px; color: #9ca3af; font-style: italic; margin-top: 4px; }
+    .media-nome { font-size: 11.7px; color: #6b7280; margin-top: 3px; word-break: break-all; }
+    .obs { font-size: 11.7px; color: #9ca3af; font-style: italic; margin-top: 4px; }
 
     @media print {
       body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
