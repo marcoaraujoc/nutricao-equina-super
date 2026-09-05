@@ -7,6 +7,7 @@ import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import PageContainer from '../components/PageContainer';
+import JanelaLista from '../components/JanelaLista';
 import BotaoVoltar from '../components/BotaoVoltar';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
@@ -1787,9 +1788,9 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
       ) : (
         <>
           {/* Mobile — cards */}
-          <div className="md:hidden divide-y divide-gray-50">
+          <JanelaLista className="md:hidden divide-y divide-gray-50">
             {pageItems.map(o => (
-              <div key={o.id} className="px-4 py-3">
+              <div key={o.id} data-item-lista className="px-4 py-3">
                 <div className="flex items-center justify-between gap-2 mb-1">
                   <button onClick={() => visualizar(o)} className="font-mono font-bold text-emerald-700 hover:underline text-sm">#{o.numeroFormatado}</button>
                   <span className={`inline-flex flex-shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_ORC[o.status].cls}`}>{STATUS_ORC[o.status].label}</span>
@@ -1811,10 +1812,10 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
                 <div className="mt-2">{acoesDoOrcamento(o)}</div>
               </div>
             ))}
-          </div>
+          </JanelaLista>
 
           {/* Desktop — tabela */}
-          <div className="hidden md:block overflow-x-auto">
+          <JanelaLista className="hidden md:block">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
@@ -1858,7 +1859,7 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
                 ))}
               </tbody>
             </table>
-          </div>
+          </JanelaLista>
 
           {totalPags > 1 && (
             <div className="flex items-center justify-between px-4 py-3 border-t border-gray-50">

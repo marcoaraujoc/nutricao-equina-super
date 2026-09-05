@@ -1,16 +1,20 @@
 // frontend/src/components/DietaAcoesBar.tsx
-// Barra de ações da dieta: Compartilhar | Imprimir | Exportar (PDF / Excel)
+// Barra de ações da dieta: WhatsApp · E-mail | Imprimir | Exportar (PDF / Excel)
 // Reutilizável em Dieta.tsx e outras páginas futuras.
+//
+// 🔴 O botão "Compartilhar" (2026-09-05) DEIXOU DE EXISTIR: ele abria um modal que
+// mandava a dieta só por E-MAIL, com o PDF gerado no NAVEGADOR (html2canvas —
+// captura de tela, texto não selecionável). No lugar entrou o mesmo par de botões do
+// resto do sistema (`CompartilharPdfBotoes`): WhatsApp e e-mail, PDF do Puppeteer
+// anexado de verdade, barra de progresso e resultado no centro da tela.
+// ⚠️ `gerarPdfBlob` FICA — é o "Exportar PDF", que baixa o arquivo no navegador e
+// não passa pelo servidor.
 
 import { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
-import {
-  Printer, Download, Share2, ChevronDown,
-  X, MessageCircle, Mail, Loader2,
-} from 'lucide-react';
-import toast from 'react-hot-toast';
-import api from '../services/api';
-import { gerarHtmlDieta, type PrintAnimal, type PrintPlan, type PrintItem, type PrintUser } from '../utils/Dietaprint';
+import { Printer, Download, ChevronDown, Loader2 } from 'lucide-react';
+import { gerarHtmlDieta, prepararDieta, type PrintAnimal, type PrintPlan, type PrintItem, type PrintUser } from '../utils/Dietaprint';
+import CompartilharPdfBotoes from './CompartilharPdfBotoes';
 import { htmlParaPdfBlob } from '../utils/gerarPdf';
 import { imprimirHtml } from '../utils/print/imprimirHtml';
 import InlineError from './InlineError';
@@ -50,167 +54,6 @@ function gerarPdfBlob(
   return htmlParaPdfBlob(gerarHtmlDieta(animal, plano, itens, user));
 }
 
-// ─── Helper: blob → base64 ────────────────────────────────────────────────────
-
-async function blobParaBase64(blob: Blob): Promise<string> {
-  const buf = await blob.arrayBuffer();
-  return btoa(new Uint8Array(buf).reduce((s, b) => s + String.fromCharCode(b), ''));
-}
-
-// ─── Modal de compartilhamento ────────────────────────────────────────────────
-
-function CompartilharModal({
-  animal, plano, itens, user, onClose,
-}: {
-  animal:  AnimalParaAcoes;
-  plano:   PlanoParaAcoes;
-  itens:   PrintItem[];
-  user:    PrintUser | null;
-  onClose: () => void;
-}) {
-  const [estado, setEstado] = useState<'idle' | 'gerando' | 'enviando'>('idle');
-  // Erro de ação exibido inline (substitui o toast de erro)
-  const [erroInline, setErroInline] = useState<string | null>(null);
-
-  const emailPropr = animal.user?.email  ?? '';
-  const phoneRaw   = (animal.user?.phone ?? '').replace(/\D/g, '');
-  const phoneWA    = phoneRaw.startsWith('55') ? phoneRaw : phoneRaw ? `55${phoneRaw}` : '';
-  const textoWA    = `Segue a Dieta do Cavalo ${animal.nome}`;
-
-  // ── WhatsApp ─────────────────────────────────────────────────────────────
-
-  const handleWhatsApp = async () => {
-    setEstado('gerando');
-    try {
-      const blob    = await gerarPdfBlob(animal, plano, itens, user);
-      const arquivo = new File([blob], `dieta-${animal.nome}-${plano.nome}.pdf`, { type: 'application/pdf' });
-
-      // Mobile: Web Share API com arquivo (anexa direto no WhatsApp)
-      if (navigator.canShare && navigator.canShare({ files: [arquivo] })) {
-        await navigator.share({
-          files: [arquivo],
-          title: `Plano de Dieta — ${animal.nome}`,
-          text:  textoWA,
-        });
-        onClose();
-        return;
-      }
-
-      // Desktop: baixa o PDF e abre WhatsApp Web com número/texto pré-preenchido
-      const url = URL.createObjectURL(blob);
-      const a   = document.createElement('a');
-      a.href = url; a.download = arquivo.name; a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 100);
-
-      const waUrl = phoneWA
-        ? `https://wa.me/${phoneWA}?text=${encodeURIComponent(textoWA)}`
-        : `https://web.whatsapp.com/send?text=${encodeURIComponent(textoWA)}`;
-      setTimeout(() => window.open(waUrl, '_blank', 'noopener,noreferrer'), 500);
-      toast('PDF baixado — anexe-o na conversa do WhatsApp.', { icon: '📎', duration: 5000 });
-      onClose();
-    } catch (err) {
-      if ((err as Error)?.name !== 'AbortError') setErroInline('Erro ao preparar compartilhamento');
-    } finally {
-      setEstado('idle');
-    }
-  };
-
-  // ── E-mail via backend (com anexo real) ──────────────────────────────────
-
-  const handleEmail = async () => {
-    if (!emailPropr) {
-      setErroInline('Proprietário sem e-mail cadastrado');
-      return;
-    }
-    setEstado('gerando');
-    try {
-      const blob    = await gerarPdfBlob(animal, plano, itens, user);
-      setEstado('enviando');
-      const base64  = await blobParaBase64(blob);
-
-      await api.post('/dietas/compartilhar', {
-        emailDestinatario: emailPropr,
-        nomeProprietario:  animal.user?.fullName ?? '',
-        nomeAnimal:        animal.nome,
-        planoNome:         plano.nome,
-        pdfBase64:         base64,
-      });
-
-      toast.success(`E-mail enviado para ${emailPropr}`);
-      onClose();
-    } catch {
-      setErroInline('Erro ao enviar e-mail');
-    } finally {
-      setEstado('idle');
-    }
-  };
-
-  const ocupado = estado !== 'idle';
-  const label   = estado === 'gerando' ? 'Gerando PDF…' : estado === 'enviando' ? 'Enviando…' : '';
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm border border-gray-100 overflow-hidden">
-
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-          <div>
-            <h3 className="font-bold text-gray-900 text-sm">Compartilhar Dieta</h3>
-            <p className="text-xs text-gray-400 mt-0.5">{animal.nome} · {plano.nome}</p>
-          </div>
-          <button onClick={onClose} disabled={ocupado} className="p-1 text-gray-400 hover:text-gray-600">
-            <X size={18} />
-          </button>
-        </div>
-
-        {animal.user && (
-          <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 space-y-0.5">
-            <p className="text-xs font-semibold text-gray-700">{animal.user.fullName}</p>
-            {emailPropr && <p className="text-xs text-gray-400">✉ {emailPropr}</p>}
-            {phoneRaw   && <p className="text-xs text-gray-400">📱 {animal.user.phone}</p>}
-          </div>
-        )}
-
-        <div className="p-5 space-y-3">
-          {ocupado ? (
-            <div className="flex items-center justify-center gap-2 py-6 text-emerald-700">
-              <Loader2 size={20} className="animate-spin" />
-              <span className="text-sm font-medium">{label}</span>
-            </div>
-          ) : (
-            <>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={handleWhatsApp}
-                  className="flex flex-col items-center gap-2 py-4 bg-[#25D366] hover:bg-[#1da851] text-white rounded-xl font-semibold text-sm transition-colors">
-                  <MessageCircle size={22} />
-                  WhatsApp
-                </button>
-                <button
-                  onClick={handleEmail}
-                  disabled={!emailPropr}
-                  className="flex flex-col items-center gap-2 py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded-xl font-semibold text-sm transition-colors">
-                  <Mail size={22} />
-                  E-mail
-                </button>
-              </div>
-              {!emailPropr && (
-                <p className="text-xs text-center text-amber-600">
-                  Proprietário sem e-mail cadastrado
-                </p>
-              )}
-              <InlineError message={erroInline} />
-
-              <button onClick={onClose} className="w-full py-2 text-xs text-gray-400 hover:text-gray-600 transition-colors">
-                Cancelar
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── DietaAcoesBar ────────────────────────────────────────────────────────────
 
 export default function DietaAcoesBar({
@@ -218,8 +61,6 @@ export default function DietaAcoesBar({
   podeImprimir = true, podeCompartilhar = true, podeExportar = true,
 }: DietaAcoesBarProps) {
   const [exportandoPdf,        setExportandoPdf]        = useState(false);
-  const [compartilhando,       setCompartilhando]       = useState(false);
-  const [showCompartilhar,     setShowCompartilhar]     = useState(false);
   const [showExportMenu,       setShowExportMenu]       = useState(false);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline,           setErroInline]           = useState<string | null>(null);
@@ -239,6 +80,21 @@ export default function DietaAcoesBar({
 
   const imprimir = () => {
     imprimirHtml(gerarHtmlDieta(animal, plano, itens, user));
+  };
+
+  // ── Enviar por WhatsApp / e-mail ────────────────────────────────────────
+  //
+  // Substituiu o antigo botão "Compartilhar", que abria um modal e mandava só por
+  // e-mail, com o PDF gerado no NAVEGADOR (captura de tela). Agora é o mesmo par de
+  // botões do resto do sistema: PDF do Puppeteer (texto selecionável), anexado de
+  // verdade, com barra de progresso e o resultado no centro da tela.
+  // ⚠️ `gerarHtml` é SÍNCRONO — o preparo das imagens vai em `aoPreparar`.
+  const opcoesEnvio = {
+    gerarHtml:   () => gerarHtmlDieta(animal, plano, itens, user),
+    nomeArquivo: `dieta-${animal.nome}-${plano.nome}.pdf`.replace(/\s+/g, '-'),
+    texto:       `Segue o plano alimentar de ${animal.nome} — ${plano.nome}.`,
+    documento:   'Dieta',
+    titulo:      `Plano Alimentar — ${animal.nome}`,
   };
 
   // ── Exportar PDF ────────────────────────────────────────────────────────
@@ -273,13 +129,6 @@ export default function DietaAcoesBar({
     setShowExportMenu(false);
   };
 
-  // ── Abrir modal compartilhar ─────────────────────────────────────────────
-
-  const abrirCompartilhar = () => {
-    setCompartilhando(true);
-    setShowCompartilhar(true);
-    setCompartilhando(false);
-  };
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -292,10 +141,12 @@ export default function DietaAcoesBar({
         <InlineError message={erroInline} className="mb-2" />
 
         {podeCompartilhar && (
-          <button onClick={abrirCompartilhar} title="Compartilhar"
-            className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100">
-            <Share2 size={15} />
-          </button>
+          <CompartilharPdfBotoes
+            {...opcoesEnvio}
+            aoPreparar={() => prepararDieta(animal)}
+            telefone={animal.user?.phone}
+            emailPara={animal.user?.email}
+          />
         )}
         {podeImprimir && (
           <button onClick={imprimir} title="Imprimir"
@@ -311,10 +162,6 @@ export default function DietaAcoesBar({
               : <Download size={15} />}
           </button>
         )}
-        {showCompartilhar && (
-          <CompartilharModal animal={animal} plano={plano} itens={itens} user={user}
-            onClose={() => setShowCompartilhar(false)} />
-        )}
       </>
     );
   }
@@ -323,19 +170,14 @@ export default function DietaAcoesBar({
     <>
       <InlineError message={erroInline} className="mb-2" />
 
-      <button
-        onClick={podeCompartilhar ? abrirCompartilhar : () => semPermissao('compartilhar dieta')}
-        disabled={compartilhando}
-        className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs transition-colors disabled:opacity-60 ${
-          podeCompartilhar
-            ? 'border-gray-200 hover:bg-gray-50 text-gray-600'
-            : 'border-gray-100 text-gray-300 cursor-not-allowed'
-        }`}>
-        {compartilhando
-          ? <Loader2 size={13} className="animate-spin" />
-          : <Share2 size={13} />}
-        Compartilhar
-      </button>
+      {podeCompartilhar && (
+        <CompartilharPdfBotoes
+          {...opcoesEnvio}
+          aoPreparar={() => prepararDieta(animal)}
+          telefone={animal.user?.phone}
+          emailPara={animal.user?.email}
+        />
+      )}
 
       <button
         onClick={podeImprimir ? imprimir : () => semPermissao('imprimir dieta')}
@@ -373,11 +215,6 @@ export default function DietaAcoesBar({
           </div>
         )}
       </div>
-
-      {showCompartilhar && (
-        <CompartilharModal animal={animal} plano={plano} itens={itens} user={user}
-          onClose={() => setShowCompartilhar(false)} />
-      )}
     </>
   );
 }

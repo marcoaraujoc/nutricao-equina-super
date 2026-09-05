@@ -3,15 +3,17 @@
 // Seções independentes: Diário (por período do dia) | Semanal | Mensal
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura } from './print/PrintShell';
-import { resolverUrlAbsoluta } from './printUrl';
+import {
+  PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura, srcImpressao, prepararImagensImpressao,
+} from './print/PrintShell';
 
 export interface PrintAnimal {
   nome: string;
   photoUrl?: string | null;
   raca?: { nome: string } | null;
   dataNascimento?: string | Date | null;
-  user?: { fullName: string; email: string } | null;
+  /** Contato do cliente — destino do PDF por WhatsApp / e-mail. */
+  user?: { fullName: string; email?: string | null; phone?: string | null } | null;
   logoUrl?: string | null;
 }
 
@@ -252,7 +254,10 @@ export function gerarHtmlDieta(
   itens: PrintItem[],
   user: PrintUser | null,
 ): string {
-  const fotoUrl     = resolverUrlAbsoluta(animal?.photoUrl);
+  // `srcImpressao`, nao `resolverUrlAbsoluta`: o PDF sai do Puppeteer, que bloqueia
+  // toda requisicao que nao seja `data:` — com a URL http a foto nasce QUEBRADA no
+  // arquivo que chega ao cliente (ver prepararDieta).
+  const fotoUrl     = srcImpressao(animal?.photoUrl);
   const totalItens  = itens.length;
   const groupedHTML = buildGroupedHTML(itens);
 
@@ -311,4 +316,12 @@ export function gerarHtmlDieta(
 
 </body>
 </html>`;
+}
+/**
+ * Resolve as imagens da folha (logo e foto do paciente) para `data:` ANTES de gerar
+ * o HTML. Obrigatório em quem vai mandar a dieta por WhatsApp/e-mail — ver
+ * `prepararImagensImpressao` em print/PrintShell.
+ */
+export async function prepararDieta(animal: PrintAnimal | null): Promise<void> {
+  await prepararImagensImpressao([animal?.logoUrl, animal?.photoUrl]);
 }

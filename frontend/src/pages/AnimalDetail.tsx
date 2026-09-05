@@ -217,9 +217,9 @@ const BADGE_ORIGEM: Record<OrigemEvento, string> = {
 // O Histórico abre mostrando os 3 atendimentos mais recentes. Paciente antigo tem
 // dezenas, e a lista inteira empurrava a Memória Clínica e os Agendamentos para
 // fora da tela — o resto da página ficava inalcançável sem rolar o histórico todo.
-// 5 = o que a JanelaLista deixa visível sem rolar; manter os dois em sincronia
+// 3 = o que a JanelaLista deixa visível sem rolar; manter os dois em sincronia
 // evita o estado esquisito de a lista fechada já nascer com barra de rolagem.
-const HISTORICO_VISIVEL_PADRAO = 5;
+const HISTORICO_VISIVEL_PADRAO = 3;
 
 type FiltroAgendamento = 'TODOS' | 'AGENDADO' | 'CONCLUIDO' | 'CANCELADO' | 'REAGENDADO';
 

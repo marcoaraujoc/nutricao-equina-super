@@ -22,6 +22,7 @@ import { carregarComoDataUri } from '../utils/printUrl';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
 import { ordenarComInsumos } from '../utils/faturaInsumos';
 import InlineError from '../components/InlineError';
+import JanelaLista from '../components/JanelaLista';
 import FotoAnimal from '../components/FotoAnimal';
 import ConfirmModal from '../components/ConfirmModal';
 
@@ -1626,12 +1627,12 @@ function PainelFatura({
             <div className="px-4 py-3 border-b border-gray-50">
               <p className="text-sm font-bold text-gray-700">Assistência &amp; Serviços Gerais</p>
             </div>
-            <div className="divide-y divide-gray-50">
+            <JanelaLista className="divide-y divide-gray-50">
               {ordenarComInsumos(itensPorAnimal['sem'] ?? []).map((item: FaturaItem) => (
                 <ItemRow key={item.id} item={item} canEdit={canEdit}
                   onDelete={handleDeleteItem} onSave={handleSaveItem}/>
               ))}
-            </div>
+            </JanelaLista>
           </div>
         )}
 
@@ -1677,12 +1678,12 @@ function PainelFatura({
                       Assistência &amp; Serviços Gerais
                     </p>
                   </div>
-                  <div className="divide-y divide-gray-50">
+                  <JanelaLista className="divide-y divide-gray-50">
                     {ordenarComInsumos(itensAssistencia).map(item => (
                       <ItemRow key={item.id} item={item} canEdit={canEdit}
                         onDelete={handleDeleteItem} onSave={handleSaveItem}/>
                     ))}
-                  </div>
+                  </JanelaLista>
                 </>
               )}
 
@@ -1694,12 +1695,12 @@ function PainelFatura({
                       Itens da Fatura
                     </p>
                   </div>
-                  <div className="divide-y divide-gray-50">
+                  <JanelaLista className="divide-y divide-gray-50">
                     {ordenarComInsumos(itensOutros).map(item => (
                       <ItemRow key={item.id} item={item} canEdit={canEdit}
                         onDelete={handleDeleteItem} onSave={handleSaveItem}/>
                     ))}
-                  </div>
+                  </JanelaLista>
                 </>
               )}
 
@@ -1733,12 +1734,12 @@ function PainelFatura({
                 </div>
               </div>
             </div>
-            <div className="divide-y divide-gray-50">
+            <JanelaLista className="divide-y divide-gray-50">
               {ordenarComInsumos(grupo.itens).map(item => (
                 <ItemRow key={item.id} item={item} canEdit={canEdit}
                   onDelete={handleDeleteItem} onSave={handleSaveItem}/>
               ))}
-            </div>
+            </JanelaLista>
           </div>
         ))}
 

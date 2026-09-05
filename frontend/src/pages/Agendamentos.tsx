@@ -82,6 +82,8 @@ interface AnimalOption {
   // Localização atual do animal (LocalizacaoAnimal) — filtra por onde o vet atende
   localizacaoId: number | null;
   localizacaoNome: string | null;
+  /** Prontuário CONGELADO (`Animal.inativo`) — não se agenda para ele. */
+  inativo?: boolean;
 }
 
 /**
@@ -235,6 +237,26 @@ function gerarSlots(horaIni: string | null, horaFim: string | null, passoMin: nu
   const out: string[] = [];
   for (let m = ini; m + passo <= fim; m += passo) out.push(minParaHHMM(m));
   return out;
+}
+
+/**
+ * 🔴 Minuto do dia a partir do qual `dateStr` AINDA aceita agendamento. Quem filtra
+ * descarta todo slot cujo início seja `<= limite`:
+ *   data FUTURA  → `null`     (o dia inteiro está livre)
+ *   HOJE         → o relógio  (só o que ainda vai acontecer)
+ *   data PASSADA → `Infinity` (NENHUM horário — o dia inteiro ficou para trás)
+ * ⚠️ O caso da data PASSADA é o que faltava: até aqui só "hoje" descontava o que já
+ * tinha passado, então abrir um dia anterior no calendário mostrava a grade INTEIRA
+ * como disponível e a recusa (400 `DATA_PASSADA`) só vinha do backend depois de a
+ * pessoa escolher paciente e título. A agenda é para o futuro: horário que já passou
+ * não é nem oferecido.
+ */
+function limiteDeAgendamentoNoDia(dateStr: string): number | null {
+  const hj = hoje();                      // comparação lexicográfica: formato YYYY-MM-DD
+  if (dateStr > hj) return null;
+  if (dateStr < hj) return Infinity;
+  const agora = new Date();
+  return agora.getHours() * 60 + agora.getMinutes();
 }
 
 const MESES_PT      = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
@@ -748,6 +770,18 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // Seleção de animal NÃO é restrita por local/dia de trabalho do profissional — o
   // combo mostra todos os animais da empresa, e quem escolhe é o usuário.
   const animaisDisponiveis = animais;
+  // 🔴 PACIENTE INATIVO NÃO SE AGENDA. O prontuário dele está congelado (somente
+  // leitura até o gestor reativar), então marcar um atendimento novo criaria um
+  // compromisso que o backend recusa na hora de abrir a evolução — o erro apareceria
+  // só depois, com o horário já ocupado na grade.
+  // ⚠️ NÃO filtra `animaisDisponiveis`: é dele que sai o rótulo do paciente JÁ
+  // escolhido (`animalSelecionadoCombo`). Um agendamento marcado antes da
+  // inativação continua existindo, e sem essa lista completa a linha dele ficaria
+  // sem nome ao ser reaberta para edição.
+  const animaisAgendaveis = useMemo(
+    () => animaisDisponiveis.filter(a => !a.inativo),
+    [animaisDisponiveis],
+  );
   // Filtra pelo proprietário selecionado (barra superior)
   const animaisFiltradosBar = useMemo(
     () => selectedProprId ? animaisDisponiveis.filter(a => String(a.user?.id) === selectedProprId) : animaisDisponiveis,
@@ -938,6 +972,9 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     const diasNoMes = new Date(Number(anoS), mesN, 0).getDate();
     for (let d = 1; d <= diasNoMes; d++) {
       const dStr  = `${anoS}-${pad(mesN)}-${pad(d)}`;
+      // Dia que já passou não ganha bolinha: verde ali anunciaria vaga onde a agenda
+      // não oferece mais nenhum horário.
+      if (dStr < hoje()) continue;
       const count = contagem.get(dStr) ?? 0;
       if (count === 0)              result.set(dStr, 'LIVRE');
       else if (count < HORARIOS.length) result.set(dStr, 'PARCIAL');
@@ -1282,7 +1319,11 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     const wd = new Date(`${dateStr}T00:00:00`).getDay();
     // dias null = todos; array (mesmo vazio) = só os listados (vazio → nenhum dia)
     if (exp.dias && !exp.dias.includes(wd)) return [];
-    return gerarSlots(exp.horaInicio, exp.horaFim, passoDoVet(vetId));
+    const passo  = passoDoVet(vetId);
+    const limite = limiteDeAgendamentoNoDia(dateStr);
+    // O que já passou nem entra na grade (dia anterior → nenhum horário).
+    return gerarSlots(exp.horaInicio, exp.horaFim, passo)
+      .filter(h => limite === null || hhmmParaMin(h) > limite);
   };
 
   // ── Slots ────────────────────────────────────────────────────────────────────
@@ -1381,8 +1422,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
    */
   const linhasAtendimento = useMemo(() => {
     const wd = new Date(`${selectedDate}T00:00:00`).getDay();
-    const agora = selectedDate === hoje() ? new Date() : null;
-    const agoraMin = agora ? agora.getHours() * 60 + agora.getMinutes() : null;
+    const limiteMin = limiteDeAgendamentoNoDia(selectedDate);
     const espFiltro = filtroEspId ? Number(filtroEspId) : null;
     const localFiltro = filtroLocalId ? Number(filtroLocalId) : null;
 
@@ -1416,7 +1456,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
         const ini = hhmmParaMin(h), fim = ini + passo;
         if (ini < faixaHorarioFiltro.de || ini >= faixaHorarioFiltro.ate) return false;
         if (ocupados.some(o => o.iniMin < fim && ini < o.fimMin)) return false;
-        if (agoraMin !== null && ini <= agoraMin) return false;
+        if (limiteMin !== null && ini <= limiteMin) return false;   // já passou
         return true;
       });
 
@@ -1510,7 +1550,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // é busca — é a exibição da escolha —, então a lista inteira continua disponível.
   const queryEhRotuloSelecionado =
     !!animalSelecionadoCombo && comboQuery === rotuloAnimalCombo(animalSelecionadoCombo);
-  const animaisCombo = animaisDisponiveis.filter(a =>
+  const animaisCombo = animaisAgendaveis.filter(a =>
     !comboQuery || queryEhRotuloSelecionado || a.nome.toLowerCase().includes(comboQuery.toLowerCase()));
 
   // ── Conflict check ────────────────────────────────────────────────────────────
@@ -1953,12 +1993,11 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     if (!reagendando || !reagData) return [];
     const vetId = reagendando.veterinario?.id;
     if (!vetId) return [];
-    const passo   = passoDoVet(vetId);
-    const agora   = new Date();
-    const agoraMin = reagData === hoje() ? agora.getHours() * 60 + agora.getMinutes() : null;
+    const passo = passoDoVet(vetId);
+    // O que já passou (e o dia inteiro, quando a data ficou para trás) já sai em
+    // `horariosDoDia` — aqui resta descontar o que está ocupado.
     return horariosDoDia(vetId, reagData).filter(h => {
       const ini = hhmmParaMin(h), fim = ini + passo;
-      if (agoraMin !== null && ini <= agoraMin) return false;      // horário já passou
       return !reagOcupados.some(o => o.iniMin < fim && ini < o.fimMin);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2272,10 +2311,21 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
             {linhasAtendimento.length === 0 ? (
               <div className="py-10 text-center">
                 <Users size={28} className="mx-auto mb-2 text-gray-300" />
-                <p className="text-sm text-gray-400">Nenhum horário livre neste dia</p>
-                <p className="text-xs text-gray-300 mt-1">
-                  Só aparece quem atende em {labelDia(selectedDate)} e ainda tem horário disponível.
-                </p>
+                {selectedDate < hoje() ? (
+                  <>
+                    <p className="text-sm text-gray-400">Este dia já passou</p>
+                    <p className="text-xs text-gray-300 mt-1">
+                      Não há horário a oferecer para trás do relógio — escolha hoje ou uma data futura para agendar.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm text-gray-400">Nenhum horário livre neste dia</p>
+                    <p className="text-xs text-gray-300 mt-1">
+                      Só aparece quem atende em {labelDia(selectedDate)} e ainda tem horário disponível.
+                    </p>
+                  </>
+                )}
               </div>
             ) : (
               <>

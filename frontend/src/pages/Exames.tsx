@@ -5,6 +5,7 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import InlineError from '../components/InlineError';
+import JanelaLista from '../components/JanelaLista';
 import {
   Eye, Calendar, Edit, Trash2, Microscope, ClipboardList, Scan, X, ChevronLeft, ChevronRight, ExternalLink,
   Loader2, Printer, MessageCircle, Mail, Maximize2, Minimize2, ChevronDown, Check, FileX,
@@ -973,7 +974,7 @@ const Exames = () => {
           {examesFiltrados.length > 0 && (
           <>
           {/* Desktop table */}
-          <div className="hidden md:block overflow-x-auto">
+          <JanelaLista className="hidden md:block">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
@@ -1051,15 +1052,15 @@ const Exames = () => {
                 })}
               </tbody>
             </table>
-          </div>
+          </JanelaLista>
 
           {/* Mobile cards */}
-          <div className="md:hidden divide-y divide-gray-50">
+          <JanelaLista className="md:hidden divide-y divide-gray-50">
             {examesFiltrados.map((ex: any) => {
               const isEditing = editingId === ex.id;
               const status    = getStatus(ex);
               return (
-                <div key={ex.id} className="px-4 py-3">
+                <div key={ex.id} data-item-lista className="px-4 py-3">
                   {isEditing ? (
                     <div className="space-y-2">
                       <DateInputBR
@@ -1113,7 +1114,7 @@ const Exames = () => {
                 </div>
               );
             })}
-          </div>
+          </JanelaLista>
           </>
           )}
           </div>

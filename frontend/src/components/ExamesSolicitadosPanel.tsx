@@ -34,6 +34,7 @@ import api from '../services/api';
 import InlineError from './InlineError';
 import ModalJustificativa from './ModalJustificativa';
 import DateInput from './DateInput';
+import JanelaLista from './JanelaLista';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import { isMobile } from '../services/whisperService';
@@ -1233,9 +1234,9 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
       ) : (
         <>
           {/* Mobile — cards */}
-          <div className="md:hidden divide-y divide-gray-50">
+          <JanelaLista className="md:hidden divide-y divide-gray-50">
             {pendentes.map(ex => (
-              <div key={ex.id} className="px-4 py-3">
+              <div key={ex.id} data-item-lista className="px-4 py-3">
                 <p className="text-sm font-semibold text-gray-900">{ex.descricao}</p>
                 <p className="text-[11px] text-gray-400 mt-0.5">
                   {numeroExame(ex)} · {formatData(ex.dataSolicitacao)}
@@ -1244,10 +1245,10 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
                 <div className="mt-2">{acoesDoPendente(ex)}</div>
               </div>
             ))}
-          </div>
+          </JanelaLista>
 
           {/* Desktop — tabela */}
-          <div className="hidden md:block overflow-x-auto">
+          <JanelaLista className="hidden md:block">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
@@ -1277,7 +1278,7 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
                 ))}
               </tbody>
             </table>
-          </div>
+          </JanelaLista>
         </>
       )}
 

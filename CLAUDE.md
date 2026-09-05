@@ -2975,6 +2975,40 @@ New-Item -ItemType Junction `
       lista fechada não nascer já com barra de rolagem. O `ExecucaoPrescricao` tinha
       janela PRÓPRIA (`max-h-[50vh]`) que cobria cabeçalho e filtros junto — agora a
       janela vale só para as listas.
+- [x] **Janela do histórico: 5 → 3 itens** (a pedido), e estendida a **14 telas** —
+      entraram Orçamento, Fatura (o extrato, por seção de itens), Resultado de Exame
+      (`Exames` e `ExamesSolicitadosPanel`). Documento (`Emitidos`) já tinha.
+      ⚠️ `AnimalDetail.HISTORICO_VISIVEL_PADRAO` acompanha o número (3): os dois
+      fora de sincronia fazem a lista fechada já nascer com barra de rolagem.
+      ⚠️ Na FATURA a janela vale por SEÇÃO de itens (assistência, cada animal, os
+      fora do escopo) — não sobre o corpo inteiro, que já é `lg:overflow-y-auto` e é
+      a rolagem da coluna.
+- [x] 🔴 **PACIENTE INATIVO NÃO APARECE NO SELETOR DO AGENDAMENTO** (a pedido). O
+      prontuário dele está congelado (somente leitura até o gestor reativar), então
+      marcar atendimento novo criava um compromisso que o backend recusa depois, na
+      hora de abrir a evolução — o erro aparecia só ali, com o horário já ocupado na
+      grade. `GET /animais` já devolvia `inativo` (`anexarInativoEmLista`); o que
+      faltava era o front filtrar.
+      ⚠️ Filtra `animaisAgendaveis`, **NÃO** `animaisDisponiveis`: é desta última que
+      sai o rótulo do paciente JÁ escolhido (`animalSelecionadoCombo`). Um
+      agendamento marcado ANTES da inativação continua existindo, e sem a lista
+      completa a linha dele ficaria sem nome ao ser reaberta.
+      ⚠️ A barra superior de filtro da tela (Animal ↔ Proprietário) NÃO foi filtrada:
+      ali esconder o paciente sumiria com os agendamentos que ele já tem na agenda.
+- [x] **Dieta: o botão "Compartilhar" virou WhatsApp + E-mail** (a pedido). Ele abria
+      um modal que mandava a dieta só por E-MAIL, com o PDF gerado no NAVEGADOR
+      (`html2canvas` — captura de tela, texto não selecionável). Agora é o mesmo par
+      do resto do sistema (`CompartilharPdfBotoes`): PDF do Puppeteer anexado, barra
+      de progresso e resultado no centro. O `CompartilharModal` e o `blobParaBase64`
+      foram REMOVIDOS (sem outro call site, ficariam mortos e o `tsc -b` reprova).
+      🔴 `Dietaprint.gerarHtmlDieta` usava `resolverUrlAbsoluta` na foto do paciente —
+      o MESMO defeito de `EvolucaoPrint`: no PDF do servidor a imagem nasce quebrada
+      (o Puppeteer só aceita `data:`). Passou por `srcImpressao` + `prepararDieta`.
+      ⚠️ `gerarPdfBlob` (client-side) FICA: é o "Exportar PDF", que baixa o arquivo no
+      navegador e não passa pelo servidor.
+      ⚠️ `PrintAnimal` da dieta ganhou `user.phone` — sem ele não há destino para o
+      WhatsApp; a rota `POST /dietas/compartilhar` continua no backend, agora sem
+      chamador no front.
 - [ ] O envio real depende do WhatsApp da clínica provisionado/conectado na Evolution
       API e de SMTP configurado. Sem isso TODO clique cai no fallback (baixa o PDF) —
       e o toast diz isso, mas vale confirmar num envio de verdade antes de anunciar a

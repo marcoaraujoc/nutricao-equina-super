@@ -1,6 +1,6 @@
 // frontend/src/components/JanelaLista.tsx
-// Janela de rolagem para listas de HISTÓRICO: mostra os N primeiros itens (5, por
-// padrão) e o resto se alcança rolando — vertical para os itens, horizontal para a
+// Janela de rolagem para listas de HISTÓRICO: mostra os N últimos registros (3, por
+// padrão — a lista já vem do mais recente para o mais antigo) e o resto se alcança rolando — vertical para os itens, horizontal para a
 // tabela larga.
 //
 // POR QUÊ: um histórico com 40 linhas empurrava o resto da tela para fora da dobra,
@@ -16,7 +16,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
 interface Props {
-  /** Quantos itens ficam visíveis antes de precisar rolar. */
+  /** Quantos itens ficam visíveis antes de precisar rolar (padrão: 3). */
   maxItens?:  number;
   /**
    * Como achar os itens. O padrão cobre os dois formatos do sistema: linha de
@@ -32,7 +32,7 @@ interface Props {
 const ESPIA_PX = 14;
 
 export default function JanelaLista({
-  maxItens = 5, seletor = 'tbody > tr, [data-item-lista]', className = '', children,
+  maxItens = 3, seletor = 'tbody > tr, [data-item-lista]', className = '', children,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [altura, setAltura] = useState<number | null>(null);
