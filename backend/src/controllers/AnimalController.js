@@ -11,8 +11,11 @@ const { animalVisivelNaEmpresa, ANIMAL_VISIVEL } = require('../lib/visibilidade'
 const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
 const { garantirFaturaAberta } = require('../services/FaturaService');
 const { registrarAuditoria } = require('../lib/auditoria');
+// Inativar o paciente FECHA o atendimento aberto — mesma cascata do Finalizar.
+const { cascataDaFinalizacao, lancarExamesDaEvolucao } = require('../lib/finalizacaoEvolucao');
+const { invalidarVersoes } = require('../lib/concorrenciaRegistro');
 const { registrarHistoricoAnimal } = require('../lib/animalHistorico');
-const { ehGestorNoContexto } = require('../middlewares/permissao.middleware');
+const { ehGestorNoContexto, getNivelEfetivo } = require('../middlewares/permissao.middleware');
 const {
   marcarInativo, marcarAtivo, animalEstaInativo,
   anexarInativo, anexarInativoEmLista,
@@ -25,6 +28,8 @@ const {
 const { cancelarPendenciasDoAnimal } = require('../lib/cancelamentoPendencias');
 const { validarMotivoTipo, exigeDescricao } = require('../lib/motivosInativacao');
 const { transferirPropriedadeAnimal } = require('../lib/transferenciaPropriedadeAnimal');
+const { verificarDuplicidadeAnimal } = require('../lib/duplicidadeAnimal');
+const { garantirDonoAtivo } = require('../lib/donoAtivoDoPaciente');
 
 const prisma = require('../lib/prisma').default;
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
@@ -69,6 +74,33 @@ const ANIMAL_INCLUDE = {
   // Junto saíram `gerarToken`/`gerarExpiracao`, que só serviam ao token de aprovação
   // de 24h dos e-mails de vínculo/desvínculo.
 };
+
+/**
+ * Marca em cada linha se o CLIENTE dela está inativo NESTA clínica.
+ *
+ * Só a aba de Pacientes usa isto — é a única listagem que enxerga o paciente de
+ * cliente inativado (ver `listar`). Sem a marca, ele apareceria lá como um paciente
+ * comum, sem nada explicando por que não está em mais tela nenhuma.
+ *
+ * ⚠️ A pergunta é respondida pela REGRA POSITIVA que já existe
+ * (`animalVisivelNaEmpresa`), consultando quem PASSA por ela e marcando o resto —
+ * nunca por uma negação escrita à mão. Uma negação própria seria uma segunda cópia
+ * da regra do §36 (perfil da empresa × `users.ativo` do legado) e divergiria dela na
+ * primeira correção — e a divergência apareceria como "o paciente aparece na lista e
+ * o dono consta ativo", que é justamente o que ninguém consegue depurar.
+ */
+async function marcarProprietarioInativo(animais, empresaId) {
+  if (!animais.length) return;
+  const donoAtivo = animalVisivelNaEmpresa(empresaId).user;
+  const ids = animais.map(a => a.id);
+  const comDonoAtivo = new Set(
+    (await prisma.animal.findMany({
+      where:  { id: { in: ids }, user: donoAtivo },
+      select: { id: true },
+    })).map(a => a.id),
+  );
+  for (const a of animais) a.proprietarioInativo = !comDonoAtivo.has(a.id);
+}
 
 const obterUserType = async (userId) => {
   const u = await prisma.user.findUnique({
@@ -176,6 +208,46 @@ class AnimalController {
     } catch (error) {
       console.error('[AnimalController.verificarBaia]', error);
       return res.status(500).json({ sucesso: false, mensagem: 'Erro ao verificar disponibilidade da baia' });
+    }
+  }
+
+  // ── GET /api/animais/verificar-duplicidade ───────────────────────────────
+  // Query: nome, localizacaoId?, email? (do proprietário pretendido), ignorarId?
+  //
+  // Responde a cascata de duplicidade EM TEMPO REAL, enquanto o cadastro é digitado:
+  // mesmo nome no mesmo LOCAL é uma PERGUNTA; mesmo nome, mesmo local e mesmo DONO é
+  // duplicata. Ver a regra inteira em lib/duplicidadeAnimal.js.
+  //
+  // ⚠️ Isto é o AVISO, não a garantia: quem recusa de verdade é o `criar` (o mesmo
+  // helper roda lá). Entre a verificação e o Salvar, outra pessoa pode ter cadastrado
+  // o mesmo paciente — e uma tela não segura regra de integridade.
+  async verificarDuplicidade(req, res) {
+    const { nome, localizacaoId, email, ignorarId } = req.query;
+    if (!nome?.trim()) return res.json({ sucesso: true, dados: null });
+
+    try {
+      // O dono pretendido chega por E-MAIL (é o que a tela tem antes de criar o
+      // cliente). Sem e-mail, ou com um e-mail que ainda não existe, `proprietarioId`
+      // fica null e a resposta não conclui nada sobre "mesmo dono" — é a tela que
+      // pergunta primeiro e completa depois.
+      let proprietarioId = null;
+      if (email?.trim()) {
+        const dono = await findUserByEmail(prisma, normalizeEmail(email));
+        proprietarioId = dono?.id ?? null;
+      }
+
+      const resultado = await verificarDuplicidadeAnimal({
+        nome,
+        localizacaoId: localizacaoId ? Number(localizacaoId) : null,
+        empresaId:     req.empresaId,
+        proprietarioId,
+        ignorarId:     ignorarId ? Number(ignorarId) : null,
+      });
+
+      return res.json({ sucesso: true, dados: resultado });
+    } catch (error) {
+      console.error('[AnimalController.verificarDuplicidade]', error);
+      return res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
   }
 
@@ -315,20 +387,30 @@ class AnimalController {
       // (convidado) só vê os seus animais + os liberados por outros vets na empresa ativa.
       const { where } = await buildAnimalScopeWhere(req);
 
-      // EXCLUSÃO LÓGICA (lib/visibilidade.js): o animal inativado some, e o do CLIENTE
-      // inativado some junto — nem como "inativo" ele aparece. `animalVisivelNaEmpresa`
+      // EXCLUSÃO LÓGICA (lib/visibilidade.js): o animal inativado some de toda tela
+      // operacional, e o do CLIENTE inativado some junto — `animalVisivelNaEmpresa`
       // aplica também o `ativo` POR EMPRESA do cliente (§36): inativado numa clínica,
       // ele continua visível nas outras.
       //
-      // Exceção: a aba Ativos/Inativos/Todos da tela de Pacientes precisa enxergar
-      // `ativo:false` — mas SÓ para gestor/admin do contexto, senão a aba vazaria
-      // pacientes excluídos para qualquer perfil que soubesse mandar `?ativo=`.
+      // 🔴 A ABA DE PACIENTES É A ÚNICA QUE ENXERGA O QUE A REGRA ESCONDE (2026-09-06).
+      // Ela precisa de `ativo:false` (aba Inativos) E do paciente cujo CLIENTE foi
+      // inativado — este segundo caso era o defeito relatado: `removerDaEmpresa`
+      // INATIVA os animais do cliente removido, mas o filtro do dono os escondia até
+      // da aba Inativos. Eles sumiam da aplicação INTEIRA: nenhum lugar onde conferir
+      // o que aconteceu, e nenhum botão por onde desfazer.
+      // Aqui, portanto, o estado do dono deixa de FILTRAR e passa a ser REPORTADO
+      // (`proprietarioInativo`, marcado abaixo); quem classifica é a tela.
+      // ⚠️ SÓ para gestor/admin do contexto e só com `?ativo=` explícito — sem essa
+      // trava, qualquer perfil que soubesse mandar o parâmetro veria o que a exclusão
+      // lógica esconde.
+      // ⚠️ Nenhuma outra listagem muda: agenda, plantão, dashboard e relatórios
+      // seguem em `animalVisivelNaEmpresa` — ou seja, tratando o paciente de cliente
+      // inativo como INATIVO, que é exatamente o que esta tela passa a dizer dele.
       const visivel = animalVisivelNaEmpresa(req.empresaId);
+      const abaDePacientes = ehGestorNoContexto(req) && req.query.ativo !== undefined;
       let whereAtivo = visivel;
-      if (ehGestorNoContexto(req) && req.query.ativo !== undefined) {
-        const { ativo: _ignorado, ...visivelSemAtivo } = visivel;
-        if (req.query.ativo === 'all') whereAtivo = visivelSemAtivo;
-        else whereAtivo = { ...visivelSemAtivo, ativo: req.query.ativo === 'true' };
+      if (abaDePacientes) {
+        whereAtivo = req.query.ativo === 'all' ? {} : { ativo: req.query.ativo === 'true' };
       }
 
       let animais = await prisma.animal.findMany({
@@ -345,6 +427,8 @@ class AnimalController {
       // reatribuir aqui, a trilha era calculada e descartada, e a coluna "Ativado
       // em/por" e "Inativado em/por" da tela de Pacientes nunca recebia dado nenhum.
       animais = await anexarTrilhaAtivacaoEmLista(animais);
+      // O que a consulta deixou de filtrar, a LINHA precisa declarar (ver acima).
+      if (abaDePacientes) await marcarProprietarioInativo(animais, req.empresaId);
       res.json({
         sucesso: true,
         dados:   await aplicarPerfilProprietarioEmRelacao(animais, 'user', req.empresaId),
@@ -483,6 +567,13 @@ class AnimalController {
         });
       }
 
+      // Motivo da reativação do CLIENTE (caso "paciente novo + dono inativo"): vem do
+      // modal de justificativa da tela. Em multipart tudo chega como string.
+      const motivoReativacaoProp = String(req.body.motivoReativacaoProprietario ?? '').trim();
+      // Preenchido quando o cadastro do cliente foi de fato reativado nesta chamada —
+      // é o que dispara a auditoria depois de o animal existir.
+      let reativandoProprietario = null;
+
       let targetUserId              = req.user.id;
       let proprietarioNomeParaEmail = 'Proprietário';
       let proprietarioEmailParaEmail = null;
@@ -524,6 +615,57 @@ class AnimalController {
                   isNewProprietario = true;
                 }
 
+                // 🔴 CLIENTE INATIVADO NESTA CLÍNICA: PERGUNTA, NÃO SILÊNCIO.
+                // Até 2026-09-06 este caminho REATIVAVA o cadastro sozinho, para o
+                // animal não nascer com dono inativo (e sumir das listas). O invariante
+                // estava certo; o silêncio, não: alguém inativou aquele cliente de
+                // propósito (`removerDaEmpresa`) e ele voltava pela porta dos fundos,
+                // sem ninguém decidir nem ficar sabendo.
+                // Agora o cadastro PARA e devolve quem é: a tela pergunta, e só reativa
+                // com a confirmação explícita (`reativarProprietario`). O invariante
+                // continua garantido — ou o cliente é reativado, ou o animal não nasce.
+                if (vetEmpresaId && !isNewProprietario) {
+                  const perfilAqui = await prisma.proprietarioPerfil.findUnique({
+                    where:  { userId_empresaId: { userId: prop.id, empresaId: Number(vetEmpresaId) } },
+                    select: { ativo: true },
+                  }).catch(() => null);
+
+                  if (perfilAqui && perfilAqui.ativo === false) {
+                    const confirmou = req.body.reativarProprietario === true
+                      || req.body.reativarProprietario === 'true';
+                    if (!confirmou) {
+                      return res.status(409).json({
+                        sucesso:  false,
+                        inativo:  true,
+                        mensagem: `O cliente "${propData.fullName || prop.fullName || prop.email}" está inativo nesta clínica.`,
+                        proprietario: { id: prop.id, nome: propData.fullName || prop.fullName || prop.email },
+                      });
+                    }
+                    // ⚠️ Confirmar no formulário do ANIMAL não pode virar bypass do
+                    // Controle de Acesso: reativar cliente é `cadastro.proprietario.ativar`,
+                    // e quem não o tem continua sem reativar ninguém por aqui.
+                    const nivel = await getNivelEfetivo(req, 'cadastro.proprietario.ativar');
+                    if (!nivel || nivel === 'NENHUM' || nivel === 'NEGADO') {
+                      return res.status(403).json({
+                        sucesso:  false,
+                        mensagem: 'Sem permissão para reativar o cliente. Peça ao responsável da equipe.',
+                      });
+                    }
+
+                    // 🔴 REATIVAR CLIENTE EXIGE MOTIVO, como toda (in)ativação de
+                    // cadastro (§33): sem ele a trilha registra que o cliente voltou e
+                    // não registra POR QUÊ — e quem o inativou fica sem resposta. É o
+                    // mesmo motivo que a tela pede para reativar um PACIENTE.
+                    if (!motivoReativacaoProp) {
+                      return res.status(400).json({
+                        sucesso:  false,
+                        mensagem: 'É obrigatório informar o motivo da reativação do cliente.',
+                      });
+                    }
+                    reativandoProprietario = { id: prop.id, nome: propData.fullName || prop.fullName || prop.email };
+                  }
+                }
+
                 // Cadastro do cliente NESTA empresa. Se o proprietário já existe
                 // (atendido por outra clínica), esta empresa passa a ter o próprio
                 // perfil com os dados que o vet digitou — sem herdar nem alterar o
@@ -536,14 +678,12 @@ class AnimalController {
                     ativo:    true,
                   });
 
-                  // 🔴 REATIVA o cliente NESTA empresa. `garantirPerfil` só aplica o
-                  // seed (com `ativo:true`) na CRIAÇÃO; se o cliente já tinha cadastro
-                  // aqui e foi INATIVADO antes (ex.: `removerDaEmpresa`), o perfil é
-                  // preservado como está — `ativo=false`. O animal nasceria ATIVO com
-                  // DONO INATIVO, quebrando o invariante "dono de animal ativo é cliente
-                  // ativo da empresa", e o filtro de visibilidade (§36) o esconderia da
-                  // lista — sintoma exato do Horse1 (paciente cadastrado que não aparece).
-                  // Só toca `ativo`; nome/telefone/documento seguem preservados.
+                  // Reativa o cliente NESTA empresa — mantém o invariante "dono de
+                  // animal ativo é cliente ativo da empresa" (sem ele o paciente nasce
+                  // e some da lista: era o sintoma do Horse1). O que mudou em
+                  // 2026-09-06 é que a reativação já passou pela CONFIRMAÇÃO no guard
+                  // acima; aqui ela só é executada. Só toca `ativo`; nome, telefone e
+                  // documento seguem preservados.
                   await salvarPerfilProprietario(prisma, prop.id, vetEmpresaId, { ativo: true });
 
                   // Cliente que JÁ tinha cadastro nesta empresa: `garantirPerfil`
@@ -618,6 +758,46 @@ class AnimalController {
         });
       }
 
+      // 🔴 DUPLICATA = MESMO NOME + MESMO LOCAL + MESMO DONO (2026-09-06).
+      // A tela pergunta antes (GET /animais/verificar-duplicidade), mas é AQUI que a
+      // regra vale: entre a pergunta e o Salvar, outra pessoa pode ter cadastrado o
+      // mesmo paciente, e tela nenhuma segura integridade.
+      // ⚠️ Nome repetido na clínica NÃO basta para barrar: dois clientes diferentes
+      // podem ter cada um o seu "Thor" no mesmo haras. Quem barra é a TRÍADE.
+      if (vetEmpresaId) {
+        const dup = await verificarDuplicidadeAnimal({
+          nome,
+          localizacaoId: localizacaoId ? Number(localizacaoId) : null,
+          empresaId:     vetEmpresaId,
+          proprietarioId: Number(targetUserId),
+        });
+
+        if (dup.duplicado) {
+          return res.status(409).json({
+            sucesso:   false,
+            duplicado: true,
+            mensagem:  `${dup.duplicado.nome} já está cadastrado neste local para este proprietário.`,
+            animal:    { id: dup.duplicado.id, nome: dup.duplicado.nome },
+          });
+        }
+
+        // Existe, mas está fora de uso (excluído ou congelado): a saída é REAPROVEITAR
+        // o cadastro — criar um segundo deixaria o histórico clínico partido em dois.
+        if (dup.duplicadoInativo) {
+          return res.status(409).json({
+            sucesso:          false,
+            duplicadoInativo: true,
+            mensagem:         `${dup.duplicadoInativo.nome} já existe neste local para este proprietário, mas está inativo.`,
+            animal: {
+              id:      dup.duplicadoInativo.id,
+              nome:    dup.duplicadoInativo.nome,
+              ativo:   dup.duplicadoInativo.ativo,
+              inativo: dup.duplicadoInativo.inativo,
+            },
+          });
+        }
+      }
+
       // Passaporte/registro único por empresa — ver acharAnimalComMesmoPassaporte.
       if (registroPassaporte?.trim()) {
         const duplicata = await acharAnimalComMesmoPassaporte({
@@ -661,6 +841,21 @@ class AnimalController {
           equipeId:   vetEquipeId  ?? undefined,
         },
       });
+
+      // A reativação do CLIENTE é auditada à parte, com o motivo que a tela pediu:
+      // quem abrir a trilha do cadastro dele precisa achar lá por que ele voltou.
+      // ⚠️ Depois do `create`: se o animal não nascer, o cliente não pode constar como
+      // reativado por um cadastro que não aconteceu.
+      if (reativandoProprietario) {
+        await registrarAuditoria(prisma, req, {
+          categoria:  'ATIVACAO',
+          entidade:   'PROPRIETARIO',
+          entidadeId: reativandoProprietario.id,
+          animalId:   animal.id,
+          motivo:     motivoReativacaoProp,
+          detalhes:   `Cliente reativado no cadastro do paciente ${animal.nome} — ${reativandoProprietario.nome}`,
+        });
+      }
 
       // Ponto de partida do histórico de peso/local/baia (gráfico em AnimalDetail).
       await registrarHistoricoAnimal(prisma, {
@@ -1026,7 +1221,10 @@ class AnimalController {
         return res.status(403).json({ sucesso: false, mensagem: 'Apenas o gestor pode reativar um paciente excluído.' });
       }
 
-      const animal = await prisma.animal.findUnique({ where: { id: animalId }, select: { nome: true, ativo: true } });
+      const animal = await prisma.animal.findUnique({
+        where:  { id: animalId },
+        select: { id: true, nome: true, ativo: true, userId: true, empresaId: true },
+      });
       if (!animal) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (animal.ativo) return res.status(400).json({ sucesso: false, mensagem: 'Este paciente já está ativo.' });
 
@@ -1036,7 +1234,7 @@ class AnimalController {
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
-      await prisma.$transaction(async (tx) => {
+      const dono = await prisma.$transaction(async (tx) => {
         await registrarAtivacaoAnimal(tx, animalId, req.user.id);
         await registrarAuditoria(tx, req, {
           // Desfaz a EXCLUSÃO lógica — mesma família do `ativar` acima, e por isso a
@@ -1048,9 +1246,19 @@ class AnimalController {
           motivo,
           detalhes:   `Paciente trazido de volta às listagens — ${animal.nome}`,
         });
+        // PACIENTE ATIVO ⇒ DONO ATIVO NESTA CLÍNICA. Sem isto o paciente volta e
+        // continua invisível, porque a visibilidade olha o cadastro do dono.
+        return garantirDonoAtivo(tx, req, { animal, motivo });
       });
 
-      res.json({ sucesso: true, mensagem: 'Paciente reativado com sucesso' });
+      res.json({
+        sucesso:  true,
+        mensagem: dono.reativou
+          ? `Paciente reativado — o cliente ${dono.nome ?? ''} foi reativado junto.`.trim()
+          : 'Paciente reativado com sucesso',
+        donoReativado:      dono.reativou,
+        loginGlobalInativo: dono.loginGlobalInativo,
+      });
     } catch (error) {
       console.error('[AnimalController.reativarExcluido]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao reativar paciente' });
@@ -1083,8 +1291,59 @@ class AnimalController {
         return res.status(400).json({ sucesso: false, mensagem: 'Este paciente já está inativo.' });
       }
 
+      // 🔴 INATIVAR FECHA O ATENDIMENTO ABERTO (a pedido, 2026-09-06).
+      // Antes, a evolução EM_ANDAMENTO ficava aberta para sempre: o prontuário
+      // congelava e ela não podia mais ser finalizada por ninguém (o guard recusa
+      // toda escrita), então o atendimento ficava pendurado na tela e na fila.
+      // Congelar um atendimento no meio não é deixá-lo em aberto — é fechá-lo.
+      const abertas = await prisma.evolucaoClinica.findMany({
+        where:  { animalId, ativo: true, status: 'EM_ANDAMENTO' },
+        select: { id: true, agendamentoId: true, veterinarioId: true, empresaId: true },
+      });
+
       await prisma.$transaction(async (tx) => {
         await marcarInativo(tx, animalId, { motivo, porId: req.user.id });
+
+        for (const ev of abertas) {
+          await tx.evolucaoClinica.update({
+            where: { id: ev.id },
+            data:  {
+              status:  'FINALIZADA',
+              dataFim: new Date(),
+              // 🔴 `veterinarioId` NÃO MUDA. Quem finaliza no fluxo normal vira o
+              // responsável, porque escolheu fechar o atendimento e responde pelo
+              // que ele declara. Aqui ninguém conduziu nada: é consequência
+              // administrativa da inativação. Carimbar quem inativou como autor do
+              // prontuário alheio seria falsear a autoria clínica — a mesma razão
+              // pela qual a assinatura do vet não sai na linha de outro (§12, 02/09).
+              // Quem inativou fica em `modificadoPorId`, e o motivo, na auditoria.
+              modificadoPorId: req.user.id,
+              dataModificacao: new Date(),
+            },
+          });
+
+          // MESMA cascata do Finalizar — prescrição e vacina SALVAS vão ao plantão,
+          // o agendamento sai de EM_ANDAMENTO. "Respeitando todas as demais regras"
+          // quer dizer literalmente reusar o caminho, não reimplementá-lo.
+          await cascataDaFinalizacao(tx, ev.id, {
+            agendamentoId: ev.agendamentoId,
+            porUsuarioId:  req.user.id,
+          });
+
+          // Quem estiver com essa evolução aberta na tela leva 409 no próximo
+          // salvar, em vez de gravar sobre um atendimento já encerrado.
+          await invalidarVersoes(tx, 'EVOLUCAO', [ev.id]);
+
+          await registrarAuditoria(tx, req, {
+            categoria:  'ALTERACAO',
+            entidade:   'EVOLUCAO',
+            entidadeId: ev.id,
+            animalId,
+            motivo,
+            detalhes:   'Atendimento finalizado automaticamente pela inativação do paciente'
+              + ' ; status: EM_ANDAMENTO -> FINALIZADA',
+          });
+        }
         await registrarAuditoria(tx, req, {
           // Inativar NÃO é cancelar nem excluir: o paciente continua visível, com o
           // prontuário congelado. Categoria própria porque ela vira o RÓTULO da ação
@@ -1098,7 +1357,26 @@ class AnimalController {
         });
       });
 
-      res.json({ sucesso: true, mensagem: 'Paciente inativado com sucesso' });
+      res.json({
+        sucesso:  true,
+        mensagem: abertas.length > 0
+          ? `Paciente inativado. ${abertas.length} atendimento(s) em andamento foram finalizados.`
+          : 'Paciente inativado com sucesso',
+        atendimentosFinalizados: abertas.length,
+      });
+
+      // Exames do atendimento fechado vão para a fatura com valor ZERADO — é o que
+      // o Finalizar normal faz. DEPOIS do commit e sem `await`: fatura de destino
+      // PAGA faz o helper lançar, e isso não pode reverter uma inativação que já
+      // aconteceu (nem prender o paciente num estado pela metade).
+      if (abertas.length > 0) {
+        setImmediate(async () => {
+          for (const ev of abertas) {
+            try { await lancarExamesDaEvolucao(ev.id, ev.empresaId ?? req.empresaId ?? null); }
+            catch { /* silencioso — a fatura não bloqueia a inativação */ }
+          }
+        });
+      }
     } catch (error) {
       console.error('[AnimalController.inativar]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao inativar paciente' });
@@ -1124,12 +1402,15 @@ class AnimalController {
       if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
       if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
 
-      const animal = await prisma.animal.findUnique({ where: { id: animalId }, select: { nome: true } });
+      const animal = await prisma.animal.findUnique({
+        where:  { id: animalId },
+        select: { id: true, nome: true, userId: true, empresaId: true },
+      });
       if (!(await animalEstaInativo(animalId))) {
         return res.status(400).json({ sucesso: false, mensagem: 'Este paciente já está ativo.' });
       }
 
-      await prisma.$transaction(async (tx) => {
+      const dono = await prisma.$transaction(async (tx) => {
         await marcarAtivo(tx, animalId);
         await registrarAuditoria(tx, req, {
           // 🔴 Era 'CANCELAMENTO' — a auditoria dizia "CANCELAMENTO ANIMAL" para
@@ -1141,9 +1422,19 @@ class AnimalController {
           motivo,
           detalhes:   `Paciente reativado — ${animal?.nome ?? ''}`,
         });
+        // Mesmo invariante do `reativarExcluido`: o dono volta junto, com o MESMO
+        // motivo e na MESMA transaction (ver lib/donoAtivoDoPaciente.js).
+        return garantirDonoAtivo(tx, req, { animal, motivo });
       });
 
-      res.json({ sucesso: true, mensagem: 'Paciente reativado com sucesso' });
+      res.json({
+        sucesso:  true,
+        mensagem: dono.reativou
+          ? `Paciente reativado — o cliente ${dono.nome ?? ''} foi reativado junto.`.trim()
+          : 'Paciente reativado com sucesso',
+        donoReativado:      dono.reativou,
+        loginGlobalInativo: dono.loginGlobalInativo,
+      });
     } catch (error) {
       console.error('[AnimalController.ativar]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao reativar paciente' });

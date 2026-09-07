@@ -111,7 +111,8 @@ const computarFinanceiro = async (req) => {
         where: { ativo: true, status: 'FINALIZADA', dataFim: { gte: inicio, lte: fim }, ...(empresaId ? { animal: { empresaId } } : {}) },
       }),
       prisma.fatura.findMany({
-        where:  { status: { in: ['ABERTA', 'FECHADA'] }, ...propWhere },
+        // REABERTA conta como fatura em aberto — ver DashboardController.
+        where:  { status: { in: ['ABERTA', 'REABERTA', 'FECHADA'] }, ...propWhere },
         select: { total: true, mesReferencia: true },
       }),
     ]);

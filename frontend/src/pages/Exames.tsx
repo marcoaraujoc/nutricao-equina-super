@@ -6,6 +6,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import InlineError from '../components/InlineError';
 import JanelaLista from '../components/JanelaLista';
+import { useOrdenacao, ThOrdenavel, ordenarLista, valorDataPura } from '../components/OrdenacaoLista';
 import {
   Eye, Calendar, Edit, Trash2, Microscope, ClipboardList, Scan, X, ChevronLeft, ChevronRight, ExternalLink,
   Loader2, Printer, MessageCircle, Mail, Maximize2, Minimize2, ChevronDown, Check, FileX,
@@ -677,6 +678,9 @@ const Exames = () => {
     }
   };
 
+  // Ordenação por coluna do histórico de exames nutricionais.
+  const { ordenacao, alternar } = useOrdenacao<'data' | 'exame' | 'valor' | 'status'>();
+
   const getStatus = (ex: any) => {
     const valor = parseFloat(ex.valorEncontrado);
     const min   = parseFloat(ex.valorMinRef);
@@ -688,11 +692,28 @@ const Exames = () => {
     return 'normal';
   };
 
-  const examesFiltrados = useMemo(() => exames.filter(ex => {
+  const examesDoFiltro = useMemo(() => exames.filter(ex => {
     if (filtroData && ex.dataExame?.split('T')[0] !== filtroData) return false;
     if (filtroExame && !(ex.nutriente?.nome ?? '').toLowerCase().includes(filtroExame.toLowerCase())) return false;
     return true;
   }), [exames, filtroData, filtroExame]);
+
+  // Ordenação por coluna do histórico. `valorEncontrado` entra como NÚMERO: como
+  // texto, 9 viria depois de 10.
+  const examesFiltrados = useMemo(
+    () => ordenarLista(examesDoFiltro, ordenacao, (ex: any, campo) => {
+      switch (campo) {
+        case 'data':   return valorDataPura(ex.dataExame);
+        case 'exame':  return ex.nutriente?.nome ?? null;
+        case 'valor':  { const n = parseFloat(ex.valorEncontrado); return Number.isNaN(n) ? null : n; }
+        case 'status': return getStatus(ex);
+        default:       return null;
+      }
+    }),
+    // `getStatus` é estável (não depende de estado) — fora das dependências de propósito.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [examesDoFiltro, ordenacao],
+  );
 
   // Mesmos filtros (Data/Exame) aplicados aos exames CLÍNICOS já com resultado —
   // sem isto o contador de registros do card só via os nutricionais e ficava
@@ -978,12 +999,12 @@ const Exames = () => {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  <ThOrdenavel campo="data" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">
                     <span className="flex items-center gap-1"><Calendar size={11} /> Data</span>
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Exame</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Valor</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                  </ThOrdenavel>
+                  <ThOrdenavel campo="exame" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Exame</ThOrdenavel>
+                  <ThOrdenavel campo="valor" ordenacao={ordenacao} onOrdenar={alternar} alinhar="centro" className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Valor</ThOrdenavel>
+                  <ThOrdenavel campo="status" ordenacao={ordenacao} onOrdenar={alternar} alinhar="centro" className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</ThOrdenavel>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
                 </tr>
               </thead>

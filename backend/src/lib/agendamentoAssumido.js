@@ -17,6 +17,7 @@
  */
 
 const prismaPadrao = require('./prisma').default;
+const { empilharResponsavel, anexarCadeiaEmLista } = require('./cadeiaResponsaveis');
 
 const TABELA = 'schs2vet.tb_agendamentos_clinicos';
 
@@ -27,6 +28,12 @@ const TABELA = 'schs2vet.tb_agendamentos_clinicos';
  */
 async function marcarAssumido(client, agendamentoId, deVetId) {
   const db = client || prismaPadrao;
+  // A CADEIA acompanha o rastro: `assumido_de_id` guarda só o anterior imediato, e a
+  // tela risca TODOS os que já responderam. Aqui é o funil dos quatro caminhos que
+  // trocam o dono do agendamento (assumir da agenda, assumir da evolução, trocar
+  // profissional, transferir o dia) — empilhar em cada um deixaria o próximo nascer
+  // sem a cadeia. Ver lib/cadeiaResponsaveis.js.
+  await empilharResponsavel(db, 'AGENDAMENTO', [agendamentoId], deVetId);
   await db.$executeRawUnsafe(
     // `NOW() AT TIME ZONE 'UTC'`: a coluna é `timestamp` (UTC naive, convenção do
     // Prisma) e o `NOW()` puro gravaria a hora do fuso da SESSÃO — o registro nasceria
@@ -73,6 +80,7 @@ async function lerAssumidos(ids, client) {
 async function anexarAssumidoEmLista(lista, client) {
   const itens = Array.isArray(lista) ? lista : [];
   if (itens.length === 0) return itens;
+  await anexarCadeiaEmLista('AGENDAMENTO', itens, client);
   const mapa = await lerAssumidos(itens.map(i => i.id), client);
   for (const item of itens) {
     const info = mapa.get(Number(item.id));

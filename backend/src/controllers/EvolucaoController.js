@@ -12,6 +12,8 @@ const { escopoEvolucaoWhere }   = require('../lib/clinicalScope');
 const { corteDePropriedade }    = require('../lib/animalPropriedadeCorte');
 // Rastro de "assumido de quem" no agendamento arrastado junto (SQL cru)
 const { marcarAssumido }        = require('../lib/agendamentoAssumido');
+const { empilharResponsavel, anexarCadeiaEmLista } = require('../lib/cadeiaResponsaveis');
+const { orderByDaQuery, opcional, simples, daRelacao } = require('../lib/ordenacaoLista');
 const { formatAtendimentoNum, lancarExameNaFatura } = require('../lib/faturaUtils');
 const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
 const emailService              = require('../services/emailService');
@@ -63,6 +65,7 @@ const {
   registrarAuditoria: auditoriaCentral,
   registrarTransferencia,
   registrarAlteracao,
+  registrarConflitoEdicao,
   resumoTexto,
 } = require('../lib/auditoria');
 // AUTORIA (2026-08-04): a ação concedida vale sobre o que é DE QUEM A EXECUTA — o
@@ -70,6 +73,16 @@ const {
 const { podeOperarRegistro, ehGestorNoContexto } = require('../middlewares/permissao.middleware');
 // Assumir a evolução arrasta prescrição, exame, encaminhamento e vacina do atendimento
 const { transferirFilhosDasEvolucoes } = require('../lib/transferenciaAtendimento');
+// Concorrencia de edicao: trava otimista + assuncao atomica. A garantia e do BANCO
+// (cláusula WHERE), nunca da tela — ver lib/concorrenciaRegistro.js.
+const {
+  ConflitoEdicaoError, lerControle, descreverEditor, reservarVersao,
+  assumirComLock, definirAutor, anexarControle, versaoDoBody, responderConflito,
+} = require('../lib/concorrenciaRegistro');
+const { publicar, EVENTOS } = require('../lib/eventosTempoReal');
+// Cascata da finalização (agendamento + prescrição + vacina) — FONTE ÚNICA,
+// compartilhada com a inativação do paciente, que finaliza o atendimento sozinha.
+const { cascataDaFinalizacao, lancarExamesDaEvolucao } = require('../lib/finalizacaoEvolucao');
 // Cancelar/excluir a evolução cancela junto tudo que está atrelado a ela (prescrição,
 // procedimento, exame, encaminhamento, vacina) e estorna o item já lançado na fatura
 const { cancelarPendenciasDaEvolucao } = require('../lib/cancelamentoPendencias');
@@ -138,11 +151,25 @@ function notificarEvolucao({ req, paraVetId, deVetId, evolucao, animalNome, modo
 // CONTROLLER
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Colunas que o histórico da tela pode ordenar (whitelist — ver lib/ordenacaoLista.js).
+// A chave é a da COLUNA na tela, não o nome da coluna do banco: renomear o campo aqui
+// não pode mudar o contrato com o front sem que alguém decida isso.
+const ORDENACAO_EVOLUCAO = {
+  numero:        opcional('numero'),
+  dataInicio:    simples('dataInicio'),
+  dataFim:       opcional('dataFim'),
+  titulo:        opcional('titulo'),
+  responsavel:   daRelacao('veterinario', 'fullName'),
+  status:        simples('status'),
+  justificativa: opcional('justificativaExclusao'),
+};
+
 const EvolucaoController = {
 
   // ── Listar evoluções de um animal ────────────────────────────────────────
   // GET /clinica/evolucoes/animal/:animalId
-  // Query: page, limit, status, dataInicio, dataFim, responsavelId, busca
+  // Query: page, limit, status, dataInicio, dataFim, responsavelId, busca,
+  //        ordenarPor, ordem (whitelist em ORDENACAO_EVOLUCAO)
 
   listarPorAnimal: async (req, res) => {
     const { animalId } = req.params;
@@ -199,7 +226,9 @@ const EvolucaoController = {
           where,
           skip,
           take:    Number(limit),
-          orderBy: { dataInicio: 'desc' },
+          // Ordem natural do histórico: o mais recente primeiro. `?ordenarPor=` só
+          // troca isso quando a coluna está na whitelist.
+          orderBy: orderByDaQuery(req.query, ORDENACAO_EVOLUCAO, { dataInicio: 'desc' }),
           include: INCLUDE_PADRAO,
         }),
         prisma.evolucaoClinica.count({ where }),
@@ -209,6 +238,13 @@ const EvolucaoController = {
         ...e,
         atendimentoNumero: formatAtendimentoNum(e.tipoAtendimento, e.numero),
       }));
+      // `versao` viaja com TODA leitura: é ela que a tela devolve no próximo
+      // salvar. Lista sem versão faria o formulário aberto a partir dela gravar
+      // sem proteção nenhuma — a trava só existe se o cliente souber de onde
+      // partiu. Falha de leitura não derruba a lista (ver `anexarControle`).
+      await anexarControle(prisma, 'EVOLUCAO', dados);
+      // Cadeia de responsáveis — é ela que a coluna "Responsável" risca.
+      await anexarCadeiaEmLista('EVOLUCAO', dados, prisma);
 
       res.json({ sucesso: true, dados, total });
     } catch (error) {
@@ -276,6 +312,8 @@ const EvolucaoController = {
           return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este registro' });
         }
       }
+
+      await anexarControle(prisma, 'EVOLUCAO', evolucao);
 
       res.json({ sucesso: true, dados: evolucao });
     } catch (error) {
@@ -447,7 +485,7 @@ const EvolucaoController = {
           tipoAtendimento = 'EV';
         }
 
-        return tx.evolucaoClinica.create({
+        const criada = await tx.evolucaoClinica.create({
           data: {
             animalId:        Number(animalId),
             veterinarioId:   userId,
@@ -469,6 +507,14 @@ const EvolucaoController = {
           },
           include: INCLUDE_PADRAO,
         });
+
+        // AUTOR ORIGINAL, imutável a partir daqui. `veterinarioId` é o EDITOR
+        // atual e `assumir` o transfere — sem esta coluna, assumir a evolução
+        // apagava quem a criou, e o prontuário perdia a resposta de 'quem abriu
+        // este atendimento?'. Gravado por SQL cru na MESMA transaction: a coluna
+        // é nova e o client Prisma pode não conhecê-la ainda (CLAUDE.md §11).
+        await definirAutor(tx, 'EVOLUCAO', criada.id, userId);
+        return { ...criada, autorId: userId, versao: 1 };
       });
 
       await registrarAuditoria(
@@ -545,6 +591,10 @@ const EvolucaoController = {
     const { id }                            = req.params;
     const { especialidade, texto, status }  = req.body;
     const userId                            = req.user.id;
+    // Versao que a TELA leu. `null` = cliente que nao a declara (legado ou
+    // caminho interno): segue funcionando, so sem a protecao — endurecer aqui
+    // quebraria toda chamada existente de uma vez. Ver `versaoDoBody`.
+    const versaoCliente                     = versaoDoBody(req.body);
 
     try {
       const existente = await prisma.evolucaoClinica.findUnique({
@@ -565,6 +615,29 @@ const EvolucaoController = {
       // Autoria dirigida pela matriz RBAC (nível efetivo em atendimento.evolucoes.editar):
       // PROPRIO → só registros próprios; EQUIPE/FULL → qualquer registro da equipe.
       if (!podeOperarRegistro(req, existente.veterinarioId)) {
+        // 🔴 PERDEU O REGISTRO × NUNCA TEVE PERMISSÃO — são coisas diferentes e a
+        // pessoa precisa saber qual delas é. Quem DECLAROU uma versão tinha a
+        // evolução aberta na tela e a perdeu para outro profissional no meio do
+        // trabalho: isso é CONCORRÊNCIA (409), e a resposta diz quem assumiu e
+        // quando, para o texto digitado não sumir sem explicação. Quem não
+        // declarou versão nunca teve o registro carregado — é PERMISSÃO (403), e
+        // o 403 preservado mantém intacto o comportamento do cliente antigo.
+        if (versaoCliente != null && Number(existente.veterinarioId) !== Number(userId)) {
+          const editor = await descreverEditor(prisma, existente.veterinarioId);
+          const quando = existente.dataModificacao ?? existente.dataInicio ?? null;
+          registrarConflitoEdicao(req, {
+            entidade: 'EVOLUCAO', entidadeId: Number(id), animalId: existente.animalId,
+            motivo: 'Gravação recusada: a evolução foi assumida por outro profissional',
+            versaoCliente, editorAtualId: existente.veterinarioId,
+          });
+          return responderConflito(res, new ConflitoEdicaoError(
+            'REGISTRO_ASSUMIDO',
+            editor?.nome
+              ? `Esta evolução foi assumida por ${editor.nome}. Você não possui mais permissão para editar este registro.`
+              : 'Esta evolução foi assumida por outro profissional. Você não possui mais permissão para editar este registro.',
+            { editor, versaoCliente },
+          ), { assumidaEm: quando });
+        }
         return res.status(403).json({ sucesso: false, mensagem: 'Seu nível de permissão só permite editar evoluções criadas por você.' });
       }
 
@@ -611,6 +684,13 @@ const EvolucaoController = {
       const acoesIA = [];
 
       const atualizada = await prisma.$transaction(async (tx) => {
+        // 🔴 PRIMEIRO PASSO, sempre. `UPDATE ... WHERE versao = $x` é o que
+        // impede o overwrite silencioso: se outro profissional gravou entre a
+        // leitura desta tela e este clique, nenhuma linha casa e o erro sobe
+        // como 409 — a transação inteira reverte e NADA do que ele escreveu se
+        // perde. Rodando isto DEPOIS do update, a escrita já teria acontecido.
+        const versaoNova = await reservarVersao(tx, 'EVOLUCAO', Number(id), versaoCliente);
+
         const upd = await tx.evolucaoClinica.update({
           where: { id: Number(id) },
           data: {
@@ -629,44 +709,17 @@ const EvolucaoController = {
           include: INCLUDE_PADRAO,
         });
 
-        // Evolução vinculada a um agendamento (AG-XXXX): ao finalizar, o agendamento
-        // sai de EM_ANDAMENTO para FINALIZADO (distinto do CONCLUIDO manual, sem evolução).
-        if (vaiFinalizar && existente.agendamentoId) {
-          await tx.agendamentoClinico.updateMany({
-            where: { id: existente.agendamentoId, status: 'EM_ANDAMENTO' },
-            data:  { status: 'FINALIZADO' },
-          });
-        }
-
-        // Cascata da finalização (2026-07-25): finalizar a evolução também FINALIZA as
-        // prescrições e vacinas SALVAS do atendimento → elas passam a "Em Execução" e vão
-        // para o plantão (Execução de Prescrição). Só transição de status: fatura e débito
-        // de estoque continuam acontecendo na EXECUÇÃO, não aqui. Idempotente (só toca SALVO/SALVA).
+        // Cascata da finalização — agendamento, prescrição e vacina do atendimento.
+        // Mora em `lib/finalizacaoEvolucao.js` porque a inativação do paciente também
+        // a executa; duas cópias divergiriam em silêncio (a prescrição iria ao plantão
+        // por um caminho e não pelo outro).
         if (vaiFinalizar) {
-          const gruposSalvos = await tx.prescricaoGrupo.findMany({
-            where:  { evolucaoId: Number(id), status: 'SALVO' },
-            select: { id: true },
+          await cascataDaFinalizacao(tx, Number(id), {
+            agendamentoId: existente.agendamentoId,
+            porUsuarioId:  userId,
           });
-          const grupoIds = gruposSalvos.map(g => g.id);
-          if (grupoIds.length > 0) {
-            await tx.prescricao.updateMany({
-              where: { grupoId: { in: grupoIds }, ativo: true },
-              data:  { status: 'ATIVA' },
-            });
-            await tx.prescricaoGrupo.updateMany({
-              where: { id: { in: grupoIds } },
-              data:  { status: 'FINALIZADO', finalizadoPorId: userId, finalizadoEm: new Date() },
-            });
-          }
-
-          // Vacinas SALVAS do atendimento → FINALIZADA (status vive fora do client gerado).
-          await tx.$executeRawUnsafe(
-            `UPDATE schs2vet.tb_vacinas_clinicas
-             SET status = 'FINALIZADA'
-             WHERE evolucao_id = $1 AND status = 'SALVA' AND ativo = true`,
-            Number(id)
-          );
         }
+
 
         // Mudar o status faz de quem finaliza/cancela o novo responsável. Quando isso
         // tira a evolução de outro profissional (gestor finalizando a dele), é uma
@@ -694,7 +747,10 @@ const EvolucaoController = {
           },
         });
 
-        return upd;
+        // A versão vigente volta JUNTO do registro: a tela precisa dela para o
+        // próximo salvar. Sem devolvê-la, o segundo clique mandaria a versão
+        // velha e receberia um 409 contra a própria gravação anterior.
+        return { ...upd, versao: versaoNova ?? undefined };
       });
 
       await registrarAuditoria(
@@ -706,6 +762,22 @@ const EvolucaoController = {
       );
 
       res.json({ sucesso: true, dados: atualizada, acoesIA });
+
+      // Avisa QUEM PERDEU o registro — o gestor que finaliza a evolução de outro
+      // profissional a transfere para si (regra antiga: quem finaliza vira o
+      // responsável), e sem este aviso a tela do anterior segue oferecendo um
+      // Salvar que o backend já recusa. DEPOIS do commit e da resposta: o evento
+      // é conveniência, e falha de entrega não pode tocar na escrita já feita.
+      if (existente.veterinarioId != null && Number(existente.veterinarioId) !== Number(novoVetId)) {
+        publicar([existente.veterinarioId], {
+          tipo:       EVENTOS.EVOLUCAO_ASSUMIDA,
+          recurso:    'EVOLUCAO',
+          evolucaoId: Number(id),
+          animalId:   existente.animalId,
+          porUsuario: { id: userId, nome: req.user.fullName ?? null },
+          versao:     atualizada?.versao ?? null,
+        });
+      }
 
       // Título em segundo plano quando o texto mudou fora do fluxo de finalização —
       // não atrasa o "Salvar" do rascunho nem falha a edição se o Gemini estiver
@@ -749,6 +821,23 @@ const EvolucaoController = {
         });
       }
     } catch (error) {
+      // 🔴 CONFLITO NÃO É ERRO INTERNO. Sem este ramo o 409 viraria 500 e a tela
+      // diria 'Erro interno' para o caso mais importante da regra — quem editou
+      // sobre dado velho precisa saber que foi isso, para não repetir o clique.
+      if (error instanceof ConflitoEdicaoError) {
+        const editor = await descreverEditor(prisma, error.editorId).catch(() => null);
+        // A tentativa recusada VAI para a trilha: é o registro de que alguém ia
+        // escrever por cima e o banco impediu. Sem `await` — a resposta não espera
+        // a auditoria, e falhar em registrar não muda o veredito.
+        registrarConflitoEdicao(req, {
+          entidade: 'EVOLUCAO', entidadeId: Number(id), animalId: existente?.animalId ?? null,
+          motivo: 'Gravação recusada: a evolução foi alterada por outro profissional',
+          versaoCliente: error.versaoCliente ?? versaoCliente,
+          versaoAtual:   error.versaoAtual ?? null,
+          editorAtualId: error.editorId ?? null,
+        });
+        return responderConflito(res, Object.assign(error, { editor }));
+      }
       console.error('Erro ao atualizar evolução:', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
@@ -972,6 +1061,14 @@ const EvolucaoController = {
 
       const anteriorId = existente.veterinarioId;
 
+      // Estado de concorrência LIDO AGORA — é ele que vira a condição do UPDATE.
+      // Sem isso, `assumir` era o SELECT + UPDATE ingênuo: B e C liam o mesmo
+      // `veterinarioId` (A) e os DOIS atualizavam com sucesso, cada um achando
+      // que assumiu. O último a gravar ficava com a evolução e o outro recebia
+      // 200 sobre uma assunção que não existiu.
+      const controle = await lerControle(prisma, 'EVOLUCAO', existente.id);
+      if (!controle) return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
+
       // Só anexa quando a evolução assumida AINDA não tem agendamento próprio —
       // isto é um vínculo que faltava, não uma substituição do que já existia. O
       // número/tipoAtendimento da evolução assumida NÃO mudam: ela continua com o
@@ -996,12 +1093,35 @@ const EvolucaoController = {
       // vacina): com a premissa de autoria, quem assume precisa poder operar o que
       // passou a conduzir, e o antigo responsável não pode continuar mexendo nisso.
       const { evolucao: assumida, movidos } = await prisma.$transaction(async (tx) => {
+        // 🔴 A ASSUNÇÃO É UM UPDATE CONDICIONAL, não um update cego. A cláusula
+        // exige a versão E o editor anterior lidos acima: com B e C clicando no
+        // mesmo instante, o primeiro a commitar move a linha e o segundo não
+        // encontra nada para atualizar. Um vence, o outro leva 409 — nunca os
+        // dois 'com sucesso'. Ver o teste de corrida em concorrenciaEdicao.test.js.
+        const ganhou = await assumirComLock(tx, 'EVOLUCAO', existente.id, {
+          deEditorId:     anteriorId,
+          versaoEsperada: controle.versao,
+          paraEditorId:   userId,
+          camposExtra:    { '"modificadoPorId"': userId, '"dataModificacao"': new Date() },
+        });
+        if (!ganhou) {
+          throw new ConflitoEdicaoError(
+            'REGISTRO_ASSUMIDO',
+            'Esta evolução acabou de ser assumida por outro profissional.',
+            { versaoCliente: controle.versao },
+          );
+        }
+
+        // A CADEIA ganha quem acabou de perder o registro. A tela risca todos os que
+        // já responderam por ele e deixa em pé só o atual — `autorId` sozinho não
+        // conta a história depois da segunda assunção. Ver lib/cadeiaResponsaveis.js.
+        await empilharResponsavel(tx, 'EVOLUCAO', [existente.id], anteriorId);
+
+        // Só agora o resto: a linha já é nossa, e o `update` tipado abaixo existe
+        // para montar a resposta com o `include` (o SQL cru não o produz).
         const evo = await tx.evolucaoClinica.update({
           where: { id: existente.id },
           data:  {
-            veterinarioId:   userId,
-            modificadoPorId: userId,
-            dataModificacao: new Date(),
             ...(agendamentoNovo ? { agendamentoId: agendamentoNovo.id } : {}),
           },
           include: INCLUDE_PADRAO,
@@ -1070,14 +1190,34 @@ const EvolucaoController = {
         evolucao:   existente,
       });
 
+      // 🔴 AVISO EM TEMPO REAL a QUEM PERDEU a evolução — é o que faz a tela dele
+      // entrar em somente leitura na hora, em vez de continuar aceitando digitação
+      // de um texto que o backend já vai recusar. Fire-and-forget, DEPOIS do
+      // commit: publicar antes faria um rollback avisar de algo que não houve.
+      publicar([anteriorId], {
+        tipo:       EVENTOS.EVOLUCAO_ASSUMIDA,
+        recurso:    'EVOLUCAO',
+        evolucaoId: existente.id,
+        animalId:   existente.animalId,
+        porUsuario: { id: userId, nome: req.user.fullName ?? null },
+        versao:     controle.versao + 1,
+      });
+
       res.json({
         sucesso: true,
         dados: {
           ...assumida,
+          // A versão vigente vai junto: quem assumiu salva em seguida, e sem ela
+          // o primeiro Salvar mandaria a versão de ANTES da assunção e levaria
+          // um 409 contra a própria ação que acabou de fazer.
+          versao: controle.versao + 1,
           atendimentoNumero: formatAtendimentoNum(assumida.tipoAtendimento, assumida.numero),
         },
       });
     } catch (error) {
+      // Perdeu a corrida com outro profissional: 409, nunca 500. A tela recarrega
+      // e mostra quem ficou com a evolução.
+      if (error instanceof ConflitoEdicaoError) return responderConflito(res, error);
       console.error('Erro ao assumir evolução:', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }

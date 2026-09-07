@@ -14,7 +14,6 @@ import { buscarRelatorioAtendimento, type RelatorioAtendimentoDados } from '../u
 import RelatorioAtendimentoModal from '../components/RelatorioAtendimentoModal';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { formatDate as formatarData, formatDateTime as formatarDataHora, TOLERANCIA_INICIO_MS } from '../utils/dateUtils';
-import DateInput from '../components/DateInput';
 
 import {
   isMobile     as detectarMobile,
@@ -26,6 +25,10 @@ import InlineError from '../components/InlineError';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import JanelaLista from '../components/JanelaLista';
+import { useOrdenacao, ThOrdenavel } from '../components/OrdenacaoLista';
+import ResponsavelTrocado, { type EloResponsavel } from '../components/ResponsavelTrocado';
+import AvisoRegistroAssumido from '../components/AvisoRegistroAssumido';
+import { useEventosTempoReal } from '../hooks/useEventosTempoReal';
 
 
 // ─── Speech Recognition types ────────────────────────────────────────────────
@@ -98,6 +101,11 @@ interface EvolucaoAtiva {
   dataInicio?:      string | null;
   titulo?:          string | null;
   especialidade?:   string | null;
+  // Evolução ASSUMIDA: `autorId` (quem criou) diferente de `veterinarioId` (quem
+  // responde agora). Com os dois, o banner do shell troca o título pelo nome de
+  // quem assumiu — regra em utils/evolucaoAtiva.ts#descricaoAtendimento.
+  autorId?:         number | null;
+  veterinarioNome?: string | null;
 }
 
 /**
@@ -139,6 +147,19 @@ interface EvolucaoItem {
   dataInicio:       string;
   dataFim?:         string | null;
   dataModificacao?: string | null;
+  // Trava otimista: a versão LIDA volta ao backend no próximo salvar. Ausente
+  // em resposta de servidor antigo — nesse caso o salvar segue sem proteção.
+  versao?:          number | null;
+  // Autor ORIGINAL, distinto de `veterinarioId` (o responsável atual, que
+  // `assumir` transfere). Preservar os dois é o que mantém o histórico honesto.
+  autorId?:         number | null;
+  // Nome do autor original. Continua vindo do mesmo SELECT de `autorId` e serve de
+  // RESERVA da cadeia abaixo, para a base ainda sem a migration 20260924000000.
+  autorNome?:       string | null;
+  // TODOS os que já responderam pela evolução, do mais antigo ao mais recente — é o
+  // que a coluna "Responsável" risca. Vazio = nunca trocou de mãos (ou a coluna
+  // ainda não existe no banco). Ver lib/cadeiaResponsaveis.js.
+  responsaveisAnteriores?: { id: number; fullName: string | null }[];
   ativo:            boolean;
   aprovado:         boolean;
   midias:           EvolucaoMidia[];
@@ -242,8 +263,17 @@ const STATUS_CONFIG: Record<EvolucaoStatus, { label: string; cls: string }> = {
   CANCELADA:    { label: 'Cancelada',    cls: 'bg-red-100 text-red-700'         },
 };
 
+// Colunas ordenáveis do histórico. As chaves são as MESMAS da whitelist do backend
+// (`ORDENACAO_EVOLUCAO`, em EvolucaoController) — divergir aqui faz a coluna clicar e
+// não ordenar nada, porque o servidor descarta a chave que não conhece.
+type ColunaEvolucao = 'numero' | 'dataInicio' | 'dataFim' | 'titulo' | 'responsavel' | 'status' | 'justificativa';
+
 const FORM_INICIAL: FormEvolucao = { especialidade: 'Clínico', texto: '', status: 'EM_ANDAMENTO' };
-const LIMIT_OPTIONS = [10, 20, 50];
+// Tamanho da página do histórico. Era um seletor "N por página" na barra de filtros
+// e saiu com ela (a pedido): a janela do histórico já mostra 3 linhas e o resto se
+// alcança rolando ou pelas setas — escolher o tamanho da página ali não mudava nada
+// que a pessoa estivesse procurando.
+const LIMIT_HISTORICO = 10;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -596,7 +626,7 @@ function NovaEvolucaoModal({
   form, editingId, midias, saving, interpretando,
   agendamentos, agendamentoId, onAgendamentoChange,
   onFormChange, onSalvar, onFinalizar, onClose,
-  onArquivosChange, onRemoverMidia, somenteLeitura = false,
+  onArquivosChange, onRemoverMidia, somenteLeitura = false, avisoTopo,
   podeSalvar, podeFinalizar,
 }: {
   form:              FormEvolucao;
@@ -614,6 +644,10 @@ function NovaEvolucaoModal({
   onArquivosChange:  (files: File[]) => void;
   onRemoverMidia:    (id: number) => void;
   somenteLeitura?:   boolean;
+  /** Aviso acima do formulário (ex.: registro assumido por outro profissional).
+   *  ⚠️ Renderizado FORA do `<fieldset disabled>`: os botões dele precisam
+   *  continuar clicáveis justamente quando o formulário está travado. */
+  avisoTopo?:        React.ReactNode;
   // Cada botão segue o SEU slug: Salvar = criar/alterar, Finalizar = finalizar.
   // Ter "alterar" não dá direito a finalizar, e vice-versa.
   podeSalvar:        boolean;
@@ -800,7 +834,11 @@ function NovaEvolucaoModal({
     <div className="border-b border-gray-100"
       onChange={() => setErroInline(null)}
       onInput={() => setErroInline(null)}>
-      {somenteLeitura && (
+      {avisoTopo && <div className="px-5 pt-4">{avisoTopo}</div>}
+      {/* A tarja genérica some quando há um aviso específico: dois textos
+          dizendo 'somente leitura' competem, e o que EXPLICA o motivo é o que
+          a pessoa precisa ler. */}
+      {somenteLeitura && !avisoTopo && (
         <div className="flex items-center gap-1.5 px-5 pt-4 -mb-2">
           <Eye size={12} className="text-gray-400" />
           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
@@ -1137,21 +1175,37 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const ehMinhaEvolucao = (ev: { veterinarioId: number | null }) =>
     isGestor || ev.veterinarioId === (user?.id ?? 0);
 
+  /**
+   * TODOS os que já responderam pela evolução, do mais antigo ao mais recente — a
+   * lista risca cada um deles e deixa em pé só o atual.
+   *
+   * ⚠️ RESERVA para a base sem a migration `20260924000000`: sem a cadeia gravada,
+   * cai no AUTOR (quem criou), que é o que `autorId` sempre soube. Aí a tela mostra
+   * uma troca em vez de três — nunca uma troca que não houve.
+   */
+  const responsaveisAnteriores = (ev: EvolucaoItem): EloResponsavel[] => {
+    const cadeia = ev.responsaveisAnteriores ?? [];
+    if (cadeia.length > 0) return cadeia;
+    return ev.autorId != null && ev.autorId !== ev.veterinarioId
+      ? [{ id: ev.autorId, fullName: ev.autorNome ?? null }]
+      : [];
+  };
+
   const semPermissao = (acao: string) =>
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   // ── State ──────────────────────────────────────────────────────────────────
   const [evolucoes,      setEvolucoes]      = useState<EvolucaoItem[]>([]);
-  const [responsaveis,   setResponsaveis]   = useState<{ id: number; fullName: string }[]>([]);
   const [loading,        setLoading]        = useState(true);
   const [total,          setTotal]          = useState(0);
   const [page,           setPage]           = useState(1);
-  const [limit,          setLimit]          = useState(10);
 
   const [filterStatus,      setFilterStatus]      = useState<string>(FILTRO_STATUS_PADRAO);
-  const [filtroDataInicio,  setFiltroDataInicio]  = useState('');
-  const [filtroDataFim,     setFiltroDataFim]     = useState('');
-  const [filtroResponsavel, setFiltroResponsavel] = useState('');
+
+  // Ordenação por COLUNA do histórico. Aqui a paginação é do SERVIDOR, então a ordem
+  // é pedida a ele (`?ordenarPor=&ordem=`) — ordenar no navegador reorganizaria só as
+  // 10 linhas da página e mentiria sobre as demais. Ver components/OrdenacaoLista.
+  const { ordenacao, alternar } = useOrdenacao<ColunaEvolucao>();
 
   const [agendamentosDisponiveis,   setAgendamentosDisponiveis]   = useState<AgendamentoItem[]>([]);
   const [agendamentoSelecionadoId, setAgendamentoSelecionadoId] = useState<number | null>(null);
@@ -1162,6 +1216,16 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   // Visualizar no Histórico de Evolução Clínica: popula os campos do formulário
   // da página em SOMENTE LEITURA (sem abrir popup).
   const [formLeitura,    setFormLeitura]    = useState(false);
+  // 🔴 REGISTRO PERDIDO PARA OUTRO PROFISSIONAL. Preenchido por DOIS caminhos
+  // independentes, e é isso que faz a regra valer mesmo sem tempo real:
+  //  (a) evento SSE — chega na hora, com a tela aberta;
+  //  (b) 409 do backend no Salvar — chega mesmo com o canal caído, a aba
+  //      congelada ou o navegador offline. É a rede de segurança de verdade.
+  // Enquanto preenchido, o formulário fica em SOMENTE LEITURA e o texto
+  // digitado PERMANECE na tela (nunca é apagado sozinho).
+  const [conflito,       setConflito]       = useState<
+    { porNome: string | null; em: string | null } | null
+  >(null);
   const [cancelandoEv,   setCancelandoEv]   = useState<EvolucaoItem | null>(null);
   const [form,           setForm]           = useState<FormEvolucao>(FORM_INICIAL);
   const [savingEv,       setSavingEv]       = useState(false);
@@ -1199,12 +1263,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const rolarParaFormulario = () =>
     setTimeout(() => formTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
 
-  const totalPaginas       = Math.ceil(total / limit);
+  const totalPaginas       = Math.ceil(total / LIMIT_HISTORICO);
   const temEvolucaoAberta  = !loading && evolucoes.some(e => e.status === 'EM_ANDAMENTO');
   // O status tem padrão próprio, então "filtro ativo" é DIVERGIR dele — senão o botão
   // "Limpar" nasceria aceso em toda abertura da tela, sem nada a limpar.
-  const filtrosAtivos      = !!(filtroDataInicio || filtroDataFim || filtroResponsavel)
-    || filterStatus !== FILTRO_STATUS_PADRAO;
   // Evolução aberta PELO PRÓPRIO usuário × por OUTRO profissional — os dois casos
   // seguem caminhos opostos: a própria BLOQUEIA abrir outra (finalize/cancele antes)
   // e não é assumível; a do outro abre a decisão (assumir × nova em paralelo).
@@ -1233,11 +1295,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const carregarEvolucoes = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ page: String(page), limit: String(limit) });
-      if (filterStatus)      params.set('status',        filterStatus);
-      if (filtroDataInicio)  params.set('dataInicio',    filtroDataInicio);
-      if (filtroDataFim)     params.set('dataFim',       filtroDataFim);
-      if (filtroResponsavel) params.set('responsavelId', filtroResponsavel);
+      const params = new URLSearchParams({ page: String(page), limit: String(LIMIT_HISTORICO) });
+      if (filterStatus) params.set('status', filterStatus);
+      if (ordenacao) { params.set('ordenarPor', ordenacao.campo); params.set('ordem', ordenacao.direcao); }
       const res = await api.get(`/clinica/evolucoes/animal/${animalId}?${params}`);
       // GET 403 → o interceptor resolve com data null (armadilha #23 do CLAUDE.md).
       // Sem este guard, `res.data.dados` estourava TypeError e caía no catch,
@@ -1247,10 +1307,12 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       // delas. Reportar um recorte ao shell APAGARIA do banner o atendimento em
       // paralelo que o usuário está conduzindo (e desvincularia a prescrição
       // seguinte). Filtrou algo? O shell segue com a lista da consulta própria dele.
+      // ⚠️ A ORDENAÇÃO não entra nesta conta: ela reordena a MESMA lista, não a
+      // recorta — a página 1 continua tendo todas as abertas quando o filtro de
+      // status não esconde nenhuma. Só o RECORTE (página, status) ameaça o retrato.
       const retratoConfiavel =
         page === 1 &&
-        (!filterStatus || filterStatus === 'EM_ANDAMENTO') &&
-        !filtroDataInicio && !filtroDataFim && !filtroResponsavel;
+        (!filterStatus || filterStatus === 'EM_ANDAMENTO');
 
       if (!res.data) {
         setEvolucoes([]); setTotal(0);
@@ -1278,11 +1340,13 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           dataInicio:       e.dataInicio ?? null,
           titulo:           e.titulo ?? null,
           especialidade:    e.especialidade ?? null,
+          autorId:          e.autorId ?? null,
+          veterinarioNome:  e.veterinario?.fullName ?? null,
         })));
       }
     } catch { setErroInline('Erro ao carregar evoluções'); }
     finally { setLoading(false); }
-  }, [animalId, page, limit, filterStatus, filtroDataInicio, filtroDataFim, filtroResponsavel, onEvolucoesAbertasChange]);
+  }, [animalId, page, filterStatus, ordenacao, onEvolucoesAbertasChange]);
 
   useEffect(() => { if (!loadingPerms) carregarEvolucoes(); }, [carregarEvolucoes, loadingPerms]);
 
@@ -1291,13 +1355,6 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     decisaoAgendaProposta.current = false;
     agendamentoConflitoOrigemRef.current = null;
   }, [animalId]);
-
-  useEffect(() => {
-    if (loadingPerms) return;
-    api.get(`/clinica/evolucoes/responsaveis/${animalId}`)
-      .then(res => setResponsaveis(res.data?.dados ?? []))
-      .catch(() => {});
-  }, [animalId, loadingPerms]);
 
   useEffect(() => {
     if (!openItemId) return;
@@ -1506,6 +1563,14 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       await carregarEvolucoes();
       onSalvo?.();
     } catch (err: unknown) {
+      // TESTE 6: dois profissionais clicaram em Assumir quase ao mesmo tempo e
+      // este perdeu. Não é erro de rede nem falta de permissão — a lista
+      // recarrega e mostra quem ficou com a evolução.
+      if (tratarConflitoConcorrencia(err)) {
+        setEvolucaoAbertaInfo(null);
+        await carregarEvolucoes();
+        return;
+      }
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
       setErroInline(msg ?? 'Erro ao assumir a evolução');
     } finally { setAssumindoEv(false); }
@@ -1539,6 +1604,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   };
 
   const fecharModal = () => {
+    setConflito(null);
     const wasEditing = !!editingEv;
     setShowModal(!wasEditing); // Keep form open for new; close when done editing
     setEditingEv(null);
@@ -1552,6 +1618,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   };
 
   const abrirEdicao = (ev: EvolucaoItem) => {
+    // Abrir OUTRO registro zera o aviso: ele fala do que estava aberto antes.
+    setConflito(null);
     setForm({ especialidade: ev.especialidade, texto: ev.texto, status: ev.status });
     setEditingEv(ev);
     setArquivosModal([]);
@@ -1568,6 +1636,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
   // Visualizar: mesmos campos populados, mas bloqueados para edição.
   const abrirVisualizacao = (ev: EvolucaoItem) => {
+    setConflito(null);
     setForm({ especialidade: ev.especialidade, texto: ev.texto, status: ev.status });
     setEditingEv(ev);
     setArquivosModal([]);
@@ -1591,6 +1660,44 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       .catch(() => {});
   }, [editItemId]);
 
+  // ── TEMPO REAL ────────────────────────────────────────────────────────────
+  // Outro profissional assumiu a evolução que ESTA tela tem aberta: a interface
+  // vira somente leitura na hora, em vez de continuar aceitando digitação de um
+  // texto que o backend já vai recusar.
+  //
+  // ⚠️ Isto NÃO é a proteção — é o aviso. Com o canal caído, quem recusa é o 409
+  // do backend (`tratarConflitoConcorrencia`), e o resultado para o dado é o
+  // mesmo. Nunca transformar este ouvinte em pré-requisito de nada.
+  //
+  // ⚠️ O TEXTO DIGITADO NÃO É APAGADO. A pessoa perdeu o direito de gravar, não
+  // o que escreveu — some com isso e ela perde de vez o parágrafo que estava no
+  // meio. O `AvisoRegistroAssumido` diz explicitamente que não foi gravado.
+  //
+  // ⚠️ Só reage ao registro ABERTO AQUI (`editingEv.id`): a mesma pessoa pode ter
+  // perdido outra evolução, de outro paciente, e travar esta tela por causa
+  // daquela seria bloquear um trabalho que continua válido.
+  useEventosTempoReal((ev) => {
+    if (ev.recurso !== 'EVOLUCAO' || !ev.evolucaoId) return;
+    if (!editingEv || editingEv.id !== ev.evolucaoId) {
+      // Não é o que está aberto: a lista pode estar desatualizada, mas nada
+      // trava. Recarregar aqui atropelaria a digitação em curso.
+      return;
+    }
+    if (ev.porUsuario?.id === user?.id) return;   // fui eu, em outra aba
+    setConflito({ porNome: ev.porUsuario?.nome ?? null, em: ev.em ?? null });
+    setFormLeitura(true);
+  });
+
+  /** Recarrega do servidor e devolve a tela ao estado gravado. */
+  const atualizarAposConflito = async () => {
+    setConflito(null);
+    setEditingEv(null);
+    setFormLeitura(false);
+    setForm(FORM_INICIAL);
+    await carregarEvolucoes();
+    onSalvo?.();
+  };
+
   const uploadMidias = async (evolucaoId: number, arquivos: File[]) => {
     for (const arquivo of arquivos) {
       try {
@@ -1607,6 +1714,29 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   // 409 EVOLUCAO_EM_ANDAMENTO: outra evolução foi aberta enquanto este texto era
   // digitado (ou a lista da tela estava filtrada). Abre a decisão com os dados que
   // o backend devolveu — o texto do formulário é preservado.
+  /**
+   * 🔴 A REDE DE SEGURANÇA. Trata o 409 de concorrência do backend — o caminho
+   * que funciona MESMO sem tempo real: navegador offline, aba congelada, evento
+   * SSE perdido. Quem recusa é sempre o banco; aqui só se traduz a recusa.
+   *
+   * ⚠️ NÃO limpa o formulário: o texto digitado fica na tela para a pessoa
+   * copiar o que importa. Apagá-lo transformaria 'não gravei' em 'perdi'.
+   */
+  const tratarConflitoConcorrencia = (err: unknown): boolean => {
+    const resp = (err as {
+      response?: { status?: number; data?: { code?: string; editor?: { nome?: string | null }; assumidaEm?: string | null; mensagem?: string; error?: string } };
+    })?.response;
+    const code = resp?.data?.code;
+    if (resp?.status !== 409 || (code !== 'VERSAO_CONFLITO' && code !== 'REGISTRO_ASSUMIDO')) return false;
+    setConflito({
+      porNome: resp.data?.editor?.nome ?? null,
+      em:      resp.data?.assumidaEm ?? null,
+    });
+    setFormLeitura(true);          // some com o Salvar (nunca botão que só falha)
+    setErroInline(null);           // o aviso já explica; dois avisos confundem
+    return true;
+  };
+
   const tratarConflitoEvolucaoAberta = (err: unknown): boolean => {
     const resp = (err as { response?: { status?: number; data?: { code?: string; evolucaoAberta?: EvolucaoAbertaInfo } } })?.response;
     if (resp?.status !== 409 || resp.data?.code !== 'EVOLUCAO_EM_ANDAMENTO' || !resp.data.evolucaoAberta) return false;
@@ -1634,6 +1764,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           // faria o "Salvar" virar um atalho para finalizar/cancelar sem passar pelos
           // botões (e, no cancelamento, sem a justificativa obrigatória).
           status:        editingEv.status,
+          // A versão LIDA quando o formulário abriu. É ela que o backend compara
+          // para recusar a gravação sobre dado que outra pessoa já mudou.
+          versao:        editingEv.versao ?? undefined,
         });
         evolucaoId = editingEv.id;
         toast.success('Evolução salva');
@@ -1672,6 +1805,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       carregarEvolucoes();
       onSalvo?.();
     } catch (err: unknown) {
+      if (tratarConflitoConcorrencia(err)) return;
       if (tratarConflitoEvolucaoAberta(err)) return;
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
       setErroInline(msg ?? 'Erro ao salvar evolução');
@@ -1705,6 +1839,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           especialidade: form.especialidade,
           texto:         form.texto,
           status:        'FINALIZADA',
+          // Finalizar é gravação como qualquer outra: precisa da mesma trava.
+          // Sem ela, finalizar por cima do texto que outro profissional acabou
+          // de escrever CONGELARIA o prontuário no conteúdo errado.
+          versao:        editingEv.versao ?? undefined,
         });
         evolucaoId = editingEv.id;
       } else {
@@ -1750,6 +1888,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           .catch(() => { /* silencioso — título e sugestão são conveniência */ });
       }
     } catch (err: unknown) {
+      if (tratarConflitoConcorrencia(err)) return;
       if (tratarConflitoEvolucaoAberta(err)) return;
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
       setErroInline(msg ?? 'Erro ao finalizar evolução');
@@ -1856,8 +1995,19 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   // forma por CSS (ícone no desktop, botão com rótulo no mobile).
   const acoesDaEvolucao = (ev: EvolucaoItem) => {
     const emAndamento  = ev.status === 'EM_ANDAMENTO';
-    const nivelEditar  = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.editar']  ?? 'NENHUM');
-    const nivelDeletar = isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.deletar'] ?? 'NENHUM');
+    // 🔴 PACIENTE INATIVO ZERA O NÍVEL, e é aqui que isso tem de acontecer.
+    // Este bloco RECALCULA os níveis a partir de `permissoes[...]` cru, em vez de
+    // usar `podeEditar`/`podeDeletar` do módulo — que são justamente as variáveis
+    // onde o `!pacienteInativo` mora. O resultado era que Alterar, Cancelar e
+    // Assumir continuavam VISÍVEIS no prontuário congelado; o backend recusava com
+    // 400 (`bloquearSeAnimalInativo`), então o clique só falhava — o pior dos dois
+    // mundos (armadilha 28-d: botão que só falha depois do clique).
+    // Zerando o NÍVEL na origem, todo predicado derivado abaixo some de uma vez —
+    // inclusive o que ainda for escrito aqui.
+    const nivelEditar  = pacienteInativo ? 'NENHUM'
+      : (isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.editar']  ?? 'NENHUM'));
+    const nivelDeletar = pacienteInativo ? 'NENHUM'
+      : (isGestor ? 'FULL' : (permissoes['atendimento.evolucoes.deletar'] ?? 'NENHUM'));
     // AUTORIA (2026-08-04): a ação concedida vale sobre a evolução que a pessoa criou
     // ou assumiu. Só o gestor opera a de outro — espelho do `podeOperarRegistro` do
     // backend, que é quem de fato barra.
@@ -1874,8 +2024,11 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
             check de role, senão quem só tem VER enxergaria o botão. */}
         <AcaoRegistro tom="aprovar" icone={CheckCircle2} rotulo="Aprovar"
           visivel={!ev.aprovado && podeFinalizar} onClick={() => handleAprovar(ev.id)} />
+        {/* ⚠️ O ramo do GESTOR (reabrir evolução FINALIZADA) precisa do
+            `!pacienteInativo` explícito: ele não passa por `podeEditarEsta` e
+            escapava do congelamento do prontuário. */}
         <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Alterar"
-          visivel={(emAndamento && podeEditarEsta) || (isGestor && ev.status === 'FINALIZADA')}
+          visivel={(emAndamento && podeEditarEsta) || (!pacienteInativo && isGestor && ev.status === 'FINALIZADA')}
           onClick={() => { abrirEdicao(ev); onAbrirAtendimento?.(ev.id, 'editar'); }} />
         <AcaoRegistro tom="ver" icone={Eye} rotulo="Visualizar"
           onClick={() => { abrirVisualizacao(ev); onAbrirAtendimento?.(ev.id, 'visualizar'); }} />
@@ -1929,10 +2082,13 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     <>
       <InlineError message={erroInline} className="mx-4 mt-3" />
 
-      {/* Barra de ação e filtros */}
-      <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-100">
-
-        {!formularioVisivel && podeCriar && (
+      {/* Barra de ação. Os filtros de data, responsável e "N por página" que moravam
+          aqui foram REMOVIDOS a pedido — o recorte do histórico ficou só nas pílulas de
+          status, no mesmo lugar de Prescrição, Vacina e Exames.
+          ⚠️ Só é renderizada quando há o botão: uma faixa com borda e nada dentro é
+          uma linha vazia no meio da tela. */}
+      {!formularioVisivel && podeCriar && (
+        <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-100">
           <div className="relative flex-shrink-0">
             {/* A PRÓPRIA evolução aberta trava o botão (finalize/cancele antes).
                 Aberta por OUTRO profissional, o clique abre a decisão:
@@ -1953,56 +2109,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
               <span className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-amber-400 rounded-full border-2 border-white" title="Evolução em andamento" />
             )}
           </div>
-        )}
-
-        <select value={limit} onChange={e => { setLimit(Number(e.target.value)); setPage(1); }}
-          className="hidden md:block border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:border-emerald-500 flex-shrink-0">
-          {LIMIT_OPTIONS.map(l => <option key={l} value={l}>{l} por página</option>)}
-        </select>
-
-        <div className="hidden md:flex items-center border border-gray-200 rounded-xl bg-white overflow-hidden flex-shrink-0">
-          <div className="flex flex-col px-2 py-1 min-w-0">
-            <span className="text-[10px] text-gray-400 leading-none mb-0.5">Data Inicial</span>
-            <DateInput
-              value={filtroDataInicio}
-              onChange={v => { setFiltroDataInicio(v); setPage(1); }}
-              className="w-32 text-xs text-gray-900"
-              /* Barra de filtros: a mensagem de data inválida iria como `title`, não
-                 como bloco abaixo — aqui ela empurraria a toolbar inteira. */
-              compacto
-            />
-          </div>
-          <span className="text-gray-300 text-xs px-1 flex-shrink-0">→</span>
-          <div className="flex flex-col px-2 py-1 border-l border-gray-100 min-w-0">
-            <span className="text-[10px] text-gray-400 leading-none mb-0.5">Data Final</span>
-            <DateInput
-              value={filtroDataFim}
-              onChange={v => { setFiltroDataFim(v); setPage(1); }}
-              className="w-32 text-xs text-gray-900"
-              compacto
-            />
-          </div>
         </div>
-
-        <div className="hidden md:flex items-center gap-1.5 border border-gray-200 rounded-xl bg-white px-3 py-2 flex-shrink-0">
-          <User size={14} className="text-gray-400 flex-shrink-0" />
-          <select value={filtroResponsavel}
-            onChange={e => { setFiltroResponsavel(e.target.value); setPage(1); }}
-            className="text-sm text-gray-700 bg-transparent focus:outline-none max-w-[140px]">
-            <option value="">Responsável</option>
-            {responsaveis.filter(Boolean).map(r => <option key={r.id} value={r.id}>{r.fullName}</option>)}
-          </select>
-        </div>
-
-
-        {filtrosAtivos && (
-          <button
-            onClick={() => { setFiltroDataInicio(''); setFiltroDataFim(''); setFiltroResponsavel(''); setFilterStatus(FILTRO_STATUS_PADRAO); setPage(1); }}
-            className="hidden md:block px-3 py-2 text-xs text-gray-500 hover:text-red-500 border border-gray-200 rounded-xl bg-white transition-colors flex-shrink-0">
-            Limpar ×
-          </button>
-        )}
-      </div>
+      )}
 
       <div ref={formTopRef} />
 
@@ -2038,6 +2146,17 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           onArquivosChange={setArquivosModal}
           onRemoverMidia={(midiaId) => editingEv && handleRemoverMidia(editingEv.id, midiaId)}
           somenteLeitura={formLeitura}
+          avisoTopo={conflito && (
+            <AvisoRegistroAssumido
+              porNome={conflito.porNome}
+              em={conflito.em}
+              registro="evolução"
+              onAtualizar={atualizarAposConflito}
+              // Só oferece descartar quando há texto local a descartar — botão
+              // que não muda nada só ocupa espaço e gera dúvida.
+              onDescartar={form.texto.trim() ? atualizarAposConflito : undefined}
+            />
+          )}
           podeSalvar={editingEv ? podeEditar : podeCriar}
           // Editando a de outro, o Finalizar do rodapé some (o formulário já abre em
           // leitura nesse caso; isto fecha o rodapé por conta própria). Evolução NOVA
@@ -2119,7 +2238,11 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                   </div>
 
                   <p className="text-xs text-gray-500">
-                    {ev.veterinario?.fullName ?? '—'}
+                    <ResponsavelTrocado
+                      atual={ev.veterinario?.fullName}
+                      anteriores={responsaveisAnteriores(ev)}
+                      className="text-xs text-gray-500"
+                    />
                     <span className="text-gray-300"> · </span>
                     <span className="text-[11px] text-gray-400">{ev.especialidade}</span>
                   </p>
@@ -2149,13 +2272,14 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-100">
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Nº</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide leading-tight">Data<br />Início</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide leading-tight">Data<br />Fim</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Título</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Responsável</th>
-                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
+                <ThOrdenavel campo="numero" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Nº</ThOrdenavel>
+                <ThOrdenavel campo="dataInicio" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide leading-tight"><span>Data<br />Início</span></ThOrdenavel>
+                <ThOrdenavel campo="dataFim" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide leading-tight"><span>Data<br />Fim</span></ThOrdenavel>
+                <ThOrdenavel campo="titulo" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Título</ThOrdenavel>
+                <ThOrdenavel campo="responsavel" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Responsável</ThOrdenavel>
+                <ThOrdenavel campo="status" ordenacao={ordenacao} onOrdenar={alternar} alinhar="centro" className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</ThOrdenavel>
+                <ThOrdenavel campo="justificativa" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</ThOrdenavel>
+                {/* Ações não ordena: não é dado do registro, é o que se pode fazer com ele. */}
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
               </tr>
             </thead>
@@ -2207,7 +2331,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
                       </span>
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
-                      <p className="text-xs font-medium text-gray-800">{ev.veterinario?.fullName ?? '—'}</p>
+                      <ResponsavelTrocado
+                        atual={ev.veterinario?.fullName}
+                        anteriores={responsaveisAnteriores(ev)}
+                      />
                       {ev.modificadoPor && ev.modificadoPor.id !== ev.veterinarioId && (
                         <p className="text-[10px] text-gray-400 mt-0.5">editado por {ev.modificadoPor.fullName}</p>
                       )}

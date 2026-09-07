@@ -34,11 +34,19 @@ const { comEscopoPlataforma } = require('./prismaTenant');
 //                  capability URL (ex.: link público de fatura) e o token era válido.
 //                  Registrado por `registrarAcessoPublico`, mesmo molde fire-and-forget
 //                  em escopo de plataforma — não há req.user/req.empresaId aqui.
+// CONFLITO_EDICAO → TENTATIVA de gravar sobre dado que outro profissional já mudou,
+//                  RECUSADA pela trava otimista (409). Nada foi alterado — é o
+//                  registro de que alguém ia sobrescrever e não conseguiu. Sem
+//                  esta linha, o único rastro da quase-perda seria um 409 na tela
+//                  de quem levou o erro, e a clínica nunca saberia que a disputa
+//                  aconteceu. NÃO é ACESSO_NEGADO: não faltou permissão, faltou
+//                  atualidade do dado — misturar os dois polui a tela de tentativas
+//                  de invasão com casos de duas pessoas trabalhando juntas.
 // ⚠️ INATIVACAO/ATIVACAO nasceram em 2026-09-05: inativar e ATIVAR um paciente
 // gravavam os dois como 'CANCELAMENTO', então a auditoria dizia "CANCELAMENTO ANIMAL"
 // para quem tinha acabado de REATIVAR o prontuário — o oposto do que aconteceu.
 // A ação exibida na tela é `${categoria} ${entidade}`, ou seja, a categoria É o rótulo.
-const CATEGORIAS = ['EXCLUSAO', 'CANCELAMENTO', 'INATIVACAO', 'ATIVACAO', 'AJUSTE', 'CONFIGURACAO', 'TRANSFERENCIA', 'ALTERACAO', 'CRIACAO', 'EXECUCAO', 'ACESSO_NEGADO', 'EXPORTACAO', 'ACESSO_PUBLICO'];
+const CATEGORIAS = ['EXCLUSAO', 'CANCELAMENTO', 'INATIVACAO', 'ATIVACAO', 'AJUSTE', 'CONFIGURACAO', 'TRANSFERENCIA', 'ALTERACAO', 'CRIACAO', 'EXECUCAO', 'ACESSO_NEGADO', 'EXPORTACAO', 'ACESSO_PUBLICO', 'CONFLITO_EDICAO'];
 
 /**
  * Extrai o IP de origem do request de forma consistente com o `trust proxy`
@@ -366,8 +374,55 @@ async function nomeLocalizacao(client, localizacaoId) {
   }
 }
 
+/**
+ * Registra a TENTATIVA de gravar sobre dado que outro profissional já alterou —
+ * a que a trava otimista recusou com 409.
+ *
+ * POR QUE ISTO EXISTE: sem ele, o único rastro da quase-perda é o erro na tela de
+ * quem levou o 409. A clínica não teria como responder 'alguém tentou escrever por
+ * cima desta evolução?' — e essa é exatamente a pergunta que se faz quando um
+ * atendimento sai diferente do que alguém lembra de ter escrito.
+ *
+ * ⚠️ FIRE-AND-FORGET: nunca lança e nunca atrasa a resposta. O 409 já foi decidido
+ * pelo banco; falhar em REGISTRAR a recusa não pode transformá-la em outra coisa.
+ *
+ * ⚠️ NÃO grava o texto que a pessoa tentou salvar. O conteúdo recusado continua na
+ * TELA dela, para copiar o que quiser; duplicá-lo na trilha faria o AuditLog
+ * acumular versões de prontuário que ninguém assinou — e ele não é versionador.
+ */
+async function registrarConflitoEdicao(req, { entidade, entidadeId = null, animalId = null, motivo = null, versaoCliente = null, versaoAtual = null, editorAtualId = null }) {
+  try {
+    const detalhes = [
+      `versão em edição: ${versaoCliente ?? '?'}`,
+      `versão vigente: ${versaoAtual ?? '?'}`,
+      editorAtualId != null ? `responsável atual: ${await nomeDoUsuario(editorAtualId)}` : null,
+    ].filter(Boolean).join(' ; ');
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO schs2vet.tb_audit_logs
+         ("userId", "userName", "email", "action", "empresaId", "categoria", "entidade", "entidadeId", "animalId", "motivo", "detalhes", "ip")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      req?.user?.id ?? null,
+      req?.user?.fullName ?? '',
+      req?.user?.email ?? '',
+      `CONFLITO_EDICAO ${entidade}`,
+      req?.empresaId ?? null,
+      'CONFLITO_EDICAO',
+      entidade,
+      entidadeId != null ? Number(entidadeId) : null,
+      animalId   != null ? Number(animalId)   : null,
+      motivo?.trim() || null,
+      detalhes,
+      ipDoRequest(req),
+    );
+  } catch (err) {
+    console.warn('[auditoria] falha ao registrar CONFLITO_EDICAO:', err.message);
+  }
+}
+
 module.exports = {
   registrarAuditoria,
+  registrarConflitoEdicao,
   registrarAcesso,
   registrarAcessoNegado,
   registrarAcessoPublico,

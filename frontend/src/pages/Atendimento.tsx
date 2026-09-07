@@ -29,7 +29,7 @@ import { imprimirAtendimento, gerarHtmlAtendimento, type PrintAtendimento, type 
 import InlineError from '../components/InlineError';
 import FaixaPacienteInativo from '../components/FaixaPacienteInativo';
 import { formatDataHora } from '../utils/dateUtils';
-import { escolherEvolucaoAtiva, lerEvolucaoSelecionada, salvarEvolucaoSelecionada } from '../utils/evolucaoAtiva';
+import { escolherEvolucaoAtiva, descricaoAtendimento, lerEvolucaoSelecionada, salvarEvolucaoSelecionada } from '../utils/evolucaoAtiva';
 import { animalParaAutoSelecao } from '../utils/animalInfo';
 import JanelaLista from '../components/JanelaLista';
 
@@ -74,6 +74,12 @@ interface EvolucaoAtiva {
   dataInicio?:      string | null;
   titulo?:          string | null;
   especialidade?:   string | null;
+  // Assumida por quem: `autorId` é quem CRIOU (imutável) e `veterinarioId` é o
+  // responsável ATUAL — diferentes entre si, a evolução foi assumida, e o banner
+  // passa a dizer o nome de quem assumiu no lugar do título. Ver
+  // `descricaoAtendimento` em utils/evolucaoAtiva.ts.
+  autorId?:         number | null;
+  veterinarioNome?: string | null;
 }
 
 type SubModulo  = 'agenda' | 'evolucao' | 'prescricao' | 'vacina' | 'exames' | 'encaminhamento';
@@ -511,7 +517,10 @@ const Atendimento = () => {
   const location                              = useLocation();
   const { animalId: animalIdParam }           = useParams<{ animalId?: string }>();
 
-  const podeFinalizarEvolucao = isGestor || podeExecutar('atendimento.evolucoes.finalizar');
+  // ⚠️ `podeFinalizarEvolucao` mora LÁ EMBAIXO, junto de `pacienteInativo` — ele
+  // depende do estado do paciente e o `animal` só existe depois daqui. Imprimir
+  // fica aqui porque NÃO depende: saída de conteúdo é liberada no prontuário
+  // congelado (é o que "fica para visualização" quer dizer).
   const podeImprimirEvolucao  = isGestor || podeExecutar('atendimento.evolucoes.imprimir');
   // FORNECEDOR: regra de autoria — só finaliza a evolução que ele próprio criou
   const isFornecedor = user?.userType === 'FORNECEDOR';
@@ -617,7 +626,7 @@ const Atendimento = () => {
   // com "…" (uma linha), então o texto inteiro precisa continuar alcançável.
   const rotuloAtendimentoAtivo = useMemo(() => {
     if (!evolucaoAtiva) return '';
-    const nome = evolucaoAtiva.titulo?.trim() || evolucaoAtiva.especialidade;
+    const nome = descricaoAtendimento(evolucaoAtiva);
     return [
       `Atendimento ${evolucaoAtiva.atendimentoNumero ?? '—'}`,
       evolucaoAtiva.dataInicio ? `de ${formatDataHora(evolucaoAtiva.dataInicio)}` : null,
@@ -816,6 +825,7 @@ const Atendimento = () => {
         id: number; veterinarioId?: number | null; agendamentoId?: number | null;
         numero?: number | null; tipoAtendimento?: string | null; atendimentoNumero?: string | null;
         dataInicio?: string | null; titulo?: string | null; especialidade?: string | null;
+        autorId?: number | null; veterinario?: { fullName?: string | null } | null;
       };
       const dados: EvDados[] = res.data?.dados ?? [];
       setEvolucoesAbertas(dados.map(ev => ({
@@ -828,15 +838,27 @@ const Atendimento = () => {
         dataInicio:       ev.dataInicio ?? null,
         titulo:           ev.titulo ?? null,
         especialidade:    ev.especialidade ?? null,
+        autorId:          ev.autorId ?? null,
+        veterinarioNome:  ev.veterinario?.fullName ?? null,
       })));
     } catch { /* silencioso */ }
   }, [effectiveAnimalId]);
 
+  // TROCOU DE PACIENTE = TELA NOVA.
   useEffect(() => {
+    // 🔴 `setAnimal(null)` primeiro: sem isso a tela segue exibindo o paciente
+    // ANTERIOR até o fetch responder — e, nessa janela, `pacienteInativo` é o
+    // estado do OUTRO. Trocar de um paciente ativo para um inativo deixava os
+    // botões de escrita ligados por um instante, com o dado errado na tela.
+    setAnimal(null);
     setEvolucoesAbertas([]);
     setEvolucaoSelecionadaId(lerEvolucaoSelecionada(effectiveAnimalId));
     setViewPrescricaoId(null);
     setViewExameId(null);
+    setOpenItemId(null);
+    setEditEvolucaoId(null);
+    setEditPrescricaoId(null);
+    setConfirmFinalizarAt(false);
     carregarAnimal();
   }, [effectiveAnimalId]);
 
@@ -932,6 +954,16 @@ const Atendimento = () => {
    */
   const pacienteInativo = !!animal?.inativo;
 
+  // 🔴 O BANNER "Finalizar Atendimento" TAMBÉM É ESCRITA. Ele ficava fora do
+  // congelamento porque a permissão era resolvida no topo do componente, antes de
+  // `animal` existir — então o botão seguia aparecendo no paciente inativo e o
+  // clique morria no 400 do backend (armadilha 28-d).
+  // ⚠️ Desde 2026-09-06 a inativação FINALIZA o atendimento aberto sozinha, então
+  // na prática não sobra evolução EM_ANDAMENTO para o banner mostrar. O gate fica
+  // porque o paciente inativado ANTES dessa mudança ainda tem atendimento aberto —
+  // e porque a defesa não pode depender de a outra regra nunca falhar.
+  const podeFinalizarEvolucao = !pacienteInativo && (isGestor || podeExecutar('atendimento.evolucoes.finalizar'));
+
   /**
    * Vai para um submódulo abrindo um item do Histórico do Paciente.
    *
@@ -964,7 +996,13 @@ const Atendimento = () => {
       case 'evolucao':
         return (
           <SubModuloEvolucao
-            key={`evtab-${evolucaoTabKey}`}
+            // 🔴 A CHAVE INCLUI O PACIENTE. Sem isso o React REAPROVEITA a instância
+            // ao trocar de animal, e o estado interno do submódulo vai junto: o texto
+            // da evolução em digitação, o item em edição, o formulário aberto. Ou
+            // seja, o rascunho de um paciente aparecia no prontuário de outro — e um
+            // Salvar distraído o gravaria lá. O rascunho de verdade continua
+            // preservado: ele é guardado em localStorage POR animalId.
+            key={`ev-${effectiveAnimalId ?? 0}-${evolucaoTabKey}`}
             animalId={animalIdNum}
             pacienteInativo={pacienteInativo}
             animal={animal}
@@ -992,6 +1030,8 @@ const Atendimento = () => {
       case 'prescricao':
         return (
           <SubModuloPrescricao
+            // Remonta ao trocar de paciente — ver a nota em SubModuloEvolucao.
+            key={`prescricao-${effectiveAnimalId ?? 0}`}
             animalId={animalIdNum}
             pacienteInativo={pacienteInativo}
             animal={animal ? {
@@ -1018,6 +1058,8 @@ const Atendimento = () => {
       case 'exames':
         return (
           <SubModuloExames
+            // Remonta ao trocar de paciente — ver a nota em SubModuloEvolucao.
+            key={`exames-${effectiveAnimalId ?? 0}`}
             animalId={animalIdNum}
             pacienteInativo={pacienteInativo}
             animal={animal}
@@ -1032,6 +1074,8 @@ const Atendimento = () => {
       case 'encaminhamento':
         return (
           <SubModuloEncaminhamento
+            // Remonta ao trocar de paciente — ver a nota em SubModuloEvolucao.
+            key={`encaminhamento-${effectiveAnimalId ?? 0}`}
             animalId={animalIdNum}
             animal={animal ? {
               nome: animal.nome, raca: animal.raca ?? null,
@@ -1098,8 +1142,7 @@ const Atendimento = () => {
             <span className="min-w-0 truncate" title={rotuloAtendimentoAtivo}>
               Atendimento <span className="font-bold">{evolucaoAtiva.atendimentoNumero ?? '—'}</span>
               {evolucaoAtiva.dataInicio && ` de ${formatDataHora(evolucaoAtiva.dataInicio)}`}
-              {(evolucaoAtiva.titulo?.trim() || evolucaoAtiva.especialidade) &&
-                ` - ${evolucaoAtiva.titulo?.trim() || evolucaoAtiva.especialidade}`}
+              {descricaoAtendimento(evolucaoAtiva) && ` - ${descricaoAtendimento(evolucaoAtiva)}`}
               {' - Em andamento'}
             </span>
           </div>

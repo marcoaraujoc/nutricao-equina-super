@@ -15,20 +15,25 @@ import {
   DollarSign, Search, Loader2, Trash2,
   Pencil, Check, X, RefreshCw, Receipt,
   CheckCircle2, Download, Printer, ChevronDown, MessageCircle, Mail,
-  Link2, Ban, Eye,
 } from 'lucide-react';
 import { imprimirFatura, exportarFaturaCSV, gerarHtmlFatura } from '../utils/FaturaExport';
 import { carregarComoDataUri } from '../utils/printUrl';
 import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
+// O MESMO par que a Prescrição usa: PDF anexado pelo backend, barra de progresso no
+// centro da tela, botão Cancelar e veredito no mesmo lugar (ver `handleShare`).
+import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
 import { ordenarComInsumos } from '../utils/faturaInsumos';
 import InlineError from '../components/InlineError';
 import JanelaLista from '../components/JanelaLista';
 import FotoAnimal from '../components/FotoAnimal';
-import ConfirmModal from '../components/ConfirmModal';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
-type FaturaStatus = 'ABERTA' | 'PAGA' | 'CANCELADA' | 'FECHADA' | 'ATRASADA';
+/** ⚠️ REABERTA não é ABERTA: é a fatura que já FOI fechada e voltou a ser editável.
+ *  Quem grava a distinção é o backend (`statusAoReabrir` em lib/faturaUtils.js) —
+ *  o botão "Reabrir" continua mandando ABERTA. As duas são editáveis; só a ABERTA é
+ *  a fatura CORRENTE, a que recebe o lançamento clínico do mês. */
+type FaturaStatus = 'ABERTA' | 'REABERTA' | 'PAGA' | 'CANCELADA' | 'FECHADA' | 'ATRASADA';
 type ItemTipo     = 'ASSISTENCIA' | 'TRANSPORTE' | 'MEDICAMENTO' | 'PROCEDIMENTO';
 /** Desconto do item: percentual sobre o bruto ou abatimento em reais */
 type DescontoTipo = 'PERCENTUAL' | 'VALOR';
@@ -79,15 +84,6 @@ interface FaturaResumo {
   id: number; total: number; status: FaturaStatus; mesReferencia?: string;
 }
 
-// Link público de fatura (WhatsApp/e-mail) — GET /clinica/faturas/:id/links.
-type LinkStatus = 'PENDENTE' | 'ENVIADO' | 'FALHOU' | 'FALHOU_DEFINITIVO';
-interface FaturaLink {
-  id: number; canal: 'WHATSAPP' | 'EMAIL' | null; destino: string | null;
-  status: LinkStatus; tentativas: number; ultimoErro?: string | null;
-  enviadoEm?: string | null; proximaTentativaEm?: string | null;
-  revogadoEm?: string | null; ultimoAcessoEm?: string | null; qtdAcessos: number;
-  expiraEm: string; criadoEm: string;
-}
 
 interface ProprietarioItem {
   id: number; fullName: string; email: string; phone?: string;
@@ -98,7 +94,9 @@ interface ProprietarioItem {
   // ver o filtro em FaturaController.listarProprietarios.
   ativo?: boolean;
   animais: AnimalResumo[];
+  /** SÓ a ABERTA — a reaberta tem campo próprio, senão uma esconderia a outra. */
   faturaAtiva?:    FaturaResumo | null;
+  faturaReaberta?: FaturaResumo | null;
   faturaFechada?:  FaturaResumo | null;
   faturaAtrasada?: FaturaResumo | null;
   faturaPaga?:     FaturaResumo | null;
@@ -959,8 +957,6 @@ const TOM_ACAO = {
   /** exportar tem tom PRÓPRIO (marrom): baixa arquivo, não põe o documento em
    *  circulação como o imprimir/e-mail azuis ao lado */
   exportar:  'border-amber-300   text-amber-800   hover:bg-amber-50',
-  /** links enviados — revela o que já foi mandado ao cliente */
-  links:     'border-yellow-200  text-yellow-600  hover:bg-yellow-50',
 } as const;
 
 function PainelFatura({
@@ -1048,32 +1044,30 @@ function PainelFatura({
     };
   };
 
-  // Envio por WhatsApp/e-mail passou a mandar um LINK (não o PDF anexado — ver
-  // lib/faturaLinkPublico.js no backend): o servidor gera o PDF, salva no
-  // storage e devolve a URL pública — um token de 64 caracteres é a única
-  // proteção (capability URL pura, sem segundo fator). Nunca mais depende do
-  // Puppeteer/upload terminarem dentro da janela de "user activation" do
-  // navegador do vet.
+  // 🔴 A FATURA SAI PELO MESMO CAMINHO DA PRESCRIÇÃO (a pedido, 2026-09-06): o PDF
+  // ANEXADO de verdade, pelo par `enviarPdfWhatsAppComAviso`/`enviarPdfEmailComAviso`
+  // (utils/compartilharPdf.ts) — a mesma folha do botão Imprimir, com a barra de
+  // progresso no centro da tela, o botão Cancelar e o veredito no mesmo lugar.
+  //
+  // ⚠️ REVERTE o envio por LINK PÚBLICO (`/clinica/faturas/:id/enviar-{whatsapp,email}`
+  // + lib/faturaLinkPublico.js), que existia para não depender de o Puppeteer terminar
+  // dentro da janela de "user activation" do navegador. Aquilo deixou de ser um risco
+  // quando o envio passou a ser feito PELO BACKEND (2026-09-05): o Chromium roda no
+  // servidor e a janela do navegador só importa no FALLBACK — quando não há telefone,
+  // e-mail ou provider configurado, e a tela baixa o PDF e abre o app para anexar.
+  // ⚠️ As rotas de link e o painel "links já enviados" CONTINUAM existindo: os links
+  // que já saíram precisam seguir revogáveis, e o cron `reenviar_links_fatura` depende
+  // deles. O que mudou foi por onde ESTES DOIS BOTÕES mandam a fatura.
+  //
+  // ⚠️ Nenhum `try/catch` aqui: `enviarPdf*ComAviso` NUNCA lança — ela mesma conta o
+  // resultado (e o motivo da falha) no card central. Um catch em volta só produziria
+  // uma segunda mensagem sobre o mesmo clique.
   const handleShare = async () => {
     const opcoes = opcoesCompartilhar();
     if (!fatura || !opcoes) return;
     setCompartilhando(true);
     try {
-      const r = await api.post(`/clinica/faturas/${fatura.id}/enviar-whatsapp`, {
-        html: opcoes.gerarHtml(), nomeArquivo: opcoes.nomeArquivo, texto: opcoes.texto, telefone: prop.phone,
-      });
-      const dados = r.data?.dados;
-      if (dados?.enviado) {
-        toast.success(dados.simulado ? 'Envio simulado (WhatsApp em modo de teste).' : 'Link da fatura enviado por WhatsApp.');
-      } else if (dados?.url) {
-        // WhatsApp da clínica indisponível — abre o app com o link já pronto
-        // (nada de PDF para baixar/anexar, é só texto).
-        abrirWhatsApp(`${opcoes.texto}\n\n📄 Abra a fatura: ${dados.url}`, prop.phone ?? undefined);
-        toast('WhatsApp da clínica indisponível — abrindo com o link pronto.', { icon: '🔗', duration: 5000 });
-      }
-    } catch (err: unknown) {
-      const e = err as { response?: { data?: { error?: string } } };
-      setErroInline(e.response?.data?.error ?? 'Erro ao enviar a fatura pelo WhatsApp.');
+      await enviarPdfWhatsAppComAviso(opcoes, prop.phone);
     } finally {
       setCompartilhando(false);
     }
@@ -1084,76 +1078,13 @@ function PainelFatura({
     if (!fatura || !opcoes) return;
     setEnviandoEmail(true);
     try {
-      const r = await api.post(`/clinica/faturas/${fatura.id}/enviar-email`, {
-        html: opcoes.gerarHtml(), nomeArquivo: opcoes.nomeArquivo, texto: opcoes.texto, titulo: opcoes.titulo, email: prop.email,
-      });
-      const dados = r.data?.dados;
-      if (dados?.enviado) {
-        toast.success('Link da fatura enviado por e-mail.');
-      } else if (dados?.url) {
-        abrirEmail(opcoes.titulo, `${opcoes.texto}\n\nAbra a fatura: ${dados.url}`, prop.email ?? undefined);
-        toast('E-mail da clínica não configurado — abrindo com o link pronto.', { icon: '🔗', duration: 5000 });
-      }
-    } catch (err: unknown) {
-      const e = err as { response?: { data?: { error?: string } } };
-      setErroInline(e.response?.data?.error ?? 'Erro ao enviar a fatura por e-mail.');
+      await enviarPdfEmailComAviso(opcoes, prop.email);
     } finally {
       setEnviandoEmail(false);
     }
   };
 
-  // Links públicos já enviados desta fatura (WhatsApp/e-mail) — painel
-  // colapsável, carregado sob demanda (não polui a tela por padrão).
-  const [mostrarLinks,  setMostrarLinks]  = useState(false);
-  const [links,         setLinks]         = useState<FaturaLink[] | null>(null);
-  const [carregandoLinks, setCarregandoLinks] = useState(false);
-  const [linkParaRevogar, setLinkParaRevogar] = useState<FaturaLink | null>(null);
-  const [revogando, setRevogando] = useState(false);
 
-  const carregarLinks = useCallback(async () => {
-    if (!fatura) return;
-    setCarregandoLinks(true);
-    try {
-      const r = await api.get(`/clinica/faturas/${fatura.id}/links`);
-      if (r.data) setLinks(r.data.dados ?? []);
-    } catch {
-      // silencioso — o painel é opcional, não trava o resto da tela
-    } finally {
-      setCarregandoLinks(false);
-    }
-  }, [fatura]);
-
-  const toggleLinks = () => {
-    const abrindo = !mostrarLinks;
-    setMostrarLinks(abrindo);
-    if (abrindo && links === null) carregarLinks();
-  };
-
-  const confirmarRevogar = async () => {
-    if (!fatura || !linkParaRevogar) return;
-    setRevogando(true);
-    try {
-      await api.patch(`/clinica/faturas/${fatura.id}/links/${linkParaRevogar.id}/revogar`);
-      toast.success('Link revogado.');
-      await carregarLinks();
-    } catch (err: unknown) {
-      const e = err as { response?: { data?: { error?: string } } };
-      toast.error(e.response?.data?.error ?? 'Erro ao revogar o link.');
-    } finally {
-      setRevogando(false);
-      setLinkParaRevogar(null);
-    }
-  };
-
-  const LINK_STATUS_LABEL: Record<LinkStatus, string> = {
-    PENDENTE: 'Enviando…', ENVIADO: 'Enviado', FALHOU: 'Tentando de novo', FALHOU_DEFINITIVO: 'Falhou',
-  };
-  const LINK_STATUS_CLS: Record<LinkStatus, string> = {
-    PENDENTE: 'bg-amber-50 text-amber-700 border-amber-200',
-    ENVIADO: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    FALHOU: 'bg-amber-50 text-amber-700 border-amber-200',
-    FALHOU_DEFINITIVO: 'bg-red-50 text-red-700 border-red-200',
-  };
 
   // Formulário de novo item
   const [novoCatIdx,        setNovoCatIdx]        = useState<string>('');
@@ -1415,7 +1346,13 @@ function PainelFatura({
     try {
       const r = await api.patch(`/clinica/faturas/${fatura.id}/fechar`);
       setFatura(r.data.dados);
-      toast.success('Fatura fechada — itens bloqueados para edição');
+      // O backend abre a fatura do ciclo seguinte no mesmo ato (com a assistência
+      // mensal já dentro). Dizer isso evita a pergunta "e agora, cadê a fatura nova?" —
+      // e é a única pista de que a próxima já existe antes do primeiro atendimento.
+      const proxima = r.data.proxima as { mesReferencia?: string } | null | undefined;
+      toast.success(proxima
+        ? `Fatura fechada — nova fatura ${formatMes(proxima.mesReferencia) || 'aberta'} criada`
+        : 'Fatura fechada');
       onStatusChange();
     } catch { setErroInline('Erro ao fechar fatura'); }
     finally { setSalvando(false); }
@@ -1442,7 +1379,8 @@ function PainelFatura({
       itens: itens ?? [],
     }));
 
-  const canEdit = fatura?.status === 'ABERTA';
+  // REABERTA também edita — é justamente para isso que se reabre uma fatura.
+  const canEdit = fatura?.status === 'ABERTA' || fatura?.status === 'REABERTA';
 
   const invoiceRef = fatura ? `INV-${String(fatura.id).padStart(3, '0')}` : '—';
 
@@ -1529,10 +1467,6 @@ function PainelFatura({
           className={`${BTN_ACAO} ${TOM_ACAO.whatsapp}`}>
           {compartilhando ? <Loader2 size={13} className="animate-spin"/> : <MessageCircle size={13}/>} WhatsApp
         </button>
-        <button onClick={toggleLinks}
-          className={`${BTN_ACAO} ${TOM_ACAO.links}`}>
-          <Link2 size={13}/> Links enviados
-        </button>
         <button onClick={handlePDF}
           className={`${BTN_ACAO} ${TOM_ACAO.imprimir}`}>
           <Printer size={13}/> Imprimir
@@ -1553,62 +1487,6 @@ function PainelFatura({
         </div>
       </div>
 
-      {/* Links públicos enviados (WhatsApp/e-mail) — colapsável, sob demanda */}
-      {mostrarLinks && (
-        <div className="mb-3 flex-shrink-0 bg-white border border-gray-200 rounded-xl p-3">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-xs font-semibold text-gray-600">Links enviados</p>
-            {carregandoLinks && <Loader2 size={13} className="animate-spin text-gray-400" />}
-          </div>
-          {links !== null && links.length === 0 && !carregandoLinks && (
-            <p className="text-xs text-gray-400">Nenhum link enviado ainda.</p>
-          )}
-          {links !== null && links.length > 0 && (
-            <div className="space-y-1.5">
-              {links.map((l) => {
-                const ativo = !l.revogadoEm && new Date(l.expiraEm).getTime() > Date.now();
-                return (
-                  <div key={l.id} className="flex items-center justify-between gap-2 text-xs border border-gray-100 rounded-lg px-2.5 py-1.5">
-                    <div className="flex items-center gap-2 min-w-0">
-                      {l.canal === 'WHATSAPP' ? <MessageCircle size={12} className="text-emerald-600 flex-shrink-0"/> : <Mail size={12} className="text-blue-600 flex-shrink-0"/>}
-                      <span className="truncate text-gray-700">{l.destino ?? '—'}</span>
-                      <span className={`px-1.5 py-0.5 rounded-full border font-semibold flex-shrink-0 ${LINK_STATUS_CLS[l.status]}`}>
-                        {LINK_STATUS_LABEL[l.status]}
-                      </span>
-                      {l.revogadoEm && (
-                        <span className="px-1.5 py-0.5 rounded-full border border-gray-200 bg-gray-100 text-gray-500 font-semibold flex-shrink-0">Revogado</span>
-                      )}
-                      {l.qtdAcessos > 0 && (
-                        <span className="flex items-center gap-0.5 text-gray-400 flex-shrink-0" title="Vezes que o cliente abriu">
-                          <Eye size={11}/> {l.qtdAcessos}
-                        </span>
-                      )}
-                    </div>
-                    {ativo && (
-                      <button
-                        onClick={() => setLinkParaRevogar(l)}
-                        className="flex items-center gap-1 text-red-600 hover:text-red-700 font-semibold flex-shrink-0"
-                      >
-                        <Ban size={12}/> Revogar
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      <ConfirmModal
-        open={!!linkParaRevogar}
-        titulo="Revogar link da fatura?"
-        mensagem={`O link enviado para "${linkParaRevogar?.destino ?? ''}" para de funcionar imediatamente — quem já tiver aberto não consegue mais acessar a fatura por ele.`}
-        labelConfirmar={revogando ? 'Revogando…' : 'Revogar'}
-        variante="perigo"
-        onConfirmar={confirmarRevogar}
-        onCancelar={() => setLinkParaRevogar(null)}
-      />
 
       {/* Modal — itens "Outros" aprovados no orçamento → fatura */}
       {showImportOrc && (
@@ -1935,13 +1813,14 @@ function PainelFatura({
 // contagens NÃO somam o total — cada número responde "quantos clientes têm fatura
 // NESTE estado", nunca "quantos clientes existem ao todo".
 
-type FiltroLista = 'TODAS' | 'ABERTA' | 'FECHADA' | 'ATRASADA' | 'PAGA';
+type FiltroLista = 'TODAS' | 'ABERTA' | 'REABERTA' | 'FECHADA' | 'ATRASADA' | 'PAGA';
 
 /** Mesma paleta da barra "Fatura:" do detalhe — o mesmo estado não pode ter uma cor
  *  na lista e outra no painel ao lado. */
 const STATUS_LISTA: { key: FiltroLista; label: string; cor: string }[] = [
   { key: 'TODAS',    label: 'Todas',    cor: 'bg-gray-700'    },
   { key: 'ABERTA',   label: 'Aberta',   cor: 'bg-amber-500'   },
+  { key: 'REABERTA', label: 'Reaberta', cor: 'bg-orange-600'  },
   { key: 'FECHADA',  label: 'Fechada',  cor: 'bg-indigo-600'  },
   { key: 'ATRASADA', label: 'Atrasada', cor: 'bg-red-600'     },
   { key: 'PAGA',     label: 'Paga',     cor: 'bg-emerald-600' },
@@ -1952,6 +1831,7 @@ const STATUS_LISTA: { key: FiltroLista; label: string; cor: string }[] = [
  *  próprio). Mantém exatamente as cores que o card já usava. */
 const BOLINHA_STATUS: Record<Exclude<FiltroLista, 'TODAS'>, { cor: string; titulo: string }> = {
   ABERTA:   { cor: 'bg-amber-400',   titulo: 'Fatura aberta'   },
+  REABERTA: { cor: 'bg-orange-400',  titulo: 'Fatura reaberta' },
   FECHADA:  { cor: 'bg-indigo-400',  titulo: 'Fatura fechada'  },
   ATRASADA: { cor: 'bg-red-500',     titulo: 'Fatura atrasada' },
   PAGA:     { cor: 'bg-emerald-500', titulo: 'Fatura paga'     },
@@ -1960,6 +1840,7 @@ const BOLINHA_STATUS: Record<Exclude<FiltroLista, 'TODAS'>, { cor: string; titul
 function temStatusNaLista(p: ProprietarioItem, filtro: FiltroLista): boolean {
   switch (filtro) {
     case 'ABERTA':   return !!p.faturaAtiva;
+    case 'REABERTA': return !!p.faturaReaberta;
     case 'FECHADA':  return !!p.faturaFechada;
     case 'ATRASADA': return !!p.faturaAtrasada;
     case 'PAGA':     return !!p.faturaPaga;
@@ -2039,6 +1920,7 @@ function CardProprietario({
           {filtro === 'TODAS' ? (
             <>
               {prop.faturaAtiva    && <span className="w-2 h-2 rounded-full bg-amber-400" title="Fatura aberta"/>}
+              {prop.faturaReaberta && <span className="w-2 h-2 rounded-full bg-orange-400" title="Fatura reaberta"/>}
               {prop.faturaFechada  && <span className="w-2 h-2 rounded-full bg-indigo-400" title="Fatura fechada"/>}
               {prop.faturaAtrasada && <span className="w-2 h-2 rounded-full bg-red-500" title="Fatura atrasada"/>}
               {prop.faturaPaga     && <span className="w-2 h-2 rounded-full bg-emerald-500" title="Fatura paga"/>}
@@ -2439,6 +2321,7 @@ export default function Faturamento() {
                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider self-center mr-1">Fatura:</p>
                   {[
                     { key: 'ABERTA'   as FiltroTipo, label: 'Aberta',   cor: 'bg-amber-500',   existe: !!selecionado.faturaAtiva    },
+                    { key: 'REABERTA' as FiltroTipo, label: 'Reaberta', cor: 'bg-orange-600',  existe: !!selecionado.faturaReaberta },
                     { key: 'FECHADA'  as FiltroTipo, label: 'Fechada',  cor: 'bg-indigo-600',  existe: !!selecionado.faturaFechada  },
                     { key: 'ATRASADA' as FiltroTipo, label: 'Atrasada', cor: 'bg-red-600',     existe: !!selecionado.faturaAtrasada },
                     { key: 'PAGA'     as FiltroTipo, label: 'Paga',     cor: 'bg-emerald-600', existe: !!selecionado.faturaPaga     },
@@ -2475,6 +2358,7 @@ export default function Faturamento() {
                     filtroStatus === 'PAGA'     ? selecionado.faturaPaga?.id     :
                     filtroStatus === 'ATRASADA' ? selecionado.faturaAtrasada?.id :
                     filtroStatus === 'FECHADA'  ? selecionado.faturaFechada?.id  :
+                    filtroStatus === 'REABERTA' ? selecionado.faturaReaberta?.id :
                     undefined
                   }
                 />

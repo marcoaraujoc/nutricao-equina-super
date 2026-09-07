@@ -30,6 +30,9 @@ function formatAtendimentoNum(tipo, numero) {
 async function getOrCreateFatura(tx, proprietarioId, empresaId = null) {
   const mesAtual = new Date().toISOString().slice(0, 7); // '2026-06'
   const empresa  = empresaId ? Number(empresaId) : null;
+  // ⚠️ SÓ `ABERTA` — nunca `REABERTA`. A fatura reaberta é um documento ANTIGO
+  // destravado para correção; jogar o lançamento de hoje dentro dela misturaria o
+  // mês corrente com um mês já entregue ao cliente. Ver STATUS_FATURA_ABERTOS.
   let fatura = await tx.fatura.findFirst({
     where: { proprietarioId, status: 'ABERTA', empresaId: empresa },
   });
@@ -446,9 +449,68 @@ function deveFecharHoje(config, hoje) {
   return ehUltimoDiaDoMes(hoje);
 }
 
+// ─── CICLO DE VIDA DA FATURA ─────────────────────────────────────────────────
+//
+// 🔴 REABERTA NÃO É ABERTA (2026-09-06, a pedido). Fatura FECHADA/ATRASADA/PAGA que
+// volta a ser editável passa a gravar **REABERTA** — nunca ABERTA de novo. As duas
+// são editáveis, mas só a ABERTA é a fatura CORRENTE: é ela que `getOrCreateFatura`
+// encontra para receber o lançamento clínico de hoje. Sem a distinção, reabrir a
+// fatura de agosto para corrigir uma linha fazia a cobrança de setembro cair dentro
+// dela — e ninguém na tela tinha como saber que aquele documento já tinha sido
+// entregue ao cliente uma vez.
+const STATUS_FATURA_ABERTOS  = ['ABERTA', 'REABERTA'];
+const STATUS_FATURA_FECHADOS = ['FECHADA', 'ATRASADA', 'PAGA'];
+
+/** A fatura aceita inclusão/alteração de item? (PAGA e CANCELADA nunca aceitam.) */
+function faturaEditavel(status) {
+  return STATUS_FATURA_ABERTOS.includes(status);
+}
+
+/**
+ * Status a GRAVAR quando alguém pede para levar a fatura de volta a ABERTA.
+ *
+ * ⚠️ A conversão é do BACKEND, não da tela: o botão "Reabrir" continua mandando
+ * `ABERTA` (cliente antigo não muda de comportamento) e é AQUI que ela vira
+ * REABERTA. Pôr a decisão no front deixaria cada chamador com uma regra própria.
+ */
+function statusAoReabrir(statusAtual, statusPedido) {
+  if (statusPedido !== 'ABERTA') return statusPedido;
+  return STATUS_FATURA_FECHADOS.includes(statusAtual) ? 'REABERTA' : statusPedido;
+}
+
+/**
+ * 'YYYY-MM' + 1 mês — o `mesReferencia` da fatura que NASCE quando a anterior fecha.
+ *
+ * O ciclo seguinte começa no DIA do fechamento (que pode ser o 23, não o último dia
+ * do mês), então ele é cobrado no mês seguinte. Repetir o mês da fechada deixaria
+ * duas faturas com o MESMO rótulo no seletor de mês da tela, e `?mes=` devolveria
+ * sempre a mais recente — a fechada ficaria inalcançável.
+ *
+ * Sem mês de referência (ou em formato que não seja 'YYYY-MM'), cai no mês ATUAL —
+ * que é o que `getOrCreateFatura` sempre usou ao criar do zero.
+ */
+function proximoMesReferencia(mesRef) {
+  const texto  = String(mesRef ?? '');
+  const partes = texto.split('-');
+  const ano = Number(partes[0]);
+  const mes = Number(partes[1]); // 1-12
+  const valido = texto.length === 7 && partes.length === 2
+    && Number.isInteger(ano) && ano > 0
+    && Number.isInteger(mes) && mes >= 1 && mes <= 12;
+  if (!valido) return new Date().toISOString().slice(0, 7);
+  const proxAno = mes === 12 ? ano + 1 : ano;
+  const proxMes = mes === 12 ? 1 : mes + 1;
+  return `${proxAno}-${String(proxMes).padStart(2, '0')}`;
+}
+
 module.exports = {
   formatAtendimentoNum,
   getOrCreateFatura,
+  STATUS_FATURA_ABERTOS,
+  STATUS_FATURA_FECHADOS,
+  faturaEditavel,
+  statusAoReabrir,
+  proximoMesReferencia,
   adicionarFaturaItem,
   adicionarOuSomarFaturaItem,
   lancarExameNaFatura,

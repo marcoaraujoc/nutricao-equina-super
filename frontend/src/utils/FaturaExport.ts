@@ -139,6 +139,7 @@ export function gerarHtmlFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl
     .total-box .value { font-size: 22px; font-weight: 800; color: #dc2626; }
 
     .status-ABERTA    { color: #b45309; background: #fef3c7; }
+    .status-REABERTA  { color: #c2410c; background: #ffedd5; }
     .status-PAGA      { color: #065f46; background: #d1fae5; }
     .status-CANCELADA { color: #6b7280; background: #f3f4f6; }
     .status-badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 10px; font-weight: 700; }

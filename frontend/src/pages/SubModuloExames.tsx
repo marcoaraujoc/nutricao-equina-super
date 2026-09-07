@@ -22,6 +22,7 @@ import InlineError from '../components/InlineError';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import JanelaLista from '../components/JanelaLista';
+import { useOrdenacao, ThOrdenavel, ordenarLista, valorDataPura } from '../components/OrdenacaoLista';
 import LaudoTexto from '../components/LaudoTexto';
 
 
@@ -175,6 +176,10 @@ const TIPOS_META: Record<TipoExame, { badge: string }> = {
 // Ciclo do PEDIDO de exame: SALVA (solicitado) → FINALIZADA (concluído) /
 // REALIZADA (resultado carregado). CANCELADA = pedido cancelado (soft delete).
 type StatusExameUI    = 'SALVA' | 'FINALIZADA' | 'REALIZADA' | 'CANCELADA';
+
+/** Colunas ordenáveis do histórico de exames. */
+type ColunaExame = 'numero' | 'dataInicio' | 'dataFim' | 'tipo' | 'exames'
+                 | 'laboratorio' | 'amostra' | 'solicitante' | 'status' | 'justificativa';
 type FiltroStatusExame = 'todos' | 'SALVA' | 'FINALIZADA' | 'REALIZADA' | 'CANCELADA';
 
 function getStatusExame(ex: ExameClinico): StatusExameUI {
@@ -725,12 +730,34 @@ export default function SubModuloExames({
 
   const [page,      setPage]    = useState(1);
   const limit                   = 10;
+  // Ordenação por coluna — a lista vem inteira do backend (a paginação é da tela),
+  // então ordenar aqui é a ordem de verdade, não só a da página.
+  const { ordenacao, alternar } = useOrdenacao<ColunaExame>();
 
   // Filtro por status + paginação no cliente (mesmo padrão da tela de Vacina)
   const historicoFiltrado = historico.filter(ex =>
     filtroStatus === 'todos' ? true : getStatusExame(ex) === filtroStatus);
-  const totalPags     = Math.ceil(historicoFiltrado.length / limit);
-  const historicoPage = historicoFiltrado.slice((page - 1) * limit, page * limit);
+  // Ordena o TODO e só então pagina.
+  const historicoOrdenado = ordenarLista(historicoFiltrado, ordenacao, (ex, campo) => {
+    // `laboratorio`/`tipoAmostra` moram no JSON de `observacao` — a mesma leitura que
+    // a linha faz para exibi-los.
+    const extra = parseExtra(ex.observacao);
+    switch (campo) {
+      case 'numero':        return ex.numero ?? null;
+      case 'dataInicio':    return valorDataPura(ex.dataSolicitacao);
+      case 'dataFim':       return valorDataPura(ex.dataResultado);
+      case 'tipo':          return ex.tipo ?? null;
+      case 'exames':        return ex.descricao ?? null;
+      case 'laboratorio':   return extra.laboratorio ?? null;
+      case 'amostra':       return extra.tipoAmostra ?? null;
+      case 'solicitante':   return ex.veterinario?.fullName ?? null;
+      case 'status':        return getStatusExame(ex);
+      case 'justificativa': return ex.ativo ? null : (ex.justificativa ?? null);
+      default:              return null;
+    }
+  });
+  const totalPags     = Math.ceil(historicoOrdenado.length / limit);
+  const historicoPage = historicoOrdenado.slice((page - 1) * limit, page * limit);
   const counts = historico.reduce(
     (acc, ex) => { acc[getStatusExame(ex)]++; return acc; },
     { SALVA: 0, FINALIZADA: 0, REALIZADA: 0, CANCELADA: 0 } as Record<StatusExameUI, number>,
@@ -2242,16 +2269,16 @@ export default function SubModuloExames({
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nº</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Início</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Fim</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipo</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Exames</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Laboratório</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Amostra</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Solicitante</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
+                  <ThOrdenavel campo="numero" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nº</ThOrdenavel>
+                  <ThOrdenavel campo="dataInicio" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Início</ThOrdenavel>
+                  <ThOrdenavel campo="dataFim" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Fim</ThOrdenavel>
+                  <ThOrdenavel campo="tipo" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipo</ThOrdenavel>
+                  <ThOrdenavel campo="exames" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Exames</ThOrdenavel>
+                  <ThOrdenavel campo="laboratorio" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Laboratório</ThOrdenavel>
+                  <ThOrdenavel campo="amostra" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Amostra</ThOrdenavel>
+                  <ThOrdenavel campo="solicitante" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Solicitante</ThOrdenavel>
+                  <ThOrdenavel campo="status" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</ThOrdenavel>
+                  <ThOrdenavel campo="justificativa" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</ThOrdenavel>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
                 </tr>
               </thead>

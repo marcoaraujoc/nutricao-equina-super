@@ -17,6 +17,7 @@ import { Eye, Printer, Ban, FileText, X, Loader2, ZoomIn, ZoomOut } from 'lucide
 import AcaoRegistro, { AcoesRegistro } from '../../components/AcaoRegistro';
 import CompartilharPdfBotoes from '../../components/CompartilharPdfBotoes';
 import JanelaLista from '../../components/JanelaLista';
+import { useOrdenacao, ThOrdenavel, ordenarLista, valorData } from '../../components/OrdenacaoLista';
 import JustificativaCancelamento from '../../components/JustificativaCancelamento';
 import { formatDataHora } from '../../utils/dateUtils';
 import { carregarComoDataUri } from '../../utils/printUrl';
@@ -348,6 +349,18 @@ export function AcoesDocumento({ doc, imagens, onVisualizar, onCancelar, podeCan
   );
 }
 
+/** Colunas ordenáveis do histórico (a de Ações fica de fora, é renderizada à parte). */
+type ColunaEmitido = 'numero' | 'documento' | 'paciente' | 'emissao' | 'responsavel' | 'justificativa';
+
+const COLUNAS_EMITIDOS: { campo: ColunaEmitido; rotulo: string }[] = [
+  { campo: 'numero',        rotulo: 'Nº' },
+  { campo: 'documento',     rotulo: 'Documento' },
+  { campo: 'paciente',      rotulo: 'Paciente' },
+  { campo: 'emissao',       rotulo: 'Emissão' },
+  { campo: 'responsavel',   rotulo: 'Responsável' },
+  { campo: 'justificativa', rotulo: 'Justificativa' },
+];
+
 /**
  * Histórico de documentos emitidos — cards no mobile, tabela no desktop (§6).
  *
@@ -367,6 +380,7 @@ export default function ListaDocumentosEmitidos({
 }) {
   const imagens = useImagensDocumento(documentos);
   const [vendo, setVendo] = useState<DocumentoEmitido | null>(null);
+  const { ordenacao, alternar } = useOrdenacao<ColunaEmitido>();
   const visualizar = useCallback((d: DocumentoEmitido) => setVendo(d), []);
 
   /**
@@ -391,9 +405,23 @@ export default function ListaDocumentosEmitidos({
   // Uma aba só (ou nenhuma) não é filtro: some com a barra em vez de exibir um
   // controle que não muda nada.
   const mostrarFiltro = !compacto && abas.length > 1;
-  const lista = status === 'TODOS'
+  const listaFiltrada = status === 'TODOS'
     ? documentos
     : documentos.filter(d => (status === 'EMITIDO' ? d.ativo : !d.ativo));
+  // Ordenação por coluna do histórico (só o desktop tem cabeçalho; o card mobile
+  // acompanha a mesma ordem). Sem escolha, fica a ordem que o backend devolve —
+  // o mais recente primeiro.
+  const lista = ordenarLista(listaFiltrada, ordenacao, (d, campo) => {
+    switch (campo) {
+      case 'numero':        return d.numeroFmt ?? null;
+      case 'documento':     return d.titulo || d.templateNome || null;
+      case 'paciente':      return d.animalNome ?? null;
+      case 'emissao':       return valorData(d.emitidoEm);
+      case 'responsavel':   return d.emitidoPor ?? null;
+      case 'justificativa': return d.ativo ? null : (d.canceladoMotivo ?? null);
+      default:              return null;
+    }
+  });
 
   const filtro = mostrarFiltro && (
     <div className="flex flex-wrap items-center gap-1.5 px-4 py-2 border-b border-gray-100">
@@ -515,11 +543,14 @@ export default function ListaDocumentosEmitidos({
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-100">
-              {['Nº', 'Documento', 'Paciente', 'Emissão', 'Responsável', 'Justificativa', 'Ações'].map(h => (
-                <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">
-                  {h}
-                </th>
+              {COLUNAS_EMITIDOS.map(c => (
+                <ThOrdenavel key={c.campo} campo={c.campo} ordenacao={ordenacao} onOrdenar={alternar}
+                  className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">
+                  {c.rotulo}
+                </ThOrdenavel>
               ))}
+              {/* Ações fica fora da ordenação: não é dado do documento. */}
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ações</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">

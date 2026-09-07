@@ -28,6 +28,7 @@ import {
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import JanelaLista from '../components/JanelaLista';
+import { useOrdenacao, ThOrdenavel } from '../components/OrdenacaoLista';
 
 
 
@@ -46,6 +47,10 @@ interface AlertaEstoque {
 
 type TipoItem    = 'MEDICAMENTO' | 'PROCEDIMENTO';
 type StatusGrupo = 'SALVO' | 'FINALIZADO' | 'EXECUTADO' | 'CANCELADO' | 'CANCELADO_PARCIALMENTE';
+
+// Colunas ordenáveis do histórico — as MESMAS chaves da whitelist do backend
+// (`ORDENACAO_GRUPO`, em PrescricaoGrupoController).
+type ColunaPrescricao = 'numero' | 'dataInicio' | 'dataFim' | 'responsavel' | 'status' | 'justificativa';
 
 interface MedicamentoCat {
   id: number; nome: string; formaFarmaceutica: string;
@@ -90,6 +95,9 @@ interface PrescricaoGrupo {
   finalizadoEm?: string | null;
   executadoEm?: string | null;
   itens: ItemGrupo[];
+  // Trava otimista do DOCUMENTO: volta ao backend em toda escrita de item. Fica no
+  // GRUPO porque incluir/remover item muda o conjunto — ver §12.
+  versao?: number | null;
   // Justificativa do cancelamento — preenchida em CANCELADO e CANCELADO_PARCIALMENTE.
   motivoCancelamento?: string | null;
 }
@@ -728,7 +736,14 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
   // Item ÚNICO indo para o servidor (incluir/editar em prescrição já salva) — mesma
   // normalização de duração do `semRastreio`.
-  const itemParaEnvio = (i: FormItem) => ({ ...i, duracaoDias: duracaoParaEnvio(i) });
+  // A versão do GRUPO viaja em toda escrita de item (incluir, alterar, remover): é
+  // ela que o backend compara para recusar gravação sobre um documento que outro
+  // profissional já mudou. Ausente (servidor ou tela antiga) = grava sem proteção.
+  const itemParaEnvio = (i: FormItem) => ({
+    ...i,
+    duracaoDias: duracaoParaEnvio(i),
+    versao: grupo?.versao ?? undefined,
+  });
 
   // Marca no orçamento os itens que foram efetivamente salvos (chamar após o POST).
   const marcarOrcamentoSalvo = (itens: FormItem[]) =>
@@ -1161,7 +1176,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
   const handleRemoverServer = async (itemId: number, motivo: string) => {
     try {
-      await api.delete(`/clinica/prescricoes/grupos/${grupo!.id}/itens/${itemId}`, { data: { motivo } });
+      await api.delete(`/clinica/prescricoes/grupos/${grupo!.id}/itens/${itemId}`, { data: { motivo, versao: grupo?.versao ?? undefined } });
       setServerItens(prev => prev.filter(it => it.id !== itemId));
       if (editingServerId === itemId) { resetForm(); setEditingServerId(null); }
     } catch (err: unknown) {
@@ -2346,20 +2361,26 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   const [alertaDireto,       setAlertaDireto]       = useState<{ grupoId: number; alertas: AlertaEstoque[] } | null>(null);
   const [loadingForceDireto, setLoadingForceDireto] = useState(false);
 
+  // Ordenação por coluna do histórico. Paginação é do SERVIDOR, então a ordem é
+  // pedida a ele — as chaves são as MESMAS da whitelist `ORDENACAO_GRUPO`
+  // (PrescricaoGrupoController); divergir faz a coluna clicar sem ordenar nada.
+  const { ordenacao, alternar } = useOrdenacao<ColunaPrescricao>();
+
   const totalPaginas = Math.ceil(total / limit);
 
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
       const statusParam = filtroStatus !== 'todos' ? `&status=${filtroStatus}` : '';
-      const res = await api.get(`/clinica/prescricoes/grupos/animal/${animalId}?page=${page}&limit=${limit}${statusParam}`);
+      const ordemParam  = ordenacao ? `&ordenarPor=${ordenacao.campo}&ordem=${ordenacao.direcao}` : '';
+      const res = await api.get(`/clinica/prescricoes/grupos/animal/${animalId}?page=${page}&limit=${limit}${statusParam}${ordemParam}`);
       setGrupos(res.data.dados ?? []);
       setTotal(res.data.total ?? 0);
       setSalvos(res.data.salvos ?? 0);
       setContagens(res.data.contagens ?? {});
     } catch { setErroInline('Erro ao carregar prescrições'); }
     finally { setLoading(false); }
-  }, [animalId, page, limit, filtroStatus]);
+  }, [animalId, page, limit, filtroStatus, ordenacao]);
 
   useEffect(() => { if (!loadingPerms) carregar(); }, [carregar, loadingPerms]);
 
@@ -2770,13 +2791,15 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-100">
-              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nº</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide leading-tight">Data<br />Início</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide leading-tight">Data<br />Fim</th>
+              <ThOrdenavel campo="numero" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nº</ThOrdenavel>
+              <ThOrdenavel campo="dataInicio" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide leading-tight"><span>Data<br />Início</span></ThOrdenavel>
+              <ThOrdenavel campo="dataFim" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide leading-tight"><span>Data<br />Fim</span></ThOrdenavel>
+              {/* Tipo/Itens não ordena: a célula resume os ITENS do documento (um grupo
+                   tem medicamento e procedimento ao mesmo tempo), não um campo do registro. */}
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Tipo / Itens</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Responsável</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
+              <ThOrdenavel campo="responsavel" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Responsável</ThOrdenavel>
+              <ThOrdenavel campo="status" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</ThOrdenavel>
+              <ThOrdenavel campo="justificativa" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</ThOrdenavel>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
             </tr>
           </thead>

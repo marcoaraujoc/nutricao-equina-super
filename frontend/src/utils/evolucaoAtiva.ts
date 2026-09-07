@@ -55,6 +55,41 @@ export function escolherEvolucaoAtiva<T extends EvolucaoAbertaResumo>(
   return porAgendamento ?? minhas[0] ?? abertas[0];
 }
 
+// ── Como o atendimento se DESCREVE no banner ─────────────────────────────────
+// A evolução ASSUMIDA passa a dizer QUEM a assumiu, no lugar do título/especialidade:
+// "Atendimento EV-0004 de 05/09/2026 22:54 - Evolução assumida por Fulano - Em
+// andamento". Quem responde pelo atendimento mudou, e é isso que a faixa precisa
+// dizer primeiro — o título ali era o do registro de quem abriu, e não acusava a
+// troca de responsável.
+//
+// ⚠️ Assumida = `autorId` (quem CRIOU, imutável) diferente de `veterinarioId` (o
+// responsável ATUAL, que `assumir` transfere). Não existe coluna "assumida": são
+// essas duas que a distinguem — ver CLAUDE.md, sessão 2026-09-05 (parte 4).
+// ⚠️ Sem o NOME de quem assumiu (autor removido do sistema, ou lista de servidor
+// antigo que não traz o campo), cai no rótulo de sempre: "assumida por" sem nome
+// não informa nada que o banner já não diga.
+
+export interface EvolucaoDescritivel {
+  titulo?:        string | null;
+  especialidade?: string | null;
+  veterinarioId:  number | null;
+  /** Quem CRIOU a evolução — imutável. */
+  autorId?:       number | null;
+  /** Nome do responsável ATUAL (é ele quem assumiu, quando houve assunção). */
+  veterinarioNome?: string | null;
+}
+
+export function foiAssumida(ev: EvolucaoDescritivel): boolean {
+  return ev.autorId != null && ev.veterinarioId != null && ev.autorId !== ev.veterinarioId;
+}
+
+/** Trecho do meio do rótulo do banner. `null` = não há o que dizer ali. */
+export function descricaoAtendimento(ev: EvolucaoDescritivel): string | null {
+  const nome = ev.veterinarioNome?.trim();
+  if (foiAssumida(ev) && nome) return `Evolução assumida por ${nome}`;
+  return ev.titulo?.trim() || ev.especialidade?.trim() || null;
+}
+
 // ── Persistência da escolha ──────────────────────────────────────────────────
 // A escolha é ESTADO do shell, mas o shell é DESMONTADO ao navegar para a tela
 // apartada de Vacina (e para a Execução de Prescrição). Sem persistir, voltar de lá

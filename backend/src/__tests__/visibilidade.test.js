@@ -37,20 +37,38 @@ describe('exclusão lógica — o que some e o que fica', () => {
     // §36: o cadastro do proprietário é POR EMPRESA. Inativar na clínica A não pode
     // apagá-lo da clínica B — por isso o filtro casa o perfil DAQUELA empresa.
     const w = proprietarioAtivoNaEmpresa(7);
-    expect(w.user.ativo).toBe(true);
-    const [semCadastro, comCadastroAtivo] = w.user.OR;
-    expect(semCadastro).toEqual({ proprietarioPerfis: { none: { empresaId: 7 } } });
+    const [comCadastroAtivo] = w.user.OR;
     expect(comCadastroAtivo).toEqual({
       proprietarioPerfis: { some: { empresaId: 7, ativo: true } },
     });
   });
 
-  test('cliente LEGADO (sem cadastro na empresa) NÃO é escondido', () => {
+  test('🔴 com cadastro na empresa, o `users.ativo` GLOBAL não esconde o paciente', () => {
+    // Regra de 2026-09-06, depois de um caso real: a dona do paciente foi inativada
+    // como PROFISSIONAL em OUTRA clínica, o `users.ativo` (que é do login, e é global)
+    // caiu, e o paciente recém-cadastrado nasceu invisível na clínica onde ela é
+    // cliente ATIVA. "Pode entrar no sistema?" e "é cliente desta clínica?" são
+    // perguntas diferentes; só a segunda decide se o paciente aparece.
+    const w = proprietarioAtivoNaEmpresa(7);
+    // O `ativo` global não pode estar no NÍVEL DE CIMA (valeria para todos os ramos)…
+    expect(w.user.ativo).toBeUndefined();
+    // …e o ramo de quem TEM cadastro aqui não pode mencioná-lo de forma nenhuma.
+    const [comCadastroAtivo] = w.user.OR;
+    expect(JSON.stringify(comCadastroAtivo)).not.toContain('"ativo":true,"proprietarioPerfis"');
+    expect(Object.keys(comCadastroAtivo)).toEqual(['proprietarioPerfis']);
+  });
+
+  test('cliente LEGADO (sem cadastro na empresa) ainda cai no `ativo` global', () => {
     // O ramo `none` existe para isso: base antiga tem cliente sem `ProprietarioPerfil`.
     // Sem ele, o filtro esconderia todo mundo que nunca foi cadastrado por empresa —
-    // e a tela de Pacientes nasceria vazia numa migração.
+    // e a tela de Pacientes nasceria vazia numa migração. Ali o `users.ativo` é o
+    // ÚNICO sinal que existe, então continua valendo.
     const w = proprietarioAtivoNaEmpresa(7);
-    expect(w.user.OR.some(r => r.proprietarioPerfis?.none)).toBe(true);
+    const legado = w.user.OR.find(r => Array.isArray(r.AND));
+    expect(legado.AND).toEqual([
+      { proprietarioPerfis: { none: { empresaId: 7 } } },
+      { ativo: true },
+    ]);
   });
 
   test('sem empresa no contexto NÃO se inventa filtro por empresa', () => {
@@ -63,8 +81,9 @@ describe('exclusão lógica — o que some e o que fica', () => {
 
   test('animalVisivelNaEmpresa soma o ativo do animal ao do cliente naquela empresa', () => {
     const w = animalVisivelNaEmpresa(7);
+    // O `ativo` do ANIMAL continua sendo exigido — é a exclusão lógica dele mesmo,
+    // que nada tem a ver com o estado do dono.
     expect(w.ativo).toBe(true);
-    expect(w.user.ativo).toBe(true);
     expect(w.user.OR).toHaveLength(2);
   });
 

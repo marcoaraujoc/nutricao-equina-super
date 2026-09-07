@@ -41,7 +41,23 @@ function mesclar(user, perfil) {
   for (const campo of CAMPOS_PERFIL) {
     if (campo in user) out[campo] = perfil[campo];
   }
-  if ('ativo' in user) out.ativo = user.ativo !== false && perfil.ativo !== false;
+  // 🔴 HAVENDO CADASTRO NESTA EMPRESA, É ELE QUE DIZ SE O CLIENTE ESTÁ ATIVO — o
+  // `users.ativo` NÃO entra na conta (2026-09-06).
+  // O `ativo` do `users` é o LOGIN, e é global: cai quando a pessoa é inativada como
+  // PROFISSIONAL em QUALQUER clínica (`toggleMembro` mexe nele). Multiplicando os dois,
+  // a cliente ATIVA da clínica A aparecia INATIVA lá porque a clínica B desligou o
+  // acesso dela ao sistema — e não havia nada que a clínica A pudesse fazer a respeito.
+  // Foi um caso real: cadastro ativo na MarcoVet, login desligado na Patyvet.
+  //
+  // É a MESMA regra da visibilidade do paciente (lib/visibilidade.js): "pode entrar no
+  // sistema?" e "é cliente desta clínica?" são perguntas diferentes, e aqui só a
+  // segunda importa. As duas precisam concordar, senão o paciente aparece na lista e o
+  // dono dele consta como inativo na tela ao lado.
+  //
+  // ⚠️ Sem perfil na empresa (cliente LEGADO) nada disso se aplica: o `user` volta
+  // como está, com o `ativo` global — ali não existe outro sinal (ver o `return user`
+  // no topo desta função).
+  if ('ativo' in user) out.ativo = perfil.ativo !== false;
   return out;
 }
 

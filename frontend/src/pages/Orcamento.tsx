@@ -8,6 +8,7 @@ import toast from 'react-hot-toast';
 import api from '../services/api';
 import PageContainer from '../components/PageContainer';
 import JanelaLista from '../components/JanelaLista';
+import { useOrdenacao, ThOrdenavel, ordenarLista, valorData } from '../components/OrdenacaoLista';
 import BotaoVoltar from '../components/BotaoVoltar';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
@@ -26,6 +27,9 @@ import { DOSES, VIAS_PADRAO, normalizeVia } from '../utils/vacina';
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 // OUTROS: item avulso (nome + qtd de vezes + valor) que não passa pelas telas
 // clínicas — depois de aprovado é lançado direto na fatura (tela Faturamento).
+/** Colunas ordenáveis do histórico de orçamentos. */
+type ColunaOrcamento = 'numero' | 'proprietario' | 'data' | 'itens' | 'total' | 'aprovado' | 'status' | 'motivo';
+
 type TipoItem   = 'PROCEDIMENTO' | 'COMBO' | 'MEDICAMENTO' | 'VACINA' | 'OUTROS';
 type StatusOrc  = 'RASCUNHO' | 'APROVADO' | 'APROVADO_PARCIALMENTE' | 'REJEITADO' | 'CANCELADO';
 type StatusItem = 'PENDENTE' | 'ACEITO' | 'REJEITADO';
@@ -1631,6 +1635,8 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
   const [detalhe, setDetalhe] = useState<{ orc: OrcamentoResumo; somenteLeitura: boolean } | null>(null);
   const [cancelando, setCancelando] = useState<OrcamentoResumo | null>(null);
   const [page, setPage] = useState(1);
+  // Ordenação por coluna do histórico (lista completa em mãos — a paginação é da tela).
+  const { ordenacao, alternar } = useOrdenacao<ColunaOrcamento>();
 
   const visualizar = (o: OrcamentoResumo) => setDetalhe({ orc: o, somenteLeitura: true });
   const decidir    = (o: OrcamentoResumo) => setDetalhe({ orc: o, somenteLeitura: false });
@@ -1753,9 +1759,24 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
   );
 
   const LIMIT = 10;
-  const totalPags = Math.max(1, Math.ceil(orcamentos.length / LIMIT));
+  // Ordena a lista inteira e só então pagina (ordenar depois do `slice` reorganizaria
+  // uma página e mentiria sobre o resto).
+  const ordenados = ordenarLista(orcamentos, ordenacao, (o, campo) => {
+    switch (campo) {
+      case 'numero':       return o.numeroFormatado ?? null;
+      case 'proprietario': return o.proprietario?.fullName ?? null;
+      case 'data':         return valorData(o.createdAt);
+      case 'itens':        return o.itens.length;
+      case 'total':        return o.valorTotal ?? 0;
+      case 'aprovado':     return o.valorAceito ?? 0;
+      case 'status':       return o.status ?? null;
+      case 'motivo':       return o.status === 'CANCELADO' ? (o.observacao ?? null) : null;
+      default:             return null;
+    }
+  });
+  const totalPags = Math.max(1, Math.ceil(ordenados.length / LIMIT));
   const pageAtual = Math.min(page, totalPags);
-  const pageItems = orcamentos.slice((pageAtual - 1) * LIMIT, pageAtual * LIMIT);
+  const pageItems = ordenados.slice((pageAtual - 1) * LIMIT, pageAtual * LIMIT);
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
@@ -1819,15 +1840,15 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Nº</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Proprietário</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Data</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Itens</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Total</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Aprovado</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                  <ThOrdenavel campo="numero" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Nº</ThOrdenavel>
+                  <ThOrdenavel campo="proprietario" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Proprietário</ThOrdenavel>
+                  <ThOrdenavel campo="data" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Data</ThOrdenavel>
+                  <ThOrdenavel campo="itens" ordenacao={ordenacao} onOrdenar={alternar} alinhar="centro" className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Itens</ThOrdenavel>
+                  <ThOrdenavel campo="total" ordenacao={ordenacao} onOrdenar={alternar} alinhar="direita" className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Total</ThOrdenavel>
+                  <ThOrdenavel campo="aprovado" ordenacao={ordenacao} onOrdenar={alternar} alinhar="direita" className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Aprovado</ThOrdenavel>
+                  <ThOrdenavel campo="status" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</ThOrdenavel>
                   {filtroStatus === 'CANCELADO' && (
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Motivo do Cancelamento</th>
+                    <ThOrdenavel campo="motivo" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Motivo do Cancelamento</ThOrdenavel>
                   )}
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
                 </tr>

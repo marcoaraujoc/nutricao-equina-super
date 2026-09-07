@@ -135,12 +135,19 @@ const VeterinarioController = {
         return res.json({ sucesso: true, dados: [] });
       }
 
-      const where = { ativo: true, AND: [whereEhClienteDaEmpresa(req.empresaId)] };
+      const where = { AND: [whereEhClienteDaEmpresa(req.empresaId)] };
 
       // Proprietário removido DESTA empresa (ProprietarioPerfil.ativo=false) não pode
       // aparecer — mesma regra de `animalVisivelNaEmpresa`, aplicada ao cliente direto.
+      // ⚠️ Quem decide é o cadastro NA EMPRESA, e o `users.ativo` (global, do login) só
+      // entra pelo ramo do LEGADO, dentro do próprio filtro. Exigi-lo aqui em cima
+      // esconderia o cliente ATIVO nesta clínica cuja conta foi desativada em OUTRA —
+      // e aí o paciente dele apareceria na lista sem o dono existir aqui.
       const filtroPerfilAtivo = proprietarioAtivoNaEmpresa(req.empresaId).user;
       if (filtroPerfilAtivo?.OR) where.AND.push({ OR: filtroPerfilAtivo.OR });
+      // Sem empresa no contexto (ADMIN de plataforma) não há filtro por empresa: ali o
+      // `ativo` global é o único sinal que existe.
+      else where.ativo = true;
 
       if (!isAdmin) {
         const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);

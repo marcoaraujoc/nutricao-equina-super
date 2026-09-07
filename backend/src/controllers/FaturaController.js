@@ -7,6 +7,9 @@ const {
   registrarCorrecaoFatura,
   normalizarDesconto,
   formatAtendimentoNum,
+  STATUS_FATURA_ABERTOS,
+  statusAoReabrir,
+  proximoMesReferencia,
 } = require('../lib/faturaUtils');
 const { resolverLogoPorProprietario } = require('../lib/logoEmpresaUtils');
 const { ehClienteDaEmpresa } = require('../lib/clienteEmpresa');
@@ -286,6 +289,91 @@ async function adicionarAssistenciaMensal(faturaId, proprietario, veterinarioId 
   return true;
 }
 
+/**
+ * 🔴 FECHAR UMA FATURA ABRE A SEGUINTE (2026-09-06, a pedido).
+ *
+ * Até aqui o ciclo seguinte só nascia quando ALGUÉM tocava naquele cliente: abrindo a
+ * tela dele (`obterFaturaProprietario` cria a ABERTA do mês) ou lançando o primeiro
+ * item clínico (`getOrCreateFatura`). No fechamento automático da madrugada isso
+ * deixava o cliente SEM fatura corrente até o próximo atendimento — e a **Assistência
+ * Veterinária Mensal**, que é cobrança RECORRENTE e não depende de atendimento nenhum,
+ * só entrava quando alguém abrisse a tela. Cliente mensalista sem consulta no mês
+ * simplesmente não era cobrado.
+ *
+ * A fatura nova nasce com os itens PADRÃO — hoje só a assistência, pela MESMA
+ * `adicionarAssistenciaMensal` do fechamento. Uma segunda cópia da regra do valor
+ * divergiria na primeira correção; item padrão novo entra LÁ e vale para os dois.
+ *
+ * ⚠️ **NÃO cria se o cliente já tem outra fatura em aberto NESTA empresa** (ABERTA ou
+ * REABERTA, fora a que acabou de fechar). Duas correntes ao mesmo tempo partem o mês em
+ * duas: `getOrCreateFatura` pega a primeira que achar e metade dos lançamentos vai
+ * parar na outra. É essa guarda que torna a chamada IDEMPOTENTE — e é o que permite
+ * chamá-la do fechamento em LOTE e do cron sem contar quantas vezes ela rodou.
+ *
+ * ⚠️ O `mesReferencia` é o do mês SEGUINTE ao da fechada (`proximoMesReferencia`), não
+ * o mês atual: quem fecha no dia 23 abre um ciclo que será cobrado no mês que vem, e
+ * repetir o rótulo deixaria duas linhas idênticas no seletor de mês da tela.
+ *
+ * ⚠️ Fatura LEGADA por ANIMAL (sem `proprietarioId`) não tem ciclo mensal — não há o
+ * que abrir depois dela. Sem `empresaId` também não: a fatura nova precisa de tenant.
+ *
+ * @param fechada  a fatura que ACABOU de fechar (id, proprietarioId, empresaId, mesReferencia)
+ * @param db       🔴 o `tx` da empresa da vez quando vier do CRON — com o `prisma`
+ *   global o RLS esconde tudo e a criação morre na policy (ver `lib/cronTenant.js`).
+ * @returns a fatura criada, ou `null` quando não havia o que abrir.
+ */
+async function abrirProximaFatura(fechada, { veterinarioId = null, db = prisma } = {}) {
+  const proprietarioId = fechada?.proprietarioId ?? null;
+  const empresaId      = fechada?.empresaId ?? null;
+  if (!proprietarioId || empresaId == null) return null;
+
+  const jaEmAberto = await db.fatura.findFirst({
+    where:  {
+      proprietarioId,
+      empresaId,
+      status: { in: STATUS_FATURA_ABERTOS },
+      id:     { not: fechada.id },
+    },
+    select: { id: true },
+  });
+  if (jaEmAberto) return null;
+
+  const nova = await db.fatura.create({
+    data: {
+      proprietarioId,
+      empresaId,
+      mesReferencia: proximoMesReferencia(fechada.mesReferencia),
+      status:        'ABERTA',
+      total:         0,
+    },
+  });
+
+  // A assistência é a da EMPRESA DA FATURA (não a do contexto de quem fechou), e `db`
+  // precisa ser o `tx` no cron — sem ele o RLS esconde o ProprietarioPerfil e o
+  // mensalista deixa de ser cobrado, sem erro nenhum.
+  await adicionarAssistenciaMensal(nova.id, proprietarioId, veterinarioId, empresaId, db);
+
+  // Relê: `adicionarAssistenciaMensal` recalcula o total, e devolver o registro de
+  // antes faria o caller anunciar uma fatura nova com total zero.
+  return db.fatura.findUnique({ where: { id: nova.id } });
+}
+
+/**
+ * Mesma coisa, mas SEM derrubar a resposta HTTP. Falhar em ABRIR a seguinte não pode
+ * transformar um fechamento BEM-SUCEDIDO em "erro ao fechar" na tela: a fatura já
+ * fechou, e o ciclo novo ainda nasce sozinho no primeiro lançamento clínico
+ * (`getOrCreateFatura`) ou ao abrir a tela do cliente. No CRON este atalho NÃO é
+ * usado — lá a falha tem de aparecer no diário da execução, que é onde se investiga.
+ */
+async function abrirProximaFaturaSemQuebrar(fechada, opts) {
+  try {
+    return await abrirProximaFatura(fechada, opts);
+  } catch (err) {
+    console.error('Erro ao abrir a fatura seguinte à #' + fechada?.id + ':', err);
+    return null;
+  }
+}
+
 // ISOLAMENTO ENTRE EMPRESAS na fatura alcançada por ID.
 //
 // `checkPermission('financeiro.faturas.*')` diz que a pessoa mexe em fatura — não em
@@ -355,19 +443,26 @@ const FaturaController = {
             id: true, fullName: true, email: true, phone: true,
             animais: { where: { ativo: true }, select: ANIMAL_SELECT },
             faturas: {
-              where:   { status: { in: ['ABERTA', 'FECHADA', 'ATRASADA', 'PAGA'] } },
+              where:   { status: { in: ['ABERTA', 'REABERTA', 'FECHADA', 'ATRASADA', 'PAGA'] } },
               orderBy: { criadoEm: 'desc' },
-              take:    6,
+              // 10, não 6: com REABERTA são CINCO estados possíveis, e um `take` curto
+              // podia devolver seis faturas fechadas e nenhuma das outras — a aba
+              // sumiria da tela por causa do corte, não por não existir.
+              take:    10,
               select:  { id: true, total: true, status: true, mesReferencia: true, criadoEm: true },
             },
           },
         });
         if (!prop) return res.json({ dados: [] });
+        // ⚠️ `faturaAtiva` é SÓ a ABERTA. A reaberta tem casa própria (`faturaReaberta`)
+        // porque é outro documento: as duas podem existir ao mesmo tempo, e cair na
+        // mesma aba faria uma esconder a outra.
         const faturaAberta   = prop.faturas.find(f => f.status === 'ABERTA')   ?? null;
+        const faturaReaberta = prop.faturas.find(f => f.status === 'REABERTA') ?? null;
         const faturaFechada  = prop.faturas.find(f => f.status === 'FECHADA')  ?? null;
         const faturaAtrasada = prop.faturas.find(f => f.status === 'ATRASADA') ?? null;
         const faturaPaga     = prop.faturas.find(f => f.status === 'PAGA')     ?? null;
-        const dados = [{ ...prop, faturaAtiva: faturaAberta ?? null, faturaFechada, faturaAtrasada, faturaPaga, faturas: undefined }];
+        const dados = [{ ...prop, faturaAtiva: faturaAberta ?? null, faturaReaberta, faturaFechada, faturaAtrasada, faturaPaga, faturas: undefined }];
         return res.json({ dados });
       }
 
@@ -402,7 +497,7 @@ const FaturaController = {
         // cliente foi desligado. Cobre ABERTA/FECHADA/ATRASADA (qualquer uma ainda
         // não paga); fatura já PAGA não precisa reter o proprietário na lista.
         const faturasPendentes = await prisma.fatura.findMany({
-          where:  { empresaId, status: { in: ['ABERTA', 'FECHADA', 'ATRASADA'] }, proprietarioId: { not: null } },
+          where:  { empresaId, status: { in: ['ABERTA', 'REABERTA', 'FECHADA', 'ATRASADA'] }, proprietarioId: { not: null } },
           select: { proprietarioId: true },
         });
         proprietarioIds = [...new Set([...proprietarioIds, ...faturasPendentes.map(f => f.proprietarioId)])];
@@ -441,9 +536,10 @@ const FaturaController = {
             },
           },
           faturas: {
-            where: { status: { in: ['ABERTA', 'FECHADA', 'ATRASADA'] } },
+            where: { status: { in: ['ABERTA', 'REABERTA', 'FECHADA', 'ATRASADA'] } },
             orderBy: { criadoEm: 'desc' },
-            take: 6,
+            // Ver a nota do `take` no ramo do proprietário: são cinco estados agora.
+            take: 10,
             select: { id: true, total: true, status: true, mesReferencia: true, criadoEm: true },
           },
         },
@@ -484,6 +580,7 @@ const FaturaController = {
         .map(p => ({
           ...p,
           faturaAtiva:    p.faturas.find(f => f.status === 'ABERTA')   ?? null,
+          faturaReaberta: p.faturas.find(f => f.status === 'REABERTA') ?? null,
           faturaFechada:  p.faturas.find(f => f.status === 'FECHADA')  ?? null,
           faturaAtrasada: p.faturas.find(f => f.status === 'ATRASADA') ?? null,
           faturaPaga:     faturaPagaPorProp[p.id] ?? null,
@@ -742,7 +839,9 @@ const FaturaController = {
     const { faturaId } = req.params;
     const { status }   = req.body;
 
-    const VALIDOS = ['ABERTA', 'PAGA', 'CANCELADA', 'FECHADA'];
+    // REABERTA é aceita para o cliente que já a conhece; o botão "Reabrir" da tela
+    // continua mandando ABERTA e é `statusAoReabrir` que a converte (abaixo).
+    const VALIDOS = ['ABERTA', 'REABERTA', 'PAGA', 'CANCELADA', 'FECHADA'];
     if (!VALIDOS.includes(status)) {
       return res.status(400).json({ error: `Status inválido. Use: ${VALIDOS.join(', ')}` });
     }
@@ -752,7 +851,9 @@ const FaturaController = {
       // marcar como PAGA (ou CANCELADA) a fatura de outra clínica.
       const alvo = await prisma.fatura.findUnique({
         where:  { id: Number(faturaId) },
-        select: { id: true, empresaId: true, status: true, proprietarioId: true },
+        // `mesReferencia` entra por causa de `abrirProximaFatura`: é dele que sai o
+        // mês da fatura seguinte quando esta rota é o caminho do FECHAMENTO.
+        select: { id: true, empresaId: true, status: true, proprietarioId: true, mesReferencia: true },
       });
       if (!alvo || faturaForaDoEscopo(alvo, req)) {
         return res.status(404).json({ error: 'Fatura não encontrada' });
@@ -778,10 +879,26 @@ const FaturaController = {
         });
       }
 
+      // 🔴 REABRIR NÃO DEVOLVE A FATURA A "ABERTA" (2026-09-06, a pedido).
+      //
+      // Fatura que já foi FECHADA/ATRASADA/PAGA e volta a ser editável grava
+      // **REABERTA**. Ela continua editável — o que muda é que a tela, o relatório e
+      // `getOrCreateFatura` param de confundi-la com a fatura CORRENTE do mês: quem
+      // reabre agosto para corrigir uma linha não quer que a cobrança de setembro
+      // caia lá dentro. A conversão é do BACKEND (`statusAoReabrir`), então o botão
+      // "Reabrir" da tela não precisou mudar o que envia.
+      const statusFinal = statusAoReabrir(alvo.status, status);
+
+      // Esta rota também é um caminho de FECHAMENTO (o botão "Fechar Fatura" usa
+      // `/fechar`, mas o status pode chegar por aqui). Fechar por qualquer porta abre
+      // a fatura seguinte — mas só quando de fato veio de uma fatura em ABERTO;
+      // PAGA → FECHADA é acerto de status, não um ciclo que terminou.
+      const estaFechando = statusFinal === 'FECHADA' && STATUS_FATURA_ABERTOS.includes(alvo.status);
+
       const fatura = await prisma.$transaction(async (tx) => {
         const atualizada = await tx.fatura.update({
           where:   { id: Number(faturaId) },
-          data:    { status },
+          data:    { status: statusFinal },
           include: FATURA_INCLUDE,
         });
         if (saindoDePaga) {
@@ -789,12 +906,20 @@ const FaturaController = {
             categoria:  'ALTERACAO',
             entidade:   'FATURA',
             entidadeId: alvo.id,
-            detalhes:   `Fatura PAGA reaberta como ${status}`,
+            detalhes:   `Fatura PAGA reaberta como ${statusFinal}`,
           });
         }
         return atualizada;
       });
-      res.json({ dados: await comPerfilDaEmpresa(fatura, req.empresaId) });
+
+      const proxima = estaFechando
+        ? await abrirProximaFaturaSemQuebrar(fatura, { veterinarioId: req.user.id })
+        : null;
+
+      res.json({
+        dados:   await comPerfilDaEmpresa(fatura, req.empresaId),
+        proxima: proxima ? { id: proxima.id, mesReferencia: proxima.mesReferencia, total: proxima.total } : null,
+      });
     } catch (err) {
       console.error('Erro ao atualizar status:', err);
       res.status(500).json({ error: 'Erro interno' });
@@ -988,8 +1113,10 @@ const FaturaController = {
       if (req.empresaId && fatura.empresaId && fatura.empresaId !== Number(req.empresaId)) {
         return res.status(404).json({ error: 'Fatura não encontrada' });
       }
-      if (fatura.status !== 'ABERTA') {
-        return res.status(400).json({ error: 'Apenas faturas com status ABERTA podem ser fechadas' });
+      // REABERTA fecha de novo pelo MESMO caminho: ela é uma fatura em aberto que já
+      // passou por aqui uma vez, e sem isto ficaria presa em aberto para sempre.
+      if (!STATUS_FATURA_ABERTOS.includes(fatura.status)) {
+        return res.status(400).json({ error: 'Apenas faturas ABERTA ou REABERTA podem ser fechadas' });
       }
 
       // A assistência é a da EMPRESA DA FATURA (não a do contexto de quem fecha)
@@ -1001,7 +1128,13 @@ const FaturaController = {
         include: FATURA_INCLUDE,
       });
 
-      res.json({ dados: await comPerfilDaEmpresa(faturaFechada, req.empresaId) });
+      // Fechou uma, abre a seguinte já com os itens padrão — ver `abrirProximaFatura`.
+      const proxima = await abrirProximaFaturaSemQuebrar(faturaFechada, { veterinarioId: req.user.id });
+
+      res.json({
+        dados:   await comPerfilDaEmpresa(faturaFechada, req.empresaId),
+        proxima: proxima ? { id: proxima.id, mesReferencia: proxima.mesReferencia, total: proxima.total } : null,
+      });
     } catch (err) {
       console.error('Erro ao fechar fatura:', err);
       res.status(500).json({ error: 'Erro interno' });
@@ -1028,7 +1161,7 @@ const FaturaController = {
             proprietario: { select: { id: true, fullName: true, phone: true, email: true, empresaId: true, valorAssistencia: true, mensalista: true } },
           },
         });
-        if (!fatura || fatura.status !== 'ABERTA') continue;
+        if (!fatura || !STATUS_FATURA_ABERTOS.includes(fatura.status)) continue;
         // Guarda de escopo: a fatura precisa ser DESTA empresa. Antes o teste era pelo
         // `empresaId` do PROPRIETÁRIO (que é global e não diz de quem é a fatura) —
         // agora é pelo da própria fatura, que é a tenancy real do documento.
@@ -1040,6 +1173,15 @@ const FaturaController = {
           data:   { status: 'FECHADA' },
           select: { id: true, total: true, mesReferencia: true },
         });
+
+        // Cada fatura fechada abre a sua seguinte. A guarda de "já tem uma em aberto"
+        // mora dentro do helper, então fechar o lote inteiro não cria duas para o
+        // mesmo cliente nem quando ele aparece duas vezes na lista.
+        await abrirProximaFaturaSemQuebrar(
+          { id, proprietarioId: fatura.proprietarioId, empresaId: fatura.empresaId, mesReferencia: atualizada.mesReferencia },
+          { veterinarioId: req.user.id },
+        );
+
         fechadas.push({
           faturaId:      atualizada.id,
           total:         atualizada.total,
@@ -1153,5 +1295,6 @@ const FaturaController = {
 
 module.exports = FaturaController;
 module.exports.adicionarAssistenciaMensal      = adicionarAssistenciaMensal;
+module.exports.abrirProximaFatura              = abrirProximaFatura;
 module.exports.diaVencimentoDoProprietario     = diaVencimentoDoProprietario;
 module.exports.recalcularTotal            = recalcularTotal;

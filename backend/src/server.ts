@@ -204,6 +204,12 @@ const limiter = rateLimit({
   windowMs: 60 * 1000,
   max: RATE_LIMIT_MAX,
   keyGenerator: chaveDeLimite,
+  // O canal SSE fica ABERTO por minutos e o EventSource RECONECTA sozinho ao cair
+  // (rede instável, troca de wi-fi no celular). Contado como requisição comum, um
+  // dia ruim de rede consumiria a cota da pessoa e a tela levaria 429 no meio do
+  // atendimento — pelo canal que existe só para avisar. O que ele protege (o dado)
+  // continua atrás do limite: toda ESCRITA passa pelas rotas normais.
+  skip: (req: Request) => req.path === '/eventos/stream',
   standardHeaders: true,
   legacyHeaders: false,
   message: { sucesso: false, mensagem: 'Muitas requisições. Tente novamente em instantes.' },
@@ -239,6 +245,8 @@ app.use('/api', limiter);
 // ===================== IMPORTAÇÃO DAS ROTAS =====================
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const authRoutes               = require('./routes/auth');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const eventosRoutes            = require('./routes/eventos'); // SSE — avisos de concorrencia de edicao
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const animaisRoutes            = require('./routes/animais');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -361,6 +369,9 @@ app.use('/api/users',                 usersRoutes);
 app.use('/api/nutrientes',            nutrientesRoutes);
 app.use('/api/composicoes-alimentares', composicaoAlimentarRoutes);
 app.use('/api/clinica/evolucoes',     evolucaoRoutes);
+// SSE: a conexao fica ABERTA por minutos, entao ela nao pode contar no rate
+// limit geral como uma requisicao qualquer — ver a excecao em `limiter.skip`.
+app.use('/api/eventos',               eventosRoutes);
 app.use('/api/clinica/faturas',       faturaRoutes);
 app.use('/api/clinica/prescricoes',   prescricoesRoutes);
 app.use('/api/clinica/encaminhamentos', encaminhamentosRoutes);
@@ -778,7 +789,7 @@ registrarJob('lembrete_dose_prescricao', {
 
 // ===================== CRON — FECHAMENTO AUTOMÁTICO DE FATURAS =====================
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { adicionarAssistenciaMensal, recalcularTotal } = require('./controllers/FaturaController');
+const { adicionarAssistenciaMensal, recalcularTotal, abrirProximaFatura } = require('./controllers/FaturaController');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { getEquipeIdsDoProprietario } = require('./middlewares/permissao.middleware');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -916,7 +927,15 @@ async function fecharFaturasDoMes() {
             data:  { status: 'FECHADA', total },
           });
 
-          diario.ok(empresa, `${quem} — fechada, total R$ ${Number(total).toFixed(2)}`);
+          // 🔴 FECHOU, ABRE A SEGUINTE (2026-09-06). É aqui que mais importa: no
+          // fechamento automático ninguém está na frente da tela, e sem isto o cliente
+          // ficava sem fatura corrente — e sem a Assistência Veterinária Mensal, que é
+          // recorrente — até o próximo atendimento. `tx` obrigatório: fora dele o RLS
+          // recusa a criação (ver `lib/cronTenant.js`).
+          const proxima = await abrirProximaFatura(fatura, { db: tx });
+
+          diario.ok(empresa, `${quem} — fechada, total R$ ${Number(total).toFixed(2)}`
+            + (proxima ? ` · fatura ${proxima.mesReferencia ?? 'seguinte'} aberta (#${proxima.id})` : ''));
         } catch (err: unknown) {
           // O erro vai INTEIRO para o diário (banco, validação, o que for) — é ele que
           // aparece ao clicar na execução.

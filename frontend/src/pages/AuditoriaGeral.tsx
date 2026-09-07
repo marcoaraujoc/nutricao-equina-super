@@ -12,7 +12,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import {
   ScrollText, Search, RefreshCw, ChevronLeft, ChevronRight, Trash2, Ban, ShieldCheck,
-  ArrowLeftRight, PencilLine, PlusCircle, Eye, X, CheckCircle2, ShieldAlert, FileDown,
+  ArrowLeftRight, PencilLine, PlusCircle, Eye, X, CheckCircle2, ShieldAlert, FileDown, GitCompareArrows,
   ToggleLeft, ToggleRight,
 } from 'lucide-react';
 
@@ -41,7 +41,7 @@ interface LogAuditoria {
 
 interface Meta { total: number; page: number; limit: number; totalPages: number }
 
-type FiltroCategoria = '' | 'EXCLUSAO' | 'CANCELAMENTO' | 'INATIVACAO' | 'ATIVACAO' | 'CONFIGURACAO' | 'TRANSFERENCIA' | 'ALTERACAO' | 'CRIACAO' | 'EXECUCAO' | 'ACESSO_NEGADO' | 'EXPORTACAO';
+type FiltroCategoria = '' | 'EXCLUSAO' | 'CANCELAMENTO' | 'INATIVACAO' | 'ATIVACAO' | 'CONFIGURACAO' | 'TRANSFERENCIA' | 'ALTERACAO' | 'CRIACAO' | 'EXECUCAO' | 'ACESSO_NEGADO' | 'EXPORTACAO' | 'CONFLITO_EDICAO';
 
 /**
  * O registro EXECUTADO pela ação, em uma expressão só — a coluna "Paciente" foi
@@ -164,6 +164,14 @@ function BadgeCategoria({ categoria }: { categoria: string | null }) {
   if (categoria === 'EXECUCAO') return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-100 text-teal-700">
       <CheckCircle2 size={9} /> EXECUÇÃO
+    </span>
+  );
+  // TENTATIVA de gravar sobre dado que outro profissional já mudou, recusada pela
+  // trava otimista. Âmbar (aviso), NÃO o rose do ACESSO_NEGADO: aqui não houve
+  // invasão nem falta de permissão — foram duas pessoas trabalhando ao mesmo tempo.
+  if (categoria === 'CONFLITO_EDICAO') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700">
+      <GitCompareArrows size={9} /> CONFLITO DE EDIÇÃO
     </span>
   );
   // Tentativa BLOQUEADA — login recusado, módulo sem permissão ou paciente fora do escopo
@@ -381,7 +389,7 @@ export default function AuditoriaGeral() {
         {/* Filtros */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-3">
           <div className="flex flex-wrap gap-2">
-            {([['', 'Todas'], ['ACESSO_NEGADO', 'Acesso negado'], ['EXCLUSAO', 'Exclusões'], ['CANCELAMENTO', 'Cancelamentos'], ['INATIVACAO', 'Inativações'], ['ATIVACAO', 'Ativações'], ['TRANSFERENCIA', 'Transferências'], ['ALTERACAO', 'Alterações'], ['CRIACAO', 'Criações'], ['EXECUCAO', 'Execuções'], ['EXPORTACAO', 'Exportações'], ['CONFIGURACAO', 'Configuração']] as [FiltroCategoria, string][]).map(([key, label]) => (
+            {([['', 'Todas'], ['ACESSO_NEGADO', 'Acesso negado'], ['EXCLUSAO', 'Exclusões'], ['CANCELAMENTO', 'Cancelamentos'], ['INATIVACAO', 'Inativações'], ['ATIVACAO', 'Ativações'], ['TRANSFERENCIA', 'Transferências'], ['ALTERACAO', 'Alterações'], ['CRIACAO', 'Criações'], ['EXECUCAO', 'Execuções'], ['EXPORTACAO', 'Exportações'], ['CONFLITO_EDICAO', 'Conflitos de edição'], ['CONFIGURACAO', 'Configuração']] as [FiltroCategoria, string][]).map(([key, label]) => (
               <button key={key} onClick={() => setCategoria(key)}
                 className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
                   categoria === key

@@ -60,17 +60,49 @@ function filhoDeAnimalVisivel(campo = 'animal') {
  * cadastro do proprietário é POR EMPRESA). Some da empresa que o inativou e
  * continua visível nas outras.
  *
+ * 🔴 COM CADASTRO NA EMPRESA, QUEM DECIDE É O CADASTRO DA EMPRESA — NÃO O `users.ativo`
+ * (2026-09-06). O `ativo` do `users` é do LOGIN, e é global: ele cai quando a pessoa é
+ * inativada como PROFISSIONAL em qualquer clínica (`toggleMembro` mexe no `User.ativo`).
+ * Enquanto ele fazia parte deste filtro, inativar a veterinária na clínica A escondia os
+ * pacientes em que ela é CLIENTE da clínica B — um paciente recém-cadastrado nascia
+ * invisível, sem nada acusar. Foi um caso real: o paciente foi gravado na MarcoVet com a
+ * dona ativa ALI e sumiu porque a conta dela tinha sido desativada na Patyvet, semanas
+ * antes e por outra pessoa.
+ *
+ * Isso contrariava as duas regras que este arquivo existe para sustentar: PROFISSIONAL
+ * inativo continua aparecendo (é o AUTOR do registro) e o cadastro do cliente é POR
+ * EMPRESA. "Pode entrar no sistema?" e "é cliente desta clínica?" são perguntas
+ * diferentes, e só a segunda decide se o paciente aparece.
+ *
+ * ⚠️ O `users.ativo` CONTINUA valendo para quem NÃO tem cadastro nesta empresa (o
+ * legado): ali não existe outro sinal, e ignorá-lo faria reaparecer o cliente que a
+ * única clínica dele havia inativado. É o mesmo fallback de sempre, agora explícito.
+ * ⚠️ O sinal é o cadastro de CLIENTE (`ProprietarioPerfil`), NUNCA `UsuarioEmpresa`:
+ * aquela tabela guarda o vínculo de qualquer papel, o profissional inclusive, e usá-la
+ * aqui remisturaria as duas coisas que esta regra existe para separar — só que por
+ * empresa. Consequência aceita: o cliente cadastrado SÓ na tabela nova (§36-f) cai no
+ * fallback do `users.ativo` abaixo. O projeto grava as duas em paralelo enquanto os
+ * leitores migram, então isso é o comportamento antigo, não uma regressão.
+ *
  * Devolve `{}` sem empresa no contexto — ADMIN de plataforma não tem clínica de
  * referência, e um filtro chutado ali esconderia dado legítimo.
  */
 function proprietarioAtivoNaEmpresa(empresaId) {
   if (!empresaId) return {};
+  const emp = Number(empresaId);
   return {
     user: {
-      ativo: true,
       OR: [
-        { proprietarioPerfis: { none: { empresaId: Number(empresaId) } } },  // sem cadastro aqui = legado, não esconde
-        { proprietarioPerfis: { some: { empresaId: Number(empresaId), ativo: true } } },
+        // Cadastro de cliente ATIVO nesta clínica: é cliente daqui, e é só isso que
+        // importa — o `users.ativo` do login não entra nesta perna.
+        { proprietarioPerfis: { some: { empresaId: emp, ativo: true } } },
+        // Sem cadastro aqui (legado): só resta o sinal global do login.
+        {
+          AND: [
+            { proprietarioPerfis: { none: { empresaId: emp } } },
+            { ativo: true },
+          ],
+        },
       ],
     },
   };

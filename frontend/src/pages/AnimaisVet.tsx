@@ -56,6 +56,17 @@ interface Animal {
    * É o estado que o botão "Inativar" desta tela produz.
    */
   inativo?:         boolean;
+  /**
+   * O PROPRIETÁRIO está inativo NESTA clínica (`removerDaEmpresa`), e por isso o
+   * paciente está fora de todas as outras telas — a regra de visibilidade esconde o
+   * animal de quem não é cliente ativo da empresa (lib/visibilidade.js).
+   *
+   * Só esta listagem recebe o campo, porque é a única que enxerga esses pacientes.
+   * ⚠️ Conta como INATIVO nas abas (ver `pacienteInativo`): sem isso o paciente do
+   * cliente removido cairia na aba "Ativos" prometendo uma atividade que ele não tem
+   * em lugar nenhum do sistema.
+   */
+  proprietarioInativo?: boolean;
   inativoEm?:       string | null;
   inativoMotivo?:   string | null;
   inativoPor?:      { fullName?: string | null } | null;
@@ -157,6 +168,16 @@ function seloStatus(animal: Animal): { texto: string; classe: string; titulo: st
       titulo: 'Fora das listagens — este paciente não aparece em nenhuma outra tela.',
     };
   }
+  // O dono inativo produz a MESMA consequência do `ativo = false` (o paciente não
+  // aparece em nenhuma outra tela), e por isso a mesma cor — o que muda é onde se
+  // desfaz: no CLIENTE, não no paciente.
+  if (animal.proprietarioInativo) {
+    return {
+      texto:  'Inativo',
+      classe: 'bg-red-100 text-red-700',
+      titulo: 'O proprietário está inativo nesta clínica — enquanto ele não for reativado, este paciente não aparece em nenhuma outra tela.',
+    };
+  }
   if (animal.inativo) {
     return {
       texto:  'Inativo',
@@ -178,7 +199,7 @@ function seloStatus(animal: Animal): { texto: string; classe: string; titulo: st
  * TELA: as duas condições moram em colunas diferentes e nenhuma query única as cobre.
  */
 function pacienteInativo(a: Animal): boolean {
-  return a.ativo === false || !!a.inativo;
+  return a.ativo === false || !!a.inativo || !!a.proprietarioInativo;
 }
 
 /**
@@ -187,6 +208,16 @@ function pacienteInativo(a: Animal): boolean {
  * (legado) grava `desativado_em`/`desativado_motivo`/`desativado_por_nome`.
  */
 function rastroInativacao(a: Animal): { em: string | null; por: string | null; motivo: string } {
+  // Dono inativado com os animais PRESERVADOS (a opção "manter os animais" de
+  // `removerDaEmpresa`): o paciente não tem trilha própria — ninguém o inativou. Ele
+  // está fora das telas por causa do CLIENTE, e a justificativa diz onde se desfaz.
+  if (a.ativo !== false && !a.inativo && a.proprietarioInativo) {
+    return {
+      em:     null,
+      por:    null,
+      motivo: 'Proprietário inativo nesta clínica — reative o cliente em Cadastro › Proprietários para o paciente voltar às listagens.',
+    };
+  }
   if (a.inativo) {
     return {
       em:     a.inativoEm ?? null,
@@ -377,8 +408,20 @@ const AnimaisVet = () => {
     if (!modalAtivar) return;
     setProcessandoAtivo(true); setErroModalAtivo(null);
     try {
-      await api.patch(`/animais/${modalAtivar.id}/ativar`, { motivo });
-      toast.success('Paciente ativado — o prontuário voltou a aceitar registros');
+      const nome = modalAtivar.nome;
+      const r = await api.patch(`/animais/${modalAtivar.id}/ativar`, { motivo });
+      // O paciente não volta sozinho: `lib/donoAtivoDoPaciente.js` reativa o cadastro
+      // do dono NESTA clínica na mesma transaction, porque paciente ativo de cliente
+      // inativo nasce invisível. A tela só CONTA o que aconteceu — mesmo padrão de
+      // `Animal.tsx#handleAtivarPacienteDuplicado`.
+      // ⚠️ `loginGlobalInativo` também vem na resposta e é DELIBERADAMENTE ignorado
+      // (a pedido, 2026-09-06): é UMA ação, com UM aviso. O acesso ao sistema é outra
+      // dimensão, resolvida por quem o desligou — dizer isso aqui virava uma segunda
+      // mensagem sobre o mesmo clique.
+      const resp = (r.data ?? {}) as { donoReativado?: boolean };
+      toast.success(resp.donoReativado
+        ? `${nome} e o proprietário foram reativados`
+        : `Paciente ativado — o prontuário voltou a aceitar registros`);
       fecharModaisAtivo();
       await loadAnimais();
     } catch (err: unknown) {
@@ -391,8 +434,20 @@ const AnimaisVet = () => {
     if (!modalReativar) return;
     setProcessandoAtivo(true); setErroModalAtivo(null);
     try {
-      await api.patch(`/animais/${modalReativar.id}/reativar`, { motivo });
-      toast.success('Paciente ativado com sucesso');
+      const nome = modalReativar.nome;
+      const r = await api.patch(`/animais/${modalReativar.id}/reativar`, { motivo });
+      // O paciente não volta sozinho: `lib/donoAtivoDoPaciente.js` reativa o cadastro
+      // do dono NESTA clínica na mesma transaction, porque paciente ativo de cliente
+      // inativo nasce invisível. A tela só CONTA o que aconteceu — mesmo padrão de
+      // `Animal.tsx#handleAtivarPacienteDuplicado`.
+      // ⚠️ `loginGlobalInativo` também vem na resposta e é DELIBERADAMENTE ignorado
+      // (a pedido, 2026-09-06): é UMA ação, com UM aviso. O acesso ao sistema é outra
+      // dimensão, resolvida por quem o desligou — dizer isso aqui virava uma segunda
+      // mensagem sobre o mesmo clique.
+      const resp = (r.data ?? {}) as { donoReativado?: boolean };
+      toast.success(resp.donoReativado
+        ? `${nome} e o proprietário foram reativados`
+        : `${nome} foi reativado`);
       fecharModaisAtivo();
       await loadAnimais();
     } catch (err: unknown) {

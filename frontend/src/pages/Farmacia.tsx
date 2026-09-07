@@ -7,6 +7,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import toast from 'react-hot-toast';
 import { useSearchParams } from 'react-router-dom';
 import PageContainer from '../components/PageContainer';
+import { useOrdenacao, ThOrdenavel, ordenarLista, valorData } from '../components/OrdenacaoLista';
 import BotaoVoltar from '../components/BotaoVoltar';
 import {
   AlertTriangle, Lock, Plus, Pencil,
@@ -73,6 +74,10 @@ interface Meta { total: number; totalControlados: number; totalAbaixoMinimo: num
 interface MovimentoEstoque { id: number; tipo: string; quantidade: number; motivo: string | null; createdAt: string }
 
 type FiltroTab = 'todos' | 'ativos' | 'inativos' | 'critico' | 'alarmante' | 'controlados';
+
+/** Colunas ordenáveis da lista de estoque (as três últimas variam com a aba). */
+type ColunaFarmacia = 'medicamento' | 'estoque' | 'status' | 'criadoEm' | 'ativadoEm'
+                    | 'ativadoPor' | 'inativadoEm' | 'inativadoPor' | 'justificativa';
 
 
 // Tipos de fornecedor relevantes para farmácia (excluem prestadores de serviço clínico)
@@ -180,6 +185,8 @@ export default function Farmacia() {
   const [filtroTab,    setFiltroTab]    = useState<FiltroTab>(
     (['todos','ativos','inativos','critico','alarmante','controlados'] as string[]).includes(filtroDaUrl) ? filtroDaUrl : 'ativos',
   );
+
+  const { ordenacao, alternar } = useOrdenacao<ColunaFarmacia>();
 
   const [form,         setForm]         = useState({ ...FORM_VAZIO });
   const [editandoId,   setEditandoId]   = useState<number | null>(null);
@@ -338,11 +345,28 @@ export default function Farmacia() {
 
   // ── Filtro local ──────────────────────────────────────────────────────────
 
-  const itensFiltrados = (() => {
+  const itensDaAba = (() => {
     if (filtroTab === 'critico')   return itens.filter((i) => i.qtdEstoque <= i.estoqueMinimo);
     if (filtroTab === 'alarmante') return itens.filter((i) => i.qtdEstoque <= i.estoqueAlarmante && i.qtdEstoque > i.estoqueMinimo);
     return itens;
   })();
+  // Ordenação por coluna — vale para a lista INTEIRA da aba (aqui não há paginação).
+  // As colunas de data mudam com a aba (ativado × inativado); a chave é a mesma e o
+  // valor acompanha o que a linha exibe naquela aba.
+  const itensFiltrados = ordenarLista(itensDaAba, ordenacao, (item, campo) => {
+    switch (campo) {
+      case 'medicamento':   return item.medicamento?.nome ?? null;
+      case 'estoque':       return item.qtdEstoque ?? 0;
+      case 'status':        return item.ativo ? 'ATIVO' : 'INATIVO';
+      case 'criadoEm':      return valorData(item.createdAt);
+      case 'ativadoEm':     return valorData(item.ativoEm ?? item.createdAt);
+      case 'ativadoPor':    return item.ativoPorNome ?? null;
+      case 'inativadoEm':   return valorData(item.inativoEm);
+      case 'inativadoPor':  return item.inativoPorNome ?? null;
+      case 'justificativa': return item.inativoMotivo ?? null;
+      default:              return null;
+    }
+  });
 
   // ── Helpers UI ────────────────────────────────────────────────────────────
 
@@ -705,20 +729,20 @@ export default function Farmacia() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-100">
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Medicamento</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Estoque</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                      <ThOrdenavel campo="medicamento" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Medicamento</ThOrdenavel>
+                      <ThOrdenavel campo="estoque" ordenacao={ordenacao} onOrdenar={alternar} alinhar="centro" className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Estoque</ThOrdenavel>
+                      <ThOrdenavel campo="status" ordenacao={ordenacao} onOrdenar={alternar} alinhar="centro" className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</ThOrdenavel>
                       {filtroTab !== 'inativos' ? (
                         <>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Criado em</th>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado em</th>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado por</th>
+                          <ThOrdenavel campo="criadoEm" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Criado em</ThOrdenavel>
+                          <ThOrdenavel campo="ativadoEm" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado em</ThOrdenavel>
+                          <ThOrdenavel campo="ativadoPor" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado por</ThOrdenavel>
                         </>
                       ) : (
                         <>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado em</th>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado por</th>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
+                          <ThOrdenavel campo="inativadoEm" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado em</ThOrdenavel>
+                          <ThOrdenavel campo="inativadoPor" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado por</ThOrdenavel>
+                          <ThOrdenavel campo="justificativa" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</ThOrdenavel>
                         </>
                       )}
                       <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>

@@ -9,7 +9,7 @@ const { corteDePropriedade }                      = require('../lib/animalPropri
 const { buildAnimalScopeWhere }                   = require('../lib/animalScope');
 const { filhoDeAnimalVisivel, animalVisivelNaEmpresa } = require('../lib/visibilidade');
 const { formatAtendimentoNum }                    = require('../lib/faturaUtils');
-const { registrarAuditoria, registrarTransferencia, registrarAlteracao } = require('../lib/auditoria');
+const { registrarAuditoria, registrarTransferencia, registrarAlteracao, registrarConflitoEdicao } = require('../lib/auditoria');
 const {
   fusoDaEmpresa, FUSO_PADRAO, formatarDataNaEmpresa, formatarHoraNaEmpresa,
 } = require('../lib/fusoEmpresa');
@@ -28,6 +28,13 @@ const { marcarAssumido, anexarAssumido, anexarAssumidoEmLista } = require('../li
 // Cancelar o agendamento cancela junto a evolução EM_ANDAMENTO que ele abriu e tudo
 // que está atrelado a ela (prescrição, procedimento, exame, encaminhamento, vacina)
 const { cancelarEvolucoesDoAgendamento }          = require('../lib/cancelamentoPendencias');
+// Concorrência de edição — a mesma regra do atendimento vale para a AGENDA:
+// dois profissionais no mesmo agendamento não se sobrescrevem em silêncio.
+const {
+  ConflitoEdicaoError, lerControle, descreverEditor, reservarVersao,
+  assumirComLock, anexarControle, versaoDoBody, responderConflito,
+} = require('../lib/concorrenciaRegistro');
+const { publicar, EVENTOS } = require('../lib/eventosTempoReal');
 
 const TIPOS_VALIDOS  = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'];
 // EM_ANDAMENTO/FINALIZADO são setados automaticamente pelo fluxo de evolução clínica
@@ -426,6 +433,8 @@ const AgendamentoController = {
       // Rastro de "assumido de quem" — a agenda pinta o selo na linha que trocou de
       // responsável. Colunas lidas por SQL cru (lib/agendamentoAssumido.js).
       await anexarAssumidoEmLista(itens);
+      // `versao` acompanha toda leitura: é o que a tela devolve no próximo salvar.
+      await anexarControle(prisma, 'AGENDAMENTO', itens);
 
       res.json({ dados: itens });
     } catch (err) {
@@ -508,6 +517,8 @@ const AgendamentoController = {
         orderBy: { dataHora: 'asc' },
       });
       await anexarAssumidoEmLista(itens);
+      // `versao` acompanha toda leitura: é o que a tela devolve no próximo salvar.
+      await anexarControle(prisma, 'AGENDAMENTO', itens);
 
       res.json({ dados: itens });
     } catch (err) {
@@ -921,12 +932,20 @@ const AgendamentoController = {
         return res.status(400).json({ error: 'Nenhum campo válido para atualizar' });
       }
 
+      const versaoCliente = versaoDoBody(req.body);
+
       const atualizado = await prisma.$transaction(async (tx) => {
+        // Trava otimista como PRIMEIRO passo — ver EvolucaoController.atualizar.
+        // Reagendar sobre uma agenda que outra pessoa já mexeu (remarcou, trocou
+        // o profissional, cancelou) é 409, não um overwrite calado do horário.
+        const versaoNova = await reservarVersao(tx, 'AGENDAMENTO', item.id, versaoCliente);
+
         const ag = await tx.agendamentoClinico.update({
           where:   { id: item.id },
           data,
           include: INCLUDE_GLOBAL,
         });
+        ag.versao = versaoNova ?? ag.versao;
 
         // Trocar o responsável na agenda é transferir o atendimento: a evolução
         // aberta e tudo que está sob ela vão junto, senão o novo responsável não
@@ -977,8 +996,34 @@ const AgendamentoController = {
         });
       }
 
+      // Avisa em tempo real QUEM PERDEU o atendimento na troca de profissional —
+      // a agenda dele perde a linha, e a tela precisa saber por quê em vez de
+      // simplesmente ver o item sumir na próxima recarga.
+      if (trocaDeVet && item.veterinarioId != null && novoVetId) {
+        publicar([item.veterinarioId], {
+          tipo:          EVENTOS.AGENDAMENTO_ASSUMIDO,
+          recurso:       'AGENDAMENTO',
+          agendamentoId: item.id,
+          animalId:      item.animalId,
+          porUsuario:    { id: req.user.id, nome: req.user.fullName ?? null },
+          versao:        atualizado?.versao ?? null,
+        });
+      }
+
       res.json({ dados: atualizado });
     } catch (err) {
+      // Conflito de concorrência é 409 com explicação, nunca 500 genérico.
+      if (err instanceof ConflitoEdicaoError) {
+        const editor = await descreverEditor(prisma, err.editorId).catch(() => null);
+        registrarConflitoEdicao(req, {
+          entidade: 'AGENDAMENTO', entidadeId: Number(req.params.id), animalId: null,
+          motivo: 'Gravação recusada: o agendamento foi alterado por outro profissional',
+          versaoCliente: err.versaoCliente ?? null,
+          versaoAtual:   err.versaoAtual ?? null,
+          editorAtualId: err.editorId ?? null,
+        });
+        return responderConflito(res, Object.assign(err, { editor }));
+      }
       console.error('Erro ao atualizar agendamento:', err);
       res.status(500).json({ error: 'Erro ao atualizar agendamento' });
     }
@@ -1278,10 +1323,31 @@ const AgendamentoController = {
       // iniciado, existe evolução vinculada com o vet anterior. Mover só o
       // agendamento deixaria o atendimento na mão de quem não o conduz mais —
       // a evolução sumiria da tela de quem assumiu e continuaria na do outro.
+      // Estado de concorrência lido AGORA — vira a condição do UPDATE abaixo.
+      const controle = await lerControle(prisma, 'AGENDAMENTO', item.id);
+      if (!controle) return res.status(404).json({ error: 'Agendamento não encontrado' });
+
       const atualizado = await prisma.$transaction(async (tx) => {
-        const ag = await tx.agendamentoClinico.update({
+        // 🔴 UPDATE CONDICIONAL: exige a versão E o responsável anterior. Com dois
+        // profissionais clicando em Assumir no mesmo instante, o primeiro a
+        // commitar move a linha e o segundo não acha nada para atualizar — um
+        // vence e o outro leva 409. O `update` cego que havia aqui deixava os
+        // DOIS responderem 200 sobre a mesma assunção.
+        const ganhou = await assumirComLock(tx, 'AGENDAMENTO', item.id, {
+          deEditorId:     item.veterinarioId,
+          versaoEsperada: controle.versao,
+          paraEditorId:   Number(req.user.id),
+        });
+        if (!ganhou) {
+          throw new ConflitoEdicaoError(
+            'REGISTRO_ASSUMIDO',
+            'Este atendimento acabou de ser assumido por outro profissional.',
+            { versaoCliente: controle.versao },
+          );
+        }
+
+        const ag = await tx.agendamentoClinico.findUniqueOrThrow({
           where:   { id: item.id },
-          data:    { veterinarioId: Number(req.user.id) },
           include: INCLUDE_GLOBAL,
         });
         // Arrasta a evolução aberta E tudo que está sob ela (prescrição, exame,
@@ -1328,8 +1394,20 @@ const AgendamentoController = {
         });
       }
 
-      res.json({ dados: atualizado, foraExpediente });
+      // Aviso em tempo real a quem PERDEU o atendimento.
+      publicar([item.veterinarioId], {
+        tipo:          EVENTOS.AGENDAMENTO_ASSUMIDO,
+        recurso:       'AGENDAMENTO',
+        agendamentoId: item.id,
+        animalId:      item.animalId,
+        porUsuario:    { id: req.user.id, nome: req.user.fullName ?? null },
+        versao:        controle.versao + 1,
+      });
+
+      res.json({ dados: { ...atualizado, versao: controle.versao + 1 }, foraExpediente });
     } catch (err) {
+      // Perdeu a corrida: 409 com explicação, nunca 500.
+      if (err instanceof ConflitoEdicaoError) return responderConflito(res, err);
       console.error('Erro ao assumir agendamento:', err);
       res.status(500).json({ error: 'Erro ao assumir agendamento' });
     }

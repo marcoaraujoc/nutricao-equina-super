@@ -155,7 +155,9 @@ async function blocoReceitaPorLocalidade(propWhere, periodo) {
 async function blocoDevedores(propWhere, mesAtual) {
   const faturas = await prisma.fatura.findMany({
     where: {
-      status:        { in: ['ABERTA', 'FECHADA'] },
+      // REABERTA é fatura não paga como qualquer outra — quem reabriu para corrigir
+      // não deixou de dever. Tirá-la daqui apagaria o devedor do relatório.
+      status:        { in: ['ABERTA', 'REABERTA', 'FECHADA'] },
       mesReferencia: { lt: mesAtual },
       proprietarioId: { not: null },
       ...propWhere,

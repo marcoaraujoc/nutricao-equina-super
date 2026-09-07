@@ -26,6 +26,7 @@ import ErroAcao, { classeErro, temErro, type ErroAcaoDados } from '../components
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import JanelaLista from '../components/JanelaLista';
+import { useOrdenacao, ThOrdenavel, ordenarLista, valorData } from '../components/OrdenacaoLista';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -77,6 +78,9 @@ interface Encaminhamento {
   // a partir do AuditLog na listagem, só para os `status === 'CANCELADO'`.
   justificativaCancelamento?: string | null;
 }
+
+/** Colunas ordenáveis do histórico de encaminhamentos. */
+type ColunaEnc = 'data' | 'especialidade' | 'justificativa' | 'destino' | 'responsavel';
 
 interface Props {
   animalId:           number;
@@ -767,6 +771,9 @@ export default function SubModuloEncaminhamento({ animalId, animal, evolucaoId, 
   const [cancelandoId,     setCancelandoId]    = useState<number | null>(null);
   const [finalizandoId,    setFinalizandoId]   = useState<number | null>(null);
   const [page,             setPage]            = useState(1);
+  // Ordenação por coluna do histórico — a lista vem inteira do backend (a paginação
+  // é da tela), então ordenar aqui vale para o histórico todo, não só para a página.
+  const { ordenacao, alternar } = useOrdenacao<ColunaEnc>();
   // Erro de AÇÃO, guardado com o id da LINHA que o disparou — concluir e cancelar são
   // ações de uma linha específica, e a mensagem no topo da página deixaria o usuário
   // sem saber a qual encaminhamento ela se refere. Mesmo padrão da tela de Vacina.
@@ -884,9 +891,22 @@ export default function SubModuloEncaminhamento({ animalId, animal, evolucaoId, 
   }
 
   const LIMIT_ENC = 10;
-  const totalPags = Math.max(1, Math.ceil(encaminhamentos.length / LIMIT_ENC));
+  // Ordena o histórico inteiro e só então pagina.
+  // `destino` é o prestador da equipe OU o profissional/clínica externa — a mesma
+  // ordem de leitura que a coluna usa para exibi-lo.
+  const ordenados = ordenarLista(encaminhamentos, ordenacao, (enc, campo) => {
+    switch (campo) {
+      case 'data':          return valorData(enc.dataEncaminhamento);
+      case 'especialidade': return enc.especialidade ?? null;
+      case 'justificativa': return enc.motivo ?? null;
+      case 'destino':       return enc.prestador?.fullName ?? enc.veterinarioDestino ?? enc.clinicaDestino ?? null;
+      case 'responsavel':   return enc.veterinario?.fullName ?? null;
+      default:              return null;
+    }
+  });
+  const totalPags = Math.max(1, Math.ceil(ordenados.length / LIMIT_ENC));
   const pageAtual = Math.min(page, totalPags);
-  const pageItems = encaminhamentos.slice((pageAtual - 1) * LIMIT_ENC, pageAtual * LIMIT_ENC);
+  const pageItems = ordenados.slice((pageAtual - 1) * LIMIT_ENC, pageAtual * LIMIT_ENC);
 
   return (
     <div className="p-4 space-y-4">
@@ -948,11 +968,11 @@ export default function SubModuloEncaminhamento({ animalId, animal, evolucaoId, 
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Data</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Especialidade</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Destino</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Responsável</th>
+                  <ThOrdenavel campo="data" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Data</ThOrdenavel>
+                  <ThOrdenavel campo="especialidade" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Especialidade</ThOrdenavel>
+                  <ThOrdenavel campo="justificativa" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</ThOrdenavel>
+                  <ThOrdenavel campo="destino" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Destino</ThOrdenavel>
+                  <ThOrdenavel campo="responsavel" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Responsável</ThOrdenavel>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
                 </tr>
               </thead>

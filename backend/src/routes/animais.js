@@ -37,6 +37,15 @@ router.get('/buscar-por-nome', authenticate, animalController.buscarPorNome);
 // que popula `req.membroCargo`, do qual buildAnimalScopeWhere depende.
 router.get('/verificar-baia', authenticate, checkPermission('animais.ler', 'LEITURA'), animalController.verificarBaia);
 
+// GET  /api/animais/verificar-duplicidade?nome=&localizacaoId=&email=&ignorarId=
+// Cascata de duplicidade EM TEMPO REAL enquanto o cadastro é digitado: mesmo nome no
+// mesmo LOCAL é pergunta; mesmo nome + local + DONO é duplicata (lib/duplicidadeAnimal.js).
+// Mesmo par de razões do `verificar-baia` acima: rota literal ANTES de `/:id`, e o
+// checkPermission popula `req.membroCargo`/`req.empresaId`, sem os quais a verificação
+// não teria escopo de empresa nenhum.
+// ⚠️ É o AVISO da tela; quem RECUSA é o POST /animais, com o mesmo helper.
+router.get('/verificar-duplicidade', authenticate, checkPermission('animais.ler', 'LEITURA'), animalController.verificarDuplicidade);
+
 
 
 // ─── Rotas CRUD ───────────────────────────────────────────────────────────────

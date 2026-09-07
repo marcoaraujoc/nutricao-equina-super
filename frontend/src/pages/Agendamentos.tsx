@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import InlineError from '../components/InlineError';
 import ModalJustificativa from '../components/ModalJustificativa';
+import ResponsavelTrocado, { type EloResponsavel } from '../components/ResponsavelTrocado';
+import { useEventosTempoReal } from '../hooks/useEventosTempoReal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -60,9 +62,20 @@ interface AgendamentoGlobal {
   status:      StatusAgendamento;
   /** Minutos que o atendimento ocupa. null = agendamento antigo (tratado como 60). */
   duracaoMin:  number | null;
+  /** Trava otimista — volta ao backend na próxima escrita. Ausente em resposta
+   *  de servidor antigo; nesse caso a gravação segue sem proteção. */
+  versao?:     number | null;
   especialidade: { id: number; nome: string } | null;
   veterinario: { id: number; fullName: string } | null;
   criadoPor:   { id: number; fullName: string } | null;
+  /** Rastro da última TROCA de responsável (assumir, trocar profissional, transferir
+   *  o dia): de quem o atendimento veio. RESERVA da cadeia abaixo, para a base sem a
+   *  migration 20260924000000. Gravado por lib/agendamentoAssumido.js. */
+  assumidoDe?: { id: number; fullName: string | null } | null;
+  assumidoEm?: string | null;
+  /** TODOS os que já responderam pelo agendamento, do mais antigo ao mais recente —
+   *  é o que a coluna Profissional risca. Ver lib/cadeiaResponsaveis.js. */
+  responsaveisAnteriores?: { id: number; fullName: string | null }[];
   animal: {
     id:      number;
     nome:    string;
@@ -73,6 +86,17 @@ interface AgendamentoGlobal {
     user:    { id: number; fullName: string } | null;
   } | null;
 }
+
+/**
+ * Todos os que já responderam pelo agendamento, na ordem — a lista risca cada um.
+ * Sem a cadeia gravada (base ainda sem a migration), cai no anterior IMEDIATO, que é
+ * o que `assumido_de_id` sempre soube.
+ */
+const responsaveisAnterioresDoAg = (ag: AgendamentoGlobal): EloResponsavel[] => {
+  const cadeia = ag.responsaveisAnteriores ?? [];
+  if (cadeia.length > 0) return cadeia;
+  return ag.assumidoDe?.fullName ? [ag.assumidoDe] : [];
+};
 
 interface AnimalOption {
   id:      number;
@@ -1564,8 +1588,45 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
   // Extrai a mensagem de erro do backend (campo `error`) para exibir ao usuário.
+  // ── TEMPO REAL ────────────────────────────────────────────────────────────
+  // Alguém assumiu um atendimento QUE ERA DESTA PESSOA: a linha sai da agenda
+  // dela. Sem o aviso, o item simplesmente sumiria na próxima recarga manual —
+  // ou pior, ela clicaria em Iniciar num atendimento que já é de outro.
+  //
+  // ⚠️ Recarrega a LISTA e não trava a tela: aqui não há formulário longo em
+  // digitação a proteger (o da evolução é outro caso). Uma agenda que se
+  // conserta sozinha é melhor que uma agenda com aviso a fechar.
+  useEventosTempoReal((ev) => {
+    if (ev.recurso !== 'AGENDAMENTO') return;
+    if (ev.porUsuario?.id === user?.id) return;   // fui eu, em outra aba
+    fetchAgendamentos(selectedDate);
+    setMesCarregado('');
+    toast(
+      ev.porUsuario?.nome
+        ? `${ev.porUsuario.nome} assumiu um atendimento da sua agenda.`
+        : 'Um atendimento da sua agenda foi assumido por outro profissional.',
+      { icon: '🔄', duration: 6000 },
+    );
+  });
+
   const msgErroAgenda = (err: unknown, fallback: string): string =>
     (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback;
+
+  /**
+   * 🔴 Conflito de concorrência (409): outro profissional assumiu ou remarcou este
+   * atendimento enquanto esta tela estava aberta. Recarrega a agenda para mostrar
+   * o estado REAL — insistir sobre a linha velha só produziria o mesmo 409.
+   * Devolve `true` quando tratou, para o chamador não sobrepor outra mensagem.
+   */
+  const tratarConflitoAgenda = (err: unknown): boolean => {
+    const resp = (err as { response?: { status?: number; data?: { code?: string; error?: string; mensagem?: string } } })?.response;
+    const code = resp?.data?.code;
+    if (resp?.status !== 409 || (code !== 'VERSAO_CONFLITO' && code !== 'REGISTRO_ASSUMIDO')) return false;
+    setErroLista(resp.data?.mensagem ?? resp.data?.error ?? 'Este atendimento foi alterado por outro profissional.');
+    fetchAgendamentos(selectedDate);
+    setMesCarregado('');
+    return true;
+  };
 
   async function criarAgendamentoDireto(animalId: number, animalNome: string, vetId: number, hora: string) {
     setSalvando(true);
@@ -1847,13 +1908,20 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     }
     setSavingTrocaAg(true);
     try {
-      await api.patch(`/clinica/agendamentos/${trocandoVetAg.id}`, { veterinarioId: Number(trocandoVetIdAg) });
+      await api.patch(`/clinica/agendamentos/${trocandoVetAg.id}`, {
+        veterinarioId: Number(trocandoVetIdAg),
+        // Trocar o responsável sobre uma agenda que outra pessoa já mexeu é
+        // recusado — a versão lida é o que o backend compara.
+        versao: trocandoVetAg.versao ?? undefined,
+      });
       const novoVet = vets.find(v => String(v.userId) === trocandoVetIdAg);
       toast.success(`Transferido para ${novoVet?.fullName ?? 'novo profissional'}`);
       setTrocandoVetAg(null);
       fetchAgendamentos(selectedDate);
       setMesCarregado('');
-    } catch (err) { setErroModal(msgErroAgenda(err, 'Erro ao trocar profissional')); }
+    } catch (err) {
+      if (!tratarConflitoAgenda(err)) setErroModal(msgErroAgenda(err, 'Erro ao trocar profissional'));
+    }
     finally { setSavingTrocaAg(false); }
   }
 
@@ -1875,7 +1943,10 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
       }
       fetchAgendamentos(selectedDate);
       setMesCarregado('');
-    } catch (err) { setErroLista(msgErroAgenda(err, 'Erro ao assumir o atendimento')); }
+    } catch (err) {
+      // Perdeu a corrida para outro profissional — não é erro de rede.
+      if (!tratarConflitoAgenda(err)) setErroLista(msgErroAgenda(err, 'Erro ao assumir o atendimento'));
+    }
     finally { setAssumindoId(null); }
   }
 
@@ -2663,7 +2734,16 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                         )
                         : <p className="font-bold text-sm text-gray-900">{labelTipo(ag.tipo)}</p>}
                       {ag.animal?.user && <p className="text-xs text-gray-400">Tutor: {ag.animal.user.fullName}</p>}
-                      {ag.veterinario && <p className="text-xs text-gray-400">Vet: {ag.veterinario.fullName}</p>}
+                      {(ag.veterinario || responsaveisAnterioresDoAg(ag).length > 0) && (
+                        <p className="text-xs text-gray-400">
+                          Vet: <ResponsavelTrocado
+                            atual={ag.veterinario?.fullName}
+                            anteriores={responsaveisAnterioresDoAg(ag)}
+                            className="text-xs text-gray-400"
+                            vazio="Não atribuído"
+                          />
+                        </p>
+                      )}
                       {ag.criadoPor && ag.criadoPor.id !== ag.veterinario?.id && (
                         <p className="text-xs text-gray-400">Agendado por: {ag.criadoPor.fullName}</p>
                       )}
@@ -2771,9 +2851,15 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-block ${corTipo(ag.tipo)}`}>{labelTipo(ag.tipo)}</span>
                         </td>
                         <td className="py-3.5 px-4">
-                          {ag.veterinario
-                            ? <span className="flex items-center gap-1.5 text-xs text-gray-700"><UserIcon size={12} className="text-gray-400" />{ag.veterinario.fullName}</span>
-                            : <span className="text-xs text-gray-400">Não atribuído</span>}
+                          <span className="flex items-start gap-1.5">
+                            <UserIcon size={12} className="text-gray-400 flex-shrink-0 mt-0.5" />
+                            <ResponsavelTrocado
+                              atual={ag.veterinario?.fullName}
+                              anteriores={responsaveisAnterioresDoAg(ag)}
+                              className="text-xs text-gray-700"
+                              vazio="Não atribuído"
+                            />
+                          </span>
                           {ag.criadoPor && ag.criadoPor.id !== ag.veterinario?.id && (
                             <p className="text-[11px] text-gray-400 mt-0.5">Agendado por: {ag.criadoPor.fullName}</p>
                           )}

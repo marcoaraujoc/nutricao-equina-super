@@ -503,6 +503,9 @@ model ExameClinico {
   qtdAmostra      Int?      @map("qtd_amostra")
   numero          Int?
   ativo           Boolean   @default(true)
+  // Trava otimista (migration 20260923000000) — o laudo é o pior lugar para uma
+  // sobrescrita calada: é o dado que fundamenta a conduta.
+  versao          Int       @default(1)
 
   animal         Animal                      @relation("AnimalExamesClinicos", fields: [animalId], references: [id], onDelete: Cascade)
   veterinario    User?                       @relation("ExameClinicoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
@@ -641,6 +644,22 @@ model EvolucaoClinica {
   ativo                 Boolean   @default(true)
   justificativaExclusao String?   @db.Text
   aprovado              Boolean   @default(true)
+  // ── Concorrência de edição (migration 20260922000000) ────────────────────
+  // TRAVA OTIMISTA: quem salva manda a versão que LEU e o UPDATE é condicionado a
+  // ela. Gravação concorrente vira 409, nunca overwrite silencioso. Ver
+  // lib/concorrenciaRegistro.js — leitura/escrita por SQL cru (o client pode não
+  // conhecer a coluna: no Windows o `generate` falha com o backend rodando).
+  versao                Int       @default(1)
+  // QUEM CRIOU, imutável. `veterinarioId` continua sendo o EDITOR/RESPONSÁVEL atual
+  // (é ele que `assumir` transfere) — sem esta coluna, assumir APAGAVA o criador.
+  // Sem FK de propósito: o prontuário sobrevive à exclusão da conta do autor.
+  autorId               Int?      @map("autor_id")
+  // TODOS os que já responderam pelo registro, do mais antigo ao mais recente — é a
+  // coluna "Responsável" da tela, que risca cada um deles e deixa em pé só o atual.
+  // `assumidoDeId`/`autorId` guardam UM nome cada (o anterior imediato e o primeiro);
+  // com três assunções seguidas nenhum dos dois conta a história.
+  // Leitura/escrita por SQL cru — lib/cadeiaResponsaveis.js (migration 20260924000000).
+  responsaveisAnteriores  Int[]     @map("responsaveis_anteriores")
   resumoIaData          Json?     @map("resumo_ia_data") // ResumoAtendimento (body-map + scores) cacheado — ver laudoEquinoExtracao.service.ts
   resumoIaVersao        String?   @map("resumo_ia_versao") @db.VarChar(50) // ex: "extrair_resultado_sessao_equino@v2" — invalida o cache se mudar
 
@@ -660,6 +679,7 @@ model EvolucaoClinica {
   @@index([empresaId])
   @@index([equipeId])
   @@index([veterinarioId])
+  @@index([autorId])
   @@map("tb_evolucoes_clinicas")
   @@schema("schs2vet")
 }
@@ -794,6 +814,10 @@ model PrescricaoGrupo {
   finalizadoEm       DateTime?
   executadoPorId     Int?
   executadoEm        DateTime?
+  // Trava otimista do DOCUMENTO (migration 20260923000000). Fica no GRUPO e não
+  // no item: o que se disputa é o conjunto — incluir/remover item muda o
+  // documento, e versão por item deixaria isso passar. Ver lib/concorrenciaRegistro.js.
+  versao             Int       @default(1)
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
@@ -1003,6 +1027,14 @@ model AgendamentoClinico {
   // 20260815000000 e lib/agendamentoAssumido.js (leitura/escrita por SQL cru).
   assumidoDeId             Int?      @map("assumido_de_id")
   assumidoEm               DateTime? @map("assumido_em")
+  // TODOS os que já responderam pelo registro, do mais antigo ao mais recente — é a
+  // coluna "Responsável" da tela, que risca cada um deles e deixa em pé só o atual.
+  // `assumidoDeId`/`autorId` guardam UM nome cada (o anterior imediato e o primeiro);
+  // com três assunções seguidas nenhum dos dois conta a história.
+  // Leitura/escrita por SQL cru — lib/cadeiaResponsaveis.js (migration 20260924000000).
+  responsaveisAnteriores   Int[]     @map("responsaveis_anteriores")
+  // Trava otimista — mesma regra da evolução. Ver lib/concorrenciaRegistro.js.
+  versao                   Int       @default(1)
   createdAt                DateTime  @default(now()) @map("created_at")
   updatedAt                DateTime  @updatedAt @map("updated_at")
 

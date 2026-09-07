@@ -84,6 +84,10 @@ function fakeTx(dados) {
   });
   return {
     chamadas,
+    // O arrasto também INVALIDA A VERSÃO dos registros movidos (SQL cru), e é isso
+    // que impede o profissional anterior — inclusive o GESTOR, que a autoria não
+    // barra — de gravar por cima de quem assumiu. Ver lib/concorrenciaRegistro.js.
+    $executeRawUnsafe: async (sql, ids) => { chamadas.push(['sql', 'invalidarVersoes', sql, ids]); return (ids ?? []).length; },
     prescricaoGrupo:       modelo('prescricaoGrupo'),
     exameClinico:          modelo('exameClinico'),
     encaminhamentoClinico: modelo('encaminhamentoClinico'),
@@ -109,6 +113,16 @@ describe('arrasto do atendimento — quem assume a cabeça assume tudo embaixo',
     expect(movidos.every(m => m.deVetId === 3)).toBe(true);
     // Os ITENS da prescrição vão junto — a autoria do item é avaliada por eles
     expect(tx.chamadas.some(([m, op]) => m === 'prescricao' && op === 'updateMany')).toBe(true);
+
+    // 🔴 E A VERSÃO DOS MOVIDOS É INVALIDADA — é o que trava o profissional
+    // anterior de verdade. A autoria sozinha não basta: `podeOperarRegistro` tem
+    // bypass de GESTOR, então um gestor que perdeu o atendimento continuaria
+    // gravando por cima de quem assumiu. Com a versão bumpada, a tela dele leva
+    // 409 no próximo salvar, seja qual for o cargo.
+    const invalidacoes = tx.chamadas.filter(([m, op]) => m === 'sql' && op === 'invalidarVersoes');
+    expect(invalidacoes).toHaveLength(2);   // prescrição e exame (as duas com a coluna)
+    expect(invalidacoes.map(c => c[2]).join(' ')).toContain('"versao" = "versao" + 1');
+    expect(invalidacoes.flatMap(c => c[3]).sort()).toEqual([1, 2]);   // ids movidos
   });
 
   it('não reporta como movido o registro que já era de quem assume', async () => {

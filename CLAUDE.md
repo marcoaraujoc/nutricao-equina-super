@@ -1,5 +1,126 @@
 # S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-09-06 (parte 4) (🔴 O PACIENTE DO CLIENTE INATIVADO DEIXOU DE
+#   SUMIR DA APLICAÇÃO — ele vai para a aba **Inativos** da tela de Pacientes.
+#   `ProprietarioController.removerDaEmpresa` INATIVA os animais do cliente removido
+#   (isso já era assim) e a regra de visibilidade esconde o animal de quem não é
+#   cliente ativo da empresa (isso também). Cada uma está certa sozinha; JUNTAS,
+#   faziam o paciente desaparecer de TUDO — nem na aba Inativos ele aparecia. Não
+#   havia onde conferir o que houve nem botão por onde desfazer, e o único rastro era
+#   a justificativa gravada numa linha que ninguém mais enxergava.
+#   REGRA NOVA: **na aba de Pacientes o estado do dono deixa de FILTRAR e passa a ser
+#   REPORTADO** (`proprietarioInativo`), e a TELA o classifica como inativo.
+#   ⚠️ SÓ ali, e só para gestor/admin com `?ativo=` explícito: é a mesma trava que já
+#   protegia o `ativo:false`. Nenhuma outra listagem mudou — agenda, plantão,
+#   dashboard e relatórios seguem em `animalVisivelNaEmpresa`, isto é, tratando o
+#   paciente de cliente inativo como INATIVO, que é o que a tela passa a dizer dele.
+#   ⚠️ A marca sai da REGRA POSITIVA (`animalVisivelNaEmpresa`), consultando quem
+#   PASSA por ela e marcando o complemento — nunca de uma negação escrita à mão, que
+#   seria uma segunda cópia da regra do §36 e divergiria dela na primeira correção.
+#   ⚠️ A SAÍDA já existia: "Ativar" na aba Inativos chama `/animais/:id/reativar`, que
+#   reativa o CLIENTE junto (`lib/donoAtivoDoPaciente.js`) — a tela agora CONTA isso,
+#   e avisa quando o login global do cliente segue desligado por outra clínica.
+#   ⚠️ Cobre também a opção "manter os animais" de `removerDaEmpresa`: ali o paciente
+#   fica `ativo = true` sem trilha própria, e a justificativa diz onde se desfaz
+#   (Cadastro › Proprietários) em vez de sair vazia.
+#   Gate novo `__tests__/pacienteDeClienteInativo.test.js` (8 casos, os dois lados) —
+#   verificado que REPROVA. Suíte: 584. Detalhes na §12, sessão 2026-09-06 (parte 4).)
+# Atualizado em: 2026-09-06 (🔴 INATIVAR O PACIENTE FECHA O ATENDIMENTO ABERTO +
+#   dois vãos no congelamento do prontuário + reset ao trocar de paciente.
+#   1. 🔴 **A EVOLUÇÃO ABERTA FICAVA ABERTA PARA SEMPRE.** Inativado o paciente, o
+#      guard passa a recusar TODA escrita — inclusive a própria finalização. Nem o
+#      gestor conseguia fechar aquele atendimento, e ele ficava pendurado na tela e
+#      nas listas. Congelar um atendimento no meio não é deixá-lo em aberto: é
+#      FECHÁ-LO. Agora `AnimalController.inativar` finaliza as evoluções
+#      EM_ANDAMENTO na MESMA transaction da inativação.
+#      ⚠️ Pela MESMA cascata do Finalizar normal — `lib/finalizacaoEvolucao.js`,
+#      extraída de `EvolucaoController.atualizar`: prescrição e vacina SALVAS vão
+#      ao plantão, o agendamento sai de EM_ANDAMENTO, os exames vão à fatura. Uma
+#      cópia própria divergiria em silêncio.
+#      ⚠️ **`veterinarioId` NÃO é reescrito.** No Finalizar normal quem finaliza
+#      vira o responsável porque ESCOLHEU fechar e responde pelo que declara; aqui
+#      ninguém conduziu nada — é consequência administrativa. Quem inativou fica em
+#      `modificadoPorId` e o motivo, na auditoria.
+#   2. 🔴 **DOIS VÃOS NO CONGELAMENTO, achados em uso:** (a) `SubModuloEvolucao`
+#      RECALCULA os níveis por LINHA a partir de `permissoes[...]` cru, contornando
+#      as variáveis onde o `!pacienteInativo` mora — Alterar, Cancelar e Assumir
+#      seguiam visíveis; (b) o banner "Finalizar Atendimento" resolvia a permissão
+#      no TOPO do componente, antes de `animal` existir. Nos dois casos o backend
+#      recusava com 400 e o clique só falhava (armadilha 28-d).
+#      O gate agora zera o NÍVEL na origem, não cada predicado.
+#   3. **TROCAR DE PACIENTE = TELA NOVA.** Nenhum submódulo era remontado: o texto
+#      da evolução em digitação, o item em edição e o formulário aberto
+#      atravessavam a troca — o rascunho de um paciente aparecia no prontuário de
+#      outro. `key` com o `effectiveAnimalId` nos quatro + `setAnimal(null)` no
+#      reset (sem ele, `pacienteInativo` é o do paciente ANTERIOR até o fetch voltar).
+#   Gate novo `__tests__/pacienteInativoFront.test.js` — o anterior só cobria o
+#   BACKEND, e o sintoma nasce na TELA. Suíte: 526. Detalhes na §12, 2026-09-06.)
+# Atualizado em: 2026-09-05 (parte 5) (🔴 CONCORRÊNCIA CHEGOU À PRESCRIÇÃO E AO
+#   EXAME, e o ARRASTO passou a TRAVAR o profissional anterior de verdade.
+#   1. 🔴 **A AUTORIA NÃO BARRAVA O GESTOR ANTERIOR.** Quem assume a evolução
+#      arrasta prescrição/exame/encaminhamento/vacina junto (isso já existia), e a
+#      autoria bloqueia o profissional comum. Mas `podeOperarRegistro` tem BYPASS
+#      DE GESTOR — um gestor que perdeu o atendimento continuava gravando por cima
+#      de quem assumiu, em silêncio. Agora `transferirFilhosDasEvolucoes` também
+#      INVALIDA A VERSÃO de cada registro movido (`invalidarVersoes`): a tela do
+#      anterior segura a versão velha e leva 409 no próximo salvar, SEJA QUAL FOR
+#      O CARGO. É o que torna o bloqueio automático em vez de depender de quem a
+#      pessoa é — e vale para TODO caller do arrasto (assumir evolução, assumir
+#      agendamento, trocar profissional, transferir o dia).
+#   2. **`versao` em `tb_prescricao_grupos` e `tb_exames_clinicos`.** A da
+#      prescrição fica no GRUPO, não no item: o que se disputa é o DOCUMENTO —
+#      incluir/remover item muda o conjunto, e versão por item deixaria passar
+#      "A removeu o item 3 enquanto B adicionava o item 4".
+#      ⚠️ `veterinarioId` NÃO tem `@map` nessas duas tabelas (camelCase, exige
+#      aspas), ao contrário do agendamento (`veterinario_id`) — armadilha 41.
+#   3. 🔴 **A RESERVA DE ESTOQUE PASSOU A ACOMPANHAR A EDIÇÃO DO ITEM.**
+#      `finalizar` reserva pela quantidade do item; editar DEPOIS (grupo
+#      FINALIZADO, zero doses — a prescrição parada na fila do plantão) deixava a
+#      reserva na quantidade ANTIGA, e trocar o medicamento deixava a do anterior
+#      ÓRFÃ, segurando estoque que ninguém mais consome. Novo
+#      `recalcularReservasDoGrupo`: apaga e refaz do zero.
+#      ⚠️ Só é seguro porque o guard `EXECUTADO` garante ZERO doses dadas —
+#      depois da primeira, as reservas já foram abatidas proporcionalmente e
+#      recriá-las pela quantidade CHEIA reservaria o que já saiu do estoque.
+#   🔴 **MIGRATION GERADA, NÃO APLICADA** — `20260923000000_concorrencia_prescricao_exame`.
+#   Suíte: 504 (+11). Detalhes na §12, sessão 2026-09-05 (parte 5).)
+# Atualizado em: 2026-09-05 (parte 4) (🔴 CONTROLE DE CONCORRÊNCIA DE EDIÇÃO —
+#   "quem salva por último vence" DEIXOU DE EXISTIR em evolução e agendamento.
+#   Dois profissionais com o MESMO registro aberto se sobrescreviam em silêncio: o
+#   texto do primeiro simplesmente deixava de existir, e nada no sistema acusava.
+#   ⚠️ A AUTORIA (`podeOperarRegistro`) NUNCA cobriu isso — ela responde "posso
+#   operar o registro DESTA pessoa?", e é VERDADEIRA para os dois gestores da mesma
+#   clínica editando a mesma evolução. Autoria é AUTORIZAÇÃO; concorrência é
+#   INTEGRIDADE, e são camadas diferentes.
+#   1. 🔴 **TRAVA OTIMISTA** — coluna `versao` (evolução e agendamento). A tela
+#      devolve a versão que LEU e o UPDATE é condicionado a ela
+#      (`WHERE id = $1 AND versao = $2`): gravação sobre dado velho afeta 0 linhas
+#      e vira **409**, nunca overwrite calado. Fonte única em
+#      `lib/concorrenciaRegistro.js`.
+#      ⚠️ **A GARANTIA É DO BANCO, NUNCA DA TELA.** Navegador offline, aba
+#      congelada, evento perdido ou front desatualizado batem todos na mesma
+#      cláusula WHERE. Nunca mover esta decisão para o cliente.
+#      ⚠️ Versão AUSENTE no corpo NÃO é conflito: cliente antigo segue funcionando,
+#      só sem a proteção. Endurecer quebraria toda chamada existente de uma vez.
+#   2. 🔴 **ASSUMIR VIROU ATÔMICO.** Era `SELECT` + `UPDATE` cego: B e C liam o
+#      mesmo `veterinarioId` e os DOIS gravavam com 200 — o último vencia e o outro
+#      achava que tinha assumido. Agora a cláusula exige a versão E o editor
+#      anterior; um vence, o outro leva 409. Vale para evolução E agendamento.
+#   3. **AUTOR × EDITOR separados** — `EvolucaoClinica.autorId` (novo, imutável).
+#      `veterinarioId` continua sendo o RESPONSÁVEL ATUAL (é ele que `assumir`
+#      transfere) e os ~47 pontos que o leem não mudaram; sem a coluna nova,
+#      assumir APAGAVA quem criou o atendimento.
+#   4. **TEMPO REAL por SSE** (`GET /api/eventos/stream`, `lib/eventosTempoReal.js`).
+#      Quem perde o registro entra em somente leitura NA HORA, com o texto
+#      digitado preservado na tela. SSE e não WebSocket: a auth já é por cookie
+#      HttpOnly (o `EventSource` mesma-origem o manda sozinho), o fluxo é de mão
+#      única e não entra dependência nova. ⚠️ O evento é CONVENIÊNCIA — a
+#      integridade não depende dele.
+#   5. **CONFLITO VAI PARA A AUDITORIA** — categoria nova `CONFLITO_EDICAO`: a
+#      TENTATIVA recusada fica registrada. Sem ela, o único rastro da quase-perda
+#      seria o 409 na tela de quem o levou.
+#   🔴 **MIGRATION GERADA, NÃO APLICADA** — `20260922000000_concorrencia_edicao`.
+#   Suíte: 493 (+27). Detalhes e armadilhas na §12, sessão 2026-09-05 (parte 4).)
 # Atualizado em: 2026-09-05 (WhatsApp/E-mail passaram a mandar o PDF em Prescrição,
 #   Vacina, Pedido e Resultado de Exames — mesma folha do Imprimir, anexada de verdade
 #   (Puppeteer). 🔴 A logo e a foto nasciam QUEBRADAS no PDF do servidor: o Puppeteer só
@@ -1356,6 +1477,14 @@ PlanoDieta        → agrupamento de itens de dieta
 ExameNutricional  → resultados de exames nutricionais
 ExameClinico      → exames clínicos solicitados/resultados
 EvolucaoClinica   → prontuário/evolução clínica (campos: titulo VARCHAR255, ativo, status)
+                    CONCORRÊNCIA (migration 20260922000000): `versao` (trava otimista —
+                    a escrita é condicionada à versão que a tela leu; concorrente vira 409,
+                    nunca overwrite silencioso) e `autorId` (quem CRIOU, imutável).
+                    ⚠️ `veterinarioId` continua sendo o EDITOR/RESPONSÁVEL ATUAL — é ele
+                    que `assumir` transfere, e é o que os ~47 leitores esperam. Sem
+                    `autorId`, assumir APAGAVA quem abriu o atendimento.
+                    LEITURA/ESCRITA das duas colunas: SEMPRE por `lib/concorrenciaRegistro.js`
+                    (SQL cru — funciona antes do `prisma generate`).
 EvolucaoMidia     → mídias (imagem/vídeo/áudio) anexadas a evoluções (tipo, url, nome, tamanho)
 Prescricao        → prescrições médicas (tipo: MEDICAMENTO|PROCEDIMENTO, status: RASCUNHO|ATIVA,
                     dosagem, unidade, via, frequencia, duracaoDias, horaInicio,
@@ -1784,6 +1913,55 @@ PROFISSIONAL · FORNECEDOR · PRESTADOR → CONTINUAM aparecendo, marcados como 
     São o AUTOR do registro: esconder o autor apagaria a autoria de prontuário que segue
     válido — "quem prescreveu isto?" precisa ter resposta.
 ```
+
+🔴 **QUEM DECIDE SE O CLIENTE ESTÁ INATIVO É O CADASTRO DA EMPRESA, NÃO O
+`users.ativo` (2026-09-06).** O `ativo` do `users` é do LOGIN e é GLOBAL: ele cai quando
+a pessoa é inativada como PROFISSIONAL em QUALQUER clínica (`toggleMembro` mexe nele).
+Enquanto ele fazia parte de `proprietarioAtivoNaEmpresa`, inativar a veterinária na
+clínica A escondia os pacientes em que ela é CLIENTE da clínica B.
+CASO REAL: o paciente "Super Simples" foi cadastrado na MarcoVet com a dona ATIVA ali, e
+nasceu invisível porque a conta dela tinha sido desativada na Patyvet três semanas antes,
+por outra pessoa. Nada acusou — nem no cadastro, nem na lista.
+Isso contrariava as duas regras deste bloco: profissional inativo continua aparecendo, e
+o cadastro do cliente é POR EMPRESA (§36). **"Pode entrar no sistema?" e "é cliente desta
+clínica?" são perguntas diferentes; só a segunda decide se o paciente aparece.**
+⚠️ O `users.ativo` CONTINUA valendo para quem NÃO tem cadastro na empresa (legado) e
+para `ANIMAL_VISIVEL` (a variante SEM empresa no contexto): ali não existe outro sinal.
+⚠️ O sinal é `ProprietarioPerfil`, NUNCA `UsuarioEmpresa` — esta guarda o vínculo de
+qualquer papel, o profissional inclusive, e usá-la remisturaria o que a regra separa.
+⚠️ `VeterinarioController.listarProprietarios` seguiu junto: mantinha um `ativo: true`
+global POR FORA do filtro, e sem isso o paciente apareceria na lista com o dono
+inexistente na tela de clientes.
+
+🔴 **E O `ativo` EXIBIDO DO CLIENTE SEGUIU A MESMA REGRA (2026-09-06).**
+`proprietarioPerfil.mesclar` calculava `ativo = user.ativo && perfil.ativo` — então a
+cliente ATIVA na clínica A aparecia INATIVA lá porque a clínica B desligou o LOGIN dela
+(`toggleMembro` mexe no `users.ativo`, que é global). Não havia nada que a clínica A
+pudesse fazer: o cadastro dela ali já estava ativo.
+Agora, **havendo cadastro na empresa, é ele que decide**; o `users.ativo` só vale para o
+cliente LEGADO, que não tem cadastro por empresa (o `mesclar` devolve o user cru nesse
+caso). As abas Ativos/Inativos da tela filtram DEPOIS do merge, então acompanham sozinhas.
+⚠️ As duas regras — esta e a da visibilidade acima — precisam CONCORDAR: se uma olhar o
+login global e a outra não, o paciente aparece na lista e o dono consta como inativo na
+tela ao lado. Há teste travando as duas juntas
+(`__tests__/clienteAtivoNaEmpresa.test.js`, verificado que reprova).
+⚠️ O que isto NÃO faz: religar o login. Quem precisa voltar a ENTRAR no sistema depende
+de quem o desligou — é outra dimensão, e continua sendo.
+
+🔴 **E CADASTRAR PACIENTE PARA UM CLIENTE INATIVO NESTA CLÍNICA VIROU PERGUNTA
+(2026-09-06).** `AnimalController.criar` REATIVAVA o cadastro sozinho para o animal não
+nascer com dono inativo (e sumir das listas — o sintoma "Horse1"). O invariante estava
+certo; o **silêncio**, não: alguém tinha inativado aquele cliente de propósito
+(`removerDaEmpresa`) e ele voltava sem ninguém decidir nem ficar sabendo.
+Agora o cadastro PARA com **409 `{ inativo: true, proprietario: { id, nome } }`**, a tela
+pergunta ("Reativar cliente e cadastrar"), e só o reenvio com `reativarProprietario`
+autoriza. O invariante continua garantido: ou o cliente é reativado, ou o animal não nasce.
+⚠️ **A confirmação NÃO é bypass do Controle de Acesso**: reativar cliente é
+`cadastro.proprietario.ativar`, conferido no controller por `getNivelEfetivo` — sem o
+slug, 403, e a tela nem oferece o botão (28-d).
+⚠️ Cliente NOVO (criado na mesma chamada) não passa pelo guard: não há cadastro anterior
+a respeitar. Gate estrutural em `__tests__/proprietarioInativoNoCadastro.test.js` —
+verificado que reprova (removido o guard, os 6 casos falham).
 
 ⚠️ **NUNCA zerar `empresaId` ao inativar.** `ProprietarioController.removerDaEmpresa`
 fazia `{ ativo: false, empresaId: null, equipeId: null }` e transformava cada animal do
@@ -2600,6 +2778,641 @@ New-Item -ItemType Junction `
 ---
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
+
+### Sessão 2026-09-06 (parte 4) — O paciente do cliente inativado vai para "Inativos"
+
+- [x] 🔴 **O DEFEITO: dois acertos que, somados, apagavam o paciente.**
+      `removerDaEmpresa` inativa os animais do cliente removido (com trilha e cascata
+      de cancelamento das pendências) — correto. `lib/visibilidade.js` esconde o animal
+      de quem não é cliente ativo da empresa — também correto, e é o que impede o
+      prontuário do cliente que saiu de continuar circulando. Juntos, faziam o paciente
+      sumir da **aplicação inteira**: `AnimalController.listar` aplicava o filtro do
+      dono TAMBÉM na aba de Pacientes, então nem em "Inativos" ele aparecia. O gestor
+      inativava o cliente, os animais evaporavam e não havia tela onde conferir o que
+      tinha acontecido — nem botão por onde desfazer.
+- [x] 🔴 **NA ABA DE PACIENTES O ESTADO DO DONO DEIXA DE FILTRAR E PASSA A SER
+      REPORTADO.** `whereAtivo` da aba passou a falar só de `Animal.ativo`; o estado do
+      cliente vira o campo `proprietarioInativo` de cada linha, e quem CLASSIFICA é a
+      tela (`pacienteInativo` inclui o campo → aba "Inativos", selo vermelho, e a
+      justificativa que `removerDaEmpresa` gravou aparece na coluna).
+      ⚠️ **SÓ ali**: `abaDePacientes = ehGestorNoContexto(req) && req.query.ativo !==
+      undefined` — a MESMA trava que já protegia o `ativo:false`. Sem ela, qualquer
+      perfil que soubesse mandar o parâmetro veria o que a exclusão lógica esconde.
+      ⚠️ **Nenhuma outra listagem mudou.** Agenda, plantão, dashboard, relatórios e
+      busca global continuam em `animalVisivelNaEmpresa`/`ANIMAL_VISIVEL` — ou seja,
+      tratando o paciente de cliente inativo como INATIVO, que é exatamente o que a
+      tela passa a dizer dele. É essa coerência que faz a aba não mentir: ele está lá
+      porque não está em mais lugar nenhum.
+- [x] 🔴 **A MARCA SAI DA REGRA POSITIVA, NUNCA DE UMA NEGAÇÃO À MÃO.**
+      `marcarProprietarioInativo` consulta quem PASSA por `animalVisivelNaEmpresa` e
+      marca o complemento. Escrever a negação (perfil da empresa × `users.ativo` do
+      legado, §36) criaria uma segunda cópia da regra, que divergiria da primeira na
+      correção seguinte — e a divergência apareceria como "o paciente está na lista e o
+      dono consta ativo na tela ao lado", que é justamente o que ninguém depura.
+      ⚠️ Uma consulta a mais, só no caminho da aba.
+- [x] **A SAÍDA já existia e agora é DITA**: "Ativar" na aba Inativos chama
+      `/animais/:id/reativar`, que reativa o cadastro do CLIENTE na mesma transaction
+      (`lib/donoAtivoDoPaciente.js`, sessão anterior). `AnimaisVet` passou a ler
+      `donoReativado`/`loginGlobalInativo` do retorno — mesmo padrão de
+      `Animal.tsx#handleAtivarPacienteDuplicado` — e avisa quando o login global do
+      cliente segue desligado por OUTRA clínica (este botão não o religa, de propósito).
+- [x] **Cobre também a opção "manter os animais"** de `removerDaEmpresa` (2026-09-04):
+      ali o paciente fica `ativo = true` e SEM trilha própria (ninguém o inativou), mas
+      está fora de todas as telas por causa do cliente. Ele cai na aba Inativos com o
+      selo explicando, e `rastroInativacao` devolve "Proprietário inativo nesta clínica
+      — reative o cliente em Cadastro › Proprietários", em vez de coluna vazia.
+      ⚠️ Não há ação no card para esse caso, e é correto: o que se desfaz ali é o
+      cadastro do CLIENTE, e ele tem tela própria.
+- [x] **Gate novo `__tests__/pacienteDeClienteInativo.test.js`** (8 casos): varre os
+      DOIS lados, porque os dois falham em silêncio — o backend voltar a filtrar pelo
+      dono faz o paciente sumir de novo sem erro nenhum; a tela deixar de contar o
+      `proprietarioInativo` o devolve à aba "Ativos", prometendo uma atividade que não
+      existe em tela alguma. Inclui a asserção de que as listagens operacionais NÃO
+      foram afrouxadas junto.
+      ⚠️ A varredura IGNORA COMENTÁRIOS (`semComentarios`): sem isso ela passaria só
+      porque o comentário que EXPLICA a regra cita as mesmas palavras — e um gate que
+      se satisfaz com a própria documentação é um gate que se aprende a ignorar.
+      ✅ **Verificado que REPROVA**: revertido o filtro do backend e o predicado da
+      tela, os dois casos 🔴 falharam. Suíte: **584**; `tsc -b` limpo.
+- [x] 🔴 **PACIENTE + CLIENTE INATIVOS VIRARAM UMA PERGUNTA SÓ** (a pedido, mesma
+      sessão). Cadastrar um paciente que já existe INATIVO para um cliente também
+      inativo abria DUAS caixas em sequência: o backend recusa primeiro pelo CLIENTE
+      (`criar`, o guard do cliente inativo vem antes do de duplicidade), a tela pedia
+      o motivo, reativava e salvava — e então o backend recusava de novo, agora pela
+      duplicidade, pedindo o MESMO motivo outra vez. Era o mesmo ato perguntado duas
+      vezes: **reativar o paciente já reativa o cliente junto**, na mesma transaction
+      (`lib/donoAtivoDoPaciente.js`), então a segunda caixa não tinha o que decidir.
+      Agora, quando a checagem em tempo real já sabe do paciente inativo
+      (`dupInativoConhecido`), a caixa do cliente nomeia os dois — *"O cliente "X" e o
+      paciente "Y" estão inativos nesta clínica, caso deseje reativá-los, informe o
+      motivo."* (o cadastro não é "feito", é REAPROVEITADO: quem volta é o paciente que
+      já existe) —, o botão diz **"Reativar Paciente
+      e Proprietário"** e o confirmar faz UMA chamada, a de reativação do paciente.
+      ⚠️ Restrito ao **GESTOR**: as rotas de reativação do PACIENTE são dele, e sem a
+      trava quem tem só `cadastro.proprietario.ativar` veria o botão e levaria 403
+      depois do clique (28-d). Para esse perfil o fluxo segue como era.
+      ⚠️ O alvo vai por PARÂMETRO (`handleAtivarPacienteDuplicado(motivo, alvo)`), não
+      por `setDupInativoAlvo` antes da chamada: o estado só existe no próximo render e
+      a função leria o valor ANTIGO da closure.
+      ⚠️ Cliente inativo com paciente NOVO não muda — segue "Reativar cliente e
+      cadastrar", que ali é o que a ação faz.
+      ⚠️ E a caixa do PACIENTE duplicado inativo (a de cima) deixou de prometer o
+      proprietário: virou *"O paciente "Y" já existe neste local para este
+      proprietário, mas está inativo. Caso deseje ativá-lo informe o motivo."* +
+      **"Reativar Paciente"**. Não é uma escolha da tela — é consequência da ordem dos
+      guards: com o cliente inativo quem abre é a OUTRA caixa, então esta só existe
+      com o cliente ATIVO, e ali `garantirDonoAtivo` não tem o que reativar. O texto
+      antigo ("ele é reativado junto") descrevia um efeito que nunca acontecia por
+      este caminho.
+- [x] **O aviso "O acesso do proprietário ao sistema está desativado…" SAIU** das três
+      telas que o exibiam (a pedido: "não quero duas validações, quero uma só"). O
+      `loginGlobalInativo` continua vindo na resposta e é deliberadamente ignorado —
+      o acesso ao SISTEMA é outra dimensão, resolvida por quem o desligou, e dizê-lo
+      junto transformava a confirmação de um clique em duas mensagens sobre o mesmo
+      ato. ⚠️ Não reintroduzir como toast; se um dia precisar aparecer, o lugar é a
+      tela do CADASTRO do cliente, não a confirmação da reativação do paciente.
+- [x] 🔴 **A FATURA PASSOU A SAIR PELO MESMO CAMINHO DA PRESCRIÇÃO** (a pedido): os
+      botões WhatsApp/E-mail da fatura trocaram o envio por LINK PÚBLICO pelo par
+      `enviarPdfWhatsAppComAviso`/`enviarPdfEmailComAviso` (`utils/compartilharPdf.ts`)
+      — **PDF anexado de verdade**, a mesma folha do Imprimir, com a barra de progresso
+      no centro da tela, o botão Cancelar e o veredito no mesmo lugar.
+      ⚠️ **REVERTE** o envio por link (`/clinica/faturas/:id/enviar-{whatsapp,email}` +
+      `lib/faturaLinkPublico.js`), que existia para não depender de o Puppeteer terminar
+      dentro da janela de "user activation" do navegador. Isso deixou de ser risco em
+      2026-09-05, quando o envio passou a ser feito PELO BACKEND: o Chromium roda no
+      servidor, e a janela do navegador só importa no FALLBACK (sem telefone/e-mail ou
+      sem provider, a tela baixa o PDF e abre o app para anexar).
+      🔴 **O botão "Links enviados" e todo o painel dele SAÍRAM da tela** (a pedido, na
+      mesma sessão): sem envio por link, ele nascia vazio em toda fatura nova. Foram
+      junto o estado, o `carregarLinks`/`toggleLinks`/`confirmarRevogar`, o
+      `ConfirmModal` de revogação, o tipo `FaturaLink`, os mapas `LINK_STATUS_*` e o
+      tom `TOM_ACAO.links` — UI inalcançável é pior que UI ausente, e o `tsc -b`
+      reprova o que sobra sem leitor.
+      ⚠️ **CONSEQUÊNCIA ACEITA: revogar um link já enviado ficou SEM PORTA DE ENTRADA.**
+      As rotas continuam montadas e funcionais (`GET /clinica/faturas/:id/links`,
+      `PATCH .../links/:id/revogar`), e o cron `reenviar_links_fatura` segue
+      trabalhando em cima da tabela — mas nenhuma tela as chama. Os links que já saíram
+      permanecem VÁLIDOS até expirar, com um token de 64 caracteres como única
+      proteção. Se for preciso cortar o acesso de um deles, hoje é pela API ou pelo
+      banco; para devolver o painel, o lugar é este mesmo (está no git).
+      ⚠️ Sem `try/catch` em volta: `enviarPdf*ComAviso` NUNCA lança — ela mesma conta o
+      resultado e o motivo da falha no card central; um catch só produziria uma segunda
+      mensagem sobre o mesmo clique.
+      ⚠️ A logo já era convertida para `data:` no carregamento da tela
+      (`carregarComoDataUri`), então a folha não nasce sem imagem no PDF do servidor —
+      é a armadilha que derruba todo gerador novo.
+- [ ] O envio EM LOTE do fechamento de faturas (o modal com uma linha por proprietário)
+      continua mandando TEXTO por `abrirWhatsApp`/`abrirEmail`. Ali as faturas são de
+      OUTROS clientes, não carregados na tela: não há itens, animais nem logo para
+      montar o HTML de cada uma, e migrar exige buscar cada fatura inteira para gerar N
+      PDFs. Mesma exclusão registrada em 2026-09-05.
+- [ ] O `?ativo=true` da aba "Ativos" passou a não filtrar pelo dono no BACKEND — quem
+      recorta é a tela. Não muda nada hoje (`AnimaisVet` só pede `ativo=all` e filtra
+      em memória), mas um consumidor novo dessa query precisa saber que a classificação
+      mora no front, não na resposta.
+- [ ] O paciente do cliente inativado continua fora do seletor de paciente, da agenda e
+      do plantão. É o desejado enquanto "cliente inativo ⇒ paciente inativo" valer; se
+      um dia a opção "manter os animais" tiver de deixá-los OPERÁVEIS, a decisão é de
+      produto e o lugar é `lib/visibilidade.js`, não esta listagem.
+
+### Sessão 2026-09-06 (parte 3) — Duplicidade de paciente e troca de dono na tela de cadastro
+
+- [x] 🔴 **DUPLICATA DE PACIENTE = NOME + LOCAL + DONO** (`lib/duplicidadeAnimal.js`).
+      Cascata, a pedido: mesmo NOME no mesmo LOCAL é **pergunta** ("deseja continuar?");
+      respondido que sim, o que decide é o **DONO** — mesmo dono é duplicata e não se
+      cadastra; dono diferente segue, porque dois clientes podem ter cada um o seu
+      "Thor" no mesmo haras. Existindo e estando INATIVO, a tela oferece **reativar**
+      aquele cadastro; recusando, informa que não é permitido duplicar.
+      ⚠️ **REVERTE o bloqueio por NOME** (`statusBuscaAnimal === 'ja_cadastrado'`), que
+      barrava qualquer homônimo da clínica e deixava o vet sem saída no caso legítimo.
+      O Salvar agora é bloqueado por `dupBloqueado`, não pelo nome repetido.
+      ⚠️ "INATIVO" são os DOIS estados, de propósito: `ativo = false` (exclusão lógica)
+      e `inativo = true` (prontuário congelado). Para quem cadastra, os dois significam
+      "existe e não está em uso", e a saída é a mesma — reaproveitar em vez de criar um
+      segundo, que partiria o histórico clínico em dois. A tela chama `/reativar` e/ou
+      `/ativar` conforme o caso (um paciente pode estar nos dois).
+- [x] **EM TEMPO REAL** — `GET /animais/verificar-duplicidade?nome=&localizacaoId=&email=`,
+      com 500ms de espera, refeito a cada mudança de nome, local ou e-mail do dono (a
+      tríade se completa aos poucos; o dono é o último a ser digitado).
+      ⚠️ **É o AVISO, não a garantia**: o `POST /animais` roda o MESMO helper e recusa
+      com 409 (`duplicado` / `duplicadoInativo`). Entre a verificação e o Salvar outra
+      pessoa pode ter cadastrado o mesmo paciente — tela nenhuma segura integridade.
+      ⚠️ A confirmação do "deseja continuar" vale para o PAR nome+local conferido:
+      trocar qualquer um dos dois é outra pergunta.
+- [x] 🔴 **A COMPARAÇÃO DE NOME ACONTECE NO BANCO** — e foi um TESTE que pegou isto,
+      não o uso. A primeira versão buscava com `contains` e normalizava em JS: no
+      Postgres, `contains: 'Mel'` (mesmo `insensitive`) **NÃO casa "Mél"**, então o
+      candidato acentuado nunca chegava ao filtro e a duplicata passava batido. Agora a
+      consulta compara `translate(lower(btrim(nome)))`.
+      ⚠️ `translate()` e não `unaccent()`: a extensão pode não estar instalada na base
+      do cliente, e uma verificação que só funciona em algumas instalações é pior que
+      nenhuma. ⚠️ As duas tabelas do `translate` precisam ter o MESMO comprimento —
+      uma sobra desloca todo o resto e passa a trocar letras erradas. Há teste para os
+      dois pontos.
+- [x] 🔴 **PACIENTE ATIVO ⇒ DONO ATIVO NESTA CLÍNICA** (`lib/donoAtivoDoPaciente.js`),
+      nos TRÊS cenários — a pedido, depois de relatado que ativar o paciente deixava o
+      dono inativo:
+      ```
+      paciente inativo + dono ATIVO    → justificativa do PACIENTE (só ele volta)
+      paciente inativo + dono INATIVO  → UMA justificativa, os DOIS voltam juntos
+      paciente NOVO    + dono INATIVO  → justificativa do CLIENTE, e só então o cadastro
+      ```
+      Reativar o paciente sem o dono devolve um cadastro que NASCE INVISÍVEL — a
+      visibilidade esconde o animal de quem não é cliente ativo da empresa. A pessoa lê
+      "reativado com sucesso" e o paciente não aparece em lugar nenhum (o sintoma
+      "Horse1", por outro caminho).
+      O helper entra nas DUAS rotas de ativação (`/ativar`, que descongela, e
+      `/reativar`, que desfaz a exclusão lógica), DENTRO da transaction do paciente: ou
+      os dois voltam, ou nenhum volta.
+      ⚠️ **NUNCA religa o `users.ativo`** — aquele é o LOGIN, é global, e cai quando a
+      pessoa é inativada como PROFISSIONAL em qualquer clínica. Ligá-lo daqui desfaria
+      em silêncio a decisão de OUTRA empresa sobre o acesso dela ao sistema, que é o
+      vazamento que a regra de visibilidade acabou de corrigir. O retorno traz
+      `loginGlobalInativo` e a tela AVISA, em vez de fingir que resolveu tudo.
+      ⚠️ Não toca `UsuarioEmpresa`: lá mora o vínculo de qualquer papel, o profissional
+      inclusive — reativar ali devolveria o CARGO de quem também trabalha na clínica.
+      ⚠️ A reativação do cliente é auditada À PARTE (`ATIVACAO`/`PROPRIETARIO`), com o
+      mesmo motivo: quem abrir a trilha do CADASTRO DELE precisa achar lá o porquê, não
+      só na trilha do animal.
+      ⚠️ Cliente LEGADO (sem cadastro na empresa) não ganha um cadastro criado do nada:
+      a visibilidade já não o esconde, e criar seria afirmar um vínculo que ninguém
+      registrou.
+      Os dois modais passaram a ser o `ModalJustificativa` (`tom="neutro"`, §33) — o
+      motivo era EXIGIDO pelo backend e a tela não o pedia: `/ativar` respondia 400
+      "É obrigatório informar o motivo da reativação" e o botão só falhava.
+      Testes: `__tests__/donoAtivoDoPaciente.test.js` (8 casos), incluindo o LIMITE
+      (nenhuma escrita em `user`) e um gate que exige o helper nas duas rotas, dentro
+      da transaction. Suíte: **572**.
+- [x] **TROCAR O PROPRIETÁRIO na tela de cadastro do paciente** (`/animais/:id`) — botão
+      "Trocar proprietário" na seção Proprietário, só na EDIÇÃO e só para gestor/ADMIN.
+      ⚠️ **REUSO, não implementação nova**: abre o MESMO `ProprietarioFormModal`
+      (`modoTransferencia`) e a MESMA rota `POST /animais/:id/transferir-propriedade`
+      que a tela do paciente (`/animal/:id`) já usava desde antes — com MOTIVO
+      obrigatório (Doação/Venda/Aluguel), fechamento da janela de posse em
+      `tb_animal_proprietario_historico` e registro na auditoria (`TRANSFERENCIA`).
+      Uma segunda implementação divergiria na primeira correção, e o que divergiria
+      seria justamente COMO a troca fica registrada.
+      ⚠️ O e-mail do dono continua TRAVADO na edição: trocar de dono não é editar um
+      campo, é um ato com motivo e registro próprios — por isso um botão.
+- [x] Testes: `__tests__/duplicidadeAnimal.test.js` (17 casos) — a cascata inteira, o
+      que NÃO é duplicata (outro local, outra empresa, o próprio animal na edição,
+      nome parecido), acento/caixa, e um gate estrutural que exige o `translate` na
+      consulta e o mesmo comprimento das tabelas.
+      ✅ **Verificado que REPROVA**: removida a regra do dono, 2 casos falharam.
+      Suíte: **563**. Provado também contra a base real, em transação revertida.
+- [ ] A verificação não cobre a EDIÇÃO (`PUT /animais/:id`): renomear um paciente para
+      o nome de outro do mesmo dono e local ainda passa. O helper já aceita `ignorarId`
+      para isso — falta chamar no `atualizar`.
+- [ ] O aviso em tempo real não distingue "dono ainda não digitado" de "dono diferente"
+      no texto do banner (os dois caem no mesmo aviso âmbar). Como o veredito final é
+      do backend, isso não deixa passar duplicata — só é menos informativo.
+
+### Sessão 2026-09-06 (parte 2) — Cadeia de responsáveis, ordenação nos históricos e filtros da Evolução
+
+> ✅ **MIGRATIONS APLICADAS** (autorizadas nesta sessão) — `20260924000000_cadeia_responsaveis`
+> (colunas + backfill) e `20260924000001_cadeia_responsaveis_backfill` (o backfill de
+> verdade — ver armadilha 42). `npx prisma generate` FALHOU com `EPERM` (lock do query
+> engine, §11) e ficou PENDENTE: não faz falta hoje (a cadeia é lida e escrita por SQL
+> cru), mas rodar na próxima parada do backend.
+
+- [x] 🔴 **CADEIA DE RESPONSÁVEIS — a coluna "Responsável" passou a contar a história
+      inteira.** `Marco Araújo → Marina → Cláudio → Laura` sai com os três primeiros
+      RISCADOS, lado a lado (quebrando linha quando não cabem), e Laura em pé embaixo.
+      ⚠️ **O registro só sabia UM nome antes disto**: `autorId` (o primeiro) na evolução
+      e `assumido_de_id` (o imediato) no agendamento. Depois da segunda assunção,
+      nenhum dos dois conta a história. A trilha completa existia só como TEXTO LIVRE
+      no AuditLog ("responsável anterior: X → novo responsável: Y") — boa para auditar,
+      inútil para desenhar uma coluna: exigiria varrer o log por linha da lista e
+      depender do formato de uma frase.
+      Coluna `responsaveis_anteriores INTEGER[]` nas duas tabelas + fonte única
+      `lib/cadeiaResponsaveis.js` (SQL cru, `array_append`).
+      ⚠️ **INTEGER[] e não tabela de histórico**: o dado é uma lista ORDENADA lida
+      sempre inteira, junto da linha, e nunca consultada por si ("em que registros o
+      Fulano já foi responsável" é pergunta do AuditLog). Uma tabela custaria um JOIN em
+      toda listagem para devolver exatamente o mesmo array.
+      ⚠️ **A escrita mora no FUNIL, não nos controllers**: `marcarAssumido` já era o
+      ponto por onde passam as QUATRO trocas do agendamento (assumir na agenda, assumir
+      pela evolução, trocar profissional, transferir o dia). Empilhar em cada caminho
+      faria o próximo nascer sem cadeia. Na evolução são dois pontos: `assumir` e o
+      ARRASTO (`transferirEvolucoesDoAgendamento`), onde cada evolução empilha O SEU
+      dono anterior — um agendamento pode ter evoluções de profissionais diferentes.
+      ⚠️ **Não empilha `null`** (agendamento sem responsável não deixa um vão riscado) e
+      **não repete o último** (dois caminhos podem carimbar a mesma troca). A mesma
+      pessoa REAPARECE quando a passagem é outra (A → B → A), que é história de verdade.
+      🔴 **A CADEIA GUARDA PASSAGENS, NÃO PESSOAS DISTINTAS** — corrigido no mesmo dia,
+      depois de relatado: `ResponsavelTrocado` descartava todo elo com o nome do
+      responsável ATUAL, e com isso apagava a passagem anterior de quem voltou a
+      assumir. Medido na base: a evolução 132 tem
+      `Marco Araújo → Claudio Araujoc → marina → Claudio Araujoc` gravado, e a tela
+      mostrava só `Marco Araújo / marina` — uma história que não aconteceu. O filtro
+      saiu; fica só o colapso de repetição CONSECUTIVA (que é a mesma troca carimbada
+      duas vezes), e ele compara por **id**, não por nome: homônimos na mesma clínica
+      são duas pessoas.
+      ⚠️ **`WITH ORDINALITY` + `ORDER BY` na leitura**: sem eles o banco não promete
+      ordem nenhuma, e a cadeia sairia contada de trás para frente.
+      ⚠️ **Tolera a coluna ausente** (`.catch`), o que permitiu subir o código antes do
+      banco: sem a migration, a tela caía no comportamento anterior (um nome riscado).
+      Front: `components/ResponsavelTrocado.tsx`, usado pela Evolução e pela Agenda.
+      🔴 Na AGENDA o rastro existia no backend desde 2026-08-02 e **nenhuma tela o
+      exibia** — o selo "Assumida de" se perdeu quando `SubModuloMinhaAgenda` foi
+      removido (28-g).
+- [x] **ORDENAÇÃO POR COLUNA nos históricos** — `components/OrdenacaoLista.tsx`, fonte
+      única. Ciclo: 1º crescente · 2º decrescente · **3º volta à ordem natural** (sem o
+      terceiro estado, quem clica sem querer não tem como devolver a lista ao padrão).
+      Registro SEM VALOR vai para o fim nos DOIS sentidos — trocar os "—" de ponta faz a
+      lista parecer embaralhada. Texto por `localeCompare` pt-BR; data como TIMESTAMP
+      (como texto, "10/02" viria antes de "9/02").
+      Aplicada em 10 históricos: Evolução, Prescrição, Vacina, Exames, Encaminhamento,
+      Documentos Emitidos, Orçamento, Farmácia, Estoque de Vacinas e Exames Nutricionais.
+      ⚠️ **Onde a paginação é do SERVIDOR (Evolução e Prescrição), a ordem é pedida ao
+      backend** — ordenar no navegador reorganizaria as 10 linhas da página e mentiria
+      sobre as outras 200. `lib/ordenacaoLista.js` + **whitelist obrigatória** por
+      controller: o campo vem do cliente e vira caminho de `orderBy` do Prisma.
+      ⚠️ As chaves do front e da whitelist do backend são AS MESMAS — divergir faz a
+      coluna clicar e não ordenar nada, porque o servidor descarta a chave que não
+      conhece.
+      ⚠️ FICAM DE FORA os históricos SEM cabeçalho de coluna (Fatura, Execução de
+      Prescrição, Histórico do Paciente, Exame de Compra): são listas de cards/linhas, e
+      ordenar ali exige um controle novo ("Ordenar por: …"), que é outra interface.
+- [x] **Filtros de data, responsável e "N por página" REMOVIDOS da Evolução** (a pedido).
+      O recorte do histórico ficou só nas pílulas de status, no mesmo lugar de
+      Prescrição, Vacina e Exames. Saiu junto o `GET /clinica/evolucoes/responsaveis/
+      :animalId` (só alimentava aquele select) e o `DateInput` da tela; `limit` virou
+      `LIMIT_HISTORICO = 10`.
+      ⚠️ A barra só é renderizada quando o botão "Nova Evolução" existe — sem isso ela
+      virava uma faixa com borda e nada dentro.
+      ⚠️ `retratoConfiavel` (o que o submódulo reporta ao shell) NÃO passou a olhar a
+      ordenação: ela REORDENA a mesma lista, não a recorta. Só o RECORTE (página,
+      status) ameaça o retrato das evoluções abertas.
+- [x] **O banner do atendimento nomeia quem assumiu** — "Atendimento EV-0004 de
+      05/09/2026 22:54 - **Evolução assumida por Marina** - Em andamento", no lugar do
+      título. Regra em `utils/evolucaoAtiva.ts#descricaoAtendimento`, consumida pelos
+      DOIS pontos que montam o rótulo (o `title` da faixa e o JSX).
+      ⚠️ Sem o NOME de quem assumiu, cai no rótulo de sempre: "assumida por" sem nome
+      não informa nada que o banner já não diga.
+- [x] Testes: `__tests__/cadeiaResponsaveis.test.js` (13 casos) — ordem cronológica,
+      `null` que não vira nome riscado, o "não repete o último", A → B → A, coluna não
+      migrada que não derruba a operação clínica, e um gate estrutural que reprova
+      `marcarAssumido`/arrasto/`assumir` sem a empilhagem.
+      ✅ **Verificado que REPROVA**: o banco falso do teste deriva as garantias DO
+      PRÓPRIO SQL (`<> $2::int` e `ORDER BY ... e.ord`) — removidas as duas cláusulas da
+      lib, dois casos falharam. Suíte: **539**.
+- [ ] Os FILHOS do atendimento (prescrição, exame, encaminhamento, vacina) não têm
+      cadeia — são arrastados normalmente, mas a coluna "Responsável" deles mostra só o
+      atual. O caminho é o mesmo: entrada em `TABELAS` de `lib/cadeiaResponsaveis.js` e
+      a empilhagem dentro de `transferirFilhosDasEvolucoes`, que já conhece o `deVetId`
+      de cada movido.
+- [ ] Mãos INTERMEDIÁRIAS anteriores à migration não são reconstruídas: o backfill
+      semeia o AUTOR (evolução) e o ANTERIOR IMEDIATO (agendamento), que é o que as
+      colunas antigas sabiam. A sequência completa do passado só existe como texto no
+      AuditLog, e derivá-la de uma frase faria o sistema AFIRMAR uma cadeia deduzida.
+- [ ] O card MOBILE acompanha a ordem escolhida no desktop, mas não tem controle
+      próprio (não há cabeçalho de coluna para clicar).
+
+### Sessão 2026-09-06 — Inativar fecha o atendimento; os vãos do congelamento; reset por paciente
+
+- [x] 🔴 **A EVOLUÇÃO ABERTA DE UM PACIENTE INATIVADO FICAVA ABERTA PARA SEMPRE.**
+      O guard (`bloquearSeAnimalInativo`) recusa toda escrita — inclusive a
+      finalização. Resultado: ninguém, nem o gestor, conseguia mais fechar aquele
+      atendimento; ele seguia pendurado na tela, no banner e nas listas.
+      **Congelar um atendimento no meio não é deixá-lo em aberto — é fechá-lo.**
+      `AnimalController.inativar` passou a finalizar as evoluções EM_ANDAMENTO do
+      paciente na MESMA transaction da inativação.
+      ⚠️ **NÃO precisou de exceção no guard**: a finalização acontece ANTES de o
+      estado congelado valer para o mundo, dentro da transaction. Abrir um furo em
+      `bloquearSeAnimalInativo` seria o caminho errado — o furo serviria a qualquer
+      escrita, não só a esta.
+- [x] **`lib/finalizacaoEvolucao.js` — a cascata virou FONTE ÚNICA.** Ela nasceu
+      inline em `EvolucaoController.atualizar` e ganhou um segundo chamador; duas
+      cópias divergiriam em silêncio (a prescrição iria ao plantão por um caminho e
+      não pelo outro, sem nada acusar).
+      `cascataDaFinalizacao(tx, evolucaoId, { agendamentoId, porUsuarioId })`:
+      agendamento EM_ANDAMENTO → FINALIZADO · prescrição SALVO → FINALIZADO (+ itens
+      ATIVA) · vacina SALVA → FINALIZADA. Idempotente (todo update filtra pelo status
+      de origem). `lancarExamesDaEvolucao` é a parte de FATURA, e mora à parte porque
+      roda DEPOIS do commit.
+      ⚠️ **Só transição de status.** Fatura e baixa de estoque continuam na EXECUÇÃO,
+      no plantão (regra de 2026-07-25). A exceção é o EXAME, lançado com valor ZERADO
+      — e fora da transaction: fatura de destino PAGA faz o helper lançar, e isso
+      reverteria a inativação, prendendo o paciente num estado pela metade.
+      ⚠️ A prescrição promovida tem a `versao` invalidada: quem a tiver aberta leva
+      409 em vez de gravar sobre um documento que já foi para o plantão.
+- [x] 🔴 **`veterinarioId` NÃO É REESCRITO na finalização automática.** No Finalizar
+      normal quem finaliza vira o responsável, porque ESCOLHEU fechar o atendimento e
+      responde pelo que ele declara. Aqui ninguém conduziu nada — é consequência
+      administrativa da inativação. Carimbar quem inativou como autor do prontuário
+      alheio seria falsear a autoria clínica, a mesma razão pela qual a assinatura do
+      vet não sai na linha de outro (§12, 02/09). Quem inativou fica em
+      `modificadoPorId`; o motivo e o antes → depois vão para a auditoria.
+- [x] 🔴 **VÃO 1 — a Evolução RECALCULAVA os níveis por LINHA.** Dentro de
+      `acoesDaEvolucao`, `nivelEditar`/`nivelDeletar` saíam de `permissoes[...]` CRU,
+      contornando `podeEditar`/`podeDeletar` — que são justamente onde o
+      `!pacienteInativo` mora. Alterar, Cancelar e Assumir seguiam visíveis no
+      prontuário congelado; o backend recusava com 400 e o clique só falhava.
+      Corrigido **na origem**: `const nivelEditar = pacienteInativo ? 'NENHUM' : …`.
+      ⚠️ Gatear cada predicado derivado (`podeEditarEsta`, `podeCancelarPropria`…)
+      resolveria o sintoma e deixaria o buraco: o PRÓXIMO predicado escrito ali
+      nasceria desprotegido. Zerando o nível, todos somem de uma vez.
+      ⚠️ Havia um segundo escape no mesmo bloco: o ramo `isGestor && FINALIZADA` do
+      Alterar (reabrir evolução finalizada), que não passa por `podeEditarEsta`.
+      **`isGestor` não é passe livre aqui** — o backend barra o gestor igual.
+- [x] 🔴 **VÃO 2 — o banner "Finalizar Atendimento".** `podeFinalizarEvolucao` era
+      resolvido no TOPO do componente, antes de `animal` existir, então não tinha como
+      olhar `pacienteInativo`. Movido para junto dele.
+      ⚠️ `podeImprimirEvolucao` FICA no topo: imprimir não depende do estado do
+      paciente — saída de conteúdo é liberada no prontuário congelado, e é isso que
+      "fica para visualização" quer dizer. Há teste guardando esse sentido.
+- [x] 🔴 **TROCAR DE PACIENTE = TELA NOVA.** Nenhum submódulo era remontado na troca:
+      só a Evolução tinha `key`, e era o contador de finalização, não o animal. O
+      estado interno atravessava a troca — texto da evolução em digitação, item em
+      edição, formulário aberto. O rascunho de um paciente aparecia no prontuário de
+      outro, e um Salvar distraído o gravaria lá.
+      `key` com `effectiveAnimalId` nos QUATRO submódulos.
+      ⚠️ O rascunho de verdade não se perde: `SubModuloEvolucao` o guarda em
+      localStorage POR animalId, então remontar restaura o do paciente certo.
+      ⚠️ **`setAnimal(null)` no reset**: sem ele a tela segue exibindo o paciente
+      ANTERIOR até o fetch responder — e nessa janela `pacienteInativo` é o estado do
+      OUTRO. Trocar de um ativo para um inativo deixava os botões ligados por um
+      instante, com o dado errado na tela.
+- [x] **Gate novo `__tests__/pacienteInativoFront.test.js` (11 casos).** O
+      `pacienteInativo.test.js` cobre o BACKEND (o guard em toda escrita); este cobre
+      a TELA, que é onde o sintoma nasce e onde ele é INVISÍVEL — o botão aparece, o
+      backend recusa, e a pessoa conclui que "o sistema está com erro".
+      ✅ **Verificado que reprova**: revertido o arquivo ao código com o defeito, os
+      dois casos relevantes falharam.
+      ⚠️ A varredura IGNORA COMENTÁRIOS (`semComentarios`) — sem isso ela acusa o
+      PRÓPRIO comentário que explica a regra, e um gate que reprova a documentação da
+      regra é um gate que se aprende a ignorar. Mesma lição do gate de e-mail.
+      Mais `__tests__/inativacaoFinalizaAtendimento.test.js` (11 casos) para a
+      cascata e para a regra de autoria. Suíte: **526**.
+- [ ] **Paciente inativado ANTES desta mudança continua com o atendimento aberto** —
+      a finalização automática só vale daqui em diante. O gate do banner e o dos
+      ícones cobrem a tela desses casos, mas a evolução deles segue EM_ANDAMENTO e só
+      fecha reativando o paciente e finalizando à mão. Um backfill resolveria; não foi
+      feito porque fechar atendimento em massa é decisão de produto, não de código.
+- [ ] A inativação NÃO gera título por IA para a evolução que fecha (o Finalizar
+      normal gera). É consumo de IA medido por empresa, e o título é documentado como
+      conveniência — evolução fechada por inativação pode ficar sem ele.
+
+### Sessão 2026-09-05 (parte 5) — Concorrência na prescrição e no exame + o arrasto que trava de verdade
+
+> 🔴 **MIGRATION GERADA, NÃO APLICADA** —
+> `prisma/migrations/20260923000000_concorrencia_prescricao_exame/`: `versao INT NOT
+> NULL DEFAULT 1` em `tb_prescricao_grupos` e `tb_exames_clinicos`. Sem RLS novo, sem
+> backfill (o default cobre a linha existente). Some com a de `20260922000000` no
+> mesmo `migrate deploy`.
+
+- [x] 🔴 **O QUE FALTAVA NO ARRASTO: ele não travava o GESTOR anterior.**
+      `transferirFilhosDasEvolucoes` já movia prescrição, exame, encaminhamento e
+      vacina quando alguém assume a evolução — isso existe desde 2026-08-04 e está
+      correto. O que não existia era o bloqueio ser AUTOMÁTICO: quem barrava o
+      profissional anterior era a AUTORIA, e `podeOperarRegistro` tem **bypass de
+      GESTOR**. Na prática, um gestor que perdeu o atendimento continuava podendo
+      gravar por cima de quem assumiu, e nada acusava.
+      Agora cada registro arrastado tem a `versao` INCREMENTADA (`invalidarVersoes`,
+      em `lib/concorrenciaRegistro.js`): a tela do anterior segura a versão velha e
+      leva **409** no próximo salvar, seja qual for o cargo.
+      ⚠️ **Fica DENTRO de `transferirFilhosDasEvolucoes`, não nos controllers** — é o
+      que faz valer para TODOS os callers de uma vez: assumir evolução, assumir
+      agendamento, trocar o profissional e transferir o dia inteiro. Pôr nos
+      controllers deixaria o caminho novo nascer desprotegido.
+      ⚠️ **Na MESMA transaction do arrasto**: revertida a transferência, a versão não
+      pode ter avançado — senão a tela de quem NÃO perdeu nada passaria a levar 409.
+      ⚠️ **Sem condição de versão** ali, de propósito: não há disputa a resolver, a
+      transferência JÁ foi decidida. Condicionar criaria uma corrida onde não há.
+      ⚠️ O 4º campo de `FILHOS_DA_EVOLUCAO` diz qual recurso invalidar; `null` em
+      ENCAMINHAMENTO e VACINA (sem a coluna) — são formulários curtos, sem o risco de
+      texto longo em digitação. Ganhando `versao` um dia, é só preencher o campo.
+- [x] **`versao` na PRESCRIÇÃO (no GRUPO) e no EXAME.**
+      ⚠️ **No GRUPO, não no item**: o que se disputa é o DOCUMENTO. Incluir e remover
+      item mudam o conjunto, e uma versão por item deixaria passar "A removeu o item
+      3 enquanto B adicionava o item 4" — cada item com a versão intacta e o
+      documento resultante sendo o de ninguém. `atualizarItem`, `adicionarItem` e
+      `removerItem` reservam a versão do grupo como PRIMEIRO passo da transaction.
+      ⚠️ **`veterinarioId` NÃO tem `@map`** em `PrescricaoGrupo` nem em `ExameClinico`
+      (coluna camelCase, exige aspas), ao contrário de `AgendamentoClinico`
+      (`veterinario_id`). Errar isso só aparece em runtime, com o banco na frente —
+      armadilha 41. Há teste travando as quatro strings.
+      ⚠️ No EXAME o `salvarResultado` também entrou, nos DOIS ramos: o de Imagem
+      gravava por um `update` solto e ganhou transaction por causa da trava. Dois
+      carregamentos concorrentes faziam o segundo APAGAR a tabela de resultado do
+      primeiro (`deleteMany` + recriação) sem nenhum aviso.
+- [x] 🔴 **A RESERVA DE ESTOQUE ACOMPANHA A EDIÇÃO DO ITEM** —
+      `recalcularReservasDoGrupo`. `finalizar` reserva estoque pela quantidade de
+      cada item; editar DEPOIS disso (grupo FINALIZADO e ainda sem nenhuma dose — ou
+      seja, a prescrição parada na fila do plantão) deixava a reserva presa no valor
+      ANTIGO: dobrar a duração de 5 para 10 dias seguia reservando 5, e trocar o
+      medicamento deixava a reserva do anterior ÓRFÃ, segurando estoque que ninguém
+      mais vai consumir — o próximo a prescrever aquele medicamento via saldo a menos.
+      ⚠️ **APAGA TUDO E RECRIA**, em vez do ajuste por medicamento: é o único jeito de
+      limpar a reserva do medicamento que SAIU do documento — `criarReservas` percorre
+      os itens NOVOS e nunca chega ao que foi trocado.
+      ⚠️ **SÓ VALE PARA GRUPO SEM NENHUMA EXECUÇÃO.** Depois da primeira dose as
+      reservas já foram abatidas proporcionalmente por `debitarEstoqueDia`, e
+      recriá-las pela quantidade CHEIA reservaria de novo o que já saiu do estoque.
+      Quem garante isso é o guard `EXECUTADO` do `atualizarItem`, que roda antes — se
+      ele for afrouxado, este helper precisa ser revisto junto.
+      ⚠️ Sai cedo em `SALVO`: rascunho não tem reserva a refazer.
+      ⚠️ `removerItem` NÃO foi tocado — ele já tinha o próprio recálculo, com o
+      cuidado extra do caso PARCIALMENTE executado, que este helper não cobre.
+- [x] **Testes**: 38 em `concorrenciaEdicao.test.js` (+11) e a asserção nova em
+      `autoriaAtendimento.test.js`, que agora prova que o arrasto invalida as versões
+      dos movidos — é lá que a regra pertence.
+      ✅ **Verificado que REPROVAM**: removi a invalidação do arrasto e o recálculo da
+      reserva, um de cada vez, e cada gate falhou.
+      ⚠️ **O gate da reserva nasceu FROUXO e passou na sabotagem**: ele só checava que
+      `recalcularReservasDoGrupo` APARECIA no handler, e o handler chama o helper duas
+      vezes (origem e destino do roteamento). Foi apertado para exigir a chamada da
+      ORIGEM (`recalcularReservasDoGrupo(tx, item.grupo)`). Lição para gate novo:
+      "a função aparece" não é asserção — sabote e confira.
+      Suíte: **504 passando**; `tsc -b` + `vite build` limpos.
+- [ ] **ENCAMINHAMENTO e VACINA seguem sem `versao`.** São arrastados normalmente e
+      protegidos pela autoria, mas o gestor anterior ainda os alcança. O caminho é o
+      mesmo: coluna + entrada em `TABELAS` + preencher o 4º campo de
+      `FILHOS_DA_EVOLUCAO` (que já está lá, com `null`).
+- [ ] **A tela da prescrição e a do exame não assinam o canal SSE** — recebem o 409 ao
+      salvar, com a mensagem certa, mas não entram em somente leitura na hora como a
+      Evolução. Não é lacuna de integridade; é o aviso imediato que falta.
+
+### Sessão 2026-09-05 (parte 4) — Concorrência de edição: fim do "último a salvar vence"
+
+> 🔴 **MIGRATION GERADA, NÃO APLICADA** —
+> `prisma/migrations/20260922000000_concorrencia_edicao/`: `versao INT NOT NULL
+> DEFAULT 1` em `tb_evolucoes_clinicas` e `tb_agendamentos_clinicos`, `autor_id INT`
+> (sem FK) na primeira, backfill `autor_id = "veterinarioId"` e índice. Sem RLS novo
+> — as duas tabelas já estão no tenant plane. Aplicar com
+> `DATABASE_URL=$DATABASE_URL_MIGRATIONS npx prisma migrate deploy` + `npx prisma
+> generate`.
+> ⚠️ **FUNCIONA ANTES DO `generate`**: `versao`/`autor_id` são lidas e gravadas por
+> SQL CRU (`lib/concorrenciaRegistro.js`), como `animalInativo` e
+> `agendamentoAssumido` — no Windows o generate falha com o backend rodando (§11).
+> O que NÃO funciona antes da MIGRATION é a proteção: `anexarControle` cai em
+> `versao: 1` e a tela grava como gravava (sem trava, não quebrada).
+
+- [x] 🔴 **O DEFEITO: dois profissionais no mesmo registro se sobrescreviam em
+      silêncio.** Médico A abre a evolução, B abre a mesma e salva, A salva depois —
+      o texto de B desaparecia e nada acusava. Em prontuário isso é perda de dado
+      clínico, não um detalhe de UX.
+      ⚠️ **A AUTORIA NÃO COBRIA ISSO, e é importante entender por quê**:
+      `podeOperarRegistro` responde "posso operar o registro DESTA pessoa?" e é
+      VERDADEIRA para os dois gestores da mesma clínica, ou para quem tem nível
+      EQUIPE/FULL. **Autoria é AUTORIZAÇÃO; concorrência é INTEGRIDADE.** São
+      camadas distintas e a segunda não existia.
+- [x] 🔴 **TRAVA OTIMISTA (`versao`) — fonte única `lib/concorrenciaRegistro.js`.**
+      A tela devolve a versão que LEU; o UPDATE é condicionado a ela
+      (`WHERE id = $1 AND versao = $2`) e incrementa no MESMO comando. Concorrente
+      partindo da mesma versão não acha linha para atualizar → 409.
+      ⚠️ **O incremento é parte do MESMO UPDATE.** Gravar a versão num comando
+      separado abre uma janela em que a linha já mudou e a versão ainda não — e
+      nessa janela um terceiro passa pela checagem com a versão velha.
+      ⚠️ **`reservarVersao` é o PRIMEIRO passo da transaction**, antes do `update`
+      tipado do Prisma (que existe só para montar a resposta com o `include`).
+      Rodando depois, a escrita já aconteceu e o rollback vira a única defesa.
+      ⚠️ **Versão ausente no corpo NÃO é conflito** — cliente antigo continua
+      funcionando, só sem proteção. Mas ela INCREMENTA mesmo assim, para que quem
+      declarou versão veja o conflito. Endurecer isso quebraria toda chamada
+      existente de uma vez, sem aviso nenhum ao usuário.
+- [x] 🔴 **ASSUMIR DEIXOU DE SER `SELECT` + `UPDATE` CEGO.** Era a corrida clássica:
+      B e C liam o mesmo `veterinarioId` e os DOIS gravavam com 200 — o último a
+      commitar ficava com o registro e o outro recebia sucesso sobre uma assunção
+      que não aconteceu. `assumirComLock` condiciona a versão E o editor anterior.
+      ⚠️ **`IS NOT DISTINCT FROM`, nunca `=`**, na comparação do editor anterior:
+      `NULL = NULL` é NULL no Postgres, e com `=` assumir um agendamento "Não
+      atribuído" falharia SEMPRE. Há teste para esse caso.
+      ⚠️ Aplicado nos DOIS: `EvolucaoController.assumir` e
+      `AgendamentoController.assumir`.
+- [x] **AUTOR × EDITOR: `EvolucaoClinica.autorId`.** `veterinarioId` era as duas
+      coisas ao mesmo tempo, e `assumir` o sobrescrevia — ou seja, assumir APAGAVA
+      quem criou o atendimento.
+      ⚠️ **`veterinarioId` NÃO mudou de significado**: continua sendo o EDITOR/
+      RESPONSÁVEL atual, que é o que escopo, autoria e agenda já esperam. A coluna
+      nova só acrescenta o que se perdia — nenhum dos ~47 leitores foi tocado.
+      ⚠️ Sem FK (como `assumido_de_id`): com `SetNull`, excluir a conta do
+      profissional APAGARIA a autoria do prontuário dele.
+      ⚠️ O backfill NÃO reconstrói autoria de evolução já assumida a partir do
+      AuditLog: a trilha existe e é consultável, mas virar coluna faria o sistema
+      AFIRMAR uma autoria derivada por heurística.
+- [x] **TEMPO REAL POR SSE** — `lib/eventosTempoReal.js` + `GET /api/eventos/stream`.
+      Quem perde o registro recebe o evento e a tela entra em somente leitura na
+      hora, em vez de aceitar mais digitação de um texto que o backend já recusa.
+      🔴 **POR QUE SSE E NÃO WEBSOCKET**: (1) a auth já é por COOKIE HttpOnly (§14) e
+      o `EventSource` mesma-origem o manda sozinho — WebSocket exigiria handshake de
+      auth próprio (token na query, justamente o que a §8 evita) e um segundo caminho
+      de sessão a manter em sincronia; (2) o fluxo é de mão ÚNICA, e toda escrita
+      continua sendo HTTP autenticado e auditado; (3) sem dependência nova e sem
+      infra paralela — mesmo Express, mesmo proxy do Vite, mesmo túnel.
+      ⚠️ **O EVENTO NUNCA É A FONTE DA VERDADE.** Ele é conveniência; a integridade
+      é do banco. Há teste dedicado ao cenário "SSE caído": B assume, A não é
+      avisado, A tenta salvar → 409 igual.
+      ⚠️ **Publicar SEMPRE depois do commit e FORA da transaction** — antes dela, um
+      rollback avisaria a tela de algo que não aconteceu; dentro, uma falha de
+      entrega reverteria a operação clínica. Há gate estrutural para isso.
+      ⚠️ `X-Accel-Buffering: no` + `res.flushHeaders()` são obrigatórios: sem eles o
+      proxy segura os bytes e o aviso chega tarde demais para servir de aviso.
+      ⚠️ **A rota é ISENTA do rate limit geral** (`limiter.skip`): a conexão fica
+      aberta por minutos e o `EventSource` RECONECTA sozinho ao cair. Contada como
+      requisição comum, um dia ruim de rede consumiria a cota e a tela levaria 429 no
+      meio do atendimento. O que ela protege continua atrás do limite: toda ESCRITA
+      passa pelas rotas normais.
+      ⚠️ **STORE ÚNICO no front** (`useEventosTempoReal`), como `usePermissoes`: um
+      `EventSource` por componente abriria N conexões por pessoa, e o teto de 5 abas
+      do backend derrubaria as mais antigas — a própria tela ficaria surda.
+- [x] 🔴 **VAZAMENTO DE TIMER encontrado pelo próprio teste** (jest acusou "open
+      handle"): `encerrarTudo` chamava `res.end()` e deixava o `setInterval` do
+      heartbeat VIVO, tentando escrever numa resposta morta a cada 25s para sempre.
+      Corrigido com um `WeakMap` de encerradores + `unref()` no timer. Regressão
+      travada por teste com timers falsos.
+- [x] **A TELA NÃO FECHA E O TEXTO NÃO SOME** (`components/AvisoRegistroAssumido.tsx`).
+      O conteúdo digitado fica visível para a pessoa copiar o que importa; o que sai
+      é o Salvar (botão que só falha depois do clique é a armadilha 28-d). Saídas:
+      **Atualizar** (recarrega o gravado) e **Descartar minhas alterações**.
+      ⚠️ **NÃO existe merge automático de texto clínico.** Juntar dois textos sem
+      regra de negócio explícita produz um prontuário que ninguém escreveu — e que
+      leva a assinatura de alguém.
+      ⚠️ O aviso é renderizado FORA do `<fieldset disabled>`: os botões dele
+      precisam funcionar justamente quando o formulário está travado.
+- [x] **PERDEU O REGISTRO × NUNCA TEVE PERMISSÃO são respostas DIFERENTES.** Quem
+      DECLAROU uma versão tinha a evolução aberta e a perdeu no meio do trabalho:
+      isso é concorrência (**409**, com quem assumiu e quando). Quem não declarou
+      versão nunca teve o registro carregado: é permissão (**403**, texto de sempre
+      — o cliente antigo não muda de comportamento).
+- [x] **Auditoria: categoria nova `CONFLITO_EDICAO`** (`registrarConflitoEdicao`).
+      ⚠️ **NÃO é `ACESSO_NEGADO`**: não faltou permissão, faltou atualidade do dado.
+      Misturar os dois poluiria a tela de tentativas de invasão com casos de duas
+      pessoas trabalhando juntas. Badge âmbar (aviso), não o rose de segurança.
+      ⚠️ **Não grava o texto recusado.** Ele continua na TELA de quem o escreveu;
+      duplicá-lo na trilha faria o AuditLog acumular versões de prontuário que
+      ninguém assinou — e ele é um ledger, não um versionador.
+      ⚠️ Fire-and-forget: falhar em REGISTRAR a recusa não pode alterá-la.
+- [x] **ASSUMIR e ALTERAR já estavam auditados** por `TRANSFERENCIA` e `ALTERACAO`
+      (com antes → depois e o dono de cada lado) — não foi preciso categoria nova
+      para eles. O que faltava na trilha era só a TENTATIVA recusada.
+- [x] **Testes**: `__tests__/concorrenciaEdicao.test.js` (27 casos) — trava otimista,
+      corrida de assunção, autoria preservada, leitura, resposta 409, tempo real e
+      o cenário completo com o SSE caído. Mais um GATE ESTRUTURAL que varre o código
+      e reprova `assumir` sem `assumirComLock`, `atualizar` sem `reservarVersao` e
+      `publicar` dentro de `$transaction`.
+      ✅ **Verificado que REPROVA de verdade**: a cláusula de versão foi removida de
+      propósito e 5 casos falharam. Suíte: **493 passando** (era 466); `tsc -b` +
+      `vite build` limpos; smoke test do wire SSE (16 checagens, servidor HTTP real).
+- [ ] **NÃO existe lock com TIMEOUT, e é decisão de produto.** Lock que expira exige
+      heartbeat, e heartbeat que falha por rede instável libera o registro de quem
+      AINDA está digitando — troca um problema raro (dois editando) por um pior (o
+      lock some sozinho no meio do atendimento). Quem dá exclusividade é o par
+      AUTORIZAÇÃO + INTEGRIDADE, e "assumir" é a transferência explícita, feita por
+      uma pessoa. Se um dia for necessário, é aqui que a decisão precisa ser revista
+      — junto de heartbeat, renovação e comportamento na reconexão.
+- [ ] **PRESCRIÇÃO ainda não tem `versao`.** O caso é menos exposto (o gate de status
+      `SALVO` já impede editar item de documento finalizado), mas dois profissionais
+      no MESMO grupo em rascunho continuam podendo se sobrescrever. O caminho é o
+      mesmo: coluna + entrada em `TABELAS` de `lib/concorrenciaRegistro.js`.
+- [ ] **SSE é POR PROCESSO.** Em várias instâncias, cada uma só alcança as telas
+      conectadas nela — e nesse dia o caminho é publicar por Redis pub/sub mantendo a
+      MESMA interface (`publicar`), sem tocar nos controllers. Hoje o projeto roda em
+      processo único (o `cronManager` depende disso).
+- [ ] A tela do paciente (`AnimalDetail`) e as demais listas clínicas não assinam o
+      canal — só Evolução e Agenda. Não é lacuna de integridade (o 409 continua
+      valendo em todas), é ausência do aviso imediato.
 
 ### Sessão 2026-09-05 — PDF no WhatsApp/e-mail, assinatura na prescrição e paciente inativo fora da fila
 
@@ -6664,6 +7477,11 @@ POST   /lancar-na-fatura                 → { faturaId, itemIds } cria FaturaIt
 | `hooks/usePermissoes.ts` | `Nivel` inclui `'NEGADO'`. `NIVEL_ORDINAL` inclui `NEGADO: -1`. `podeExecutar` retorna false para NEGADO (ordinal -1 < qualquer mínimo). `loading` deve ser usado para gating de useEffects. |
 | `services/whisperService.ts` | Transcrição: online → Web Speech API, offline → Whisper local. Funções: `isMobile()`, `estaOnline()`, `carregarModelo()`, `transcreverOffline()` |
 | `utils/EvolucaoPrint.ts` | `imprimirEvolucao(evolucao)` — abre janela de impressão formatada para evolução clínica |
+| `lib/concorrenciaRegistro.js` (backend) | **FONTE ÚNICA da concorrência de edição.** `reservarVersao` (trava otimista antes do update tipado), `gravarComVersao`, `assumirComLock` (assunção atômica), **`invalidarVersoes`** (bump em lote — é o que trava o profissional anterior no ARRASTO, inclusive o gestor), `definirAutor`, `anexarControle` (põe `versao`/`autorId` na leitura), `versaoDoBody`, `responderConflito` (409 legível). `TABELAS` cobre EVOLUCAO, AGENDAMENTO, PRESCRICAO_GRUPO e EXAME_CLINICO — ⚠️ a coluna do editor DIFERE por tabela (armadilha 41). SQL cru — funciona antes do `prisma generate`. Ver a §12, sessões de 2026-09-05 (partes 4 e 5) |
+| `lib/eventosTempoReal.js` (backend) | Canal SSE por sessão: `abrirCanal` (registra a resposta + heartbeat com `unref`), `publicar` (fire-and-forget, SEMPRE fora da transaction), `estatisticas`, `encerrarTudo`. ⚠️ NÃO é fonte da verdade — só avisa; quem garante é a trava otimista |
+| `routes/eventos.js` (backend) | `GET /api/eventos/stream` (SSE, autenticado por cookie; o cliente NUNCA diz para quem escutar) e `/status` (ADMIN). Isento do rate limit geral — ver §12 |
+| `hooks/useEventosTempoReal.ts` | Assina o canal SSE. **STORE ÚNICO de módulo** (um `EventSource` por aba, não por componente). `aoEvento` vai num `ref`, não nas dependências: arrow inline reabriria a conexão a cada tecla digitada |
+| `components/AvisoRegistroAssumido.tsx` | Aviso de registro perdido para outro profissional + **Atualizar** / **Descartar**. Renderizado FORA do `<fieldset disabled>` (os botões precisam funcionar com o formulário travado). Não fecha a tela e não apaga o texto digitado |
 | `lib/fusoEmpresa.js` (backend) | **FONTE ÚNICA de fuso do servidor.** `fusoDaEmpresa(empresaId)` (cache 60s), `hojeNaEmpresa`/`diaNaEmpresa`/`formatarNaEmpresa`/`formatarHoraNaEmpresa` e `instanteNoFuso` (HH:MM da clínica → instante UTC). Sempre `Intl` com `timeZone` explícito — NUNCA `process.env.TZ` em runtime. Ver §6 |
 | `utils/dateUtils.ts` | **FONTE ÚNICA de data/hora do front.** Duas famílias: DATA PURA (`formatDate`/`formatDateShort`, sem conversão de fuso) e INSTANTE (`formatHora`/`formatDiaMes`/`formatDiaMesHora`/`formatDataHora`/`formatHoraComDia`/`diaISO`/`hojeISO`/`mesmoDia`, no fuso de quem olha). `fusoDoUsuario()` é o ponto único de troca se o fuso passar a vir da empresa. Ver a regra completa na seção 6 |
 
@@ -7404,6 +8222,26 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     Entradas do request passam por `normalizarDesconto` (400 em tipo inválido ou % > 100);
     em `atualizarItem` o desconto só é tocado se o body mencionar um dos dois campos — assim
     um PATCH parcial não zera desconto existente.
+42. 🔴 **`UPDATE` DE MIGRATION EM TABELA DO TENANT PLANE NÃO AFETA NADA (2026-09-06).**
+    As tabelas sob RLS estão com **FORCE ROW LEVEL SECURITY**: a policy vale até para o
+    DONO do schema, que é justamente quem roda as migrations (`DATABASE_URL_MIGRATIONS`).
+    Sem `app.empresa_id` nem `app.plataforma` carimbados, `(app_plataforma() OR
+    empresa_id = app_empresa_id())` é falsa para TODA linha — e o backfill afeta ZERO
+    delas, **com sucesso e sem aviso**. `ALTER TABLE` passa (DDL não consulta policy);
+    só o DML é filtrado, e é por isso que a migration "funciona" e o dado não aparece.
+    Medido em 2026-09-06: o backfill de `20260924000000_cadeia_responsaveis` deixou 2
+    evoluções e 14 agendamentos sem semear, e a migration reportou sucesso.
+    REGRA: `UPDATE`/`INSERT`/`DELETE` de migration em tabela do tenant plane começa com
+    `SELECT set_config('app.plataforma', 'on', true);` — `true` = LOCAL à transação da
+    migration, para o carimbo não vazar para a conexão seguinte do pool.
+    ⚠️ Migration JÁ APLICADA não se corrige editando o arquivo (o checksum registrado
+    passa a divergir e o Prisma acusa "migration alterada depois de aplicada" em todo
+    ambiente que já a tem): crie uma migration NOVA só com o backfill — foi o que
+    `20260924000001_cadeia_responsaveis_backfill` faz.
+    ⚠️ CONFERIR o resultado tem o mesmo problema: um `count(*)` pelo client comum
+    devolve 0 por RLS, não por tabela vazia. Compare com `pg_class.reltuples` ou consulte
+    dentro de uma transação com o mesmo `set_config`.
+
 ```
 
 ---

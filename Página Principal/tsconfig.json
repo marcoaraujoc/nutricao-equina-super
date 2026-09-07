@@ -1,27 +1,114 @@
-{
-  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts", "eslint.config.js"],
-  "compilerOptions": {
-    "target": "ES2022",
-    "jsx": "react-jsx",
-    "module": "ESNext",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["vite/client"],
+Em todos os documentos faça essas alterações:
+- Colocar o e-mail do veterinário responsável
+- Se for CNPJ informar os dados da empresa (nome, endereço completo, CNPJ, Inscrição Estadual e Registro no CRMV) 
+- Os campos que não forem preenchidos não podem ser impressos, encaminhados por Whastapp por e-mail e nem visualizar vazio
 
-    /* Bundler mode */
-    "moduleResolution": "Bundler",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": false,
-    "noEmit": true,
+Atestado de óbito
+- documento a ser emitido em 2 vias: 1ª via: médico-veterinário; 2ª via: proprietário, tutor/responsável
 
-    /* Linting */
-    "skipLibCheck": true,
-    "strict": true,
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true,
-    "paths": {
-      "@/*": ["./src/*"]
-    }
-  }
-}
+Receita Controlada:
+- 
+
+CONSENTIMENTO — PROCEDIMENTO CIRÚRGICO
+- Troque o nome de "CONSENTIMENTO — PROCEDIMENTO CIRÚRGICO" para "TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE PROCEDIMENTO CIRÚRGICO"
+- documento a ser emitido em 2 vias: 1ª via: médico-veterinário; 2ª via: proprietário, tutor/responsável
+
+Consentimento — Doação do Corpo para Ensino e Pesquisa
+- Troque o nome de "Consentimento — Doação do Corpo para Ensino e Pesquisa" para "TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO DE DOAÇÃO DE CORPO DE ANIMAL 
+PARA FINS DE ENSINO E PESQUISA"
+- documento a ser emitido em 2 vias: 1ª via: médico-veterinário; 2ª via: proprietário, tutor/responsável
+- Troque de "Observações do(a) Médico(a) Veterinário(a)" para "Observações de interesse a serem fornecidas pelo(a) Médico(a) Veterinário(a):"
+- Troque de "Observações do(a) responsável" para "Observações de interesse a serem fornecidas pelo(a) tutor(a)/proprietário(a)/responsável:"
+
+Consentimento — Eutanásia
+- Troque o nome de "Consentimento — Eutanásia" para "TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE EUTANÁSIA 
+- Troque de "Observações do(a) Médico(a) Veterinário(a)" para "Observações de interesse a serem fornecidas pelo(a) Médico(a) Veterinário(a):"
+- Troque de "Observações do(a) responsável" para "Observações de interesse a serem fornecidas pelo(a) tutor(a)/proprietário(a)/responsável:"
+- documento a ser emitido em 2 vias: 1ª via: médico-veterinário; 2ª via: proprietário, tutor/responsável
+
+Consentimento — Internação e Tratamento Clínico
+- Troque o nome de "Consentimento — Internação e Tratamento Clínico" para "TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE INTERNAÇÃO E TRATAMENTO CLÍNICO OU PÓS-CIRÚRGICO"
+- Troque de "Observações do(a) Médico(a) Veterinário(a)" para "Observações de interesse a serem fornecidas pelo(a) Médico(a) Veterinário(a):"
+- Troque de "Observações do(a) responsável" para "Observações de interesse a serem fornecidas pelo(a) tutor(a)/proprietário(a)/responsável:"
+- documento a ser emitido em 2 vias: 1ª via: médico-veterinário; 2ª via: proprietário, tutor/responsável
+
+CONSENTIMENTO — PROCEDIMENTO TERAPÊUTICO DE RISCO
+- Troque o nome de "CONSENTIMENTO — PROCEDIMENTO TERAPÊUTICO DE RISCO" para "TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE PROCEDIMENTO 
+TERAPÊUTICO DE RISCO "
+- Troque de "Observações do(a) Médico(a) Veterinário(a)" para "Observações de interesse a serem fornecidas pelo(a) Médico(a) Veterinário(a):"
+- Troque de "Observações do(a) responsável" para "Observações de interesse a serem fornecidas pelo(a) tutor(a)/proprietário(a)/responsável:"
+- documento a ser emitido em 2 vias: 1ª via: médico-veterinário; 2ª via: proprietário, tutor/responsável
+
+Consentimento — Procedimentos Anestésicos
+- Troque o nome de "Consentimento — Procedimentos Anestésicos" para "TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE PROCEDIMENTOS ANESTÉSICOS"
+- Troque de "Observações do(a) Médico(a) Veterinário(a)" para "Observações de interesse a serem fornecidas pelo(a) Médico(a) Veterinário(a):"
+- Troque de "Observações do(a) responsável" para "Observações de interesse a serem fornecidas pelo(a) tutor(a)/proprietário(a)/responsável:"
+- documento a ser emitido em 2 vias: 1ª via: médico-veterinário; 2ª via: proprietário, tutor/responsável
+- Inserir no documento o campo "Tipo de procedimento Anestésico indicado:"
+
+Consentimento — Realização de Exames
+- Troque o nome de "Consentimento — Realização de Exames
+
+O prompt da memória clínica não está certo, nos destaques está sendo sugerido e inferido valores sem ter sido informada na evolução:
+A evolução disse "Feito atendimento doa animal, encontrado uma pequena dor lombar e realizada a vermifigução", nessa evolução foi prescrito NGF-5 e prescrito ivermectina, já executada. O que a LLM da memória clínica disse "Recorrência de dor lombar em 06/09/2026: t3, t6, t7, t9, t11.", o que eu espero é "Paciente XPTO teve recorrência (06/09, 07/09 e 10/09) de dor lombar leve feito massagem com NFG-5 e aplicada ivermectina para vermifugar", ou seja, ele está combinando o texto da evolução com a prescrição executada na evolução, e se não tivesse sido executada..."Paciente XPTO teve recorrência (06/09, 07/09 e 10/09) de dor lombar leve aguardando a execução de massagem com NFG-5 e a aplicação de ivermectina para vermifugar". A IA não pode sugerir ou inferir, deve somente fazer uma análise das evoluções, prescrições, exames e vacinas, separando os highlights sem ter repetições e realizando uma consolidação dos atendimentos. 
+Coloque os destaques em primeiro, substitua o resumo pelo Registros, traga apenas as 3 últimos registros, o restante deve ficar no contract.
+
+Na memória clinica quando eu clico no highlight é aberta uma tela com as informações do atendimento mas quando eu clico na tela e movimento, não só a tela em questão mas tudo em volta se movimenta junto, quero poder selecionar as informações contidas na tela.
+
+No cadastro da empresa crie um campo para colocar a chave PIX, o recebedor do PIX, Banco, Agência e Conta Corrente
+Na fatura imprima a chave PIX com os dados do recebedor do PIX, Banco, Agência e Conta Corrente
+
+Na tela de paciente coloque a pelagem como obrigatória
+
+Na tela de incluir membro no campo Perfil de acesso * troque Fornecedor por Prestador
+
+Dentro da tela Novo Prestador no campo Tipo de Serviço * remova Secertária, coloque o checkbox "Terá acesso ao sistema" e a opção "Atender somente no local de trabalho", da mesma forma que a tela de incluir membro.
+
+Na tela Nova Localização retire a frase "Esta localização será cadastrada como CLIENTE, vinculada à sua empresa/equipe ativa.", em "Tipo de Localização *" remova Canil, Gatil, Petshop e Proprietário, dê a opção de criar uma novo tipo de localização que deverá respeitar o Multi-Tentant e o RLS, permita tb escrever para localizar o local.
+
+Em toda a aplicação a Senha Inicial deverá ser composta por:
+- 3 primeiras letras do email com a primeira maiúscula
+- 2 últimos números do telefone
+- 3 primeira letras do nome, se só tiver 2 letras coloque uma consoante
+- 1 caracter especial
+Nunca deve ser mostrada, a senha deverá ser enviada por e-mail somente. O processo seguinte não deve ser alterado
+
+Na tela de Agendamento http://localhost:5173/#/agendamentos, quando o profissional não tiver Local de trabalho definido, coloque o "Nome da Empresa *" que estiver no cadastro da empresa.
+
+Preciso que altere o componente do card Paciente para refletir em todas as telas, o que será replicado é o fato de poder digitar o nome do paciente e ele buscar sem ser obrigado a usar somente o seletor, assim como é na tela de atendimento.
+
+O orçamento não está sendo cancelado depois dos dias que foi informado "Validade do Orçamento" no cadastro da empresa, na MarcoVet tem um orçamento de 10/08 que ainda esta agurdando aprovação, quero que a cada 7 dias seja verificado se existe orçamento em aberto, caso exista o(s) gestor(es) deverão ser avisados via Whastapp e quando estiver faltando um dia para expirar o orçamento o(s) gestor(es) deverão receber outro Whastapp em vermelho informando que no dia seguinte o orçamento será cancelado. 
+Coloque no relatório de orçamentos,como hoje é feito no card histórico do atendimento, ao clicar nos cards(Valor total orçado,Valor aprovado,Valor Rejeitado, Orçamentos Aprovados, Aprovados parcial, Rejeitados, Rejeitados Parcialmente, Aguardando decisão), com o nome do proprietário, animal, data do orçamento, valor e o motivo de ter sido negado se Cancelado automaticamente pelo sistema ou pelo motivo informado.
+No orçamento se algum item, ou ele todo, não tiver sido aprovado, precisa ser informado o motivo.
+
+Conforme já coloquei anteriormente, preciso que o envio via Whastapp e E-mail que é usado hoje na fatura seja um componente na aplicação e que seja feita uma varredura em todo o código e faça a substituição em todas as telas que tiver o envio via whastapp e e-mail para esse componente.
+
+Na tela de Indicadores de Atendimento 
+- Ao clicar nos cards (Consultas agendadas, Consultas realizadas, Consultas não realizadas, Consultas canceladas) precisa trazer a informação na parte debaixo da tela como hoje é feito no card histórico do atendimento
+- Inclua mais os cards (esses cards já existiam na tela de Mapa de atendimento)
+	- Animais sem atendimento no dia
+	- Animais sem atendimento a mais de 3 dias
+	- Animais sem atendimento a mais de 7 dias
+	- Ao selecionar esses cards deverão ser mostrados no "Histórico" abaixo
+- Esse histórico deverá ter:
+	- Nome do Animal, 
+	- Local do Animal,
+	- Veterinário resposável
+	- Data do último Atendimento (consulta)
+	- No caso de consulta o status (agendadas, realizadas,  não realizadas e canceladas)
+
+Na tela de http://localhost:5173/#/relatorios/cadastro
+- Ao clicar nos cards (Pacientes ativos, Novos pacientes no período, Clientes ativos, Novos clientes no período, Pacientes Inativados, Proprietários Inativados,, Pacientes Reativados, Proprietários Reativados) precisa trazer a informação na parte debaixo da tela como hoje é feito no card histórico do atendimento.
+- Esse histórico deverá ter:
+	- No caso do Animal:	
+		- Nome do Animal, 
+		- Local do Animal,
+		- Veterinário resposável
+		- Data de Ativação/Inativação/Reativação
+		- Motivo da Ativação (Cliente Novo)/Inativação/Reativação
+
+
+
+
+
+

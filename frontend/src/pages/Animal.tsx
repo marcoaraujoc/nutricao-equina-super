@@ -7,12 +7,14 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import { hojeISO } from '../utils/dateUtils';
 import toast from 'react-hot-toast';
-import { Camera, AlertCircle, RefreshCw, MapPin, CheckCircle2, X, Plus, User2, Loader2, ChevronDown } from 'lucide-react';
+import { Camera, AlertCircle, RefreshCw, MapPin, CheckCircle2, X, Plus, User2, Loader2, ChevronDown, ArrowLeftRight } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import DateInput from '../components/DateInput';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
+import ProprietarioFormModal from '../components/ProprietarioFormModal';
+import ModalJustificativa from '../components/ModalJustificativa';
 
 
 // ─── NRC ─────────────────────────────────────────────────────────────────────
@@ -110,6 +112,35 @@ interface AnimalEncontrado {
 // responsável é de outra equipe") perguntavam quem era o veterinário do animal.
 // Quem responde por um paciente é a CLÍNICA: ou ele já é desta empresa (e então não
 // se duplica), ou não é (e o cadastro segue normalmente).
+/** Resposta de GET /animais/verificar-duplicidade. */
+interface ConflitoAnimal {
+  id:                number;
+  nome:              string;
+  ativo:             boolean;
+  inativo:           boolean;
+  localizacaoId:     number | null;
+  localNome:         string | null;
+  proprietarioId:    number | null;
+  proprietarioNome:  string | null;
+  /** `null` = ainda não se sabe quem será o dono (e-mail não informado). */
+  mesmoProprietario: boolean | null;
+}
+/**
+ * O paciente que a tela oferece REATIVAR em vez de duplicar.
+ *
+ * Os dois estados viajam juntos porque a rota é diferente para cada um e o paciente
+ * pode estar nos dois: `ativo = false` é a exclusão lógica (`/reativar`) e
+ * `inativo = true` é o prontuário congelado (`/ativar`).
+ */
+type AlvoReativacao = { id: number; nome: string; ativo: boolean; inativo: boolean };
+
+interface DuplicidadeInfo {
+  conflitos:        ConflitoAnimal[];
+  mesmoLocal:       ConflitoAnimal[];
+  duplicado:        ConflitoAnimal | null;
+  duplicadoInativo: ConflitoAnimal | null;
+}
+
 type StatusBusca = 'idle' | 'ja_cadastrado' | 'outra_empresa' | 'nao_encontrado';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -223,6 +254,14 @@ const Animal = () => {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const podeCriar  = isGestor || podeExecutar('animais.criar');
   const podeEditar = isGestor || podeExecutar('animais.editar');
+  // Reativar CLIENTE inativo é ação do cadastro de proprietário — slug próprio, como
+  // no tratador: quem não o tem não vê o botão (armadilha 28-d) e o backend recusa igual.
+  const podeAtivarProprietario = isGestor || podeExecutar('cadastro.proprietario.ativar');
+  // Trocar o dono é regra BASAL de gestor (não configurável na matriz) — mesma família
+  // de "só o gestor transfere agenda" (CLAUDE.md 28-b/28-c). O backend recusa igual.
+  const podeTransferirPropriedade = isGestor || user?.userType === 'ADMIN';
+  // Reativar tratador inativo é ação do CADASTRO de tratador, não do animal — slug próprio.
+  const podeAtivarTratador = isGestor || podeExecutar('cadastro.tratador.ativar');
   const semPermissao = (acao: string) =>
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
@@ -248,6 +287,15 @@ const Animal = () => {
   const [erroInline, setErroInline] = useState<string | null>(null);
   // Erro de AÇÃO — renderizado no modal/painel que disparou, não no topo
   const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
+  // Tratador com o mesmo nome NESTE local, porém INATIVO: não é erro, é uma pergunta —
+  // quase sempre é a mesma pessoa voltando. Guarda quem é para oferecer a reativação.
+  const [tratDupInativo, setTratDupInativo] = useState<{ id: number; nome: string; mensagem: string } | null>(null);
+  const [ativandoTratador, setAtivandoTratador] = useState(false);
+  // Cliente com cadastro INATIVO nesta clínica: o backend recusa o cadastro do paciente
+  // (409) e devolve quem é. Guardado aqui para a tela PERGUNTAR — antes o cadastro era
+  // aceito e o cliente voltava reativado em silêncio, desfazendo a decisão de quem o
+  // tinha inativado.
+  const [propInativo, setPropInativo] = useState<{ nome: string; mensagem: string } | null>(null);
   // Erros por campo — preenchidos durante a digitação (onBlur) e no submit
   const [erros, setErros] = useState<Record<string, string>>({});
   // ⚠️ FASE 3 DO MULTI-TENANCY — saíram daqui `vets`, `vetsFiltrados`, `vetOriginalId`
@@ -269,6 +317,30 @@ const Animal = () => {
   const [novoTratNome,     setNovoTratNome]     = useState('');
   const [novoTratTelefone, setNovoTratTelefone] = useState('');
   const [novoTratLocId,    setNovoTratLocId]    = useState<number | null>(null);
+
+  // ── Duplicidade de paciente (nome + local + dono) ──────────────────────────
+  // A cascata (ver lib/duplicidadeAnimal.js): mesmo nome no mesmo LOCAL é PERGUNTA;
+  // com o mesmo DONO é duplicata — e, se o existente estiver inativo, a saída é
+  // reativá-lo em vez de criar um segundo cadastro.
+  // ⚠️ Isto é o AVISO. Quem recusa é o POST /animais, com o mesmo helper: entre a
+  // verificação e o Salvar outra pessoa pode ter cadastrado o mesmo paciente.
+  const [dupInfo, setDupInfo] = useState<DuplicidadeInfo | null>(null);
+  // "Sim, quero continuar" da pergunta 1 — vale para o par nome+local conferido.
+  const [dupConfirmadoPara, setDupConfirmadoPara] = useState<string | null>(null);
+  const [dupPerguntando, setDupPerguntando] = useState(false);
+  // Existente inativo que a tela ofereceu reativar (vem do 409 do Salvar).
+  const [dupInativoAlvo, setDupInativoAlvo] = useState<AlvoReativacao | null>(null);
+  const [ativandoDuplicado, setAtivandoDuplicado] = useState(false);
+  // Erro da ativação exibido DENTRO do modal, junto ao botão: no topo da página ele
+  // ficaria atrás do overlay e a pessoa não veria o motivo da recusa.
+  const [erroAtivacao, setErroAtivacao] = useState<string | null>(null);
+
+  // TROCA DE DONO — o mesmo fluxo da tela do paciente (`/animal/:id`), reusado aqui:
+  // exige MOTIVO (Doação/Venda/Aluguel), fecha a janela de posse anterior no histórico
+  // do animal e registra na auditoria. Ver lib/transferenciaPropriedadeAnimal.js.
+  // ⚠️ Reuso, não cópia: uma segunda implementação divergiria na primeira correção, e
+  // aqui o que divergiria é COMO a troca de dono fica registrada.
+  const [showTransferencia, setShowTransferencia] = useState(false);
 
   // ── Busca por nome (vet, novo cadastro) ────────────────────────────────────
   const [buscandoAnimal,    setBuscandoAnimal]    = useState(false);
@@ -603,6 +675,57 @@ const Animal = () => {
     }
   };
 
+  /**
+   * VERIFICAÇÃO EM TEMPO REAL da duplicidade — roda enquanto o cadastro é preenchido.
+   *
+   * Dispara a cada mudança de NOME, LOCAL ou E-MAIL do proprietário, com 500ms de
+   * espera: a tríade se completa aos poucos (o nome vem primeiro, o dono por último),
+   * e consultar a cada tecla seria uma requisição por caractere digitado.
+   * ⚠️ Só no cadastro NOVO: na edição o paciente já existe e ele mesmo seria o conflito.
+   */
+  useEffect(() => {
+    if (isEditMode || !isVet) return;
+    const nome = formData.nome.trim();
+    if (nome.length < 2) { setDupInfo(null); return; }
+
+    let cancelado = false;
+    const t = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ nome });
+        if (formData.localizacaoId) params.set('localizacaoId', String(formData.localizacaoId));
+        if (formProp.email.trim())  params.set('email', formProp.email.trim());
+        const res = await api.get(`/animais/verificar-duplicidade?${params}`);
+        if (!cancelado) setDupInfo(res.data?.dados ?? null);
+      } catch { if (!cancelado) setDupInfo(null); }
+    }, 500);
+
+    return () => { cancelado = true; clearTimeout(t); };
+  }, [formData.nome, formData.localizacaoId, formProp.email, isEditMode, isVet]);
+
+  // A confirmação vale para o PAR nome+local que foi conferido: trocar qualquer um
+  // dos dois é outra pergunta, e herdar o "sim" anterior deixaria passar um caso que
+  // ninguém aprovou.
+  const chaveDup = `${formData.nome.trim().toLowerCase()}|${formData.localizacaoId ?? ''}`;
+  const dupConfirmado = dupConfirmadoPara === chaveDup;
+  /** Mesmo nome no mesmo local, de OUTRO dono (ou dono ainda desconhecido). */
+  const dupMesmoLocal = (dupInfo?.mesmoLocal ?? []).filter(c => c.mesmoProprietario !== true);
+  /** Duplicata pura: mesmo nome, mesmo local, mesmo dono, e o existente está em uso. */
+  const dupBloqueado  = dupInfo?.duplicado ?? null;
+  /**
+   * O paciente já existe para este mesmo dono e local, INATIVO — sabido pela checagem
+   * em tempo real, antes de o Salvar chegar ao backend.
+   *
+   * 🔴 É o que permite resolver PACIENTE + CLIENTE inativos em UMA pergunta só (a
+   * pedido, 2026-09-06): reativar o paciente já reativa o cliente na mesma
+   * transaction (`lib/donoAtivoDoPaciente.js`), então a segunda caixa não tinha o que
+   * perguntar — só repetia o pedido de motivo para o mesmo ato.
+   * ⚠️ Restrito ao GESTOR porque as rotas de reativação do PACIENTE são dele
+   * (`AnimalController.ativar`/`reativarExcluido` recusam os demais). Sem essa trava,
+   * quem tem só `cadastro.proprietario.ativar` veria o botão e levaria 403 depois do
+   * clique — a armadilha 28-d. Para esse perfil o fluxo segue como era.
+   */
+  const dupInativoConhecido = isGestor ? (dupInfo?.duplicadoInativo ?? null) : null;
+
   // Auto-busca quando nome vem de location state (ex: AnimaisVet → "Cadastrar Animal").
   // Garante que animais já existentes não tomem o caminho nao_encontrado e criem duplicatas.
   useEffect(() => {
@@ -689,10 +812,97 @@ const Animal = () => {
         toast.success('Tratador criado com sucesso!');
       }
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem ?? 'Erro ao criar tratador';
-      setErroAcao({ mensagem: msg });
+      const dados = (err as { response?: { data?: {
+        mensagem?: string; inativo?: boolean; tratador?: { id: number; nome: string };
+      } } }).response?.data;
+      // Duplicata INATIVA: o backend devolve QUEM é, e a decisão (reativar × desistir)
+      // é da pessoa. Sem isto, a tela dizia "já existe um tratador com esse nome" e
+      // deixava o usuário sem saída nenhuma — o cadastro existia, só estava inativo.
+      if (dados?.inativo && dados.tratador?.id) {
+        setTratDupInativo({ id: dados.tratador.id, nome: dados.tratador.nome, mensagem: dados.mensagem ?? '' });
+        return;
+      }
+      setErroAcao({ mensagem: dados?.mensagem ?? 'Erro ao criar tratador' });
     } finally {
       setCriandoTratador(false);
+    }
+  };
+
+  /**
+   * Reativa o PACIENTE que já existe (mesmo nome, local e dono) em vez de criar um
+   * segundo cadastro, e abre a ficha dele.
+   *
+   * ⚠️ São DOIS estados distintos e a rota é diferente para cada um: `ativo = false`
+   * é a exclusão lógica (`/reativar`) e `inativo = true` é o prontuário congelado
+   * (`/ativar`). Um paciente pode estar nos dois ao mesmo tempo — daí as duas
+   * chamadas em sequência, e não um `if/else`.
+   *
+   * ⚠️ `alvoExplicito` existe porque o modal do CLIENTE inativo também chama esta
+   * função (quando o paciente está inativo junto — ver o modal lá embaixo), e ali o
+   * alvo vem da checagem em tempo real, não de `dupInativoAlvo`. Passar por um
+   * `setDupInativoAlvo` antes de chamar não funcionaria: o estado só existe no
+   * próximo render, e a função leria o valor ANTIGO da closure.
+   */
+  const handleAtivarPacienteDuplicado = async (motivo: string, alvoExplicito?: AlvoReativacao) => {
+    const alvo = alvoExplicito ?? dupInativoAlvo;
+    if (!alvo) return;
+    setAtivandoDuplicado(true);
+    setErroAtivacao(null);
+    try {
+      // ⚠️ As DUAS rotas exigem `motivo` (400 sem ele): reativar um paciente é ato
+      // registrado na Auditoria, como a inativação. Era o que faltava aqui — o modal
+      // ativava sem perguntar nada e o backend recusava.
+      // O backend devolve `donoReativado`: o paciente não volta sozinho — o cadastro
+      // do dono nesta clínica é reativado junto, na mesma transaction
+      // (lib/donoAtivoDoPaciente.js). A tela só CONTA o que aconteceu.
+      // ⚠️ `loginGlobalInativo` também vem na resposta e é DELIBERADAMENTE ignorado
+      // (a pedido, 2026-09-06): é UMA decisão, com UM aviso. O acesso ao sistema é
+      // outra dimensão, resolvida em outra tela por quem o desligou — dizê-lo aqui
+      // transformava a confirmação em duas mensagens sobre a mesma ação.
+      let resp: { donoReativado?: boolean } = {};
+      if (!alvo.ativo)  resp = (await api.patch(`/animais/${alvo.id}/reativar`, { motivo })).data ?? {};
+      if (alvo.inativo) resp = (await api.patch(`/animais/${alvo.id}/ativar`,   { motivo })).data ?? {};
+
+      toast.success(resp.donoReativado
+        ? `${alvo.nome} e o proprietário foram reativados`
+        : `${alvo.nome} foi reativado`);
+      setDupInativoAlvo(null);
+      setPropInativo(null);
+      navigate(`/animal/${alvo.id}`);
+    } catch (err: unknown) {
+      // Fica NO modal: o formulário do paciente continua atrás, e fechar aqui perderia
+      // o motivo que a pessoa acabou de digitar.
+      setErroAtivacao((err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem
+        ?? 'Erro ao reativar o paciente');
+    } finally {
+      setAtivandoDuplicado(false);
+    }
+  };
+
+  /** Reativa o tratador que já existe neste local e o seleciona no formulário. */
+  const handleAtivarTratadorExistente = async () => {
+    if (!tratDupInativo) return;
+    setAtivandoTratador(true);
+    try {
+      const res = await api.patch(`/cadastro/tratadores/${tratDupInativo.id}/toggle`);
+      const reativado: Tratador = res.data?.dados ?? res.data;
+      setTratadores(prev => {
+        // Ele pode já estar na lista (carregada com ?ativo=all): troca em vez de duplicar.
+        const semEle = prev.filter(t => t.id !== reativado.id);
+        return [...semEle, reativado].sort((a, b) => a.nome.localeCompare(b.nome));
+      });
+      setFormData(p => ({ ...p, tratadorId: reativado.id }));
+      setTratBusca(reativado.nome);
+      setTratDupInativo(null);
+      setModalNovoTrat(false);
+      toast.success(`Tratador ${reativado.nome} reativado`);
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem
+        ?? 'Erro ao reativar o tratador';
+      setTratDupInativo(null);
+      setErroAcao({ mensagem: msg });
+    } finally {
+      setAtivandoTratador(false);
     }
   };
 
@@ -754,14 +964,32 @@ const Animal = () => {
     erros[campo] ? <p className="mt-1 text-xs text-red-600">{erros[campo]}</p> : null;
 
   // ── Submit ─────────────────────────────────────────────────────────────────
-  const handleSubmit = async (e: React.FormEvent) => {
+  /**
+   * `reativarProprietario` só chega aqui pelo modal de confirmação: o backend recusa o
+   * cadastro quando o cliente está inativo NESTA clínica, e o reenvio com a confirmação
+   * é o que autoriza a reativação. Sem ele, o formulário inteiro se perdia num erro que
+   * não dizia o que fazer.
+   */
+  const handleSubmit = async (e: React.FormEvent, reativarProprietario = false, motivoReativacaoProprietario = '') => {
     e.preventDefault();
 
     if (isEditMode && !podeEditar) { semPermissao('alterar animal'); return; }
     if (!isEditMode && !podeCriar) { semPermissao('criar animal'); return; }
 
-    if (statusBuscaAnimal === 'ja_cadastrado') {
-      setErroInline(`${formData.nome} já está cadastrado nesta clínica`);
+    // 🔴 DUPLICATA = NOME + LOCAL + DONO (2026-09-06). O nome repetido na clínica
+    // NÃO basta para barrar — dois clientes podem ter cada um o seu "Thor" no mesmo
+    // haras. Antes o cadastro era bloqueado por `statusBuscaAnimal === 'ja_cadastrado'`,
+    // que olhava só o nome e não deixava passar nem o caso legítimo.
+    if (dupBloqueado) {
+      setErroInline(`${dupBloqueado.nome} já está cadastrado neste local para este proprietário.`);
+      return;
+    }
+
+    // Mesmo nome no mesmo LOCAL (de outro dono, ou de dono ainda desconhecido): não é
+    // erro, é uma coincidência que merece uma conferida. Pergunta uma vez por par
+    // nome+local; respondido que sim, o cadastro segue.
+    if (dupMesmoLocal.length > 0 && !dupConfirmado) {
+      setDupPerguntando(true);
       return;
     }
 
@@ -799,7 +1027,7 @@ const Animal = () => {
     if (pendentes.length > 0) {
       setErroInline(pendentes.length === 1
         ? novosErros[pendentes[0]]
-        : `Há ${pendentes.length} campos a corrigir — veja as mensagens em vermelho.`);
+        : `Existem ${pendentes.length} campos para corrigir — veja as mensagens em vermelho.`);
       // Leva o usuário até o primeiro campo com problema
       document.querySelector(`[data-campo="${pendentes[0]}"]`)
         ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -860,6 +1088,9 @@ const Animal = () => {
         // já salva ficava intocada — o campo só é enviado quando não há arquivo novo
         // (photoFile vence: trocar a foto já implica remover a antiga, no backend).
         ...(isEditMode && photoRemovida && !photoFile && { removerFoto: true }),
+        // Confirmação de reativar o cliente inativo — só vem do modal, com o motivo
+        // que ele exigiu: toda (in)ativação de cadastro é justificada (§33).
+        ...(reativarProprietario && { reativarProprietario: true, motivoReativacaoProprietario }),
       };
 
       let createdAnimalId: number | null = null;
@@ -921,15 +1152,52 @@ const Animal = () => {
         navigate(paginaPacientes);
       }
     } catch (err: unknown) {
-      // Log completo para diagnóstico — o toast abaixo mostra só a mensagem curta.
-      console.error('[Animal.tsx] Erro ao salvar animal:', err);
       const isPermErr = (err as { isPermissionError?: boolean } | null)?.isPermissionError === true;
       const resp = (err as {
-        response?: { data?: { mensagem?: string; error?: string; erros?: { campo: string; mensagem: string }[] } };
+        response?: { data?: {
+          mensagem?: string; error?: string; erros?: { campo: string; mensagem: string }[];
+          inativo?: boolean; proprietario?: { id: number; nome: string };
+          duplicado?: boolean; duplicadoInativo?: boolean;
+          animal?: { id: number; nome: string; ativo: boolean; inativo: boolean };
+        } };
       }).response;
+
+      // PACIENTE JÁ EXISTE NESTE LOCAL PARA ESTE DONO, porém INATIVO: a saída é
+      // REAPROVEITAR o cadastro — um segundo deixaria o histórico clínico partido
+      // em dois. O modal pergunta; quem decide é a pessoa.
+      if (resp?.data?.duplicadoInativo && resp.data.animal) {
+        setDupInativoAlvo(resp.data.animal);
+        return;
+      }
+      // Duplicata pura (o existente está em uso): não há o que fazer além de avisar.
+      if (resp?.data?.duplicado && resp.data.animal) {
+        setErroInline(resp.data.mensagem ?? 'Paciente já cadastrado neste local para este proprietário.');
+        return;
+      }
+
+      // CLIENTE INATIVO NESTA CLÍNICA: não é erro, é uma decisão a tomar. O formulário
+      // fica como está e o modal pergunta se reativa e continua.
+      if (resp?.data?.inativo && resp.data.proprietario) {
+        // Sem permissão para reativar cliente, não se abre um modal cujo botão iria
+        // 403 (armadilha 28-d): a tela explica e diz a quem pedir.
+        if (!podeAtivarProprietario) {
+          setErroInline(`${resp.data.mensagem ?? 'Cliente inativo nesta clínica.'} Peça ao responsável da equipe para reativá-lo.`);
+          return;
+        }
+        setPropInativo({
+          nome:     resp.data.proprietario.nome,
+          mensagem: resp.data.mensagem ?? '',
+        });
+        return;
+      }
       // Fallback em cascata: mensagem do controller → erro de permissão (checkPermission
       // usa a chave `error`, não `mensagem` — e o interceptor 403 zera o response de
       // mutations) → 1º erro de validação (422) → texto genérico.
+      // 🔴 O LOG FICA PARA O QUE SOBRA. Os 409 acima (paciente duplicado, cliente
+      // inativo) são DECISÕES esperadas do fluxo, não falhas: logá-los como erro
+      // enchia o console de "Erro ao salvar animal" toda vez que a regra funcionava —
+      // e um console cheio de alarme falso é um console que ninguém lê.
+      console.error('[Animal.tsx] Erro ao salvar animal:', err);
       const msg = isPermErr
         ? 'Sem permissão para realizar esta ação. Verifique com o responsável da equipe.'
         : resp?.data?.mensagem
@@ -1075,13 +1343,33 @@ const Animal = () => {
                 </div>
               </div>
 
-              {/* Já é desta clínica — bloqueia (o Salvar também recusa) */}
-              {statusBuscaAnimal === 'ja_cadastrado' && (
-                <div className="mt-2 flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 text-xs text-emerald-700">
-                  <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" />
+              {/* 🔴 DUPLICATA: mesmo nome, mesmo local, MESMO DONO — o Salvar recusa.
+                  Antes o aviso era por NOME ("já está cadastrado nesta clínica") e
+                  barrava também o caso legítimo de dois donos diferentes com pacientes
+                  de mesmo nome no mesmo haras. */}
+              {dupBloqueado && (
+                <div className="mt-2 flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-3 py-2 text-xs text-red-700">
+                  <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
                   <span>
-                    <strong>{formData.nome}</strong> já está cadastrado nesta clínica.
-                    Nenhuma ação necessária.
+                    <strong>{dupBloqueado.nome}</strong> já está cadastrado
+                    {dupBloqueado.localNome ? <> em <strong>{dupBloqueado.localNome}</strong></> : ' neste local'}
+                    {dupBloqueado.proprietarioNome ? <> para <strong>{dupBloqueado.proprietarioNome}</strong></> : ''}.
+                    Não é permitido cadastrar um paciente em duplicidade.
+                  </span>
+                </div>
+              )}
+
+              {/* Mesmo nome no mesmo local, de OUTRO dono (ou dono ainda não informado):
+                  coincidência comum — a tela só pede uma conferida. */}
+              {!dupBloqueado && dupMesmoLocal.length > 0 && (
+                <div className="mt-2 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700">
+                  <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+                  <span>
+                    Já existe <strong>{dupMesmoLocal.length === 1 ? 'um paciente' : `${dupMesmoLocal.length} pacientes`}</strong> com
+                    o nome <strong>{formData.nome}</strong>
+                    {dupMesmoLocal[0].localNome ? <> em <strong>{dupMesmoLocal[0].localNome}</strong></> : ' neste local'}
+                    {dupMesmoLocal[0].proprietarioNome ? <> (de {dupMesmoLocal[0].proprietarioNome})</> : ''}.
+                    {dupConfirmado && ' Você confirmou que é outro paciente.'}
                   </span>
                 </div>
               )}
@@ -1551,7 +1839,22 @@ const Animal = () => {
             {/* ── 8. Proprietário (apenas vets) ────────────────────────────── */}
             {isVet && (
               <div className="pt-4 border-t border-gray-100">
-                <p className="text-sm font-semibold text-gray-700 mb-3">Proprietário</p>
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <p className="text-sm font-semibold text-gray-700">Proprietário</p>
+                  {/* Trocar o dono não é editar um campo: é um ATO, com motivo e
+                      registro próprios. Por isso um botão, e não a liberação do
+                      e-mail — que continua travado (nome e e-mail do cliente são
+                      assunto do Cadastro de Cliente). */}
+                  {isEditMode && podeTransferirPropriedade && (
+                    <button
+                      type="button"
+                      onClick={() => setShowTransferencia(true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-xl text-xs font-semibold transition-colors flex-shrink-0"
+                    >
+                      <ArrowLeftRight size={13} /> Trocar proprietário
+                    </button>
+                  )}
+                </div>
                 <div className="space-y-3">
                   {/* E-mail e Nome lado a lado */}
                   <div className="grid grid-cols-2 gap-4">
@@ -1700,12 +2003,12 @@ const Animal = () => {
               </button>
               <button
                 type="submit"
-                disabled={submitting || statusBuscaAnimal === 'ja_cadastrado'}
+                disabled={submitting || !!dupBloqueado}
                 className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors"
               >
                 {submitting
                   ? 'Salvando...'
-                  : statusBuscaAnimal === 'ja_cadastrado'
+                  : dupBloqueado
                     // Estado BLOQUEADO: o texto é a única explicação de por que o
                     // botão está desabilitado (CLAUDE.md §12, rodapé do Animal).
                     ? 'Animal já cadastrado aqui'
@@ -1716,6 +2019,198 @@ const Animal = () => {
           </form>
         </div>
     </PageContainer>
+
+    {/* ── Troca de proprietário (com motivo, histórico e auditoria) ──────────
+        MESMO modal e MESMA rota da tela do paciente: `POST /animais/:id/transferir-
+        propriedade` exige o motivo, fecha a janela de posse anterior em
+        `tb_animal_proprietario_historico` e grava a auditoria (TRANSFERENCIA). */}
+    {showTransferencia && isEditMode && id && (
+      <ProprietarioFormModal
+        modoTransferencia={{
+          animalId: Number(id),
+          onConcluido: (animalAtualizado) => {
+            // O toast de sucesso é do próprio modal. Aqui só refletimos o dono novo no
+            // formulário — sem recarregar a tela, para não perder o que está digitado.
+            const a = animalAtualizado as { user?: { fullName?: string; email?: string; phone?: string | null; phone2?: string | null } };
+            if (a?.user) {
+              setFormProp({
+                nomeCompleto: a.user.fullName ?? '',
+                email:        a.user.email    ?? '',
+                telefone:     a.user.phone    ?? '',
+                telefone2:    a.user.phone2   ?? '',
+              });
+            }
+            setShowTransferencia(false);
+          },
+        }}
+        onClose={() => setShowTransferencia(false)}
+      />
+    )}
+
+    {/* ── Mesmo nome no mesmo local: deseja continuar? ───────────────────────
+        Pergunta 1 da cascata. É só uma conferida — dois pacientes de mesmo nome no
+        mesmo haras acontecem o tempo todo; o que caracteriza duplicata é o DONO, e
+        isso o backend confere no Salvar. */}
+    {dupPerguntando && (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 px-4">
+        <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm space-y-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle size={22} className="text-amber-500 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold text-gray-900 text-sm mb-1">Já existe um paciente com este nome neste local</p>
+              <ul className="text-sm text-gray-600 space-y-1 mt-1">
+                {dupMesmoLocal.slice(0, 4).map(c => (
+                  <li key={c.id}>
+                    <strong>{c.nome}</strong>
+                    {c.proprietarioNome ? ` — ${c.proprietarioNome}` : ''}
+                    {c.ativo && !c.inativo ? '' : ' (inativo)'}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-sm text-gray-500 mt-2">Deseja continuar o cadastro?</p>
+            </div>
+          </div>
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={(ev) => { setDupConfirmadoPara(chaveDup); setDupPerguntando(false); handleSubmit(ev); }}
+              className="w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-sm font-semibold transition-colors"
+            >
+              Sim, continuar
+            </button>
+            <button
+              type="button"
+              onClick={() => setDupPerguntando(false)}
+              className="w-full py-2 text-sm text-gray-500 hover:text-gray-700 font-medium transition-colors"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ── Paciente duplicado, porém INATIVO: ativar em vez de duplicar ────────
+        Último degrau da cascata. Criar um segundo cadastro partiria o histórico
+        clínico em dois — por isso a saída oferecida é reativar o que existe.
+        ⚠️ `ModalJustificativa` e não um modal próprio: reativar EXIGE motivo (as rotas
+        `/reativar` e `/ativar` recusam sem ele) e o motivo vai para a Auditoria, como
+        manda a §33. `tom="neutro"` porque nada está sendo destruído aqui.
+
+        ⚠️ AQUI SÓ O PACIENTE VOLTA, e o texto diz só isso (a pedido, 2026-09-06).
+        Não é uma escolha desta tela: quando o CLIENTE também está inativo, o backend
+        recusa por ELE primeiro (o guard do cliente vem antes do de duplicidade em
+        `AnimalController.criar`), e quem abre é a caixa de baixo — a que nomeia os
+        dois. Ou seja, esta caixa só existe com o cliente ATIVO, e `garantirDonoAtivo`
+        não tem o que reativar. Prometer "e proprietário" aqui era descrever um efeito
+        que nunca acontece neste caminho. */}
+    <ModalJustificativa
+      aberto={!!dupInativoAlvo}
+      titulo="Paciente já cadastrado (inativo)"
+      descricao={dupInativoAlvo
+        ? `O paciente "${dupInativoAlvo.nome}" já existe neste local para este proprietário, mas está inativo. Caso deseje ativá-lo informe o motivo.`
+        : undefined}
+      acaoLabel="Reativar Paciente"
+      placeholder="Descreva o motivo da reativação (obrigatório)..."
+      tom="neutro"
+      processando={ativandoDuplicado}
+      erro={erroAtivacao}
+      onConfirmar={(motivo) => handleAtivarPacienteDuplicado(motivo)}
+      onFechar={() => {
+        setDupInativoAlvo(null);
+        setErroAtivacao(null);
+        setErroInline('Não é permitido cadastrar um paciente em duplicidade.');
+      }}
+    />
+
+    {/* ── Cliente inativo nesta clínica ──────────────────────────────────────
+        O cadastro do paciente PARA aqui: reativar o cliente é decisão de quem opera,
+        não efeito colateral de salvar um formulário — e, como toda (in)ativação de
+        cadastro, exige MOTIVO, que vai para a Auditoria (§33). `tom="neutro"` porque
+        nada está sendo destruído.
+
+        🔴 UMA PERGUNTA SÓ QUANDO O PACIENTE TAMBÉM ESTÁ INATIVO (a pedido, 2026-09-06).
+        Antes eram duas caixas em sequência — reativa o cliente, salva, e então o
+        backend recusava de novo porque o paciente já existia inativo, abrindo a
+        segunda. É o MESMO ato pedido duas vezes: reativar o paciente já reativa o
+        cliente junto, na mesma transaction (`lib/donoAtivoDoPaciente.js`). Aqui a
+        caixa nomeia os dois, pede UM motivo e faz UMA chamada.
+        ⚠️ Sem paciente inativo conhecido (cliente inativo e paciente NOVO), o fluxo é
+        o de sempre: reativa o cliente e segue o cadastro. */}
+    <ModalJustificativa
+      aberto={!!propInativo}
+      titulo={dupInativoConhecido ? 'Paciente e cliente inativos nesta clínica' : 'Cliente inativo nesta clínica'}
+      descricao={propInativo
+        ? (dupInativoConhecido
+          ? `O cliente "${propInativo.nome}" e o paciente "${dupInativoConhecido.nome}" estão inativos nesta clínica, caso deseje reativá-los, informe o motivo.`
+          : `${propInativo.mensagem} Caso deseje reativá-lo e cadastrar o paciente, informe o motivo.`)
+        : undefined}
+      acaoLabel={dupInativoConhecido ? 'Reativar Paciente e Proprietário' : 'Reativar cliente e cadastrar'}
+      placeholder="Descreva o motivo da reativação (obrigatório)..."
+      tom="neutro"
+      processando={dupInativoConhecido ? ativandoDuplicado : submitting}
+      // O erro fica NO modal (a página está atrás do overlay) — e só existe no caminho
+      // da reativação, que é o único que falha sem sair daqui.
+      erro={dupInativoConhecido ? erroAtivacao : undefined}
+      onConfirmar={(motivo) => {
+        if (dupInativoConhecido) {
+          // Reativa o paciente E o cliente com o mesmo motivo, e abre a ficha dele.
+          // ⚠️ O alvo vai por PARÂMETRO: um `setDupInativoAlvo` antes da chamada só
+          // valeria no próximo render, e a função leria o valor antigo da closure.
+          handleAtivarPacienteDuplicado(motivo, dupInativoConhecido);
+          return;
+        }
+        setPropInativo(null);
+        // O gesto veio do MODAL, não de um formulário submetendo: `handleSubmit` só
+        // usa o evento para `preventDefault`, então basta um objeto com esse método.
+        handleSubmit({ preventDefault: () => {} } as React.FormEvent, true, motivo);
+      }}
+      onFechar={() => { setPropInativo(null); setErroAtivacao(null); }}
+    />
+
+    {/* ── Tratador já existe, mas está INATIVO ───────────────────────────────
+        Mesmo padrão de ModalNovoFornecedor: o cadastro duplicado inativo é uma
+        PERGUNTA, não um erro. Fica por cima do mini-modal (z maior) para a resposta
+        aparecer onde a pessoa está olhando. */}
+    {tratDupInativo && (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 px-4">
+        <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm space-y-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle size={22} className="text-amber-500 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold text-gray-900 text-sm mb-1">Tratador já cadastrado (inativo)</p>
+              <p className="text-sm text-gray-600">{tratDupInativo.mensagem}</p>
+              <p className="text-sm text-gray-500 mt-2">
+                {podeAtivarTratador
+                  ? `Deseja ativar novamente o tratador ${tratDupInativo.nome}?`
+                  : 'Peça ao responsável da equipe para reativá-lo no cadastro de tratadores.'}
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-col gap-2">
+            {podeAtivarTratador && (
+              <button
+                type="button"
+                onClick={handleAtivarTratadorExistente}
+                disabled={ativandoTratador}
+                className="w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+              >
+                {ativandoTratador && <Loader2 size={13} className="animate-spin" />}
+                {ativandoTratador ? 'Ativando…' : 'Ativar tratador'}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setTratDupInativo(null)}
+              disabled={ativandoTratador}
+              className="w-full py-2 text-sm text-gray-500 hover:text-gray-700 font-medium transition-colors disabled:opacity-50"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
 
     {/* ── Mini-modal: Novo Tratador ──────────────────────────────────────── */}
     {modalNovoTrat && (
@@ -1768,7 +2263,6 @@ const Animal = () => {
             >
               Cancelar
             </button>
-            <ErroAcao erro={erroAcao} className="mb-3" />
             <button
               type="button"
               onClick={handleCriarTratador}
@@ -1778,6 +2272,10 @@ const Animal = () => {
               {criandoTratador ? 'Salvando...' : 'Criar tratador'}
             </button>
           </div>
+
+          {/* Erro ABAIXO dos botões (§6). Entre eles, como estava, ele espremia o
+              "Criar tratador" a ponto de o rótulo sair pela borda do modal. */}
+          <ErroAcao erro={erroAcao} />
         </div>
       </div>
     )}

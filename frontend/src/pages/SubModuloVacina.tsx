@@ -20,6 +20,7 @@ import ErroAcao, { classeErro, type ErroAcaoDados } from '../components/ErroAcao
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import JanelaLista from '../components/JanelaLista';
+import { useOrdenacao, ThOrdenavel, ordenarLista, valorDataPura } from '../components/OrdenacaoLista';
 import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
 import { formatNumeroClinico, numeroClinicoComHash } from '../utils/numeroClinico';
 import { DOSES, INTERVALO_REFORCO_MESES, VIAS_PADRAO, normalizeVia } from '../utils/vacina';
@@ -96,6 +97,10 @@ interface VacinaClinica {
 // CANCELADA = registro cancelado (soft delete com justificativa).
 type StatusVacina = 'SALVA' | 'FINALIZADA' | 'EXECUTADA' | 'CANCELADA';
 type FiltroStatus = 'todos' | StatusVacina;
+
+/** Colunas ordenáveis do histórico de vacinas. */
+type ColunaVacina = 'numero' | 'aplicacao' | 'vacina' | 'dose' | 'quantidade' | 'lote'
+                  | 'via' | 'status' | 'justificativa' | 'executor';
 
 // Rótulo + cor de cada status — fonte única do selo e das abas de filtro,
 // espelhando STATUS_GRUPO da prescrição (mesmas cores por significado:
@@ -533,6 +538,9 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   const [editandoHistoricoId, setEditandoHistoricoId] = useState<number | null>(null);
 
   const [page, setPage] = useState(1);
+  // Ordenação por coluna do histórico. Aqui a lista vem INTEIRA do backend (a
+  // paginação é da tela), então ordenar no navegador é a ordem de verdade.
+  const { ordenacao, alternar } = useOrdenacao<ColunaVacina>();
   const limit = 10;
   const [confirmandoDuplicata, setConfirmandoDuplicata] = useState(false);
   const [showImportOrc, setShowImportOrc] = useState(false);
@@ -696,8 +704,25 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
     if (filtroStatus === 'todos') return true;
     return getStatus(v) === filtroStatus;
   });
-  const totalPags    = Math.ceil(historicoFiltrado.length / limit);
-  const historicoPage = historicoFiltrado.slice((page - 1) * limit, page * limit);
+  // Ordena a lista INTEIRA e só então pagina: ordenar depois do `slice` reorganizaria
+  // as 10 linhas da página e mentiria sobre as demais.
+  const historicoOrdenado = ordenarLista(historicoFiltrado, ordenacao, (v, campo) => {
+    switch (campo) {
+      case 'numero':        return v.numero ?? null;
+      case 'aplicacao':     return valorDataPura(v.dataAplicacao);
+      case 'vacina':        return v.nome ?? null;
+      case 'dose':          return v.dose ?? null;
+      case 'quantidade':    return v.quantidade ?? 1;
+      case 'lote':          return v.lote ?? null;
+      case 'via':           return v.via ?? null;
+      case 'status':        return getStatus(v);
+      case 'justificativa': return v.motivoInativacao ?? null;
+      case 'executor':      return v.veterinario?.fullName ?? null;
+      default:              return null;
+    }
+  });
+  const totalPags    = Math.ceil(historicoOrdenado.length / limit);
+  const historicoPage = historicoOrdenado.slice((page - 1) * limit, page * limit);
 
   // 🔴 PACIENTE INATIVO = SOMENTE LEITURA. O prontuário fica congelado na data e hora
   // da inativação: tudo continua visível, nada mais é criado, alterado, finalizado ou
@@ -1640,16 +1665,16 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nº</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Aplicação</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Vacina</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Dose</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Qtd</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Lote</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Via</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Executor</th>
+                  <ThOrdenavel campo="numero" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nº</ThOrdenavel>
+                  <ThOrdenavel campo="aplicacao" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Aplicação</ThOrdenavel>
+                  <ThOrdenavel campo="vacina" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Vacina</ThOrdenavel>
+                  <ThOrdenavel campo="dose" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Dose</ThOrdenavel>
+                  <ThOrdenavel campo="quantidade" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Qtd</ThOrdenavel>
+                  <ThOrdenavel campo="lote" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Lote</ThOrdenavel>
+                  <ThOrdenavel campo="via" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Via</ThOrdenavel>
+                  <ThOrdenavel campo="status" ordenacao={ordenacao} onOrdenar={alternar} alinhar="centro" className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</ThOrdenavel>
+                  <ThOrdenavel campo="justificativa" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</ThOrdenavel>
+                  <ThOrdenavel campo="executor" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Executor</ThOrdenavel>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
                 </tr>
               </thead>

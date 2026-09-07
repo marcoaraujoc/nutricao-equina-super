@@ -27,12 +27,19 @@ async function verificarDuplicidade({ nome, localizacaoId, empresaId, excludeId 
   });
 
   const dup = candidatos.find(c => normalizarTexto(c.nome) === nomeNorm);
-  return dup ? { tipo: 'nome_local' } : null;
+  // `ativo` acompanha o achado: duplicata ATIVA é bloqueio (não há o que fazer além
+  // de trocar o nome), duplicata INATIVA é uma PERGUNTA — quase sempre é a mesma
+  // pessoa voltando, e o caminho é reativar o cadastro que já existe em vez de criar
+  // um segundo com o mesmo nome no mesmo local. Mesmo padrão de FornecedorController.
+  return dup ? { tipo: 'nome_local', ativo: dup.ativo !== false, tratador: dup } : null;
 }
 
 const MSG_DUPLICADO = {
   nome_local: 'Já existe um tratador com esse nome neste local',
 };
+
+/** Texto do aviso de duplicata INATIVA — nomeia o cadastro para a pessoa reconhecê-lo. */
+const msgInativo = (t) => `O tratador "${t.nome}" já existe neste local, mas está inativo.`;
 
 const TratadorController = {
 
@@ -125,7 +132,17 @@ const TratadorController = {
 
     try {
       const dup = await verificarDuplicidade({ nome, localizacaoId: locId, empresaId: empresaAlvo });
-      if (dup) return res.status(409).json({ sucesso: false, mensagem: MSG_DUPLICADO[dup.tipo] });
+      if (dup) {
+        if (dup.ativo) return res.status(409).json({ sucesso: false, mensagem: MSG_DUPLICADO[dup.tipo] });
+        // INATIVO: devolve QUEM é, para a tela oferecer a reativação. Não cria nada —
+        // quem decide entre reativar e desistir é a pessoa, não o servidor.
+        return res.status(409).json({
+          sucesso:  false,
+          inativo:  true,
+          mensagem: msgInativo(dup.tratador),
+          tratador: { id: dup.tratador.id, nome: dup.tratador.nome },
+        });
+      }
 
       const tratador = await prisma.tratador.create({
         data: {

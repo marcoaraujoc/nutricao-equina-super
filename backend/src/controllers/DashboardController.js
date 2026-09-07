@@ -103,7 +103,9 @@ const stats = async (req, res) => {
       prisma.fatura.findMany({
         // Contas a receber são as DESTA empresa — a fatura da outra clínica para o
         // mesmo cliente não entra no indicador daqui.
-        where:  { status: { in: ['ABERTA', 'FECHADA'] }, mesReferencia: { lt: hoje.toISOString().slice(0, 7) }, ...(empresaId ? { empresaId } : {}), ...propWhere },
+        // REABERTA entra junto: é fatura NÃO PAGA, e sair do indicador só porque
+        // alguém a destravou para corrigir uma linha esconderia dinheiro a receber.
+        where:  { status: { in: ['ABERTA', 'REABERTA', 'FECHADA'] }, mesReferencia: { lt: hoje.toISOString().slice(0, 7) }, ...(empresaId ? { empresaId } : {}), ...propWhere },
         select: { total: true },
       }),
       carregarAnimaisComUltimoAtendimento(animalWhere),

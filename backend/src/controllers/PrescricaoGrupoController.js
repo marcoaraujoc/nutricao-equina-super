@@ -10,6 +10,12 @@ const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, adicionarO
 const { garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
 const { registrarAuditoria, registrarAlteracao, registrarTransferencia, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
+// Concorrência de edição: a versão do DOCUMENTO (grupo) é a trava — ver §12.
+const {
+  ConflitoEdicaoError, descreverEditor, reservarVersao, anexarControle,
+  versaoDoBody, responderConflito,
+} = require('../lib/concorrenciaRegistro');
+const { orderByDaQuery, opcional, simples, daRelacao } = require('../lib/ordenacaoLista');
 const { animalEstaInativo, bloquearSeAnimalInativo, lerInativosEmLote } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const { cursoTodoDoProprietario } = require('../lib/prescricaoProprietario');
@@ -277,6 +283,36 @@ async function liberarReservas(tx, grupoId) {
   await tx.reservaEstoque.deleteMany({ where: { prescricaoGrupoId: grupoId } });
 }
 
+/**
+ * 🔴 REFAZ AS RESERVAS DO GRUPO do zero, a partir dos itens que existem AGORA.
+ *
+ * POR QUE EXISTE: `finalizar` reserva estoque pela quantidade de cada item. Editar
+ * um item DEPOIS disso (grupo FINALIZADO, ainda sem nenhuma dose dada — que é
+ * exatamente a prescrição parada na fila do plantão) deixava a reserva presa na
+ * quantidade ANTIGA. Dobrar a duração de 5 para 10 dias reservava 5; trocar o
+ * medicamento deixava a reserva do anterior ÓRFÃ, segurando estoque que ninguém
+ * mais vai usar — e o próximo a prescrever aquele medicamento via saldo a menos.
+ *
+ * ⚠️ APAGA TUDO E RECRIA, em vez do ajuste por medicamento: é o único jeito de
+ * limpar a reserva do medicamento que saiu do documento (`criarReservas` percorre
+ * os itens NOVOS e nunca chega ao que foi trocado).
+ *
+ * ⚠️ SÓ VALE PARA GRUPO SEM NENHUMA EXECUÇÃO. Depois da primeira dose as reservas
+ * já foram abatidas proporcionalmente por `debitarEstoqueDia`, e recriá-las pela
+ * quantidade CHEIA do item reservaria de novo o que já saiu do estoque. Quem
+ * garante isso aqui é o guard `EXECUTADO` do `atualizarItem`, que roda antes.
+ */
+async function recalcularReservasDoGrupo(tx, grupo) {
+  // Reserva só existe a partir do FINALIZADO — em rascunho não há o que refazer.
+  if (!grupo || grupo.status === 'SALVO') return;
+  await liberarReservas(tx, grupo.id);
+  const itens = await anexarAplicadaProprietario(prisma, await tx.prescricao.findMany({
+    where: { grupoId: grupo.id, ativo: true, status: { not: 'CANCELADA' } },
+  }));
+  if (itens.length === 0) return;
+  await criarReservas(tx, grupo.id, grupo.animalId, itens, grupo.empresaId ?? null);
+}
+
 // Debita estoque e cria MovimentoEstoque para a quantidade que `resolverQtd(item)`
 // determinar — por padrão, a dose do DIA INTEIRO (`calcularQuantidadeDiaria`, itens
 // legados sem horário definido); a execução por dose passa um resolvedor que
@@ -530,6 +566,19 @@ async function verificarDisponibilidade(itens, grupoId, empresaId) {
 
 // ─── Listar grupos por animal ─────────────────────────────────────────────────
 
+// Colunas ordenáveis do histórico de prescrição (whitelist — lib/ordenacaoLista.js).
+// `dataFim` é a do GRUPO: executadoEm quando houve execução, senão finalizadoEm — a
+// mesma conta que a tela faz na coluna "Data Fim". Como são duas colunas, ordenar por
+// ela usa a de execução e cai na de finalização no desempate.
+const ORDENACAO_GRUPO = {
+  numero:        opcional('numero'),
+  dataInicio:    simples('createdAt'),
+  dataFim:       (dir) => [{ executadoEm: { sort: dir, nulls: 'last' } }, { finalizadoEm: { sort: dir, nulls: 'last' } }],
+  responsavel:   daRelacao('veterinario', 'fullName'),
+  status:        simples('status'),
+  justificativa: opcional('motivoCancelamento'),
+};
+
 const listarPorAnimal = async (req, res) => {
   try {
     const { animalId } = req.params;
@@ -548,7 +597,9 @@ const listarPorAnimal = async (req, res) => {
       prisma.prescricaoGrupo.findMany({
         where,
         include: GRUPO_INCLUDE,
-        orderBy: { numero: 'desc' },
+        // Ordem natural: o mais recente primeiro. `?ordenarPor=` só troca isso
+        // quando a coluna está na whitelist.
+        orderBy: orderByDaQuery(req.query, ORDENACAO_GRUPO, { numero: 'desc' }),
         skip:    (Number(page) - 1) * Number(limit),
         take:    Number(limit),
       }),
@@ -565,11 +616,13 @@ const listarPorAnimal = async (req, res) => {
     const contagens = Object.fromEntries(contagensRaw.map((c) => [c.status, c._count._all]));
     const salvos = contagens.SALVO ?? 0;
 
+    // `versao` acompanha TODA leitura: é ela que a tela devolve no próximo salvar.
+    // Lista sem versão faz o formulário aberto a partir dela gravar sem proteção.
     return res.json({
-      dados:   await anexarFlagEmGrupos(
+      dados:   await anexarControle(prisma, 'PRESCRICAO_GRUPO', await anexarFlagEmGrupos(
         prisma,
         grupos.map((g) => ({ ...g, numeroFormatado: formatNumero(g.numero) })),
-      ),
+      )),
       total,
       salvos,
       contagens,
@@ -590,7 +643,8 @@ const obterPorId = async (req, res) => {
     });
     if (!grupo) return res.status(404).json({ error: 'Prescrição não encontrada.' });
     return res.json({
-      dados: await anexarFlagEmGrupos(prisma, { ...grupo, numeroFormatado: formatNumero(grupo.numero) }),
+      dados: await anexarControle(prisma, 'PRESCRICAO_GRUPO',
+        await anexarFlagEmGrupos(prisma, { ...grupo, numeroFormatado: formatNumero(grupo.numero) })),
     });
   } catch (err) {
     console.error('PrescricaoGrupoController.obterPorId:', err);
@@ -1000,7 +1054,14 @@ const adicionarItem = async (req, res) => {
     const catItem  = await categoriaDoItem(prisma, { tipo, medicamentoCatId });
     const catGrupo = categoriaDeItens(grupo.itens);
 
+    const versaoCliente = versaoDoBody(req.body);
+
     const resultado = await prisma.$transaction(async (tx) => {
+      // Incluir item MUDA O DOCUMENTO: se outro profissional mexeu nele desde que
+      // esta tela carregou, a inclusão é recusada com 409 em vez de entrar num
+      // conjunto que já não é o que a pessoa está vendo.
+      await reservarVersao(tx, 'PRESCRICAO_GRUPO', grupoId, versaoCliente);
+
       let destinoId   = grupoId;
       let destinoInfo = null;
       if (catGrupo && catGrupo !== 'MISTO' && catGrupo !== catItem) {
@@ -1068,6 +1129,10 @@ const adicionarItem = async (req, res) => {
         : null,
     });
   } catch (err) {
+    if (err instanceof ConflitoEdicaoError) {
+      const editor = await descreverEditor(prisma, err.editorId).catch(() => null);
+      return responderConflito(res, Object.assign(err, { editor }));
+    }
     console.error('PrescricaoGrupoController.adicionarItem:', err);
     return res.status(500).json({ error: 'Erro ao adicionar item.' });
   }
@@ -1154,7 +1219,15 @@ const atualizarItem = async (req, res) => {
     const catOutros    = categoriaDeItens(outros);
     const precisaRotear = outros.length > 0 && catOutros !== 'MISTO' && catOutros !== catItem;
 
+    const versaoCliente = versaoDoBody(req.body);
+
     const resultado = await prisma.$transaction(async (tx) => {
+      // 🔴 PRIMEIRO PASSO. A versão é do DOCUMENTO: se outro profissional mexeu na
+      // prescrição (qualquer item, ou o próprio conjunto) entre a leitura desta tela
+      // e este clique, nada casa e o erro sobe como 409 — a transação inteira
+      // reverte e o trabalho dele não é sobrescrito.
+      await reservarVersao(tx, 'PRESCRICAO_GRUPO', item.grupoId, versaoCliente);
+
       let destinoInfo = null;
       if (precisaRotear) {
         destinoInfo = await resolverGrupoDestino(tx, {
@@ -1202,6 +1275,20 @@ const atualizarItem = async (req, res) => {
 
       await gravarAplicadaProprietario(tx, itemId, aplicadaPeloProprietario);
 
+      // 🔴 A RESERVA DE ESTOQUE ACOMPANHA A EDIÇÃO. Grupo FINALIZADO reservou pela
+      // quantidade ANTIGA no `finalizar`; sem refazer, dobrar a duração de 5 para
+      // 10 dias mantinha a reserva de 5, e trocar o medicamento deixava a reserva
+      // do anterior ÓRFÃ segurando estoque que ninguém mais vai consumir.
+      // Seguro aqui porque o guard `EXECUTADO` acima garante ZERO doses dadas.
+      await recalcularReservasDoGrupo(tx, item.grupo);
+      // Item ROTEADO para outra prescrição: a origem perdeu um item e o destino
+      // ganhou. O destino nasce/é escolhido em SALVO (`resolverGrupoDestino`), então
+      // o helper sai cedo nele — a chamada fica pelo dia em que isso mudar.
+      if (destinoInfo) {
+        const grupoDestino = await tx.prescricaoGrupo.findUnique({ where: { id: destinoInfo.id } });
+        await recalcularReservasDoGrupo(tx, grupoDestino);
+      }
+
       // O grupo de origem MANTÉM o responsável (ver comentário em `donoDoDocumento`);
       // só assume um quando estava órfão.
       if (item.grupo?.veterinarioId == null) {
@@ -1233,6 +1320,10 @@ const atualizarItem = async (req, res) => {
         : null,
     });
   } catch (err) {
+    if (err instanceof ConflitoEdicaoError) {
+      const editor = await descreverEditor(prisma, err.editorId).catch(() => null);
+      return responderConflito(res, Object.assign(err, { editor }));
+    }
     console.error('PrescricaoGrupoController.atualizarItem:', err);
     return res.status(500).json({ error: 'Erro ao atualizar item.' });
   }
@@ -1275,7 +1366,12 @@ const removerItem = async (req, res) => {
     const itemComExecucao  = item.executadoEm != null;
     const grupoJaFinalizado = item.grupo?.status !== 'SALVO';
 
+    const versaoCliente = versaoDoBody(req.body);
+
     await prisma.$transaction(async (tx) => {
+      // Remover item MUDA O DOCUMENTO — mesma trava do incluir/alterar.
+      await reservarVersao(tx, 'PRESCRICAO_GRUPO', item.grupoId, versaoCliente);
+
       // Item PARCIALMENTE executado fica VISÍVEL marcado como cancelado (ativo=true,
       // status CANCELADA) — igual ao cancelar de fora —, preservando fatura/estoque das
       // doses já dadas. Item nunca executado some (ativo=false); em grupo SALVO (edição)
@@ -1357,6 +1453,10 @@ const removerItem = async (req, res) => {
   } catch (err) {
     if (err.code === 'FATURA_PAGA') {
       return res.status(400).json({ error: err.message, code: 'FATURA_PAGA' });
+    }
+    if (err instanceof ConflitoEdicaoError) {
+      const editor = await descreverEditor(prisma, err.editorId).catch(() => null);
+      return responderConflito(res, Object.assign(err, { editor }));
     }
     console.error('PrescricaoGrupoController.removerItem:', err);
     return res.status(500).json({ error: 'Erro ao remover item.' });

@@ -11,6 +11,11 @@ const { lancarExameNaFatura, removerFaturaItensDaOrigem, atualizarFaturaItensDaO
 const { normalizarDocsLegados } = require('../lib/documentoConversao');
 const { registrarAuditoria, registrarAlteracao, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro, getNivelEfetivo, NIVEL_ORDINAL } = require('../middlewares/permissao.middleware');
+// Concorrência de edição — o laudo é o pior lugar para uma sobrescrita calada.
+const {
+  ConflitoEdicaoError, descreverEditor, reservarVersao, anexarControle,
+  versaoDoBody, responderConflito,
+} = require('../lib/concorrenciaRegistro');
 const { animalEstaInativo, bloquearSeAnimalInativo } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const { processarExame, processarBuffer, processarLaudoImagem, processarLaudoImagemBuffer, ArquivoSemTranscricaoError } = require('../services/exameParserService');
@@ -195,6 +200,9 @@ const ExameClinicoController = {
         for (const log of logs) if (!motivoPorId.has(log.entidadeId)) motivoPorId.set(log.entidadeId, log.motivo);
         for (const d of dados) if (!d.ativo) d.justificativa = motivoPorId.get(d.id) ?? null;
       }
+
+      // `versao` acompanha toda leitura — é ela que a tela devolve ao salvar.
+      await anexarControle(prisma, 'EXAME_CLINICO', dados);
 
       res.json({ dados, meta: { total: dados.length } });
     } catch (err) {
@@ -593,6 +601,7 @@ const ExameClinicoController = {
         include: INCLUDE,
       });
       if (!item) return res.status(404).json({ error: 'Exame não encontrado' });
+      await anexarControle(prisma, 'EXAME_CLINICO', item);
       res.json({ dados: item });
     } catch (err) {
       console.error('Erro ao obter exame clínico:', err);
@@ -640,7 +649,13 @@ const ExameClinicoController = {
       const descricaoTrim  = descricao ? descricao.trim() : undefined;
       const descricaoMudou = descricaoTrim !== undefined && descricaoTrim !== item.descricao;
 
+      const versaoCliente = versaoDoBody(req.body);
+
       const atualizado = await prisma.$transaction(async (tx) => {
+        // 🔴 PRIMEIRO PASSO — trava otimista. Gravação sobre um exame que outro
+        // profissional já alterou é recusada com 409 em vez de sobrescrever.
+        const versaoNova = await reservarVersao(tx, 'EXAME_CLINICO', item.id, versaoCliente);
+
         // Descrição mudou → sincroniza o FaturaItem vinculado (se houver), independente
         // do status — o exame pode estar faturado ainda como SOLICITADO (valor 0 ao
         // finalizar a evolução). Idempotente; bloqueia se a fatura de destino for PAGA.
@@ -674,11 +689,16 @@ const ExameClinicoController = {
           },
         });
 
-        return upd;
+        // A versão vigente volta com o registro: a tela precisa dela no próximo salvar.
+        return { ...upd, versao: versaoNova ?? upd.versao };
       });
 
       res.json({ dados: atualizado });
     } catch (err) {
+      if (err instanceof ConflitoEdicaoError) {
+        const editor = await descreverEditor(prisma, err.editorId).catch(() => null);
+        return responderConflito(res, Object.assign(err, { editor }));
+      }
       if (err.code === 'FATURA_PAGA') {
         return res.status(400).json({ error: err.message, code: 'FATURA_PAGA' });
       }
@@ -779,9 +799,15 @@ const ExameClinicoController = {
           if (laudoTranscrito) laudoFinal = laudoTranscrito;
         }
 
-        await prisma.exameClinico.update({
-          where: { id: exame.id },
-          data:  { resultado: laudoFinal || exame.resultado, status: 'REALIZADO', dataResultado: dataResultadoFinal },
+        // Trava otimista antes de gravar o laudo: carregar resultado por cima do que
+        // outro profissional acabou de carregar substituiria o laudo dele em silêncio.
+        // A transaction existe por causa dela — o update era solto.
+        await prisma.$transaction(async (tx) => {
+          await reservarVersao(tx, 'EXAME_CLINICO', exame.id, versaoDoBody(req.body));
+          await tx.exameClinico.update({
+            where: { id: exame.id },
+            data:  { resultado: laudoFinal || exame.resultado, status: 'REALIZADO', dataResultado: dataResultadoFinal },
+          });
         });
         return res.json({ dados: { id: exame.id, status: 'REALIZADO', imagens } });
       }
@@ -850,6 +876,11 @@ const ExameClinicoController = {
       }
 
       await prisma.$transaction(async (tx) => {
+        // 🔴 Trava otimista ANTES de apagar a tabela do resultado anterior: sem ela,
+        // dois carregamentos concorrentes fazem o segundo apagar e substituir o
+        // laudo do primeiro sem nenhum aviso.
+        await reservarVersao(tx, 'EXAME_CLINICO', exame.id, versaoDoBody(req.body));
+
         // Recarga do resultado substitui a tabela anterior deste exame.
         // Só quando há tabela NOVA: sem isso, reenviar o formulário apenas com uma
         // observação apagaria o resultado já carregado (a IA falhou / o usuário só
@@ -877,6 +908,13 @@ const ExameClinicoController = {
 
       return res.json({ dados: { id: exame.id, status: 'REALIZADO', itens } });
     } catch (err) {
+      // Outro profissional carregou resultado neste exame no meio do caminho:
+      // 409 com o nome dele, nunca 500 — a pessoa precisa saber que o laudo dela
+      // NÃO entrou, para não achar que entrou e seguir o atendimento por ele.
+      if (err instanceof ConflitoEdicaoError) {
+        const editor = await descreverEditor(prisma, err.editorId).catch(() => null);
+        return responderConflito(res, Object.assign(err, { editor }));
+      }
       console.error('Erro ao salvar resultado do exame:', err);
       res.status(500).json({ error: 'Erro ao salvar resultado' });
     }

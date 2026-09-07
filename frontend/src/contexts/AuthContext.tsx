@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
+import { encerrarEventos } from '../hooks/useEventosTempoReal';
 import type { ReactNode } from 'react';
 
 export interface PendingInvite {
@@ -226,6 +227,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }).catch(() => { /* best-effort */ });
     localStorage.removeItem('s2vet_empresa_id');
     localStorage.removeItem('s2vet_equipe_id');
+    // Fecha o canal de eventos: ele foi aberto com o cookie da sessão que acabou
+    // de ser revogada. Sem isto, o `EventSource` continua tentando reconectar
+    // sozinho a cada 5s, agora sem sessão — 401 em laço na tela de login.
+    encerrarEventos();
     setUser(null);
   };
 

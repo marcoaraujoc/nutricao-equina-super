@@ -7,6 +7,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import toast from 'react-hot-toast';
 import { useSearchParams } from 'react-router-dom';
 import PageContainer from '../components/PageContainer';
+import { useOrdenacao, ThOrdenavel, ordenarLista, valorData } from '../components/OrdenacaoLista';
 import BotaoVoltar from '../components/BotaoVoltar';
 import {
   AlertTriangle, Plus, Pencil,
@@ -73,6 +74,10 @@ interface Meta {
 
 type FiltroTab = 'todos' | 'ativos' | 'inativos' | 'critico' | 'alarmante' | 'vencido' | 'vencendo';
 
+/** Colunas ordenáveis da lista de lotes (as três últimas variam com a aba). */
+type ColunaLote = 'vacina' | 'doses' | 'status' | 'criadoEm' | 'ativadoEm'
+                | 'ativadoPor' | 'inativadoEm' | 'inativadoPor' | 'justificativa';
+
 const DOSES_POR_FRASCO_OPTS = [1, 2, 5, 10, 20, 50, 100];
 
 const FORM_VAZIO = {
@@ -113,6 +118,8 @@ export default function EstoqueVacina() {
   const [searchParams] = useSearchParams();
   const [busca,        setBusca]        = useState(searchParams.get('busca') ?? '');
   const [filtroTab,    setFiltroTab]    = useState<FiltroTab>('todos');
+  // Ordenação por coluna da lista de lotes (chaves em `ColunaLote`).
+  const { ordenacao, alternar } = useOrdenacao<ColunaLote>();
 
   const [form,              setForm]              = useState({ ...FORM_VAZIO });
   const [fabricanteSel,     setFabricanteSel]     = useState('');
@@ -255,7 +262,7 @@ export default function EstoqueVacina() {
   const hojeDate = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
   const em7Date  = (() => { const d = new Date(hojeDate); d.setDate(d.getDate() + 7); return d; })();
 
-  const lotesFiltrados = (() => {
+  const lotesDaAba = (() => {
     if (filtroTab === 'ativos')   return lotes.filter(l => l.ativo && new Date(l.validade) >= hojeDate);
     if (filtroTab === 'inativos') return lotes.filter(l => !l.ativo);
     if (filtroTab === 'critico')  return lotes.filter(l => l.ativo && l.qtdDisponivel <= l.estoqueMinimo);
@@ -268,6 +275,27 @@ export default function EstoqueVacina() {
     });
     return lotes; // todos
   })();
+
+  /**
+   * Ordenação por coluna — vale para a lista INTEIRA da aba (esta tela não pagina).
+   * As três colunas do fim mudam com a aba (ativado × inativado); cada chave lê o que
+   * a linha daquela aba exibe.
+   */
+  const lotesFiltrados = ordenarLista(lotesDaAba, ordenacao, (lote, campo) => {
+    switch (campo) {
+      case 'vacina':        return lote.medicamentoCat?.nome ?? lote.vacina?.nome ?? null;
+      case 'doses':         return lote.qtdDisponivel ?? 0;
+      case 'status':        return !lote.ativo ? 'INATIVO'
+                                 : new Date(lote.validade) < hojeDate ? 'VENCIDO' : 'ATIVO';
+      case 'criadoEm':      return valorData(lote.createdAt);
+      case 'ativadoEm':     return valorData(lote.ativoEm ?? lote.createdAt);
+      case 'ativadoPor':    return lote.ativoPorNome ?? null;
+      case 'inativadoEm':   return valorData(lote.inativoEm);
+      case 'inativadoPor':  return lote.inativoPorNome ?? null;
+      case 'justificativa': return lote.inativoMotivo ?? null;
+      default:              return null;
+    }
+  });
 
   const vacinasFiltradas = buscaVac.trim().length === 0
     ? vacinas
@@ -605,20 +633,20 @@ export default function EstoqueVacina() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-100">
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Vacina</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Doses</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                      <ThOrdenavel campo="vacina" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Vacina</ThOrdenavel>
+                      <ThOrdenavel campo="doses" ordenacao={ordenacao} onOrdenar={alternar} alinhar="centro" className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Doses</ThOrdenavel>
+                      <ThOrdenavel campo="status" ordenacao={ordenacao} onOrdenar={alternar} alinhar="centro" className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</ThOrdenavel>
                       {filtroTab === 'ativos' || filtroTab === 'critico' || filtroTab === 'alarmante' || filtroTab === 'vencido' || filtroTab === 'vencendo' ? (
                         <>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Criado em</th>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado em</th>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado por</th>
+                          <ThOrdenavel campo="criadoEm" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Criado em</ThOrdenavel>
+                          <ThOrdenavel campo="ativadoEm" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado em</ThOrdenavel>
+                          <ThOrdenavel campo="ativadoPor" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Ativado por</ThOrdenavel>
                         </>
                       ) : filtroTab === 'inativos' ? (
                         <>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado em</th>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado por</th>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</th>
+                          <ThOrdenavel campo="inativadoEm" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado em</ThOrdenavel>
+                          <ThOrdenavel campo="inativadoPor" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Inativado por</ThOrdenavel>
+                          <ThOrdenavel campo="justificativa" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Justificativa</ThOrdenavel>
                         </>
                       ) : null}
                       <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
