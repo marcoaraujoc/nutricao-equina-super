@@ -34,6 +34,9 @@ const ACOES = new Set(['USAR_TEMPLATE', 'AJUSTAR', 'RESPONDER']);
 /** Só estas chaves resolvem de verdade — ver `lib/documentoVariaveis.js`. */
 const VARIAVEIS_VALIDAS = [
   'veterinario.nome', 'veterinario.crmv', 'veterinario.clinica', 'veterinario.telefone',
+  'veterinario.email',
+  'empresa.nome', 'empresa.nomeFantasia', 'empresa.cnpj', 'empresa.inscricaoEstadual',
+  'empresa.crmv', 'empresa.endereco', 'empresa.telefone', 'empresa.email',
   'cliente.nome', 'cliente.documento', 'cliente.telefone', 'cliente.email',
   'cliente.cep', 'cliente.endereco', 'cliente.complemento', 'cliente.bairro',
   'cliente.cidade', 'cliente.estado', 'cliente.municipio',

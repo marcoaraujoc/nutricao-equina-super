@@ -105,6 +105,9 @@ const LABEL_ORIGEM: Record<string, string> = {
 
 // ─── Componente ───────────────────────────────────────────────────────────────
 
+/** Quantas linhas da narrativa aparecem sem expandir — as MAIS RECENTES. */
+const REGISTROS_VISIVEIS = 3;
+
 export default function MemoriaClinicaPanel({
   memoria, atualizando, onAbrirRef, refsAbriveis,
 }: Props) {
@@ -112,6 +115,10 @@ export default function MemoriaClinicaPanel({
   // Registros nascem FECHADOS: quem abre a tela quer o resumo e os destaques, não a
   // lista evento a evento — que é o detalhe para quem já leu os dois de cima.
   const [registrosAbertos, setRegistrosAbertos] = useState(false);
+  // A narrativa mostra as 3 mais recentes; o resto fica contraído (a pedido,
+  // 2026-09-08). Sem o corte, um paciente com dois anos de histórico abria a ficha
+  // com 20 parágrafos e enterrava os destaques que vêm logo acima.
+  const [todosRegistros, setTodosRegistros] = useState(false);
   const topicoRefs = useRef<Record<string, HTMLLIElement | null>>({});
   const scrollRef  = useRef<HTMLDivElement | null>(null);
 
@@ -227,40 +234,9 @@ export default function MemoriaClinicaPanel({
           )
         ) : (
           <>
-            {/* ── 1. Resumo das atividades (10 a 20 linhas, vindas da IA) ── */}
-            {resumoLinhas.length > 0 && (
-              <div className="mb-5">
-                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">
-                  Resumo das atividades
-                </p>
-                {/* Parágrafos, não bullets: o resumo é narrativa contínua, e a lista
-                    picotada era justamente a leitura telegráfica que o v3 saiu de. */}
-                <div className="rounded-xl bg-gray-50/70 border border-gray-100 px-3 py-2.5 space-y-2">
-                  {resumoLinhas.map((linha, i) => (
-                    <p key={i} className="text-xs text-gray-700 leading-relaxed">{comAncoras(linha)}</p>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* ── 2. O que mudou desde a consolidação anterior (antes × depois) ── */}
-            {mudancas.length > 0 && (
-              <div className="mb-5">
-                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">
-                  O que mudou
-                </p>
-                <ul className="space-y-1.5 rounded-xl bg-amber-50/70 border border-amber-100 px-3 py-2.5">
-                  {mudancas.map((linha, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <ArrowRightLeft size={11} className="text-amber-500 flex-shrink-0 mt-[3px]" />
-                      <p className="text-xs text-amber-900 leading-relaxed">{comAncoras(linha)}</p>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {/* ── 3. Destaques ── */}
+            {/* ── 1. Destaques — PRIMEIRO (a pedido, 2026-09-08) ──
+                É a leitura de meio minuto: quem abre a ficha quer o padrão, e só
+                depois a narrativa que o sustenta. */}
             {highlights.length > 0 && (
               <div className="mb-5">
                 <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">
@@ -347,7 +323,58 @@ export default function MemoriaClinicaPanel({
               </div>
             )}
 
-            {/* ── 4. Registros (um por evento) — FECHADO por padrão ── */}
+            {/* ── 2. O que mudou desde a consolidação anterior (antes × depois) ── */}
+            {mudancas.length > 0 && (
+              <div className="mb-5">
+                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">
+                  O que mudou
+                </p>
+                <ul className="space-y-1.5 rounded-xl bg-amber-50/70 border border-amber-100 px-3 py-2.5">
+                  {mudancas.map((linha, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <ArrowRightLeft size={11} className="text-amber-500 flex-shrink-0 mt-[3px]" />
+                      <p className="text-xs text-amber-900 leading-relaxed">{comAncoras(linha)}</p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* ── 3. REGISTROS — a narrativa da IA, 3 linhas e o resto contraído ──
+                (a pedido, 2026-09-08; era "Resumo das atividades" e vinha em primeiro,
+                inteiro). As linhas vêm DO MAIS RECENTE PARA O MAIS ANTIGO (é ordem do
+                prompt), então "os 3 últimos registros" são as 3 PRIMEIRAS da lista. */}
+            {resumoLinhas.length > 0 && (
+              <div className="mb-5">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">
+                    Registros
+                  </p>
+                  {resumoLinhas.length > REGISTROS_VISIVEIS && (
+                    <button
+                      type="button"
+                      onClick={() => setTodosRegistros(v => !v)}
+                      aria-expanded={todosRegistros}
+                      className="text-[10px] text-violet-600 hover:text-violet-800 font-medium"
+                    >
+                      {todosRegistros
+                        ? 'Ver menos'
+                        : `Ver todos (${resumoLinhas.length})`}
+                    </button>
+                  )}
+                </div>
+                {/* Parágrafos, não bullets: é narrativa contínua, e a lista picotada
+                    era justamente a leitura telegráfica que o v3 saiu de. */}
+                <div className="rounded-xl bg-gray-50/70 border border-gray-100 px-3 py-2.5 space-y-2">
+                  {(todosRegistros ? resumoLinhas : resumoLinhas.slice(0, REGISTROS_VISIVEIS))
+                    .map((linha, i) => (
+                      <p key={i} className="text-xs text-gray-700 leading-relaxed">{comAncoras(linha)}</p>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── 4. Atendimentos, um por evento — FECHADO por padrão ── */}
             <div className="flex items-center justify-between mb-2">
               <button
                 type="button"
@@ -359,7 +386,10 @@ export default function MemoriaClinicaPanel({
                   size={12}
                   className={`transition-transform ${registrosAbertos ? 'rotate-90' : ''}`}
                 />
-                Registros
+                {/* Renomeado em 2026-09-08: "Registros" passou a ser a narrativa
+                    acima, e dois blocos com o mesmo nome na mesma tela não dizem a
+                    ninguém qual é qual. Aqui é a lista evento a evento. */}
+                Atendimentos
                 {topicos.length > 0 && ` (${topicos.length})`}
               </button>
               {registrosAbertos && selecionado !== null && (

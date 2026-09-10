@@ -13,6 +13,7 @@ const {
 } = require('../lib/faturaUtils');
 const { resolverLogoPorProprietario } = require('../lib/logoEmpresaUtils');
 const { ehClienteDaEmpresa } = require('../lib/clienteEmpresa');
+const { lerDadosRecebimento } = require('../lib/dadosRecebimento');
 const { registrarAuditoria } = require('../lib/auditoria');
 const { ehGestorNoContexto } = require('../middlewares/permissao.middleware');
 const { escopoCatalogoEmpresa } = require('../middlewares/empresaAtiva.middleware');
@@ -689,7 +690,14 @@ const FaturaController = {
         return res.status(404).json({ error: 'Proprietário não encontrado' });
       }
       const logoUrl = await resolverLogoPorProprietario(req.params.proprietarioId);
-      res.json({ dados: { logoUrl } });
+      // Os dados de recebimento saem PELA MESMA rota da logo (a pedido, 2026-09-08):
+      // as duas são identidade da clínica na folha, buscadas no mesmo ponto do
+      // carregamento da fatura. Uma rota nova só para cinco campos custaria uma ida a
+      // mais ao servidor a cada abertura da tela.
+      // ⚠️ Empresa do CONTEXTO, nunca a do proprietário: o mesmo cliente atendido por
+      // duas clínicas receberia o PIX da outra.
+      const recebimento = await lerDadosRecebimento(empresaId);
+      res.json({ dados: { logoUrl, recebimento } });
     } catch (err) {
       console.error('Erro ao obter logo do proprietário:', err);
       res.status(500).json({ error: 'Erro interno' });

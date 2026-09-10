@@ -17,8 +17,9 @@ import {
   CheckCircle2, Download, Printer, ChevronDown, MessageCircle, Mail,
 } from 'lucide-react';
 import { imprimirFatura, exportarFaturaCSV, gerarHtmlFatura } from '../utils/FaturaExport';
+import type { DadosRecebimento } from '../utils/FaturaExport';
 import { carregarComoDataUri } from '../utils/printUrl';
-import { abrirWhatsApp, abrirEmail } from '../utils/compartilhar';
+import CompartilharPdfBotoes from '../components/CompartilharPdfBotoes';
 // O MESMO par que a Prescrição usa: PDF anexado pelo backend, barra de progresso no
 // centro da tela, botão Cancelar e veredito no mesmo lugar (ver `handleShare`).
 import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
@@ -267,12 +268,9 @@ function totalItem(i: { valor: number; quantidade: number; descontoTipo?: Descon
   return i.valor * i.quantidade - descontoDoItem(i);
 }
 
-// WhatsApp exige número internacional (Brasil: 55 + DDD + número).
-function foneIntl(phone?: string): string {
-  const d = (phone ?? '').replace(/\D/g, '');
-  if (!d) return '';
-  return d.startsWith('55') ? d : `55${d}`;
-}
+// ⚠️ `foneIntl` SAIU daqui em 2026-09-08. O DDI deixou de ser problema desta tela
+// quando o envio em lote passou a usar `CompartilharPdfBotoes`: quem normaliza o
+// telefone agora é `utils/compartilharPdf.ts`, um lugar só para todas as telas.
 
 function montarTextoFatura(fatura: Fatura, prop: ProprietarioItem): string {
   const nomeDestinatario = prop.fullName;
@@ -980,6 +978,9 @@ function PainelFatura({
   const [salvando,       setSalvando]       = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [logoUrl,        setLogoUrl]        = useState<string | null>(null);
+  // Chave PIX / banco da clínica — impressos no rodapé da fatura (2026-09-08).
+  // `null` = a clínica não cadastrou, e o bloco não é impresso.
+  const [recebimento,    setRecebimento]    = useState<DadosRecebimento | null>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
 
   // Logo da empresa/equipe do proprietário para PDF/impressão/compartilhamento —
@@ -997,9 +998,12 @@ function PainelFatura({
       .then(async res => {
         const bruto = res.data?.dados?.logoUrl ?? null;
         const dataUri = await carregarComoDataUri(bruto);
+        // Os dados de pagamento vêm na MESMA resposta — as duas coisas são identidade
+        // da clínica na folha, e uma rota só evita uma ida a mais por abertura.
+        if (!cancelado) setRecebimento(res.data?.dados?.recebimento ?? null);
         if (!cancelado) setLogoUrl(dataUri);
       })
-      .catch(() => { if (!cancelado) setLogoUrl(null); });
+      .catch(() => { if (!cancelado) { setLogoUrl(null); setRecebimento(null); } });
     return () => { cancelado = true; };
   }, [prop.id]);
 
@@ -1015,7 +1019,7 @@ function PainelFatura({
 
   const handlePDF = () => {
     if (!fatura) return;
-    imprimirFatura(fatura, prop.animais, logoUrl);
+    imprimirFatura(fatura, prop.animais, logoUrl, recebimento);
     setShowExportMenu(false);
   };
 
@@ -1036,7 +1040,7 @@ function PainelFatura({
     const inv         = `INV-${String(fatura.id).padStart(3, '0')}`;
     const nomeDestino = prop.fullName;
     return {
-      gerarHtml:   () => gerarHtmlFatura(fatura, prop.animais, logoUrl),
+      gerarHtml:   () => gerarHtmlFatura(fatura, prop.animais, logoUrl, recebimento),
       nomeArquivo: `fatura-${inv}-${nomeDestino.replace(/\s+/g, '-')}.pdf`,
       documento:   'Fatura',
       texto:       montarTextoFatura(fatura, prop),
@@ -1354,6 +1358,11 @@ function PainelFatura({
         ? `Fatura fechada — nova fatura ${formatMes(proxima.mesReferencia) || 'aberta'} criada`
         : 'Fatura fechada');
       onStatusChange();
+      // A aba "Aberta" (sem `faturaId`/`mes` fixos) mostra a fatura CORRENTE — e a
+      // corrente passou a ser a que acabou de nascer. Sem recarregar, ela continuaria
+      // exibindo a fatura FECHADA debaixo do rótulo "Aberta", com o botão Reabrir no
+      // lugar do Fechar: a tela contradizendo a própria aba.
+      if (proxima && !faturaId && !mes) await carregar();
     } catch { setErroInline('Erro ao fechar fatura'); }
     finally { setSalvando(false); }
   };
@@ -1952,6 +1961,62 @@ function ModalFechamentoLote({ proprietarios, onClose, onDone }: {
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
 
+  // 🔴 O LOTE PASSOU A MANDAR O PDF, como todo o resto do sistema (a pedido,
+  // 2026-09-08). Até aqui esta era a ÚNICA tela que ainda enviava TEXTO puro
+  // (`abrirWhatsApp`/`abrirEmail`) — o cliente recebia "Total: R$ 1.234,00" numa
+  // mensagem e nenhuma fatura.
+  //
+  // O que faltava para migrar era o CONTEÚDO: a resposta do fechamento em lote traz
+  // só id, total, mês e o contato do dono — sem itens, sem animais e sem logo não há
+  // como montar a folha. A saída não é engordar aquela resposta com N faturas
+  // inteiras (a maioria nunca vai ser enviada), é buscar UMA por clique: `aoPreparar`
+  // do `CompartilharPdfBotoes` existe exatamente para o preparo assíncrono, e
+  // `gerarHtml` continua síncrono porque é ele que roda dentro da janela de "user
+  // activation" de que o fallback manual depende.
+  //
+  // ⚠️ AS FATURAS SÃO CARREGADAS ANTES DE OS BOTÕES APARECEREM, não no clique.
+  //
+  // A tentação é buscar sob demanda (`aoPreparar`), e ela tem um furo: falhando a
+  // busca, `gerarHtml` — que é SÍNCRONO por contrato — não teria o que devolver, e o
+  // envio seguiria com uma folha vazia. Um PDF em branco chegando ao cliente é pior
+  // que um botão que não aparece. Carregando antes, a falha é VISÍVEL na linha, antes
+  // de qualquer clique, e `gerarHtml` só existe quando tem o que gerar.
+  //
+  // O custo é aceitável: o lote são as faturas ABERTAS daquele mês, as mesmas que a
+  // pessoa está olhando uma a uma para enviar.
+  const [faturas, setFaturas] = useState<Map<number, Fatura>>(new Map());
+  const [logo,    setLogo]    = useState<string | null>(null);
+  const [recebimento, setRecebimento] = useState<DadosRecebimento | null>(null);
+  const [carregandoFaturas, setCarregandoFaturas] = useState(false);
+
+  useEffect(() => {
+    if (!resultado || resultado.length === 0) return;
+    let vivo = true;
+    setCarregandoFaturas(true);
+    (async () => {
+      // A logo é da EMPRESA, igual para todas as linhas — uma busca só.
+      // ⚠️ Convertida para `data:`: o Puppeteer BLOQUEIA requisição que não seja
+      // `data:`, e sem isso ela nasce quebrada no PDF que chega ao cliente.
+      try {
+        const r = await api.get(`/clinica/faturas/proprietario/${resultado[0].proprietario.id}/logo-empresa`);
+        const bruto = r.data?.dados?.logoUrl ?? null;
+        // Os dados de pagamento são da EMPRESA, iguais em todas as linhas do lote.
+        if (vivo) setRecebimento(r.data?.dados?.recebimento ?? null);
+        if (vivo && bruto) setLogo(await carregarComoDataUri(bruto));
+      } catch { /* sem logo a folha sai sem timbre, que é melhor que não sair */ }
+
+      const mapa = new Map<number, Fatura>();
+      for (const f of resultado) {
+        try {
+          const r = await api.get(`/clinica/faturas/proprietario/${f.proprietario.id}?faturaId=${f.faturaId}`);
+          if (r.data?.dados) mapa.set(f.faturaId, r.data.dados as Fatura);
+        } catch { /* a linha aparece sem botão, com o aviso ao lado */ }
+      }
+      if (vivo) { setFaturas(mapa); setCarregandoFaturas(false); }
+    })();
+    return () => { vivo = false; };
+  }, [resultado]);
+
   const abertasDoMes = proprietarios.filter(p => p.faturaAtiva?.mesReferencia === mes);
 
   const fechar = async () => {
@@ -2014,33 +2079,42 @@ function ModalFechamentoLote({ proprietarios, onClose, onDone }: {
                 </p>
               </div>
               <p className="text-[11px] text-gray-400">
-                O WhatsApp abre uma conversa por vez — toque em cada proprietário para enviar a mensagem já pronta.
+                Cada envio manda o PDF da fatura anexado, com a barra de progresso no centro da tela.
               </p>
               {resultado.length === 0 ? (
                 <p className="text-sm text-gray-400 text-center py-4">Nenhuma fatura foi fechada.</p>
               ) : (
                 <div className="space-y-2">
                   {resultado.map(f => {
-                    const nomeDestino  = f.proprietario.fullName;
-                    const foneDestino  = f.proprietario.phone;
-                    const emailDestino = f.proprietario.email;
-                    const texto = montarTextoFaturaLote(nomeDestino, f.mesReferencia, f.faturaId, f.total);
+                    const nomeDestino = f.proprietario.fullName;
+                    const inv         = `INV-${String(f.faturaId).padStart(3, '0')}`;
+                    // Os animais vêm da LISTA que a tela já tem — a resposta do lote não
+                    // os traz, e são eles que agrupam os itens na folha.
+                    const animais = proprietarios.find(p => p.id === f.proprietario.id)?.animais ?? [];
+                    const fat     = faturas.get(f.faturaId);
                     return (
                       <div key={f.faturaId} className="flex items-center gap-2 border border-gray-100 rounded-xl px-3 py-2">
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-gray-800 truncate">{nomeDestino}</p>
                           <p className="text-[11px] text-gray-400">{formatBRL(f.total)}</p>
                         </div>
-                        {foneDestino && (
-                          <button onClick={() => abrirWhatsApp(texto, foneIntl(foneDestino))}
-                            className="flex items-center gap-1 px-2.5 py-1 bg-[#25D366] hover:bg-[#20BA5A] text-white rounded-lg text-xs font-semibold transition-colors">
-                            <MessageCircle size={12}/> WhatsApp
-                          </button>
+                        {carregandoFaturas ? (
+                          <Loader2 size={14} className="animate-spin text-gray-300 flex-shrink-0"/>
+                        ) : fat ? (
+                          <CompartilharPdfBotoes
+                            telefone={f.proprietario.phone}
+                            emailPara={f.proprietario.email}
+                            gerarHtml={() => gerarHtmlFatura(fat, animais, logo, recebimento)}
+                            nomeArquivo={`fatura-${inv}-${nomeDestino.replace(/\s+/g, '-')}.pdf`}
+                            documento="Fatura"
+                            texto={montarTextoFaturaLote(nomeDestino, f.mesReferencia, f.faturaId, f.total)}
+                            titulo={`Fatura — ${nomeDestino}`}
+                          />
+                        ) : (
+                          /* Sem a fatura carregada não há folha a mandar — e um botão
+                             que só falha depois do clique é a armadilha 28-d. */
+                          <span className="text-[10px] text-red-500 flex-shrink-0">não foi possível carregar</span>
                         )}
-                        <button onClick={() => abrirEmail(`Fatura — ${nomeDestino}`, texto, emailDestino)}
-                          className="flex items-center gap-1 px-2.5 py-1 border border-blue-200 text-blue-600 hover:bg-blue-50 rounded-lg text-xs font-semibold transition-colors">
-                          <Mail size={12}/> E-mail
-                        </button>
                       </div>
                     );
                   })}

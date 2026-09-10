@@ -4,6 +4,7 @@
 
 const prisma = require('./prisma').default;
 const { resolverTipoNoContexto } = require('./tipoContexto');
+const { ehCargoPrestador } = require('./cargosPrestador');
 
 /**
  * Verifica se o usuário tem acesso a um animal específico.
@@ -120,7 +121,9 @@ async function verificarAcessoAnimal({ animalId, userId, empresaId = null, equip
       where:  { userId: Number(userId), equipeId: Number(equipeId) },
       select: { cargo: true },
     });
-    if (membroCtx?.cargo === 'FORNECEDOR') {
+    // FORNECEDOR ou PRESTADOR — os dois cargos são o mesmo prestador externo
+    // (`lib/cargosPrestador.js`); PRESTADOR nasceu depois e nada foi migrado.
+    if (ehCargoPrestador(membroCtx?.cargo)) {
       vetPrestadorNoContexto = true;
       const designacaoVet = await prisma.designacaoPrestador.findFirst({
         where: {

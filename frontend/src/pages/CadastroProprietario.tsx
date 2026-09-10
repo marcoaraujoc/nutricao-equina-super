@@ -308,7 +308,7 @@ export default function CadastroProprietario() {
           <strong>Regras deste cadastro:</strong>
           <ul className="mt-1 list-disc pl-5 space-y-0.5">
             <li>Proprietários criados aqui recebem e-mail de boas-vindas com senha inicial.</li>
-            <li>A senha padrão é <strong>Inicial_001</strong> — troca obrigatória no primeiro acesso.</li>
+            <li>A senha inicial é gerada pelo sistema e vai <strong>somente no e-mail</strong> — troca obrigatória no primeiro acesso.</li>
             <li>Proprietários são associados à empresa/equipe ativa no momento do cadastro.</li>
             <li>A remoção da empresa não exclui o proprietário do sistema.</li>
           </ul>

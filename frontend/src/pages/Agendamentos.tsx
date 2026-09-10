@@ -606,7 +606,11 @@ function PageWrapper({ children }: { children: React.ReactNode }) {
 export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnimal }: AgendamentosProps = {}) {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const { user }                                    = useAuth();
-  const { contextoAtivo }                           = useEmpresa();
+  const { contextoAtivo, marca }                    = useEmpresa();
+  // Rótulo do local de quem NÃO tem local de trabalho cadastrado: é a sede da
+  // clínica. Sem o nome da empresa resolvido (contexto ainda carregando), volta ao
+  // traço — melhor um traço do que um nome errado na coluna.
+  const localDaSede = marca?.empresaNome?.trim() || '—';
   const meuUserId                                   = user?.id ?? null;
   // Agendar/operar a agenda de OUTRO profissional é decidido pelo CONTROLE DE ACESSO,
   // não pelo cargo: EQUIPE/FULL em `atendimento.agendamentos.criar` agenda para
@@ -1057,6 +1061,9 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
           id: number; fullName: string; userType: string; ativo?: boolean;
           vetPerfil?: { subespecialidades?: { nome: string }[] } | null;
           fornecedorPerfil?: { tipoServico?: string | null } | null;
+          // Cargo PRESTADOR (2026-09-09): o tipo de serviço mora no cadastro de
+          // Prestadores, não no de Fornecedores.
+          prestadorPerfil?:  { tipoServico?: string | null } | null;
           especialidades?: { especialidadeId?: number; especialidade?: { id?: number; nome?: string | null } | null }[] | null;
         };
       }>;
@@ -1072,9 +1079,13 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
         .filter(m => m.cargo !== 'PROPRIETARIO' && m.user?.userType !== 'ADMIN' && m.user?.ativo !== false)
         .map(m => {
           let especialidades: string[];
-          if (m.cargo === 'FORNECEDOR') {
-            // Fornecedor: especialidade vem do tipo de serviço do cadastro
-            especialidades = (m.user.fornecedorPerfil?.tipoServico ?? '')
+          if (m.cargo === 'FORNECEDOR' || m.cargo === 'PRESTADOR') {
+            // Profissional externo: a especialidade vem do tipo de serviço do cadastro
+            // correspondente ao cargo — Fornecedores × Prestadores.
+            const doCadastro = m.cargo === 'PRESTADOR'
+              ? m.user.prestadorPerfil?.tipoServico
+              : m.user.fornecedorPerfil?.tipoServico;
+            especialidades = (doCadastro ?? '')
               .split(',').map(s => s.trim()).filter(Boolean);
             if (especialidades.length === 0) especialidades = ['Prestador'];
           } else {
@@ -1505,8 +1516,14 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
         const esps = espFiltro
           ? vet.especialidadesCat.filter(e => e.id === espFiltro)
           : vet.especialidadesCat;
-        if (esps.length === 0) montar(vet, null, '—', exp, null);
-        else for (const esp of esps) montar(vet, null, '—', exp, esp);
+        // 🔴 SEM LOCAL, ENTRA O NOME DA EMPRESA (a pedido, 2026-09-08). O traço "—"
+        // não dizia nada: quem olha a coluna "Local de trabalho" e vê um traço não
+        // sabe se o dado falta ou se o atendimento é na própria clínica. É na clínica
+        // — o profissional sem local cadastrado atende na sede.
+        // ⚠️ Só o RÓTULO muda; `localId` continua `null`, que é o que o backend usa
+        // para saber que não há local vinculado.
+        if (esps.length === 0) montar(vet, null, localDaSede, exp, null);
+        else for (const esp of esps) montar(vet, null, localDaSede, exp, esp);
         continue;
       }
 

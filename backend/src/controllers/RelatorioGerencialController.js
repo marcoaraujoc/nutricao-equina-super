@@ -9,7 +9,7 @@
 //   (lançamento "Atd. Emergencial" do Faturamento), em fatura não cancelada.
 // - Receita bruta  = soma do valor líquido (valor×qtd − desconto do item) em faturas ABERTA/FECHADA/PAGA (faturado).
 // - Receita líquida = mesma soma, restrita a faturas PAGA (efetivamente recebido).
-// - Devedor: proprietário com fatura ABERTA/FECHADA de mês anterior ao atual;
+// - Devedor: proprietário com fatura ABERTA/REABERTA/FECHADA de mês anterior ao atual;
 //   meses em atraso = distância em meses do mês devido mais antigo até o mês atual.
 // - Fatura corrigida: qtdCorrecoes > 0 (item existente alterado/removido — ver faturaUtils).
 // - Evolução editada: FINALIZADA com dataModificacao > dataFim + 60s

@@ -19,7 +19,7 @@
 import { imprimirHtml } from './print/imprimirHtml';
 import { resolverUrlAbsoluta } from './printUrl';
 import { assinaturaDoVeterinario } from '../modules/documentos/catalogo';
-import { prepararFolha, cabecalhoVazio } from '../modules/documentos/cabecalho';
+import { prepararFolha, cabecalhoVazio, linhasDoEstabelecimento } from '../modules/documentos/cabecalho';
 import { semBlocosVazios } from '../modules/documentos/vazios';
 import type { DadosCabecalho } from '../modules/documentos/cabecalho';
 import type { Bloco, DocumentoEmitido, MarcaDocumentoEmitido } from '../modules/documentos/types';
@@ -205,11 +205,21 @@ function cabecalhoHtml(c: DadosCabecalho, imagens?: ImagensDocumento): string {
     : c.empresaNome
       ? `<p style="font-size:14px;font-weight:700;margin:0">${texto(c.empresaNome)}</p>`
       : '';
+  // Timbre do ESTABELECIMENTO (só pessoa jurídica) — espelho de `CabecalhoFolha.tsx`.
+  // A razão social só entra quando NÃO houve logo: com logo ela já apareceu acima.
+  const linhasEmpresa = linhasDoEstabelecimento(c.empresa)
+    .map(l => `<p style="margin:0">${texto(l)}</p>`).join('');
+  const razao = logo && c.empresa?.nome
+    ? `<p style="margin:0;font-weight:700;color:#111827;font-size:11px">${texto(c.empresa.nome)}</p>`
+    : '';
+  const timbre = linhasEmpresa || razao
+    ? `<div style="margin-top:6px;font-size:9px;line-height:1.45;color:#4b5563">${razao}${linhasEmpresa}</div>`
+    : '';
   // Título CENTRALIZADO na folha (a pedido, 2026-09-03); a logo segue à esquerda.
   const titulo = c.titulo
     ? `<h1 style="font-size:17px;font-weight:700;letter-spacing:.02em;margin:10px 0 0;text-align:center">${texto(c.titulo)}</h1>`
     : '';
-  return `<header class="doc-cabecalho">${marca}${titulo}</header>`;
+  return `<header class="doc-cabecalho">${marca}${timbre}${titulo}</header>`;
 }
 
 /**

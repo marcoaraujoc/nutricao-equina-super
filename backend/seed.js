@@ -5,6 +5,7 @@ const seedMedicamentos = require('./src/seeds/003_medicamentos.seed');
 const seedProcedimentos = require('./src/seeds/004_procedimentos.seed');
 const { seedLaboratorios }   = require('./src/seeds/003_laboratorios.seed');
 const { seedImagemExames }  = require('./src/seeds/004_imagem_exames.seed');
+const { seedProcedimentosImagem } = require('./src/seeds/005_procedimentos_imagem.seed');
 const { seedDocumentosCfmv } = require('./src/seeds/006_documentos_cfmv.seed');
 
 // Catálogos globais (medicamentos, procedimentos, laboratórios, módulos do sistema)
@@ -155,6 +156,10 @@ async function main() {
   await seedProcedimentos(prisma);
   await seedLaboratorios();
   await seedImagemExames(prisma);
+  // DEPOIS de seedImagemExames: este projeta o MESMO catálogo em tb_procedimentos_vet
+  // (onde o exame de imagem ganha preço e prestador) e inativa os genéricos de
+  // 'Diagnóstico por Imagem' que ele substitui. Ver o cabeçalho do arquivo.
+  await seedProcedimentosImagem(prisma);
 
   // ── Modelos de documento do CFMV (Res. 1.321/2020) ────────────────────────────
   // Catálogo GLOBAL (empresa_id null) da Central de Documentos. Idempotente por

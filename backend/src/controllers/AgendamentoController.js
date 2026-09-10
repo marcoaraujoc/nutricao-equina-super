@@ -7,6 +7,7 @@ const { verificarAcessoAnimal }                   = require('../lib/animalAccess
 const { corteDePropriedade }                      = require('../lib/animalPropriedadeCorte');
 // Escopo de DADOS de animal (base × convidado × prestador) — fonte única, ver §5
 const { buildAnimalScopeWhere }                   = require('../lib/animalScope');
+const { ehCargoPrestador } = require('../lib/cargosPrestador');
 const { filhoDeAnimalVisivel, animalVisivelNaEmpresa } = require('../lib/visibilidade');
 const { formatAtendimentoNum }                    = require('../lib/faturaUtils');
 const { registrarAuditoria, registrarTransferencia, registrarAlteracao, registrarConflitoEdicao } = require('../lib/auditoria');
@@ -397,7 +398,8 @@ const AgendamentoController = {
         where.animal = { userId: Number(userId) };
       } else if (req.empresaId) {
         where.id = { in: await idsDoContexto() };
-        // ÚNICA exceção, e ela NÃO é permissão: o PRESTADOR (cargo FORNECEDOR) só
+        // ÚNICA exceção, e ela NÃO é permissão: o PRESTADOR (cargo FORNECEDOR ou
+        // PRESTADOR — ver `lib/cargosPrestador.js`) só
         // alcança animais com designação ativa — deny-by-default do
         // DesignacaoPrestador, que existe para o profissional externo (ferrador,
         // fisioterapeuta) não receber a base de pacientes inteira. É escopo de
@@ -407,7 +409,7 @@ const AgendamentoController = {
         // O `OR` com os próprios é obrigatório: a designação é INATIVADA quando o
         // encaminhamento é concluído, então sem ele o prestador perderia de vista
         // os atendimentos que ele mesmo fez (medido: um caso real ia de 5 para 0).
-        if (req.membroCargo === 'FORNECEDOR') {
+        if (ehCargoPrestador(req.membroCargo)) {
           const { where: escopoAnimal } = await buildAnimalScopeWhere(req);
           if (escopoAnimal && Object.keys(escopoAnimal).length > 0) {
             where.OR = [

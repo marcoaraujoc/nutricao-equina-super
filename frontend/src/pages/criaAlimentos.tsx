@@ -5,8 +5,11 @@ import { useNavigate, useParams } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import axios from 'axios';
+import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
+import SeloOrigemCatalogo from '../components/SeloOrigemCatalogo';
+import { useCatalogoNutricional } from '../hooks/useCatalogoNutricional';
 
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
@@ -47,6 +50,10 @@ const CriaAlimentos = () => {
   const { id } = useParams<{ id: string }>();
   const isEditMode = !!id && id !== 'novo';
 
+  const { podeCriar, podeAlterar, loading: loadingPerms } = useCatalogoNutricional();
+  // De quem é o alimento aberto (só na edição). `undefined` = ainda carregando.
+  const [doSistema,   setDoSistema]   = useState<boolean | undefined>(undefined);
+
   const [formData,    setFormData]    = useState<FormData>(FORM_INICIAL);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
@@ -69,6 +76,7 @@ const CriaAlimentos = () => {
           unidade:    a.unidade     ?? 'kg',
           ativo:      a.ativo       !== false,
         });
+        setDoSistema(a.doSistema);
       } catch (error) {
         console.error('Erro ao carregar alimento:', error);
         setErroInline('Erro ao carregar alimento');
@@ -81,9 +89,14 @@ const CriaAlimentos = () => {
 
   // ── Submit ────────────────────────────────────────────────────────────────
 
+  // Linha do SISTEMA é somente leitura para a clínica (o backend recusa com 403
+  // ITEM_DO_SISTEMA). A tela precisa dizer isso ANTES do clique — antipadrão 28-d.
+  const podeSalvar = isEditMode ? podeAlterar(doSistema) : podeCriar;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    if (!podeSalvar) return;
     if (!formData.nome.trim()) { setErroInline('Informe o nome do alimento'); return; }
     if (!formData.categoria)   { setErroInline('Selecione a categoria');       return; }
 
@@ -115,24 +128,44 @@ const CriaAlimentos = () => {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center text-gray-400">Carregando...</div>;
+  if (loading || loadingPerms) {
+    return (
+      <PageContainer maxWidth="3xl">
+        <p className="text-center text-gray-400 py-16 text-sm">Carregando...</p>
+      </PageContainer>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-start justify-center py-10 px-4">
-      <div className="w-full max-w-lg">
+    <PageContainer maxWidth="3xl">
+      <div className="w-full max-w-lg mx-auto">
 
         {/* Voltar */}
         <BotaoVoltar className="mb-6" />
 
-        <div className="bg-white shadow-xl rounded-3xl p-6 border border-gray-100">
+        <div className="bg-white rounded-2xl p-5 border border-gray-100">
 
           <InlineError message={erroInline} className="mb-4" />
 
-          <h1 className="text-xl font-bold text-gray-900 text-center mb-6">
-            {isEditMode ? 'Editar Alimento' : 'Novo Alimento'}
-          </h1>
+          <div className="flex items-center justify-between gap-3 mb-5">
+            <h1 className="text-2xl font-bold text-gray-900">
+              {isEditMode ? 'Editar Alimento' : 'Novo Alimento'}
+            </h1>
+            {isEditMode && <SeloOrigemCatalogo doSistema={doSistema} />}
+          </div>
+
+          {/* Somente leitura: o catálogo do sistema é compartilhado com todas as
+              clínicas, e alterá-lo aqui sairia da empresa. */}
+          {!podeSalvar && (
+            <div className="mb-4 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
+              {isEditMode
+                ? 'Este alimento é do catálogo do sistema — somente leitura. Cadastre um alimento próprio da clínica para usar valores diferentes.'
+                : 'Você não tem permissão para cadastrar alimentos.'}
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            <fieldset disabled={!podeSalvar} className="space-y-4 min-w-0 border-0 p-0 m-0">
 
             {/* Nome */}
             <div>
@@ -199,20 +232,30 @@ const CriaAlimentos = () => {
               </div>
             )}
 
-            {/* Botão */}
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-400 text-white py-3.5 rounded-2xl font-semibold transition-colors mt-2">
-              {submitting
-                ? (isEditMode ? 'Atualizando...' : 'Cadastrando...')
-                : (isEditMode ? 'Atualizar Alimento' : 'Cadastrar Alimento')}
-            </button>
+            </fieldset>
+
+            {/* Rodapé no padrão da aplicação: ação à direita, tamanho de sempre. */}
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => navigate('/alimentos')}
+                className="px-5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50">
+                Cancelar
+              </button>
+              {podeSalvar && (
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white text-sm font-semibold rounded-xl transition-colors">
+                  {submitting ? 'Salvando...' : 'Salvar'}
+                </button>
+              )}
+            </div>
 
           </form>
         </div>
       </div>
-    </div>
+    </PageContainer>
   );
 };
 

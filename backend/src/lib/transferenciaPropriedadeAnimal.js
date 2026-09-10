@@ -21,8 +21,11 @@ const { garantirPerfil: garantirPerfilProprietario, salvarPerfil: salvarPerfilPr
 const { salvarVinculo } = require('./usuarioEmpresa');
 const { salvarLocalidades, normalizarLocalidades } = require('./proprietarioLocalidades');
 const { registrarTransferenciaPropriedade } = require('./auditoria');
+const { gerarSenhaInicial } = require('./senhaInicial');
 
-const SENHA_PADRAO_INICIAL = 'Inicial_001';
+// ⚠️ A senha inicial deixou de ser CONSTANTE (2026-09-08) — ver `lib/senhaInicial.js`.
+// A exportação FICA porque há chamador externo; hoje ela só descreve a regra.
+const SENHA_PADRAO_INICIAL = 'derivada do cadastro — ver lib/senhaInicial.js';
 
 /**
  * Resolve o novo proprietário (encontra por e-mail ou cria) e o vincula à
@@ -40,7 +43,8 @@ async function resolverOuCriarProprietario(tx, req, { empresaId, equipeId, dados
         email,
         phone:              dados.phone  || null,
         phone2:             dados.phone2 || null,
-        passwordHash:       await bcrypt.hash(SENHA_PADRAO_INICIAL, 10),
+        passwordHash:       await bcrypt.hash(
+          gerarSenhaInicial({ email, nome: dados.fullName, telefone: dados.phone }), 10),
         role:               'USER',
         userType:           'PROPRIETARIO',
         mustChangePassword: true,

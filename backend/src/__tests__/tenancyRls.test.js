@@ -31,6 +31,12 @@ const SCHEMA = 'schs2vet';
 // ─── TENANT PLANE — protegidas por RLS ────────────────────────────────────────
 // Vazia na fase 1: nenhuma tabela tem RLS ainda (medido — 0 de 90).
 const TENANT_PLANE = [
+  // ✅ 2026-09-10 — PRESTADOR NO PROCEDIMENTO + RECIBO (migration
+  // `20261001000000_procedimento_prestador`, APLICADA). As duas nascem com
+  // ENABLE + FORCE + policy de TENANT DIRETO. Guardam PREÇO e REMUNERAÇÃO de
+  // terceiros, então vazamento aqui é vazamento comercial: o que uma clínica paga
+  // ao seu ferrador não pode ser legível pela clínica vizinha.
+  'tb_procedimento_prestadores', 'tb_execucoes_procedimento_prestador',
   // ✅ FASE 6 — a CANÁRIA. ENABLE + FORCE + policy com USING e WITH CHECK, provada
   // por `__tests__/rlsCanario.test.js` (isolamento de leitura, escrita e update, e
   // ausência de vazamento do tenant entre transações do pool).
@@ -144,6 +150,10 @@ const AGUARDANDO_RLS = [
   //   tb_procedimentos_vet     938 globais + 2 de empresa
   //   tb_vacinas             vazia — a coluna `empresa_id` ainda precisa ser criada
   'tb_localizacoes_animal', 'tb_medicamentos', 'tb_procedimentos_vet', 'tb_vacinas',
+  // Catálogo nutricional (2026-09-09, migration 20261004000000): saiu de SEM_RLS
+  // (catálogo global puro) quando a clínica passou a cadastrar e excluir o alimento, o
+  // nutriente e a composição dela. Mesma policy assimétrica de `tb_medicamentos`.
+  'tb_alimentos', 'tb_nutrientes', 'tb_composicao_alimento',
 
   // PENDENTES resolvidas em D8: modelos de laudo, cada clínica monta o seu
   'tb_exame_grupos', 'tb_exame_itens', 'tb_imagem_exame_grupos', 'tb_imagem_exame_itens',
@@ -180,11 +190,13 @@ const SEM_RLS = [
   // TENANT_PLANE (migration 20260920000000). "Ninguém cria linha própria" deixou de
   // valer quando o encaminhamento a profissional externo passou a cadastrar a
   // especialidade que falta, com `empresa_id` da clínica.
-  'tb_alimentos', 'tb_crmv_sync_log', 'tb_crmv_validos',
+  // ⚠️ `tb_alimentos` / `tb_nutrientes` / `tb_composicao_alimento` SAÍRAM daqui em
+  // 2026-09-09 — viraram CATÁLOGO MISTO e foram para TENANT_PLANE (migration
+  // 20261004000000): a clínica cadastra o alimento que o sistema não conhece, e a
+  // exclusão dele passou a apagar do banco de verdade.
+  'tb_crmv_sync_log', 'tb_crmv_validos',
   'tb_especies', 'tb_exigencias_nrc', 'tb_laboratorios',
-  'tb_nutrientes', 'tb_racas', 'tb_regioes_anatomicas_equino',
-  // D8: referência técnica (composição nutricional por espécie), igual para todas
-  'tb_composicao_alimento',
+  'tb_racas', 'tb_regioes_anatomicas_equino',
 ];
 
 // ─── Conexão ──────────────────────────────────────────────────────────────────

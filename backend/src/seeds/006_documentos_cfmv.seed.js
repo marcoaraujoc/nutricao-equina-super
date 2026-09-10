@@ -110,6 +110,10 @@ const IDENTIFICACAO_PROFISSIONAL = () => [
   campo('CRMV',        '{{veterinario.crmv}}'),
   campo('Estabelecimento', '{{veterinario.clinica}}'),
   campo('Telefone',    '{{veterinario.telefone}}'),
+  // E-mail do responsável (a pedido, 2026-09-08) — é por ele que o cliente e o
+  // serviço oficial respondem ao documento. Vem de `users` (a identidade do login),
+  // que é o único campo do profissional que NÃO é por empresa (§36-f).
+  campo('E-mail',      '{{veterinario.email}}'),
 ];
 
 /**
@@ -224,7 +228,7 @@ const MODELOS = [
   {
     chave: 'cfmv_03_tcle_exames',
     anexo: 'III',
-    nome: 'Consentimento — Realização de Exames',
+    nome: 'TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE EXAMES',
     descricao: 'Termo de consentimento livre e esclarecido para realização de exames (Res. CFMV 1.321/2020, Anexo III).',
     categoria: 'consentimentos',
     tags: ['tcle', 'consentimento', 'exames', 'cfmv'],
@@ -242,7 +246,7 @@ const MODELOS = [
   {
     chave: 'cfmv_04_tcle_procedimento_risco',
     anexo: 'IV',
-    nome: 'Consentimento — Procedimento Terapêutico de Risco',
+    nome: 'TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE PROCEDIMENTO TERAPÊUTICO DE RISCO',
     descricao: 'Termo de consentimento para procedimento terapêutico de risco (Res. CFMV 1.321/2020, Anexo IV).',
     categoria: 'consentimentos',
     tags: ['tcle', 'consentimento', 'risco', 'cfmv'],
@@ -276,7 +280,7 @@ const MODELOS = [
   {
     chave: 'cfmv_06_tcle_cirurgico',
     anexo: 'VI',
-    nome: 'Consentimento — Procedimento Cirúrgico',
+    nome: 'TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE PROCEDIMENTO CIRÚRGICO',
     descricao: 'Termo de consentimento para procedimento cirúrgico (Res. CFMV 1.321/2020, Anexo VI).',
     categoria: 'cirurgias',
     tags: ['tcle', 'consentimento', 'cirurgia', 'cfmv'],
@@ -294,7 +298,7 @@ const MODELOS = [
   {
     chave: 'cfmv_07_tcle_internacao',
     anexo: 'VII',
-    nome: 'Consentimento — Internação e Tratamento Clínico',
+    nome: 'TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE INTERNAÇÃO E TRATAMENTO CLÍNICO OU PÓS-CIRÚRGICO',
     descricao: 'Termo de consentimento para internação e tratamento clínico/pós-cirúrgico (Res. CFMV 1.321/2020, Anexo VII).',
     categoria: 'consentimentos',
     tags: ['tcle', 'internação', 'tratamento', 'cfmv'],
@@ -311,7 +315,7 @@ const MODELOS = [
   {
     chave: 'cfmv_08_tcle_anestesico',
     anexo: 'VIII',
-    nome: 'Consentimento — Procedimentos Anestésicos',
+    nome: 'TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE PROCEDIMENTOS ANESTÉSICOS',
     descricao: 'Termo de consentimento para procedimentos anestésicos (Res. CFMV 1.321/2020, Anexo VIII).',
     categoria: 'consentimentos',
     tags: ['tcle', 'anestesia', 'cfmv'],
@@ -324,11 +328,21 @@ const MODELOS = [
       + 'proposto(s), estando o(a) referido(a) profissional isento(a) de quaisquer responsabilidades '
       + 'decorrentes de tais riscos.',
     assinante: 'RESPONSAVEL',
+    /**
+     * Campo pedido em 2026-09-08. É LACUNA (`[[...]]`), não variável: o S2Vet não
+     * guarda o protocolo anestésico em lugar nenhum, e apontar para um dado
+     * "parecido" escreveria no papel uma técnica que ninguém indicou. Como lacuna,
+     * ele aparece na tela de emissão para o veterinário preencher — e, em branco,
+     * não é impresso (regra do campo vazio).
+     */
+    extras: () => [
+      linhaEmBranco('Tipo de procedimento Anestésico indicado', { espacamentoTopo: 8 }),
+    ],
   },
   {
     chave: 'cfmv_09_tcle_eutanasia',
     anexo: 'IX',
-    nome: 'Consentimento — Eutanásia',
+    nome: 'TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE EUTANÁSIA',
     descricao: 'Termo de consentimento livre e esclarecido para realização de eutanásia (Res. CFMV 1.321/2020, Anexo IX).',
     categoria: 'consentimentos',
     tags: ['tcle', 'eutanásia', 'cfmv'],
@@ -418,7 +432,7 @@ const MODELOS = [
   {
     chave: 'cfmv_12_tcle_doacao_corpo',
     anexo: 'XII',
-    nome: 'Consentimento — Doação do Corpo para Ensino e Pesquisa',
+    nome: 'TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO DE DOAÇÃO DE CORPO DE ANIMAL PARA FINS DE ENSINO E PESQUISA',
     descricao: 'Termo de consentimento para doação do corpo do animal a ensino e pesquisa (Res. CFMV 1.321/2020, Anexo XII).',
     categoria: 'consentimentos',
     tags: ['tcle', 'doação', 'ensino', 'pesquisa', 'cfmv'],
@@ -447,10 +461,18 @@ function montarBlocos(def) {
 
   // O bloco de observações DO VETERINÁRIO é padrão nos 12; o Anexo XI o dispensa
   // (2026-09-03, a pedido) e fica com um "Observações" só, no fim da identificação.
-  if (!def.semObservacaoVeterinario) blocos.push(observacoes('Observações do(a) Médico(a) Veterinário(a)'));
+  // 🔴 OS RÓTULOS SÃO OS DA RESOLUÇÃO, e mudam nos 12 DE UMA VEZ (a pedido,
+  // 2026-09-08). O pedido nomeou cinco documentos, mas o rótulo nasce AQUI, em um
+  // lugar só: trocá-lo em cinco e deixar os outros com a redação antiga daria dois
+  // textos para o MESMO campo — o que se lê como defeito, não como escolha.
+  if (!def.semObservacaoVeterinario) {
+    blocos.push(observacoes('Observações de interesse a serem fornecidas pelo(a) Médico(a) Veterinário(a):'));
+  }
   // Só o TCLE tem campo de observação DO RESPONSÁVEL — é o que registra a
   // manifestação de quem consente, e nos atestados ela não existe.
-  if (def.assinante === 'RESPONSAVEL') blocos.push(observacoes('Observações do(a) responsável'));
+  if (def.assinante === 'RESPONSAVEL') {
+    blocos.push(observacoes('Observações de interesse a serem fornecidas pelo(a) tutor(a)/proprietário(a)/responsável:'));
+  }
   for (const rot of def.observacoes ?? []) blocos.push(observacoes(rot));
 
   blocos.push(...CAMPOS_RESPONSAVEL());

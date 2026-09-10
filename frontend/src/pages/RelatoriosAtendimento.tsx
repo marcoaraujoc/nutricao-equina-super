@@ -11,20 +11,59 @@ import { usePeriodo, periodoParams } from '../contexts/PeriodoContext';
 import PeriodoSelector from '../components/relatorios/PeriodoSelector';
 import { Link } from 'react-router-dom';
 import { StatTiles, CarregandoRelatorio, ErroRelatorio, Card, EmptyState } from '../components/relatorios/RelatorioUI';
+import DetalheDoCard from '../components/relatorios/DetalheDoCard';
+import { formatDate } from '../utils/dateUtils';
 
-// Cada indicador leva à Agenda JÁ FILTRADA pelo mesmo recorte que ele conta.
-// ⚠️ 'REALIZADOS'/'CANCELADOS' são GRUPOS do seletor da Agenda (concluído+finalizado
-// e cancelado manual+automático) — existem justamente porque o relatório soma dois
-// status em um número só; filtrar por um deles mostraria METADE do que foi clicado.
-const agenda = (status: string) => `/agendamentos?status=${status}`;
+// ⚠️ OS INDICADORES DEIXARAM DE SER LINK PARA A AGENDA (a pedido, 2026-09-08).
+// Ir para `/agendamentos?status=…` trocava de tela e PERDIA o período do relatório —
+// quem clicava em "Consultas canceladas" de julho caía na agenda de hoje. Agora o
+// card abre a lista logo abaixo, com o mesmo recorte que ele conta.
 
 interface AtendimentoPorAnimal { animal: string; total: number; animalId?: number | null }
 interface AtendimentoPorLocalidade { localizacao: string; total: number; animais: AtendimentoPorAnimal[] }
 
-interface Atendimento {
-  periodo: { agendadas: number; realizadas: number; canceladas: number; naoRealizadas: number; procedimentos: number; exames: number };
-  atendimentosPorLocalidade: AtendimentoPorLocalidade[];
+/** Linha do detalhe — as colunas que o pedido fixou. */
+interface LinhaDetalhe {
+  animalId:    number | null;
+  animal:      string;
+  localizacao: string;
+  veterinario: string | null;
+  data:        string | null;
+  status:      string | null;
+  /** Só nos cards de "sem atendimento": há quantos dias. `null` = nunca atendido. */
+  dias?:       number | null;
 }
+
+type CardId = 'agendadas' | 'realizadas' | 'naoRealizadas' | 'canceladas'
+            | 'semAtendimentoDia' | 'semAtendimento3' | 'semAtendimento7';
+
+interface Atendimento {
+  periodo: {
+    agendadas: number; realizadas: number; canceladas: number; naoRealizadas: number;
+    procedimentos: number; exames: number;
+    semAtendimentoDia: number; semAtendimento3: number; semAtendimento7: number;
+  };
+  atendimentosPorLocalidade: AtendimentoPorLocalidade[];
+  detalhes: Record<CardId, LinhaDetalhe[]>;
+}
+
+const ROTULO_CARD: Record<CardId, string> = {
+  agendadas:         'Consultas agendadas',
+  realizadas:        'Consultas realizadas',
+  naoRealizadas:     'Consultas não realizadas',
+  canceladas:        'Consultas canceladas',
+  semAtendimentoDia: 'Animais sem atendimento no dia',
+  semAtendimento3:   'Animais sem atendimento há mais de 3 dias',
+  semAtendimento7:   'Animais sem atendimento há mais de 7 dias',
+};
+
+/** Rótulo do status do agendamento — o mesmo vocabulário da Agenda. */
+const LABEL_STATUS: Record<string, string> = {
+  AGENDADO: 'Agendado', EM_ANDAMENTO: 'Em andamento', ATRASADA: 'Atrasada',
+  CONCLUIDO: 'Concluído', FINALIZADO: 'Finalizado', CANCELADO: 'Cancelado',
+  CANCELADO_AUTOMATICAMENTE: 'Cancelado automaticamente',
+  REAGENDADO: 'Reagendado', TRANSFERIDO: 'Reagendado',
+};
 
 export default function RelatoriosAtendimento() {
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
@@ -34,10 +73,22 @@ export default function RelatoriosAtendimento() {
   const [dados, setDados] = useState<Atendimento | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState(false);
+  // Um card aberto por vez: dois abertos exigiriam duas listas na tela e a pessoa
+  // deixaria de saber qual número a de baixo está explicando.
+  const [selecionado, setSelecionado] = useState<CardId | null>(null);
+
+  /** Props de seleção do card — clicar no aberto FECHA (é o mesmo botão). */
+  const card = (id: CardId) => ({
+    onSelect: () => setSelecionado(a => (a === id ? null : id)),
+    ativo:    selecionado === id,
+  });
 
   useEffect(() => {
     if (loadingPerms || !podeVer) return;
     setCarregando(true);
+    // Trocar o período troca os NÚMEROS: manter o card aberto deixaria a lista de
+    // julho embaixo dos cards de agosto até o próximo clique.
+    setSelecionado(null);
     api.get('/relatorios/atendimento', { params: periodoParams(granularidade, dataRef) })
       .then(res => { if (!res.data) return; setDados(res.data.dados as Atendimento); })
       .catch(() => setErro(true))
@@ -74,11 +125,58 @@ export default function RelatoriosAtendimento() {
         <div className="space-y-4">
           <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">No período</p>
           <StatTiles tiles={[
-            { label: 'Consultas agendadas',      valor: dados.periodo.agendadas, to: agenda('TODOS') },
-            { label: 'Consultas realizadas',     valor: dados.periodo.realizadas, tom: 'emerald', to: agenda('REALIZADOS') },
-            { label: 'Consultas não realizadas', valor: dados.periodo.naoRealizadas, tom: dados.periodo.naoRealizadas > 0 ? 'amber' : 'gray', to: agenda('ATRASADA') },
-            { label: 'Consultas canceladas',     valor: dados.periodo.canceladas, tom: dados.periodo.canceladas > 0 ? 'red' : 'gray', to: agenda('CANCELADOS') },
+            { label: ROTULO_CARD.agendadas,     valor: dados.periodo.agendadas,     ...card('agendadas') },
+            { label: ROTULO_CARD.realizadas,    valor: dados.periodo.realizadas,    tom: 'emerald', ...card('realizadas') },
+            { label: ROTULO_CARD.naoRealizadas, valor: dados.periodo.naoRealizadas, tom: dados.periodo.naoRealizadas > 0 ? 'amber' : 'gray', ...card('naoRealizadas') },
+            { label: ROTULO_CARD.canceladas,    valor: dados.periodo.canceladas,    tom: dados.periodo.canceladas > 0 ? 'red' : 'gray', ...card('canceladas') },
           ]} />
+
+          {/* ── Animais SEM atendimento (a pedido, 2026-09-08; vieram do Mapa) ──
+              "Atendido" é evolução FINALIZADA, o mesmo critério do resto desta tela:
+              consulta marcada ou em andamento não conta, senão agenda cheia viraria
+              paciente atendido. A contagem parte da data de referência do PERÍODO, não
+              do relógio de agora — um relatório de julho responde sobre julho. */}
+          <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider pt-1">Sem atendimento</p>
+          <StatTiles cols={3} tiles={[
+            { label: ROTULO_CARD.semAtendimentoDia, valor: dados.periodo.semAtendimentoDia,
+              tom: dados.periodo.semAtendimentoDia > 0 ? 'amber' : 'gray', ...card('semAtendimentoDia') },
+            { label: ROTULO_CARD.semAtendimento3,   valor: dados.periodo.semAtendimento3,
+              tom: dados.periodo.semAtendimento3 > 0 ? 'amber' : 'gray', ...card('semAtendimento3') },
+            { label: ROTULO_CARD.semAtendimento7,   valor: dados.periodo.semAtendimento7,
+              tom: dados.periodo.semAtendimento7 > 0 ? 'red' : 'gray', ...card('semAtendimento7') },
+          ]} />
+
+          {/* A lista do card aberto. Fica LOGO ABAIXO dos cards, e não no fim da
+              página: o clique e a resposta têm de caber no mesmo olhar. */}
+          <DetalheDoCard
+            titulo={selecionado ? ROTULO_CARD[selecionado] : null}
+            linhas={selecionado ? (dados.detalhes?.[selecionado] ?? []) : []}
+            onFechar={() => setSelecionado(null)}
+            vazio={selecionado?.startsWith('semAtendimento')
+              ? 'Todos os pacientes foram atendidos neste recorte'
+              : 'Nenhuma consulta neste recorte'}
+            colunas={[
+              { titulo: 'Paciente', celula: (l: LinhaDetalhe) => (
+                l.animalId
+                  ? <Link to={`/animal/${l.animalId}`} className="text-emerald-700 font-medium hover:underline">{l.animal}</Link>
+                  : <span className="font-medium text-gray-800">{l.animal}</span>
+              ) },
+              { titulo: 'Local',        celula: (l: LinhaDetalhe) => l.localizacao || null },
+              { titulo: 'Veterinário',  celula: (l: LinhaDetalhe) => l.veterinario, somenteDesktop: true },
+              { titulo: 'Último atendimento', celula: (l: LinhaDetalhe) => (
+                l.data
+                  ? <>{formatDate(l.data)}{typeof l.dias === 'number' ? <span className="text-gray-400"> ({l.dias}d)</span> : null}</>
+                  : (l.dias === null && selecionado?.startsWith('semAtendimento')
+                      ? <span className="text-red-500">nunca atendido</span>
+                      : null)
+              ) },
+              // O status só existe nas consultas — nos cards de "sem atendimento" a
+              // coluna sairia vazia em todas as linhas, e coluna vazia é ruído.
+              ...(selecionado && !selecionado.startsWith('semAtendimento')
+                ? [{ titulo: 'Status', celula: (l: LinhaDetalhe) => (l.status ? (LABEL_STATUS[l.status] ?? l.status) : null) }]
+                : []),
+            ]}
+          />
           {/* Procedimentos e exames NÃO viram link: o primeiro conta itens de
               prescrição executados e o segundo, pedidos de exame — e as duas telas que
               os listam são POR PACIENTE (/execucao-prescricao é a fila do dia, não o

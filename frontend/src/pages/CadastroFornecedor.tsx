@@ -7,9 +7,10 @@ import toast from 'react-hot-toast';
 import {
   Pencil, Search, Loader2, X, Truck,
   ToggleLeft, ToggleRight, Building2, User as UserIcon,
-  Phone, MapPin, BadgeCheck, AlertCircle,
+  Phone, MapPin, BadgeCheck, AlertCircle, Wrench,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import GerenciarAcessoPrestadorModal from '../components/GerenciarAcessoPrestadorModal';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
@@ -83,6 +84,10 @@ interface Fornecedor {
   estado:      string | null;
   ativo:       boolean;
   createdAt:   string;
+  /** Login vinculado ao cadastro (Fornecedor.userId) — sem ele não há acesso a gerenciar. */
+  userId?:         number | null;
+  /** Equipe onde o cartão de acesso foi emitido (backend: anexarEquipeDoAcesso). */
+  acessoEquipeId?: number | null;
   // Trilha de ativação/inativação (quem fez, quando) — ver lib/cadastroAtivacao.js
   ativoEm?:        string | null;
   ativoPorNome?:   string | null;
@@ -447,6 +452,9 @@ export default function CadastroFornecedor() {
   // Fornecedor em vias de ser INATIVADO — pede justificativa antes do PATCH
   // (ativar continua direto, sem modal).
   const [inativando,      setInativando]      = useState<Fornecedor | null>(null);
+  // Designação de pacientes — substitui o "Gerenciar Acesso" que vivia no Controle
+  // de Acesso enquanto o fornecedor com login ainda era tratado como equipe.
+  const [modalAcesso,     setModalAcesso]     = useState<{ equipeId: number; userId: number; nome: string } | null>(null);
   const [processandoToggle, setProcessandoToggle] = useState(false);
 
   const carregar = useCallback(async () => {
@@ -575,6 +583,15 @@ export default function CadastroFornecedor() {
       <AcoesRegistro>
         <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
           visivel={podeEditar} onClick={() => abrirEdicao(f)} />
+        {/* 🔴 A DESIGNAÇÃO MORA AQUI desde 2026-09-09: o fornecedor com login não é
+            equipe, então o "Gerenciar Acesso" saiu do Controle de Acesso e veio para o
+            cadastro dele. É ela que define QUAIS pacientes ele enxerga.
+            ⚠️ Só com cartão de acesso emitido (login + equipe) — a maioria dos
+            fornecedores não tem login nenhum, e para eles o botão nem aparece. */}
+        <AcaoRegistro tom="ver" icone={Wrench} rotulo="Gerenciar Acesso"
+          titulo="Definir quais pacientes este fornecedor pode acessar"
+          visivel={podeEditar && !!f.userId && !!f.acessoEquipeId}
+          onClick={() => setModalAcesso({ equipeId: f.acessoEquipeId as number, userId: f.userId as number, nome: f.nome })} />
         <AcaoRegistro tom="ativar" icone={f.ativo ? ToggleRight : ToggleLeft}
           rotulo={f.ativo ? 'Inativar' : 'Ativar'}
           visivel={podeAtivar} onClick={() => handleToggle(f)} />
@@ -838,6 +855,15 @@ export default function CadastroFornecedor() {
         onConfirmar={(motivo) => { if (inativando) confirmarToggle(inativando, motivo); }}
         onFechar={() => setInativando(null)}
       />
+
+      {modalAcesso && (
+        <GerenciarAcessoPrestadorModal
+          equipeId={modalAcesso.equipeId}
+          prestadorUserId={modalAcesso.userId}
+          prestadorNome={modalAcesso.nome}
+          onClose={() => setModalAcesso(null)}
+        />
+      )}
     </PageContainer>
   );
 }

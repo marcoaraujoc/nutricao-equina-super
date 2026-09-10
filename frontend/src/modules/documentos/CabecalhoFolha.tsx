@@ -10,7 +10,7 @@
 // fotografando este DOM, e a folha precisa sair igual fora da árvore de estilos do
 // app. É a mesma escolha do `BlocoView` e do `PreviewA4`.
 
-import { cabecalhoVazio } from './cabecalho';
+import { cabecalhoVazio, linhasDoEstabelecimento } from './cabecalho';
 import type { DadosCabecalho } from './cabecalho';
 
 export default function CabecalhoFolha({ dados }: { dados: DadosCabecalho }) {
@@ -25,6 +25,20 @@ export default function CabecalhoFolha({ dados }: { dados: DadosCabecalho }) {
         : dados.empresaNome
           ? <p style={{ fontSize: 14, fontWeight: 700, margin: 0, color: '#111827' }}>{dados.empresaNome}</p>
           : null}
+
+      {/* Timbre do ESTABELECIMENTO (só pessoa jurídica). A razão social só é escrita
+          aqui quando NÃO houve logo — com logo ela já apareceu acima, e repeti-la
+          duplicaria a identificação no alto da folha. */}
+      {dados.empresa && (
+        <div style={{ marginTop: 6, fontSize: 9, lineHeight: 1.45, color: '#4b5563' }}>
+          {dados.logoUrl && dados.empresa.nome && (
+            <p style={{ margin: 0, fontWeight: 700, color: '#111827', fontSize: 11 }}>{dados.empresa.nome}</p>
+          )}
+          {linhasDoEstabelecimento(dados.empresa).map((linha, i) => (
+            <p key={i} style={{ margin: 0 }}>{linha}</p>
+          ))}
+        </div>
+      )}
 
       {/* TÍTULO CENTRALIZADO na largura da folha (a pedido, 2026-09-03) — a logo
           continua à esquerda, e por isso o centro é o da folha, não o do que sobra

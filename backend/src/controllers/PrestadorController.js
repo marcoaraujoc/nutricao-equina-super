@@ -8,14 +8,17 @@ const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
 const { normalizarPagamento } = require('../lib/usuarioEmpresa');
 const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
 const { definirAtivoNaEmpresa } = require('../lib/usuarioEmpresa');
+const { emitirCartaoAcesso, aplicarPermissoes, revogarCartaoAcesso, anexarEquipeDoAcesso } = require('../lib/acessoExterno');
 const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 const emailService = require('../services/emailService');
+const { gerarSenhaInicial } = require('../lib/senhaInicial');
 
 // Whitelist fixa SAIU (2026-08-25) — o tipo de serviço agora vem do catálogo
 // tenant-scoped (tb_catalogo_tipo_servico, CatalogoTipoServicoController), que
 // cresce por uso. Validação aqui é só "não vazio, tamanho razoável".
 
-const SENHA_INICIAL = 'Inicial_001';
+// ⚠️ A senha inicial deixou de ser CONSTANTE (2026-09-08): ela é derivada do cadastro
+// de cada pessoa (`lib/senhaInicial.js`) e sai só pelo e-mail de boas-vindas.
 
 // Relação padrão devolvida ao front — locais de trabalho com o nome da localização.
 const PRESTADOR_INCLUDE = {
@@ -80,14 +83,70 @@ function buildMensagemInativo(tipo, p) {
 }
 
 // ─── Pagamento (opcional para Prestador — nem todo externo tem remuneração fixa
-// com a clínica) — só valida quando ALGUM dos 3 campos vier preenchido; a validação
-// em si é a MESMA do Incluir Membro (normalizarPagamento, lib/usuarioEmpresa.js).
+// com a clínica) — só valida quando ALGUM dos 3 campos vier preenchido.
+//
+// SALARIO e COMISSAO usam a MESMA validação do Incluir Membro
+// (`normalizarPagamento`, lib/usuarioEmpresa.js).
+//
+// 🔴 `POR_PROCEDIMENTO` (2026-09-08) é EXCLUSIVO do prestador e por isso NÃO entra
+// em `TIPOS_PAGAMENTO` daquela lib: ela é compartilhada com `tb_usuario_empresa`, e
+// acrescentar o valor lá o tornaria aceito para MEMBRO DE EQUIPE sem que nenhuma
+// tela o ofereça — um estado alcançável só por chamada direta à API e que ninguém
+// consegue configurar nem corrigir depois. O prestador é o único cujo trabalho se
+// conta por procedimento.
+//
+// ⚠️ POR_PROCEDIMENTO não tem "R$ ou %" nem valor único: o valor é o do VÍNCULO,
+// procedimento a procedimento (Cadastro > Procedimentos → "Valor Cobrado pelo
+// Prestador"). Os três campos são gravados como NULL de propósito — deixar um valor
+// antigo ali faria o recibo ter duas fontes possíveis para o mesmo pagamento.
 function resolverPagamento(body) {
   const { tipoPagamento, formaPagamento, valorPagamento } = body;
+  const tipo = String(tipoPagamento ?? '').trim().toUpperCase();
+
+  if (tipo === 'POR_PROCEDIMENTO') {
+    return { erro: null, dados: { tipoPagamento: tipo, formaPagamento: null, valorPagamento: null } };
+  }
+
   const iniciado = !!tipoPagamento || !!formaPagamento ||
     (valorPagamento !== undefined && valorPagamento !== null && String(valorPagamento).trim() !== '');
   if (!iniciado) return { erro: null, dados: { tipoPagamento: null, formaPagamento: null, valorPagamento: null } };
   return normalizarPagamento({ tipoPagamento, formaPagamento, valorPagamento });
+}
+
+/**
+ * "Atender somente no local de trabalho" — coluna nova
+ * (`20260929000000_prestador_restringir_por_local`).
+ *
+ * 🔴 SQL CRU COM `catch`, pelo motivo de sempre (§11): no Windows o `prisma generate`
+ * falha com o backend rodando, e um `data:` tipado derrubaria o CADASTRO INTEIRO de
+ * prestador numa máquina que ainda não regenerou. Assim o pior caso é o flag não
+ * persistir — e `false` é o comportamento de antes.
+ */
+async function gravarRestricaoPorLocal(tx, prestadorId, valor) {
+  await tx.$executeRaw`
+    UPDATE "schs2vet"."tb_prestadores"
+       SET "restringir_por_local" = ${valor === true}
+     WHERE "id" = ${Number(prestadorId)}
+  `.catch(() => {});
+}
+
+/**
+ * Anexa `restringirPorLocal` à lista devolvida ao front.
+ *
+ * ⚠️ Precisa ser LIDO à parte, e não pelo `include`: o client Prisma seleciona as
+ * colunas que ele CONHECE, e enquanto o `generate` não roda (§11) a coluna nova
+ * simplesmente não vem — o checkbox abriria sempre desmarcado na edição, apagando em
+ * silêncio o que o gestor tinha configurado.
+ */
+async function anexarRestricaoPorLocal(lista) {
+  if (!lista?.length) return lista;
+  const linhas = await prisma.$queryRaw`
+    SELECT "id", "restringir_por_local" AS "restringirPorLocal"
+      FROM "schs2vet"."tb_prestadores"
+     WHERE "id" = ANY(${lista.map(p => p.id)}::int[])
+  `.catch(() => []);
+  const mapa = new Map(linhas.map(l => [l.id, l.restringirPorLocal === true]));
+  return lista.map(p => ({ ...p, restringirPorLocal: mapa.get(p.id) ?? false }));
 }
 
 // ─── Login opcional do Prestador — SEM MembroEquipe ────────────────────────────
@@ -113,7 +172,7 @@ async function provisionarLogin(tx, { prestadorId, nome, telefone, email }) {
     return { userId: existente.id, criado: false };
   }
 
-  const senhaHash = await bcrypt.hash(SENHA_INICIAL, 10);
+  const senhaHash = await bcrypt.hash(gerarSenhaInicial({ email: emailNorm, nome, telefone }), 10);
   const novo = await tx.user.create({
     data: {
       email:              emailNorm,
@@ -198,7 +257,9 @@ const PrestadorController = {
         orderBy: [{ ativo: 'desc' }, { nome: 'asc' }],
       });
 
-      res.json({ sucesso: true, dados: await anexarTrilha(prestadores, 'prestador') });
+      // `acessoEquipeId`: onde o cartão de acesso foi emitido — é o que habilita o
+      // botão "Gerenciar Acesso" (designação de pacientes) nesta tela.
+      res.json({ sucesso: true, dados: await anexarEquipeDoAcesso(prisma, await anexarRestricaoPorLocal(await anexarTrilha(prestadores, 'prestador'))) });
     } catch (err) {
       console.error('Erro ao listar prestadores:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar prestadores' });
@@ -232,7 +293,7 @@ const PrestadorController = {
     const {
       nome, cpf, cnpj, telefone, email, tipoServico,
       cep, endereco, complemento, bairro, cidade, estado,
-      acessoSistema, locaisTrabalho,
+      acessoSistema, locaisTrabalho, restringirPorLocal,
     } = req.body;
 
     if (!nome?.trim())
@@ -265,6 +326,7 @@ const PrestadorController = {
       }
 
       let usuarioCriado = false;
+      let cartao = null;
 
       const prestadorId = await prisma.$transaction(async (tx) => {
         const criado = await tx.prestador.create({
@@ -290,6 +352,7 @@ const PrestadorController = {
         });
 
         await gravarLocaisTrabalho(tx, criado.id, locaisTrabalho, empresaAlvo, equipeAlvo);
+        await gravarRestricaoPorLocal(tx, criado.id, restringirPorLocal);
 
         if (acessoSistema === true) {
           const login = await provisionarLogin(tx, {
@@ -297,17 +360,39 @@ const PrestadorController = {
           });
           await tx.prestador.update({ where: { id: criado.id }, data: { userId: login.userId } });
           usuarioCriado = login.criado;
+          // 🔴 O CARTÃO DE ACESSO. Sem ele, `acessoSistema` era promessa vazia: a
+          // pessoa logava e não enxergava tela nenhuma, porque TODO o RBAC se resolve
+          // por `MembroEquipe` (ver lib/acessoExterno.js). O prestador segue FORA da
+          // equipe na organização — a tela Equipe e a Agenda não o listam.
+          cartao = await emitirCartaoAcesso(tx, {
+            userId:    login.userId,
+            empresaId: empresaAlvo,
+            equipeId:  equipeAlvo,
+            cargo:     'PRESTADOR',
+            cadastro:  {
+              fullName: criado.nome, phone: criado.telefone,
+              cep: criado.cep, endereco: criado.endereco, complemento: criado.complemento,
+              bairro: criado.bairro, cidade: criado.cidade, estado: criado.estado, ativo: true,
+            },
+          });
         }
 
         return criado.id;
       });
+
+      // Permissões padrão do perfil PRESTADOR — FORA da transaction (PermissaoService
+      // abre a própria). Best-effort: falhar aqui deixa o acesso sem permissão
+      // configurada, e o gestor ajusta no Controle de Acesso; nunca desfaz o cadastro.
+      if (cartao) {
+        await aplicarPermissoes({ equipeId: cartao.equipeId, userId: cartao.userId, cargo: 'PRESTADOR', atualizadoPor: req.user.id });
+      }
 
       if (usuarioCriado) {
         emailService.enviarBoasVindasProprietario({
           destinatarioEmail: email.trim().toLowerCase(),
           destinatarioNome:  nome.trim(),
           criadoPorNome:     req.user?.fullName || 'Equipe',
-          senhaInicial:      SENHA_INICIAL,
+          senhaInicial:      gerarSenhaInicial({ email, nome, telefone }),
         }).catch(err => console.error('[emailService] Falha ao enviar boas-vindas do prestador:', err));
       }
 
@@ -339,7 +424,7 @@ const PrestadorController = {
     const {
       nome, cpf, cnpj, telefone, email, tipoServico,
       cep, endereco, complemento, bairro, cidade, estado,
-      acessoSistema, locaisTrabalho,
+      acessoSistema, locaisTrabalho, restringirPorLocal,
     } = req.body;
 
     if (!nome?.trim())
@@ -379,6 +464,7 @@ const PrestadorController = {
       }
 
       let usuarioCriado = false;
+      let cartao = null;
       const emailFinal = email?.trim() ? email.trim().toLowerCase() : null;
 
       await prisma.$transaction(async (tx) => {
@@ -406,23 +492,56 @@ const PrestadorController = {
         });
 
         await gravarLocaisTrabalho(tx, Number(id), locaisTrabalho, existe.empresaId, existe.equipeId);
+        await gravarRestricaoPorLocal(tx, Number(id), restringirPorLocal);
 
         // Provisiona o login só na transição false/nulo → true (userId ainda vazio).
+        let userIdAcesso = existe.userId;
         if (acessoSistema === true && !existe.userId) {
           const login = await provisionarLogin(tx, {
             prestadorId: Number(id), nome: nome.trim(), telefone: telefone.trim(), email: emailFinal,
           });
           await tx.prestador.update({ where: { id: Number(id) }, data: { userId: login.userId } });
           usuarioCriado = login.criado;
+          userIdAcesso  = login.userId;
+        }
+
+        // 🔴 O cartão é reemitido a CADA salvar com o acesso ligado, não só quando o
+        // login nasce: cadastro antigo (que ganhou `userId` antes desta regra existir)
+        // passa a enxergar tela ao ser salvo de novo — sem migration nenhuma.
+        if (acessoSistema === true && userIdAcesso) {
+          cartao = await emitirCartaoAcesso(tx, {
+            userId:    userIdAcesso,
+            empresaId: existe.empresaId,
+            equipeId:  existe.equipeId,
+            cargo:     'PRESTADOR',
+            cadastro:  {
+              fullName: nome.trim(), phone: telefone.trim(),
+              cep: cep?.trim() || null, endereco: endereco?.trim() || null,
+              complemento: complemento?.trim() || null, bairro: bairro?.trim() || null,
+              cidade: cidade?.trim() || null, estado: estado?.trim() || null,
+            },
+          });
+        }
+
+        // Desmarcou: o login CONTINUA existindo (religar é só marcar de novo), mas
+        // `acesso_sistema = false` faz `podeAcessarSistema` recusar já no login.
+        // ⚠️ O `MembroEquipe` NÃO é apagado — o cascade levaria junto as permissões
+        // que o gestor configurou, e religar devolveria a pessoa sem nenhuma delas.
+        if (acessoSistema !== true && existe.userId) {
+          await revogarCartaoAcesso(tx, { userId: existe.userId, empresaId: existe.empresaId });
         }
       });
+
+      if (cartao) {
+        await aplicarPermissoes({ equipeId: cartao.equipeId, userId: cartao.userId, cargo: 'PRESTADOR', atualizadoPor: req.user.id });
+      }
 
       if (usuarioCriado) {
         emailService.enviarBoasVindasProprietario({
           destinatarioEmail: emailFinal,
           destinatarioNome:  nome.trim(),
           criadoPorNome:     req.user?.fullName || 'Equipe',
-          senhaInicial:      SENHA_INICIAL,
+          senhaInicial:      gerarSenhaInicial({ email, nome, telefone }),
         }).catch(err => console.error('[emailService] Falha ao enviar boas-vindas do prestador:', err));
       }
 

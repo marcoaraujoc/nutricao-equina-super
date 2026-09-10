@@ -20,12 +20,25 @@ import type { Bloco } from './types';
  * assinatura. Vem de `GET /documentos/contexto/:animalId` (`MarcaDocumento` em
  * ./api) e é `null` enquanto nenhum paciente foi escolhido.
  */
+/** Timbre do ESTABELECIMENTO — só existe quando a clínica é pessoa JURÍDICA. */
+export interface EmpresaFolha {
+  nome:              string;
+  cnpj:              string;
+  inscricaoEstadual: string;
+  crmv:              string;
+  endereco:          string;
+  telefone:          string;
+  email:             string;
+}
+
 export interface MarcaFolha {
   logoUrl:       string | null;
   empresaNome:   string;
   assinaturaUrl: string | null;
   crmv:          string;
   assinanteNome: string;
+  /** `null` na clínica pessoa física — ver `lib/documentoVariaveis.js`. */
+  empresa?:      EmpresaFolha | null;
 }
 
 /** Traduz as propriedades do bloco para CSS. */

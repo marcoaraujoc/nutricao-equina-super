@@ -5,6 +5,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
+const { OR_CARGO_PRESTADOR, membroEhPrestador } = require('../lib/cargosPrestador');
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
@@ -135,14 +136,17 @@ const EncaminhamentoController = {
 
       const normalizar = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
-      const [membros, servicosFornecedor] = await Promise.all([
+      const [membros, servicosFornecedor, servicosPrestador] = await Promise.all([
         equipeIds.length === 0
           ? Promise.resolve([])
           : prisma.membroEquipe.findMany({
               where: {
                 equipeId: { in: equipeIds },
                 OR: [
-                  { cargo: 'FORNECEDOR' },  { cargos: { has: 'FORNECEDOR' } },
+                  // FORNECEDOR **e** PRESTADOR — os dois cargos do prestador externo
+                  // (`lib/cargosPrestador.js`). Deixar PRESTADOR de fora aqui o faria
+                  // sumir do seletor de destino sem nenhum erro na tela.
+                  ...OR_CARGO_PRESTADOR,
                   { cargo: 'VETERINARIO' }, { cargos: { has: 'VETERINARIO' } },
                 ],
                 user: { ativo: true },
@@ -162,6 +166,16 @@ const EncaminhamentoController = {
           },
           select: { tipoServico: true },
         }),
+        // Mesmo levantamento no cadastro de PRESTADORES — o cargo novo (2026-09-09)
+        // guarda o tipo de serviço lá, e sem isto ele não apareceria no filtro.
+        prisma.prestador.findMany({
+          where: {
+            ativo: true,
+            tipoEntrada: 'CLIENTE',
+            empresaId: req.empresaId ?? null,
+          },
+          select: { tipoServico: true },
+        }),
       ]);
 
       const EXCLUIR_SERVICOS = new Set([
@@ -169,7 +183,7 @@ const EncaminhamentoController = {
       ]);
 
       const servicosSet = new Set();
-      for (const f of servicosFornecedor) {
+      for (const f of [...servicosFornecedor, ...servicosPrestador]) {
         if (!f.tipoServico) continue;
         for (const s of f.tipoServico.split(',')) {
           const nome = s.trim();
@@ -183,8 +197,13 @@ const EncaminhamentoController = {
 
       const userIds = [...new Set(membros.map(m => m.user.id))];
 
-      const [fornecedores, designacoes, userEspecs, fornecedorEspecs] = await Promise.all([
+      const [fornecedores, prestadores, designacoes, userEspecs, fornecedorEspecs] = await Promise.all([
         prisma.fornecedor.findMany({
+          where:  { userId: { in: userIds } },
+          select: { id: true, userId: true, tipoServico: true },
+        }),
+        // Cadastro do cargo PRESTADOR — o tipoServico dele mora em `tb_prestadores`.
+        prisma.prestador.findMany({
           where:  { userId: { in: userIds } },
           select: { id: true, userId: true, tipoServico: true },
         }),
@@ -218,7 +237,9 @@ const EncaminhamentoController = {
         }),
       ]);
 
-      const tipoPorUser  = new Map(fornecedores.map(f => [f.userId, f.tipoServico]));
+      // Um usuário tem no máximo UM dos dois cadastros (`userId` é @unique nas duas
+      // tabelas), então não há conflito de chave — o Map só reúne as duas origens.
+      const tipoPorUser  = new Map([...fornecedores, ...prestadores].map(f => [f.userId, f.tipoServico]));
       const designadoSet = new Set(designacoes.map(d => d.prestadorId));
       const especPorUser = new Map();
       const addEspec = (userId, nome) => {
@@ -245,10 +266,10 @@ const EncaminhamentoController = {
         for (const s of servicos) {
           if (!EXCLUIR_SERVICOS.has(normalizar(s))) servicosSet.add(s);
         }
-        // FORNECEDOR precisa de designação (escopo de acesso ao animal); VETERINARIO
+        // PRESTADOR (cargo FORNECEDOR ou PRESTADOR) precisa de designação (escopo de
+        // acesso ao animal); VETERINARIO
         // já tem acesso de equipe — encaminhar não altera acesso.
-        const precisaDesignacao =
-          m.cargo === 'FORNECEDOR' || (m.cargos ?? []).includes('FORNECEDOR');
+        const precisaDesignacao = membroEhPrestador(m);
         // Vet sem nenhuma especialidade não é "especialista" — não entra na lista
         // (fornecedor entra mesmo sem, para não regredir o comportamento anterior).
         if (!precisaDesignacao && servicos.length === 0) continue;
@@ -352,7 +373,7 @@ const EncaminhamentoController = {
             userId:   Number(prestadorId),
             equipeId: { in: equipeIds.length ? equipeIds : [-1] },
             OR: [
-              { cargo: 'FORNECEDOR' },  { cargos: { has: 'FORNECEDOR' } },
+              ...OR_CARGO_PRESTADOR,
               { cargo: 'VETERINARIO' }, { cargos: { has: 'VETERINARIO' } },
             ],
           },
@@ -361,10 +382,8 @@ const EncaminhamentoController = {
         if (memberships.length === 0) {
           return res.status(400).json({ error: 'Destinatário não é membro de uma equipe deste animal' });
         }
-        // Designação de acesso só para FORNECEDOR — vet já tem acesso de equipe.
-        const fornecedorMemberships = memberships.filter(
-          m => m.cargo === 'FORNECEDOR' || (m.cargos ?? []).includes('FORNECEDOR'),
-        );
+        // Designação de acesso só para o prestador externo — vet já tem acesso de equipe.
+        const fornecedorMemberships = memberships.filter(membroEhPrestador);
         if (fornecedorMemberships.length > 0) {
           // Preferir a equipe do animal quando o prestador pertence a ela
           equipeDesignacao =

@@ -90,6 +90,12 @@ interface CadastroEmpresaDados {
   documento:         string | null;
   tipoDocumento:     string | null;
   inscricaoEstadual: string | null;
+  crmv: string | null;
+  pixChave: string | null;
+  pixRecebedor: string | null;
+  banco: string | null;
+  agencia: string | null;
+  contaCorrente: string | null;
   emailContato:      string | null;
   telefone:          string | null;
   whatsapp:          string | null;
@@ -114,14 +120,16 @@ interface CadastroEmpresaDados {
  * conversão para `null` acontece na borda, ao salvar.
  */
 type Form = Record<
-  'nome' | 'razaoSocial' | 'nomeFantasia' | 'documento' | 'inscricaoEstadual' | 'emailContato' |
+  'nome' | 'razaoSocial' | 'nomeFantasia' | 'documento' | 'inscricaoEstadual' | 'crmv' | 'emailContato' |
+  'pixChave' | 'pixRecebedor' | 'banco' | 'agencia' | 'contaCorrente' |
   'telefone' | 'cep' | 'endereco' | 'numero' | 'complemento' | 'bairro' |
   'cidade' | 'estado',
   string
 >;
 
 const FORM_VAZIO: Form = {
-  nome: '', razaoSocial: '', nomeFantasia: '', documento: '', inscricaoEstadual: '',
+  nome: '', razaoSocial: '', nomeFantasia: '', documento: '', inscricaoEstadual: '', crmv: '',
+  pixChave: '', pixRecebedor: '', banco: '', agencia: '', contaCorrente: '',
   emailContato: '', telefone: '', cep: '', endereco: '',
   numero: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
@@ -285,6 +293,9 @@ export default function CadastroEmpresa() {
         nomeFantasia:      d.nomeFantasia      ?? '',
         documento:         d.documento ? mascaraDocumento(d.documento) : '',
         inscricaoEstadual: d.inscricaoEstadual ?? '',
+        crmv: d.crmv ?? '',
+        pixChave: d.pixChave ?? '', pixRecebedor: d.pixRecebedor ?? '',
+        banco: d.banco ?? '', agencia: d.agencia ?? '', contaCorrente: d.contaCorrente ?? '',
         emailContato:      d.emailContato      ?? '',
         telefone:          d.telefone ? mascaraTelefone(d.telefone) : '',
         cep:               d.cep ? mascaraCep(d.cep) : '',
@@ -574,6 +585,14 @@ export default function CadastroEmpresa() {
                     <Campo label="Inscrição Estadual" className="sm:col-span-2">
                       <input className={INPUT} disabled={!podeEditar} value={form.inscricaoEstadual} onChange={e => set('inscricaoEstadual', e.target.value)} />
                     </Campo>
+                    {/* Registro do ESTABELECIMENTO no CRMV — vai para o timbre de todo
+                        documento da Central (2026-09-08). Não é o CRMV de quem assina,
+                        que é do profissional e fica no Cadastro Pessoal dele.
+                        Opcional: em branco, a linha simplesmente não é impressa. */}
+                    <Campo label="Registro no CRMV" className="sm:col-span-2">
+                      <input className={INPUT} disabled={!podeEditar} value={form.crmv}
+                        onChange={e => set('crmv', e.target.value)} placeholder="CRMV-SP PJ 1234" />
+                    </Campo>
                   </div>
                 )}
 
@@ -685,6 +704,43 @@ export default function CadastroEmpresa() {
                     </p>
                   </div>
                 )}
+              </div>
+            </div>
+
+            {/* ── Dados de recebimento (a pedido, 2026-09-08) ─────────────────────
+                Impressos no rodapé da FATURA. Até aqui o cliente recebia o documento
+                e não tinha para onde pagar.
+                ⚠️ Todos OPCIONAIS: o que ficar em branco simplesmente não é impresso
+                (regra do campo vazio). Sem nenhum, a fatura não ganha faixa vazia. */}
+            <div className="pt-2 border-t border-gray-100">
+              <p className="text-sm font-semibold text-gray-600 mb-1">Dados para Recebimento</p>
+              <p className="text-xs text-gray-400 mb-4">Impressos na fatura enviada ao cliente.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-6 gap-4 sm:gap-6">
+                <Campo label="Chave PIX" className="sm:col-span-3">
+                  {/* ⚠️ Sem máscara: a chave pode ser CPF, CNPJ, e-mail, telefone ou
+                      aleatória — normalizar quebraria as duas últimas. */}
+                  <input className={INPUT} disabled={!podeEditar} value={form.pixChave}
+                    onChange={e => set('pixChave', e.target.value)}
+                    placeholder="CPF/CNPJ, e-mail, telefone ou chave aleatória" />
+                </Campo>
+                <Campo label="Recebedor do PIX" className="sm:col-span-3">
+                  {/* Separado da razão social de propósito: a conta pode estar no nome
+                      do sócio, e imprimir outro nome faria o cliente desconfiar. */}
+                  <input className={INPUT} disabled={!podeEditar} value={form.pixRecebedor}
+                    onChange={e => set('pixRecebedor', e.target.value)} placeholder="Nome do titular da conta" />
+                </Campo>
+                <Campo label="Banco" className="sm:col-span-2">
+                  <input className={INPUT} disabled={!podeEditar} value={form.banco}
+                    onChange={e => set('banco', e.target.value)} placeholder="Ex.: 341 - Itaú" />
+                </Campo>
+                <Campo label="Agência" className="sm:col-span-2">
+                  <input className={INPUT} disabled={!podeEditar} value={form.agencia}
+                    onChange={e => set('agencia', e.target.value)} placeholder="0000" />
+                </Campo>
+                <Campo label="Conta Corrente" className="sm:col-span-2">
+                  <input className={INPUT} disabled={!podeEditar} value={form.contaCorrente}
+                    onChange={e => set('contaCorrente', e.target.value)} placeholder="00000-0" />
+                </Campo>
               </div>
             </div>
 

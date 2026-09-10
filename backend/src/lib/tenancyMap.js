@@ -46,8 +46,11 @@ const CONTROL_PLANE = new Set([
 ]);
 
 const CATALOGO_GLOBAL = new Set([
-  'tb_especies', 'tb_racas', 'tb_alimentos', 'tb_nutrientes',
-  'tb_composicao_alimentos', 'tb_exigencias_nrc',
+  'tb_especies', 'tb_racas', 'tb_exigencias_nrc',
+  // ⚠️ `tb_alimentos` / `tb_nutrientes` / `tb_composicao_alimento` SAÍRAM daqui em
+  // 2026-09-09 (migration 20261004000000) — viraram CATÁLOGO MISTO. "Ninguém cria
+  // linha própria" deixou de valer quando a clínica passou a cadastrar (e excluir) o
+  // alimento, o nutriente e a composição dela. Ver CATALOGO_MISTO abaixo.
   // ⚠️ `tb_especialidades` SAIU daqui em 2026-08-28 — virou CATALOGO MISTO
   // (migration 20260920000000). "Ninguém cria linha própria" deixou de valer quando o
   // encaminhamento para profissional EXTERNO passou a cadastrar a especialidade que
@@ -85,9 +88,6 @@ const CATALOGO_GLOBAL = new Set([
   // CATÁLOGO MISTO (`empresa_id` NULÁVEL, null = o padrão), como `tb_medicamentos`.
   // Nunca a tenant puro — o padrão do MAPA tem de continuar visível para todos.
   'tb_exame_grupos', 'tb_exame_itens', 'tb_imagem_exame_grupos', 'tb_imagem_exame_itens',
-
-  // D8 confirmada: referência técnica (composição nutricional por espécie, base NRC)
-  'tb_composicao_alimento',
 
   // Catálogo comercial do SaaS: os planos são da PLATAFORMA, não de uma clínica.
   // Toda empresa precisa lê-los para saber o próprio limite (`tb_assinaturas_empresa`
@@ -206,6 +206,15 @@ const CATALOGO_MISTO = new Map([
   // (lib/catalogoManual.js#garantirEspecialidadeDaEmpresa). Sem predicado: especialidade
   // global é só nome + espécie, não há coluna que distinga a semeada de uma órfã.
   ['tb_especialidades',      null],
+  // Catálogo nutricional (2026-09-09). O nulo aqui é o catálogo do sistema — os
+  // alimentos, nutrientes e composições do seed, que toda clínica lê para montar dieta
+  // e rodar a análise NRC. Linha com `empresa_id` é a que a clínica cadastrou nas telas
+  // de Alimentos / Nutrientes / Composição Alimentar, e que só ela vê, edita e exclui.
+  // Sem predicado: alimento global é só nome + categoria, não há coluna que distinga o
+  // semeado de uma órfã.
+  ['tb_alimentos',           null],
+  ['tb_nutrientes',          null],
+  ['tb_composicao_alimento', null],
 ]);
 
 /**

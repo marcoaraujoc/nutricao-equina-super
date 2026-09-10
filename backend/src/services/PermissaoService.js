@@ -24,7 +24,11 @@ const USER_TYPES_GERENCIADOS = ['GESTOR', 'VETERINARIO', 'ESTAGIARIO', 'PROPRIET
 const PERFIS_PADRAO = [
   { slug: 'GESTOR',        label: 'Gestor',        descricao: 'Acesso total irrestrito. Bypass de todas as permissões do sistema.' },
   { slug: 'VETERINARIO',  label: 'Veterinário',   descricao: 'Acesso clínico completo: prontuários, exames, prescrições e nutrição.' },
-  { slug: 'FORNECEDOR',   label: 'Fornecedor',    descricao: 'Fornecedor de serviços. Acesso configurável pelo gestor da equipe.' },
+  { slug: 'FORNECEDOR',   label: 'Fornecedor',    descricao: 'Fornecedor de produtos/serviços com login. Acesso configurável pelo gestor da equipe.' },
+  // Cargo NOVO (2026-09-09), irmão do FORNECEDOR: mesmo comportamento de prestador
+  // externo (escopo por designação, agenda própria, permissão por membro), cadastro
+  // em `tb_prestadores`. Nada foi migrado — quem já era FORNECEDOR continua sendo.
+  { slug: 'PRESTADOR',    label: 'Prestador',     descricao: 'Prestador de serviços externo (ferrador, fisioterapeuta…). Acesso configurável pelo gestor da equipe.' },
   { slug: 'ESTAGIARIO',   label: 'Estagiário',    descricao: 'Acesso de leitura por padrão. Permissões elevadas pelo gestor conforme necessário.' },
   { slug: 'PROPRIETARIO', label: 'Proprietário',  descricao: 'Proprietário de animais. Acesso de leitura configurável pelo gestor.' },
   { slug: 'SECRETARIA',   label: 'Secretaria',    descricao: 'Recepção e administrativo: agendamentos, cadastros e financeiro básico.' },

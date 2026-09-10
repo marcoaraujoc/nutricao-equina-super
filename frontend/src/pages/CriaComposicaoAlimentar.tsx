@@ -5,6 +5,8 @@ import toast from 'react-hot-toast';
 import axios from 'axios';
 import { ArrowLeft, Upload, FileText, AlertCircle, Edit, Trash2, Check, X, Pencil } from 'lucide-react';
 import BotaoVoltar from '../components/BotaoVoltar';
+import PageContainer from '../components/PageContainer';
+import { useEspeciesDaEmpresa } from '../hooks/useEspeciesDaEmpresa';
 
 // =====================================================================
 // CONSTANTES
@@ -12,13 +14,14 @@ import BotaoVoltar from '../components/BotaoVoltar';
 
 const UNIDADES_PADRAO = ['g', 'mg', 'mcg', 'ui', 'kcal', 'UFC', '%'];
 
+// ⚠️ "Importado" saiu da lista (2026-09-09, a pedido). Alimento JÁ cadastrado com
+// essa categoria não é tocado — o que mudou é o que a tela OFERECE daqui em diante.
 const CATEGORIAS_ALIMENTO = [
   'Concentrado',
   'Volumoso',
   'Suplemento',
   'Minerais',
   'Vitaminas',
-  'Importado',
 ];
 
 const FORM_MANUAL_INICIAL = {
@@ -31,11 +34,6 @@ const FORM_MANUAL_INICIAL = {
 // =====================================================================
 // INTERFACES
 // =====================================================================
-
-interface Especie {
-  id: number;
-  nome: string;
-}
 
 interface Nutriente {
   id: number;
@@ -87,12 +85,16 @@ const CriaComposicaoAlimentar = () => {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [especies, setEspecies] = useState<Especie[]>([]);
+  // Espécies oferecidas = permitidas (Equino/Bovino) ∩ atendidas pela empresa.
+  // Sobrando UMA, o campo não é exibido: ela é aplicada sozinha (ver o efeito abaixo).
+  const { especies, unica: especieUnica } = useEspeciesDaEmpresa();
+  const escolheEspecie = especies.length > 1;
+
   const [nutrientes, setNutrientes] = useState<Nutriente[]>([]);
 
   // ── Campos globais ──────────────────────────────────────────────────
   const [nomeAlimento, setNomeAlimento] = useState('');
-  const [categoriaAlimento, setCategoriaAlimento] = useState('Importado');
+  const [categoriaAlimento, setCategoriaAlimento] = useState('Concentrado');
   const [especieId, setEspecieId] = useState('');
   const [erroAlimento, setErroAlimento] = useState('');
   const [erroCategoria, setErroCategoria] = useState('');
@@ -142,18 +144,20 @@ const CriaComposicaoAlimentar = () => {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [nutRes, espRes] = await Promise.all([
-          api.get('/nutrientes'),
-          api.get('/especies'),
-        ]);
+        const nutRes = await api.get('/nutrientes');
         setNutrientes(nutRes.data?.dados ?? nutRes.data ?? []);
-        setEspecies(espRes.data?.dados ?? espRes.data ?? []);
       } catch (err) {
         console.error('Erro ao carregar dados auxiliares:', err);
       }
     };
     loadData();
   }, []);
+
+  // Espécie única ⇒ aplicada sozinha, e o campo não é exibido. Sem isso a validação
+  // barraria o salvar por um campo que a tela nem mostra.
+  useEffect(() => {
+    if (especieUnica) { setEspecieId(String(especieUnica.id)); setErroEspecie(''); }
+  }, [especieUnica]);
 
   // =====================================================================
   // UNIDADES DISPONÍVEIS BASEADAS NO NUTRIENTE DIGITADO
@@ -185,7 +189,10 @@ const CriaComposicaoAlimentar = () => {
       setErroCategoria('Selecione a categoria do alimento');
       valido = false;
     }
-    if (!especieId) {
+    // Só cobra a espécie quando o campo está na tela. Com uma só, ela já foi
+    // aplicada; sem nenhuma resolvida (falha ao ler o catálogo), exigir travaria o
+    // cadastro num campo invisível.
+    if (!especieId && escolheEspecie) {
       setErroEspecie('Selecione a espécie do alimento');
       valido = false;
     }
@@ -478,10 +485,12 @@ const CriaComposicaoAlimentar = () => {
   // CLASSES REUTILIZÁVEIS (padrão CriaDieta)
   // =====================================================================
 
+  // Mesmas medidas dos demais cadastros (ver Medicamentos.tsx): rounded-xl, py-2.5,
+  // text-sm. A tela usava px-4 py-3 rounded-2xl e destoava do resto da aplicação.
   const selectClass =
-    'w-full border border-gray-300 rounded-2xl px-4 py-3 focus:outline-none focus:border-emerald-600 bg-white text-gray-900 text-sm';
+    'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600';
   const inputClass =
-    'w-full border border-gray-300 rounded-2xl px-4 py-3 focus:outline-none focus:border-emerald-600 text-gray-900 text-sm';
+    'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-600';
 
   const showPreview = resultadoIA && !showConfirmModal;
   const showActionCards = !showPreview && !showManualForm;
@@ -519,18 +528,18 @@ const CriaComposicaoAlimentar = () => {
   // =====================================================================
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-3xl mx-auto space-y-4">
+    <PageContainer maxWidth="3xl">
+      <div className="space-y-4">
 
         {/* ── Card de dados globais — oculto no fluxo manual ── */}
         {!showManualForm && (
-          <div className="bg-white shadow-2xl rounded-3xl p-6 border border-gray-100">
+          <div className="bg-white rounded-2xl p-5 border border-gray-100">
 
-            <div className="flex items-center gap-3 mb-5">
+            <div className="flex items-center gap-3 mb-4">
               <BotaoVoltar />
             </div>
 
-            <h1 className="text-xl font-bold text-gray-900 mb-5 text-center">
+            <h1 className="text-2xl font-bold text-gray-900 mb-5">
               Nova Composição Alimentar
             </h1>
 
@@ -586,27 +595,29 @@ const CriaComposicaoAlimentar = () => {
                   )}
                 </div>
 
-                <div className="flex-1">
-                  <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                    Espécie <span className="text-red-400">*</span>
-                  </label>
-                  <select
-                    value={especieId}
-                    onChange={(e) => { setEspecieId(e.target.value); setErroEspecie(''); }}
-                    className={`${selectClass} ${erroEspecie ? 'border-red-400 bg-red-50' : ''}`}
-                  >
-                    <option value="">Selecione...</option>
-                    {especies.map((e) => (
-                      <option key={e.id} value={e.id}>{e.nome}</option>
-                    ))}
-                  </select>
-                  {erroEspecie && (
-                    <div className="flex items-start gap-2 mt-1.5 text-red-600 text-xs">
-                      <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
-                      <span>{erroEspecie}</span>
-                    </div>
-                  )}
-                </div>
+                {escolheEspecie && (
+                  <div className="flex-1">
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                      Espécie <span className="text-red-400">*</span>
+                    </label>
+                    <select
+                      value={especieId}
+                      onChange={(e) => { setEspecieId(e.target.value); setErroEspecie(''); }}
+                      className={`${selectClass} ${erroEspecie ? 'border-red-400 bg-red-50' : ''}`}
+                    >
+                      <option value="">Selecione...</option>
+                      {especies.map((e) => (
+                        <option key={e.id} value={e.id}>{e.nome}</option>
+                      ))}
+                    </select>
+                    {erroEspecie && (
+                      <div className="flex items-start gap-2 mt-1.5 text-red-600 text-xs">
+                        <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
+                        <span>{erroEspecie}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
             </div>
@@ -641,7 +652,7 @@ const CriaComposicaoAlimentar = () => {
           <div className="grid grid-cols-2 gap-4">
 
             {/* Upload */}
-            <div className="bg-white rounded-3xl shadow p-6 text-center hover:shadow-md transition flex flex-col items-center border border-gray-100">
+            <div className="bg-white rounded-2xl p-5 text-center hover:shadow-sm transition flex flex-col items-center border border-gray-100">
               <Upload className="mb-3 text-emerald-600" size={32} />
               <p className="font-medium text-gray-900">Enviar Rótulo</p>
               <p className="text-xs text-gray-500 mt-1">PDF ou foto do rótulo</p>
@@ -655,14 +666,14 @@ const CriaComposicaoAlimentar = () => {
               />
               <button
                 onClick={handleUploadClick}
-                className="mt-6 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium py-3 px-8 rounded-3xl w-full transition-colors"
+                className="mt-5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold py-2.5 px-4 rounded-2xl w-full transition-colors"
               >
                 Escolher Arquivo
               </button>
             </div>
 
             {/* Manual */}
-            <div className="bg-white rounded-3xl shadow p-6 text-center hover:shadow-md transition flex flex-col items-center border border-gray-100">
+            <div className="bg-white rounded-2xl p-5 text-center hover:shadow-sm transition flex flex-col items-center border border-gray-100">
               <FileText className="mb-3 text-emerald-600" size={32} />
               <p className="font-medium text-gray-900">Preencher Manualmente</p>
               <p className="text-xs text-gray-500 mt-1">Digite os nutrientes um a um</p>
@@ -671,7 +682,7 @@ const CriaComposicaoAlimentar = () => {
                   if (!validarCamposGlobais()) return;
                   setShowManualForm(true);
                 }}
-                className="mt-6 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium py-3 px-8 rounded-3xl w-full transition-colors"
+                className="mt-5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold py-2.5 px-4 rounded-2xl w-full transition-colors"
               >
                 Iniciar Preenchimento
               </button>
@@ -685,16 +696,16 @@ const CriaComposicaoAlimentar = () => {
         ============================================================ */}
         {showManualForm && (
           <>
-            <div className="bg-white shadow-2xl rounded-3xl p-6 border border-gray-100">
+            <div className="bg-white rounded-2xl p-5 border border-gray-100">
 
               {/* Header com voltar e info do alimento */}
               <div className="flex items-center gap-3 mb-2">
                 <button
                   onClick={cancelarManual}
-                  className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-medium"
+                  className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 text-sm font-medium"
                 >
-                  <ArrowLeft size={22} />
-                  <span className="text-base">Voltar</span>
+                  <ArrowLeft size={18} />
+                  <span>Voltar</span>
                 </button>
               </div>
 
@@ -819,7 +830,7 @@ const CriaComposicaoAlimentar = () => {
                     type="button"
                     onClick={handleAdicionarNutriente}
                     disabled={salvando}
-                    className="flex-1 border-2 border-emerald-700 text-emerald-700 hover:bg-emerald-50 py-3 rounded-2xl font-semibold text-sm transition-colors disabled:opacity-50"
+                    className="flex-1 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 py-2.5 rounded-2xl font-semibold text-sm transition-colors disabled:opacity-50"
                   >
                     + Adicionar outro nutriente
                   </button>
@@ -827,7 +838,7 @@ const CriaComposicaoAlimentar = () => {
                     type="button"
                     onClick={salvarManual}
                     disabled={salvando}
-                    className="flex-1 bg-emerald-700 hover:bg-emerald-800 text-white py-3 rounded-2xl font-semibold text-sm transition-colors disabled:opacity-50"
+                    className="flex-1 bg-emerald-700 hover:bg-emerald-800 text-white py-2.5 rounded-2xl font-semibold text-sm transition-colors disabled:opacity-50"
                   >
                     {salvando
                       ? 'Salvando...'
@@ -965,12 +976,12 @@ const CriaComposicaoAlimentar = () => {
             PREVIEW IA EDITÁVEL
         ============================================================ */}
         {showPreview && (
-          <div className="bg-white rounded-3xl shadow overflow-hidden border border-gray-100">
+          <div className="bg-white rounded-2xl overflow-hidden border border-gray-100">
 
-            <div className="px-6 py-4 border-b bg-gray-50 flex justify-between items-center">
+            <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex justify-between items-center gap-3 flex-wrap">
               <div>
-                <h2 className="font-semibold text-gray-900">Preview — edite antes de salvar</h2>
-                <p className="text-sm text-gray-500 mt-0.5">
+                <h2 className="text-sm font-semibold text-gray-900">Preview — edite antes de salvar</h2>
+                <p className="text-xs text-gray-500 mt-0.5">
                   <span className="font-medium text-gray-700">{nomeAlimento}</span>
                   <span className="mx-1">·</span>
                   <span className="text-emerald-700">{categoriaAlimento}</span>
@@ -982,20 +993,20 @@ const CriaComposicaoAlimentar = () => {
                   )}
                 </p>
               </div>
-              <span className="text-sm text-emerald-700 font-medium">
+              <span className="text-xs text-emerald-700 font-medium">
                 {composicoesEditaveis.length} nutrientes
               </span>
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full">
+              <table className="w-full text-sm">
                 <thead className="bg-gray-50">
-                  <tr>
-                    <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">Nutriente</th>
-                    <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">Valor</th>
-                    <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">Unidade</th>
-                    <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">Base</th>
-                    <th className="text-right px-4 py-3 text-sm font-medium text-gray-500">Ações</th>
+                  <tr className="border-b border-gray-100">
+                    <th className="text-left  px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Nutriente</th>
+                    <th className="text-left  px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Valor</th>
+                    <th className="text-left  px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Unidade</th>
+                    <th className="text-left  px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Base</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1135,29 +1146,29 @@ const CriaComposicaoAlimentar = () => {
             </div>
 
             {erroAlimento && (
-              <div className="mx-6 my-3 flex items-start gap-2 bg-red-50 border border-red-100 rounded-2xl px-4 py-3 text-red-700 text-sm">
+              <div className="mx-4 my-3 flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-3 py-2.5 text-red-700 text-sm">
                 <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
                 <span>{erroAlimento}</span>
               </div>
             )}
 
-            <div className="p-6 border-t flex gap-3">
+            <div className="p-4 border-t border-gray-100 flex justify-end gap-3">
               <button
                 onClick={() => setShowConfirmModal(true)}
-                className="py-4 px-6 border border-gray-300 rounded-3xl text-gray-700 font-medium hover:bg-gray-50"
+                className="px-5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50"
               >
                 Editar nome
               </button>
               <button
                 onClick={limparIA}
-                className="py-4 px-6 border border-gray-300 rounded-3xl text-gray-700 font-medium hover:bg-gray-50"
+                className="px-5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50"
               >
                 Cancelar
               </button>
               <button
                 onClick={salvarResultadoIA}
                 disabled={salvando || composicoesEditaveis.length === 0}
-                className="flex-1 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white py-4 rounded-3xl font-semibold transition-colors"
+                className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white text-sm font-semibold rounded-xl transition-colors"
               >
                 {salvando
                   ? 'Salvando...'
@@ -1173,11 +1184,11 @@ const CriaComposicaoAlimentar = () => {
         ============================================================ */}
         {showConfirmModal && resultadoIA && (
           <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl">
+            <div className="bg-white rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl">
 
-              <div className="bg-emerald-700 text-white p-6 text-center">
-                <h2 className="text-2xl font-bold">Confirmar Alimento</h2>
-                <p className="text-emerald-100 mt-1 text-sm">
+              <div className="px-5 py-4 border-b border-gray-100">
+                <h2 className="text-lg font-bold text-gray-900">Confirmar Alimento</h2>
+                <p className="text-sm text-gray-500 mt-0.5">
                   {resultadoIA.composicoes.length} nutrientes detectados
                   {resultadoIA.baseCalculo === '100g' && (
                     <span className="ml-1">· valores convertidos de 100g → kg</span>
@@ -1185,10 +1196,10 @@ const CriaComposicaoAlimentar = () => {
                 </p>
               </div>
 
-              <div className="p-6 space-y-4">
+              <div className="p-5 space-y-4">
 
                 {resultadoIA.nomeAlimento && resultadoIA.nomeAlimento !== nomeAlimento && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-2xl px-4 py-3 text-sm text-blue-800">
+                  <div className="bg-blue-50 border border-blue-200 rounded-xl px-3 py-2.5 text-sm text-blue-800">
                     Foi identificado no rótulo o nome: <strong>{resultadoIA.nomeAlimento}</strong>
                   </div>
                 )}
@@ -1225,27 +1236,29 @@ const CriaComposicaoAlimentar = () => {
                       ))}
                     </select>
                   </div>
-                  <div className="flex-1">
-                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Espécie</label>
-                    <select
-                      value={especieId}
-                      onChange={(e) => setEspecieId(e.target.value)}
-                      className={selectClass}
-                    >
-                      <option value="">Selecione...</option>
-                      {especies.map((e) => (
-                        <option key={e.id} value={e.id}>{e.nome}</option>
-                      ))}
-                    </select>
-                  </div>
+                  {escolheEspecie && (
+                    <div className="flex-1">
+                      <label className="block text-xs font-medium text-gray-600 mb-1.5">Espécie</label>
+                      <select
+                        value={especieId}
+                        onChange={(e) => setEspecieId(e.target.value)}
+                        className={selectClass}
+                      >
+                        <option value="">Selecione...</option>
+                        {especies.map((e) => (
+                          <option key={e.id} value={e.id}>{e.nome}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
 
               </div>
 
-              <div className="p-6 border-t flex gap-3">
+              <div className="p-4 border-t border-gray-100 flex justify-end gap-3">
                 <button
                   onClick={() => { setShowConfirmModal(false); limparIA(); }}
-                  className="flex-1 py-4 border border-gray-300 rounded-3xl text-gray-700 font-medium hover:bg-gray-50"
+                  className="px-5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50"
                 >
                   Cancelar
                 </button>
@@ -1258,7 +1271,7 @@ const CriaComposicaoAlimentar = () => {
                     setErroAlimento('');
                     setShowConfirmModal(false);
                   }}
-                  className="flex-1 py-4 bg-emerald-700 hover:bg-emerald-800 text-white font-medium rounded-3xl"
+                  className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-xl transition-colors"
                 >
                   Ver preview e salvar
                 </button>
@@ -1269,7 +1282,7 @@ const CriaComposicaoAlimentar = () => {
         )}
 
       </div>
-    </div>
+    </PageContainer>
   );
 };
 

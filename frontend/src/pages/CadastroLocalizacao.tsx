@@ -6,9 +6,10 @@ import toast from 'react-hot-toast';
 import {
   Search, Loader2, X, MapPin, Pencil,
   Phone, User, ToggleLeft, ToggleRight,
-  ChevronDown, Info,
+  Info,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import TipoServicoSelect from '../components/TipoServicoSelect';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
@@ -37,10 +38,16 @@ function mascaraTelefone(v: string): string {
   return n.replace(/(\d{2})(\d{5})(\d{0,4})/, '($1) $2-$3');
 }
 
+// ⚠️ CANIL, GATIL, PETSHOP e PROPRIETARIO saíram da lista oferecida (a pedido,
+// 2026-09-08). O backend continua ACEITANDO os quatro (`TIPOS_LEGADOS`): localização
+// já cadastrada com um deles não pode virar inválida — ela seguiria no banco e passaria
+// a recusar qualquer edição, inclusive corrigir o nome.
+// ⚠️ Este array é só o PONTO DE PARTIDA do combobox: o que a clínica criar entra pelo
+// catálogo tenant-scoped (categoria LOCALIZACAO), como já acontece no Prestador.
 const TIPOS_LOCALIZACAO = [
-  'CANIL', 'CENTRO_REPRODUCAO', 'CENTRO_TREINAMENTO', 'CLINICA',
-  'CLUBE', 'CLUBE_HIPICO', 'CRIADOR', 'FAZENDA', 'GATIL', 'HARAS',
-  'HOSPITAL', 'HOTEL_ANIMAL', 'ONG', 'OUTRO', 'PETSHOP', 'PROPRIETARIO',
+  'CENTRO_REPRODUCAO', 'CENTRO_TREINAMENTO', 'CLINICA',
+  'CLUBE', 'CLUBE_HIPICO', 'CRIADOR', 'FAZENDA', 'HARAS',
+  'HOSPITAL', 'HOTEL_ANIMAL', 'ONG', 'OUTRO',
 ];
 
 const formatarTipo = (tipo: string) =>
@@ -463,12 +470,11 @@ export default function CadastroLocalizacao() {
             {/* Body */}
             <div className="overflow-y-auto flex-1 px-6 py-4 space-y-4">
 
-              {/* Banner informativo para não-ADMIN */}
-              {!isAdmin && !editando && (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-800">
-                  Esta localização será cadastrada como <strong>CLIENTE</strong>, vinculada à sua empresa/equipe ativa.
-                </div>
-              )}
+              {/* ⚠️ O banner "será cadastrada como CLIENTE, vinculada à sua
+                  empresa/equipe ativa" SAIU a pedido (2026-09-08): descrevia um detalhe
+                  interno de tenancy que quem cadastra um haras não precisa decidir nem
+                  conferir. O comportamento não mudou — o `tipoEntrada` continua sendo
+                  resolvido no submit. */}
 
               {/* Nome */}
               <div>
@@ -488,19 +494,20 @@ export default function CadastroLocalizacao() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Tipo de Localização <span className="text-red-500">*</span>
                 </label>
-                <div className="relative">
-                  <select
-                    value={form.tipoLocalizacao}
-                    onChange={e => setForm(f => ({ ...f, tipoLocalizacao: e.target.value }))}
-                    className="w-full px-3 py-2.5 border border-gray-200 rounded-2xl text-sm appearance-none bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400 pr-8"
-                  >
-                    <option value="">Selecione…</option>
-                    {TIPOS_LOCALIZACAO.map(t => (
-                      <option key={t} value={t}>{formatarTipo(t)}</option>
-                    ))}
-                  </select>
-                  <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                </div>
+                {/* Combobox CRIÁVEL, com busca por digitação (a pedido, 2026-09-08) —
+                    o MESMO componente do Tipo de Serviço do Prestador. O que a clínica
+                    digitar e criar vai para `tb_catalogo_tipo_servico` na categoria
+                    LOCALIZACAO: por EMPRESA, sob a mesma policy de RLS, sem tabela nova.
+                    ⚠️ Reusar em vez de escrever outro é o que garante que "criar tipo"
+                    se comporte igual nos dois cadastros. */}
+                <TipoServicoSelect
+                  categoria="LOCALIZACAO"
+                  value={form.tipoLocalizacao}
+                  onChange={(tipoLocalizacao: string) => setForm(f => ({ ...f, tipoLocalizacao }))}
+                  defaults={TIPOS_LOCALIZACAO}
+                  placeholder="Digite para buscar ou criar…"
+                  className="w-full px-3 py-2.5 border border-gray-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                />
               </div>
 
               {/* CNPJ */}

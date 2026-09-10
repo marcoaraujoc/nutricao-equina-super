@@ -11,6 +11,7 @@
 // um vínculo entre partes (decisão D1).
 
 const prisma = require('./prisma').default;
+const { ehCargoPrestador } = require('./cargosPrestador');
 const { getEquipeScopeDoUsuario } = require('./vetUtils');
 
 // Fallback: tipo GLOBAL do login. Só entra quando o request não traz o tipo do
@@ -56,10 +57,45 @@ async function localizacoesRestritasDeHoje(userId, equipeId) {
   });
   if (!membro?.restringirPorLocal) return null;
 
+  return doDiaDeHoje(membro.locaisTrabalho);
+}
+
+/** Locais cujo `diasTrabalho` inclui o dia da semana de hoje. */
+function doDiaDeHoje(locais) {
   const hoje = String(diaDaSemanaLocal());
-  return membro.locaisTrabalho
+  return (locais ?? [])
     .filter(l => (l.diasTrabalho ?? '').split(',').map(d => d.trim()).includes(hoje))
     .map(l => l.localizacaoId);
+}
+
+/**
+ * Mesma regra, para o PRESTADOR — que não tem `MembroEquipe` (o cadastro dele não
+ * cria um; ver `PrestadorController#provisionarLogin`), e por isso guarda o flag em
+ * `tb_prestadores.restringir_por_local`.
+ *
+ * ⚠️ Ela ESTREITA o que a DESIGNAÇÃO já liberou, nunca amplia: o prestador continua
+ * vendo só o que o gestor lhe designou (deny-by-default do `DesignacaoPrestador`), e
+ * com o flag ligado, dentro disso, só o que está hoje num local de trabalho dele.
+ * Inverter essa ordem daria acesso a paciente que ninguém designou.
+ *
+ * ⚠️ Lido por SQL cru (§11): a coluna é nova (`20260929000000`) e o client pode não
+ * estar regenerado — pelo `select` tipado, a LISTA DE PACIENTES do prestador quebraria
+ * inteira numa base ainda não migrada. Sem a coluna, devolve `null` = sem restrição,
+ * que é o comportamento anterior.
+ */
+async function localizacoesRestritasDoPrestador(userId) {
+  if (!userId) return null;
+  const linhas = await prisma.$queryRaw`
+    SELECT p."restringir_por_local" AS restringir,
+           l."localizacao_id"       AS "localizacaoId",
+           l."dias_trabalho"        AS "diasTrabalho"
+      FROM "schs2vet"."tb_prestadores" p
+      LEFT JOIN "schs2vet"."tb_prestador_locais_trabalho" l ON l."prestador_id" = p."id"
+     WHERE p."user_id" = ${Number(userId)} AND p."ativo" = true
+  `.catch(() => []);
+
+  if (!linhas.length || !linhas[0].restringir) return null;
+  return doDiaDeHoje(linhas.filter(l => l.localizacaoId != null));
 }
 
 /**
@@ -91,14 +127,16 @@ async function buildAnimalScopeWhere(req) {
   const isProprietarioMulticargo = userType === 'PROPRIETARIO'
     && req.membroCargo && CARGOS_EQUIPE.includes(req.membroCargo);
   const isFornecedorGestorContexto = userType === 'FORNECEDOR' && req.membroCargo === 'GESTOR';
-  const isVetPrestadorContexto = userType === 'VETERINARIO' && req.membroCargo === 'FORNECEDOR';
+  // Cargo FORNECEDOR **ou** PRESTADOR — os dois são o prestador externo; ver
+  // `lib/cargosPrestador.js` (o segundo nasceu em 2026-09-09 e nada foi migrado).
+  const isVetPrestadorContexto = userType === 'VETERINARIO' && ehCargoPrestador(req.membroCargo);
   const isDonoOuGestorContexto = req.membroCargo === 'GESTOR';
 
   const designacaoContextoFiltro = req.equipeId
     ? { equipeId: Number(req.equipeId) }
     : (req.empresaId ? { equipe: { empresaId: Number(req.empresaId) } } : {});
 
-  const designacoesWhere = { designacoes: { some: {
+  const designacoesBase = { designacoes: { some: {
     prestadorId: Number(userId),
     ativo:       true,
     OR: [{ dataFim: null }, { dataFim: { gte: new Date() } }],
@@ -125,9 +163,21 @@ async function buildAnimalScopeWhere(req) {
   const restricaoLocalIds = isMembroEquipe
     ? await localizacoesRestritasDeHoje(userId, req.equipeId)
     : null;
+  // O PRESTADOR tem o flag no cadastro dele, não em MembroEquipe — ver a função.
+  const restricaoPrestador = userType === 'FORNECEDOR' && !isFornecedorGestorContexto
+    ? await localizacoesRestritasDoPrestador(userId)
+    : null;
   const scopeOREfetivo = restricaoLocalIds
     ? scopeOR.map(clausula => ({ ...clausula, localizacaoId: { in: restricaoLocalIds } }))
     : scopeOR;
+
+  // ⚠️ A restrição por local do prestador ESTREITA a designação (AND), nunca a
+  // substitui: trocar um pelo outro daria acesso a paciente que ninguém designou.
+  // `[]` (marcou a opção e hoje não trabalha em lugar nenhum) resulta em lista vazia
+  // — que é a resposta correta, não um bug.
+  const designacoesWhere = restricaoPrestador
+    ? { AND: [designacoesBase, { localizacaoId: { in: restricaoPrestador } }] }
+    : designacoesBase;
 
   // ⚠️ REGRA BASE × CONVIDADO REMOVIDA (fase 3 do multi-tenancy).
   //

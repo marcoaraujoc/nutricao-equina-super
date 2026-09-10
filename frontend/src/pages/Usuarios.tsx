@@ -461,8 +461,8 @@ const Usuarios = () => {
           Tela ADMIN-only (as rotas /users/:id exigem authorize('ADMIN')).
           ⚠️ SEM campo de senha (2026-08-04): senha é da PESSOA, e nem o ADMIN a
           troca por ela pela tela. Os caminhos que restam são os do próprio dono —
-          "esqueci minha senha" e a troca em Cadastro Pessoal — e a padrão
-          `Inicial_001` + troca obrigatória no primeiro acesso, para conta nova.
+          "esqueci minha senha" e a troca em Cadastro Pessoal — e a senha inicial
+          gerada pelo sistema (só por e-mail) + troca obrigatória, para conta nova.
           Não reintroduzir `permitirSenha` aqui. */}
       {modalAberto && (
         <UsuarioFormModal

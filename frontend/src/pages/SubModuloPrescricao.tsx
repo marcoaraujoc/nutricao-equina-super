@@ -78,6 +78,10 @@ interface ItemGrupo {
   medicamentoCliente: boolean;
   /** Aplicado pelo PROPRIETÁRIO em casa: fora do plantão, da fatura e do estoque. */
   aplicadaPeloProprietario?: boolean;
+  /** PRESTADOR que executa este PROCEDIMENTO — define o preço ao cliente e gera a
+   *  linha do recibo de pagamento dele quando o item é executado. */
+  prestadorId?:      number | null;
+  prestadorNome?:    string | null;
   executadoEm:       string | null;
   medicamentoCat?:   { controlado: boolean } | null;
 }
@@ -130,6 +134,9 @@ interface FormItem {
   valorOrcado?:       number | null;
   /** Especialidade do procedimento (vem do orçamento). Só front — removida do payload. */
   especialidade?:     string | null;
+  /** PRESTADOR que vai executar ESTE procedimento (2026-09-08). Só faz sentido em
+   *  PROCEDIMENTO — o backend ignora o campo em MEDICAMENTO. */
+  prestadorId?:       number | null;
 }
 
 /**
@@ -304,6 +311,7 @@ const FORM_VAZIO = (): FormItem => ({
   dosagem: '', unidade: '', via: '', frequencia: '',
   horaInicio: '', duracaoDias: '', dataInicio: hojeLocalStr(),
   observacao: '', medicamentoCliente: false, aplicadaPeloProprietario: false,
+  prestadorId: null,
 });
 
 const labelPosologia = (v: string) => POSOLOGIAS.find(p => p.value === v)?.label ?? POSOLOGIA_LABEL_LEGADO[v] ?? v;
@@ -679,6 +687,21 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const [showMedDropdown,  setShowMedDropdown]  = useState(false);
   const [procedimentos,    setProcedimentos]    = useState<{ id: number; nome: string; especialidade: string | null; valor: number | null; combo?: boolean }[]>([]);
   const [combosProc,       setCombosProc]       = useState<{ id: number; nome: string; valor: number | null; especialidade: string | null }[]>([]);
+  /**
+   * PRESTADORES do procedimento escolhido (2026-09-08).
+   *
+   * `vinculados` são os que TÊM valor cadastrado para aquele procedimento (Cadastro ›
+   * Procedimentos); `todos` é a lista completa de prestadores ativos da empresa.
+   *
+   * ⚠️ Os dois vêm juntos de propósito. O vínculo é configuração do GESTOR e pode não
+   * existir ainda; travar a prescrição por causa disso pararia o atendimento. Quem não
+   * tem vínculo aparece marcado "sem valor cadastrado" — quem decide é quem está
+   * atendendo, e o aviso é o que evita o procedimento sair na fatura por R$ 0,00.
+   */
+  const [prestProc, setPrestProc] = useState<{
+    vinculados: { prestadorId: number; prestadorNome: string; valorCliente: number | null; valorPrestador: number | null }[];
+    todos:      { id: number; nome: string; tipoServico: string | null }[];
+  }>({ vinculados: [], todos: [] });
   const [showProcDropdown, setShowProcDropdown] = useState(false);
   const [procEspecialidade, setProcEspecialidade] = useState('');
   const [loadingMeds,      setLoadingMeds]      = useState(false);
@@ -881,6 +904,66 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
 
   // Cancela busca paralela ao desmontar
   useEffect(() => () => { searchAbortRef.current?.abort(); }, []);
+
+  /**
+   * Prestadores do procedimento em edição. Recarrega quando o NOME muda porque é o
+   * nome que identifica o procedimento (o item de prescrição não guarda FK).
+   *
+   * ⚠️ Só busca em PROCEDIMENTO e com nome preenchido: em MEDICAMENTO não há prestador,
+   * e disparar a cada tecla digitada no combobox de busca seria uma requisição por
+   * caractere.
+   */
+  useEffect(() => {
+    const nome = form.medicamento.trim();
+    if (form.tipo !== 'PROCEDIMENTO' || !nome) { setPrestProc({ vinculados: [], todos: [] }); return; }
+    let cancelado = false;
+    api.get('/procedimentos/cadastro/prestadores-do-procedimento', { params: { nome } })
+      .then(r => {
+        if (cancelado || !r.data) return;
+        setPrestProc({ vinculados: r.data.dados ?? [], todos: r.data.todos ?? [] });
+      })
+      .catch(() => { /* silencioso — sem prestador a tela só não oferece o campo */ });
+    return () => { cancelado = true; };
+  }, [form.tipo, form.medicamento]);
+
+  /** O prestador escolhido, com o valor que o vínculo define (quando há vínculo). */
+  const prestadorEscolhido = useMemo(() => {
+    if (!form.prestadorId) return null;
+    const v = prestProc.vinculados.find(x => x.prestadorId === form.prestadorId);
+    if (v) return { nome: v.prestadorNome, valorCliente: v.valorCliente, vinculado: true };
+    const t = prestProc.todos.find(x => x.id === form.prestadorId);
+    return t ? { nome: t.nome, valorCliente: null, vinculado: false } : null;
+  }, [form.prestadorId, prestProc]);
+
+  /**
+   * Manda para o cadastro do PRESTADOR já com o formulário aberto e, ao salvar, para
+   * Cadastro › Procedimentos — onde se define o valor e se atrela o procedimento ao
+   * prestador. É a razão de `depois` existir: cadastro sem preço faz o procedimento
+   * sair na fatura por R$ 0,00.
+   */
+  const irCadastrarPrestador = () => {
+    const nomeProc = form.medicamento.trim();
+    const esp = procEspecialidade
+      || procedimentos.find(x => x.nome === nomeProc)?.especialidade
+      || '';
+    const depois = `/cadastro/procedimentos?${new URLSearchParams({
+      ...(esp ? { especialidade: esp } : {}), busca: nomeProc,
+    })}`;
+    navigate(`/cadastro/prestadores?${new URLSearchParams({ novo: '1', depois })}`);
+  };
+
+  /** Só o valor: o prestador existe, o vínculo (preço) é que falta. */
+  const irDefinirValorDoPrestador = () => {
+    const nomeProc = form.medicamento.trim();
+    const esp = procEspecialidade
+      || procedimentos.find(x => x.nome === nomeProc)?.especialidade
+      || '';
+    navigate(`/cadastro/procedimentos?${new URLSearchParams({
+      ...(esp ? { especialidade: esp } : {}),
+      busca:    nomeProc,
+      vincular: String(form.prestadorId ?? ''),
+    })}`);
+  };
 
   // Especialidades presentes no catálogo de procedimentos (filtro do form PROCEDIMENTO)
   const especialidadesProc = useMemo(() =>
@@ -1165,6 +1248,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       observacao:         item.observacao ?? '',
       medicamentoCliente: item.medicamentoCliente,
       aplicadaPeloProprietario: item.aplicadaPeloProprietario === true,
+      prestadorId:        item.prestadorId ?? null,
     });
     setEditingServerId(item.id);
   };
@@ -1699,7 +1783,11 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                       <input
                         type="text"
                         value={form.medicamento}
-                        onChange={e => { set('medicamento', e.target.value); set('medicamentoCatId', null); setShowProcDropdown(true); }}
+                        // Trocar o PROCEDIMENTO zera o prestador: quem executa é
+                        // escolhido para AQUELE procedimento (o vínculo é por par), e
+                        // deixá-lo colado faria o item novo nascer com o prestador do
+                        // anterior — que talvez nem execute este.
+                        onChange={e => { set('medicamento', e.target.value); set('medicamentoCatId', null); set('prestadorId', null); setShowProcDropdown(true); }}
                         onFocus={() => setShowProcDropdown(true)}
                         onBlur={() => setTimeout(() => setShowProcDropdown(false), 150)}
                         placeholder="Buscar procedimento..."
@@ -1712,7 +1800,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                             .slice(0, 40)
                             .map(p => (
                               <button key={p.id} type="button"
-                                onMouseDown={() => { set('medicamento', p.nome); setShowProcDropdown(false); }}
+                                onMouseDown={() => { set('medicamento', p.nome); set('prestadorId', null); setShowProcDropdown(false); }}
                                 className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 transition-colors first:rounded-t-xl last:rounded-b-xl border-b border-gray-50 last:border-0">
                                 <span className="font-medium">{p.nome}</span>
                                 {p.combo && (
@@ -1737,6 +1825,88 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                   )}
                   </div>
                 </div>
+
+                {/* ── PRESTADOR do procedimento (2026-09-08) ──────────────────────
+                    Quem EXECUTA define o preço ao cliente e é quem entra no recibo de
+                    pagamento quando o item for executado.
+                    ⚠️ Só existe em PROCEDIMENTO e só depois de o procedimento ser
+                    escolhido: sem saber QUAL procedimento, não há vínculo a consultar
+                    nem valor a mostrar.
+                    ⚠️ O campo é OPCIONAL. Procedimento executado pela própria equipe
+                    não tem prestador, e exigi-lo pararia o atendimento por causa de um
+                    cadastro que talvez nem exista. Sem prestador, o preço é o valor
+                    padrão da empresa — exatamente como era antes. */}
+                {!isMed && form.medicamento.trim() !== '' && (
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
+                      PRESTADOR QUE VAI EXECUTAR
+                    </label>
+                    <select
+                      value={form.prestadorId ?? ''}
+                      onChange={e => {
+                        const v = e.target.value;
+                        // Sentinela: escolher "cadastrar" não é escolher prestador —
+                        // navega e deixa o campo como estava, para o retorno não achar
+                        // um id que não existe.
+                        if (v === '__novo__') { irCadastrarPrestador(); return; }
+                        set('prestadorId', v ? Number(v) : null);
+                      }}
+                      className={`w-full border border-gray-200 rounded-xl px-2 py-2 text-sm bg-white focus:outline-none focus:border-emerald-500 ${!form.prestadorId ? 'text-gray-400' : 'text-gray-900'}`}>
+                      <option value="">Equipe da clínica (sem prestador externo)</option>
+                      {prestProc.vinculados.length > 0 && (
+                        <optgroup label="Com valor cadastrado para este procedimento">
+                          {prestProc.vinculados.map(v => (
+                            <option key={v.prestadorId} value={v.prestadorId} className="text-gray-900">
+                              {v.prestadorNome}
+                              {v.valorCliente != null
+                                ? ` — cliente R$ ${v.valorCliente.toFixed(2).replace('.', ',')}`
+                                : ' — usa o valor padrão'}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {(() => {
+                        const idsVinc = new Set(prestProc.vinculados.map(v => v.prestadorId));
+                        const outros = prestProc.todos.filter(t => !idsVinc.has(t.id));
+                        if (outros.length === 0) return null;
+                        return (
+                          <optgroup label="Sem valor cadastrado para este procedimento">
+                            {outros.map(t => (
+                              <option key={t.id} value={t.id} className="text-gray-900">
+                                {t.nome}{t.tipoServico ? ` (${t.tipoServico})` : ''}
+                              </option>
+                            ))}
+                          </optgroup>
+                        );
+                      })()}
+                      <option value="__novo__" className="text-gray-900">+ Cadastrar novo prestador…</option>
+                    </select>
+
+                    {/* 🔴 O AVISO É O QUE EVITA A FATURA POR R$ 0,00. Prestador sem
+                        vínculo neste procedimento não tem preço: o item cairia no valor
+                        padrão da empresa (ou em zero, se nem esse existir) e o recibo
+                        dele sairia sem base de cálculo. O atalho leva direto ao lugar
+                        onde isso se resolve, já posicionado no procedimento. */}
+                    {prestadorEscolhido && !prestadorEscolhido.vinculado && (
+                      <div className="mt-1.5 flex items-start gap-1.5 rounded-xl bg-amber-50 border border-amber-100 px-2.5 py-2">
+                        <p className="text-[11px] text-amber-800 leading-snug flex-1">
+                          <strong>{prestadorEscolhido.nome}</strong> ainda não tem valor cadastrado para
+                          este procedimento — a cobrança usará o valor padrão da empresa.
+                        </p>
+                        <button type="button" onClick={irDefinirValorDoPrestador}
+                          className="text-[11px] font-semibold text-amber-900 underline whitespace-nowrap">
+                          Definir valor
+                        </button>
+                      </div>
+                    )}
+                    {prestadorEscolhido?.vinculado && prestadorEscolhido.valorCliente != null && (
+                      <p className="mt-1 text-[11px] text-emerald-700">
+                        Valor cobrado para o cliente:{' '}
+                        <strong>R$ {prestadorEscolhido.valorCliente.toFixed(2).replace('.', ',')}</strong>
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Dosagem + Via */}
                 {isMed && (

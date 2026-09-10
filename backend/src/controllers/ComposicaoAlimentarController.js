@@ -1,4 +1,11 @@
 const prisma = require('../lib/prisma').default;
+const { registrarAuditoria } = require('../lib/auditoria');
+// CATÁLOGO MISTO desde 2026-09-09 (migration 20261004000000): composição com
+// `empresaId` nulo é a do sistema; com empresa, é da clínica que a cadastrou.
+const {
+  empresaDoNovoItem, noEscopoDeEscrita, bloqueioDeEscrita,
+  marcarOrigem, marcarOrigemEmLista, EXIGE_EMPRESA,
+} = require('../lib/catalogoNutricional');
 
 // Normaliza nome de nutriente: sem acentos + Title Case por palavra
 // Ex: "selênio" → "Selenio" | "proteína bruta" → "Proteina Bruta"
@@ -75,7 +82,7 @@ const ComposicaoAlimentarController = {
         orderBy: [{ alimento: { nome: 'asc' } }, { nutriente: { nome: 'asc' } }],
       });
 
-      res.json({ sucesso: true, dados: composicoes });
+      res.json({ sucesso: true, dados: marcarOrigemEmLista(composicoes) });
     } catch (error) {
       console.error('Erro ao listar composições:', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar composições' });
@@ -99,7 +106,7 @@ const ComposicaoAlimentarController = {
       if (!item) {
         return res.status(404).json({ sucesso: false, mensagem: 'Composição não encontrada' });
       }
-      res.json({ sucesso: true, dados: item });
+      res.json({ sucesso: true, dados: marcarOrigem(item) });
     } catch (error) {
       console.error('Erro ao buscar composição:', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar composição' });
@@ -122,6 +129,10 @@ const ComposicaoAlimentarController = {
       return res.status(400).json({ sucesso: false, mensagem: 'valorPorKg deve ser um número positivo' });
     }
 
+    // ADMIN da plataforma escreve no catálogo GLOBAL; a clínica, no dela.
+    const empresaId = empresaDoNovoItem(req);
+    if (empresaId === undefined) return res.status(EXIGE_EMPRESA.status).json(EXIGE_EMPRESA.corpo);
+
     try {
       // Check explícito com mensagem descritiva — antes de depender do P2002
       const existente = await prisma.composicaoAlimento.findFirst({
@@ -142,22 +153,28 @@ const ComposicaoAlimentarController = {
         });
       }
 
-      const item = await prisma.composicaoAlimento.create({
-        data: {
-          alimentoId: Number(alimentoId),
-          nutrienteId: Number(nutrienteId),
-          valorPorKg: Number(valorPorKg),
-          base: base || 'Seca',
-          ...(especieId ? { especieId: Number(especieId) } : {}),
-        },
-        include: {
-          alimento: { select: { id: true, nome: true } },
-          nutriente: { select: { id: true, nome: true, unidadePadrao: true } },
-          especie: { select: { id: true, nome: true } },
-        },
-      });
+      // ⚠️ A clínica PODE acrescentar um nutriente que falta num alimento GLOBAL: a
+      // linha nasce com `empresaId` dela e só ela a enxerga. O que o unique
+      // (alimentoId, nutrienteId) impede é o par existir duas vezes — global e da
+      // clínica —, o que faria o cálculo da dieta contar o nutriente em dobro.
+      const item = await noEscopoDeEscrita(req, empresaId == null, () =>
+        prisma.composicaoAlimento.create({
+          data: {
+            alimentoId: Number(alimentoId),
+            nutrienteId: Number(nutrienteId),
+            valorPorKg: Number(valorPorKg),
+            base: base || 'Seca',
+            empresaId,
+            ...(especieId ? { especieId: Number(especieId) } : {}),
+          },
+          include: {
+            alimento: { select: { id: true, nome: true } },
+            nutriente: { select: { id: true, nome: true, unidadePadrao: true } },
+            especie: { select: { id: true, nome: true } },
+          },
+        }));
 
-      res.status(201).json({ sucesso: true, dados: item });
+      res.status(201).json({ sucesso: true, dados: marcarOrigem(item) });
     } catch (error) {
       if (error.code === 'P2002') {
         return res.status(409).json({
@@ -187,12 +204,16 @@ const ComposicaoAlimentarController = {
         return res.status(404).json({ sucesso: false, mensagem: 'Composição não encontrada' });
       }
 
-      const item = await prisma.composicaoAlimento.update({
-        where: { id: Number(id) },
-        data: { valorPorKg: Number(valorPorKg) },
-    });
+      const barrado = bloqueioDeEscrita(req, existe, 'valor de composição');
+      if (barrado) return res.status(barrado.status).json(barrado.corpo);
 
-      res.json({ sucesso: true, dados: item });
+      const item = await noEscopoDeEscrita(req, existe.empresaId == null, () =>
+        prisma.composicaoAlimento.update({
+          where: { id: Number(id) },
+          data: { valorPorKg: Number(valorPorKg) },
+        }));
+
+      res.json({ sucesso: true, dados: marcarOrigem(item) });
     } catch (error) {
       if (error.code === 'P2002') {
         return res.status(409).json({
@@ -213,8 +234,36 @@ const ComposicaoAlimentarController = {
   // -------------------------------------------------------------------
   excluir: async (req, res) => {
     const { id } = req.params;
+    const { motivo } = req.body ?? {};
+    if (!motivo?.trim()) {
+      return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da exclusão' });
+    }
+
     try {
-      await prisma.composicaoAlimento.delete({ where: { id: Number(id) } });
+      const existe = await prisma.composicaoAlimento.findUnique({
+        where:  { id: Number(id) },
+        include: { alimento: { select: { nome: true } }, nutriente: { select: { nome: true } } },
+      });
+      if (!existe) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Composição não encontrada' });
+      }
+
+      const barrado = bloqueioDeEscrita(req, existe, 'valor de composição');
+      if (barrado) return res.status(barrado.status).json(barrado.corpo);
+
+      // Nada aponta para a composição: ela é a folha da árvore do catálogo, e por isso
+      // não há `bloqueioDeUso` aqui — o que a protege é a posse (global × da clínica).
+      await noEscopoDeEscrita(req, existe.empresaId == null, () =>
+        prisma.composicaoAlimento.delete({ where: { id: Number(id) } }));
+
+      await registrarAuditoria(null, req, {
+        categoria:  'EXCLUSAO',
+        entidade:   'COMPOSICAO_ALIMENTO',
+        entidadeId: Number(id),
+        motivo,
+        detalhes:   `${existe.alimento?.nome ?? '?'} × ${existe.nutriente?.nome ?? '?'}`,
+      });
+
       res.json({ sucesso: true, mensagem: 'Composição excluída com sucesso' });
     } catch (error) {
       if (error.code === 'P2025') {
@@ -268,7 +317,13 @@ const ComposicaoAlimentarController = {
       return res.status(400).json({ sucesso: false, mensagem: 'Nenhuma composição para salvar' });
     }
 
+    // ADMIN da plataforma importa para o catálogo GLOBAL; a clínica, para o dela.
+    const empresaId = empresaDoNovoItem(req);
+    if (empresaId === undefined) return res.status(EXIGE_EMPRESA.status).json(EXIGE_EMPRESA.corpo);
+    const ehGlobal = empresaId == null;
+
     // ── 1. Verifica se o alimento já existe ──────────────────────────
+    // O RLS restringe a busca ao que este contexto enxerga (global + próprio).
     const alimentoExistente = await prisma.alimento.findFirst({
       where: { nome: nomeAlimento.trim() },
     });
@@ -282,12 +337,14 @@ const ComposicaoAlimentarController = {
 
     try {
       // ── 2. Cria o alimento ─────────────────────────────────────────
-      const alimento = await prisma.alimento.create({
-        data: {
-          nome: nomeAlimento.trim(),
-          categoria: categoriaAlimento || 'Importado',
-        },
-      });
+      const alimento = await noEscopoDeEscrita(req, ehGlobal, () =>
+        prisma.alimento.create({
+          data: {
+            nome: nomeAlimento.trim(),
+            categoria: categoriaAlimento || 'Concentrado',
+            empresaId,
+          },
+        }));
 
       // ── 3. Para cada composição: encontra ou cria o nutriente ──────
       let totalSalvos = 0;
@@ -324,26 +381,30 @@ const ComposicaoAlimentarController = {
             nutriente = nutrienteMesmoNome;
           } else {
             // Nutriente genuinamente novo — cria
-            nutriente = await prisma.nutriente.create({
-              data: {
-                nome: nomeSemAcento,
-                categoria: 'Importado',
-                unidadePadrao: unidadeComp,
-              },
-            });
+            nutriente = await noEscopoDeEscrita(req, ehGlobal, () =>
+              prisma.nutriente.create({
+                data: {
+                  nome: nomeSemAcento,
+                  categoria: 'Importado',
+                  unidadePadrao: unidadeComp,
+                  empresaId,
+                },
+              }));
           }
         }
 
         try {
-          await prisma.composicaoAlimento.create({
-            data: {
-              alimentoId: alimento.id,
-              nutrienteId: nutriente.id,
-              valorPorKg: valorFinal,
-              base: comp.base || 'Seca',
-              ...(especieId ? { especieId: Number(especieId) } : {}),
-            },
-          });
+          await noEscopoDeEscrita(req, ehGlobal, () =>
+            prisma.composicaoAlimento.create({
+              data: {
+                alimentoId: alimento.id,
+                nutrienteId: nutriente.id,
+                valorPorKg: valorFinal,
+                base: comp.base || 'Seca',
+                empresaId,
+                ...(especieId ? { especieId: Number(especieId) } : {}),
+              },
+            }));
           totalSalvos++;
         } catch (err) {
           // P2002 = unique constraint — mesmo nutriente duplicado no payload, ignora

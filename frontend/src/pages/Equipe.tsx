@@ -269,7 +269,12 @@ const labelCargo = (cargo: string): string => ({
   ENFERMEIRO:   'Enfermeiro',
   SECRETARIA:   'Secretaria',
   FINANCEIRO:   'Financeiro',
+  // 2026-09-09: os dois cargos passaram a existir de verdade (ver
+  // backend/src/lib/cargosPrestador.js). Quem foi cadastrado antes continua
+  // FORNECEDOR e volta a se chamar "Fornecedor" — com PRESTADOR na lista, manter o
+  // rótulo antigo deixaria dois cargos com o mesmo nome na tela.
   FORNECEDOR:   'Fornecedor',
+  PRESTADOR:    'Prestador',
   ADMIN:        'Administrador',
   MEMBRO:       'Membro',
   PROPRIETARIO: 'Proprietário',
@@ -283,6 +288,7 @@ const badgeCargo = (cargo: string): string => ({
   SECRETARIA:   'bg-amber-100 text-amber-700',
   FINANCEIRO:   'bg-orange-100 text-orange-700',
   FORNECEDOR:   'bg-teal-100 text-teal-700',
+  PRESTADOR:    'bg-teal-100 text-teal-700',
   ADMIN:        'bg-red-100 text-red-700',
   MEMBRO:       'bg-gray-100 text-gray-600',
   PROPRIETARIO: 'bg-purple-100 text-purple-700',
@@ -396,7 +402,6 @@ export default function Equipe() {
         bairro:       values.bairro.trim()      || null,
         cidade:       values.cidade.trim()      || null,
         estado:       values.estado.trim()      || null,
-        fornecedorId: values.fornecedorId ?? null,
         tipoServico:  values.tipoServico  ?? null,
         especialidadeIds:   values.especialidadeIds ?? [],
         locaisTrabalho:     mapLocaisParaPayload(values.locaisTrabalho),
@@ -951,7 +956,6 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
           equipeId={equipeId}
           infoNota="A pessoa será adicionada imediatamente à equipe. Um e-mail de boas-vindas será enviado."
           textoBotao="Incluir"
-          comFornecedor
           comExpediente
           comVinculoEmpresa
           salvando={enviando}

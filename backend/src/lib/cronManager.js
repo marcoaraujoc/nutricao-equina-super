@@ -20,8 +20,26 @@ const jobs = new Map();
 // Manaus e 21:30 no do Acre. Para que cada clínica feche no PRÓPRIO fim de dia, o
 // caminho é agendar por empresa (ou rodar de hora em hora e filtrar por
 // `hojeNaEmpresa`) — decisão de produto em aberto, não um descuido.
-function registrarJob(chave, { nome, exprPadrao, fn, timezone = 'America/Sao_Paulo' }) {
-  jobs.set(chave, { nome, exprPadrao, fn, timezone, task: null, expr: exprPadrao, ativo: true });
+
+/**
+ * Registra um job.
+ *
+ * @param {object} opcoes
+ * @param {boolean} [opcoes.recuperarSePerdido=false] Rodar na SUBIDA do backend quando o
+ *   disparo agendado foi perdido (servidor fora do ar no horário, ou execução com erro).
+ *   ⚠️ **OPT-IN, e tem de continuar sendo.** Só serve a job cuja tarefa é DECIDIDA POR
+ *   DATA e portanto idempotente: rodar às 09:00 de hoje o que devia ter rodado às 23:50
+ *   de ontem dá exatamente o mesmo resultado. Ligar num job de MENSAGEM (lembrete de
+ *   dose, aviso de véspera, lembrete de agendamento) mandaria ao cliente um aviso sobre
+ *   um prazo que já passou — pior que não mandar.
+ * @param {number} [opcoes.janelaRecuperacaoMs=26h] Quanto tempo sem execução BEM-SUCEDIDA
+ *   caracteriza disparo perdido. 26h para um job diário: 2h de folga cobrem variação de
+ *   horário de subida sem disparar recuperação em toda reinicialização.
+ */
+function registrarJob(chave, { nome, exprPadrao, fn, timezone = 'America/Sao_Paulo',
+                               recuperarSePerdido = false, janelaRecuperacaoMs = 26 * 60 * 60 * 1000 }) {
+  jobs.set(chave, { nome, exprPadrao, fn, timezone, task: null, expr: exprPadrao, ativo: true,
+                    recuperarSePerdido, janelaRecuperacaoMs });
 }
 
 // (Re)aplica um job: para o task atual e agenda com a expressão/estado informados.
@@ -154,4 +172,83 @@ async function executarAgora(chave) {
   }
 }
 
-module.exports = { registrarJob, iniciarJobs, reagendar, listarJobs, executarAgora };
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * RECUPERAÇÃO DO DISPARO PERDIDO — "processe o que já devia ter rodado"
+ * ════════════════════════════════════════════════════════════════════════════
+ *
+ * 🔴 O PROBLEMA: `node-cron` NÃO recupera disparo perdido. Um job de 23:50 com o
+ * backend fora do ar nesse minuto simplesmente não acontece — e, no ambiente de
+ * desenvolvimento (onde o processo raramente está no ar à meia-noite), não acontece
+ * NUNCA. Foi o que manteve um orçamento de 10/08 em aberto até 08/09: o
+ * `cancelar_orcamentos_vencidos` estava correto e nunca havia rodado.
+ *
+ * O QUE ESTA FUNÇÃO FAZ: na subida do backend, para cada job marcado com
+ * `recuperarSePerdido`, pergunta ao log quando foi a última execução BEM-SUCEDIDA.
+ * Passou da janela → roda AGORA, marcado como `RECUPERACAO` no histórico.
+ *
+ * ⚠️ **BEM-SUCEDIDA, não "última".** Execução que terminou em ERRO não conta como
+ * feita — é justamente o segundo caso do pedido ("se ele falhar… deverá rodar
+ * normalmente no dia seguinte"). Aceitar qualquer linha faria uma falha diária
+ * silenciar a recuperação para sempre.
+ *
+ * ⚠️ **Sem NENHUMA execução no log, roda.** Base nova, log expurgado (15 dias) ou
+ * tarefa que nunca disparou caem aqui — e o trabalho é idempotente, então rodar é
+ * sempre mais seguro que supor que já foi feito.
+ *
+ * ⚠️ **Agenda DESLIGADA não recupera.** `ativo: false` é uma decisão do ADMIN na tela
+ * de Configuração; ressuscitar o job na subida a desfaria pelas costas dele.
+ *
+ * ⚠️ **Nunca derruba o boot**: cada job é isolado em try/catch e o conjunto roda em
+ * segundo plano, depois do `listen`.
+ *
+ * ⚠️ Uma reinicialização em série não multiplica trabalho: a execução vira linha no
+ * log, e a próxima subida já vê a última bem-sucedida dentro da janela.
+ */
+async function ultimaExecucaoOk(nome) {
+  // SQL cru pelo mesmo motivo do INSERT em `cronAlert.registrarExecucao`: mantém o
+  // caminho funcionando com o Prisma Client ainda não regenerado (§11).
+  // `tb_cron_execucoes` é CONTROL PLANE (sem RLS) — não precisa de carimbo de tenant.
+  const linhas = await prisma.$queryRawUnsafe(
+    'SELECT max("executadoEm") AS ultima FROM schs2vet.tb_cron_execucoes WHERE nome = $1 AND ok = true',
+    String(nome),
+  );
+  const v = linhas?.[0]?.ultima;
+  return v ? new Date(v) : null;
+}
+
+async function recuperarJobsPerdidos() {
+  const { comOrigem } = require('./cronTrace');
+
+  for (const [chave, job] of jobs) {
+    if (!job.recuperarSePerdido) continue;
+    if (!job.ativo) {
+      logger.info(`[CronManager] "${job.nome}": agenda desligada — recuperação não se aplica.`);
+      continue;
+    }
+    try {
+      const ultima = await ultimaExecucaoOk(job.nome);
+      const limite = Date.now() - job.janelaRecuperacaoMs;
+      if (ultima && ultima.getTime() > limite) continue;
+
+      const motivo = ultima
+        ? `última execução bem-sucedida em ${ultima.toISOString()}`
+        : 'nenhuma execução bem-sucedida registrada';
+      logger.warn(`[CronManager] "${job.nome}": disparo perdido (${motivo}) — executando agora (RECUPERACAO).`);
+
+      if (emExecucao.has(chave)) continue;
+      emExecucao.add(chave);
+      try {
+        await comOrigem('RECUPERACAO', () => job.fn());
+      } finally {
+        emExecucao.delete(chave);
+      }
+    } catch (e) {
+      // Falhar a recuperação não pode derrubar a subida do backend: o job volta a ser
+      // tentado no próximo horário agendado e na próxima reinicialização.
+      logger.error(`[CronManager] Falha ao recuperar "${job.nome}": ${e?.message ?? e}`);
+    }
+  }
+}
+
+module.exports = { registrarJob, iniciarJobs, reagendar, listarJobs, executarAgora, recuperarJobsPerdidos };

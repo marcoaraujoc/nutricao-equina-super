@@ -177,6 +177,7 @@ export function criarBloco(tipo: TipoBloco): Bloco {
 
 export const GRUPOS_VARIAVEL: { id: GrupoVariavel; rotulo: string }[] = [
   { id: 'veterinario',  rotulo: 'Veterinário'  },
+  { id: 'empresa',      rotulo: 'Estabelecimento' },
   { id: 'cliente',      rotulo: 'Cliente'      },
   { id: 'propriedade',  rotulo: 'Propriedade'  },
   { id: 'animal',       rotulo: 'Animal'       },
@@ -199,6 +200,18 @@ export const VARIAVEIS: Variavel[] = [
   v('veterinario.crmv',      'CRMV',             'CRMV-SP 12345',             'veterinario'),
   v('veterinario.clinica',   'Clínica',          'S2Vet Equinos',             'veterinario'),
   v('veterinario.telefone',  'Telefone',         '(11) 98765-4321',           'veterinario'),
+  v('veterinario.email',     'E-mail',           'marina.sereno@s2vet.com.br', 'veterinario'),
+
+  // ⚠️ Resolvem VAZIO quando a clínica é pessoa FÍSICA (veterinário autônomo, empresa
+  // com CPF): imprimir "CNPJ:" no papel dele afirmaria um registro que não existe.
+  v('empresa.nome',              'Razão social',        'S2Vet Equinos Ltda.',      'empresa'),
+  v('empresa.nomeFantasia',      'Nome fantasia',       'S2Vet Equinos',            'empresa'),
+  v('empresa.cnpj',              'CNPJ',                '12.345.678/0001-90',       'empresa'),
+  v('empresa.inscricaoEstadual', 'Inscrição Estadual',  '110.042.490.114',          'empresa'),
+  v('empresa.crmv',              'Registro no CRMV',    'CRMV-SP PJ 1234',          'empresa'),
+  v('empresa.endereco',          'Endereço',            'Rua das Acácias, 100 - Centro - Itu/SP - CEP 13300-000', 'empresa'),
+  v('empresa.telefone',          'Telefone',            '(11) 3333-4444',           'empresa'),
+  v('empresa.email',             'E-mail',              'contato@s2vet.com.br',     'empresa'),
 
   v('cliente.nome',          'Nome',             'Haras Boa Vista',           'cliente'),
   v('cliente.documento',     'CPF / CNPJ',       '12.345.678/0001-90',        'cliente'),

@@ -142,6 +142,15 @@ export interface StatTile {
   /** Tela que lista o que este número conta, já filtrada. Sem `to`, o tile não é
    *  clicável — e não ganha nenhuma pista visual de que seria. */
   to?:    string;
+  /**
+   * Abre a lista do número AQUI MESMO, abaixo dos cards (2026-09-08). Alternativa ao
+   * `to`, que troca de tela e perde o período do relatório.
+   * ⚠️ `to` e `onSelect` juntos não fazem sentido — o clique só pode ir a um lugar.
+   * Havendo os dois, vence `onSelect`: quem o passou quis a lista na própria tela.
+   */
+  onSelect?: () => void;
+  /** Este é o card aberto — ganha o anel para dizer de onde a lista abaixo veio. */
+  ativo?:    boolean;
 }
 
 const TOM_CLS: Record<NonNullable<StatTile['tom']>, string> = {
@@ -155,18 +164,35 @@ export function StatTiles({ tiles, cols = 4 }: { tiles: StatTile[]; cols?: 2 | 3
   const gridCls = cols === 2 ? 'grid-cols-2' : cols === 3 ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-2 lg:grid-cols-4';
   return (
     <div className={`grid ${gridCls} gap-3`}>
-      {tiles.map((t) => (
-        <TalvezLink key={t.label} to={t.to}
-          className="block rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500">
-          <div className={`h-full bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5 ${
-            t.to ? 'transition-colors hover:border-emerald-300 hover:bg-emerald-50/40 cursor-pointer' : ''
-          }`}>
+      {tiles.map((t) => {
+        const clicavel = Boolean(t.onSelect || t.to);
+        const miolo = (
+          <div className={`h-full bg-white rounded-2xl border shadow-sm px-4 py-3.5 ${
+            t.ativo ? 'border-emerald-400 ring-2 ring-emerald-200 bg-emerald-50/40' : 'border-gray-100'
+          } ${clicavel ? 'transition-colors hover:border-emerald-300 hover:bg-emerald-50/40 cursor-pointer' : ''}`}>
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{t.label}</p>
             <p className={`text-2xl font-bold mt-1 ${TOM_CLS[t.tom ?? 'gray']}`}>{t.valor}</p>
             {t.hint && <p className="text-[10px] text-gray-400 mt-0.5">{t.hint}</p>}
           </div>
-        </TalvezLink>
-      ))}
+        );
+        // `onSelect` vence `to`: quem o passou quis a lista na própria tela.
+        // ⚠️ `<button>` de verdade, não `<div onClick>` — o card vira alvo de teclado
+        // e leitor de tela sozinho, e `aria-pressed` diz qual está aberto.
+        if (t.onSelect) {
+          return (
+            <button key={t.label} type="button" onClick={t.onSelect} aria-pressed={!!t.ativo}
+              className="block w-full text-left rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500">
+              {miolo}
+            </button>
+          );
+        }
+        return (
+          <TalvezLink key={t.label} to={t.to}
+            className="block rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500">
+            {miolo}
+          </TalvezLink>
+        );
+      })}
     </div>
   );
 }

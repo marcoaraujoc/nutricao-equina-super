@@ -57,8 +57,12 @@ describe('Resumo das atividades — normalização', () => {
     expect(normalizarResumo([])).toEqual([]);
   });
 
-  test('versão do prompt é a v4 — é o bump que força a reconsolidação do resumo', () => {
-    expect(VERSAO_ATUAL).toBe('memoria_clinica@v4');
+  test('versão do prompt é a v5 — é o bump que força a reconsolidação do resumo', () => {
+    // v5 (2026-09-08): destaques sem ids de tópico no texto, com TODAS as datas e
+    // dizendo o que foi prescrito/executado no mesmo atendimento.
+    // ⚠️ Ao mudar o prompt, SUBA a versão: sem o bump, a memória já gravada com o
+    // defeito nunca é reconsolidada e o usuário continua vendo o texto antigo.
+    expect(VERSAO_ATUAL).toBe('memoria_clinica@v5');
   });
 
   test('o "o que mudou" é um aviso, não um segundo resumo', () => {

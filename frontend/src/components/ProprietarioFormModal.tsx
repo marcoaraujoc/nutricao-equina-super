@@ -82,7 +82,12 @@ export function mascaraCEP(v: string): string {
 }
 
 // Senha padrão de novos cadastros — troca obrigatória no primeiro acesso
-export const SENHA_PADRAO_INICIAL = 'Inicial_001';
+// 🔴 A SENHA INICIAL NÃO É MOSTRADA (2026-09-08). Ela era a constante `Inicial_001`,
+// impressa na tela de quem cadastra — um TERCEIRO, não o dono da conta — e, sendo a
+// mesma para todo mundo, quem tivesse lido a tela uma vez sabia a senha de toda conta
+// nova do sistema, inclusive as que ainda não existiam. Agora é derivada por cadastro
+// (`backend/src/lib/senhaInicial.js`) e sai só pelo e-mail de boas-vindas.
+// ⚠️ Não reintroduzir uma constante de senha no frontend.
 
 // Formata valor monetário sempre com decimais visíveis
 export function formatarMoeda(v: string): string {
@@ -547,9 +552,8 @@ export default function ProprietarioFormModal({
                   <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5 text-xs text-emerald-700">
                     <Info size={12} className="flex-shrink-0 mt-0.5" />
                     <span>
-                      A senha inicial é a padrão <strong>{SENHA_PADRAO_INICIAL}</strong> —
-                      o proprietário receberá um e-mail de boas-vindas e deverá
-                      alterá-la no primeiro acesso.
+                      A senha inicial é gerada pelo sistema e enviada <strong>apenas por
+                      e-mail</strong> ao proprietário, que deverá alterá-la no primeiro acesso.
                     </span>
                   </div>
                 </div>

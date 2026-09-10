@@ -374,10 +374,15 @@ model Alimento {
   categoria   String               @db.Text
   fabricante  String?              @db.Text
   forma       String?              @db.Text
+  unidade     String?              @db.Text
+  // null = catálogo global do sistema (ADMIN); setado = alimento próprio da clínica.
+  // CATÁLOGO MISTO, mesma forma de `tb_medicamentos` (migration 20261004000000).
+  empresaId   Int?                 @map("empresa_id")
   ativo       Boolean              @default(true)
   composicoes ComposicaoAlimento[]
   dietas      Dieta[]
 
+  @@index([empresaId])
   @@map("tb_alimentos")
   @@schema("schs2vet")
 }
@@ -387,10 +392,13 @@ model Nutriente {
   nome          String               @db.Text
   categoria     String               @db.Text
   unidadePadrao String               @db.Text
+  // null = catálogo global do sistema; setado = nutriente próprio da clínica.
+  empresaId     Int?                 @map("empresa_id")
   composicoes   ComposicaoAlimento[]
   exames        ExameNutricional[]
   exigenciasNRC ExigenciasNRC[]
 
+  @@index([empresaId])
   @@map("tb_nutrientes")
   @@schema("schs2vet")
 }
@@ -402,6 +410,11 @@ model ComposicaoAlimento {
   especieId   Int?
   valorPorKg  Float
   base        String @default("Seca") @db.VarChar(50)
+  // null = composição global do sistema; setada = da clínica.
+  // ⚠️ O @@unique([alimentoId, nutrienteId]) abaixo NÃO virou índice parcial por
+  // empresa: o par alimenta o CÁLCULO da dieta, e duas linhas para o mesmo par
+  // (uma global, uma da clínica) contariam o nutriente duas vezes. Ver a migration.
+  empresaId   Int?   @map("empresa_id")
 
   alimento  Alimento  @relation(fields: [alimentoId], references: [id])
   nutriente Nutriente @relation(fields: [nutrienteId], references: [id])
@@ -410,6 +423,7 @@ model ComposicaoAlimento {
   @@unique([alimentoId, nutrienteId])
   @@index([nutrienteId])
   @@index([especieId])
+  @@index([empresaId])
   @@map("tb_composicao_alimento")
   @@schema("schs2vet")
 }
@@ -506,6 +520,18 @@ model ExameClinico {
   // Trava otimista (migration 20260923000000) — o laudo é o pior lugar para uma
   // sobrescrita calada: é o dado que fundamenta a conduta.
   versao          Int       @default(1)
+
+  /// Quem EXECUTA o exame (migration 20261005000000). Sem FK, como
+  /// `tb_prescricoes.prestador_id`: prontuário não muda porque um cadastro de
+  /// prestador foi excluído. `null` = executado pela própria equipe.
+  /// 🔴 LEITURA/ESCRITA por `lib/exameImagemValor.js` (SQL cru) — o client pode não
+  /// conhecer estas colunas (§11: no Windows o `prisma generate` falha com o backend
+  /// no ar), e um `select` tipado derrubaria a listagem inteira de exames.
+  prestadorId     Int?      @map("prestador_id")
+  /// SNAPSHOT do preço no dia do PEDIDO (vínculo do prestador ou padrão da empresa).
+  /// `null` = não resolvido (exame laboratorial, ou sem valor cadastrado) — que é
+  /// DIFERENTE de 0 (gratuito).
+  valorCobrado    Float?    @map("valor_cobrado")
 
   animal         Animal                      @relation("AnimalExamesClinicos", fields: [animalId], references: [id], onDelete: Cascade)
   veterinario    User?                       @relation("ExameClinicoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
@@ -736,6 +762,14 @@ model Prescricao {
   // precedência sobre o preço do catálogo/estoque no lançamento da fatura.
   orcamentoItemId          Int?      @map("orcamento_item_id")
   valorOrcado              Float?    @map("valor_orcado")
+  /// PRESTADOR que executa ESTE item (procedimento). Fica no ITEM, não no grupo: a
+  /// mesma prescrição pode ter o bloqueio do veterinário da casa e o ferrageamento do
+  /// ferrador externo — mesma razão de `medicamentoCliente`/`aplicadaPeloProprietario`
+  /// serem por item.
+  /// ⚠️ Lido/gravado por SQL CRU (`lib/procedimentoPrestador.js`) — o client Prisma
+  /// pode não conhecer a coluna. Sem FK: prontuário não muda porque um cadastro de
+  /// prestador foi excluído, e o ledger do recibo já guarda o vínculo.
+  prestadorId              Int?      @map("prestador_id")
 
   // ── Execução por DOSE individual (não mais por dia) ──────────────────────────
   // `dosesExecutadas`/`proximaDoseEm` são desnormalizados a partir do log
@@ -866,6 +900,7 @@ model ProcedimentoVeterinario {
   updatedAt        DateTime @updatedAt
 
   valoresEmpresa ProcedimentoValorEmpresa[] @relation("ProcedimentoValoresEmpresa")
+  prestadores    ProcedimentoPrestador[]    @relation("ProcedimentoPrestadores")
   comboItens     ProcedimentoComboItem[]    @relation("ProcedimentoComboItens")
 
   @@index([ativo])
@@ -1531,6 +1566,97 @@ model ProcedimentoValorEmpresa {
   @@schema("schs2vet")
 }
 
+/// Vínculo PRESTADOR × PROCEDIMENTO por EMPRESA (migration 20261001000000).
+///
+/// Existe porque `ProcedimentoValorEmpresa` só comporta UM preço por procedimento:
+/// a clínica com dois ferradores cobrando (e recebendo) valores diferentes pelo
+/// mesmo ferrageamento não tinha onde gravar isso — o segundo sobrescrevia o primeiro.
+///
+/// ⚠️ NÃO substitui `ProcedimentoValorEmpresa`, que continua sendo o valor PADRÃO
+/// da empresa (o que vale quando quem executa é a própria equipe, sem prestador
+/// externo). Este vínculo só ESTREITA para o par (procedimento, prestador).
+///
+/// ⚠️ `valorCliente` NULO = "use o valor padrão da empresa" — é o que permite
+/// vincular o prestador sem repetir um preço que já existe. `valorPrestador` é o outro
+/// lado do balcão (o que a clínica DEVE a ele) e só vai ao recibo quando o
+/// `tipoPagamento` do prestador é POR_PROCEDIMENTO.
+///
+/// 🔴 LEITURA/ESCRITA: SEMPRE por `lib/procedimentoPrestador.js` (SQL cru) — no Windows o
+/// `prisma generate` falha com o backend rodando, então o client tipado pode não
+/// conhecer esta tabela.
+model ProcedimentoPrestador {
+  id             Int      @id @default(autoincrement())
+  empresaId      Int      @map("empresa_id")
+  procedimentoId Int      @map("procedimento_id")
+  prestadorId    Int      @map("prestador_id")
+  valorCliente   Float?   @map("valor_cliente")
+  valorPrestador Float?   @map("valor_prestador")
+  ativo          Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  empresa      Empresa                 @relation("EmpresaProcedimentoPrestadores", fields: [empresaId], references: [id], onDelete: Cascade)
+  procedimento ProcedimentoVeterinario @relation("ProcedimentoPrestadores", fields: [procedimentoId], references: [id], onDelete: Cascade)
+  prestador    Prestador               @relation("PrestadorProcedimentos", fields: [prestadorId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, procedimentoId, prestadorId])
+  @@index([empresaId])
+  @@index([prestadorId])
+  @@index([procedimentoId])
+  @@map("tb_procedimento_prestadores")
+  @@schema("schs2vet")
+}
+
+/// LEDGER de procedimento EXECUTADO por um prestador — base do RECIBO de pagamento
+/// (migration 20261001000000).
+///
+/// 🔴 É SNAPSHOT, e por isso é tabela e não uma consulta sobre `Prescricao`: o valor
+/// cobrado do cliente, o valor do prestador e a FORMA DE PAGAMENTO dele mudam com o
+/// tempo. Um recibo de março recalculado com o percentual de setembro pagaria valor
+/// diferente do que foi acordado, e não haveria como provar o contrário — mesma
+/// premissa de `FaturaItem.descricao` e do snapshot do documento emitido.
+///
+/// ⚠️ Uma linha por EXECUÇÃO. A regra de cobrança não muda: procedimento só entra
+/// na fatura (e aqui) DEPOIS de executado.
+///
+/// ⚠️ `animalNome`/`procedimentoNome` são GRAVADOS — o recibo precisa dizer o que
+/// foi feito mesmo que o paciente seja renomeado ou o procedimento saia do catálogo.
+///
+/// ⚠️ SEM FK para prescrição/animal/prestador: o recibo tem de sobreviver ao
+/// cancelamento da prescrição (o serviço foi prestado) e à exclusão do cadastro.
+///
+/// 🔴 LEITURA/ESCRITA: SEMPRE por `lib/procedimentoPrestador.js` (SQL cru).
+model ExecucaoProcedimentoPrestador {
+  id               Int      @id @default(autoincrement())
+  empresaId        Int      @map("empresa_id")
+  prestadorId      Int      @map("prestador_id")
+  prescricaoId     Int?     @map("prescricao_id")
+  animalId         Int      @map("animal_id")
+  animalNome       String   @default("") @map("animal_nome") @db.VarChar(255)
+  procedimentoNome String   @default("") @map("procedimento_nome") @db.VarChar(255)
+  quantidade       Float    @default(1)
+  valorCliente     Float    @default(0) @map("valor_cliente")
+  valorPrestador   Float?   @map("valor_prestador")
+  tipoPagamento    String?  @map("tipo_pagamento") @db.VarChar(20)
+  formaPagamento   String?  @map("forma_pagamento") @db.VarChar(20)
+  valorPagamento   Float?   @map("valor_pagamento")
+  valorAPagar      Float    @default(0) @map("valor_a_pagar")
+  /// VALOR_PROCEDIMENTO | PERCENTUAL_CLIENTE | VALOR_FIXO | SALARIO | SEM_CONFIG
+  baseCalculo      String   @default("SEM_CONFIG") @map("base_calculo") @db.VarChar(24)
+  executadoEm      DateTime @map("executado_em")
+  executadoPorId   Int?     @map("executado_por_id")
+  faturaItemId     Int?     @map("fatura_item_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  empresa Empresa @relation("EmpresaExecucoesPrestador", fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId])
+  @@index([empresaId, prestadorId, executadoEm])
+  @@index([prescricaoId])
+  @@map("tb_execucoes_procedimento_prestador")
+  @@schema("schs2vet")
+}
+
 // Combo de procedimentos POR EMPRESA (pacote com valor próprio).
 // Somente o GESTOR da empresa cria/edita; procedimentos vêm do catálogo ADMIN.
 model ProcedimentoCombo {
@@ -1541,7 +1667,19 @@ model ProcedimentoCombo {
   // Especialidade do combo — todos os procedimentos do combo são dela.
   // Usada para filtrar os combos por especialidade na prescrição. null = legado.
   especialidade String?  @db.VarChar(100)
+  /// **Valor CLIENTE** do pacote — o que se cobra do cliente. O nome da coluna é
+  /// histórico (era o único valor que existia); renomeá-lo obrigaria a tocar todos os
+  /// leitores para não ganhar nada. Na tela o rótulo é "Valor Cliente".
   valor         Float
+  /// PRESTADOR que executa o pacote (migration 20261002000000). Sem FK, pela mesma
+  /// razão de `Prescricao.prestadorId`: combo é configuração de preço e não pode ser
+  /// alterado porque um cadastro de prestador foi excluído.
+  /// ⚠️ Lido/gravado por SQL CRU (`lib/procedimentoPrestador.js`) — o client pode não
+  /// conhecer a coluna.
+  prestadorId    Int?    @map("prestador_id")
+  /// O que o prestador cobra da clínica pelo PACOTE. Vai ao recibo quando o tipo de
+  /// pagamento dele é POR_PROCEDIMENTO.
+  valorPrestador Float?  @map("valor_prestador")
   ativo         Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -1827,6 +1965,8 @@ model Empresa {
   loteVacinas                 LoteVacina[]                  @relation("LoteVacinaEmpresa")
   configuracoes               EmpresaConfiguracao[]
   procedimentoValores         ProcedimentoValorEmpresa[]    @relation("EmpresaProcedimentoValores")
+  procedimentoPrestadores     ProcedimentoPrestador[]       @relation("EmpresaProcedimentoPrestadores")
+  execucoesPrestador          ExecucaoProcedimentoPrestador[] @relation("EmpresaExecucoesPrestador")
   procedimentoCombos          ProcedimentoCombo[]           @relation("EmpresaProcedimentoCombos")
   resumosIA                   ResumoAtendimentoIA[]         @relation("EmpresaResumosIA")
   documentoTemplates          DocumentoTemplate[]           @relation("EmpresaDocumentoTemplates")
@@ -2707,6 +2847,7 @@ model Prestador {
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
   user           User?                    @relation("PrestadorUser", fields: [userId], references: [id], onDelete: SetNull)
+  procedimentos  ProcedimentoPrestador[]  @relation("PrestadorProcedimentos")
   locaisTrabalho PrestadorLocalTrabalho[]
 
   @@index([empresaId])

@@ -227,7 +227,7 @@ export interface Variavel {
 }
 
 export type GrupoVariavel =
-  | 'veterinario' | 'cliente' | 'propriedade' | 'animal' | 'consulta'
+  | 'veterinario' | 'empresa' | 'cliente' | 'propriedade' | 'animal' | 'consulta'
   | 'agenda' | 'medicamentos' | 'vacinas' | 'exames' | 'internacao'
   | 'reproducao' | 'financeiro' | 'sistema';
 

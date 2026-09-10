@@ -1,78 +1,69 @@
-﻿import { useState, useEffect, useCallback } from 'react';
+// frontend/src/pages/ComposicaoAlimentar.tsx
+
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import api from '../services/api';
+import { Pencil, Trash2, Check, X, Search, Layers, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { Edit, Trash2 } from 'lucide-react';
+import api from '../services/api';
+import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
+import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
+import ModalJustificativa from '../components/ModalJustificativa';
+import SeloOrigemCatalogo from '../components/SeloOrigemCatalogo';
+import { useEspeciesDaEmpresa } from '../hooks/useEspeciesDaEmpresa';
+import { useCatalogoNutricional } from '../hooks/useCatalogoNutricional';
 
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-// =====================================================================
-// INTERFACES
-// =====================================================================
-interface Especie {
-  id: number;
-  nome: string;
-}
-
-interface Alimento {
-  id: number;
-  nome: string;
-}
-
-interface Nutriente {
-  id: number;
-  nome: string;
-  unidadePadrao: string;
-}
+interface Especie   { id: number; nome: string }
+interface Alimento  { id: number; nome: string }
+interface Nutriente { id: number; nome: string; unidadePadrao: string }
 
 interface ComposicaoItem {
-  id: number;
-  alimentoId: number;
+  id:          number;
+  alimentoId:  number;
   nutrienteId: number;
-  especieId?: number | null;
-  valorPorKg: number;
-  base: string;
-  alimento?: Alimento | null;
-  nutriente?: Nutriente | null;
-  especie?: Especie | null;
+  especieId?:  number | null;
+  valorPorKg:  number;
+  base:        string;
+  alimento?:   Alimento | null;
+  nutriente?:  Nutriente | null;
+  especie?:    Especie | null;
+  /** true = catálogo do sistema (só o ADMIN da plataforma altera). */
+  doSistema?:  boolean;
 }
 
-interface EditValues {
-  valorPorKg: string;
-}
-
-// =====================================================================
-// COMPONENTE
-// =====================================================================
+// ─── Componente ───────────────────────────────────────────────────────────────
 
 const ComposicaoAlimentar = () => {
-  const { user } = useAuth();
   const navigate = useNavigate();
 
+  // Espécies oferecidas = permitidas (Equino/Bovino) ∩ atendidas pela empresa.
+  // Sobrando UMA, o campo não é exibido e ela vira o filtro — não há escolha a fazer.
+  const { especies, loading: loadingEspecies, unica: especieUnica } = useEspeciesDaEmpresa();
+  // Composição do SISTEMA é somente leitura; a da clínica ela edita e exclui.
+  const { podeCriar, podeAlterar, podeExcluir } = useCatalogoNutricional();
+
   const [composicoes, setComposicoes] = useState<ComposicaoItem[]>([]);
-  // Erro de ação exibido inline (substitui o toast de erro)
-  const [erroInline, setErroInline] = useState<string | null>(null);
-  // Erro de AÇÃO — renderizado no modal/painel que disparou, não no topo
-  const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
-  const [especies, setEspecies] = useState<Especie[]>([]);
+  const [erroInline,  setErroInline]  = useState<string | null>(null);
+  const [erroAcao,    setErroAcao]    = useState<ErroAcaoDados | null>(null);
 
-  const [search, setSearch] = useState('');
+  const [search,        setSearch]        = useState('');
   const [especieFiltro, setEspecieFiltro] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading,       setLoading]       = useState(true);
 
-  // ── Edição inline — apenas valor ────────────────────────────────────
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editValues, setEditValues] = useState<EditValues>({ valorPorKg: '' });
+  const [editValor, setEditValor] = useState('');
 
-  // ── Exclusão ────────────────────────────────────────────────────────
   const [itemToDelete, setItemToDelete] = useState<ComposicaoItem | null>(null);
+  const [excluindo,    setExcluindo]    = useState(false);
 
-  // =====================================================================
-  // CARREGAMENTO
-  // =====================================================================
+  // Espécie única resolvida ⇒ ela É o filtro (o campo some da tela).
+  useEffect(() => {
+    if (especieUnica) setEspecieFiltro(String(especieUnica.id));
+  }, [especieUnica]);
 
   const loadComposicoes = useCallback(async () => {
     try {
@@ -88,318 +79,287 @@ const ComposicaoAlimentar = () => {
     }
   }, [especieFiltro]);
 
+  // Espera a resolução das espécies: sem isso a primeira carga sairia SEM o filtro
+  // da espécie única e a lista piscaria com o catálogo inteiro.
   useEffect(() => {
-    const loadAuxData = async () => {
-      try {
-        const espRes = await api.get('/especies');
-        setEspecies(espRes.data?.dados ?? espRes.data ?? []);
-      } catch (e) {
-        console.error('Erro ao carregar espécies:', e);
-      }
-    };
-    loadAuxData();
-  }, []);
-
-  useEffect(() => {
+    if (loadingEspecies) return;
     loadComposicoes();
-  }, [loadComposicoes]);
+  }, [loadComposicoes, loadingEspecies]);
 
-  // =====================================================================
-  // EDIÇÃO INLINE — apenas valorPorKg
-  // =====================================================================
+  // ─── Edição inline (só o valor) ─────────────────────────────────────────────
 
   const startEdit = (item: ComposicaoItem) => {
     setEditingId(item.id);
-    setEditValues({ valorPorKg: String(item.valorPorKg) });
+    setEditValor(String(item.valorPorKg));
+    setErroAcao(null);
   };
 
   const cancelEdit = () => {
     setEditingId(null);
-    setEditValues({ valorPorKg: '' });
+    setEditValor('');
   };
 
   const saveEdit = async (id: number) => {
-    if (
-      !editValues.valorPorKg ||
-      isNaN(parseFloat(editValues.valorPorKg)) ||
-      parseFloat(editValues.valorPorKg) < 0
-    ) {
+    const valor = parseFloat(editValor);
+    if (!editValor || isNaN(valor) || valor < 0) {
       setErroAcao({ mensagem: 'Informe um valor numérico válido', campos: ['valor'] });
       return;
     }
-
     try {
-      await api.put(`/composicoes-alimentares/${id}`, {
-        valorPorKg: parseFloat(editValues.valorPorKg),
-      });
+      await api.put(`/composicoes-alimentares/${id}`, { valorPorKg: valor });
       toast.success('Composição atualizada!');
       cancelEdit();
       loadComposicoes();
-    } catch {
-      setErroAcao({ mensagem: 'Erro ao salvar edição' });
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { mensagem?: string } } };
+      setErroAcao({ mensagem: err.response?.data?.mensagem ?? 'Erro ao salvar edição' });
     }
   };
 
-  // =====================================================================
-  // EXCLUSÃO
-  // =====================================================================
-
-  const confirmDelete = async () => {
+  // 🔴 Apaga do banco (§33: motivo obrigatório + Auditoria).
+  const confirmDelete = async (motivo: string) => {
     if (!itemToDelete) return;
+    setExcluindo(true);
     try {
-      await api.delete(`/composicoes-alimentares/${itemToDelete.id}`);
+      await api.delete(`/composicoes-alimentares/${itemToDelete.id}`, { data: { motivo } });
       toast.success('Composição excluída com sucesso!');
       setItemToDelete(null);
+      setErroAcao(null);
       loadComposicoes();
-    } catch (error) {
-      console.error(error);
-      setErroAcao({ mensagem: 'Erro ao excluir composição' });
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { mensagem?: string } } };
+      setErroAcao({ mensagem: err.response?.data?.mensagem ?? 'Erro ao excluir composição' });
+    } finally {
+      setExcluindo(false);
     }
   };
 
-  // =====================================================================
-  // FILTRO LOCAL (busca por texto)
-  // =====================================================================
-
-  const filteredComposicoes = composicoes.filter((c) =>
+  const filtradas = composicoes.filter((c) =>
     `${c.alimento?.nome ?? ''} ${c.nutriente?.nome ?? ''} ${c.especie?.nome ?? ''}`
       .toLowerCase()
-      .includes(search.toLowerCase())
+      .includes(search.toLowerCase()),
   );
 
-  void user;
+  const acoesDaLinha = (item: ComposicaoItem) =>
+    editingId === item.id ? (
+      <AcoesRegistro>
+        <AcaoRegistro tom="finalizar" icone={Check} rotulo="Salvar"   onClick={() => saveEdit(item.id)} />
+        <AcaoRegistro tom="neutro"    icone={X}     rotulo="Cancelar" onClick={cancelEdit} />
+      </AcoesRegistro>
+    ) : (
+      <AcoesRegistro>
+        <AcaoRegistro
+          tom="alterar" icone={Pencil} rotulo="Alterar" titulo="Editar valor"
+          visivel={podeAlterar(item.doSistema)}
+          onClick={() => startEdit(item)}
+        />
+        <AcaoRegistro
+          tom="cancelar" icone={Trash2} rotulo="Excluir"
+          visivel={podeExcluir(item.doSistema)}
+          onClick={() => { setErroAcao(null); setItemToDelete(item); }}
+        />
+      </AcoesRegistro>
+    );
 
-  // =====================================================================
-  // RENDER
-  // =====================================================================
+  // ─── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-10">
-      <div className="max-w-6xl mx-auto px-4">
+    <PageContainer maxWidth="7xl">
 
-        <InlineError message={erroInline} className="mt-6" />
+      <BotaoVoltar className="mb-6" />
 
-        {/* Voltar */}
-        <BotaoVoltar className="mb-4 mt-6" />
+      <InlineError message={erroInline} className="mb-4" />
 
-        {/* Título */}
-        <h1 className="text-3xl font-bold text-gray-900 text-center mb-6">
-          Composição Alimentar
-        </h1>
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
+            <Layers size={20} className="text-emerald-700" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Composição Alimentar</h1>
+            <p className="text-sm text-gray-500">Catálogo do sistema + as composições desta clínica</p>
+          </div>
+        </div>
+        <div className="flex gap-2 flex-shrink-0">
+          {podeCriar && (
+          <button
+            onClick={() => navigate('/composicao-alimentar/nutriente/novo')}
+            className="flex items-center gap-2 px-4 py-2.5 bg-white hover:bg-gray-50 text-emerald-700 border border-emerald-700 text-sm font-semibold rounded-2xl transition-colors">
+            Novo Nutriente
+          </button>
+          )}
+          {podeCriar && (
+          <button
+            onClick={() => navigate('/composicao-alimentar/novo')}
+            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors">
+            Nova Composição
+          </button>
+          )}
+        </div>
+      </div>
 
-        {/* Filtros + botões */}
-        <div className="flex flex-col sm:flex-row gap-4 items-end mb-6">
+      {/* Filtros + tabela */}
+      <div className="bg-white border border-gray-100 rounded-2xl mb-4">
+        <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-gray-100">
 
-          {/* Filtro de espécie */}
-          <div className="w-full sm:w-56">
-            <label className="block text-sm font-medium text-gray-500 mb-1">
-              Espécie
-            </label>
+          {/* Espécie — só aparece quando há mais de uma para escolher */}
+          {especies.length > 1 && (
             <select
               value={especieFiltro}
               onChange={(e) => setEspecieFiltro(e.target.value)}
-              className="w-full rounded-3xl border border-gray-300 px-4 py-4 bg-white text-gray-900 focus:outline-none focus:border-emerald-600"
-            >
+              className="px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:border-emerald-600">
               <option value="">Todas as espécies</option>
               {especies.map((e) => (
                 <option key={e.id} value={e.id}>{e.nome}</option>
               ))}
             </select>
-          </div>
+          )}
 
-          {/* Busca por texto */}
-          <div className="flex-1">
-            <label className="block text-sm font-medium text-gray-500 mb-1">
-              Buscar
-            </label>
+          <div className="relative flex-1 max-w-xs">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input
               type="text"
               placeholder="Buscar por alimento ou nutriente..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full border border-gray-300 rounded-3xl px-6 py-4 text-gray-900 bg-white focus:outline-none focus:border-emerald-600"
+              className="w-full pl-8 pr-4 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:border-emerald-600"
             />
           </div>
 
-          {/* Botões de ação */}
-          <div className="flex gap-3 flex-shrink-0">
-            <button
-              onClick={() => navigate('/composicao-alimentar/nutriente/novo')}
-              className="flex items-center justify-center gap-2 bg-white hover:bg-gray-50 text-emerald-700 border-2 border-emerald-700 px-6 py-4 rounded-3xl font-semibold transition-colors whitespace-nowrap"
-            >
-              Novo Nutriente
+          {search && (
+            <button onClick={() => setSearch('')}
+              className="px-3 py-2 text-xs text-gray-500 hover:text-red-500 border border-gray-200 rounded-xl bg-white">
+              Limpar ×
             </button>
-            <button
-              onClick={() => navigate('/composicao-alimentar/novo')}
-              className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-4 rounded-3xl font-semibold transition-colors whitespace-nowrap"
-            >
-              Nova Composição
-            </button>
-          </div>
+          )}
 
+          <span className="ml-auto text-xs text-gray-400">
+            {filtradas.length} {filtradas.length === 1 ? 'composição' : 'composições'}
+          </span>
         </div>
 
-        {/* Tabela */}
-        {loading ? (
-          <p className="text-center text-gray-500 py-12">Carregando composições...</p>
+        <ErroAcao erro={erroAcao} className="mx-4 mt-3" />
+
+        {loading || loadingEspecies ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 size={22} className="animate-spin text-emerald-600" />
+          </div>
+        ) : filtradas.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-gray-300">
+            <Layers size={38} className="mb-3" />
+            <p className="text-sm text-gray-400">Nenhuma composição encontrada</p>
+          </div>
         ) : (
-          <div className="bg-white rounded-3xl shadow overflow-hidden">
-            <table className="w-full">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Alimento</th>
-                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Espécie</th>
-                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Nutriente</th>
-                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Valor (/kg)</th>
-                  <th className="text-left px-6 py-4 text-sm font-medium text-gray-500">Base</th>
-                  <th className="text-right px-6 py-4 text-sm font-medium text-gray-500">Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredComposicoes.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="px-6 py-12 text-center text-gray-400">
-                      Nenhuma composição encontrada.
-                    </td>
+          <>
+            {/* Desktop */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-100">
+                    <th className="px-4 py-3 text-left   text-xs font-semibold text-gray-500 uppercase tracking-wide">Alimento</th>
+                    {especies.length > 1 && (
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Espécie</th>
+                    )}
+                    <th className="px-4 py-3 text-left   text-xs font-semibold text-gray-500 uppercase tracking-wide">Nutriente</th>
+                    <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Valor (/kg)</th>
+                    <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Base</th>
+                    <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Origem</th>
+                    <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
                   </tr>
-                ) : (
-                  filteredComposicoes.map((item) => {
-                    const isEditing = editingId === item.id;
-                    return (
-                      <tr key={item.id} className="border-t hover:bg-gray-50">
-
-                        {/* Alimento — somente leitura */}
-                        <td className="px-6 py-4 font-medium text-gray-900">
-                          {item.alimento?.nome ?? '—'}
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {filtradas.map((item) => (
+                    <tr key={item.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-3">
+                        <p className="text-sm font-medium text-gray-900">{item.alimento?.nome ?? '—'}</p>
+                      </td>
+                      {especies.length > 1 && (
+                        <td className="px-4 py-3 text-center">
+                          <p className="text-xs text-gray-500">
+                            {item.especie?.nome ?? <span className="text-gray-300">—</span>}
+                          </p>
                         </td>
-
-                        {/* Espécie — somente leitura */}
-                        <td className="px-6 py-4 text-sm text-gray-700">
-                          {item.especie?.nome ?? <span className="text-gray-300">—</span>}
-                        </td>
-
-                        {/* Nutriente — somente leitura */}
-                        <td className="px-6 py-4 font-medium text-gray-900">
-                          {item.nutriente?.nome ?? '—'}
-                        </td>
-
-                        {/* Valor — editável inline */}
-                        <td className="px-6 py-4 font-semibold text-emerald-700">
-                          {isEditing ? (
-                            <input
-                              type="number"
-                              step="0.0001"
-                              min="0"
-                              autoFocus
-                              value={editValues.valorPorKg}
-                              onChange={(e) =>
-                                setEditValues({ valorPorKg: e.target.value })
-                              }
-                              className="border border-gray-300 rounded-xl p-2 text-sm text-gray-900 bg-white w-28 focus:outline-none focus:border-emerald-600"
-                            />
-                          ) : (
-                            item.valorPorKg
-                          )}
-                        </td>
-
-                        {/* Base — somente leitura */}
-                        <td className="px-6 py-4 text-gray-900">
-                          {item.base}
-                        </td>
-
-                        {/* Ações */}
-                        <td className="px-6 py-4">
-                          <div className="flex justify-end gap-3">
-                            {isEditing ? (
-                              <>
-                                <button
-                                  onClick={() => saveEdit(item.id)}
-                                  className="text-emerald-600 hover:text-emerald-700 font-medium text-sm"
-                                >
-                                  Salvar
-                                </button>
-                                <button
-                                  onClick={cancelEdit}
-                                  className="text-gray-500 hover:text-gray-700 text-sm"
-                                >
-                                  Cancelar
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <button
-                                  onClick={() => startEdit(item)}
-                                  title="Editar valor"
-                                  className="text-emerald-600 hover:text-emerald-700"
-                                >
-                                  <Edit size={18} />
-                                </button>
-                                <button
-                                  onClick={() => setItemToDelete(item)}
-                                  title="Excluir"
-                                  className="text-red-500 hover:text-red-700"
-                                >
-                                  <Trash2 size={18} />
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </td>
-
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Contagem */}
-        {!loading && filteredComposicoes.length > 0 && (
-          <p className="text-center text-sm text-gray-400 mt-4">
-            {filteredComposicoes.length}{' '}
-            {filteredComposicoes.length === 1 ? 'composição encontrada' : 'composições encontradas'}
-          </p>
-        )}
-
-        {/* Modal de exclusão */}
-        {itemToDelete && (
-          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl">
-              <div className="bg-emerald-700 text-white p-6 text-center">
-                <h2 className="text-2xl font-bold">Excluir composição?</h2>
-                <p className="text-emerald-100 mt-2">
-                  Tem certeza que deseja excluir{' '}
-                  <strong>
-                    {itemToDelete.alimento?.nome} × {itemToDelete.nutriente?.nome}
-                  </strong>
-                  ?
-                </p>
-              </div>
-              <div className="p-6">
-                <ErroAcao erro={erroAcao} className="mb-3" />
-                <div className="flex gap-4">
-                <button
-                  onClick={() => setItemToDelete(null)}
-                  className="flex-1 py-4 text-gray-700 font-semibold border border-gray-300 rounded-3xl hover:bg-gray-50"
-                >
-                  Cancelar
-                </button>
-                <button
-                  onClick={confirmDelete}
-                  className="flex-1 py-4 bg-red-600 text-white font-semibold rounded-3xl hover:bg-red-700"
-                >
-                  Excluir
-                </button>
-                </div>
-              </div>
+                      )}
+                      <td className="px-4 py-3">
+                        <p className="text-sm text-gray-700">{item.nutriente?.nome ?? '—'}</p>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {editingId === item.id ? (
+                          <input
+                            type="number" step="0.0001" min="0" autoFocus
+                            value={editValor}
+                            onChange={(e) => setEditValor(e.target.value)}
+                            className="w-28 border border-gray-200 rounded-xl px-3 py-1.5 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600"
+                          />
+                        ) : (
+                          <span className="text-sm font-semibold text-emerald-700">{item.valorPorKg}</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <p className="text-xs text-gray-700">{item.base}</p>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <SeloOrigemCatalogo doSistema={item.doSistema} />
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {acoesDaLinha(item)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          </div>
-        )}
 
+            {/* Mobile */}
+            <div className="md:hidden divide-y divide-gray-50">
+              {filtradas.map((item) => (
+                <div key={item.id} className="px-4 py-3">
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{item.alimento?.nome ?? '—'}</p>
+                      <p className="text-xs text-gray-500">
+                        {item.nutriente?.nome ?? '—'}
+                        {especies.length > 1 && item.especie?.nome ? ` · ${item.especie.nome}` : ''}
+                        {` · base ${item.base}`}
+                      </p>
+                    </div>
+                    {editingId === item.id ? (
+                      <input
+                        type="number" step="0.0001" min="0" autoFocus
+                        value={editValor}
+                        onChange={(e) => setEditValor(e.target.value)}
+                        className="w-24 border border-gray-200 rounded-xl px-2 py-1 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600 flex-shrink-0"
+                      />
+                    ) : (
+                      <span className="text-sm font-semibold text-emerald-700 flex-shrink-0">{item.valorPorKg}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <SeloOrigemCatalogo doSistema={item.doSistema} />
+                    {acoesDaLinha(item)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </div>
-    </div>
+
+      <ModalJustificativa
+        aberto={itemToDelete !== null}
+        titulo="Excluir composição"
+        descricao={itemToDelete
+          ? `${itemToDelete.alimento?.nome ?? '?'} × ${itemToDelete.nutriente?.nome ?? '?'} será APAGADO do catálogo.`
+          : ''}
+        acaoLabel="Excluir"
+        processando={excluindo}
+        erro={erroAcao}
+        onConfirmar={confirmDelete}
+        onFechar={() => { setItemToDelete(null); setErroAcao(null); }}
+      />
+
+    </PageContainer>
   );
 };
 

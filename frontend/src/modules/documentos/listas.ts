@@ -113,6 +113,17 @@ export interface ListaDocumento {
 export interface OpcaoLista {
   rotulo:  string;
   valores: Record<string, string>;
+  /**
+   * Já foi aplicada NESTE paciente nos últimos 12 meses (só `empresa.vacinas`).
+   * A tela põe um ✅ e o backend já as devolve no TOPO da lista, da mais recente para a
+   * mais antiga — ver `lib/documentoListas.js#opcoesEmpresaVacinas`.
+   *
+   * ⚠️ Erguer, não FILTRAR: um atestado pode registrar vacina que o paciente nunca
+   * tomou (a primeira dose é exatamente esse caso).
+   */
+  aplicada?:   boolean;
+  /** Data da aplicação mais recente, já formatada no fuso da clínica. */
+  aplicadaEm?: string | null;
 }
 
 /** Linha totalmente em branco não conta — nem para exibir, nem para imprimir. */

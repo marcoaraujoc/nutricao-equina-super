@@ -17,6 +17,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { PERMISSOES_PADRAO } = require('../seeds/002_permissoes_padrao.seed');
+const { ehCargoPrestador } = require('../lib/cargosPrestador');
 // "Tem cadastro de cliente nesta empresa?" — mesmo critério do tipo por empresa
 // (lib/tipoContexto.js), reusado aqui para a regra "mais de um papel na mesma
 // empresa soma permissões" (ver `ajusteperfil` na memória).
@@ -163,15 +164,16 @@ async function getNivelPermissaoProprietario(userId, moduloSlug, empresaId = nul
 /**
  * Busca o nível de permissão de um usuário para um módulo específico.
  *
- * FORNECEDOR: usa PermissaoMembro (permissões individuais configuradas por animal/membro).
+ * PRESTADOR (cargo FORNECEDOR ou PRESTADOR — ver lib/cargosPrestador.js): usa
+ * PermissaoMembro (permissões individuais configuradas por animal/membro).
  * Todos os demais cargos: usa MatrizPerfil como fonte canônica — é o que o gestor
  * edita no ControleAcesso → "Matriz de Perfis". Ignorar PermissaoMembro evita que
  * registros desatualizados (ex.: do seed ou de propagação anterior) concedam acesso
  * indevido após o gestor restringir o perfil.
  */
 async function getNivelPermissao(userId, equipeId, moduloSlug, cargo = null) {
-  if (cargo === 'FORNECEDOR') {
-    // FORNECEDOR: permissões individuais por membro (via ControleAcesso → aba Fornecedor)
+  if (ehCargoPrestador(cargo)) {
+    // Prestador externo: permissões individuais por membro (via ControleAcesso)
     const permissao = await prisma.permissaoMembro.findUnique({
       where: { equipeId_userId_moduloSlug: { equipeId, userId, moduloSlug } },
       select: { nivel: true },

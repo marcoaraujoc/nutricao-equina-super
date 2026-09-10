@@ -149,7 +149,7 @@ const normalizarFonteOpcoes = (f) => {
  * ⚠️ DATA DE FABRICAÇÃO fica em branco: o S2Vet não guarda esse dado em lugar nenhum
  * (`LoteVacina` tem lote e validade), e preencher com a validade seria inventar valor.
  */
-async function opcoesEmpresaVacinas(empresaId, fuso) {
+async function opcoesEmpresaVacinas(empresaId, fuso, animalId = null) {
   const vacinas = await prisma.medicamento.findMany({
     where: {
       ativo:         true,
@@ -170,7 +170,12 @@ async function opcoesEmpresaVacinas(empresaId, fuso) {
       },
     },
     orderBy: { nome: 'asc' },
-    take: 500,
+    // 🔴 SEM `take`. Havia um teto de 500 aqui, aplicado à consulta CRUA — isto é,
+    // ANTES da deduplicação por nome. Medido nesta base: 426 linhas → 231 nomes, então
+    // hoje ele não cortava nada; mas o corte era ALFABÉTICO e SILENCIOSO, então bastava
+    // a clínica cadastrar as próprias vacinas para o fim do catálogo ("Z…") desaparecer
+    // do atestado sem nada acusar. Catálogo de vacinas é finito e pequeno — o custo de
+    // trazê-lo inteiro é menor que o de descobrir o corte no papel.
   });
 
   // DEDUPLICA POR NOME. O catálogo é MISTO (global + o da empresa) e o mesmo produto
@@ -186,10 +191,17 @@ async function opcoesEmpresaVacinas(empresaId, fuso) {
     if (!atual || peso > atual.peso) porNome.set(nome, { v, peso });
   }
 
-  return [...porNome.values()].map(({ v }) => {
+  const aplicadas = await vacinasAplicadasNoUltimoAno(animalId);
+
+  const opcoes = [...porNome.values()].map(({ v }) => {
     const lote = (v.lotes ?? [])[0];
+    const aplicada = aplicadas.get(chaveNome(v.nome)) ?? null;
     return {
       rotulo: v.nome,
+      // Marca de "já foi aplicada NESTE paciente nos últimos 12 meses" — a tela põe um
+      // ✅ e ergue estas ao topo da lista.
+      aplicada:   Boolean(aplicada),
+      aplicadaEm: aplicada ? formatarDataNaEmpresa(aplicada, fuso) : null,
       valores: {
         'Nome comercial da vacina': v.nome,
         Fabricante:                 txt(v.fabricante),
@@ -198,17 +210,84 @@ async function opcoesEmpresaVacinas(empresaId, fuso) {
       },
     };
   });
+
+  /**
+   * AS APLICADAS PRIMEIRO, da mais recente para a mais antiga; depois o catálogo em
+   * ordem alfabética.
+   *
+   * ⚠️ A ordenação é do BACKEND, não da tela: é aqui que se sabe QUANDO cada uma foi
+   * aplicada. Mandar a data e deixar a tela ordenar significaria a mesma regra escrita
+   * duas vezes — e a segunda divergiria na primeira correção.
+   *
+   * ⚠️ Erguer, e não FILTRAR: um atestado pode registrar vacina que este paciente nunca
+   * tomou (é justamente o caso da primeira dose), então o catálogo inteiro continua
+   * disponível abaixo.
+   */
+  const quando = (o) => aplicadas.get(chaveNome(o.rotulo))?.getTime() ?? null;
+  return opcoes.sort((a, b) => {
+    const qa = quando(a);
+    const qb = quando(b);
+    if (qa !== null && qb !== null) return qb - qa;              // mais recente primeiro
+    if (qa !== null) return -1;
+    if (qb !== null) return 1;
+    return a.rotulo.localeCompare(b.rotulo, 'pt-BR');
+  });
+}
+
+/** Chave de casamento por NOME — o registro de vacina guarda o nome, não FK garantida. */
+const chaveNome = (n) => String(n ?? '').trim().toLowerCase();
+
+/**
+ * VACINAS JÁ APLICADAS NESTE PACIENTE nos últimos 12 meses → Map(nome → data da mais
+ * recente).
+ *
+ * POR QUE 12 MESES: é o intervalo do reforço anual, que é o que interessa a quem está
+ * atestando ("o que este animal já tomou neste ciclo?"). Sem janela, o atestado de um
+ * paciente antigo subiria ao topo dezenas de vacinas de anos atrás e o atalho deixaria
+ * de ser atalho.
+ *
+ * ⚠️ Só `EXECUTADA`. `SALVA` é rascunho e `FINALIZADA` está na fila do plantão
+ * aguardando aplicação — marcar as duas com ✅ afirmaria no atestado que o animal
+ * recebeu uma dose que ninguém aplicou.
+ *
+ * ⚠️ Sem `animalId` devolve Map vazio, e o catálogo sai na ordem alfabética de sempre:
+ * é o caso do editor de modelos, onde não há paciente.
+ *
+ * ⚠️ Falha aqui NÃO derruba nada — o pior caso é a lista sair sem o atalho.
+ */
+async function vacinasAplicadasNoUltimoAno(animalId) {
+  const vazio = new Map();
+  if (!animalId) return vazio;
+  const desde = new Date();
+  desde.setFullYear(desde.getFullYear() - 1);
+  try {
+    const linhas = await prisma.vacinaClinica.findMany({
+      where:   { animalId: Number(animalId), ativo: true, status: 'EXECUTADA', dataAplicacao: { gte: desde } },
+      select:  { nome: true, dataAplicacao: true },
+      orderBy: { dataAplicacao: 'desc' },
+    });
+    const mapa = new Map();
+    // A lista vem da mais recente para a mais antiga: a PRIMEIRA de cada nome é a que
+    // vale, e por isso o `if (!has)` — sobrescrever traria a dose mais velha.
+    for (const l of linhas) {
+      const k = chaveNome(l.nome);
+      if (k && !mapa.has(k)) mapa.set(k, l.dataAplicacao);
+    }
+    return mapa;
+  } catch { return vazio; }
 }
 
 /** Opções de cada lista que declarou `fonteOpcoes`, prontas para a tela. */
-async function sugerirOpcoes(listas, { empresaId = null, fuso = undefined } = {}) {
+async function sugerirOpcoes(listas, { empresaId = null, fuso = undefined, animalId = null } = {}) {
   const comOpcoes = (listas ?? []).filter(l => l.fonteOpcoes);
   const mapa = {};
   for (const l of comOpcoes) {
     if (l.fonteOpcoes === 'empresa.vacinas') {
       // Falha de catálogo NÃO derruba a emissão: sem opções, a coluna volta a ser um
       // campo de texto e o documento continua emissível.
-      mapa[l.chave] = await opcoesEmpresaVacinas(empresaId, fuso).catch(() => []);
+      // `animalId` é o que permite erguer ao topo (com ✅) o que este paciente já tomou
+      // no último ano — sem ele, o catálogo sai em ordem alfabética, como antes.
+      mapa[l.chave] = await opcoesEmpresaVacinas(empresaId, fuso, animalId).catch(() => []);
     }
   }
   return mapa;

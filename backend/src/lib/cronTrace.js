@@ -114,4 +114,33 @@ function ehManual() {
   return ativo();
 }
 
-module.exports = { comTrace, passo, grupo, ativo, ehManual };
+// ─── ORIGEM DA EXECUÇÃO ───────────────────────────────────────────────────────
+//
+// `AUTOMATICA` (a agenda disparou) · `MANUAL` (botão "Executar agora") ·
+// `RECUPERACAO` (o disparo do dia foi PERDIDO — servidor fora do ar ou erro — e o
+// job está sendo rodado atrasado, na subida).
+//
+// A terceira nasceu em 2026-09-09 com `cronManager.recuperarJobsPerdidos`. Ela precisa
+// existir como valor PRÓPRIO: contada como AUTOMATICA, o histórico diria que a tarefa
+// rodou no horário — e a próxima investigação de "por que só rodou hoje?" começaria de
+// um log que mente. Contada como MANUAL, diria que alguém clicou.
+//
+// Store separado do trace: recuperação não coleta rastro (ninguém está olhando), e
+// `ehManual()` continua significando exatamente "veio do botão".
+const origemALS = new AsyncLocalStorage();
+
+/** Roda `fn` marcando a origem que o log vai registrar. */
+function comOrigem(origem, fn) {
+  return origemALS.run(String(origem), fn);
+}
+
+/**
+ * Origem da execução em curso, para `reportarCron`. Sem marcação explícita cai no
+ * comportamento anterior: MANUAL quando há trace (botão), AUTOMATICA no resto.
+ * ⚠️ `tb_cron_execucoes.origem` é VARCHAR(12) — valor novo precisa caber.
+ */
+function origemAtual() {
+  return origemALS.getStore() ?? (ehManual() ? 'MANUAL' : 'AUTOMATICA');
+}
+
+module.exports = { comTrace, passo, grupo, ativo, ehManual, comOrigem, origemAtual };

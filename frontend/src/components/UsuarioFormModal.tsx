@@ -13,7 +13,6 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { isValidEmail } from '../utils/validators';
-import ModalNovoFornecedor, { type NovoFornecedorResult } from './ModalNovoFornecedor';
 import EspecialidadeSelector from './EspecialidadeSelector';
 import InlineError from './InlineError';
 
@@ -40,9 +39,8 @@ export interface UsuarioFormValues {
   valorPagamento?: string;
   /** Sem acesso, a pessoa fica só como cadastro da clínica e NÃO loga na aplicação. */
   acessoSistema?: boolean;
-  /** Perfil FORNECEDOR (comFornecedor): cadastro Fornecedor selecionado, null = criar novo */
-  fornecedorId?: number | null;
-  /** Perfil FORNECEDOR sem fornecedorId: tipo de serviço do novo cadastro Fornecedor */
+  /** Legado: tipo de serviço do cadastro externo. Não é mais preenchido por esta tela
+   *  (Fornecedor/Prestador saíram do formulário de membro em 2026-09-09). */
   tipoServico?: string;
   /** Especialidades (catálogo por espécie) — VET e FORNECEDOR. */
   especialidadeIds?: number[];
@@ -77,17 +75,10 @@ interface LocalizacaoOpcao { id: number; nome: string }
 const inputCls = 'w-full border border-gray-200 rounded-2xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-400 transition-colors';
 const labelCls = 'block text-xs text-gray-500 mb-1';
 
-interface FornecedorDisponivel {
-  id:          number;
-  nome:        string;
-  email:       string | null;
-  telefone:    string | null;
-  tipoServico: string;
-  userId:      number | null;
-  ativo:       boolean;
-}
 
-export const SENHA_PADRAO_INICIAL = 'Inicial_001';
+// 🔴 A SENHA INICIAL NÃO É MOSTRADA (2026-09-08) — ver a nota em
+// `ProprietarioFormModal.tsx`. Derivada por cadastro no backend
+// (`lib/senhaInicial.js`) e enviada só pelo e-mail de boas-vindas.
 
 // Perfis que TÊM especialidade e tempo de consulta. Os demais (ESTAGIARIO, ENFERMEIRO,
 // SECRETARIA, FINANCEIRO) informam apenas local e horário de trabalho.
@@ -95,7 +86,7 @@ export const SENHA_PADRAO_INICIAL = 'Inicial_001';
 // GESTOR PODE informar especialidade, nunca é obrigado — ficar fora desta lista não só
 // esconde o campo dele aqui como faz `handleSubmit` (enviaEspec) APAGAR a especialidade
 // que ele já tinha salvo (ex.: via Cadastro Pessoal) ao editar o próprio cadastro nesta tela.
-export const PERFIS_COM_ESPECIALIDADE = ['VETERINARIO', 'FORNECEDOR', 'GESTOR'];
+export const PERFIS_COM_ESPECIALIDADE = ['VETERINARIO', 'FORNECEDOR', 'PRESTADOR', 'GESTOR'];
 
 export const PERFIS_ACESSO: Array<{ value: string; label: string }> = [
   { value: 'VETERINARIO', label: 'Veterinário' },
@@ -103,11 +94,25 @@ export const PERFIS_ACESSO: Array<{ value: string; label: string }> = [
   { value: 'ENFERMEIRO',  label: 'Enfermeiro'  },
   { value: 'SECRETARIA',  label: 'Secretaria'  },
   { value: 'FINANCEIRO',  label: 'Financeiro'  },
-  { value: 'FORNECEDOR',  label: 'Fornecedor'  },
 ];
+
+// 🔴 FORNECEDOR e PRESTADOR SAÍRAM DAQUI (2026-09-09) — **não são equipe**.
+//
+// São ATUAÇÕES ESTANQUES: o profissional externo é criado e gerido no PRÓPRIO cadastro
+// (`/cadastro/fornecedores`, `/cadastro/prestadores`), que concede o acesso ao sistema
+// e a designação de pacientes. Oferecê-los aqui os traria de volta para dentro da
+// equipe pela porta dos fundos — e a tela Equipe nem os lista mais.
+//
+// ⚠️ Eles ficam em `PERFIS_LEGADOS` para o caso de um vínculo antigo ser aberto por
+// algum caminho: o `<select>` mostra o rótulo em vez de vir em branco (nada foi
+// migrado — quem já era FORNECEDOR continua sendo).
+// ⚠️ Quem dá o acesso de verdade é o cartão emitido pelo cadastro
+// (backend `lib/acessoExterno.js`), não este formulário.
 
 // Perfis que não podem ser escolhidos, mas podem existir em usuários antigos (edição)
 const PERFIS_LEGADOS: Record<string, string> = {
+  FORNECEDOR:   'Fornecedor',
+  PRESTADOR:    'Prestador',
   PROPRIETARIO: 'Proprietário',
   ADMIN:        'Administrador',
   MEMBRO:       'Membro',
@@ -340,8 +345,6 @@ interface UsuarioFormModalProps {
   permitirSenha?: boolean;
   /** Desabilita o campo de e-mail (e-mail é o login — edição restrita) */
   emailBloqueado?: boolean;
-  /** Perfil Fornecedor (FORNECEDOR): exibe seletor de fornecedores cadastrados disponíveis */
-  comFornecedor?: boolean;
   /** Exibe checkboxes multi-seleção de cargo em vez do select único */
   permitirMultiCargos?: boolean;
   /** Oculta o campo "Perfil de acesso" (usado em telas de cadastro simples) */
@@ -600,7 +603,7 @@ export function LocalTrabalhoFields({
 
 export default function UsuarioFormModal({
   titulo, infoNota, modoEdicao = false, permitirSenha = false, emailBloqueado = false,
-  comFornecedor = false, permitirMultiCargos = false, ocultarPerfil = false, comExpediente = false,
+  permitirMultiCargos = false, ocultarPerfil = false, comExpediente = false,
   comVinculoEmpresa = false, ocultarPagamento = false,
   equipeId = null, erroSenhaServidor, erroServidor, initial, salvando, textoBotao, onClose, onSubmit,
 }: UsuarioFormModalProps) {
@@ -624,13 +627,6 @@ export default function UsuarioFormModal({
   const [erroInline, setErroInline] = useState<string | null>(null);
   const [buscandoCEP,  setBuscandoCEP]  = useState(false);
 
-  // Seletor de fornecedor existente
-  const [fornecedores,        setFornecedores]        = useState<FornecedorDisponivel[]>([]);
-  const [loadingFornecedores, setLoadingFornecedores] = useState(false);
-  const [fornecedorId,        setFornecedorId]        = useState<number | ''>('');
-  const [criandoNovo,         setCriandoNovo]         = useState(false);
-
-  const mostrarSeletorFornecedor = comFornecedor && !modoEdicao && form.perfil === 'FORNECEDOR';
 
   // Especialidades (catálogo por espécie) — VET, FORNECEDOR e GESTOR (opcional para
   // este último), na inclusão E na edição. Estagiário, enfermeiro, secretaria e
@@ -722,37 +718,6 @@ export default function UsuarioFormModal({
       return `Saída após o expediente da empresa (até ${fim}).`;
     }
     return null;
-  };
-
-  useEffect(() => {
-    if (!mostrarSeletorFornecedor || fornecedores.length > 0 || loadingFornecedores) return;
-    let cancelado = false;
-    (async () => {
-      setLoadingFornecedores(true);
-      try {
-        const res = await api.get('/cadastro/fornecedores');
-        if (cancelado) return;
-        const lista = (res.data?.dados ?? []) as FornecedorDisponivel[];
-        setFornecedores(lista.filter(f => f.ativo && !f.userId));
-      } catch { /* silencioso */ }
-      finally { if (!cancelado) setLoadingFornecedores(false); }
-    })();
-    return () => { cancelado = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mostrarSeletorFornecedor]);
-
-  const selecionarFornecedor = (id: number | '') => {
-    setFornecedorId(id);
-    setCriandoNovo(false);
-    if (id === '') return;
-    const f = fornecedores.find(x => x.id === id);
-    if (!f) return;
-    setForm(prev => ({
-      ...prev,
-      fullName: f.nome,
-      email:    f.email    ?? prev.email,
-      phone:    f.telefone ?? prev.phone,
-    }));
   };
 
   const set = (field: keyof UsuarioFormValues, value: string | boolean | string[]) =>
@@ -882,7 +847,6 @@ export default function UsuarioFormModal({
       phone:        form.phone.trim(),
       cargos:       cargosFinais,
       perfil:       perfilFinal,
-      fornecedorId: mostrarSeletorFornecedor && fornecedorId !== '' ? fornecedorId : null,
       tipoServico:  undefined,
       // GESTOR sem nada preenchido (`!pagamentoAplicavel`): não manda os três campos
       // (undefined), para o backend não exigir/tocar num acordo que não existe.
@@ -935,10 +899,8 @@ export default function UsuarioFormModal({
                   <label className={labelCls}>Nome completo *</label>
                   <input type="text" value={form.fullName}
                     onChange={e => set('fullName', e.target.value)}
-                    disabled={mostrarSeletorFornecedor}
-                    title={mostrarSeletorFornecedor ? 'Vem do cadastro do fornecedor selecionado (ou do novo fornecedor incluído)' : undefined}
                     placeholder="Nome do usuário"
-                    className={`${inputCls} ${mostrarSeletorFornecedor ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`} />
+                    className={inputCls} />
                 </div>
 
                 {!ocultarPerfil && <div>
@@ -963,7 +925,6 @@ export default function UsuarioFormModal({
                     <select value={form.perfil}
                       onChange={e => {
                         const val = e.target.value;
-                        setFornecedorId(''); setCriandoNovo(false);
                         if (modoEdicao) {
                           set('perfil', val); set('cargos', [val]);
                         } else {
@@ -987,32 +948,6 @@ export default function UsuarioFormModal({
                   )}
                 </div>}
               </div>
-
-              {/* Seletor de fornecedor existente */}
-              {mostrarSeletorFornecedor && (
-                <div className="sm:col-span-2 space-y-2">
-                  {loadingFornecedores ? (
-                    <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
-                      <Loader2 size={12} className="animate-spin" /> Buscando fornecedores…
-                    </div>
-                  ) : (
-                    <select value={fornecedorId}
-                      onChange={e => selecionarFornecedor(e.target.value === '' ? '' : Number(e.target.value))}
-                      className={inputCls}>
-                      <option value="">Selecionar fornecedor existente…</option>
-                      {fornecedores.map(f => (
-                        <option key={f.id} value={f.id}>{f.nome}{f.tipoServico ? ` · ${f.tipoServico}` : ''}</option>
-                      ))}
-                    </select>
-                  )}
-                  <button type="button"
-                    onClick={() => setCriandoNovo(true)}
-                    className="flex items-center gap-1.5 text-xs text-emerald-600 hover:text-emerald-800 font-medium transition-colors">
-                    <Plus size={13} />
-                    Incluir novo fornecedor
-                  </button>
-                </div>
-              )}
 
               <>
                   {/* Telefone + e-mail + acesso ao sistema na MESMA linha. O checkbox
@@ -1106,8 +1041,8 @@ export default function UsuarioFormModal({
                       <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5 text-xs text-emerald-700">
                         <Info size={12} className="flex-shrink-0 mt-0.5" />
                         <span>
-                          A senha inicial é a padrão <strong>{SENHA_PADRAO_INICIAL}</strong> —
-                          o usuário deverá alterá-la no primeiro acesso.
+                          A senha inicial é gerada pelo sistema e enviada <strong>apenas por
+                          e-mail</strong>; o usuário deverá alterá-la no primeiro acesso.
                         </span>
                       </div>
                     </div>
@@ -1431,27 +1366,6 @@ export default function UsuarioFormModal({
       </div>
     </div>
 
-    {criandoNovo && mostrarSeletorFornecedor && (
-      <ModalNovoFornecedor
-        onClose={() => setCriandoNovo(false)}
-        onSalvo={(result: NovoFornecedorResult) => {
-          // Fornecedor criado — inclui imediatamente na equipe e fecha tudo
-          setCriandoNovo(false);
-          onSubmit({
-            fullName:     result.nome,
-            email:        result.email ?? '',
-            phone:        result.telefone ?? '',
-            perfil:       'FORNECEDOR',
-            cargos:       ['FORNECEDOR'],
-            senha:        '',
-            ativo:        true,
-            cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
-            fornecedorId: result.id,
-            tipoServico:  undefined,
-          });
-        }}
-      />
-    )}
   </>
   );
 }

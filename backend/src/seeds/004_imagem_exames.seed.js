@@ -204,7 +204,10 @@ async function seedImagemExames(prismaClient) {
   console.log(`  ✓ Exames de imagem: ${gruposCount} grupos, ${itensCount} itens`);
 }
 
-module.exports = { seedImagemExames };
+// GRUPOS/ITENS exportados porque `005_procedimentos_imagem.seed.js` PROJETA este
+// mesmo catálogo em `tb_procedimentos_vet` (onde ele ganha preço e prestador).
+// Uma segunda cópia dos 119 exames divergiria deste arquivo na primeira correção.
+module.exports = { seedImagemExames, GRUPOS, ITENS };
 
 if (require.main === module) {
   seedImagemExames()

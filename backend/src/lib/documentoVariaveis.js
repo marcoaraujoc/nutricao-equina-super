@@ -104,12 +104,42 @@ const ANIMAL_SELECT = {
  * importado porque aquele helper é privado do controller — e um `require` cruzado
  * entre controller e lib fecharia um ciclo com `EquipeController → ... → esta lib`.
  */
+/**
+ * Registro do ESTABELECIMENTO no CRMV (pessoa jurídica) — `tb_empresas.crmv`.
+ *
+ * ⚠️ Lido por SQL CRU, com `catch` que devolve null: a coluna é nova
+ * (`20260926000000_empresa_crmv`) e o client Prisma pode não estar regenerado — no
+ * Windows o `generate` falha com o backend rodando (§11). Um `select` tipado ali
+ * derrubaria a EMISSÃO INTEIRA de documento numa base que ainda não migrou; assim,
+ * o pior caso é a folha sair sem a linha do CRMV da clínica.
+ *
+ * ⚠️ NÃO confundir com `veterinario.crmv`, que é o registro da PESSOA que assina.
+ * São dois registros distintos, e a resolução pede os dois no papel.
+ */
+async function crmvDaEmpresa(empresaId) {
+  if (!empresaId) return null;
+  const linhas = await prisma
+    .$queryRaw`SELECT "crmv" FROM "schs2vet"."tb_empresas" WHERE "id" = ${Number(empresaId)} LIMIT 1`
+    .catch(() => []);
+  return linhas?.[0]?.crmv ?? null;
+}
+
 async function configDaEmpresa(empresaId, equipeId) {
   const empresa = await prisma.empresa.findUnique({
     where:  { id: empresaId },
-    select: { id: true, nome: true, cnpj: true, telefone: true, endereco: true, cidade: true, estado: true, cep: true },
+    select: {
+      id: true, nome: true, cnpj: true, telefone: true, endereco: true,
+      cidade: true, estado: true, cep: true,
+      // Cadastro fiscal — é o que vai para o timbre quando a clínica é PESSOA
+      // JURÍDICA (a pedido, 2026-09-08). `documento`/`tipoDocumento` são a coluna
+      // do cadastro fiscal; `cnpj` é a LEGADA que convive com ela (§5).
+      razaoSocial: true, nomeFantasia: true, documento: true, tipoDocumento: true,
+      inscricaoEstadual: true, emailContato: true,
+      numero: true, complemento: true, bairro: true,
+    },
   });
   if (!empresa) return { empresa: null, config: null };
+  empresa.crmv = await crmvDaEmpresa(empresaId);
 
   let escopoEquipe = null;
   if (!empresa.cnpj) {
@@ -333,12 +363,51 @@ async function montarContexto(req, { animalId, evolucaoId = null } = {}) {
   // cadastro do cliente.
   const municipioPropriedade = municipioDoEndereco(enderecoPropriedade) || municipioCliente;
 
+  // 🔴 DADOS DA EMPRESA SÓ QUANDO ELA É PESSOA JURÍDICA (a pedido, 2026-09-08).
+  //
+  // O S2Vet atende também o veterinário AUTÔNOMO, cuja "empresa" é pessoal e tem CPF
+  // (§5): imprimir "CNPJ:" e "Inscrição Estadual:" no papel dele seria afirmar um
+  // registro que não existe — num documento com valor legal. Sendo CPF, as variáveis
+  // resolvem VAZIO e a regra do campo vazio tira as linhas da folha sozinha.
+  //
+  // ⚠️ O teste é pelo DOCUMENTO, não pelo `tipoDocumento` sozinho: as duas colunas
+  // convivem (`cnpj` é a legada, `documento` é a do cadastro fiscal — §5) e a base
+  // tem linha com uma preenchida e a outra não.
+  const digitos = (v) => String(v ?? '').replace(/\D/g, '');
+  const ehPessoaJuridica = empresa?.tipoDocumento === 'CNPJ'
+    || digitos(empresa?.documento).length === 14
+    || digitos(empresa?.cnpj).length === 14;
+  const soPJ = (v) => (ehPessoaJuridica ? txt(v) : '');
+
+  // Endereço do estabelecimento em UMA linha, montado só com o que existe — nunca
+  // com separador órfão ("- , /") do campo que ficou em branco.
+  const logradouroEmpresa = [
+    [txt(empresa?.endereco), txt(empresa?.numero)].filter(Boolean).join(', '),
+    txt(empresa?.complemento),
+    txt(empresa?.bairro),
+    [txt(empresa?.cidade), txt(empresa?.estado)].filter(Boolean).join('/'),
+    txt(empresa?.cep) ? `CEP ${txt(empresa.cep)}` : '',
+  ].filter(Boolean).join(' - ');
+
   const variaveis = {
     // ── Veterinário (quem assina) ──
     'veterinario.nome':      txt(profissional?.nome),
     'veterinario.crmv':      txt(profissional?.crmv),
     'veterinario.clinica':   txt(empresa?.nome),
     'veterinario.telefone':  txt(profissional?.phone) || txt(empresa?.telefone),
+    // O e-mail é a IDENTIDADE do login e mora em `users` — é o único campo do
+    // profissional que não é por empresa (§36-f).
+    'veterinario.email':     txt(profissional?.email),
+
+    // ── Estabelecimento (vazio quando a clínica é pessoa física) ──
+    'empresa.nome':              soPJ(txt(empresa?.razaoSocial) || txt(empresa?.nome)),
+    'empresa.nomeFantasia':      soPJ(empresa?.nomeFantasia),
+    'empresa.cnpj':              soPJ(txt(empresa?.documento) || txt(empresa?.cnpj)),
+    'empresa.inscricaoEstadual': soPJ(empresa?.inscricaoEstadual),
+    'empresa.crmv':              soPJ(empresa?.crmv),
+    'empresa.endereco':          soPJ(logradouroEmpresa),
+    'empresa.telefone':          soPJ(empresa?.telefone),
+    'empresa.email':             soPJ(empresa?.emailContato),
 
     // ── Cliente (proprietário) ──
     'cliente.nome':          txt(cliente?.fullName),
@@ -440,6 +509,22 @@ async function montarContexto(req, { animalId, evolucaoId = null } = {}) {
       assinaturaUrl: profissional?.assinaturaUrl ?? null,
       crmv:          txt(profissional?.crmv),
       assinanteNome: txt(profissional?.nome),
+      // 🔴 O TIMBRE DO ESTABELECIMENTO (a pedido, 2026-09-08) — vai no CABEÇALHO, e
+      // não no corpo, porque precisa alcançar TODO documento, inclusive o que a
+      // clínica ENVIOU (que não tem bloco de identificação nenhum). Viaja na `marca`
+      // pelo mesmo motivo da logo: é identidade da folha, não conteúdo do modelo,
+      // e por isso entra no SNAPSHOT do emitido — reimprimir daqui a dois anos tem de
+      // sair com o CNPJ e o endereço DAQUELE dia.
+      // Objeto NULO quando a clínica é pessoa física: o cabeçalho não desenha faixa.
+      empresa: ehPessoaJuridica ? {
+        nome:              txt(empresa?.razaoSocial) || txt(empresa?.nome),
+        cnpj:              txt(empresa?.documento) || txt(empresa?.cnpj),
+        inscricaoEstadual: txt(empresa?.inscricaoEstadual),
+        crmv:              txt(empresa?.crmv),
+        endereco:          logradouroEmpresa,
+        telefone:          txt(empresa?.telefone),
+        email:             txt(empresa?.emailContato),
+      } : null,
     },
     animal: {
       id: animal.id, nome: animal.nome, empresaId: animal.empresaId,
@@ -710,6 +795,9 @@ module.exports = {
   coletarCampos,
   chaveDaLacuna,
   RE_LACUNA,
+  // Fonte ÚNICA da leitura tolerante da coluna nova — o cadastro da empresa a reusa
+  // em vez de repetir o `$queryRaw` com catch (duas cópias divergem na correção).
+  crmvDaEmpresa,
   // exportados para teste
   idadeDe,
   resenhaDe,

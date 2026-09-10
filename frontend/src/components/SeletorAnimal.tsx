@@ -1,7 +1,6 @@
-import { useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
-import { rotuloOpcaoAnimal } from '../utils/animalInfo';
+import SeletorAnimalInteligente from './SeletorAnimalInteligente';
 
 interface AnimalOpcao {
   id:              number;
@@ -48,39 +47,35 @@ export default function SeletorAnimal({
 
   const currentId = animalIdAtual ? String(animalIdAtual) : '';
 
-  const nomesCount = useMemo(() =>
-    animais.reduce<Record<string, number>>((acc, a) => {
-      acc[a.nome] = (acc[a.nome] ?? 0) + 1; return acc;
-    }, {}),
-  [animais]);
-
   if (animais.length <= 1) return null;
 
-  const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const val = e.target.value;
-    if (!val) return;
-    const a = animais.find(x => String(x.id) === val);
-    if (a) {
-      setSelectedAnimal(toAnimal(a));
-      // Preserva a query atual (ex.: ?tipo=laboratorial em Resultado de Exame)
-      navigate(`${rotaBase}/${a.id}${location.search}`);
-    }
+  const atual = animais.find(a => String(a.id) === currentId) ?? null;
+
+  const escolher = (a: AnimalOpcao) => {
+    setSelectedAnimal(toAnimal(a));
+    // Preserva a query atual (ex.: ?tipo=laboratorial em Resultado de Exame)
+    navigate(`${rotaBase}/${a.id}${location.search}`);
   };
 
   return (
     <div className={className}>
       <label className="block text-xs font-medium text-gray-500 mb-1">Paciente</label>
-      <select
-        value={currentId}
-        onChange={handleChange}
-        className="w-full border border-gray-200 rounded-2xl px-4 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600 shadow-sm"
-      >
-        {animais.map(a => (
-          <option key={a.id} value={a.id}>
-            {rotuloOpcaoAnimal(a, { comProprietario: (nomesCount[a.nome] ?? 0) > 1 })}
-          </option>
-        ))}
-      </select>
+      {/* 🔴 DIGITAR O NOME, em vez de rolar a lista (a pedido, 2026-09-08).
+          Este componente era um `<select>` puro, e por isso as telas que o usam
+          (Dieta, Resultado de Exame, Relatório Nutricional) obrigavam a percorrer
+          centenas de pacientes até achar "Zeus" — enquanto o Atendimento já resolvia
+          em três letras.
+          ⚠️ A troca é AQUI, no componente, e não em cada tela: é o que faz as três
+          ganharem a busca de uma vez, e o que impede a próxima tela de nascer com o
+          seletor antigo.
+          ⚠️ O que este componente acrescenta ao combobox é a NAVEGAÇÃO (ele leva para
+          `rotaBase/:id` preservando a query) e o `SelectedAnimalContext`. O combobox
+          não sabe nada disso, e não deve saber — ele é a escolha, não o destino. */}
+      <SeletorAnimalInteligente
+        animais={animais}
+        animalAtual={atual}
+        onSelecionar={escolher}
+      />
     </div>
   );
 }

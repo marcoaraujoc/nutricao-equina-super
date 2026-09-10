@@ -13,7 +13,7 @@
 // transformaria o log num arquivo morto que ninguém lê e que só engorda o backup.
 
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2, RefreshCw, CheckCircle2, XCircle, Play, Clock, Mail } from 'lucide-react';
+import { Loader2, RefreshCw, CheckCircle2, XCircle, Play, Clock, Mail, History } from 'lucide-react';
 import api from '../services/api';
 import InlineError from './InlineError';
 import { formatDataHora } from '../utils/dateUtils';
@@ -139,6 +139,15 @@ export default function LogExecucaoJobs() {
                         {e.origem === 'MANUAL' && (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700">
                             <Play size={9} /> manual
+                          </span>
+                        )}
+                        {/* A tarefa perdeu o horário (servidor fora do ar ou execução com
+                            erro) e foi rodada ATRASADA, na subida do backend. Precisa de
+                            selo próprio: sem ele o histórico diria que ela rodou na hora. */}
+                        {e.origem === 'RECUPERACAO' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-orange-100 text-orange-700"
+                                title="Disparo perdido — executada atrasada, na subida do servidor">
+                            <History size={9} /> recuperação
                           </span>
                         )}
                         {e.notificado && (

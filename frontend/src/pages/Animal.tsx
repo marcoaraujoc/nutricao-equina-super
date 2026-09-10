@@ -911,7 +911,7 @@ const Animal = () => {
   // A mensagem aparece embaixo do próprio campo — o erro fica onde o usuário está.
   const CAMPOS_ANIMAL = [
     'nome', 'sexo', 'especieId', 'racaId', 'localizacaoId',
-    'peso', 'idade', 'categoriaAnimal', 'tipoExercicio',
+    'peso', 'idade', 'categoriaAnimal', 'tipoExercicio', 'pelagem',
   ] as const;
   const CAMPOS_PROPRIETARIO = ['propNome', 'propEmail', 'propTelefone'] as const;
 
@@ -934,6 +934,8 @@ const Animal = () => {
         if (!formData.dataNascimento && !formData.idadeAnos) return 'Informe a data de nascimento ou a idade';
         if (formData.idadeAnos && Number(formData.idadeAnos) <= 0) return 'A idade deve ser positiva';
         return null;
+      // Obrigatória (2026-09-08): é a identificação do animal nos documentos do CFMV.
+      case 'pelagem':         return formData.pelagem?.trim() ? null : 'Selecione a pelagem';
       case 'categoriaAnimal': return isEquino && !formData.categoriaAnimal ? 'Obrigatória para equinos' : null;
       case 'tipoExercicio':   return isEquino && !formData.tipoExercicio   ? 'Obrigatório para equinos' : null;
       case 'propNome':        return formProp.nomeCompleto.trim() ? null : 'Informe o nome do proprietário';
@@ -1599,12 +1601,23 @@ const Animal = () => {
             {/* ── 5. Identificação / Resenha ───────────────────────────────── */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Pelagem</label>
+                {/* Pelagem passou a ser OBRIGATÓRIA (a pedido, 2026-09-08): ela
+                    identifica o animal nos documentos do CFMV (atestado sanitário,
+                    de óbito, de vacinação), onde o campo em branco deixa o papel sem
+                    identificar o paciente.
+                    ⚠️ Campo obrigatório precisa dos QUATRO — asterisco, `data-campo`,
+                    classe de erro e mensagem embaixo. Faltando um, o submit acusa e o
+                    usuário não descobre ONDE (ver a nota do tipoExercicio, abaixo). */}
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
+                  Pelagem <span className="text-red-500">*</span>
+                </label>
                 <div className="relative">
                   <select
                     value={formData.pelagem}
-                    onChange={e => setFormData(p => ({ ...p, pelagem: e.target.value }))}
-                    className={`${inputClass} appearance-none pr-9`}
+                    onChange={e => { setFormData(p => ({ ...p, pelagem: e.target.value })); setErros(p => { const { pelagem: _p, ...r } = p; return r; }); }}
+                    onBlur={() => validarCampo('pelagem')}
+                    data-campo="pelagem"
+                    className={`${erros.pelagem ? inputClassErro : inputClass} appearance-none pr-9`}
                   >
                     <option value="">— selecione —</option>
                     <option>Alazão</option>
@@ -1625,6 +1638,7 @@ const Animal = () => {
                   </select>
                   <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                 </div>
+                {erros.pelagem && <p className="text-xs text-red-600 mt-1">{erros.pelagem}</p>}
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Altura (cernelha)</label>

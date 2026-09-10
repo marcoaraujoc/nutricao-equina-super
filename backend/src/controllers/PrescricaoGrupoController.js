@@ -8,6 +8,7 @@ const { buildAnimalScopeWhere } = require('../lib/animalScope');
 const { ANIMAL_VISIVEL } = require('../lib/visibilidade');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, adicionarOuSomarFaturaItem, removerFaturaItensDaOrigem, recalcularTotal } = require('../lib/faturaUtils');
 const { garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
+const vinculoPrestador = require('../lib/procedimentoPrestador');
 const { registrarAuditoria, registrarAlteracao, registrarTransferencia, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 // Concorrência de edição: a versão do DOCUMENTO (grupo) é a trava — ver §12.
@@ -734,11 +735,23 @@ async function anexarAplicadaProprietario(client, itens) {
   return Array.isArray(itens) ? itens.map(aplicar) : aplicar(itens);
 }
 
+/**
+ * As DUAS colunas do item que o client Prisma pode não conhecer, numa passada:
+ * `aplicadaPeloProprietario` e `prestadorId`/`prestadorNome`.
+ *
+ * ⚠️ Existe para não haver dois lugares decidindo o que o item "tem": quem esquecer
+ * de anexar o prestador faz o procedimento do prestador externo ser cobrado pelo
+ * valor padrão da empresa e não gerar linha no recibo — em silêncio.
+ */
+async function anexarCamposDoItem(client, itens) {
+  return vinculoPrestador.anexarPrestador(client, await anexarAplicadaProprietario(client, itens));
+}
+
 /** Mesma coisa, para grupos já carregados com `itens`. */
 async function anexarFlagEmGrupos(client, grupos) {
   const lista = Array.isArray(grupos) ? grupos : [grupos];
   const todos = lista.flatMap(g => g?.itens ?? []);
-  const comFlag = await anexarAplicadaProprietario(client, todos);
+  const comFlag = await anexarCamposDoItem(client, todos);
   const porId = new Map(comFlag.map(i => [i.id, i]));
   const aplicar = (g) => ({ ...g, itens: (g.itens ?? []).map(i => porId.get(i.id) ?? i) });
   return Array.isArray(grupos) ? lista.map(aplicar) : aplicar(grupos);
@@ -946,9 +959,13 @@ const criar = async (req, res) => {
             dadosItem.proximaDoseEm = primeiraDoseEsperada(dadosItem);
           }
           const criado = await tx.prescricao.create({ data: dadosItem });
-          // Coluna nova gravada por SQL cru — o client Prisma pode não tê-la ainda
+          // Colunas novas gravadas por SQL cru — o client Prisma pode não tê-las ainda
           // (no Windows o `generate` falha com o backend rodando).
           await gravarAplicadaProprietario(tx, criado.id, item.aplicadaPeloProprietario === true);
+          // PRESTADOR que executa este PROCEDIMENTO. `gravarPrestadorDoItem` ignora
+          // item de MEDICAMENTO por construção: remédio não tem prestador, e aceitar
+          // o campo ali criaria linha de recibo por dose de medicamento.
+          await vinculoPrestador.gravarPrestadorDoItem(tx, criado.id, item.prestadorId ?? null, tipoItem);
         }
 
         idsCriados.push(grp.id);
@@ -1044,7 +1061,7 @@ const adicionarItem = async (req, res) => {
       return res.status(400).json({ error: MSG_PACIENTE_INATIVO, code: 'PACIENTE_INATIVO' });
     }
 
-    const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente, aplicadaPeloProprietario } = req.body;
+    const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente, aplicadaPeloProprietario, prestadorId } = req.body;
 
     if (!medicamento) return res.status(400).json({ error: 'Campo medicamento é obrigatório.' });
     // Hora Início opcional — ver a nota em `finalizar`.
@@ -1116,6 +1133,7 @@ const adicionarItem = async (req, res) => {
       });
 
       await gravarAplicadaProprietario(tx, novoItem.id, aplicadaPeloProprietario === true);
+      await vinculoPrestador.gravarPrestadorDoItem(tx, novoItem.id, prestadorId ?? null, tipo ?? 'MEDICAMENTO');
 
       // Responsável passa a ser quem adicionou (no grupo de destino)
       await tx.prescricaoGrupo.update({ where: { id: destinoId }, data: { veterinarioId } });
@@ -1167,7 +1185,7 @@ const atualizarItem = async (req, res) => {
       return res.status(400).json({ error: 'Prescrição já executada não pode ser alterada.', code: 'EXECUTADO' });
     }
 
-    const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente, aplicadaPeloProprietario } = req.body;
+    const { tipo, medicamento, medicamentoCatId, dosagem, unidade, via, frequencia, duracaoDias, horaInicio, observacao, dataInicio, medicamentoCliente, aplicadaPeloProprietario, prestadorId } = req.body;
 
     const data = {};
     if (tipo               !== undefined) data.tipo              = tipo;
@@ -1274,6 +1292,10 @@ const atualizarItem = async (req, res) => {
       });
 
       await gravarAplicadaProprietario(tx, itemId, aplicadaPeloProprietario);
+      // `undefined` não toca no gravado (PATCH parcial); `null` desvincula. O tipo vem
+      // do item ATUALIZADO — trocar procedimento→medicamento tem de limpar o prestador,
+      // senão o remédio herdaria o prestador do procedimento anterior.
+      await vinculoPrestador.gravarPrestadorDoItem(tx, itemId, prestadorId, updated.tipo);
 
       // 🔴 A RESERVA DE ESTOQUE ACOMPANHA A EDIÇÃO. Grupo FINALIZADO reservou pela
       // quantidade ANTIGA no `finalizar`; sem refazer, dobrar a duração de 5 para
@@ -1494,7 +1516,7 @@ const finalizar = async (req, res) => {
 
     // Sem a flag no item, o que o cliente aplica em casa voltaria a reservar estoque
     // e a ser cobrado logo aqui, na finalização.
-    grupo.itens = await anexarAplicadaProprietario(prisma, grupo.itens);
+    grupo.itens = await anexarCamposDoItem(prisma, grupo.itens);
 
     const empresaIdEfetivo = grupo.empresaId ?? req.empresaId ?? null;
 
@@ -1604,7 +1626,7 @@ const finalizar = async (req, res) => {
             valor:        item.valorOrcado != null
               ? item.valorOrcado
               : (item.tipo === 'PROCEDIMENTO'
-                  ? await resolverValorProcedimento(tx, empresaIdEfetivo, item.medicamento)
+                  ? await resolverValorProcedimento(tx, empresaIdEfetivo, item.medicamento, item.prestadorId)
                   : 0),
             quantidade:   1,
             veterinarioId,
@@ -1875,8 +1897,14 @@ function descricaoItemFatura(item, atendNum) {
 }
 
 // Valor de um item PROCEDIMENTO na fatura, resolvido pelo NOME (o item guarda só o
-// nome): combo da empresa > valor da empresa p/ o procedimento (Cadastro >
-// Procedimentos) > valorVenda do catálogo > 0.
+// nome): VÍNCULO DO PRESTADOR > combo da empresa > valor da empresa p/ o
+// procedimento (Cadastro > Procedimentos) > valorVenda do catálogo > 0.
+//
+// 🔴 O VÍNCULO DO PRESTADOR VEM PRIMEIRO (2026-09-08) porque é o mais específico
+// que existe: é o preço daquele procedimento QUANDO É AQUELE PRESTADOR que executa
+// — justamente o caso que o valor único da empresa não sabia representar (dois
+// ferradores cobrando diferente pelo mesmo ferrageamento). Sem prestador no item, a
+// cadeia é a de sempre e NENHUMA prescrição existente muda de preço.
 //
 // ⚠️ NÃO filtra por `ativo` — de propósito. Isto resolve o preço de algo que a
 // pessoa JÁ ESCOLHEU ao prescrever (o item só guarda o nome, sem FK para o combo/
@@ -1884,9 +1912,13 @@ function descricaoItemFatura(item, atendNum) {
 // prescrição e a finalização/execução, o item não pode nascer com valor 0 só
 // porque saiu do catálogo ativo. Oferecer a opção para prescrição NOVA é outro
 // código (`listarCombos`/`listarComValores`, que filtram `ativo:true`).
-async function resolverValorProcedimento(tx, empresaId, nome) {
+async function resolverValorProcedimento(tx, empresaId, nome, prestadorId = null) {
   const n = (nome ?? '').trim();
   if (!n) return 0;
+  if (empresaId && prestadorId) {
+    const doVinculo = await vinculoPrestador.resolverValoresPorNome(tx, empresaId, n, prestadorId);
+    if (doVinculo.valorCliente != null) return doVinculo.valorCliente;
+  }
   if (empresaId) {
     const combo = await tx.procedimentoCombo.findFirst({
       where:  { empresaId, nome: { equals: n, mode: 'insensitive' } },
@@ -1966,7 +1998,7 @@ const executar = async (req, res) => {
     const fuso    = await fusoDaEmpresa(grupo.empresaId ?? req.empresaId);
     const hojeStr = hojeNaEmpresa(fuso);
 
-    grupo.itens = await anexarAplicadaProprietario(prisma, grupo.itens);
+    grupo.itens = await anexarCamposDoItem(prisma, grupo.itens);
 
     // Itens processáveis AGORA:
     //   elegível ao fluxo novo (horário definido) → uma dose de cada vez, até o
@@ -2084,7 +2116,7 @@ const executar = async (req, res) => {
         const valorDaDose = item.valorOrcado != null
           ? item.valorOrcado
           : (item.tipo === 'PROCEDIMENTO'
-              ? await resolverValorProcedimento(tx, empresaIdEfetivo, item.medicamento)
+              ? await resolverValorProcedimento(tx, empresaIdEfetivo, item.medicamento, item.prestadorId)
               : (item.medicamentoCatId ? (precos.get(item.medicamentoCatId) ?? 0) : 0));
         const descricao = descricaoItemFatura(item, atendNum);
 
@@ -2125,6 +2157,57 @@ const executar = async (req, res) => {
               prescricaoId: item.id,
             });
           }
+        }
+
+        // 🔴 RECIBO DO PRESTADOR — o outro lado do balcão. A fatura acima registra o
+        // que se COBRA do cliente; esta linha registra o que a clínica DEVE a quem
+        // executou. Vai na MESMA transaction de propósito: ou o cliente é cobrado e o
+        // prestador entra no recibo, ou nada acontece — fora dela existiria a janela
+        // em que a clínica cobrou e não deve a ninguém.
+        //
+        // ⚠️ SNAPSHOT: `registrarExecucao` congela os dois valores E a forma de
+        // pagamento do prestador. Recalcular na leitura faria o recibo de março mudar
+        // de valor quando o percentual fosse renegociado em setembro.
+        //
+        // ⚠️ Registra mesmo com `medicamentoCliente` (item fornecido pelo cliente, que
+        // NÃO é cobrado): o serviço foi prestado e o prestador tem de ser pago. Nesse
+        // caso `valorCliente` é 0, então a comissão PERCENTUAL sai 0 — que é a
+        // consequência correta de não haver receita, e não um erro de cálculo.
+        //
+        // ⚠️ `registrarExecucao` nunca lança: falha aqui não pode derrubar a execução
+        // clínica (base ainda não migrada devolve null e a fatura sai como sempre saiu).
+        if (item.tipo === 'PROCEDIMENTO' && item.prestadorId) {
+          const doVinculo = await vinculoPrestador.resolverValoresPorNome(
+            tx, empresaIdEfetivo, item.medicamento, item.prestadorId,
+          );
+          const prestador = await tx.prestador.findUnique({
+            where:  { id: Number(item.prestadorId) },
+            select: { tipoPagamento: true, formaPagamento: true, valorPagamento: true },
+          });
+          await vinculoPrestador.registrarExecucao(tx, {
+            empresaId:        empresaIdEfetivo,
+            prestadorId:      item.prestadorId,
+            prescricaoId:     item.id,
+            animalId:         grupo.animalId,
+            animalNome:       grupo.animal?.nome ?? '',
+            procedimentoNome: item.medicamento,
+            quantidade:       1,
+            // A base do PERCENTUAL é o Valor Cobrado para o Cliente desta execução —
+            // o MESMO número que acabou de ir para a fatura. Item fornecido pelo
+            // cliente não gera cobrança, logo a base é 0.
+            valorCliente:     item.medicamentoCliente ? 0 : valorDaDose,
+            valorPrestador:   doVinculo.valorPrestador,
+            tipoPagamento:    prestador?.tipoPagamento  ?? null,
+            formaPagamento:   prestador?.formaPagamento ?? null,
+            valorPagamento:   prestador?.valorPagamento ?? null,
+            executadoEm:      agora,
+            executadoPorId:   veterinarioId,
+            // O id da linha da fatura não é rastreado aqui de propósito:
+            // `adicionarOuSomarFaturaItem` CONSOLIDA doses na mesma linha, então não
+            // existe um FaturaItem por execução para apontar. O recibo se sustenta
+            // sozinho — ele é o documento do outro lado, não um espelho da fatura.
+            faturaItemId:     null,
+          });
         }
 
         // Via injetável (IV/IM/ID/SC/EV): 1 seringa + 1 agulha por dose aplicada.

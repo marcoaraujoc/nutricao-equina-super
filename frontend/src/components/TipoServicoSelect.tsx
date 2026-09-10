@@ -18,7 +18,7 @@ import api from '../services/api';
 const OPCAO_NOVO = '__novo__';
 
 interface Props {
-  categoria: 'FORNECEDOR' | 'PRESTADOR';
+  categoria: 'FORNECEDOR' | 'PRESTADOR' | 'LOCALIZACAO';
   value: string;
   onChange: (nome: string) => void;
   /** Opções que sempre aparecem, mesmo sem nada no catálogo ainda. */

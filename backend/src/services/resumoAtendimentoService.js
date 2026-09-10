@@ -260,11 +260,47 @@ function normalizarTopicos(brutos, eventosPorId) {
   return saida;
 }
 
+/**
+ * 🔴 ID DE TÓPICO NÃO É TEXTO PARA GENTE LER (2026-09-08).
+ *
+ * O modelo estava terminando o highlight com a lista de ids que o sustenta —
+ * "Recorrência de dor lombar em 06/09/2026: t3, t6, t7, t9, t11." —, e "t3" não diz
+ * nada a quem abre a ficha. Os ids têm um campo próprio (`topicos`), que é o que faz
+ * o highlight virar clicável na tela; no texto eles são ruído.
+ *
+ * O prompt v5 proíbe. Esta é a REDE atrás dele: prompt é instrução, não garantia, e o
+ * defeito reaparece calado na próxima variação do modelo.
+ *
+ * ⚠️ Só remove a ENUMERAÇÃO no fim da frase (", t3, t6 e t7", ": t3, t6"), nunca um
+ * "t3" no meio de uma palavra ou um número solto: apagar demais mutila a frase, que é
+ * pior que deixar o resíduo.
+ */
+function semIdsDeTopico(texto) {
+  const limpo = texto
+    // ": t3, t6, t7." / " - t3, t6 e t7" no fim da frase
+    .replace(/\s*[:;-]\s*t\d+(\s*(,|e)\s*t\d+)*\s*\.?\s*$/i, '')
+    // "(t3, t6)" em qualquer posição
+    .replace(/\s*\(\s*t\d+(\s*(,|e)\s*t\d+)*\s*\)/gi, '')
+    .trim();
+  return limpo.replace(/[\s,;:-]+$/, '').trim();
+}
+
 function normalizarHighlights(brutos, idsValidos) {
   const saida = [];
+  // Um padrão por lista: o modelo às vezes devolve o MESMO achado em dois highlights
+  // (a mesma queixa com datas diferentes). Repetição aqui destrói o que a lista tem de
+  // útil, que é ser leitura de meio minuto.
+  const jaVistos = new Set();
   for (const h of Array.isArray(brutos) ? brutos : []) {
-    const texto = String(h?.texto ?? '').trim();
+    const texto = semIdsDeTopico(String(h?.texto ?? '').trim());
     if (!texto) continue;
+    // Deduplica por texto normalizado (sem caixa, sem pontuação, sem acento).
+    const chave = texto.toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+    if (jaVistos.has(chave)) continue;
+    jaVistos.add(chave);
     const topicos = (Array.isArray(h?.topicos) ? h.topicos : [])
       .map(String)
       .filter(id => idsValidos.has(id));
@@ -548,4 +584,4 @@ async function consolidar(req, animalId, animalNome) {
 
 // normalizarResumo e MAX_LINHAS_RESUMO exportados para teste: sao o corte que
 // impede o resumo de 10-20 linhas virar a lista inteira de eventos de volta.
-module.exports = { obterResumo, atualizarResumo, VERSAO_ATUAL, normalizarResumo, MAX_LINHAS_RESUMO, MAX_LINHAS_MUDANCAS, descreverItemPrescrito, resolverAmarras, semAmarras, consolidacoesEmCurso };
+module.exports = { obterResumo, atualizarResumo, VERSAO_ATUAL, normalizarResumo, MAX_LINHAS_RESUMO, MAX_LINHAS_MUDANCAS, descreverItemPrescrito, resolverAmarras, semAmarras, consolidacoesEmCurso, normalizarHighlights, semIdsDeTopico };

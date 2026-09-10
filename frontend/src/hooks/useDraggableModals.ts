@@ -68,6 +68,21 @@ export function useDraggableModals(): void {
       const p = resolverPainel(handle);
       if (!p) return;
 
+      // 🔴 O PAINEL NUNCA É A PRÓPRIA ALÇA (2026-09-08).
+      //
+      // `.rounded-t-2xl` foi escolhida como alça pensando no CABEÇALHO do modal, mas em
+      // 19 modais da aplicação ela está no PAINEL (`bg-white rounded-t-2xl
+      // sm:rounded-2xl …`). Resultado: `closest()` casava a partir de QUALQUER ponto do
+      // corpo, o modal inteiro virava alça e o `preventDefault` + `userSelect: none`
+      // matavam a seleção de texto lá dentro — não dava para copiar nada do que o
+      // documento mostrava, e tentar selecionar ARRASTAVA a janela.
+      //
+      // Sendo o casamento o próprio painel (ou um ancestral dele), não há alça: o
+      // arraste segue pelo TÍTULO (h2/h3, que todo modal tem) e por
+      // `[data-drag-handle]`, e o corpo volta a ser texto selecionável.
+      // ⚠️ NÃO reintroduzir `.rounded-t-*` como alça sem esta guarda.
+      if (handle === p || handle.contains(p)) return;
+
       painel = p;
       moveu = false;
       startX = e.clientX;

@@ -7,6 +7,7 @@ const { storage }      = require('../storage');
 const { getEmpresaIdDoVet, getContextoDoVet, getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { buildAnimalScopeWhere } = require('../lib/animalScope');
+const { gerarSenhaInicial } = require('../lib/senhaInicial');
 const { animalVisivelNaEmpresa, ANIMAL_VISIVEL } = require('../lib/visibilidade');
 const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
 const { garantirFaturaAberta } = require('../services/FaturaService');
@@ -927,7 +928,18 @@ class AnimalController {
               animalNome:        animal.nome,
               vetNome:           vetNomeCompleto,
               isNewUser:         isNewProprietario,
-              senhaInicial:      isNewProprietario ? 'Inicial#001' : undefined,
+              // 🔴 ISTO ESTAVA ERRADO ATÉ 2026-09-08: o literal aqui era `Inicial#001`
+              // (com `#`), enquanto a senha GRAVADA era `Inicial_001` (com `_`). O
+              // cliente recebia um e-mail com uma senha que nunca existiu e não
+              // conseguia entrar — sem nenhum erro no sistema, porque as duas pontas
+              // nunca se comparavam. É exatamente o que uma FONTE ÚNICA impede.
+              senhaInicial: isNewProprietario
+                ? gerarSenhaInicial({
+                    email:    proprietarioEmailParaEmail,
+                    nome:     proprietarioNomeParaEmail,
+                    telefone: null,
+                  })
+                : undefined,
             })
               .then(() => console.log(`[emailService] Email informativo enviado → ${proprietarioEmailParaEmail}`))
               .catch(err => console.error('[emailService] FALHA ao enviar informativo:', err?.message ?? err));

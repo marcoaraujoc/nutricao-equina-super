@@ -7,6 +7,7 @@ const prisma       = require('../lib/prisma').default;
 const emailService = require('../services/emailService');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 const { normalizeEmail, findUserByEmail, whereEmailInsensitive } = require('../lib/email');
+const { gerarSenhaInicial } = require('../lib/senhaInicial');
 
 // Campos seguros para retornar — nunca expor passwordHash, tokens
 const SELECT_SEGURO = {
@@ -117,8 +118,8 @@ const UserAdminController = {
       if (existente) return res.status(409).json({ sucesso: false, mensagem: 'E-mail já cadastrado' });
 
       // Sem senha no payload → aplica a padrão do sistema com troca obrigatória no primeiro acesso
-      const SENHA_INICIAL = 'Inicial_001';
-      const passwordHash = await bcrypt.hash(senha || SENHA_INICIAL, 10);
+      const passwordHash = await bcrypt.hash(
+        senha || gerarSenhaInicial({ email: emailNorm, nome: fullName, telefone: phone }), 10);
       const usuario = await prisma.user.create({
         data: {
           fullName:    fullName.trim(),

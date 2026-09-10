@@ -13,6 +13,8 @@ const { invalidarCache: invalidarCacheFuso } = require('../lib/fusoEmpresa');
 const { usoDeAssentos } = require('../lib/planoEmpresa');
 // Documento da empresa: obrigatório e único entre empresas (ver lib/documentoEmpresa.js)
 const { resolverDocumento } = require('../lib/documentoEmpresa');
+const { crmvDaEmpresa } = require('../lib/documentoVariaveis');
+const { lerDadosRecebimento, salvarDadosRecebimento } = require('../lib/dadosRecebimento');
 const axios = require('axios');
 
 /** Só dígitos — documento é gravado sem máscara. */
@@ -112,6 +114,10 @@ module.exports = {
           documento:         empresa.documento ?? (soDigitos(empresa.cnpj) || null),
           tipoDocumento:     empresa.tipoDocumento     ?? (empresa.cnpj ? 'CNPJ' : null),
           inscricaoEstadual: empresa.inscricaoEstadual ?? null,
+          // Ver a nota do SQL cru no `salvar`: coluna nova, leitura tolerante.
+          crmv:              await crmvDaEmpresa(empresa.id),
+          // Dados de recebimento (PIX/banco) — impressos na fatura.
+          ...(await lerDadosRecebimento(empresa.id)),
           emailContato:      empresa.emailContato      ?? null,
           telefone:          empresa.telefone          ?? null,
           whatsapp:          empresa.whatsapp          ?? null,
@@ -242,8 +248,23 @@ module.exports = {
       const tipoAntigo = empresa.cnpj ? 'CNPJ' : (empresa.documento ? 'CPF' : null);
       const precisaMigrarEscopo = tipoAntigo && tipoAntigo !== tipoDocumento;
 
+      // 🔴 O CRMV DO ESTABELECIMENTO É GRAVADO À PARTE, POR SQL CRU.
+      //
+      // A coluna é nova (`20260926000000_empresa_crmv`) e o client Prisma pode não
+      // estar regenerado — no Windows o `generate` falha com o backend rodando (§11).
+      // Incluí-la no `data:` do `update` tipado derrubaria o SALVAR INTEIRO do
+      // cadastro numa base ainda não migrada; assim, o pior caso é o campo não
+      // persistir e o resto do cadastro gravar normalmente.
+      // ⚠️ String vazia grava NULL: é o que permite APAGAR um registro digitado
+      // errado. Sem isso, ele ficaria no papel para sempre.
+      const crmvEmpresa = texto(b.crmv, 30);
+
       await prisma.$transaction(async (tx) => {
         await tx.empresa.update({ where: { id: empresa.id }, data: dados });
+        await tx.$executeRaw`UPDATE "schs2vet"."tb_empresas" SET "crmv" = ${crmvEmpresa} WHERE "id" = ${empresa.id}`
+          .catch(() => { /* base ainda não migrada — o resto do cadastro grava */ });
+        // Mesma razão do CRMV: colunas novas, escrita tolerante (ver lib).
+        await salvarDadosRecebimento(tx, empresa.id, b);
 
         // O FUSO da clínica é deduzido do CEP/UF (lib/fusoEmpresa.js) e fica em cache
         // de 60s por empresa. Mudou o endereço, o fuso pode ter mudado junto — zera o

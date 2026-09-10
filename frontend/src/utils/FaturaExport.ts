@@ -69,7 +69,57 @@ function contatoDaFatura(fatura: FaturaMin) {
 // (utils/compartilharPdf.ts → backend Puppeteer, mesmo padrão de
 // utils/ExameCompraPrint.ts#gerarHtmlExameCompra). Mudar o layout aqui muda os
 // dois lugares — nunca duplicar este HTML de novo.
-export function gerarHtmlFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl?: string | null): string {
+/**
+ * Escapa texto que vai para o HTML da folha. A chave PIX e o nome do recebedor são
+ * digitados pelo gestor e viram markup — sem isto, um `<` no campo quebraria a folha,
+ * e o pior caso é script injetado no documento que vai por PDF ao cliente.
+ */
+const esc = (v: string) => String(v)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
+
+/**
+ * Dados para o cliente pagar — chave PIX, recebedor, banco, agência e conta.
+ * Cadastrados em Configurações › Dados para Recebimento (2026-09-08).
+ */
+export interface DadosRecebimento {
+  pixChave?:      string | null;
+  pixRecebedor?:  string | null;
+  banco?:         string | null;
+  agencia?:       string | null;
+  contaCorrente?: string | null;
+}
+
+/**
+ * 🔴 O BLOCO DE PAGAMENTO SÓ EXISTE SE HOUVER O QUE IMPRIMIR.
+ *
+ * Campo em branco não vira linha ("Banco: —"), e sem NENHUM dos cinco a fatura não
+ * ganha uma faixa "Dados para pagamento" vazia — é a regra do campo vazio (§12,
+ * 26/08) aplicada aqui. Uma faixa vazia num documento de cobrança é pior que a
+ * ausência dela: sugere que falta um dado que deveria estar ali.
+ */
+function blocoPagamentoHtml(r?: DadosRecebimento | null): string {
+  if (!r) return '';
+  const linha = (rot: string, v?: string | null) =>
+    (v && String(v).trim() ? `<div><span class="rot">${rot}:</span> <b>${esc(String(v).trim())}</b></div>` : '');
+
+  const pix = [linha('Chave PIX', r.pixChave), linha('Recebedor', r.pixRecebedor)].filter(Boolean).join('');
+  const banco = [linha('Banco', r.banco), linha('Agência', r.agencia), linha('Conta', r.contaCorrente)]
+    .filter(Boolean).join('');
+  if (!pix && !banco) return '';
+
+  return `
+  <div class="pagamento">
+    <p class="titulo">Dados para pagamento</p>
+    ${pix ? `<div class="grupo">${pix}</div>` : ''}
+    ${banco ? `<div class="grupo">${banco}</div>` : ''}
+  </div>`;
+}
+
+export function gerarHtmlFatura(
+  fatura: FaturaMin, animais: AnimalMin[], logoUrl?: string | null,
+  recebimento?: DadosRecebimento | null,
+): string {
   const contato   = contatoDaFatura(fatura);
   const animalMap = new Map(animais.map(a => [a.id, a]));
 
@@ -144,6 +194,13 @@ export function gerarHtmlFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl
     .status-CANCELADA { color: #6b7280; background: #f3f4f6; }
     .status-badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 10px; font-weight: 700; }
 
+    .pagamento { margin-top: 18px; border: 1px solid #bbf7d0; background: #f0fdf4; border-radius: 8px;
+                 padding: 12px 16px; font-size: 12px; color: #374151;
+                 display: flex; flex-wrap: wrap; gap: 6px 32px; }
+    .pagamento .titulo { font-size: 11px; font-weight: 700; text-transform: uppercase;
+                         letter-spacing: .04em; color: #047857; margin: 0 0 4px; width: 100%; }
+    .pagamento .grupo { display: flex; flex-direction: column; gap: 2px; }
+    .pagamento .rot { color: #6b7280; }
     .footer { margin-top: 32px; font-size: 10px; color: #9ca3af; border-top: 1px solid #e5e7eb; padding-top: 10px; }
     @media print { .no-print { display: none; } }
   </style>
@@ -182,6 +239,8 @@ export function gerarHtmlFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl
     <span class="value">${brl(fatura.total)}</span>
   </div>
 
+  ${blocoPagamentoHtml(recebimento)}
+
   <div class="footer">
     Emitido em ${new Date().toLocaleString('pt-BR')} · S2Vet — Sistema Hospitalar Veterinário
   </div>
@@ -191,8 +250,11 @@ export function gerarHtmlFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl
   return html;
 }
 
-export function imprimirFatura(fatura: FaturaMin, animais: AnimalMin[], logoUrl?: string | null) {
-  imprimirHtml(gerarHtmlFatura(fatura, animais, logoUrl));
+export function imprimirFatura(
+  fatura: FaturaMin, animais: AnimalMin[], logoUrl?: string | null,
+  recebimento?: DadosRecebimento | null,
+) {
+  imprimirHtml(gerarHtmlFatura(fatura, animais, logoUrl, recebimento));
 }
 
 // ─── CSV ──────────────────────────────────────────────────────────────────────

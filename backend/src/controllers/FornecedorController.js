@@ -5,6 +5,7 @@ const prisma = require('../lib/prisma').default;
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
 const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
+const { anexarEquipeDoAcesso } = require('../lib/acessoExterno');
 const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 const { definirAtivoNaEmpresa } = require('../lib/usuarioEmpresa');
 
@@ -128,7 +129,11 @@ const FornecedorController = {
         orderBy: [{ ativo: 'desc' }, { nome: 'asc' }],
       });
 
-      res.json({ sucesso: true, dados: await anexarTrilha(fornecedores, 'fornecedor') });
+      // `acessoEquipeId`: onde o cartão de acesso do fornecedor com login foi emitido.
+      // É o que habilita "Gerenciar Acesso" (designação de pacientes) nesta tela —
+      // desde 2026-09-09 ela deixou de existir no Controle de Acesso, porque
+      // fornecedor não é equipe.
+      res.json({ sucesso: true, dados: await anexarEquipeDoAcesso(prisma, await anexarTrilha(fornecedores, 'fornecedor')) });
     } catch (err) {
       console.error('Erro ao listar fornecedores:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar fornecedores' });

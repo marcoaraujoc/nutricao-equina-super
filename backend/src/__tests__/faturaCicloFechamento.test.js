@@ -27,13 +27,17 @@ const path = require('path');
 
 // O controller arrasta storage (TS), Puppeteer e os provedores de mensagem — nada
 // disso participa da regra testada aqui.
-jest.mock('../lib/prisma', () => ({ default: {} }));
-jest.mock('../storage', () => ({ storage: { upload: jest.fn() }, chaveDaUrl: () => null }));
-jest.mock('../services/documentoWhatsappService', () => ({ htmlParaPdf: jest.fn() }));
-jest.mock('../services/whatsappService', () => ({}));
-jest.mock('../services/emailService', () => ({}));
-jest.mock('../lib/notificationDispatch', () => ({ enfileirarEnvioFatura: jest.fn() }));
-jest.mock('../lib/faturaLinkPublico', () => ({ criarLink: jest.fn(), revogar: jest.fn() }));
+// ⚠️ `virtual: true` (mesmo padrão de documentosCentral.test.js): sem ele o jest
+// RESOLVE o módulo antes de trocá-lo, e `lib/prisma.ts` / `storage/index.ts` vão
+// parar no babel — que não tem preset de TypeScript e reprova a suíte inteira com
+// "Missing semicolon". Falha só no run COMPLETO, nunca no arquivo isolado.
+jest.mock('../lib/prisma', () => ({ default: {} }), { virtual: true });
+jest.mock('../storage', () => ({ storage: { upload: jest.fn() }, chaveDaUrl: () => null }), { virtual: true });
+jest.mock('../services/documentoWhatsappService', () => ({ htmlParaPdf: jest.fn() }), { virtual: true });
+jest.mock('../services/whatsappService', () => ({}), { virtual: true });
+jest.mock('../services/emailService', () => ({}), { virtual: true });
+jest.mock('../lib/notificationDispatch', () => ({ enfileirarEnvioFatura: jest.fn() }), { virtual: true });
+jest.mock('../lib/faturaLinkPublico', () => ({ criarLink: jest.fn(), revogar: jest.fn() }), { virtual: true });
 
 const {
   proximoMesReferencia,

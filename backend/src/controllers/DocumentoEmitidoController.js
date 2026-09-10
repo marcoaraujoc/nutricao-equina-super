@@ -163,7 +163,7 @@ const DocumentoEmitidoController = {
       });
       // OPÇÕES são outra coisa: não preenchem linha nenhuma, só oferecem o que existe
       // no cadastro da EMPRESA para a coluna virar um seletor (as vacinas, hoje).
-      const opcoes = await sugerirOpcoes(listas, { empresaId: req.empresaId ?? null, fuso });
+      const opcoes = await sugerirOpcoes(listas, { empresaId: req.empresaId ?? null, fuso, animalId });
 
       return res.json({
         sucesso: true,

@@ -1,5 +1,330 @@
 # S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-09-11 (🔴 **A GRADE DE PROCEDIMENTOS DEIXOU DE SALVAR SOZINHA** +
+#   o atalho "cadastrar os valores agora".
+#   1. Os valores seguem SEMPRE editáveis, mas gravar virou ato EXPLÍCITO: alterou,
+#      aparecem **✓ Salvar** e **✕ Cancelar** na linha. ⚠️ REVERTE o auto-save no blur
+#      de 10/09 — e NÃO tem ícone "Alterar", que não teria o que destravar num campo já
+#      editável. Na linha do PRESTADOR os dois valores gravam JUNTOS, numa chamada só.
+#      A linha virou componente (`LinhaProcedimento`/`LinhaPrestador` + os cards mobile)
+#      porque dentro de um `.map` não há estado por linha.
+#   2. Na aba Imagem, exame MARCADO cujo prestador ainda não tem valor vira faixa âmbar
+#      com **"Cadastrar os valores agora"**: abre `/cadastro/procedimentos` recortado só
+#      naqueles exames (`?codigos=PR-0302,…`) e com o prestador já vinculado em cada um.
+#      ⚠️ Não bloqueia o pedido, e a tela AVISA que a lista está recortada. Suíte: 794.
+#   Detalhes na §12.)
+# Atualizado em: 2026-09-09 (parte 3) (🔴 **O EXAME DE IMAGEM VIROU PROCEDIMENTO** —
+#   com categoria, prestador e valor. Havia DOIS catálogos paralelos para a mesma coisa
+#   (`tb_imagem_exame_*` com 12 grupos e 119 itens × `tb_procedimentos_vet`), e era essa
+#   duplicidade que deixava o exame de imagem sem preço, sem prestador e fora de
+#   combo/orçamento. Os 119 passaram a ser procedimentos GLOBAIS (seed 005) e herdaram
+#   tudo isso de graça.
+#   1. **'Diagnóstico por Imagem' SAIU do seletor** do cadastro de procedimentos; no
+#      lugar entram 6 CATEGORIAS — Radiografia, Ultrassonografia, Endoscopia,
+#      Termografia, Tomografia e Ressonância, Laparoscopia. ⚠️ Elas NÃO viram
+#      especialidade (não afetam Agenda nem cadastro de membro), e a especialidade
+#      continua no DADO do procedimento.
+#   2. **Aba Imagem do pedido: CATEGORIA → PRESTADOR → EXAME**, com cadastro rápido nos
+#      dois (tela de Prestadores / de Procedimentos) e o VALOR na linha de cada exame.
+#      O prestador é OPCIONAL; sem vínculo, faixa âmbar avisa antes de sair R$ 0,00.
+#   3. 🔴 **O EXAME PASSOU A SER COBRADO**: `lancarExameNaFatura` lançava valor ZERO
+#      sempre. Agora o preço é resolvido na CRIAÇÃO (vínculo do prestador → padrão da
+#      empresa → catálogo) e congelado em `valor_cobrado`. ⚠️ `null` NÃO é 0 — sem
+#      preço a linha nasce zerada como antes. E a CONCLUSÃO do exame alimenta o recibo
+#      do prestador, no mesmo ledger do procedimento.
+#   ✅ **MIGRATION APLICADA e SEED RODADO** (autorizados): 119 exames inseridos, 34
+#   genéricos inativados, todos globais; a bandeira `recursos.porProcedimento` já
+#   responde `true`. 🔴 **ARMADILHA**: o unique de `tb_procedimentos_vet.codigo` é
+#   PARCIAL (`WHERE codigo IS NOT NULL`), e `ON CONFLICT (codigo)` sozinho morre com
+#   42P10 — o predicado tem de ser repetido na cláusula. Suíte: 794. Detalhes na §12.)
+# Atualizado em: 2026-09-10 (parte 2) (✅ **MIGRATIONS APLICADAS** + a grade de
+#   Procedimentos sem lápis, o seletor de prestador e dois defeitos de tela.
+#   1. ✅ **`20261001000000_procedimento_prestador` APLICADA** (autorizada), e com ela a
+#      `20260930000000_cargo_prestador`, que estava pendente desde 09/09.
+#      🔴 **A ANTERIOR ESTAVA COM DEFEITO E DERRUBOU A FILA**: o `INSERT` em
+#      `tb_perfis_equipe` não informava `updatedAt`, que é `@updatedAt` no Prisma —
+#      quem o preenche é o CLIENT, então a coluna é NOT NULL e **sem DEFAULT** no banco.
+#      `23502 null value in column "updatedAt"`, migration marcada como FAILED,
+#      bloqueando TODAS as seguintes. Resolvido com `migrate resolve --rolled-back` +
+#      correção do SQL. ⚠️ **`createdAt` não tem esse problema** (`@default(now())` gera
+#      DEFAULT de verdade) — a diferença entre os dois não se vê no schema.prisma a olho
+#      nu, e é a armadilha de todo INSERT por SQL cru.
+#      Resultado conferido: 6 equipes → 6 perfis PRESTADOR + 847 linhas de matriz
+#      copiadas; as 2 tabelas novas com RLS `ENABLE + FORCE` e policy de tenant; a
+#      coluna `tb_prescricoes.prestador_id` no lugar. Seed rodado (os 2 slugs de recibo
+#      existem). As duas tabelas entraram em `TENANT_PLANE`.
+#      ⚠️ **A VERIFICAÇÃO CAIU NA ARMADILHA 42**: o primeiro `SELECT count(*)` devolveu 0
+#      para os perfis novos e parecia que a migration não gravara nada — era o FORCE RLS
+#      escondendo as linhas de quem não carimbou `app.plataforma`. Conferir tabela do
+#      tenant plane exige o carimbo TAMBÉM na leitura.
+#   2. 🔴 **A GRADE DE PROCEDIMENTOS PERDEU O LÁPIS** (a pedido): "Valor Cobrado pelo
+#      Prestador"→**Valor Prestador** e "Valor Cobrado para o Cliente"→**Valor Cliente**,
+#      os dois como campos SEMPRE editáveis (`ValorInline`), que gravam ao SAIR do campo
+#      e só **se o texto mudou** — sem essa comparação, percorrer a tabela com Tab
+#      dispararia um PUT por célula visitada. `Enter` confirma, `Esc` desfaz para o
+#      último valor salvo (sem a volta, quem começa a digitar por engano não tem como
+#      cancelar e o blur gravaria o meio da digitação). Falha na gravação DEVOLVE a
+#      célula ao que o banco tem — a tela nunca fica mostrando número que não foi salvo.
+#   3. 🔴 **O PRESTADOR VIROU SELETOR, sem ícone** (a pedido): `PrestadorCombo` — digita
+#      para filtrar, marca um que exista, e **escolher JÁ CRIA a linha** (não há botão
+#      intermediário). Sem correspondência exata oferece **Cadastrar “X”**, que leva a
+#      `/cadastro/prestadores?novo=1&nome=&depois=…&vincularNome=`; ao salvar, volta para
+#      cá, acha o prestador PELO NOME e abre o vínculo sozinho. ⚠️ NÃO cria o prestador
+#      aqui: o cadastro exige nome E telefone, e criar só com o nome produziria cadastro
+#      incompleto.
+#   4. **Buscador POR PRESTADOR nas duas abas** — campo PRÓPRIO, separado da busca por
+#      nome/categoria: num campo só, "Silva" daria resultado imprevisível (procedimento
+#      OU prestador). O vazio distingue "nenhum procedimento" de "nenhum vinculado a
+#      esse prestador".
+#   5. **O COMBO ganhou prestador e os dois valores** — `prestador_id` e
+#      `valor_prestador` em `tb_procedimento_combos`. ⚠️ `valor` NÃO foi renomeado: ele
+#      já era o **Valor Cliente** do pacote; renomear obrigaria a tocar todos os leitores
+#      para não ganhar nada — mudou o RÓTULO. ✅ **MIGRATION APLICADA**
+#      (`20261002000000_combo_prestador`, autorizada; 6 combos existentes intactos).
+#      `recursos.comboPrestador` ficou como GUARDA permanente: numa base sem as colunas
+#      a tela TROCA os campos por um aviso — sem a bandeira, o gestor escolheria o
+#      prestador e a escolha desapareceria no salvar, em silêncio.
+#   6. 🔴 **"Arquivo anexado:" mostrava a descrição DO PEDIDO** no aviso de divergência
+#      de exame: a regra "o que já está escrito não é sobrescrito" preserva `descricao`,
+#      então as duas linhas do modal saíam com o MESMO texto — comparar uma coisa com ela
+#      mesma não ajuda a decidir se o laudo anexado é o errado. Agora mostra o NOME DO
+#      ARQUIVO analisado e, à parte, o que a IA leu dentro dele.
+#   7. 🔴 **O COMBO DE VACINAS DO ATESTADO CORTAVA EM 60** (`.slice(0, 60)` sem aviso,
+#      num catálogo de 231 nomes): tudo depois do 60º alfabético era invisível. O teto
+#      subiu para 200 e, quando ainda corta, a última linha diz quantas faltam. Saiu
+#      também o `take: 500` da consulta — aplicado ANTES da deduplicação por nome, ele
+#      era um corte alfabético silencioso esperando a clínica cadastrar as próprias
+#      vacinas. E as **aplicadas neste paciente nos últimos 12 meses vêm no TOPO com
+#      ✅**, da mais recente para a mais antiga. ⚠️ Só `EXECUTADA`: `SALVA` é rascunho e
+#      `FINALIZADA` aguarda o plantão — marcá-las afirmaria no atestado uma dose que
+#      ninguém aplicou. ⚠️ ERGUE, nunca FILTRA (a primeira dose é vacina que o paciente
+#      nunca tomou). Suíte: **747**. Detalhes na §12.)
+# Atualizado em: 2026-09-10 (🔴 **O PROCEDIMENTO PASSOU A TER PRESTADOR, DOIS PREÇOS E
+#   RECIBO.** Três coisas que não existiam:
+#   1. 🔴 **O MESMO PROCEDIMENTO COM VÁRIOS PRESTADORES, CADA UM COM SEU PREÇO.**
+#      `ProcedimentoValorEmpresa` comporta UM valor por procedimento, então a clínica com
+#      dois ferradores cobrando (e recebendo) diferente pelo mesmo ferrageamento não
+#      tinha onde gravar isso — o segundo sobrescrevia o primeiro. Tabela nova
+#      `tb_procedimento_prestadores`, com os DOIS valores: **Valor Cobrado para o
+#      Cliente** (o antigo "Valor", renomeado) e **Valor Cobrado pelo Prestador**.
+#      ⚠️ `ProcedimentoValorEmpresa` CONTINUA existindo e continua sendo o valor PADRÃO
+#      da empresa — o que vale quando quem executa é a própria equipe. O vínculo só
+#      ESTREITA para o par (procedimento, prestador); trocar um pelo outro faria todo
+#      procedimento sem prestador nascer sem preço na fatura.
+#      ⚠️ `valorCliente` NULO = "usa o padrão da empresa", NÃO zero. A tela exibe o
+#      padrão com a nota de herança — "R$ 0,00" faria o gestor concluir que o
+#      procedimento é gratuito com aquele prestador.
+#   2. 🔴 **`tb_prescricoes.prestador_id` — quem executa ESTE item.** Fica no ITEM, não
+#      no grupo: a mesma prescrição tem o bloqueio do vet da casa e o ferrageamento do
+#      ferrador externo (mesma razão de `medicamentoCliente`/`aplicadaPeloProprietario`).
+#      Na tela de prescrição o campo aparece ao escolher o PROCEDIMENTO, é OPCIONAL (sem
+#      prestador = valor padrão, exatamente como era antes) e oferece **+ Cadastrar novo
+#      prestador**, que leva a `/cadastro/prestadores?novo=1&depois=…` e, ao salvar,
+#      segue para `/cadastro/procedimentos?especialidade=&busca=&vincular=` — o valor é
+#      definido lá, senão o procedimento sairia na fatura por R$ 0,00.
+#      ⚠️ Prestador escolhido SEM vínculo naquele procedimento ganha faixa âmbar com
+#      atalho "Definir valor". É esse aviso que evita a fatura zerada.
+#   3. 🔴 **RECIBO DE PAGAMENTO AO PRESTADOR** (`/recibos-prestador`, dia/semana/mês/ano):
+#      é o OUTRO LADO DO BALCÃO DA FATURA — ela é o que a clínica COBRA do cliente, o
+#      recibo é o que ela DEVE a quem executou. Traz **nome do animal, procedimento
+#      executado, valor e data da execução**, com quitação e valor por extenso na folha.
+#      🔴 A base é o LEDGER `tb_execucoes_procedimento_prestador`, gravado NA EXECUÇÃO,
+#      dentro da MESMA transaction do lançamento na fatura. É SNAPSHOT (valores + forma
+#      de pagamento do prestador congelados): recalcular na leitura faria o recibo de
+#      março sair com o percentual renegociado em setembro, sem como provar o contrário.
+#      **Tipo de pagamento novo `POR_PROCEDIMENTO`** no cadastro do prestador → vai ao
+#      recibo o "Valor Cobrado pelo Prestador" do vínculo. `PERCENTUAL` incide sobre o
+#      Valor Cobrado para o Cliente; `VALOR` é comissão fixa por procedimento; `SALARIO`
+#      não se apura por procedimento (a execução é listada com valor 0 e a explicação).
+#      ⚠️ `POR_PROCEDIMENTO` **não** entra em `TIPOS_PAGAMENTO` de `lib/usuarioEmpresa.js`
+#      — aquela lista é do INCLUIR MEMBRO, e o valor lá ficaria aceito no backend sem
+#      nenhuma tela oferecê-lo. Há teste travando isso.
+#   **A REGRA DE COBRANÇA NÃO MUDOU**: procedimento só entra na fatura — e só entra no
+#   recibo — DEPOIS de executado, pelo Valor Cobrado para o Cliente.
+#   ✅ **JÁ FUNCIONAVA e não precisou de nada**: procedimento digitado à mão na
+#   prescrição já entra no catálogo da empresa (`resolverCatalogoDoItem` →
+#   `garantirProcedimentoDaEmpresa`, `lib/catalogoManual.js`).
+#   🔴 **MIGRATION GERADA, NÃO APLICADA** — `20261001000000_procedimento_prestador`:
+#   ADITIVA (nenhum UPDATE/DELETE), 2 tabelas com RLS de TENANT DIRETO + a coluna do
+#   item. Sem backfill: execução anterior não tem prestador e não pode ganhar um por
+#   dedução (`FaturaItem.veterinarioId` é quem LANÇOU, não quem executou).
+#   ⚠️ Tudo por **SQL CRU** em `lib/procedimentoPrestador.js` — fonte única do vínculo,
+#   da resolução de preço e do cálculo do recibo. Suíte: **735**. Detalhes na §12.)
+# Atualizado em: 2026-09-09 (parte 2) (🔴 **FORNECEDOR E PRESTADOR NÃO SÃO EQUIPE** —
+#   são ATUAÇÕES ESTANQUES. Eles saíram da tela Equipe, do Controle de Acesso, da grade
+#   da Agenda e dos contadores, e passaram a ser criados e geridos nos PRÓPRIOS cadastros
+#   (`/cadastro/fornecedores`, `/cadastro/prestadores`) + Designações.
+#   ⚠️ **`MembroEquipe` CONTINUA existindo para eles** — não é contradição, é
+#   infraestrutura: TODO o RBAC se resolve por ele, e sem o vínculo o profissional leva
+#   403 "Nenhuma equipe ativa" (o `userType FORNECEDOR` não tem bypass). O vínculo virou
+#   um **CARTÃO DE ACESSO emitido pelo CADASTRO** (`lib/acessoExterno.js`), não uma
+#   cadeira na equipe.
+#   🔴 O cadastro passou a ENTREGAR o acesso que prometia: `Prestador.acessoSistema`
+#   criava login SEM `MembroEquipe` desde 2026-08-21 — a pessoa entrava e não via nada
+#   (o próprio schema documentava). Agora o cartão é emitido na criação e a cada salvar.
+#   ⚠️ Desmarcar o acesso NÃO apaga o vínculo (o cascade levaria a `PermissaoMembro`
+#   junto); quem corta o login é `acesso_sistema = false`.
+#   ⚠️ O filtro da listagem é no ENDPOINT (`SEM_EXTERNOS`), pelo cargo PRIMÁRIO — quem é
+#   VETERINARIO e acumula prestador continua na equipe.
+#   "Gerenciar Acesso" (designações) mudou de casa: do Controle de Acesso para os dois
+#   cadastros, num componente só.
+#   **MAPA DE ATENDIMENTO de volta ao menu** (pedido à parte, mesma data): ele estava
+#   ESCONDIDO por um flag no Sidebar desde 2026-09-05, com rota, tela e controller
+#   intactos — a volta custou uma linha. Não confundir com o ATALHO do Painel
+#   Principal, que segue removido.
+#   **SEM migration** e sem tocar em dado gravado. Suíte: 709. Detalhes na §12.)
+# Atualizado em: 2026-09-09 (**CARGO PRESTADOR** — agora de verdade — e o cron que
+#   RECUPERA o dia perdido. Duas frentes:
+#   1. 🔴 **`PRESTADOR` VIROU CARGO PRÓPRIO, ao lado de `FORNECEDOR`.** Em 08/09 o
+#      pedido foi só RENOMEAR (rótulo); agora foi o oposto — CRIAR o cargo **sem
+#      migrar nada**. Quem está gravado segue FORNECEDOR (e volta a se chamar
+#      "Fornecedor"); PRESTADOR é o que se escolhe daqui em diante.
+#      🔴 FONTE ÚNICA `lib/cargosPrestador.js` — **nenhum `cargo === 'FORNECEDOR'`
+#      novo no código**. Cargo novo que a tela oferece e que os gates não conhecem é
+#      PIOR que não ter o cargo: o PRESTADOR nasceria com a base de pacientes INTEIRA,
+#      sem erro nenhum na tela. ⚠️ `userType === 'FORNECEDOR'` CONTINUA valendo — é o
+#      userType dos DOIS (`CARGO_PARA_TIPO`), e é o que faz todo gate por userType
+#      funcionar sem alteração.
+#      ⚠️ O que distingue os dois é só o CADASTRO do login: FORNECEDOR →
+#      `tb_fornecedores`, PRESTADOR → `tb_prestadores` (as duas já tinham `userId
+#      @unique` para isso). A matriz de permissões nasce COPIADA da do FORNECEDOR
+#      daquela equipe, com o `locked` junto.
+#      🔴 **MIGRATION GERADA, NÃO APLICADA** — `20260930000000_cargo_prestador`,
+#      ADITIVA e IDEMPOTENTE (sem UPDATE/DELETE). SEM mudança de schema, logo **sem
+#      `prisma generate`**.
+#   2. 🔴 **O CANCELAMENTO DE ORÇAMENTO RECUPERA O DIA PERDIDO.** A busca sempre foi
+#      por DATA do orçamento (idempotente); o que faltava era o job VOLTAR A RODAR —
+#      `node-cron` não recupera disparo perdido, e com o backend fora do ar às 23:50
+#      aquele dia nunca acontecia. Novo `cronManager.recuperarJobsPerdidos()` na
+#      subida: 26h sem execução BEM-SUCEDIDA (erro não conta) → roda na hora, com
+#      origem nova **RECUPERACAO** no log. ⚠️ OPT-IN: nunca ligar em job que MANDA
+#      MENSAGEM. ⚠️ Agenda desligada pelo ADMIN não é ressuscitada.
+#   Suíte: 694. Detalhes na sessão 2026-09-09 da §12.)
+# Atualizado em: 2026-09-08 (partes 3 a 5) (LEVA GRANDE — seis frentes. O que mais
+#   importa saber ao voltar aqui:
+#   1. 🔴 **SENHA INICIAL DERIVADA E NUNCA EXIBIDA** (`lib/senhaInicial.js`). Era a
+#      constante `Inicial_001`, impressa na tela de QUEM CADASTRA e igual para todo
+#      mundo. E `AnimalController` anunciava por e-mail `Inicial#001` — senha que
+#      NUNCA existiu, sem erro em lugar nenhum. Agora sai só pelo e-mail.
+#   2. 🔴 **MODAL ARRASTÁVEL COMIA A SELEÇÃO DE TEXTO EM 19 MODAIS** — `.rounded-t-2xl`
+#      está no PAINEL, não no cabeçalho, e o corpo inteiro virava alça. O painel nunca
+#      é a própria alça (`useDraggableModals`).
+#   3. 🔴 **MEMÓRIA CLÍNICA v5**: destaque não leva id de tópico no texto, traz TODAS as
+#      datas e encadeia o que foi prescrito/executado no mesmo atendimento. Com rede
+#      atrás do prompt (`semIdsDeTopico` + deduplicação).
+#   4. 🔴 **RELATÓRIOS ABREM O NÚMERO** (`DetalheDoCard`, três telas): o card deixou de
+#      ser link e passou a listar embaixo, com a contagem e a lista saindo do MESMO
+#      `where`. "Aprovado parcialmente" abre item a item, com o motivo de cada recusa.
+#   5. 🔴 **O CRON DE ORÇAMENTO SEMPRE FUNCIONOU — nunca havia rodado** (backend fora
+#      do ar às 23:50). Dois avisos novos por WhatsApp ao gestor: semanal e véspera.
+#   6. **PIX/banco na fatura**, pelagem obrigatória, Fornecedor→Prestador (só o
+#      rótulo), restrição por local do prestador COM efeito real, tipo de localização
+#      criável por empresa, e o card de paciente aceitando digitação em todas as telas.
+#   ✅ 4 MIGRATIONS APLICADAS. ⚠️ `prisma generate` segue falhando com EPERM (§11) —
+#   toda coluna nova é lida/gravada por SQL cru com `catch`. Suíte: 657.
+#   Detalhes nas sessões 2026-09-08 (partes 3, 4 e 5) da §12.)
+# Atualizado em: 2026-09-08 (parte 2) (DOCUMENTOS: e-mail do veterinário, TIMBRE do
+#   estabelecimento e a redação da norma nos termos de consentimento.
+#   1. **E-mail do responsável nos 12 modelos** — `{{veterinario.email}}`, novo, no
+#      bloco de identificação profissional. Vem de `users` (a identidade do login), o
+#      único campo do profissional que NÃO é por empresa (§36-f).
+#   2. 🔴 **TIMBRE DO ESTABELECIMENTO NO CABEÇALHO** — razão social, endereço completo,
+#      CNPJ, Inscrição Estadual e registro no CRMV, **só quando a clínica é PESSOA
+#      JURÍDICA**. Fica no CABEÇALHO, e não no corpo dos modelos, porque precisa
+#      alcançar TODO documento — inclusive o que a clínica ENVIOU (que não tem bloco de
+#      identificação nenhum) e o que ela redigiu do zero. Mesma razão pela qual a logo
+#      mora ali.
+#      ⚠️ **Pessoa FÍSICA não ganha timbre**: o S2Vet atende o veterinário autônomo,
+#      cuja empresa tem CPF (§5). Imprimir "CNPJ:" e "Inscrição Estadual:" no papel
+#      dele afirmaria registro que não existe, num documento com valor legal. Quem
+#      decide é o BACKEND (`marca.empresa` é `null`), nunca a tela.
+#      ⚠️ O teste de PJ olha o DOCUMENTO, não o `tipoDocumento` sozinho: `cnpj`
+#      (legada) e `documento` (cadastro fiscal) convivem, e a base tem linha com uma
+#      preenchida e a outra não.
+#      ⚠️ Cada linha some sozinha em branco (`linhasDoEstabelecimento`) — nada de
+#      "CNPJ: —". É a regra do campo vazio aplicada ao timbre.
+#      ⚠️ A razão social só é escrita quando NÃO há logo: com logo ela já apareceu.
+#      ⚠️ Viaja na `marca`, logo entra no SNAPSHOT do emitido — reimprimir daqui a dois
+#      anos sai com o CNPJ e o endereço DAQUELE dia, não os de hoje.
+#   3. 🔴 **COLUNA NOVA `tb_empresas.crmv`** (registro do ESTABELECIMENTO no CRMV) —
+#      **MIGRATION GERADA, NÃO APLICADA**: `20260926000000_empresa_crmv`.
+#      ⚠️ NÃO é o CRMV de quem assina (`UsuarioEmpresa.crmv`, por profissional e por
+#      empresa): a Res. 1.321/2020 pede os DOIS no papel.
+#      ⚠️ Lida e gravada por SQL CRU com `catch` (`crmvDaEmpresa` / `$executeRaw`):
+#      pelo client tipado, uma base ainda não migrada derrubaria a EMISSÃO de documento
+#      e o SALVAR do cadastro da empresa inteiros. Assim o pior caso é a linha não sair
+#      no papel. Campo novo em `/configuracoes` (só aparece para CNPJ), opcional.
+#   4. **Os 7 termos ganharam o nome completo da norma** ("TERMO DE CONSENTIMENTO LIVRE
+#      E ESCLARECIDO PARA…"), e os rótulos de observação passaram à redação da
+#      resolução ("Observações de interesse a serem fornecidas pelo(a)…").
+#      ⚠️ Os rótulos mudaram nos **12 de uma vez**: eles nascem em UM lugar
+#      (`montarBlocos`), e trocar só nos cinco que o pedido nomeou daria DOIS textos
+#      para o MESMO campo — o que se lê como defeito, não como escolha.
+#      ⚠️ "Realização de Exames" veio SEM o nome de destino no pedido; foi aplicado o
+#      padrão dos outros seis. Confirmar.
+#   5. **TCLE anestésico** ganhou "Tipo de procedimento Anestésico indicado" como
+#      LACUNA — o S2Vet não guarda protocolo anestésico, e apontar para dado "parecido"
+#      escreveria no papel uma técnica que ninguém indicou.
+#   6. **2 VIAS já funcionavam** e agora têm gate: `viasDoDocumento` lê o rodapé do
+#      próprio papel, e os 12 modelos já traziam a frase da norma. O teste trava a
+#      frase no seed — some ela, some a segunda via, e nada acusa.
+#   🔴 **RE-SEED NECESSÁRIO** (`node backend/seed.js`) para os modelos GLOBAIS ganharem
+#   o e-mail, os nomes novos e os rótulos — o upsert por `chave` sobrescreve o global e
+#   NÃO toca a cópia personalizada de cada clínica. Suíte: 615. Detalhes na §12.)
+# Atualizado em: 2026-09-08 (🔴 FECHAR UMA FATURA ABRE A SEGUINTE + status novo
+#   **REABERTA**. Duas regras que quebram em SILÊNCIO, e por isso têm gate próprio.
+#   1. 🔴 **O CICLO SEGUINTE SÓ NASCIA SE ALGUÉM TOCASSE NO CLIENTE.** A fatura nova
+#      vinha de `obterFaturaProprietario` (abrir a tela) ou de `getOrCreateFatura`
+#      (primeiro lançamento clínico) — nunca do FECHAMENTO. No fechamento automático
+#      da madrugada ninguém está na tela: o cliente ficava sem fatura corrente até o
+#      próximo atendimento, e a **Assistência Veterinária Mensal**, que é cobrança
+#      RECORRENTE e não depende de atendimento nenhum, só entrava quando alguém
+#      abrisse a tela. Mensalista sem consulta no mês simplesmente não era cobrado.
+#      Novo `FaturaController.abrirProximaFatura`, ligado aos QUATRO caminhos de
+#      fechamento: `fecharFatura`, `fecharFaturasLote`, `atualizarStatus` e o cron
+#      `fechamento_faturas`. A nova nasce com os itens PADRÃO pela MESMA
+#      `adicionarAssistenciaMensal` do fechamento — item padrão novo entra LÁ e vale
+#      para os dois lados.
+#      ⚠️ **NÃO cria se o cliente já tem outra em aberto NESTA empresa** (ABERTA ou
+#      REABERTA, fora a que fechou). Duas correntes partem o mês em duas:
+#      `getOrCreateFatura` pega a primeira que achar e metade dos lançamentos some da
+#      vista. É essa guarda que a torna IDEMPOTENTE — e o que permite chamá-la do
+#      lote e do cron sem contar quantas vezes rodou.
+#      ⚠️ `mesReferencia` é o do mês SEGUINTE (`proximoMesReferencia`), não o atual:
+#      quem fecha no dia 23 abre um ciclo cobrado no mês que vem, e repetir o rótulo
+#      deixaria duas linhas idênticas no seletor de mês.
+#      ⚠️ No CRON, `db` é o `tx` da empresa da vez — com o `prisma` global o RLS
+#      recusa a criação em silêncio (a mesma armadilha de 2026-08-23 parte 4).
+#      ⚠️ Nas rotas HTTP a chamada passa por `abrirProximaFaturaSemQuebrar`: falhar em
+#      ABRIR a seguinte não pode virar "erro ao fechar" sobre uma fatura que fechou.
+#   2. 🔴 **REABRIR NÃO DEVOLVE A FATURA A "ABERTA".** Fatura FECHADA/ATRASADA/PAGA que
+#      volta a ser editável grava **REABERTA**. As duas são editáveis; só a ABERTA é a
+#      CORRENTE, a que `getOrCreateFatura` acha para receber o lançamento de hoje. Sem
+#      a distinção, reabrir agosto para corrigir uma linha fazia a cobrança de setembro
+#      cair dentro de um documento que o cliente já recebeu.
+#      ⚠️ A conversão é do BACKEND (`statusAoReabrir`), não da tela: o botão "Reabrir"
+#      continua mandando `ABERTA`. Cliente antigo não muda de comportamento.
+#      ⚠️ **REABERTA reaberta continua REABERTA** — fatura que já passou por um
+#      fechamento não volta a ser "aberta" nunca mais. (Foi o teste que pegou este
+#      buraco: a primeira versão a rebaixava para ABERTA.)
+#      ⚠️ CANCELADA fica FORA da conversão: desfazer um cancelamento é UNDO, não
+#      reabertura.
+#      ⚠️ O cron de ATRASADAS só olha `FECHADA` — reabrir PAUSA a marcação de atraso,
+#      de propósito; fechada de novo, ela volta a ser marcada.
+#      ⚠️ O cron de FECHAMENTO só varre `ABERTA`: a REABERTA está sob correção humana,
+#      e fechá-la sozinha desfaria um ato deliberado. CONSEQUÊNCIA ACEITA: reaberta
+#      esquecida fica em aberto até alguém fechá-la à mão.
+#      **SEM MIGRATION** — `tb_faturas.status` é TEXT, sem limite; status novo só
+#      precisa entrar nas listas de `lib/faturaUtils.js`.
+#      REABERTA entra em `['ABERTA','FECHADA']` dos três relatórios (Dashboard,
+#      Relatórios Financeiros e devedores do Gerencial): é fatura NÃO PAGA, e sair do
+#      indicador porque alguém a destravou esconderia dinheiro a receber.
+#      Front: aba/pílula/bolinha **Reaberta** (laranja) ao lado de Aberta, `canEdit`
+#      cobrindo as duas, e `faturaReaberta` como campo PRÓPRIO — na mesma aba da
+#      ABERTA uma esconderia a outra.
+#   Gate novo `__tests__/faturaCicloFechamento.test.js` (26 casos) — verificado que
+#   REPROVA: sabotados os elos de `fecharFatura`, do cron e do `statusAoReabrir`, três
+#   casos falharam. Suíte: **610**. Detalhes na §12, sessão 2026-09-08.)
 # Atualizado em: 2026-09-06 (parte 4) (🔴 O PACIENTE DO CLIENTE INATIVADO DEIXOU DE
 #   SUMIR DA APLICAÇÃO — ele vai para a aba **Inativos** da tela de Pacientes.
 #   `ProprietarioController.removerDaEmpresa` INATIVA os animais do cliente removido
@@ -1335,11 +1660,33 @@ ADMIN: bypass total — não consulta permissões
 GESTOR        → userType VETERINARIO, bypass total
 VETERINARIO  → userType VETERINARIO, usa MatrizPerfil padrão VET
 ESTAGIARIO   → userType ESTAGIARIO
-PRESTADOR    → userType FORNECEDOR (externo, ex: fisioterapeuta, ferrador)
+ENFERMEIRO / SECRETARIA / FINANCEIRO → userType ESTAGIARIO
+FORNECEDOR   → userType FORNECEDOR (externo). Login amarrado a `tb_fornecedores`.
+PRESTADOR    → userType FORNECEDOR (externo, ex: fisioterapeuta, ferrador).
+               Login amarrado a `tb_prestadores`.
 PROPRIETARIO → perfil de SISTEMA — não pode ser atribuído a membros de equipe;
                permissões lidas de MatrizPerfil[perfilSlug='PROPRIETARIO'] das equipes
                vinculadas ao proprietário via Animal.empresaId → Equipe
 ```
+🔴 **ELES NÃO FAZEM PARTE DA EQUIPE** (2026-09-09, parte 2). São ATUAÇÕES ESTANQUES:
+não aparecem na tela Equipe, no Controle de Acesso nem na grade da Agenda, e são criados
+e geridos nos PRÓPRIOS cadastros + Designações. O `MembroEquipe` deles continua
+existindo, mas como **CARTÃO DE ACESSO emitido pelo cadastro** (`lib/acessoExterno.js`)
+— sem ele não há RBAC nenhum. Filtro da listagem: `SEM_EXTERNOS`.
+
+🔴 **FORNECEDOR e PRESTADOR são DOIS cargos e UM comportamento** (2026-09-09).
+`PRESTADOR` nasceu depois e **nada foi migrado**: quem já estava cadastrado segue
+`FORNECEDOR`. Para o sistema os dois são o MESMO profissional externo — escopo por
+`DesignacaoPrestador`, só a própria agenda, permissão por `PermissaoMembro` e destino
+de encaminhamento. O que muda é apenas o CADASTRO a que o login se amarra.
+⚠️ **Comparação de cargo que signifique "é prestador externo" passa por
+`lib/cargosPrestador.js`** (`ehCargoPrestador` / `membroEhPrestador` /
+`OR_CARGO_PRESTADOR`) — nenhum `cargo === 'FORNECEDOR'` novo no código. Um cargo que a
+tela oferece e que o gate não conhece devolve ao PRESTADOR a base de pacientes inteira,
+em silêncio. Há gate estrutural (`__tests__/cargoPrestador.test.js`).
+⚠️ `userType === 'FORNECEDOR'` CONTINUA correto e é intencional: `CARGO_PARA_TIPO`
+mapeia os DOIS cargos para esse userType, e é isso que faz todo gate escrito contra
+`userType` valer para ambos sem alteração.
 
 ### ControleAcesso — abas disponíveis para GESTOR (5 abas)
 ```
@@ -2778,6 +3125,1304 @@ New-Item -ItemType Junction `
 ---
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
+
+### Sessão 2026-09-11 — Salvar/Cancelar na grade e o atalho "cadastrar os valores agora"
+
+- [x] 🔴 **A GRADE DE PROCEDIMENTOS DEIXOU DE SALVAR SOZINHA** (a pedido). Os valores
+      continuam SEMPRE editáveis, mas gravar virou ato EXPLÍCITO: alterou algo, aparecem
+      **✓ Salvar** (emerald) e **✕ Cancelar** (vermelho) na coluna de ações da linha.
+      ⚠️ **REVERTE o auto-save no blur de 10/09**, e o motivo daquela decisão continua
+      valendo — não se dispara um PUT por célula visitada com Tab. É justamente por isso
+      que a confirmação virou explícita em vez de mudar de evento.
+      ⚠️ **NÃO existe ícone "Alterar"**, embora o pedido o citasse: com os campos sempre
+      editáveis ele não teria o que destravar. Decidido com o usuário entre as duas
+      formas (travar até clicar no lápis × sempre editável) — ficou a segunda.
+      ⚠️ Os ícones **só são RENDERIZADOS quando há alteração pendente**: botão que na
+      maior parte do tempo não faz nada é ruído, e desabilitado cairia no cinza que a §6
+      reserva ao indisponível.
+      🔴 **SAEM PELO `AcaoRegistro`**, a fonte única da §6 (a pedido, mesma data):
+      **ícone pintado no desktop, PÍLULA COM RÓTULO no mobile**. Uma versão própria
+      divergiria do resto da aplicação na primeira correção — e no celular, sem rótulo,
+      ✓ e ✕ pequenos ao lado de um campo de dinheiro são alvo difícil e ambíguo.
+      ⚠️ **No CARD as ações vão no RODAPÉ**, nunca ao lado do campo (§6): com rótulo
+      elas espremeriam o valor até ele quebrar de linha. No bloco do prestador,
+      Salvar/Cancelar e **Remover se ALTERNAM** no mesmo rodapé — remover a linha que
+      está sendo editada descartaria o que foi digitado sem dizer nada.
+      ⚠️ Vale na grade INTEIRA (especialidades e imagem). Dois comportamentos na mesma
+      tabela fariam o gestor reaprender como salvar ao trocar de seletor.
+- [x] **A LINHA virou componente** — `LinhaProcedimento`/`LinhaPrestador` (desktop) e
+      `CardProcedimento`/`CardPrestador` (mobile). Dentro de um `.map` não há como ter
+      estado por linha, e é a linha que guarda o texto em edição.
+      🔴 **Na linha do PRESTADOR os dois valores gravam JUNTOS, numa chamada só**: eles
+      moram no mesmo vínculo, e salvá-los em duas requisições deixaria a linha meio
+      gravada se a segunda falhasse.
+      ⚠️ O payload manda **só o que mudou**: `undefined` não toca no gravado (PATCH
+      parcial) e vazio APAGA — mandar os dois sempre transformaria "não mexi" em
+      "apague", que é como o valor do prestador sumiria ao editar só o do cliente.
+      ⚠️ Cada linha **ressincroniza com o valor de fora, mas só sem edição pendente**:
+      sobrescrever o que a pessoa está digitando porque a lista recarregou é perder
+      trabalho em silêncio.
+      ⚠️ Falha na gravação **devolve a linha ao valor do banco** — a tela nunca fica
+      exibindo número que não foi salvo (regra preservada de 10/09).
+      ⚠️ O **Remover prestador (lixeira) some enquanto há edição pendente**: excluir a
+      linha que está sendo editada descartaria o que foi digitado sem dizer nada.
+- [x] 🔴 **"CADASTRAR OS VALORES AGORA" — do pedido de exame para o cadastro** (a
+      pedido). Escolhido o prestador na aba Imagem, os exames MARCADOS que ele ainda não
+      executa por um valor (`temVinculo: false`) viram uma faixa âmbar com o atalho.
+      O botão abre `/cadastro/procedimentos` com a lista **recortada só naqueles
+      exames** e o prestador **já vinculado em cada um** — o gestor só digita os valores.
+      ⚠️ Sem o recorte, o gestor cairia numa categoria de 56 radiografias para achar as
+      3 que faltam.
+      ⚠️ **NÃO bloqueia o pedido**: o exame pode ser pedido e o valor ajustado depois;
+      travar aqui pararia o atendimento por causa de um cadastro.
+      ⚠️ Só existe **com prestador escolhido**: sem ele o exame é da própria equipe e o
+      valor padrão é o correto, não uma pendência.
+      ⚠️ O aviso vem DEPOIS da escolha do exame, nunca antes — alertar sobre 56 exames
+      que ninguém marcou seria ruído.
+- [x] **`?codigos=PR-0302,PR-0310` no `listarComValores`** — recorte por CÓDIGO, não por
+      id: é a chave estável do catálogo (a mesma do seed), enquanto id de procedimento
+      global muda entre bases. Teto de 200 (a lista vem da URL, e um `in` sem limite é
+      consulta cara aberta ao cliente). Exame sem código (cadastrado à mão pela clínica)
+      fica fora do recorte — sem chave não há como pedi-lo.
+- [x] **A tela DIZ que a lista está recortada**, com faixa emerald e o botão "Ver todos
+      de <categoria>". Sem o aviso, o gestor veria 3 radiografias onde existem 56 e
+      concluiria que o catálogo sumiu.
+- [x] **`?vincularPrestador=<id>` cria os vínculos em LOTE** na chegada, em SEQUÊNCIA
+      (nunca `Promise.all` — algumas dezenas de exames virariam uma rajada de
+      requisições). A query é consumida ANTES das chamadas, senão o efeito reexecutaria
+      a cada atualização da lista, que é o que ele mesmo provoca. Idempotente do lado do
+      servidor: o vínculo é unique por (empresa, procedimento, prestador).
+- [x] Verificado contra o banco: `Radiografia` inteira devolve 47 itens e o recorte por
+      3 códigos devolve exatamente 3; código inexistente devolve 0; e
+      `especialidades-minhas` não traz mais 'Diagnóstico por Imagem'.
+      Suíte: **794**; `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+- [ ] `listarComValores` não seleciona `codigo` no retorno — a tela não o exibe hoje. Se
+      um dia o gestor precisar conferir o código do exame recortado, é um campo a somar
+      no `select`.
+
+### Sessão 2026-09-09 (parte 3) — Exame de imagem virou PROCEDIMENTO: categoria, prestador e valor
+
+> ✅ **MIGRATION APLICADA** (autorizada) — `20261005000000_exame_prestador_valor`:
+> `prestador_id` e `valor_cobrado` em `tb_exames_clinicos`, mais o índice. ADITIVA e
+> sem backfill — exame existente ficou com as duas nulas e continua cobrado como
+> sempre (valor 0). Conferido no `information_schema`: as duas nuláveis, índice no lugar.
+> **Funciona ANTES do `prisma generate`**: as colunas são lidas/gravadas por SQL cru
+> (`lib/exameImagemValor.js`), como `animalInativo` e `agendamentoAssumido`.
+>
+> ✅ **SEED RODADO** (`node backend/seed.js`, autorizado): **119 exames inseridos e 34
+> genéricos inativados**. Conferido no banco — Radiografia 56 · Ultrassonografia 46 ·
+> Endoscopia 7 · Termografia 4 · Tomografia e Ressonância 4 · Laparoscopia 2; TODOS com
+> `empresa_id IS NULL`; 0 genéricos ativos; os 4 procedimentos PRÓPRIOS de empresa
+> intactos. Verificado ao vivo que `recursos.porProcedimento` já responde `true` e que
+> a cascata categoria → prestador → exame devolve dado real.
+>
+> 🔴 **ARMADILHA ACHADA NA APLICAÇÃO — `ON CONFLICT` com índice PARCIAL.** A primeira
+> execução do seed morreu com `42P10 there is no unique or exclusion constraint
+> matching the ON CONFLICT specification`: o unique de `tb_procedimentos_vet.codigo`
+> nesta base é **PARCIAL** (`UNIQUE (codigo) WHERE codigo IS NOT NULL` — há 641
+> procedimentos sem código), e `ON CONFLICT (codigo)` sozinho NÃO casa com ele. O
+> predicado tem de ser REPETIDO: `ON CONFLICT (codigo) WHERE codigo IS NOT NULL`.
+> ⚠️ Vale para todo upsert por SQL cru nessa coluna. E o erro é de execução, não de
+> sintaxe: `node --check` passa e só o banco reprova.
+
+- [x] 🔴 **O PROBLEMA: dois catálogos paralelos para a mesma coisa.** O exame de
+      imagem vivia em `tb_imagem_exame_grupos`/`_itens` (12 grupos, 119 itens, só
+      usado pela aba Imagem do pedido), enquanto procedimento vivia em
+      `tb_procedimentos_vet`. Era essa duplicidade que deixava o exame de imagem **sem
+      preço, sem prestador e fora de combo/orçamento** — tudo isso já existe para
+      procedimento e teria de ser reescrito no outro catálogo.
+      Decisão (autorizada): **UNIFICAR**. Os 119 exames viram procedimentos GLOBAIS
+      (`empresa_id IS NULL`, catálogo misto) e herdam de graça o valor por empresa, o
+      vínculo com prestador (com os dois valores), o combo e o orçamento.
+- [x] **Seed 005 `005_procedimentos_imagem.seed.js`** — importa `GRUPOS`/`ITENS` do
+      seed 004 (que passou a exportá-los): **uma cópia dos 119 exames, não duas**, que
+      divergiriam na primeira correção.
+      ⚠️ **A faixa PR-0302..PR-0420 foi conferida no banco ANTES**: estava livre em
+      `tb_procedimentos_vet` (maior código: PR-0301). `codigo` é @unique e é ele que
+      torna o upsert idempotente.
+      ⚠️ **Mapa EXPLÍCITO grupo → categoria**, não `split(' - ')`: "Laparoscopia
+      Diagnóstica" e "Tomografia e Ressonância (Encaminhamento)" não têm o hífen e um
+      deles viraria categoria com nome errado, sem ninguém notar. Grupo novo sem mapa é
+      avisado no console em vez de entrar calado numa categoria inventada.
+      ⚠️ Os 34 genéricos de 'Diagnóstico por Imagem' ("Radiografia digital",
+      "Ultrassonografia abdominal"…) são **INATIVADOS, nunca apagados** — podem estar
+      em orçamento/prescrição já fechados. E só os GLOBAIS: procedimento que a própria
+      clínica cadastrou é DELA e não se toca daqui.
+      ⚠️ `especialidade` continua **'Diagnóstico por Imagem' no DADO**, embora ela
+      tenha saído do SELETOR: no dado é a verdade clínica e o que mantém o exame
+      compatível com quem lê especialidade; na tela quem organiza é a CATEGORIA.
+- [x] **6 categorias no lugar da especialidade** (a pedido): Radiografia,
+      Ultrassonografia, Endoscopia, Termografia, Tomografia e Ressonância,
+      Laparoscopia. `CATEGORIAS_IMAGEM` é exportada do seed e é a **fonte única** da
+      lista e da ORDEM — um `SELECT DISTINCT categoria` daria ordem alfabética (que não
+      é a clínica) e mudaria sozinho quando a clínica criasse a primeira categoria própria.
+      ⚠️ Elas **NÃO entram em `tb_especialidades`** (decisão autorizada): não aparecem
+      na Agenda, no cadastro de membro nem no tempo de consulta. 'Diagnóstico por
+      Imagem' continua no catálogo de especialidades — removê-la quebraria a Agenda de
+      quem já a tem vinculada; o que mudou é só o que a TELA oferece.
+      ⚠️ Conferido no banco que **nenhuma categoria colide com nome de especialidade**
+      (26 no catálogo) — é o que permite o valor do seletor ser o nome puro, sem prefixo.
+- [x] **Cadastro de Procedimentos**: o seletor virou **"Especialidade / Exame de
+      imagem"**, com DOIS blocos e cabeçalho. `DropdownSelect` ganhou a prop `grupos`
+      (o `<optgroup>` que o dropdown próprio não tinha) — sem os cabeçalhos,
+      "Radiografia" apareceria no meio das especialidades clínicas e leria como se
+      fosse uma delas.
+      `listarComValores` aceita `?imagemCategoria=`; os dois filtros são **excludentes**
+      (quem escolheu categoria de imagem não quer procedimento clínico junto).
+      ⚠️ Exame de imagem é **isento do filtro de especialidades atendidas**: quem o
+      governa é a categoria, e a especialidade dele pode não estar entre as da empresa —
+      o que esconderia os 119 exames sem explicação. O filtro por ESPÉCIE continua valendo.
+- [x] **Aba Imagem do pedido de exames: CATEGORIA → PRESTADOR → EXAME**
+      (`components/ImagemSeletorUnificado.tsx`).
+      🔴 **A ordem não é estética**: o PRESTADOR define o Valor Cliente do exame (o
+      vínculo é por par exame×prestador), então escolhê-lo DEPOIS mostraria um preço que
+      muda debaixo do que já foi marcado.
+      ⚠️ Prestador é **OPCIONAL** — sem ele o exame é da própria equipe, pelo valor
+      padrão. Exigi-lo pararia o atendimento por causa de um cadastro que talvez não exista.
+      ⚠️ Prestador **sem vínculo** ganha faixa âmbar e NUNCA some da lista: é esse aviso
+      que evita o exame sair na fatura por R$ 0,00. Mesma decisão do campo de prestador
+      da prescrição.
+      ⚠️ O **VALOR aparece na linha de cada exame** — é o que se cobra do cliente com
+      AQUELE prestador. "—" quando não há valor cadastrado (nunca "R$ 0,00").
+      **Cadastro rápido**: sem prestador → `/cadastro/prestadores`; exame inexistente →
+      `/cadastro/procedimentos` já na categoria. A volta sai do ROUTER (`useLocation`),
+      **nunca de `window.location`** — o app usa HashRouter e o retorno cairia na home (§14).
+- [x] 🔴 **BANDEIRA `recursos.porProcedimento`** (`GET /clinica/imagem-exames/categorias`):
+      diz qual catálogo vale. Base que ainda não rodou o seed 005 continua no catálogo
+      ANTIGO (grupos), que **não foi removido**. Sem esse desvio a aba abriria VAZIA e
+      leria como defeito, não como seed pendente. Mesmo padrão do `comboPrestador`.
+      ⚠️ Sem cache de propósito: um cache de processo faria a tela seguir no catálogo
+      antigo até alguém reiniciar o backend depois de rodar o seed — exatamente o
+      momento em que a resposta precisa mudar.
+- [x] 🔴 **O EXAME PASSOU A SER COBRADO PELO VALOR DO PROCEDIMENTO** (autorizado).
+      Até aqui `lancarExameNaFatura` lançava a linha com **valor ZERO, sempre**.
+      `lib/exameImagemValor.js` resolve o preço na CRIAÇÃO do pedido e o congela em
+      `tb_exames_clinicos.valor_cobrado`.
+      Cadeia: **vínculo do prestador → valor padrão da empresa → `valorVenda` do
+      catálogo → null** — a mesma de `resolverValorProcedimento`, porque o exame É um
+      procedimento agora.
+      🔴 **`null` NÃO É ZERO**: "não sei o preço" e "é de graça" continuam distintos.
+      `precoDoPedido` devolve `null` quando NENHUM nome resolve, e a linha nasce zerada
+      como antes — que é o que vale para todo exame laboratorial e para todo exame
+      anterior a esta leva. Colapsar os dois faria a fatura AFIRMAR que a clínica não
+      cobra pelo exame.
+      ⚠️ **SNAPSHOT do dia do pedido**: recalcular na leitura faria o exame de março ser
+      cobrado pelo preço renegociado em setembro.
+      ⚠️ `lancarExameNaFatura` **busca o valor quando o chamador não o traz**: são
+      quatro gatilhos (criação, finalização da evolução, conclusão do exame) e sem isso
+      três deles lançariam zerado. `require` LOCAL, para não criar ciclo entre as libs.
+      ⚠️ Dinheiro **arredondado ao centavo** na soma: percentual fecha em
+      55.000000000000004 e o pedido sairia com um centavo que ninguém explica.
+- [x] **RECIBO DO PRESTADOR** — a **conclusão** do exame é, aqui, o equivalente à
+      EXECUÇÃO do procedimento: é quando o serviço se completa e a clínica passa a dever
+      a quem executou. `registrarReciboDoExame` grava no MESMO ledger
+      (`tb_execucoes_procedimento_prestador`) que o recibo já lê.
+      ⚠️ Só com prestador — exame da própria equipe não gera recibo.
+      ⚠️ Best-effort e nunca lança: conclusão de exame é ato clínico e não pode cair
+      porque o recibo não registrou.
+      ⚠️ Idempotente por construção: `finalizar` recusa exame já CONCLUIDO.
+- [x] **`prestador_id` SEM FK**, como `tb_prescricoes.prestador_id`: prontuário não muda
+      porque um cadastro de prestador foi excluído, e `ON DELETE SET NULL` apagaria de
+      quem era o exame. Quem guarda o vínculo de forma imutável é o ledger do recibo.
+- [x] **Multi-tenant**: o catálogo é MISTO — os 119 são globais (todos leem, ninguém
+      escreve) e **o que a clínica cadastra é dela** (`empresa_id` setado). Prestadores
+      vêm de `tb_prestadores` da empresa (tenant direto sob RLS) e os vínculos/valores
+      são por `empresa_id`. O endpoint de exames lê `empresa_id IS NULL OR = <empresa>`:
+      só global ou próprio — nunca de outra clínica.
+- [x] Testes: `__tests__/exameImagemProcedimento.test.js` (24 casos) — o mapa completo
+      grupo→categoria, código único, o seed que não toca em procedimento da empresa, o
+      `null ≠ 0` do preço, e um GATE ESTRUTURAL nos três elos que somem em silêncio (o
+      valor na fatura, a gravação do preço na criação, o recibo na conclusão).
+      ✅ **Verificado que REPROVA**: devolvido o `valor: 0` fixo e removida a chamada do
+      recibo, **2 casos falharam**; restaurado, os 24 voltaram a passar.
+      Suíte: **794**; `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+- [ ] O pedido de exame não guarda os itens de forma estruturada (`descricao` é a lista
+      concatenada), então o preço é a SOMA dos exames do pedido, resolvida por NOME.
+      Exame cujo nome contenha vírgula quebra o fallback — por isso o front manda
+      `examesNomes` explícito. Um `ExameClinicoItem` resolveria de vez.
+- [ ] A tela não filtra os exames pela espécie do paciente: `AnimalInfo` (a prop que
+      `SubModuloExames` recebe) não carrega a espécie. O endpoint já aceita `especie` e
+      está pronto para quando ela chegar lá.
+- [ ] O catálogo antigo `tb_imagem_exame_*` continua existindo e sendo semeado (é a
+      FONTE do seed 005 e o que atende a base não migrada). Só pode ser aposentado
+      depois que toda base tiver rodado o seed — e aí some junto o desvio da bandeira.
+
+### Sessão 2026-09-10 (parte 2) — Migrations aplicadas, grade sem lápis e dois defeitos de tela
+
+> ✅ **APLICADAS** (autorizado): `20261001000000_procedimento_prestador` e, junto,
+> `20260930000000_cargo_prestador` — que estava pendente desde 09/09 e vinha PRIMEIRO na
+> fila. `node backend/seed.js` rodado.
+> ✅ **APLICADA também** (autorizada em seguida): `20261002000000_combo_prestador`
+> (`prestador_id` + `valor_prestador` em `tb_procedimento_combos`, ADITIVA, sem
+> backfill). Conferido: as duas colunas existem e os 6 combos da base ficaram sem
+> prestador — que é o estado correto (executados pela própria equipe até alguém dizer o
+> contrário). `migrate status`: schema em dia, 189 migrations.
+
+- [x] 🔴 **A MIGRATION ANTERIOR ESTAVA COM DEFEITO E BLOQUEOU A FILA.**
+      `20260930000000_cargo_prestador` inseria em `tb_perfis_equipe` sem informar
+      `updatedAt` → `23502 null value in column "updatedAt"`, e o Prisma marcou a
+      migration como **FAILED**, o que impede aplicar qualquer outra até resolver.
+      🔴 **A LIÇÃO, que vale para todo INSERT por SQL cru:** `@updatedAt` no Prisma
+      significa que quem preenche o campo é o **CLIENT** — a coluna nasce NOT NULL e
+      **SEM DEFAULT** no banco. Já `@default(now())` gera um DEFAULT de verdade. As duas
+      anotações se parecem no `schema.prisma` e se comportam de formas opostas em SQL
+      cru; `createdAt` passa, `updatedAt` estoura.
+      Recuperação: `npx prisma migrate resolve --rolled-back <nome>` (o Prisma roda cada
+      migration em transaction, então nada parcial ficou — conferido: 0 perfis, 0 linhas
+      de matriz) → correção do SQL (`"updatedAt"` com `NOW() AT TIME ZONE 'UTC'`, nunca
+      `NOW()` puro) → `migrate deploy`.
+      ⚠️ Editar uma migration só é aceitável porque ela **nunca foi aplicada com
+      sucesso** em base nenhuma; depois de aplicada, o checksum divergiria e o caminho é
+      uma migration NOVA.
+- [x] ✅ **Resultado conferido no banco**: 6 equipes → 6 perfis `PRESTADOR` + 847 linhas
+      de matriz copiadas do `FORNECEDOR`; `tb_procedimento_prestadores` e
+      `tb_execucoes_procedimento_prestador` com `relrowsecurity`/`relforcerowsecurity`
+      true e policy `tenant_*` criada; `tb_prescricoes.prestador_id` presente; os slugs
+      `financeiro.recibos.ler`/`.imprimir` no catálogo de módulos.
+      As duas tabelas entraram em `TENANT_PLANE` (`__tests__/tenancyRls.test.js`) —
+      agora que EXISTEM, o teste 2 as exigiria classificadas.
+      🔴 **A VERIFICAÇÃO CAIU NA ARMADILHA 42.** O primeiro `SELECT count(*)` devolveu
+      **0** perfis PRESTADOR e parecia que a migration não havia gravado nada — era o
+      `FORCE ROW LEVEL SECURITY` escondendo as linhas de quem não carimbou
+      `app.plataforma`, inclusive o dono do schema. **Conferir tabela do tenant plane
+      exige o carimbo TAMBÉM na leitura** (`set_config('app.plataforma','on',true)`
+      dentro da transaction), não só na escrita da migration.
+- [x] 🔴 **A GRADE DE PROCEDIMENTOS PERDEU O LÁPIS** (a pedido). Os dois valores viraram
+      campos SEMPRE editáveis — componente novo `ValorInline`:
+      ⚠️ **grava no BLUR e SÓ SE O TEXTO MUDOU.** Sem a comparação, percorrer a tabela
+      com Tab dispararia um PUT por célula visitada — dezenas de gravações idênticas.
+      ⚠️ `Enter` confirma (tira o foco); **`Esc` DESFAZ** para o último valor salvo. Sem
+      a volta, quem começou a digitar por engano numa lista de centenas de linhas não
+      tem como cancelar, e o blur gravaria o meio da digitação.
+      ⚠️ **Falha na gravação devolve a célula ao valor do banco.** A tela nunca fica
+      exibindo um número que não foi salvo — é o mesmo princípio do 409 da concorrência.
+      ⚠️ Ressincroniza quando o valor muda POR FORA (recarga da lista, salvamento de
+      outra célula): sem isso a célula congelaria num valor antigo.
+      Com o lápis saíram `editandoValorId`/`valorEdit`/`salvandoValor` e o par ✓/✕ de
+      cada célula — quem confirma é o blur.
+- [x] **Rótulos curtos**: "Valor Cobrado pelo Prestador" → **Valor Prestador**;
+      "Valor Cobrado para o Cliente" → **Valor Cliente** (a pedido). Os nomes longos
+      ocupavam duas linhas no cabeçalho e empurravam a coluna do procedimento; o que
+      cada um significa está na linha em que aparece, e no `title` do campo.
+      ⚠️ `placeholder` do Valor Cliente do VÍNCULO é **"Padrão"**, não "R$ 0,00": vazio
+      ali significa "usa o valor padrão da empresa", e não zero. A linha ainda mostra
+      "usa R$ X" embaixo, para a herança não depender de o gestor lembrar da regra.
+- [x] 🔴 **O PRESTADOR VIROU SELETOR, SEM ÍCONE** (a pedido) — `PrestadorCombo`: digita
+      para filtrar, marca um que exista, ou cadastra um novo.
+      ⚠️ **Escolher JÁ CRIA o vínculo** (sem valores; os campos nascem editáveis na linha
+      nova). Um passo de confirmação para uma escolha que já foi feita é o que o pedido
+      dispensa ao dizer "não precisa de um ícone para isso".
+      ⚠️ Escolha por `onMouseDown` + `preventDefault`: o foco não sai do input, então o
+      blur não fecha a lista antes de o clique registrar — a armadilha do combo da Agenda.
+      ⚠️ Só oferece quem AINDA NÃO está vinculado: o unique recusaria o repetido e o
+      clique falharia depois (28-d).
+      ⚠️ **"Cadastrar X" NÃO cria o prestador aqui**: `PrestadorController.criar` exige
+      nome **e telefone**, então criar pelo nome produziria cadastro incompleto. Leva a
+      `/cadastro/prestadores?novo=1&nome=&depois=…&vincularNome=` e, ao salvar, VOLTA
+      para cá — o efeito de chegada acha o prestador **pelo NOME** (o id não existia
+      quando a URL foi montada) e abre o vínculo sozinho. Sem esse retorno, o gestor
+      teria de reencontrar o procedimento na lista para terminar o que começou.
+- [x] **Buscador POR PRESTADOR nas duas abas** (a pedido). Campo PRÓPRIO, ao lado da
+      busca por nome/categoria: num campo só, "Silva" daria resultado imprevisível
+      (nome de procedimento OU de prestador). O estado vazio distingue "nenhum
+      procedimento nesta especialidade" de "nenhum vinculado a esse prestador" — sem a
+      distinção, o gestor conclui que o catálogo está vazio.
+- [x] **O COMBO ganhou prestador e os dois valores** (a pedido) — `prestador_id` e
+      `valor_prestador` em `tb_procedimento_combos`, mesma forma da tela de
+      procedimentos.
+      ⚠️ **`valor` NÃO foi renomeado.** Ele já era, e continua sendo, o **Valor Cliente**
+      do pacote; renomear a coluna obrigaria a tocar `resolverValorProcedimento`, o
+      Orçamento, a Prescrição e os dois renderizadores para não ganhar nada. O que mudou
+      foi o RÓTULO na tela.
+      ⚠️ O prestador é **OPCIONAL**: sem ele o pacote é executado pela própria equipe.
+      "Valor Prestador" fica desabilitado enquanto não houver prestador — valor de quem
+      não existe não tem onde ser cobrado.
+      ⚠️ Prestador conferido contra a EMPRESA (`prestadorDoComboInvalido`): o RLS não
+      cruza tabelas, então a policy do combo não impede gravar o id de outra clínica.
+      🔴 **`recursos.comboPrestador` na resposta de `listarCombos`** diz se as colunas
+      EXISTEM. A migration já foi aplicada, mas a bandeira FICA: numa base que ainda não
+      a tenha, a tela ofereceria o seletor e a escolha DESAPARECERIA no salvar — falha
+      silenciosa, o pior resultado possível. Com ela, os campos são trocados por um aviso
+      que nomeia a migration. Não remover ao supor que "agora todo mundo já migrou".
+- [x] 🔴 **"Arquivo anexado:" mostrava a descrição DO PEDIDO.** No aviso de divergência
+      de exame (`ExamesSolicitadosPanel`), a linha exibia o estado `descricao` — que a
+      regra "o que já está escrito não é sobrescrito" PRESERVA a partir do pedido. As
+      duas linhas do modal saíam com o MESMO texto ("Pedido: Laboratorial · Hemograma" /
+      "Arquivo anexado: Hemograma"), e comparar uma coisa com ela mesma não ajuda a
+      responder a única pergunta daquela tela: "anexei o laudo errado?".
+      Agora mostra o **NOME DO ARQUIVO** analisado e, em linha à parte e só quando existe,
+      **o que a IA leu dentro dele**.
+      ⚠️ O retrato vem de `files` (o lote DESTA análise), não de `arquivos`: no modo
+      ADICIONAR aquele já traz os anteriores, e o modal citaria arquivo que não foi lido
+      agora.
+- [x] 🔴 **O COMBO DE VACINAS DO ATESTADO NÃO MOSTRAVA TODAS.** Dois cortes silenciosos:
+      (a) o dropdown renderizava `.slice(0, 60)` de **231** nomes — tudo depois do 60º
+      alfabético era invisível e nada dizia que a lista tinha sido cortada; (b) a
+      consulta tinha `take: 500` aplicado ANTES da deduplicação por nome (426 linhas →
+      231 nomes), então hoje não cortava, mas bastava a clínica cadastrar as próprias
+      vacinas para o fim do catálogo desaparecer do atestado.
+      O `take` SAIU (catálogo de vacinas é finito e pequeno; o custo de trazê-lo inteiro
+      é menor que o de descobrir o corte no papel) e o teto de RENDERIZAÇÃO subiu para
+      200, com a última linha dizendo quantas faltam quando ainda corta.
+      ⚠️ Num documento com valor legal, opção que falta é vacina que deixa de ser
+      atestada — corte silencioso aqui é pior que lista longa.
+- [x] **AS APLICADAS NO ÚLTIMO ANO VÊM NO TOPO, COM ✅** (a pedido).
+      ⚠️ **Só `EXECUTADA`.** `SALVA` é rascunho e `FINALIZADA` está na fila do plantão
+      aguardando aplicação — marcar as duas afirmaria no atestado que o animal recebeu
+      uma dose que ninguém aplicou.
+      ⚠️ **ERGUE, nunca FILTRA**: um atestado pode registrar vacina que o paciente nunca
+      tomou — a primeira dose é exatamente esse caso —, então o catálogo inteiro continua
+      abaixo.
+      ⚠️ **A ordenação é do BACKEND**, não da tela: é lá que se sabe QUANDO cada uma foi
+      aplicada. Mandar a data e deixar a tela ordenar seria a mesma regra escrita duas
+      vezes.
+      ⚠️ Janela de **12 meses** (o intervalo do reforço anual): sem ela, o atestado de um
+      paciente antigo subiria dezenas de vacinas de anos atrás e o atalho deixaria de ser
+      atalho.
+      ⚠️ O casamento é pelo **NOME**, sem caixa nem espaço em volta — o registro de vacina
+      guarda o nome, não uma FK garantida.
+      ⚠️ Sem `animalId` (editor de modelos) sai em ordem alfabética, como antes.
+- [x] Testes: `__tests__/vacinasAplicadasOpcoes.test.js` (12 casos) — lista completa sem
+      teto (o mock REPROVA qualquer `take` na consulta crua), deduplicação, ordem
+      alfabética sem paciente, erguidas por recência, `SALVA`/`FINALIZADA` sem marca,
+      fora da janela, nome com caixa/espaço diferentes, e a data da dose mais recente.
+      ✅ **Verificado que REPROVA**: reintroduzido o `take: 500` e afrouxado o filtro de
+      status, **10 dos 12 falharam**.
+      🔴 **E ELE NASCEU INSTÁVEL — `jest.mock` com `{ virtual: true }` num módulo que
+      EXISTE.** `virtual` diz ao jest "este módulo não existe em disco", e é necessário
+      só para `lib/prisma` (que é `.ts`, e o babel-jest não transpila). Aplicado também a
+      `lib/fusoEmpresa` (um `.js` real), o mock às vezes NÃO pegava: um worker que já
+      tivesse carregado o módulo verdadeiro num arquivo anterior resolvia o real, e a
+      data saía em dd/MM/aaaa no lugar do ISO. Falhava ~1 vez a cada 8, **só no run
+      COMPLETO** — isolado passava sempre, que é o pior formato de teste instável.
+      Removido o flag; 12 execuções completas seguidas em verde.
+      ⚠️ Regra: `virtual: true` só em módulo que o jest realmente não resolve.
+      Suíte: **747**; `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+- [ ] **`ValorInline` grava no blur, sem debounce.** Digitar e clicar direto em outra
+      célula gera duas requisições em sequência (uma por célula), o que é o correto — mas
+      não há fila: se a primeira falhar, a segunda já partiu. Na prática cada célula é
+      independente (endpoints distintos por vínculo), então não há corrida sobre o mesmo
+      dado; se um dia a tela ganhar um "salvar tudo", é aqui que a coordenação entra.
+- [ ] O vínculo prestador×procedimento não permite TROCAR o prestador de uma linha — só
+      remover e escolher outro. Trocar significaria mover preço de uma pessoa para outra,
+      e o ledger do recibo já registrou execuções sob o vínculo antigo; remover + criar
+      deixa isso explícito.
+- [ ] O combo aceita UM prestador. Pacote executado por dois profissionais diferentes
+      (o cirurgião e o anestesista) não tem como dividir o valor entre eles — exigiria
+      uma tabela de rateio, e não foi pedido.
+
+### Sessão 2026-09-10 — Prestador no procedimento, dois preços e recibo de pagamento
+
+> 🔴 **MIGRATION GERADA, NÃO APLICADA** — `20261001000000_procedimento_prestador`.
+> **ADITIVA e sem backfill** (nenhum UPDATE/DELETE de dado gravado): duas tabelas novas
+> (`tb_procedimento_prestadores`, `tb_execucoes_procedimento_prestador`), as duas com
+> ENABLE + FORCE + policy de **TENANT DIRETO**, e a coluna `tb_prescricoes.prestador_id`.
+> Aplicar com `DATABASE_URL=$DATABASE_URL_MIGRATIONS npx prisma migrate deploy`.
+> **SEM `prisma generate` obrigatório**: tudo é lido/gravado por SQL cru
+> (`lib/procedimentoPrestador.js`) — no Windows o generate falha com o backend rodando (§11).
+> ⚠️ **DEPOIS de aplicar**, acrescentar as duas tabelas a `TENANT_PLANE` em
+> `__tests__/tenancyRls.test.js` — o teste 2 reprova por falta de classificação, e o
+> teste 3 reprovaria se fossem listadas ANTES de existirem. Há comentário no arquivo.
+> ⚠️ Rodar **`node backend/seed.js`** para os slugs novos `financeiro.recibos.ler` e
+> `financeiro.recibos.imprimir` entrarem no catálogo de módulos e nas matrizes.
+
+- [x] 🔴 **O PROBLEMA: um preço por procedimento, e ninguém sabia QUEM executou.**
+      `ProcedimentoValorEmpresa` é `@@unique([empresaId, procedimentoId])` — UM valor por
+      procedimento na empresa. A clínica com dois ferradores que cobram (e recebem)
+      valores diferentes pelo MESMO ferrageamento não tinha onde gravar isso: o segundo
+      sobrescrevia o primeiro. E não havia como apurar o que a clínica DEVE a cada
+      prestador — `FaturaItem` registra o que se COBRA do cliente, e o outro lado do
+      balcão simplesmente não existia.
+- [x] **`tb_procedimento_prestadores` — o VÍNCULO (empresa, procedimento, prestador)**,
+      com os DOIS valores: `valor_cliente` (o que se cobra do cliente quando é ESTE
+      prestador que executa) e `valor_prestador` (o que ELE cobra da clínica).
+      ⚠️ **`ProcedimentoValorEmpresa` CONTINUA existindo** e continua sendo o valor
+      PADRÃO da empresa — o que vale quando quem executa é a própria equipe, sem
+      prestador externo. O vínculo só ESTREITA para o par; trocar um pelo outro faria
+      TODO procedimento sem prestador nascer sem preço na fatura.
+      ⚠️ **`valorCliente` NULO = "usa o valor padrão da empresa"**, e não zero — é o que
+      permite vincular o prestador sem repetir um preço que já existe. A tela mostra o
+      padrão com a nota de herança; exibir "R$ 0,00" faria o gestor concluir que o
+      procedimento é gratuito com aquele prestador.
+      ⚠️ Unique por (empresa, procedimento, prestador): vários prestadores no MESMO
+      procedimento é o caso de uso; o que não pode existir é a mesma dupla duas vezes,
+      com dois preços, sem ninguém saber qual vale.
+- [x] **Tela de Procedimentos: "Valor" virou "Valor Cobrado para o Cliente"** e ganhou
+      **Prestador** + **Valor Cobrado pelo Prestador**. A linha do procedimento é o
+      PADRÃO da empresa ("Padrão da empresa" na coluna do prestador) e cada prestador
+      vinculado é uma LINHA FILHA, editável e removível, com "+ Prestador" para incluir.
+      ⚠️ O botão "+ Prestador" só aparece havendo prestador AINDA NÃO vinculado: o unique
+      recusaria o repetido, e o clique só falharia depois (28-d).
+      ⚠️ Sob cada prestador vai o rótulo de COMO ele é pago ("Comissão de 30% do valor do
+      cliente", "Paga o valor do procedimento"…). Sem isso o gestor vê dois números na
+      tela e não sabe qual a clínica vai efetivamente pagar.
+      ⚠️ Os vínculos vêm em BLOCO (uma consulta para a página inteira) —
+      `vinculosPorProcedimento`. A lista tem centenas de linhas e uma ida ao banco por
+      linha derrubaria a tela.
+      ⚠️ Salvar ATUALIZA a linha com o que o backend devolveu, em vez de recarregar:
+      recarregar perderia a especialidade/busca em curso num fluxo que é de repetição.
+      O backend devolve a lista COMPLETA de vínculos do procedimento justamente para
+      isso — nunca deduzir o novo estado no front.
+- [x] 🔴 **`tb_prescricoes.prestador_id` — quem executa ESTE item.** Fica no ITEM, não no
+      grupo: a mesma prescrição tem o bloqueio feito pelo veterinário da casa e o
+      ferrageamento pelo ferrador externo, e uma marca por documento obrigaria a abrir
+      duas prescrições para o mesmo atendimento — a MESMA razão de `medicamentoCliente` e
+      `aplicadaPeloProprietario` serem por item.
+      ⚠️ **Sem FK**, por duas razões: prontuário não muda porque um cadastro de prestador
+      foi excluído, e `ON DELETE SET NULL` apagaria de quem era o procedimento — o ledger
+      do recibo já guarda o vínculo de forma imutável.
+      ⚠️ Gravado nos TRÊS pontos onde um item nasce ou muda (`criar`, `adicionarItem`,
+      `atualizarItem`). Esquecer um deixa o campo no limbo — foi exatamente o defeito de
+      `resolverCatalogoDoItem`, documentado no próprio arquivo.
+      ⚠️ `gravarPrestadorDoItem` IGNORA item de MEDICAMENTO por construção: remédio não
+      tem prestador, e aceitar o campo ali criaria linha de recibo por dose de remédio.
+      ⚠️ Na EDIÇÃO o tipo vem do item ATUALIZADO: trocar procedimento→medicamento tem de
+      limpar o prestador, senão o remédio herdaria o do procedimento anterior.
+- [x] 🔴 **O PREÇO PASSOU A TER UM DEGRAU A MAIS** —
+      `resolverValorProcedimento(tx, empresaId, nome, prestadorId)`:
+      **vínculo do prestador > combo da empresa > valor padrão da empresa >
+      `valorVenda` do catálogo > 0**. O vínculo vem PRIMEIRO porque é o mais específico
+      que existe: é o preço daquele procedimento QUANDO É AQUELE PRESTADOR que executa.
+      ⚠️ **Sem prestador no item a cadeia é a de sempre** — NENHUMA prescrição existente
+      muda de preço por causa desta mudança.
+      ⚠️ Continua NÃO filtrando por `ativo`: isto precifica algo que a pessoa JÁ ESCOLHEU
+      ao prescrever, e inativar o vínculo entre a prescrição e a execução não pode fazer
+      a linha nascer com valor 0.
+- [x] **Campo PRESTADOR na tela de prescrição**, ao escolher o PROCEDIMENTO. Lista os
+      prestadores COM valor cadastrado naquele procedimento num `<optgroup>` e os demais
+      em outro, marcados como "sem valor cadastrado".
+      ⚠️ **É OPCIONAL.** Procedimento executado pela própria equipe não tem prestador, e
+      exigi-lo pararia o atendimento por causa de um cadastro que talvez nem exista.
+      ⚠️ Os DOIS grupos vêm juntos de propósito: o vínculo é configuração do GESTOR e
+      pode não existir ainda; travar a prescrição por causa disso pararia o atendimento.
+      🔴 Prestador escolhido SEM vínculo ganha **faixa âmbar com o atalho "Definir
+      valor"** — é esse aviso que evita o procedimento sair na fatura por R$ 0,00.
+      ⚠️ Trocar o PROCEDIMENTO zera o prestador (o vínculo é por par): deixá-lo colado
+      faria o item novo nascer com o prestador do anterior, que talvez nem o execute.
+      ⚠️ A busca de prestadores só dispara em PROCEDIMENTO e com nome preenchido — no
+      combobox de medicamento seria uma requisição por caractere digitado.
+- [x] **FLUXO GUIADO de cadastro** (o pedido: "esse campo poderá incluir um novo
+      prestador… chame a tela de prestadores e abra a de procedimentos para cadastrar o
+      valor e atrelar"). A opção **+ Cadastrar novo prestador** navega para
+      `/cadastro/prestadores?novo=1&depois=/cadastro/procedimentos?especialidade=&busca=`;
+      ao SALVAR, o cadastro segue para lá, que abre já na especialidade certa, filtrado
+      pelo procedimento, com o formulário de vínculo aberto (`?vincular=<prestadorId>`
+      quando o prestador já existe e só falta o preço).
+      ⚠️ `depois` só é aceito como rota INTERNA (começa com "/" e não "//"): valor
+      absoluto transformaria a query em redirecionamento aberto.
+      ⚠️ Os dois efeitos CONSOMEM a query (`setParams`, replace) — sem isso o modal e o
+      formulário de vínculo reabririam a cada recarga da lista, por cima do que estivesse
+      sendo digitado.
+      ⚠️ A especialidade da URL só é imposta quando a empresa realmente a atende: vinda
+      de outra clínica, ela não estaria na lista e o seletor ficaria com valor sem opção.
+- [x] ✅ **Procedimento novo criado NA PRESCRIÇÃO já entra na tabela de procedimentos —
+      isso JÁ FUNCIONAVA e não precisou de nada.** `resolverCatalogoDoItem`
+      (PrescricaoGrupoController) chama `garantirProcedimentoDaEmpresa`
+      (`lib/catalogoManual.js`) em `criar`, `adicionarItem` e `atualizarItem`: o item
+      nasce com `empresaId` da clínica (nunca global — o RLS recusaria) e a espécie do
+      paciente, idempotente por (nome + empresa). Conferido ponta a ponta.
+- [x] 🔴 **RECIBO DE PAGAMENTO AO PRESTADOR** — `tb_execucoes_procedimento_prestador`,
+      gravado em `PrescricaoGrupoController.executar` **dentro da MESMA transaction** do
+      lançamento na fatura: ou o cliente é cobrado e o prestador entra no recibo, ou nada
+      acontece. Fora dela existiria a janela em que a clínica cobrou e não deve a ninguém.
+      🔴 **É SNAPSHOT, e por isso é TABELA e não uma consulta sobre `Prescricao`**: o
+      valor cobrado do cliente, o valor do prestador e a FORMA DE PAGAMENTO dele mudam
+      com o tempo. Um recibo de março recalculado com o percentual de setembro pagaria
+      valor diferente do acordado, e não haveria como provar o contrário — mesma premissa
+      de `FaturaItem.descricao` e do snapshot do documento emitido.
+      ⚠️ `animal_nome` e `procedimento_nome` são GRAVADOS: o recibo precisa dizer o que
+      foi feito mesmo que o paciente seja renomeado ou o procedimento saia do catálogo.
+      ⚠️ `registrarExecucao` **NUNCA lança**: falha ali não pode derrubar a execução
+      clínica. Base não migrada devolve `null` e a fatura sai como sempre saiu.
+      ⚠️ Registra TAMBÉM com `medicamentoCliente` (item fornecido pelo cliente, que não é
+      cobrado): o serviço foi prestado e o prestador tem de ser pago. Nesse caso
+      `valorCliente` é 0, então a comissão PERCENTUAL sai 0 — consequência correta de não
+      haver receita, não erro de cálculo.
+      ⚠️ `fatura_item_id` NÃO é rastreado: `adicionarOuSomarFaturaItem` CONSOLIDA doses
+      na mesma linha, então não existe um FaturaItem por execução para apontar. O recibo
+      se sustenta sozinho — é o documento do outro lado, não um espelho da fatura.
+- [x] **Tipo de pagamento novo `POR_PROCEDIMENTO`** no cadastro do prestador. A conta do
+      recibo (`calcularValorAPagar`, função PURA):
+      ```
+      POR_PROCEDIMENTO          → valor_prestador do VÍNCULO × quantidade
+      COMISSAO + PERCENTUAL     → % sobre o Valor Cobrado para o Cliente
+      COMISSAO + VALOR          → comissão fixa × quantidade
+      SALARIO                   → 0 (remuneração fixa; não se apura por procedimento)
+      sem cadastro              → 0 + base SEM_CONFIG (pendência à vista)
+      ```
+      ⚠️ **`POR_PROCEDIMENTO` NÃO entra em `TIPOS_PAGAMENTO` de `lib/usuarioEmpresa.js`**
+      — aquela lista é compartilhada com o INCLUIR MEMBRO (`tb_usuario_empresa`), e o
+      valor lá ficaria aceito no backend do MEMBRO sem que nenhuma tela o ofereça: um
+      estado alcançável só por chamada direta à API, que ninguém consegue configurar nem
+      corrigir depois. Mora em `lib/procedimentoPrestador.js` e há **teste travando** a
+      separação. Mesma decisão no front (`TIPOS_PAGAMENTO_PRESTADOR` é local da tela).
+      ⚠️ No cadastro, `POR_PROCEDIMENTO` **substitui** o campo de valor pela explicação,
+      e grava forma/valor como NULL — um valor ali daria DUAS fontes possíveis para o
+      mesmo pagamento, e o recibo teria de escolher uma sem ninguém saber qual.
+      ⚠️ **PERCENTUAL não multiplica por quantidade**: `valorCliente` já é o total da
+      execução (o mesmo que foi para a fatura) — multiplicar de novo pagaria em dobro.
+      `VALOR_FIXO` e `VALOR_PROCEDIMENTO` são preços UNITÁRIOS e esses sim acompanham.
+      ⚠️ **SALARIO é 0 mas a execução É REGISTRADA**: apagá-la faria o assalariado
+      desaparecer do relatório e ninguém conferiria o que ele produziu. A base
+      `SALARIO` é distinta de `SEM_CONFIG` de propósito — a primeira é uma DECISÃO, a
+      segunda uma PENDÊNCIA que a tela cobra; confundi-las mandaria o gestor cadastrar
+      algo que já está cadastrado.
+      ⚠️ Dinheiro é arredondado ao CENTAVO **na gravação**: 183,33 × 30% dá
+      55,000000000000004, e 30 linhas dessas fecham o recibo com um centavo que ninguém
+      consegue explicar.
+      🔴 **DEFEITO ACHADO PELO TESTE**: `num()` usava `Number.isFinite` cru, e
+      `Number(null)` é 0 — coluna VAZIA voltava como 0. Isso derrubava DUAS regras de
+      uma vez: `valorCliente` nulo (herança do padrão) virava "R$ 0,00" na tela, e
+      prestador POR_PROCEDIMENTO sem valor no vínculo caía em `VALOR_PROCEDIMENTO` com 0
+      em vez de `SEM_CONFIG` — a pendência desaparecia do recibo.
+- [x] **Tela `/recibos-prestador`** (Sidebar › Financeiro), com o `PeriodoSelector` de
+      sempre: **Dia · Semana · Mês · Ano**. Um card por prestador com nome, documento,
+      forma de pagamento e total, e a lista de itens — **Animal · Procedimento executado
+      · Data da execução · Cobrado do cliente · Valor** —, em `JanelaLista` de 3.
+      Botão Imprimir por prestador e para o período inteiro.
+      ⚠️ Prestador SEM execução no período não aparece: recibo de valor zero para quem
+      não trabalhou é ruído, e a lista existe para dizer A QUEM PAGAR.
+      ⚠️ O aviso de PENDÊNCIA fica no TOPO, não escondido em cada recibo: prestador sem
+      forma de pagamento faz o total do período sair MENOR do que a clínica deve, e quem
+      paga precisa saber disso antes de fechar o mês.
+      ⚠️ Janela `[inicio, fim)` com `fim` EXCLUSIVO (+1ms sobre o `fim` inclusivo de
+      `resolverPeriodo`): com `<=` numa data sem hora, a execução do último milissegundo
+      do período ficaria de fora.
+      ⚠️ Base sem a migration devolve `indisponivel: true` e a tela EXPLICA — em vez de
+      "nada a pagar", que é uma afirmação diferente (e errada).
+      ⚠️ UMA `JanelaLista` por breakpoint, com a classe do breakpoint NELA: o seletor
+      padrão casa linha de tabela E card, e uma janela só em volta dos dois blocos
+      contaria os itens em dobro.
+- [x] **A folha** (`utils/ReciboPrestadorPrint.ts`) é um RECIBO, não uma fatura: traz a
+      frase de **quitação** com o valor **por extenso**, o discriminativo do serviço e a
+      assinatura **de quem RECEBE**. Uma folha por prestador — juntar dois no mesmo papel
+      produziria um comprovante que nenhum dos dois pode levar.
+      ⚠️ `GET /recibos-prestador/emitente` devolve só a IDENTIFICAÇÃO da clínica.
+      **Chave PIX e conta bancária ficam FORA de propósito**: aqueles campos existem para
+      o cliente PAGAR a clínica, e imprimi-los num documento que vai ao prestador
+      publicaria os dados de recebimento dela para terceiros.
+      ⚠️ Valor por extenso escrito à mão (sem dependência nova): a folha é HTML puro num
+      iframe, e uma biblioteca não se paga por 40 linhas.
+- [x] **Slugs novos `financeiro.recibos.ler` / `.imprimir`** — submódulo PRÓPRIO, não uma
+      ação de `faturas`. A fatura é o que a clínica COBRA do cliente; o recibo é o que ela
+      PAGA a terceiros, e são decisões separadas na prática: reaproveitar o slug daria
+      acesso à folha de pagamento de terceiros a todo mundo que fatura. Defaults: GESTOR
+      FULL, FINANCEIRO EQUIPE, **todos os demais NENHUM**.
+- [x] Testes: `__tests__/procedimentoPrestador.test.js` (26 casos) — a matriz do cálculo
+      inteira, o arredondamento, a separação em relação a `TIPOS_PAGAMENTO`, e um GATE
+      ESTRUTURAL que varre o código e reprova a execução sem `registrarExecucao`, o preço
+      sem o prestador do item e o vínculo sem a conferência de empresa.
+      ✅ **Verificado que REPROVA**: removidos o registro do ledger e o prestador da
+      resolução de preço, **3 casos falharam**. Suíte: **735**; `tsc --noEmit` (backend),
+      `tsc -b` e `vite build` limpos.
+- [ ] **O PRESTADOR não vê o próprio recibo.** `financeiro.recibos.ler` nasce NENHUM para
+      o cargo FORNECEDOR/PRESTADOR, e a rota não filtra por "sou eu". Dar isso exige
+      decidir o recorte (só as próprias execuções) e um gate por identidade, não só por
+      slug — não foi pedido.
+- [ ] **Execução ANTERIOR à migration não entra em recibo nenhum**, e não há backfill
+      possível: `FaturaItem.veterinarioId` guarda quem LANÇOU a cobrança, não quem
+      executou o procedimento. Deduzir produziria um recibo que a clínica pagaria sobre
+      uma atribuição que ninguém fez.
+- [ ] **VACINA e EXAME não têm prestador.** A regra vale só para PROCEDIMENTO, que foi o
+      pedido. O caminho é o mesmo (coluna no item + a chamada no `executar` daquele
+      controller), mas cada um tem o seu ciclo de execução.
+- [ ] O vínculo tem coluna `ativo` e ela é gravada, mas a tela não oferece
+      inativar/reativar — só remover. Vínculo é configuração de preço (não registro
+      clínico), então o hard delete é adequado; se um dia fizer falta um histórico de
+      preços, a coluna já está lá.
+
+### Sessão 2026-09-09 (parte 2) — Fornecedor e Prestador saem da EQUIPE
+
+> **SEM migration nesta parte.** Nada de dado gravado é tocado — foi o pedido: quem já
+> está cadastrado continua exatamente como está. A migration da parte 1
+> (`20260930000000_cargo_prestador`) segue GERADA E NÃO APLICADA.
+
+- [x] 🔴 **A PREMISSA: os dois são ATUAÇÕES ESTANQUES, não equipe.** Perguntado se era
+      assim que estava configurado, a resposta era **não**: incluir um Fornecedor ou
+      Prestador criava `MembroEquipe` como qualquer outro cargo, e eles apareciam na
+      tela Equipe, no Controle de Acesso, na grade da Agenda e nos contadores.
+- [x] 🔴 **O QUE **NÃO** MUDOU, e por quê: `MembroEquipe` CONTINUA existindo para eles.**
+      Não é contradição — é infraestrutura, e apagá-lo derrubaria o acesso inteiro:
+      `resolveEquipeId` procura o vínculo; sem ele `checkPermission` cai no ramo final e
+      responde **403 "Nenhuma equipe ativa encontrada"**, e `userType FORNECEDOR` NÃO
+      tem rota de escape (os dois bypasses de dono têm `&& userType !== 'FORNECEDOR'`
+      explícito). Fora isso, `PermissaoMembro` é chaveada por `(equipeId, userId,
+      moduloSlug)` e `DesignacaoPrestador` é por equipe.
+      **O vínculo virou um CARTÃO DE ACESSO emitido pelo CADASTRO** — `lib/acessoExterno.js`
+      —, não uma cadeira na equipe. Quem o cria e o revoga é `/cadastro/prestadores`; a
+      tela Equipe nem o enxerga.
+- [x] **Eles somem da listagem de membros** — `lib/cargosPrestador.js#SEM_EXTERNOS`
+      aplicado às 4 consultas de `listarMembros`/`listarMembrosPorEquipe`.
+      ⚠️ Filtrar no **ENDPOINT** é o que faz a tela Equipe, o Controle de Acesso e a
+      **grade da Agenda** saírem juntos: os três comem o mesmo `/equipes/membros`.
+      Filtrar em cada tela deixaria a próxima nascer errada.
+      ⚠️ O filtro é pelo cargo **PRIMÁRIO**: quem é VETERINARIO e ACUMULA prestador em
+      `cargos[]` CONTINUA na equipe — é da casa e também atende como externo, e sumir da
+      lista o tornaria ingerenciável. É o oposto de `membroEhPrestador`, que existe para
+      RESTRINGIR acesso (ali qualquer cargo da família basta).
+      ⚠️ `?incluirExternos=1` é a porta de saída explícita (nada usa hoje) — sem ela,
+      quem precisasse da lista completa reescreveria o filtro por conta própria.
+      ⚠️ `listarTodasEmpresasAdmin` FICA de fora: é o inventário da plataforma, onde o
+      ADMIN precisa ver todo vínculo que existe.
+- [x] 🔴 **O CADASTRO PASSOU A ENTREGAR O ACESSO QUE PROMETIA.** `Prestador.acessoSistema`
+      existia desde 2026-08-21 e criava um `User` **sem** `MembroEquipe` — o próprio
+      schema documentava a consequência: *"dá para logar, mas sem RBAC; quem precisa de
+      tela de verdade continua indo por Equipe > Incluir Membro"*. A pessoa entrava e
+      não via nada. Agora `PrestadorController` emite o cartão (`emitirCartaoAcesso` +
+      vínculo por empresa + Matriz do perfil PRESTADOR) na criação **e a cada salvar com
+      o acesso ligado** — é isso que faz o cadastro ANTIGO passar a enxergar tela ao ser
+      salvo de novo, sem migration nenhuma.
+      ⚠️ **Não reescreve cargo nem perfil de quem já é membro**: a veterinária que também
+      tem cadastro de prestador não pode ser REBAIXADA porque alguém marcou "terá acesso"
+      num cadastro homônimo.
+      ⚠️ **Desmarcar NÃO apaga o `MembroEquipe`** — o cascade levaria junto a
+      `PermissaoMembro`, e religar devolveria a pessoa sem nenhuma das permissões que o
+      gestor configurou, em silêncio. Quem corta o login é `acesso_sistema = false`, que
+      `podeAcessarSistema` já consulta.
+      ⚠️ As permissões padrão são propagadas FORA da transaction (`PermissaoService` abre
+      a própria) e em best-effort: falhar ali deixa o acesso sem permissão configurada,
+      nunca desfaz o cadastro que já gravou.
+- [x] **"Gerenciar Acesso" (designações) MUDOU DE CASA** — saiu do Controle de Acesso e
+      foi para `/cadastro/fornecedores` e `/cadastro/prestadores`. A designação é o que
+      define quais pacientes o externo enxerga (deny-by-default): ela tem de estar onde a
+      pessoa é gerida, senão o cadastro concede login e não há por onde dizer QUEM ele
+      atende. Componente único `components/GerenciarAcessoPrestadorModal.tsx` (extraído
+      de `ControleAcesso.tsx`) — duas cópias divergiriam, e o que divergiria seria o
+      alcance de um externo aos prontuários.
+      ⚠️ O botão só aparece com **login E cartão** (`userId` + `acessoEquipeId`): sem um
+      dos dois a rota de designação não existe, e ele só falharia depois do clique (28-d).
+      ⚠️ `acessoEquipeId` vem do BACKEND (`anexarEquipeDoAcesso`), e **não** do `equipeId`
+      do cadastro: aquele é `req.equipeId ?? null` na criação, e em empresa com CNPJ o
+      seletor de contexto resolve no nível da EMPRESA — ou seja, vem nulo. O cartão, esse
+      sim, sempre nasce numa equipe concreta.
+- [x] **O formulário de MEMBRO deixou de oferecê-los** (`PERFIS_ACESSO`), e com eles saiu
+      toda a maquinaria do seletor de cadastro (busca, `fornecedorId`/`prestadorId`,
+      `comFornecedor`, `ModalNovoFornecedor` — que continua vivo, é usado pela Farmácia).
+      O ramo de INCLUSÃO DIRETA do `ControleAcesso` também saiu: ali só resta o convite.
+      ⚠️ Os dois FICAM em `PERFIS_LEGADOS`: vínculo antigo aberto por algum caminho mostra
+      o rótulo em vez de um `<select>` em branco sobre um cargo que existe no banco.
+- [x] **MAPA DE ATENDIMENTO DE VOLTA AO MENU** (pedido à parte, mesma data). Ele havia
+      sido **escondido** em 2026-09-05 por um flag no `Sidebar`
+      (`MOSTRAR_MAPA_ATENDIMENTO = false`) — nunca removido: a rota `/mapa-atendimento`,
+      a tela (`pages/MapaAtendimento.tsx`), o `MapaAtendimentoController`, a rota do
+      backend e o gate `dashboard.geral.ler` seguiram montados o tempo todo, e só o item
+      do menu ficou de fora. **Foi essa escolha que fez a volta custar uma linha em vez
+      de uma reconstrução.** O flag saiu junto — um `if (true)` não configura nada.
+      ⚠️ O item e a TELA usam o MESMO gate (`dashboard.geral.ler`): quem vê o menu entra,
+      e quem não vê não recebe um botão que falha depois do clique (28-d).
+      ⚠️ A seção ficou SEM número no comentário do `Sidebar`: renumerar as nove seguintes
+      só para encaixar um item seria ruído.
+      ⚠️ NÃO confundir com o **atalho** "Mapa de atendimento" do Painel Principal, que foi
+      REMOVIDO a pedido em 2026-09-05 e continua removido — não foi pedido de volta.
+- [x] Testes: `__tests__/externoNaoEhEquipe.test.js` (15). ✅ **Verificado que REPROVA** —
+      removido o filtro de UMA das quatro consultas, um caso falhou.
+      🔴 **E o gate achou um defeito real durante a escrita**: o bloco que emite/revoga o
+      cartão na EDIÇÃO do prestador nunca tinha sido aplicado (a edição anterior falhou
+      por âncora e foi descartada inteira). Sem o teste, "salvar o cadastro com acesso
+      ligado" seguiria sem emitir cartão nenhum — em silêncio.
+      Suíte: **709**; `tsc --noEmit`, `tsc -b` e `vite build` limpos.
+- [ ] `Agendamentos.tsx` ainda tem o ramo que lê `tipoServico` do cadastro para cargo
+      FORNECEDOR/PRESTADOR. Ficou INALCANÇÁVEL (o endpoint não os devolve mais) e foi
+      mantido de propósito: é o que mantém a grade correta se alguém um dia usar
+      `?incluirExternos=1`. Se a decisão virar definitiva, ele pode sair.
+- [ ] **FORNECEDOR não tem caminho próprio para conceder login.** `tb_prestadores` tem
+      `acesso_sistema`; `tb_fornecedores` não. Com os dois fora do "Incluir Membro", criar
+      um fornecedor COM LOGIN deixou de ter porta de entrada — quem já tem continua
+      funcionando (nada foi migrado), e o "Gerenciar Acesso" dele já está no cadastro.
+      É coerente com a separação (fornecedor é quem ABASTECE; quem ATUA é o prestador),
+      mas se a clínica precisar disso, o caminho é uma coluna `acesso_sistema` em
+      `tb_fornecedores` espelhando o Prestador — migration aditiva, nada a migrar.
+- [ ] Eles continuam **consumindo assento do plano** (`consomeAssento` só isenta
+      PROPRIETARIO). É defensável — são logins ativos —, mas é uma decisão COMERCIAL que
+      não foi tomada aqui: se "não é equipe" tiver de valer também para a cobrança, o
+      lugar é `lib/planoEmpresa.js`.
+
+### Sessão 2026-09-09 — Cargo PRESTADOR (novo) e o cron que recupera o dia perdido
+
+> 🔴 **MIGRATION GERADA, NÃO APLICADA** — `20260930000000_cargo_prestador`. É
+> **ADITIVA e IDEMPOTENTE**: só cria o perfil `PRESTADOR` em cada equipe e COPIA para
+> ele a matriz do `FORNECEDOR` daquela equipe. **Não há UPDATE nem DELETE** — foi o
+> pedido, textualmente ("nenhum dado precisa ser alterado, deixe para as futuras
+> inclusões"). Aplicar com
+> `DATABASE_URL=$DATABASE_URL_MIGRATIONS npx prisma migrate deploy`.
+> **SEM mudança de schema**: `MembroEquipe.cargo` é TEXT e `UsuarioEmpresa.perfil` é
+> VARCHAR(20) — 'PRESTADOR' tem 9 caracteres. Logo, **`prisma generate` não é
+> necessário** para esta leva.
+
+- [x] 🔴 **`PRESTADOR` VIROU CARGO DE VERDADE, ao lado de `FORNECEDOR`.** Em 2026-09-08
+      o pedido foi RENOMEAR (só o rótulo) porque separar exigiria migrar todo membro
+      cadastrado; agora o pedido foi o oposto — **criar o cargo, sem migrar nada**. Os
+      dois convivem: quem está gravado segue `FORNECEDOR` (e volta a se chamar
+      "Fornecedor" na tela — com PRESTADOR na lista, manter o rótulo antigo deixaria
+      DUAS opções com o mesmo nome), e `PRESTADOR` é o que se escolhe daqui em diante.
+- [x] 🔴 **FONTE ÚNICA `lib/cargosPrestador.js`** — `CARGOS_PRESTADOR`,
+      `ehCargoPrestador`, `membroEhPrestador`, `OR_CARGO_PRESTADOR`.
+      **POR QUE ELA EXISTE:** toda a regra do profissional externo estava escrita como
+      `cargo === 'FORNECEDOR'` espalhada em 5 arquivos — escopo por designação, agenda
+      própria, permissão por membro, destino do encaminhamento. **Um cargo novo que
+      alguém pode escolher mas que os gates não conhecem é PIOR que não ter o cargo:**
+      esquecer uma dessas comparações faz o PRESTADOR nascer com a base de pacientes
+      INTEIRA da clínica (o oposto do deny-by-default do `DesignacaoPrestador`), e não
+      há erro nenhum na tela. Convertidos: `lib/animalScope.js`, `lib/animalAccess.js`,
+      `AgendamentoController`, `EncaminhamentoController` e `permissao.middleware.js`.
+      ⚠️ **`userType === 'FORNECEDOR'` CONTINUA e é intencional**: `CARGO_PARA_TIPO`
+      já mapeava `PRESTADOR → 'FORNECEDOR'`, então todo gate escrito contra `userType`
+      vale para os dois sem uma linha de alteração. O que não pode sobrar é a
+      comparação de **CARGO**. Dar userType próprio ao PRESTADOR quebraria de uma vez
+      `animalAccess`, `animalScope` e os controllers clínicos.
+      ⚠️ `membroEhPrestador` olha `cargo` **e** `cargos[]`: restrição não se dilui por
+      acúmulo de papel.
+- [x] 🔴 **CADA CARGO AMARRA O LOGIN AO SEU CADASTRO** — é o ÚNICO ponto em que os dois
+      diferem: `FORNECEDOR → tb_fornecedores`, `PRESTADOR → tb_prestadores`. As duas
+      tabelas já tinham `userId @unique` exatamente para isso (o comentário do schema
+      em `Prestador.userId` mandava "quem precisa de tela de verdade vai por Equipe >
+      Incluir Membro, cargo Fornecedor" — é esse desvio que acabou).
+      `incluirMembroDireto` aceita `prestadorId` ao lado de `fornecedorId`, recusa com
+      409 o cadastro/login já vinculado (senão o `@unique` estoura como erro de banco
+      cru na tela) e `atualizarMembro` sincroniza os DOIS cadastros.
+      ⚠️ A sincronização da edição decide pelo VÍNCULO (`userId`), não pelo cargo: o
+      membro pode ter sido incluído como FORNECEDOR antes de o cargo novo existir.
+      ⚠️ O fallback por e-mail do Prestador exige `userId: null` — adotar cadastro que
+      já pertence a outra conta violaria o `@unique`.
+- [x] **A matriz do PRESTADOR é CÓPIA da do FORNECEDOR, não transcrição.** No seed,
+      `PERMISSOES_PADRAO.PRESTADOR = { ...PERMISSOES_PADRAO.FORNECEDOR }` (136 slugs);
+      na migration, `INSERT ... SELECT` da matriz daquela EQUIPE, com o `locked` junto.
+      ⚠️ Copiar da equipe (e não semear os defaults) porque a clínica que já configurou
+      "o que o meu prestador pode fazer" configurou isso no perfil FORNECEDOR — era o
+      único que existia. Nascer com quase tudo NENHUM obrigaria o gestor a refazer à
+      mão o que ele já fez. `locked` é bloqueio do ADMIN da plataforma e não pode se
+      perder na cópia. Depois de criadas, as duas matrizes são editadas de forma
+      INDEPENDENTE.
+      ⚠️ `PermissaoService.PERFIS_PADRAO` ganhou o perfil, então equipe NOVA (e equipe
+      que abrir a tela antes da migration) o recebe sozinha por `garantirPerfisPadrao`.
+      Sem a linha em `tb_perfis_equipe` o cargo é inutilizável: a FK de
+      `tb_matriz_perfis` aponta para ela.
+- [x] **`prestadorPerfil` entrou nos 3 selects de membro** (`EquipeController`) e a
+      Agenda passou a ler dele o tipo de serviço do cargo novo — sem isso o membro
+      PRESTADOR apareceria na grade sem especialidade nenhuma. Mesmo cuidado no
+      `EncaminhamentoController`: o `tipoServico` por usuário e a lista de serviços
+      disponíveis passaram a somar `tb_prestadores` a `tb_fornecedores`.
+- [x] **Front**: `PERFIS_ACESSO` com os dois; o seletor de cadastro do modal virou
+      genérico (`perfilCadastro` escolhe a rota `/cadastro/fornecedores` ×
+      `/cadastro/prestadores` e o campo enviado). ⚠️ A dependência do efeito é o CARGO,
+      não um booleano — trocar Fornecedor ↔ Prestador troca a ROTA, e sem refazer a
+      busca o seletor listaria o cadastro do outro; a escolha anterior é zerada junto.
+      ⚠️ Só cadastro ATIVO e **sem login** é oferecido (`userId` é @unique nas duas
+      tabelas: oferecer um já vinculado só produziria 409 depois do clique).
+      ⚠️ O modal "Incluir novo fornecedor" NÃO foi replicado para o prestador: deixando
+      o seletor em branco o backend já cria o cadastro com o que está sendo digitado, e
+      um botão que abrisse o formulário do fornecedor gravaria na tabela errada.
+      `ControleAcesso` inclui os DOIS por inclusão direta (sem convite) e a coluna
+      "Gerenciar Acesso" vale para ambos.
+- [x] 🔴 **O CANCELAMENTO DE ORÇAMENTO PASSOU A RECUPERAR O DIA PERDIDO.** A busca
+      SEMPRE foi por DATA (`createdAt < agora − validade`), nunca por "o que venceu
+      desde a última execução" — é isso que a torna idempotente e auto-corretiva. O que
+      faltava era o job VOLTAR A RODAR: **`node-cron` não recupera disparo perdido**, e
+      com o backend fora do ar às 23:50 aquele dia simplesmente não acontece (caso real
+      de 08/09: orçamento de 10/08 ainda aberto, job correto e ZERO execuções no log).
+      Novo `cronManager.recuperarJobsPerdidos()`, chamado na SUBIDA logo depois de
+      `iniciarJobs()`: passadas **26h** sem execução **BEM-SUCEDIDA**, o job roda na
+      hora. Cobre os dois casos do pedido — servidor indisponível E execução com erro
+      (a que falhou não conta como feita: a consulta filtra `ok = true`).
+      ⚠️ **OPT-IN (`recuperarSePerdido`), e tem de continuar sendo.** Só serve a job
+      DECIDIDO POR DATA. Ligar num job de MENSAGEM (lembrete de dose, aviso de véspera,
+      lembrete de agendamento, reenvio de link) mandaria ao cliente um aviso sobre um
+      prazo que já passou — pior que não mandar. Há gate travando isso.
+      ⚠️ **Agenda desligada não é ressuscitada**: `ativo: false` é decisão do ADMIN, e
+      a recuperação roda DEPOIS de `iniciarJobs` justamente para ler esse estado.
+      ⚠️ **Sem nenhuma execução no log, roda** (base nova, log expurgado aos 15 dias) —
+      o trabalho é idempotente, e rodar é sempre mais seguro que supor que já foi feito.
+      ⚠️ Isolada em try/catch por job e sem `await` no boot: nunca derruba a subida.
+- [x] **Origem nova `RECUPERACAO`** em `tb_cron_execucoes` (`cronTrace.comOrigem` /
+      `origemAtual`, e `comAlerta` passou a usar o segundo). Sem valor PRÓPRIO, a
+      execução atrasada ficaria indistinguível da que aconteceu no horário — e a
+      próxima investigação de "por que só rodou hoje?" começaria de um log que mente.
+      **SEM migration**: `origem` é VARCHAR(12) e o valor tem 11. Selo laranja
+      "recuperação" em `LogExecucaoJobs.tsx`.
+- [x] Testes: `__tests__/cargoPrestador.test.js` (25) e `__tests__/cronRecuperacao.test.js`
+      (12). ✅ **Verificado que REPROVAM**: revertido `ehCargoPrestador` no
+      `AgendamentoController` e removido o `recuperarSePerdido` do job, um caso falhou
+      em cada. Suíte: **694**; `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+- [ ] `EquipeService.CARGOS_VALIDOS` (`['GESTOR','VETERINARIO','ESPECIALISTA','ESTAGIARIO']`)
+      é legado e não conhece FORNECEDOR nem PRESTADOR — nem o cargo antigo estava lá.
+      Não bloqueia nada hoje (a inclusão de membro não passa por ele); revisar quando
+      aquele service for tocado.
+- [ ] O cargo PRESTADOR não tem `FornecedorEspecialidade` equivalente: as especialidades
+      dele vivem só em `UsuarioEspecialidade` (por empresa). Basta para a Agenda e para
+      o encaminhamento; se um dia o cadastro de Prestadores precisar de especialidade
+      própria, é uma tabela nova.
+- [ ] A recuperação roda só na SUBIDA do backend. Processo que fica semanas no ar sem
+      reiniciar e cujo job falha todo dia não é recuperado até o próximo boot — o alerta
+      de erro do `comAlerta` é quem cobre esse caso.
+
+### Sessão 2026-09-08 (parte 5) — Avisos de orçamento, PIX na fatura e a senha que ninguém vê
+
+> ✅ **MIGRATIONS APLICADAS** (autorizadas): `20260928000000_empresa_dados_recebimento`
+> (PIX/banco) e `20260929000000_prestador_restringir_por_local`. `prisma generate`
+> segue falhando com `EPERM` (§11), então TODAS as colunas novas desta leva são lidas
+> e gravadas por SQL cru com `catch` — `lib/dadosRecebimento.js`,
+> `PrestadorController#gravarRestricaoPorLocal` e `lib/animalScope.js`.
+
+- [x] 🔴 **O CANCELAMENTO DE ORÇAMENTO VENCIDO SEMPRE FUNCIONOU — o job é que nunca
+      rodou.** Diagnóstico do caso relatado (MarcoVet, orçamento de 10/08 ainda em
+      aberto): `tb_cron_execucoes` não tinha NENHUMA execução do
+      `cancelar_orcamentos_vencidos`. Ele está agendado para 23:50 e o backend de
+      desenvolvimento não fica no ar nesse horário; `node-cron` não recupera disparo
+      perdido (limitação já registrada em 2026-08-23 parte 4). Rodado à mão
+      (`npm run job -- cancelar_orcamentos_vencidos`): cancelou na hora, com o motivo
+      gravado na observação. **Nenhuma linha de código precisou mudar.**
+      ⚠️ Diagnosticar isso exige `set_config` de plataforma na consulta:
+      `tb_empresa_configuracoes` está sob RLS e volta VAZIA sem o carimbo — foi
+      exatamente o que fez a primeira leitura parecer "nenhuma clínica configurou
+      validade" (armadilha 42).
+- [x] **DOIS AVISOS NOVOS por WhatsApp ao(s) GESTOR(es)** — `orcamentoAvisoService.js`:
+      **semanal** ("existe orçamento esperando decisão", segundas 09:00) e **véspera**
+      ("estes SERÃO CANCELADOS AMANHÃ", diário 08:00, marcado com 🔴).
+      🔴 **A VÉSPERA É UM DIA EXATO** (`dias === validade - 1`), não "faltam <= 1 dia":
+      o job roda todo dia, e com `<=` o mesmo orçamento dispararia o alerta vermelho
+      todos os dias até o cancelamento — alerta que chega todo dia deixa de ser lido,
+      justamente no dia em que importava.
+      ⚠️ "Em vermelho" no WhatsApp é 🔴 + caixa alta no verbo: o app não tem cor de
+      texto, e prometer uma que não existe deixaria os dois avisos idênticos.
+      ⚠️ O aviso de véspera roda ANTES do cancelamento (08:00 × 23:50): quem decidir no
+      dia ainda mantém o orçamento.
+      ⚠️ `0 9 * * 1` (segundas), e NÃO `*/7` no dia do mês: `*/7` reinicia todo mês
+      (1, 8, 15, 22, 29, e então 1 de novo — dois dias depois), que não é "a cada 7 dias".
+      ⚠️ Teto de 5 orçamentos nomeados + "e mais N": a contagem REAL não se perde, e a
+      mensagem continua legível no celular.
+      ⚠️ Gestor sem telefone não é erro — o job segue com os outros.
+- [x] 🔴 **DADOS PARA RECEBIMENTO NA FATURA** (chave PIX, recebedor, banco, agência,
+      conta). Até aqui o cliente recebia a fatura e não tinha para onde pagar.
+      Ficam em `tb_empresas`, não em `EmpresaConfiguracao`: quem recebe é o CNPJ/CPF
+      que EMITE a cobrança, não a equipe que atendeu.
+      ⚠️ `pixRecebedor` é campo PRÓPRIO, separado da razão social: a conta pode estar
+      no nome do sócio, e imprimir outro nome faria o cliente desconfiar do PIX.
+      ⚠️ Sem máscara na chave: ela pode ser CPF, CNPJ, e-mail, telefone ou aleatória —
+      normalizar quebraria as duas últimas.
+      ⚠️ Campo em branco não vira linha, e sem NENHUM dos cinco a folha não ganha faixa
+      vazia (regra do campo vazio). Faixa vazia em documento de cobrança é pior que a
+      ausência dela: sugere que falta um dado que deveria estar ali.
+      ⚠️ Os dados saem pela MESMA rota da logo — as duas são identidade da clínica na
+      folha, e uma rota nova custaria uma ida a mais por abertura da tela. Chegam
+      também ao envio em LOTE.
+      ⚠️ `FaturaExport.ts` ganhou `esc()`: a chave e o recebedor são digitados pelo
+      gestor e viram markup — sem escapar, um sinal de menor quebra a folha e o pior
+      caso é script no PDF que vai ao cliente.
+- [x] **Pelagem OBRIGATÓRIA no cadastro do paciente** — é a identificação do animal nos
+      documentos do CFMV, onde o campo em branco deixa o papel sem identificar ninguém.
+      ⚠️ Campo obrigatório precisa dos QUATRO (asterisco, `data-campo`, classe de erro,
+      mensagem embaixo) MAIS a entrada em `CAMPOS_ANIMAL` e em `erroDoCampo` — faltando
+      um, o submit acusa e o usuário não descobre onde.
+- [x] **"Fornecedor" virou "Prestador"** no Perfil de acesso, na Equipe e no Controle
+      de Acesso. ⚠️ Só o RÓTULO: o valor gravado continua `FORNECEDOR`, que é o cargo
+      em `MembroEquipe.cargo`, o `userType` correspondente e a chave dos gates de
+      escopo do prestador. Trocar o valor exigiria migrar todo membro já cadastrado, o
+      seed de permissões e as matrizes de perfil de cada equipe.
+- [x] **Novo Prestador**: "Secretária" saiu do Tipo de Serviço (é função INTERNA — quem
+      a cadastra usa Incluir Membro), e entrou **"Atender somente no local de
+      trabalho"**. "Terá acesso ao sistema" já existia.
+      🔴 **O CHECKBOX TEM EFEITO REAL**, e isso exigiu duas coisas: coluna
+      `tb_prestadores.restringir_por_local` (o Prestador NÃO cria `MembroEquipe`, então
+      não havia onde persistir) e um ramo novo em `lib/animalScope.js`.
+      ⚠️ Para o prestador a restrição **ESTREITA a DESIGNAÇÃO (AND), nunca a
+      substitui**: trocar uma pela outra daria acesso a paciente que ninguém designou.
+      ⚠️ O flag é lido à parte na listagem, não pelo `include`: o client Prisma só
+      seleciona colunas que conhece, e sem isso o checkbox abriria sempre desmarcado na
+      edição — apagando em silêncio o que o gestor tinha configurado.
+- [x] **Nova Localização**: saiu a frase sobre "cadastrada como CLIENTE" (detalhe
+      interno de tenancy que ninguém precisa decidir), saíram CANIL, GATIL, PETSHOP e
+      PROPRIETARIO da lista oferecida, e o select virou o **combobox criável com
+      busca** — o MESMO `TipoServicoSelect` do Prestador.
+      🔴 **O tipo criado pela clínica reusa `tb_catalogo_tipo_servico`** (categoria
+      LOCALIZACAO): traz de graça o tenant, a policy de RLS e o gate de permissão que a
+      tabela já tem. Um catálogo novo exigiria repetir os três.
+      ⚠️ **`TIPOS_LEGADOS`**: os quatro removidos continuam ACEITOS no backend.
+      Localização já cadastrada com um deles não pode virar inválida — ela seguiria no
+      banco e passaria a recusar qualquer edição, inclusive corrigir o nome. E entram
+      no filtro por espécie, senão o local onde o animal está sumiria da tela.
+- [x] 🔴 **A SENHA INICIAL NÃO É MAIS MOSTRADA, e não é mais a mesma para todos.**
+      Era a constante `Inicial_001`, impressa na tela de quem cadastra — um TERCEIRO,
+      não o dono da conta — e igual para todo mundo: quem tivesse lido a tela uma vez
+      sabia a senha de toda conta nova do sistema, inclusive as que ainda não existiam.
+      Agora é derivada do cadastro (`lib/senhaInicial.js`, a composição pedida) e sai
+      **só pelo e-mail de boas-vindas** — conferido: os 11 pontos de uso passam por
+      `emailService`, nenhum por `res.json`.
+      🔴 **DEFEITO ENCONTRADO NO CAMINHO**: `AnimalController` anunciava por e-mail
+      `Inicial#001` (com cerquilha) enquanto o hash gravado era de `Inicial_001` (com
+      sublinhado). O proprietário recebia uma senha que **nunca existiu** e não
+      conseguia entrar — sem erro em lugar nenhum, porque as duas pontas nunca se
+      comparavam. É o tipo de divergência que só uma fonte única elimina.
+      ⚠️ **Determinística de propósito** (mesmo cadastro, mesma senha): é o que permite
+      reenviar o e-mail de boas-vindas sem redefinir a senha de quem ainda não entrou. A
+      proteção não vem de ser imprevisível — vem de ser de USO ÚNICO
+      (`mustChangePassword`) e de nunca aparecer em tela.
+      ⚠️ Cadastro incompleto NÃO gera senha curta: o que falta é dado do cliente, e
+      encolher a senha entregaria a conta mais frágil a quem tem o cadastro pela metade.
+      ⚠️ O resto do fluxo não mudou: troca obrigatória no primeiro acesso, mesmos
+      e-mails, mesmas rotas.
+- [x] **Agenda: profissional sem local mostra o NOME DA EMPRESA**, não um traço. O
+      traço não dizia se o dado faltava ou se o atendimento é na sede — é na sede.
+      ⚠️ Só o rótulo muda; `localId` continua `null`, que é o que o backend usa.
+- [x] 🔴 **O CARD DE PACIENTE PASSOU A ACEITAR DIGITAÇÃO EM TODAS AS TELAS.**
+      `SeletorAnimal` era um select puro, e as telas que o usam (Dieta, Resultado de
+      Exame, Relatório Nutricional) obrigavam a rolar centenas de pacientes até "Zeus"
+      — enquanto o Atendimento já resolvia em três letras. Ele passou a renderizar o
+      `SeletorAnimalInteligente` por dentro.
+      ⚠️ A troca é NO COMPONENTE, não em cada tela: é o que faz as três ganharem a busca
+      de uma vez e o que impede a próxima tela de nascer com o seletor antigo.
+      ⚠️ O que `SeletorAnimal` acrescenta ao combobox é a NAVEGAÇÃO (leva para
+      `rotaBase/:id` preservando a query) e o `SelectedAnimalContext`. O combobox não
+      sabe disso e não deve saber: ele é a escolha, não o destino.
+- [x] Testes: `orcamentoAviso.test.js` (11) e `senhaInicial.test.js` (12). Suíte: **657**.
+- [ ] O `cancelar_orcamentos_vencidos` (e os dois avisos novos) só disparam com o
+      backend no ar no horário agendado. Enquanto não houver varredura de recuperação
+      ("processe o que já devia ter rodado"), uma queda no horário do job empurra o
+      trabalho para o dia seguinte — ou para nunca, no ambiente de dev.
+- [ ] O e-mail de boas-vindas passou a anunciar uma senha DERIVADA. Vale um envio real
+      de conferência antes de anunciar ao cliente: os testes cobrem a composição, não a
+      renderização do template.
+
+> ✅ **MIGRATIONS APLICADAS** (autorizadas): `20260926000000_empresa_crmv` e
+> `20260927000000_orcamento_motivo_recusa`. `npx prisma generate` FALHOU com `EPERM`
+> (§11 — o backend segurava o query engine), então as três colunas novas são lidas e
+> gravadas por **SQL cru com `catch`**: `lib/documentoVariaveis.js#crmvDaEmpresa` e
+> `lib/orcamentoRecusa.js`. Rodar o generate na próxima parada do backend.
+
+- [x] 🔴 **O NÚMERO DO CARD ABRE A LISTA, no lugar de trocar de tela.** Cada indicador
+      era um LINK (`/agendamentos?status=…`, `/animais-vet`, `/orcamento?status=…`), e
+      isso PERDIA o período do relatório: clicar em "Consultas canceladas" de julho
+      caía na agenda de hoje. Pior nos casos em que a tela de destino sequer sabe fazer
+      aquele recorte. Agora o card abre a lista logo abaixo, com o mesmo recorte que
+      ele conta — o padrão que o card "Histórico" do Atendimento já usava.
+      Componente único **`components/relatorios/DetalheDoCard.tsx`** (três telas, três
+      cópias divergiriam na primeira correção). As COLUNAS são declaradas por quem usa;
+      o que ele fixa é o COMPORTAMENTO: um card por vez, o título dizendo qual, a
+      janela de 3 itens e o vazio explicado.
+      `StatTiles` ganhou `onSelect`/`ativo` — e o tile virou `<button>` de verdade, com
+      `aria-pressed`, não `<div onClick>`.
+      ⚠️ Trocar o período FECHA o card aberto: os números mudam, e a lista de julho
+      embaixo dos cards de agosto seria mentira silenciosa.
+- [x] 🔴 **A CONTAGEM E A LISTA SAEM DO MESMO `where`.** As quatro consultas trocaram
+      `count()` por `findMany()`, e o número passou a ser o TAMANHO da lista. Contar de
+      um jeito e listar de outro é como um card passa a exibir 7 e abrir 6 — e ninguém
+      nota. Pelo mesmo motivo as linhas viajam JUNTO do relatório, não numa rota por
+      card: uma segunda ida ao banco pagaria o mesmo `where` de novo e poderia divergir.
+- [x] **Indicadores de Atendimento: 3 cards novos** — sem atendimento no dia, há mais
+      de 3 e há mais de 7 dias (vieram do Mapa, que só tinha o "no dia").
+      ⚠️ "Atendido" é EVOLUÇÃO FINALIZADA, o mesmo critério do resto da tela: consulta
+      marcada ou em andamento não conta, senão agenda cheia viraria paciente atendido.
+      ⚠️ A contagem parte da data de REFERÊNCIA do período, não do relógio de agora —
+      um relatório de julho tem de responder sobre julho.
+      ⚠️ Paciente NUNCA atendido entra em todas as faixas (é o que ninguém quer perder
+      de vista) e a lista o marca como "nunca atendido", não com uma data inventada.
+- [x] **Relatórios de Cadastro: 4 cards novos** — pacientes e proprietários inativados
+      e reativados no período.
+      🔴 **A FONTE É O AUDITLOG**, não uma coluna do cadastro: `Animal.inativo_em`
+      guarda só a ÚLTIMA vez (um paciente inativado em julho e de novo em agosto
+      sumiria de julho), e o cadastro do cliente não tem data de inativação nenhuma. O
+      AuditLog é o ledger — uma linha por ato, com quando, por que e por quem.
+      🔴 **O CLIENTE GRAVAVA `ALTERACAO`/`EXCLUSAO`**, enquanto paciente, fornecedor,
+      prestador e tratador sempre gravaram `INATIVACAO`/`ATIVACAO`. Por isso ele não
+      aparecia em nenhum recorte de "quem foi inativado". Alinhado — e `removerDaEmpresa`
+      passou de `EXCLUSAO` para `INATIVACAO`, que é o que o ato faz: não apaga nada,
+      inativa o cadastro nesta clínica.
+      ⚠️ Linha JÁ GRAVADA continua com a categoria antiga — o AuditLog é imutável, e
+      reescrevê-lo seria adulterar a auditoria. O recorte enxerga daqui em diante.
+- [x] **Relatório de Orçamentos**: cards de **Valor rejeitado** e **Cancelados** (novos)
+      e a lista com proprietário, animal, data, valor e **MOTIVO**.
+      ⚠️ `ativo: true` saiu do `where`: o CANCELADO é justamente um dos recortes
+      pedidos, e o filtro escondia o card inteiro.
+      ⚠️ O "valor rejeitado" soma item `REJEITADO`, nunca `PENDENTE` — contar o
+      pendente como recusa inventaria uma decisão que ninguém tomou.
+      ⚠️ O motivo vem de três lugares, nesta ordem: recusa do orçamento inteiro →
+      cancelamento (que o sistema acrescenta à `observacao`) → nada.
+- [x] 🔴 **O QUE NÃO FOI APROVADO DIZ POR QUÊ** — colunas novas `motivo_recusa` em
+      `tb_orcamentos` e `tb_orcamento_itens`. Sem elas, a clínica sabia que "3 de 7
+      caíram" e não sabia se foi preço, prazo ou o cliente ter resolvido tratar em
+      outro lugar — que é o que permitiria renegociar.
+      ⚠️ **As duas metades da regra têm razões OPOSTAS** (`faltaMotivoDeRecusa`, função
+      pura em `lib/orcamentoRecusa.js`): recusa TOTAL pede UM motivo — o cliente
+      recusou o documento, não sete linhas, e exigir sete justificativas idênticas vira
+      obstáculo, que se contorna digitando "x" sete vezes; recusa PARCIAL pede POR
+      ITEM, porque cada linha pode ter caído por uma razão diferente, e o motivo geral
+      serve de padrão para quem tem uma razão só.
+      ⚠️ Item ACEITO tem o motivo LIMPO na gravação: manter o texto de uma recusa
+      anterior faria o relatório contradizer o status.
+      ⚠️ O input do motivo fica FORA do `<button>` da linha do item — input dentro de
+      botão é HTML inválido, e cada tecla digitada alternaria a seleção do item.
+- [x] Testes: `__tests__/orcamentoMotivoRecusa.test.js` (9 casos) — as duas metades da
+      regra, o motivo só com espaços, a chave em string como chega do JSON. Suíte: 634.
+- [x] 🔴 **"APROVADO PARCIALMENTE" ABRE A QUEBRA POR ITEM** (esclarecido em 2026-09-08:
+      o pedido não era um card novo, era PROFUNDIDADE). "Rejeitados parcialmente" seria
+      o MESMO conjunto de "Aprovados parcial." com outro nome — o que faltava não era
+      contar de novo, era dizer **quais** itens caíram, **quantos**, e **por quê**.
+      A linha do relatório ganhou a coluna "Itens" (`3/7 · 4 reprov.`) e uma SETA que
+      abre, dentro dela, a lista item a item: selo Aprovado/Reprovado/Sem decisão,
+      descrição, animal, valor e o MOTIVO de cada recusa.
+      ⚠️ `PENDENTE` é uma terceira coluna, não meio-a-meio: somá-lo a aprovados ou a
+      recusados afirmaria uma decisão que ninguém tomou (é o rascunho).
+      ⚠️ Item recusado SEM motivo próprio herda o do orçamento — é assim que a decisão
+      é gravada (um motivo só quando a razão é uma só), e a tela tem de mostrar o que
+      foi decidido, não uma lacuna.
+      ⚠️ Linha SEM item não ganha seta (`detalheDaLinha` devolve `null`): expansão
+      vazia é botão que promete e não entrega (28-d).
+      ⚠️ A linha do painel NÃO entra na conta da `JanelaLista`
+      (`seletor="tbody > tr:not([data-detalhe-linha])"`) — contada, a janela encolheria
+      de 3 registros para 2 assim que alguém expandisse um.
+- [ ] O relatório de cadastro lista "Pacientes ativos" inteiro, sem paginação. Base
+      grande deixa a resposta pesada — a janela de 3 itens resolve a TELA, não o
+      tráfego. Paginar quando incomodar.
+
+### Sessão 2026-09-08 (parte 3) — Envio único, e a memória clínica que parou de inventar
+
+- [x] **A VARREDURA DE ENVIO ACHOU UMA TELA SÓ.** `abrirWhatsApp`/`abrirEmail` (o envio
+      por TEXTO puro) sobrevivia em UM lugar: o **fechamento de faturas EM LOTE**. Todo
+      o resto do sistema já passava por `utils/compartilharPdf.ts` — direto (Fatura,
+      Prescrição) ou pelo `CompartilharPdfBotoes` (Vacina, Exames, Encaminhamento,
+      Evolução, Dieta, Documentos, Exame de Compra). O cliente daquele lote recebia
+      "Total: R$ 1.234,00" numa mensagem e nenhuma fatura.
+- [x] 🔴 **O LOTE PRÉ-CARREGA AS FATURAS, não busca no clique.** A resposta do
+      fechamento traz só id, total, mês e o contato — sem itens, animais e logo não há
+      folha a montar. A tentação é `aoPreparar` (busca no clique), e ela tem um furo:
+      falhando a busca, `gerarHtml` — SÍNCRONO por contrato, porque roda dentro da
+      janela de "user activation" de que o fallback manual depende — não teria o que
+      devolver e o envio seguiria com uma folha VAZIA. **Um PDF em branco chegando ao
+      cliente é pior que um botão que não aparece.** Carregando ao abrir a lista de
+      resultado, a falha é visível na linha ANTES de qualquer clique.
+      ⚠️ A logo é convertida para `data:` (`carregarComoDataUri`): o Puppeteer bloqueia
+      requisição que não seja `data:` — armadilha de todo gerador novo.
+      ⚠️ `foneIntl` SAIU da tela: quem normaliza o DDI agora é `compartilharPdf.ts`,
+      um lugar só. Não reintroduzir a cópia local.
+- [x] 🔴 **MODAL ARRASTÁVEL COMIA A SELEÇÃO DE TEXTO** (relatado na memória clínica,
+      mas valia para **19 modais**). `useDraggableModals` usa `.rounded-t-2xl` como
+      alça, pensando no CABEÇALHO — só que na maioria dos modais essa classe está no
+      PAINEL (`bg-white rounded-t-2xl sm:rounded-2xl …`). `closest()` casava a partir
+      de QUALQUER ponto do corpo: o modal inteiro virava alça, e o `preventDefault` +
+      `userSelect: none` matavam a seleção — tentar copiar uma informação ARRASTAVA a
+      janela.
+      Guarda nova: **o painel nunca é a própria alça** (`handle === p ||
+      handle.contains(p)`). O arraste segue pelo TÍTULO (h2/h3, que todo modal tem) e
+      por `[data-drag-handle]`. ⚠️ Não reintroduzir `.rounded-t-*` como alça sem ela.
+- [x] 🔴 **MEMÓRIA CLÍNICA — `memoria_clinica@v5`.** O destaque saía com os IDS DOS
+      TÓPICOS dentro do texto ("Recorrência de dor lombar em 06/09/2026: t3, t6, t7,
+      t9, t11."), com UMA data quando havia várias, e sem dizer o que foi
+      prescrito/executado naquele atendimento. O prompt agora exige: nenhum id no
+      texto, TODAS as datas, o que a evolução diz encadeado com o que foi
+      prescrito/aplicado na MESMA consulta, e o ESTADO DE EXECUÇÃO com as palavras que
+      o distinguem ("aplicada" × "aguardando a execução de"). Teto de 120 → 220
+      caracteres: a frase pedida não cabia em 120.
+      ⚠️ **Bump de versão FORÇA a reconsolidação** de todos os pacientes — é o que
+      corrige a memória já gravada com o defeito. Mudou o prompt, suba a versão.
+      ⚠️ **REDE ATRÁS DO PROMPT** (`semIdsDeTopico` + deduplicação em
+      `normalizarHighlights`): prompt é instrução, não garantia, e o defeito volta
+      calado na próxima variação do modelo. Só a ENUMERAÇÃO no fim/entre parênteses é
+      removida — "Sensibilidade em T4" (vértebra) fica intacto, e há teste para isso.
+- [x] **Painel da memória reordenado** (a pedido): **1. Destaques · 2. O que mudou ·
+      3. Registros · 4. Atendimentos**. O antigo "Resumo das atividades" virou
+      **Registros**, mostrando as **3 mais recentes** com o resto atrás de "Ver todos".
+      ⚠️ As linhas vêm do mais recente para o mais antigo (ordem do prompt), então "os
+      3 últimos registros" são as 3 PRIMEIRAS do array.
+      ⚠️ A lista evento a evento passou a se chamar **Atendimentos**: dois blocos
+      chamados "Registros" na mesma tela não dizem a ninguém qual é qual.
+- [x] Testes: `__tests__/memoriaClinicaHighlights.test.js` (10 casos) — o caso relatado,
+      o "T4 vértebra" que NÃO pode ser mutilado, a deduplicação sem acento/pontuação e
+      o destaque que fica vazio depois da limpeza. Suíte: **625**.
+- [ ] O envio em LOTE não diz quantas faturas foram efetivamente enviadas — cada linha
+      dá o seu veredito no card central, mas não há um resumo do lote.
+
+### Sessão 2026-09-08 (parte 2) — Documentos: e-mail do vet, timbre do estabelecimento e a redação da norma
+
+- [x] **E-mail do veterinário responsável nos 12 modelos** — variável nova
+      `{{veterinario.email}}`, no bloco de identificação profissional. O dado já era
+      lido por `profissionalDaEmpresa`; faltava expô-lo. Vem de `users` (identidade do
+      login), o único campo do profissional que NÃO é por empresa (§36-f).
+      ⚠️ Variável nova entra em TRÊS lugares (§12, 03/09): o contexto do backend, o
+      `catalogo.ts` do editor e o `VARIAVEIS_VALIDAS` do `documentoLLMService` — sem o
+      terceiro a IA não pode usá-la e o teste de resolvibilidade reprova.
+- [x] 🔴 **TIMBRE DO ESTABELECIMENTO NO CABEÇALHO, só para PESSOA JURÍDICA.** Razão
+      social, endereço completo, CNPJ, Inscrição Estadual e registro no CRMV.
+      **Por que no cabeçalho e não no corpo dos modelos:** precisa alcançar TODO
+      documento, e o que a clínica ENVIA (PDF/foto convertidos em imagem) não tem bloco
+      de identificação nenhum — nem o que ela redige do zero. O cabeçalho é o único
+      ponto por onde passam os quatro renderizadores. É a mesma razão da logo.
+      ⚠️ **Pessoa FÍSICA não ganha timbre.** O S2Vet atende o veterinário autônomo,
+      cuja empresa tem CPF (§5): imprimir "CNPJ:" e "Inscrição Estadual:" no papel dele
+      seria afirmar registro inexistente em documento com valor legal. `marca.empresa`
+      vem `null` do BACKEND — a decisão nunca é da tela.
+      ⚠️ O teste de PJ olha o DOCUMENTO (14 dígitos), não o `tipoDocumento` sozinho:
+      `cnpj` (legada) e `documento` (cadastro fiscal) convivem desde 2026-08-16, e a
+      base tem linha com uma preenchida e a outra não.
+      ⚠️ Cada linha some sozinha quando o cadastro está em branco
+      (`linhasDoEstabelecimento`) — nada de "CNPJ: —". Regra do campo vazio (§12,
+      26/08) aplicada ao timbre; `cabecalhoVazio` conta as linhas do timbre também.
+      ⚠️ A razão social só é escrita quando NÃO há logo: com logo ela já apareceu no
+      alto, e repeti-la duplicaria a identificação.
+      ⚠️ Viaja na `marca` e portanto entra no SNAPSHOT do emitido — reimprimir daqui a
+      dois anos sai com o CNPJ e o endereço DAQUELE dia. Emitido ANTERIOR sai sem
+      timbre, que é o correto e não defeito.
+      Desenho nos DOIS espelhos de sempre (`CabecalhoFolha.tsx` e
+      `DocumentoPrint.ts#cabecalhoHtml`); a REGRA (o que entra, em que ordem, o que
+      some vazio) em `cabecalho.ts`.
+- [x] 🔴 **COLUNA NOVA `tb_empresas.crmv`** — registro do ESTABELECIMENTO no CRMV.
+      **MIGRATION GERADA, NÃO APLICADA**: `20260926000000_empresa_crmv`.
+      ⚠️ NÃO é o CRMV de quem assina (`UsuarioEmpresa.crmv`, por profissional e por
+      empresa). A Res. 1.321/2020 pede os DOIS registros no papel, e confundi-los faria
+      o documento atribuir à clínica o registro de uma pessoa.
+      ⚠️ **Lida e gravada por SQL CRU com `catch`** (`crmvDaEmpresa` e um `$executeRaw`
+      à parte no `salvar`): pelo `select`/`data` tipado, uma base ainda não migrada
+      derrubaria a EMISSÃO de documento e o SALVAR do cadastro da empresa INTEIROS —
+      §11, o `generate` falha no Windows com o backend rodando. Assim o pior caso é a
+      linha do CRMV não sair no papel.
+      ⚠️ String vazia grava NULL: é o que permite APAGAR um registro digitado errado.
+      Campo em `/configuracoes`, só visível para CNPJ, opcional.
+- [x] **Os 7 termos ganharam o nome completo da norma** ("TERMO DE CONSENTIMENTO LIVRE
+      E ESCLARECIDO PARA REALIZAÇÃO DE…"). O título impresso sai do `nome` em caixa
+      alta, então biblioteca e papel não podem divergir — há teste para os dois.
+      ⚠️ **"Realização de Exames" veio SEM o nome de destino no pedido** (a linha
+      terminou no meio). Foi aplicado o padrão dos outros seis — "TERMO DE
+      CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE EXAMES". Confirmar.
+- [x] **Rótulos de observação na redação da resolução** — "Observações de interesse a
+      serem fornecidas pelo(a) Médico(a) Veterinário(a):" e "…pelo(a)
+      tutor(a)/proprietário(a)/responsável:".
+      ⚠️ **Mudaram nos 12 de uma vez.** O pedido nomeou cinco documentos, mas o rótulo
+      nasce em UM lugar (`montarBlocos`): trocá-lo em cinco e deixar os outros com a
+      redação antiga daria DOIS textos para o MESMO campo — o que se lê como defeito,
+      não como escolha.
+- [x] **TCLE anestésico: "Tipo de procedimento Anestésico indicado"** — como LACUNA
+      (`[[...]]`), não variável. O S2Vet não guarda protocolo anestésico em lugar
+      nenhum, e apontar para um dado "parecido" escreveria no papel uma técnica que
+      ninguém indicou. Como lacuna, a tela de emissão o pede; em branco, não é impresso.
+- [x] **2 VIAS já funcionavam** — `viasDoDocumento` lê do PRÓPRIO papel ("Emitir em 2
+      vias: 1ª via…"), e os 12 modelos já traziam a frase desde 2026-08-26. O que
+      faltava era o GATE: o teste agora trava a frase no seed com o mesmo casamento que
+      o front faz. Some a frase, some a segunda via — e nada acusa, o documento só
+      passa a sair com uma folha.
+- [x] **CAMPO VAZIO fora do papel, do envio e da tela já valia** desde 2026-09-03
+      (`removerVazios` no snapshot + `vazios.ts#semBlocosVazios` na visualização, na
+      impressão e no PDF). Os campos NOVOS entram na mesma regra por construção: o
+      e-mail é `campoAuto` (cai em `removerVazios`) e as linhas do timbre são filtradas
+      em `linhasDoEstabelecimento`.
+- [x] Testes: +6 casos em `documentosCentral.test.js` (74 no arquivo, **615** na
+      suíte) — os nomes novos casando com o título impresso, os rótulos da norma nos
+      12 sem resquício da redação antiga, o e-mail do vet nos 12, a lacuna anestésica e
+      a frase das 2 vias. O caso antigo dos rótulos foi reescrito para travar a REGRA
+      (quem tem o campo), não a redação — que é da norma e muda.
+      `tsc -b` e `vite build` limpos.
+- [ ] 🔴 **RE-SEED NECESSÁRIO**: `node backend/seed.js` para os modelos GLOBAIS ganharem
+      o e-mail, os nomes novos e os rótulos. O upsert por `chave` sobrescreve o global
+      e NÃO toca a cópia personalizada de cada clínica (que é a outra metade da mesma
+      decisão — ninguém reescreve o documento que a clínica ajustou).
+      ⚠️ Precisa do client de tenant DENTRO de `comEscopoPlataforma` — `node
+      backend/seed.js` já faz isso; um `new PrismaClient()` puro morre no RLS.
+- [ ] Documento EMITIDO antes desta sessão continua com o snapshot antigo (sem e-mail,
+      sem timbre, com os nomes antigos). É o correto: o emitido é imutável.
+- [ ] O timbre repete o nome da clínica que o corpo dos 12 já traz em "Estabelecimento"
+      (`{{veterinario.clinica}}`). Não incomodou até aqui; se incomodar, o lugar de
+      decidir é o seed — não o cabeçalho, que é o que dá uniformidade a todo o resto.
+
+### Sessão 2026-09-08 — Fechar abre a seguinte; reabrir grava REABERTA
+
+- [x] 🔴 **O DEFEITO: o ciclo seguinte não nascia do FECHAMENTO.** A fatura nova só
+      aparecia quando alguém tocava naquele cliente — abrindo a tela dele
+      (`obterFaturaProprietario` cria a ABERTA do mês) ou lançando o primeiro item
+      clínico (`getOrCreateFatura`). No cron da madrugada não há ninguém na tela: o
+      cliente ficava sem fatura corrente até o próximo atendimento e a **Assistência
+      Veterinária Mensal** — cobrança RECORRENTE, que não depende de atendimento
+      nenhum — só entrava quando alguém abrisse a tela. **Mensalista sem consulta no
+      mês não era cobrado**, e nada acusava: percebe-se no fim do mês, no faturamento
+      a menos.
+      Novo `FaturaController.abrirProximaFatura(fechada, { veterinarioId, db })`,
+      ligado aos QUATRO caminhos: `fecharFatura` (botão), `fecharFaturasLote`,
+      `atualizarStatus` (a outra porta para FECHADA) e o cron `fechamento_faturas`.
+- [x] **A nova nasce com os ITENS PADRÃO pela mesma `adicionarAssistenciaMensal`** do
+      fechamento — uma segunda cópia da regra do valor divergiria na primeira
+      correção, e item padrão novo passa a valer para os dois lados de graça.
+- [x] ⚠️ **NÃO cria se o cliente já tem outra em aberto NESTA empresa** (ABERTA ou
+      REABERTA, fora a que acabou de fechar). Duas correntes ao mesmo tempo partem o
+      mês em duas: `getOrCreateFatura` pega a primeira que achar e metade dos
+      lançamentos some da vista. É essa guarda que torna a chamada IDEMPOTENTE — e o
+      que permite chamá-la do LOTE e do cron sem contar quantas vezes rodou.
+      ⚠️ Fatura em aberto de OUTRA empresa não impede: o ciclo é por clínica.
+      ⚠️ Fatura LEGADA por animal (sem `proprietarioId`) não tem ciclo mensal a abrir;
+      sem `empresaId` também não — a nova nasceria sem tenant.
+- [x] ⚠️ **`mesReferencia` é o do mês SEGUINTE** (`proximoMesReferencia`), não o atual:
+      quem fecha no dia 23 abre um ciclo que será cobrado no mês que vem, e repetir o
+      rótulo deixaria duas linhas idênticas no seletor de mês da tela — com `?mes=`
+      devolvendo sempre a mais recente e a fechada ficando inalcançável.
+- [x] ⚠️ **No CRON, `db` é o `tx` da empresa da vez.** Com o `prisma` global o RLS
+      recusa a criação em silêncio — a MESMA armadilha que fazia o fechamento nunca
+      acontecer no dia configurado (2026-08-23 parte 4). Há gate estrutural exigindo
+      `abrirProximaFatura(fatura, { db: tx })` no corpo do job.
+- [x] ⚠️ **Nas rotas HTTP a chamada passa por `abrirProximaFaturaSemQuebrar`**: falhar
+      em ABRIR a seguinte não pode transformar um fechamento BEM-SUCEDIDO em "erro ao
+      fechar" na tela. A fatura já fechou, e o ciclo novo ainda nasce sozinho no
+      primeiro lançamento. No cron o atalho NÃO é usado — lá a falha tem de aparecer
+      no diário da execução, que é onde se investiga.
+- [x] 🔴 **REABRIR NÃO DEVOLVE A FATURA A "ABERTA" — status novo `REABERTA`.** Fatura
+      FECHADA/ATRASADA/PAGA que volta a ser editável grava REABERTA. As duas são
+      editáveis; só a ABERTA é a fatura CORRENTE, a que `getOrCreateFatura` acha para
+      receber o lançamento clínico de hoje. Sem a distinção, reabrir agosto para
+      corrigir uma linha fazia a cobrança de setembro cair dentro de um documento que
+      o cliente já tinha recebido — e ninguém na tela tinha como saber disso.
+      ⚠️ **A conversão é do BACKEND** (`statusAoReabrir`, em `lib/faturaUtils.js`), não
+      da tela: o botão "Reabrir" continua mandando `ABERTA`, então cliente antigo não
+      muda de comportamento. Pôr a decisão no front daria a cada chamador uma regra
+      própria.
+      ⚠️ **REABERTA reaberta continua REABERTA** — fatura que já passou por um
+      fechamento não volta a ser "aberta" nunca mais. Foi o TESTE que pegou este
+      buraco: a primeira versão a rebaixava para ABERTA, apagando em silêncio o fato
+      de o cliente já ter recebido aquele documento.
+      ⚠️ **CANCELADA fica FORA da conversão**: desfazer um cancelamento é UNDO (a
+      fatura nunca chegou a fechar), não uma reabertura.
+      ⚠️ `fecharFatura` passou a aceitar **ABERTA ou REABERTA** — sem isso a reaberta
+      ficaria presa em aberto para sempre.
+      **SEM MIGRATION**: `tb_faturas.status` é TEXT, sem limite de comprimento; status
+      novo só precisa entrar nas listas de `lib/faturaUtils.js`
+      (`STATUS_FATURA_ABERTOS` / `STATUS_FATURA_FECHADOS`).
+- [x] **REABERTA entra nos relatórios** — `['ABERTA','FECHADA']` virou
+      `['ABERTA','REABERTA','FECHADA']` em `DashboardController` (contas a receber
+      vencidas), `RelatoriosController` (faturamento do período) e
+      `RelatorioGerencialController.blocoDevedores`. É fatura NÃO PAGA como qualquer
+      outra: quem reabriu para corrigir não deixou de dever, e tirá-la do indicador
+      esconderia dinheiro a receber.
+- [x] ⚠️ **O cron de ATRASADAS não foi tocado** — ele só varre `FECHADA`. Consequência
+      deliberada: reabrir PAUSA a marcação de atraso; fechada de novo, ela volta a ser
+      marcada na noite seguinte.
+- [x] ⚠️ **O cron de FECHAMENTO também só varre `ABERTA`**. A REABERTA está sob
+      correção de uma PESSOA, e fechá-la sozinha desfaria um ato deliberado no meio.
+      CONSEQUÊNCIA ACEITA: reaberta esquecida fica em aberto até alguém fechá-la à
+      mão. Se isso incomodar, o lugar é o `where` de `fecharFaturasDoMes` — e a
+      guarda de "já tem uma em aberto" já protege contra duplicar o ciclo.
+- [x] **Front** (`Faturamento.tsx`): `FaturaStatus` ganhou REABERTA; `canEdit` cobre
+      ABERTA **e** REABERTA (é justamente para editar que se reabre); aba, pílula da
+      lista e bolinha do card **Reaberta** em LARANJA, ao lado de Aberta.
+      ⚠️ `faturaReaberta` é campo PRÓPRIO da resposta, não entra em `faturaAtiva`: as
+      duas podem existir ao mesmo tempo e, na mesma aba, uma esconderia a outra.
+      ⚠️ O `take` das faturas por cliente subiu de 6 para 10 — com cinco estados
+      possíveis, um corte curto podia devolver seis fechadas e nenhuma das outras, e a
+      aba sumiria da tela por causa do corte, não por não existir.
+      ⚠️ Fechar recarrega o painel quando a aba é a da CORRENTE (sem `faturaId`/`mes`
+      fixos): a corrente passou a ser a que nasceu, e sem recarregar a tela exibiria a
+      fatura FECHADA debaixo do rótulo "Aberta", com Reabrir no lugar de Fechar.
+      O toast diz qual fatura foi criada — é a única pista de que a próxima já existe
+      antes do primeiro atendimento.
+- [x] Testes: `__tests__/faturaCicloFechamento.test.js` (26 casos) — o mês da fatura
+      que nasce (virada de ano, formato inválido), a conversão de reabertura nos dois
+      sentidos, `getOrCreateFatura` IGNORANDO a REABERTA, a assistência dentro da
+      fatura nova com o total recalculado, e a idempotência nos dois estados.
+      ✅ **Verificado que REPROVA**: sabotados os elos de `fecharFatura`, do cron e do
+      `statusAoReabrir`, três casos falharam. Suíte: **610**; `tsc -b` e `vite build`
+      limpos.
+      ⚠️ Os `jest.mock` deste arquivo levam `{ virtual: true }` (mesmo padrão de
+      `documentosCentral.test.js`): sem ele o jest RESOLVE o módulo antes de trocá-lo,
+      e `lib/prisma.ts` / `storage/index.ts` vão parar no babel — que não tem preset
+      de TypeScript. Falha só no run COMPLETO, nunca no arquivo isolado.
+- [ ] O fechamento em LOTE já abre as seguintes, mas a tela não diz quantas foram
+      criadas: o retorno de `fecharFaturasLote` só conta as fechadas.
+- [ ] `adicionarItem`/`atualizarItem`/`removerItem` continuam bloqueando só `PAGA`.
+      FECHADA e REABERTA seguem editáveis (decisão anterior, preservada) — se um dia
+      FECHADA tiver de travar, o lugar é `faturaEditavel` em `lib/faturaUtils.js`,
+      que já existe como fonte única e hoje só é consumida pelo front.
 
 ### Sessão 2026-09-06 (parte 4) — O paciente do cliente inativado vai para "Inativos"
 

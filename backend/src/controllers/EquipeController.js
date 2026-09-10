@@ -5,6 +5,7 @@ const bcrypt           = require('bcryptjs');
 const emailService     = require('../services/emailService');
 const PermissaoService = require('../services/PermissaoService');
 const { PERMISSOES_PADRAO } = require('../seeds/002_permissoes_padrao.seed');
+const { ehCargoPrestador, SEM_EXTERNOS } = require('../lib/cargosPrestador');
 const { getEquipeIdsDoProprietario } = require('../middlewares/permissao.middleware');
 // "Tem cadastro de cliente nesta empresa?" — mesmo critério do tipo por empresa,
 // reusado pela regra "mais de um papel na mesma empresa soma" (ver `ajusteperfil`
@@ -38,6 +39,7 @@ const { garantirVagaDeUsuario, consomeAssento } = require('../lib/planoEmpresa')
 const { registrarAtivacao, registrarInativacao, anexarTrilhaAtivacaoEmRelacao } = require('../lib/usuarioAtivacao');
 const { registrarAuditoria, registrarAcessoNegado } = require('../lib/auditoria');
 const bloqueioLogin = require('../lib/bloqueioLogin');
+const { gerarSenhaInicial } = require('../lib/senhaInicial');
 
 // ─── Helper: encontra a empresa do usuário (owner OU gestor convidado) ─────────
 // empresaIdPreferida (req.empresaId, vindo do seletor de empresa no frontend):
@@ -784,7 +786,7 @@ const EquipeController = {
       // Usuário novo nasce VETERINARIO com senha padrão + troca obrigatória. Usuário que
       // JÁ existia mantém os próprios dados — o telefone/endereço digitados aqui só valem
       // para conta nova; quem já tem login administra o próprio cadastro.
-      const SENHA_INICIAL = 'Inicial_001';
+      const SENHA_INICIAL = gerarSenhaInicial({ email: emailNorm, nome: fullNameTrim, telefone });
       const emailNorm = normalizeEmail(emailTrim);
       let usuario = await findUserByEmail(prisma, emailNorm);
       let usuarioNovo = false;
@@ -967,7 +969,8 @@ const EquipeController = {
 
       const CARGO_LABEL = {
         GESTOR: 'Gestor', VETERINARIO: 'Veterinário', ESTAGIARIO: 'Estagiário',
-        FORNECEDOR: 'Fornecedor', SECRETARIA: 'Secretária', FINANCEIRO: 'Financeiro',
+        FORNECEDOR: 'Fornecedor', PRESTADOR: 'Prestador',
+        SECRETARIA: 'Secretária', FINANCEIRO: 'Financeiro',
         ENFERMEIRO: 'Enfermeiro',
       };
       const labelCargo = c => CARGO_LABEL[c] ?? (c ? c.charAt(0) + c.slice(1).toLowerCase() : '');
@@ -1666,6 +1669,11 @@ const EquipeController = {
 
   listarMembros: async (req, res) => {
     try {
+      // 🔴 FORNECEDOR e PRESTADOR NÃO SÃO EQUIPE (2026-09-09): eles não entram nesta
+      // lista, que alimenta a tela Equipe, o Controle de Acesso e a grade da Agenda.
+      // `?incluirExternos=1` é a porta de saída para quem precisar deles (nada usa hoje);
+      // sem ela, quem quisesse a lista completa reescreveria o filtro por conta própria.
+      const semExternos = req.query.incluirExternos === '1' ? {} : SEM_EXTERNOS;
       const vetUserId    = req.user.id;
       const equipeIdParam = req.query.equipeId ? Number(req.query.equipeId) : null;
 
@@ -1684,9 +1692,9 @@ const EquipeController = {
         }
 
         const membros = await prisma.membroEquipe.findMany({
-          where:   { equipeId: equipe.id, NOT: { user: { role: 'ADMIN' } } },
+          where:   { equipeId: equipe.id, NOT: { user: { role: 'ADMIN' } }, ...semExternos },
           include: {
-            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, bloqueadoEm: true, createdAt: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: equipe.empresaId }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
+            user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, bloqueadoEm: true, createdAt: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, prestadorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: equipe.empresaId }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
             equipe: { select: { nome: true } },
           },
           orderBy: { createdAt: 'desc' },
@@ -1740,9 +1748,9 @@ const EquipeController = {
         });
 
         const membrosDaEquipe = await prisma.membroEquipe.findMany({
-          where:   { equipeId: vinculo.equipeId, NOT: { user: { role: 'ADMIN' } } },
+          where:   { equipeId: vinculo.equipeId, NOT: { user: { role: 'ADMIN' } }, ...semExternos },
           include: {
-            user:   { select: { id: true, fullName: true, ativo: true, createdAt: true, userType: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: equipeDoVinculo?.empresaId ?? -1 }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
+            user:   { select: { id: true, fullName: true, ativo: true, createdAt: true, userType: true, fornecedorPerfil: { select: { tipoServico: true } }, prestadorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: equipeDoVinculo?.empresaId ?? -1 }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
             equipe: { select: { nome: true } },
           },
           orderBy: { createdAt: 'desc' },
@@ -1765,9 +1773,9 @@ const EquipeController = {
       const equipeAlvo = equipeAlvoId ? equipes.find(e => e.id === equipeAlvoId) ?? equipes[0] : equipes[0];
 
       const membros = await prisma.membroEquipe.findMany({
-        where:   { equipeId: equipeAlvo.id, NOT: { user: { role: 'ADMIN' } } },
+        where:   { equipeId: equipeAlvo.id, NOT: { user: { role: 'ADMIN' } }, ...semExternos },
         include: {
-          user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, createdAt: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: empresa.id }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
+          user:   { select: { id: true, fullName: true, email: true, phone: true, ativo: true, createdAt: true, userType: true, cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true, fornecedorPerfil: { select: { tipoServico: true } }, prestadorPerfil: { select: { tipoServico: true } }, vetPerfil: { select: { subespecialidades: { select: { nome: true } } } }, especialidades: { where: { empresaId: empresa.id }, select: { especialidadeId: true, especialidade: { select: { id: true, nome: true } } } } } },
           equipe: { select: { nome: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -1790,6 +1798,11 @@ const EquipeController = {
   },
   listarMembrosPorEquipe: async (req, res) => {
     try {
+      // 🔴 FORNECEDOR e PRESTADOR NÃO SÃO EQUIPE (2026-09-09): eles não entram nesta
+      // lista, que alimenta a tela Equipe, o Controle de Acesso e a grade da Agenda.
+      // `?incluirExternos=1` é a porta de saída para quem precisar deles (nada usa hoje);
+      // sem ela, quem quisesse a lista completa reescreveria o filtro por conta própria.
+      const semExternos = req.query.incluirExternos === '1' ? {} : SEM_EXTERNOS;
       const { equipeId } = req.params;
       const equipeIdN = Number(equipeId);
       const isAdminReq = req.user.role === 'ADMIN' || req.user.userType === 'ADMIN';
@@ -1816,7 +1829,7 @@ const EquipeController = {
         }
 
         const membros = await prisma.membroEquipe.findMany({
-          where:   { equipeId: equipeIdN, NOT: { user: { role: 'ADMIN' } } },
+          where:   { equipeId: equipeIdN, NOT: { user: { role: 'ADMIN' } }, ...semExternos },
           include: { user: { select: { id: true, fullName: true, email: true, phone: true, ativo: true, userType: true } } },
           orderBy: { createdAt: 'desc' },
         });
@@ -2104,7 +2117,7 @@ const EquipeController = {
       const emailNorm = normalizeEmail(email);
       let usuario = await findUserByEmail(prisma, emailNorm);
       if (!usuario) {
-        const senhaHash = await bcrypt.hash('Inicial_001', 10);
+        const senhaHash = await bcrypt.hash(gerarSenhaInicial({ email: emailNorm, nome: fullName, telefone: phone }), 10);
         usuario = await prisma.user.create({
           data: {
             fullName, email: emailNorm,
@@ -2238,7 +2251,7 @@ const EquipeController = {
       // membro por esta tela gravaria os locais com `semEspecialidade` e APAGARIA a
       // especialidade que o próprio gestor cadastrou no Cadastro Pessoal.
       const cargoEfetivo = cargo || membro.cargo;
-      const perfilComEspecialidade = ['VETERINARIO', 'FORNECEDOR', 'GESTOR'].includes(cargoEfetivo);
+      const perfilComEspecialidade = ['VETERINARIO', 'FORNECEDOR', 'PRESTADOR', 'GESTOR'].includes(cargoEfetivo);
       const especPadrao = cargoEfetivo === 'VETERINARIO'
         ? await especialidadesPadraoVeterinario(req, membro.equipeId)
         : [];
@@ -2327,7 +2340,11 @@ const EquipeController = {
         });
       }
 
-      // Sincroniza com o cadastro Fornecedor vinculado (quando o membro é PRESTADOR)
+      // Sincroniza com o cadastro vinculado ao login — Fornecedor OU Prestador.
+      // ⚠️ Não se decide pelo CARGO aqui, e sim pelo que existe amarrado ao `userId`:
+      // o membro pode ter sido incluído como FORNECEDOR antes de o cargo PRESTADOR
+      // existir (2026-09-09) e nada foi migrado. Sincronizar os dois cadastros pelo
+      // vínculo cobre os dois mundos sem tocar em dado nenhum.
       const dadosFornecedor = {};
       if (fullName    !== undefined && fullName.trim()) dadosFornecedor.nome        = fullName.trim();
       if (email       !== undefined && email.trim())    dadosFornecedor.email       = email.trim().toLowerCase();
@@ -2349,6 +2366,21 @@ const EquipeController = {
           await prisma.fornecedor.update({
             where: { id: fornecedorAlvo.id },
             data:  { ...dadosFornecedor, userId: membro.userId }, // estabelece o link se ainda não estava
+          });
+        }
+
+        // Mesmo par de lookups para o cadastro Prestador (cargo novo).
+        let prestadorAlvo = await prisma.prestador.findFirst({ where: { userId: membro.userId } });
+        if (!prestadorAlvo && membro.user?.email) {
+          // ⚠️ `userId: null` no fallback por e-mail: `Prestador.userId` é @unique, e
+          // adotar um cadastro que já pertence a OUTRA conta estouraria a constraint
+          // com um erro de banco cru no meio do salvar.
+          prestadorAlvo = await prisma.prestador.findFirst({ where: { email: membro.user.email, userId: null } });
+        }
+        if (prestadorAlvo) {
+          await prisma.prestador.update({
+            where: { id: prestadorAlvo.id },
+            data:  { ...dadosFornecedor, userId: membro.userId },
           });
         }
       }
@@ -2667,8 +2699,8 @@ const EquipeController = {
       const especiesDonoComId = vetPerfilDono?.especies.map(e => e.especieId) ?? [];
 
       // Criar usuário convidado se ainda não existir
-      const SENHA_INICIAL = 'Inicial_001';
-      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', SECRETARIA: 'ESTAGIARIO', FINANCEIRO: 'ESTAGIARIO', ENFERMEIRO: 'ESTAGIARIO' };
+      const SENHA_INICIAL = gerarSenhaInicial({ email, nome: email, telefone: null });
+      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', SECRETARIA: 'ESTAGIARIO', FINANCEIRO: 'ESTAGIARIO', ENFERMEIRO: 'ESTAGIARIO', FORNECEDOR: 'FORNECEDOR', PRESTADOR: 'FORNECEDOR' };
       const userTypeConvidado = cargoToUserType[cargo] || 'ESTAGIARIO';
       let usuarioCriado = false;
       let usuarioConvidadoId = null;
@@ -2749,7 +2781,7 @@ const EquipeController = {
   incluirMembroDireto: async (req, res) => {
     try {
       const vetUserId        = req.user.id;
-      const { email: emailRaw, cargo, fullName, phone, cep, endereco, complemento, bairro, cidade, estado, fornecedorId, tipoServico, especialidadeIds, equipeId: equipeIdBody,
+      const { email: emailRaw, cargo, fullName, phone, cep, endereco, complemento, bairro, cidade, estado, fornecedorId, prestadorId, tipoServico, especialidadeIds, equipeId: equipeIdBody,
               tipoPagamento, formaPagamento, valorPagamento, acessoSistema, restringirPorLocal } = req.body;
       const email = (emailRaw ?? '').trim().toLowerCase();
 
@@ -2763,24 +2795,36 @@ const EquipeController = {
         return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
       }
 
-      // Cargo FORNECEDOR: amarra a conta de login ao cadastro Fornecedor (tipoServico
-      // alimenta o seletor de encaminhamento). Existente → vincula; novo → cria CLIENTE.
+      // Cargo FORNECEDOR/PRESTADOR: amarra a conta de login ao CADASTRO correspondente
+      // (o tipoServico dele alimenta o seletor de encaminhamento). Existente → vincula;
+      // novo → cria CLIENTE.
+      //
+      // 🔴 CADA CARGO TEM O SEU CADASTRO, e é só isso que os distingue:
+      //   FORNECEDOR → `tb_fornecedores`   PRESTADOR → `tb_prestadores`
+      // As duas tabelas já nasceram com `userId @unique` para este vínculo. Apontar os
+      // dois para `tb_fornecedores` faria o cargo novo existir só no rótulo — que é
+      // exatamente o que a separação de 2026-09-09 veio desfazer.
       let fornecedorVinculo = null;
-      if (cargo === 'FORNECEDOR') {
-        if (fornecedorId) {
-          fornecedorVinculo = await prisma.fornecedor.findUnique({ where: { id: Number(fornecedorId) } });
-          if (!fornecedorVinculo) {
-            return res.status(404).json({ sucesso: false, mensagem: 'Fornecedor não encontrado' });
-          }
+      let prestadorVinculo  = null;
+      if (cargo === 'FORNECEDOR' && fornecedorId) {
+        fornecedorVinculo = await prisma.fornecedor.findUnique({ where: { id: Number(fornecedorId) } });
+        if (!fornecedorVinculo) {
+          return res.status(404).json({ sucesso: false, mensagem: 'Fornecedor não encontrado' });
         }
-        // Fornecedor SEM especialidade é permitido (regra 2026-07-28): o cadastro nasce
-        // com tipoServico 'Prestador' e o gestor completa depois, se quiser.
       }
+      if (cargo === 'PRESTADOR' && prestadorId) {
+        prestadorVinculo = await prisma.prestador.findUnique({ where: { id: Number(prestadorId) } });
+        if (!prestadorVinculo) {
+          return res.status(404).json({ sucesso: false, mensagem: 'Prestador não encontrado' });
+        }
+      }
+      // Prestador/fornecedor SEM especialidade é permitido (regra 2026-07-28): o cadastro
+      // nasce com tipoServico 'Prestador' e o gestor completa depois, se quiser.
 
       // Perfis sem atuação clínica (estagiário, enfermeiro, secretaria, financeiro…)
       // não têm especialidade nem tempo de consulta: o que vier no body é ignorado.
       // GESTOR tem, mas OPCIONAL — ver `especPadrao` logo abaixo.
-      const perfilComEspecialidade = ['VETERINARIO', 'FORNECEDOR', 'GESTOR'].includes(cargo);
+      const perfilComEspecialidade = ['VETERINARIO', 'FORNECEDOR', 'PRESTADOR', 'GESTOR'].includes(cargo);
       // Veterinário que não informa especialidade assume Clínica Médica; fornecedor e
       // gestor não — para eles a lista vazia é um resultado válido.
       const especPadrao = cargo === 'VETERINARIO'
@@ -2852,9 +2896,12 @@ const EquipeController = {
         if (erroExp) return res.status(400).json({ sucesso: false, mensagem: erroExp });
       }
 
-      // Fornecedor selecionado já vinculado a OUTRA conta não pode ser reutilizado
+      // Cadastro selecionado já vinculado a OUTRA conta não pode ser reutilizado
       if (fornecedorVinculo?.userId && (!usuarioCheck || fornecedorVinculo.userId !== usuarioCheck.id)) {
         return res.status(409).json({ sucesso: false, mensagem: 'Este fornecedor já está vinculado a outro usuário' });
+      }
+      if (prestadorVinculo?.userId && (!usuarioCheck || prestadorVinculo.userId !== usuarioCheck.id)) {
+        return res.status(409).json({ sucesso: false, mensagem: 'Este prestador já está vinculado a outro usuário' });
       }
 
       // Reverso: o usuário (por e-mail) já pode estar vinculado a OUTRO cadastro de
@@ -2864,6 +2911,14 @@ const EquipeController = {
         const fornecedorDoUsuario = await prisma.fornecedor.findUnique({ where: { userId: usuarioCheck.id } });
         if (fornecedorDoUsuario && (!fornecedorVinculo || fornecedorDoUsuario.id !== fornecedorVinculo.id)) {
           return res.status(409).json({ sucesso: false, mensagem: 'Este usuário já está vinculado a outro cadastro de fornecedor.' });
+        }
+      }
+      // Mesmo cuidado para o cargo novo: `Prestador.userId` também é @unique, e criar
+      // aqui violaria a constraint com um erro de banco cru na tela.
+      if (cargo === 'PRESTADOR' && usuarioCheck) {
+        const prestadorDoUsuario = await prisma.prestador.findUnique({ where: { userId: usuarioCheck.id } });
+        if (prestadorDoUsuario && (!prestadorVinculo || prestadorDoUsuario.id !== prestadorVinculo.id)) {
+          return res.status(409).json({ sucesso: false, mensagem: 'Este usuário já está vinculado a outro cadastro de prestador.' });
         }
       }
 
@@ -2876,8 +2931,11 @@ const EquipeController = {
       const especiesDono      = vetPerfilDono?.especies.map(e => e.especie) ?? [];
       const especiesDonoComId = vetPerfilDono?.especies.map(e => e.especieId) ?? [];
 
-      const SENHA_INICIAL = 'Inicial_001';
-      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', GESTOR: 'VETERINARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', FORNECEDOR: 'FORNECEDOR', SECRETARIA: 'ESTAGIARIO', FINANCEIRO: 'ESTAGIARIO', ENFERMEIRO: 'ESTAGIARIO' };
+      const SENHA_INICIAL = gerarSenhaInicial({ email, nome: fullName, telefone: phone });
+      // ⚠️ PRESTADOR resolve para o MESMO userType `FORNECEDOR` do cargo irmão — é o
+      // que faz todo gate escrito contra `userType` valer para os dois sem alteração
+      // (ver lib/cargosPrestador.js e lib/tipoContexto.js#CARGO_PARA_TIPO).
+      const cargoToUserType = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', GESTOR: 'VETERINARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', FORNECEDOR: 'FORNECEDOR', PRESTADOR: 'FORNECEDOR', SECRETARIA: 'ESTAGIARIO', FINANCEIRO: 'ESTAGIARIO', ENFERMEIRO: 'ESTAGIARIO' };
       const userTypeNovo = cargoToUserType[cargo] || 'ESTAGIARIO';
 
       let usuarioCriado = false;
@@ -2973,8 +3031,12 @@ const EquipeController = {
         await gravarExpedienteTrabalho(novoMembro.id, expediente);
       }
 
-      // Vincular/criar cadastro Fornecedor
+      // Vincular/criar o cadastro correspondente ao cargo — Fornecedor ou Prestador.
+      // Espelhos exatos: mesma decisão (vincular o existente × criar CLIENTE novo),
+      // mesmos campos, tabelas diferentes.
       let fornecedorFinalId = null;
+      let prestadorFinalId  = null;
+      const tipoServicoNovo = especResolvidas?.tipoServico ?? tipoServico?.trim() ?? 'Prestador';
       if (cargo === 'FORNECEDOR') {
         if (fornecedorVinculo) {
           await prisma.fornecedor.update({
@@ -2992,7 +3054,7 @@ const EquipeController = {
               nome:        fullName.trim(),
               email,
               telefone:    phone.trim(),
-              tipoServico: especResolvidas?.tipoServico ?? tipoServico?.trim() ?? 'Prestador',
+              tipoServico: tipoServicoNovo,
               tipoEntrada: 'CLIENTE',
               empresaId:   req.empresaId ?? null,
               equipeId:    equipe.id,
@@ -3000,6 +3062,32 @@ const EquipeController = {
             },
           });
           fornecedorFinalId = novoForn.id;
+        }
+      } else if (cargo === 'PRESTADOR') {
+        if (prestadorVinculo) {
+          await prisma.prestador.update({
+            where: { id: prestadorVinculo.id },
+            data: {
+              userId:   usuario.id,
+              email:    prestadorVinculo.email    || email,
+              telefone: prestadorVinculo.telefone || phone.trim(),
+            },
+          });
+          prestadorFinalId = prestadorVinculo.id;
+        } else {
+          const novoPrest = await prisma.prestador.create({
+            data: {
+              nome:        fullName.trim(),
+              email,
+              telefone:    phone.trim(),
+              tipoServico: tipoServicoNovo,
+              tipoEntrada: 'CLIENTE',
+              empresaId:   req.empresaId ?? null,
+              equipeId:    equipe.id,
+              userId:      usuario.id,
+            },
+          });
+          prestadorFinalId = novoPrest.id;
         }
       }
 
@@ -3067,7 +3155,10 @@ const EquipeController = {
         especiesNomes: especiesDono.map(e => e.nome).filter(Boolean),
       }).catch(err => console.error('[emailService] Falha ao enviar notificação de inclusão:', err));
 
-      res.status(201).json({ sucesso: true, mensagem: 'Membro incluído com sucesso!', dados: { userId: usuario.id, fullName: usuario.fullName } });
+      res.status(201).json({ sucesso: true, mensagem: 'Membro incluído com sucesso!',
+        // `fornecedorId`/`prestadorId`: o cadastro a que o login ficou amarrado — só
+        // um dos dois vem preenchido, conforme o cargo (ver lib/cargosPrestador.js).
+        dados: { userId: usuario.id, fullName: usuario.fullName, fornecedorId: fornecedorFinalId, prestadorId: prestadorFinalId } });
     } catch (err) {
       console.error('Erro ao incluir membro:', err);
       // Compensação (melhor esforço): desfaz o que esta requisição criou para não
@@ -3117,7 +3208,7 @@ const EquipeController = {
       const cpfNorm  = isCpf  ? cpf.replace(/\D/g, '')  : null;
 
       // Cria usuário se não existir
-      const SENHA_INICIAL  = 'Inicial_001';
+      const SENHA_INICIAL  = gerarSenhaInicial({ email, nome: fullName, telefone: null });
       let usuarioExistente = await findUserByEmail(prisma, email);
       let usuarioCriado    = false;
 
@@ -3335,8 +3426,8 @@ const EquipeController = {
       } catch { /* colunas ainda não migradas */ }
 
       // Cria usuário se ainda não existir
-      const SENHA_INICIAL     = 'Inicial_001';
-      const cargoToUserType   = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', FORNECEDOR: 'FORNECEDOR', SECRETARIA: 'ESTAGIARIO', FINANCEIRO: 'ESTAGIARIO', ENFERMEIRO: 'ESTAGIARIO' };
+      const SENHA_INICIAL     = gerarSenhaInicial({ email, nome: fullName, telefone: null });
+      const cargoToUserType   = { VETERINARIO: 'VETERINARIO', ESTAGIARIO: 'ESTAGIARIO', PROPRIETARIO: 'PROPRIETARIO', ADMIN: 'VETERINARIO', MEMBRO: 'ESTAGIARIO', FORNECEDOR: 'FORNECEDOR', PRESTADOR: 'FORNECEDOR', SECRETARIA: 'ESTAGIARIO', FINANCEIRO: 'ESTAGIARIO', ENFERMEIRO: 'ESTAGIARIO' };
       const userTypeConvidado = cargoToUserType[cargo] ?? 'ESTAGIARIO';
       const usuarioExistente  = await findUserByEmail(prisma, email);
       let usuarioCriado      = false;
@@ -4074,14 +4165,15 @@ const EquipeController = {
         return res.json({ sucesso: true, dados: { permissoes, isGestor: true, temEquipe: true } });
       }
 
-      // FORNECEDOR: permissões individuais por membro (PermissaoMembro),
+      // PRESTADOR (cargo FORNECEDOR ou PRESTADOR): permissões individuais por membro
+      // (PermissaoMembro),
       // pois o gestor configura acesso granular por animal via ControleAcesso → Fornecedor.
       // Todos os demais cargos: MatrizPerfil é a fonte canônica — reflete exatamente o que
       // o gestor configurou na aba "Matriz de Perfis" do ControleAcesso, sem depender de
       // propagação para PermissaoMembro (que pode estar desatualizada).
       let permissoesMap = {};
 
-      if (membro.cargo === 'FORNECEDOR') {
+      if (ehCargoPrestador(membro.cargo)) {
         const membroRegistros = await prisma.permissaoMembro.findMany({
           where:  { equipeId: membro.equipeId, userId },
           select: { moduloSlug: true, nivel: true },

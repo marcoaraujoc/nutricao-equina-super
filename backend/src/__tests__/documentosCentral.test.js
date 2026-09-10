@@ -329,8 +329,87 @@ describe('modelos do CFMV (Res. 1.321/2020)', () => {
       .map(b => b.conteudo.rotulo);
     const porChave = Object.fromEntries(MODELOS.map(m => [m.chave, m]));
 
-    expect(rotulos(porChave.cfmv_09_tcle_eutanasia)).toContain('Observações do(a) responsável');
-    expect(rotulos(porChave.cfmv_01_atestado_sanitario)).not.toContain('Observações do(a) responsável');
+    // O que se trava é a REGRA (quem tem o campo), não a redação — que é da norma e
+    // mudou em 2026-09-08. Por isso o casamento é por "tutor(a)", a palavra que
+    // distingue o campo do responsável do campo do veterinário.
+    const doResponsavel = (r) => r.includes('tutor(a)/proprietário(a)/responsável');
+    expect(rotulos(porChave.cfmv_09_tcle_eutanasia).some(doResponsavel)).toBe(true);
+    expect(rotulos(porChave.cfmv_01_atestado_sanitario).some(doResponsavel)).toBe(false);
+  });
+
+  // 🔴 A REDAÇÃO DOS RÓTULOS É DA RESOLUÇÃO (a pedido, 2026-09-08), e vale para os 12
+  // de uma vez: o rótulo nasce em UM lugar (`montarBlocos`), e trocá-lo só em alguns
+  // daria dois textos para o MESMO campo — o que se lê como defeito, não como escolha.
+  it('os rótulos de observação são os da norma, iguais nos 12', () => {
+    const DO_VET  = 'Observações de interesse a serem fornecidas pelo(a) Médico(a) Veterinário(a):';
+    const DO_TUTOR = 'Observações de interesse a serem fornecidas pelo(a) tutor(a)/proprietário(a)/responsável:';
+
+    for (const def of MODELOS) {
+      const rotulos = montarBlocos(def)
+        .filter(b => b.tipo === 'observacoes')
+        .map(b => b.conteudo.rotulo);
+      // O Anexo XI dispensa o campo do veterinário; os demais o têm.
+      if (!def.semObservacaoVeterinario) expect(rotulos).toContain(DO_VET);
+      if (def.assinante === 'RESPONSAVEL') expect(rotulos).toContain(DO_TUTOR);
+      // Nenhum resquício da redação antiga em modelo nenhum.
+      expect(rotulos).not.toContain('Observações do(a) responsável');
+      expect(rotulos).not.toContain('Observações do(a) Médico(a) Veterinário(a)');
+    }
+  });
+
+  // O e-mail é por onde o cliente e o serviço oficial respondem ao documento.
+  it('todos os 12 identificam o veterinário pelo E-MAIL, além de nome/CRMV/telefone', () => {
+    for (const def of MODELOS) {
+      const variaveis = montarBlocos(def)
+        .filter(b => b.tipo === 'campoAuto')
+        .map(b => b.conteudo.variavel);
+      expect(variaveis).toContain('{{veterinario.email}}');
+    }
+  });
+
+  // 🔴 A regra das 2 VIAS sai do PRÓPRIO PAPEL (`viasDoDocumento`, no front, lê o
+  // rodapé). O que este caso trava é o lado do seed: o rodapé precisa continuar
+  // dizendo quantas vias e de quem é cada uma — some a frase, somem as vias, e nada
+  // acusa: o documento simplesmente passa a sair com UMA folha.
+  it('os 12 mandam imprimir em 2 vias, dizendo de quem é cada uma', () => {
+    for (const def of MODELOS) {
+      const rodapes = montarBlocos(def)
+        .filter(b => b.tipo === 'rodape')
+        .map(b => String(b.conteudo.texto ?? ''))
+        .join(' ');
+      // O mesmo casamento que `viasDoDocumento` faz no front.
+      expect(rodapes).toMatch(/em\s+2\s+vias/i);
+      expect(rodapes).toMatch(/1\s*[ªa]\s*via[:\s]+médico/i);
+      expect(rodapes).toMatch(/2\s*[ªa]\s*via[:\s]+propriet/i);
+    }
+  });
+
+  it('os termos de consentimento usam o nome completo da norma', () => {
+    const porChave = Object.fromEntries(MODELOS.map(m => [m.chave, m]));
+    const esperado = {
+      cfmv_03_tcle_exames:              'TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE EXAMES',
+      cfmv_04_tcle_procedimento_risco:  'TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE PROCEDIMENTO TERAPÊUTICO DE RISCO',
+      cfmv_06_tcle_cirurgico:           'TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE PROCEDIMENTO CIRÚRGICO',
+      cfmv_07_tcle_internacao:          'TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE INTERNAÇÃO E TRATAMENTO CLÍNICO OU PÓS-CIRÚRGICO',
+      cfmv_08_tcle_anestesico:          'TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE PROCEDIMENTOS ANESTÉSICOS',
+      cfmv_09_tcle_eutanasia:           'TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO PARA REALIZAÇÃO DE EUTANÁSIA',
+      cfmv_12_tcle_doacao_corpo:        'TERMO DE CONSENTIMENTO LIVRE E ESCLARECIDO DE DOAÇÃO DE CORPO DE ANIMAL PARA FINS DE ENSINO E PESQUISA',
+    };
+    for (const [chave, nome] of Object.entries(esperado)) {
+      expect(porChave[chave].nome).toBe(nome);
+      // O título impresso sai do NOME em caixa alta — se um deles divergir, a folha
+      // sai com um nome e a biblioteca com outro.
+      expect(montarBlocos(porChave[chave])[0].conteudo.texto).toBe(nome.toUpperCase());
+    }
+  });
+
+  // O protocolo anestésico não existe em lugar nenhum do S2Vet: tem de ser LACUNA,
+  // para a tela de emissão pedi-lo. Virando variável de um dado "parecido", a folha
+  // sairia afirmando uma técnica que ninguém indicou.
+  it('o TCLE anestésico pede o tipo de procedimento como lacuna', () => {
+    const def = MODELOS.find(m => m.chave === 'cfmv_08_tcle_anestesico');
+    const textos = montarBlocos(def).map(b => String(b.conteudo.texto ?? '')).join(' ');
+    expect(textos).toContain('[[Tipo de procedimento Anestésico indicado]]');
   });
 
   it('valem para qualquer espécie — a norma é geral', () => {

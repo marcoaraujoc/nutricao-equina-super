@@ -20,6 +20,7 @@ const {
 } = require('./RelatorioGerencialController');
 
 const { valorLiquidoItem } = require('../lib/faturaUtils');
+const { motivosDeOrcamentos, motivosDeItens } = require('../lib/orcamentoRecusa');
 
 // Receita = valor líquido do item (bruto − desconto). Toda query que alimenta este
 // helper precisa trazer descontoTipo/descontoValor no select.
@@ -211,10 +212,42 @@ const financeiro = async (req, res) => {
 
 // ── ATENDIMENTO ─────────────────────────────────────────────────────────────
 
+/**
+ * 🔴 O NÚMERO DO CARD PRECISA MOSTRAR DE ONDE VEIO (a pedido, 2026-09-08).
+ *
+ * Até aqui cada indicador era um LINK para a Agenda filtrada — o que muda de tela,
+ * perde o período do relatório e obriga a pessoa a reconstruir o recorte lá. Agora o
+ * card ABRE A LISTA logo abaixo, no mesmo lugar em que o Histórico do Atendimento já
+ * faz isso.
+ *
+ * As linhas viajam JUNTO do relatório, não numa rota por card: são os mesmos
+ * registros que já foram lidos para CONTAR, e uma segunda ida ao banco por clique
+ * pagaria de novo o mesmo `where` — com o risco de contar 7 e listar 6 se algo mudar
+ * entre as duas chamadas.
+ *
+ * ⚠️ Colunas fixadas pelo pedido: animal, LOCAL do animal, veterinário responsável,
+ * data do último atendimento e — nas consultas — o status.
+ */
+const linhaDeAgendamento = (a) => ({
+  animalId:    a.animal?.id ?? null,
+  animal:      a.animal?.nome ?? 'Sem animal vinculado',
+  localizacao: a.animal ? nomeLocalizacao(a.animal) : SEM_LOCALIZACAO,
+  veterinario: a.veterinario?.fullName ?? null,
+  data:        a.dataHora ?? null,
+  status:      a.status ?? null,
+});
+
+// Select comum das quatro consultas — o mesmo `where` que conta é o que lista.
+const SELECT_AGENDAMENTO = {
+  id: true, dataHora: true, status: true,
+  animal:      { select: { id: true, nome: true, local: true, localizacao: { select: { nome: true } } } },
+  veterinario: { select: { fullName: true } },
+};
+
 const atendimento = async (req, res) => {
   try {
     const { empresaId } = await resolverEscopo(req);
-    const { inicio, fim } = resolverPeriodo(req);
+    const { inicio, fim, refDate } = resolverPeriodo(req);
     const escopoAnimal = empresaId ? { animal: { empresaId } } : {};
 
     // Todas as 4 métricas de consulta vêm de AgendamentoClinico (mesma fonte, mesma
@@ -225,15 +258,23 @@ const atendimento = async (req, res) => {
     // rotina noturna encerrou sozinha) — para este número gerencial as duas são a MESMA
     // coisa: o atendimento não aconteceu. A distinção entre quem cancelou fica para a
     // Auditoria, não para este agregado.
-    const [agendadas, realizadas, canceladas, naoRealizadas, procedimentos, exames] = await Promise.all([
-      prisma.agendamentoClinico.count({ where: { ativo: true, dataHora: { gte: inicio, lte: fim }, ...escopoAnimal } }),
-      prisma.agendamentoClinico.count({ where: { ativo: true, status: { in: ['CONCLUIDO', 'FINALIZADO'] }, dataHora: { gte: inicio, lte: fim }, ...escopoAnimal } }),
-      prisma.agendamentoClinico.count({ where: { ativo: true, status: { in: ['CANCELADO', 'CANCELADO_AUTOMATICAMENTE'] }, dataHora: { gte: inicio, lte: fim }, ...escopoAnimal } }),
+    // ⚠️ `findMany` no lugar de `count` nas quatro consultas: a contagem passou a ser
+    // o TAMANHO da lista que a tela mostra ao clicar no card. Contar de um jeito e
+    // listar de outro é como um card passa a exibir 7 e abrir 6 — sem ninguém notar.
+    const janela = { ativo: true, dataHora: { gte: inicio, lte: fim }, ...escopoAnimal };
+    const [linhasAgendadas, linhasRealizadas, linhasCanceladas, linhasNaoRealizadas, procedimentos, exames] = await Promise.all([
+      prisma.agendamentoClinico.findMany({ where: janela, select: SELECT_AGENDAMENTO, orderBy: { dataHora: 'desc' } }),
+      prisma.agendamentoClinico.findMany({ where: { ...janela, status: { in: ['CONCLUIDO', 'FINALIZADO'] } }, select: SELECT_AGENDAMENTO, orderBy: { dataHora: 'desc' } }),
+      prisma.agendamentoClinico.findMany({ where: { ...janela, status: { in: ['CANCELADO', 'CANCELADO_AUTOMATICAMENTE'] } }, select: SELECT_AGENDAMENTO, orderBy: { dataHora: 'desc' } }),
       // ATRASADA = já passou do horário (+30min) e ainda não foi concluída nem cancelada
-      prisma.agendamentoClinico.count({ where: { ativo: true, status: 'ATRASADA', dataHora: { gte: inicio, lte: fim }, ...escopoAnimal } }),
-      prisma.prescricao.count({         where: { ativo: true, tipo: 'PROCEDIMENTO', executadoEm:     { gte: inicio, lte: fim }, ...escopoAnimal } }),
-      prisma.exameClinico.count({       where: { ativo: true, dataSolicitacao: { gte: inicio, lte: fim }, ...escopoAnimal } }),
+      prisma.agendamentoClinico.findMany({ where: { ...janela, status: 'ATRASADA' }, select: SELECT_AGENDAMENTO, orderBy: { dataHora: 'desc' } }),
+      prisma.prescricao.count({   where: { ativo: true, tipo: 'PROCEDIMENTO', executadoEm:     { gte: inicio, lte: fim }, ...escopoAnimal } }),
+      prisma.exameClinico.count({ where: { ativo: true, dataSolicitacao: { gte: inicio, lte: fim }, ...escopoAnimal } }),
     ]);
+    const agendadas     = linhasAgendadas.length;
+    const realizadas    = linhasRealizadas.length;
+    const canceladas    = linhasCanceladas.length;
+    const naoRealizadas = linhasNaoRealizadas.length;
 
     // Atendimentos por animal e localidade: um "atendimento" = uma evolução clínica
     // FINALIZADA no período (mesmo critério de "atendido" usado no Mapa de
@@ -268,10 +309,77 @@ const atendimento = async (req, res) => {
       })
       .sort((a, b) => b.total - a.total);
 
+    // ── ANIMAIS SEM ATENDIMENTO (a pedido, 2026-09-08) ──
+    //
+    // Os três cards vieram do Mapa de Atendimento, onde só existia o "no dia". Aqui
+    // eles ganham as faixas de 3 e 7 dias, contadas a partir da MESMA data de
+    // referência do período escolhido no seletor — não do relógio de agora. Um
+    // relatório de julho aberto em setembro tem de responder sobre julho.
+    //
+    // ⚠️ "Atendido" é EVOLUÇÃO FINALIZADA, o mesmo critério do resto desta tela e do
+    // Mapa. Consulta agendada, ou em andamento, não conta como atendimento — dizer que
+    // conta transformaria a agenda cheia em "paciente atendido".
+    const animaisDoEscopo = empresaId
+      ? await prisma.animal.findMany({
+          where:  { empresaId, ativo: true },
+          select: {
+            id: true, nome: true, local: true,
+            localizacao: { select: { nome: true } },
+            evolucoes: {
+              where:   { ativo: true, status: 'FINALIZADA' },
+              orderBy: { dataFim: 'desc' },
+              take:    1,
+              select:  { dataFim: true, veterinario: { select: { fullName: true } } },
+            },
+          },
+        })
+      : [];
+
+    const fimDoDia = new Date(refDate); fimDoDia.setHours(23, 59, 59, 999);
+    const linhasSemAtendimento = animaisDoEscopo.map(a => {
+      const ult = a.evolucoes[0] ?? null;
+      const data = ult?.dataFim ?? null;
+      // `null` = nunca atendido. Ele entra em TODAS as faixas: um paciente que nunca
+      // foi atendido está, por definição, sem atendimento há mais de 7 dias — e é
+      // justamente o que ninguém quer perder de vista.
+      const dias = data ? Math.floor((fimDoDia.getTime() - new Date(data).getTime()) / 86400000) : null;
+      return {
+        animalId:    a.id,
+        animal:      a.nome,
+        localizacao: nomeLocalizacao(a),
+        veterinario: ult?.veterinario?.fullName ?? null,
+        data,
+        status:      null,
+        dias,
+      };
+    });
+    const semAtendimentoDesde = (minDias) =>
+      linhasSemAtendimento.filter(l => l.dias === null || l.dias >= minDias)
+        .sort((a, b) => (b.dias ?? Infinity) - (a.dias ?? Infinity));
+
+    const semAtendimentoDia  = semAtendimentoDesde(1); // nada finalizado NO dia de referência
+    const semAtendimento3    = semAtendimentoDesde(4); // mais de 3 dias
+    const semAtendimento7    = semAtendimentoDesde(8); // mais de 7 dias
+
     return res.json({
       dados: {
-        periodo: { agendadas, realizadas, canceladas, naoRealizadas, procedimentos, exames },
+        periodo: {
+          agendadas, realizadas, canceladas, naoRealizadas, procedimentos, exames,
+          semAtendimentoDia: semAtendimentoDia.length,
+          semAtendimento3:   semAtendimento3.length,
+          semAtendimento7:   semAtendimento7.length,
+        },
         atendimentosPorLocalidade,
+        // As linhas de cada card, na mesma resposta que traz os números.
+        detalhes: {
+          agendadas:         linhasAgendadas.map(linhaDeAgendamento),
+          realizadas:        linhasRealizadas.map(linhaDeAgendamento),
+          naoRealizadas:     linhasNaoRealizadas.map(linhaDeAgendamento),
+          canceladas:        linhasCanceladas.map(linhaDeAgendamento),
+          semAtendimentoDia,
+          semAtendimento3,
+          semAtendimento7,
+        },
       },
     });
   } catch (err) {
@@ -316,10 +424,132 @@ const cadastro = async (req, res) => {
       return [...mapa.entries()].map(([mes, total]) => ({ mes, total }));
     };
 
+    // ── INATIVAÇÕES E REATIVAÇÕES DO PERÍODO (a pedido, 2026-09-08) ──
+    //
+    // 🔴 A FONTE É O AUDITLOG, e não uma coluna do cadastro. `Animal.inativo_em`
+    // guarda só a ÚLTIMA vez, então um paciente inativado em julho e de novo em agosto
+    // sumiria de julho; e o cadastro do cliente não tem data de inativação nenhuma. O
+    // AuditLog é o ledger: guarda QUANDO, POR QUE e por QUEM, uma linha por ato — que
+    // é exatamente o que o relatório pede.
+    //
+    // ⚠️ Linha gravada ANTES de 2026-09-08 continua com a categoria antiga
+    // (`ALTERACAO`/`EXCLUSAO` no caso do cliente) — o AuditLog é imutável, e
+    // reescrevê-lo seria adulterar a auditoria. O recorte enxerga daqui em diante.
+    const auditoriaCadastro = await prisma.auditLog.findMany({
+      where: {
+        categoria: { in: ['INATIVACAO', 'ATIVACAO'] },
+        entidade:  { in: ['ANIMAL', 'PROPRIETARIO'] },
+        timestamp: { gte: inicio, lte: fim },
+        ...(empresaId ? { empresaId } : {}),
+      },
+      orderBy: { timestamp: 'desc' },
+      select: {
+        categoria: true, entidade: true, entidadeId: true, animalId: true,
+        motivo: true, detalhes: true, timestamp: true, userName: true,
+      },
+    });
+
+    // Nome/local/veterinário de cada alvo — o relatório pede as colunas do paciente,
+    // e o AuditLog só guarda o id (ele sobrevive à exclusão do registro, de propósito).
+    const idsAnimais = [...new Set(auditoriaCadastro
+      .filter(a => a.entidade === 'ANIMAL')
+      .map(a => a.entidadeId ?? a.animalId).filter(Boolean))];
+    const idsClientes = [...new Set(auditoriaCadastro
+      .filter(a => a.entidade === 'PROPRIETARIO').map(a => a.entidadeId).filter(Boolean))];
+
+    const [animaisAud, clientesAud] = await Promise.all([
+      idsAnimais.length ? prisma.animal.findMany({
+        where:  { id: { in: idsAnimais } },
+        select: {
+          id: true, nome: true, local: true,
+          localizacao: { select: { nome: true } },
+          evolucoes: {
+            where: { ativo: true, status: 'FINALIZADA' }, orderBy: { dataFim: 'desc' }, take: 1,
+            select: { veterinario: { select: { fullName: true } } },
+          },
+        },
+      }) : [],
+      idsClientes.length ? prisma.user.findMany({
+        where: { id: { in: idsClientes } }, select: { id: true, fullName: true },
+      }) : [],
+    ]);
+    const porIdAnimal  = new Map(animaisAud.map(a => [a.id, a]));
+    const porIdCliente = new Map(clientesAud.map(c => [c.id, c]));
+
+    const linhaDeAuditoria = (a) => {
+      const ehAnimal = a.entidade === 'ANIMAL';
+      const alvo = ehAnimal ? porIdAnimal.get(a.entidadeId ?? a.animalId) : porIdCliente.get(a.entidadeId);
+      return {
+        animalId:    ehAnimal ? (alvo?.id ?? null) : null,
+        // Registro já excluído do banco ainda aparece: o ATO aconteceu, e omiti-lo
+        // faria a contagem do card não bater com a lista.
+        nome:        alvo?.fullName ?? alvo?.nome ?? (ehAnimal ? 'Paciente removido' : 'Cliente removido'),
+        localizacao: ehAnimal ? nomeLocalizacao(alvo ?? {}) : null,
+        veterinario: ehAnimal ? (alvo?.evolucoes?.[0]?.veterinario?.fullName ?? null) : null,
+        data:        a.timestamp,
+        // O motivo é OBRIGATÓRIO em inativação (§33); `detalhes` cobre os atos que o
+        // sistema faz sozinho e não têm motivo digitado.
+        motivo:      a.motivo || a.detalhes || null,
+        por:         a.userName ?? null,
+      };
+    };
+
+    const doTipo = (categoria, entidade) =>
+      auditoriaCadastro.filter(a => a.categoria === categoria && a.entidade === entidade).map(linhaDeAuditoria);
+
+    const pacientesInativados = doTipo('INATIVACAO', 'ANIMAL');
+    const pacientesReativados = doTipo('ATIVACAO',   'ANIMAL');
+    const clientesInativados  = doTipo('INATIVACAO', 'PROPRIETARIO');
+    const clientesReativados  = doTipo('ATIVACAO',   'PROPRIETARIO');
+
+    // Linhas dos quatro cards que já existiam. "Ativos" é a base inteira do escopo —
+    // por isso a listagem é do MESMO `where` que conta, e não de uma consulta paralela.
+    const detalheAnimal = (a) => ({
+      animalId: a.id, nome: a.nome, localizacao: nomeLocalizacao(a),
+      veterinario: a.evolucoes?.[0]?.veterinario?.fullName ?? null,
+      data: a.dataCadastro ?? null, motivo: null, por: null,
+    });
+    const SELECT_ANIMAL_DETALHE = {
+      id: true, nome: true, local: true, dataCadastro: true,
+      localizacao: { select: { nome: true } },
+      evolucoes: {
+        where: { ativo: true, status: 'FINALIZADA' }, orderBy: { dataFim: 'desc' }, take: 1,
+        select: { veterinario: { select: { fullName: true } } },
+      },
+    };
+    const [linhasPacAtivos, linhasPacNovos, linhasCliAtivos, linhasCliNovos] = await Promise.all([
+      prisma.animal.findMany({ where: animalWhere, select: SELECT_ANIMAL_DETALHE, orderBy: { nome: 'asc' } }),
+      prisma.animal.findMany({ where: { ...animalWhere, dataCadastro: { gte: inicio, lte: fim } }, select: SELECT_ANIMAL_DETALHE, orderBy: { dataCadastro: 'desc' } }),
+      prisma.user.findMany({ where: clienteBase, select: { id: true, fullName: true, createdAt: true }, orderBy: { fullName: 'asc' } }),
+      prisma.user.findMany({ where: { ...clienteBase, createdAt: { gte: inicio, lte: fim } }, select: { id: true, fullName: true, createdAt: true }, orderBy: { createdAt: 'desc' } }),
+    ]);
+    const detalheCliente = (c) => ({
+      animalId: null, nome: c.fullName, localizacao: null, veterinario: null,
+      data: c.createdAt, motivo: null, por: null,
+    });
+
     return res.json({
       dados: {
-        pacientes: { ativos: pacientesAtivos, novos: pacientesNovos, novosPorMes: bucketMeses(animaisRecentes.map(r => ({ createdAt: r.dataCadastro }))) },
-        clientes:  { ativos: clientesAtivos,  novos: clientesNovos,  novosPorMes: bucketMeses(clientesRecentes) },
+        pacientes: {
+          ativos: pacientesAtivos, novos: pacientesNovos,
+          inativados: pacientesInativados.length, reativados: pacientesReativados.length,
+          novosPorMes: bucketMeses(animaisRecentes.map(r => ({ createdAt: r.dataCadastro }))),
+        },
+        clientes: {
+          ativos: clientesAtivos, novos: clientesNovos,
+          inativados: clientesInativados.length, reativados: clientesReativados.length,
+          novosPorMes: bucketMeses(clientesRecentes),
+        },
+        detalhes: {
+          pacientesAtivos:     linhasPacAtivos.map(detalheAnimal),
+          pacientesNovos:      linhasPacNovos.map(detalheAnimal),
+          pacientesInativados,
+          pacientesReativados,
+          clientesAtivos:      linhasCliAtivos.map(detalheCliente),
+          clientesNovos:       linhasCliNovos.map(detalheCliente),
+          clientesInativados,
+          clientesReativados,
+        },
       },
     });
   } catch (err) {
@@ -478,30 +708,47 @@ const orcamentos = async (req, res) => {
     const { empresaId } = await resolverEscopo(req);
     const { inicio, fim } = resolverPeriodo(req);
 
+    // ⚠️ `ativo: true` sai daqui: o CANCELADO é justamente um dos recortes pedidos, e
+    // o cancelamento (manual ou pelo cron de validade) é o que o relatório precisa
+    // mostrar com o MOTIVO. Filtrar por ativo escondia o card inteiro.
     const lista = await prisma.orcamento.findMany({
       where: {
-        ativo: true,
         ...(empresaId ? { empresaId } : {}),
         createdAt: { gte: inicio, lte: fim },
       },
+      orderBy: { createdAt: 'desc' },
       select: {
-        id: true, numero: true, status: true, createdAt: true,
+        id: true, numero: true, status: true, createdAt: true, ativo: true,
+        // O motivo do cancelamento é ACRESCENTADO à observação (mesmo padrão do
+        // `orcamentoCronService`) — é de lá que sai a coluna "Motivo" da lista.
+        observacao: true,
         proprietario: { select: { id: true, fullName: true } },
-        itens: { select: { valorTotal: true, statusItem: true, animal: { select: { nome: true } } } },
+        itens: {
+          select: {
+            id: true, valorTotal: true, statusItem: true, descricao: true, tipo: true,
+            animal: { select: { id: true, nome: true } },
+          },
+          orderBy: { id: 'asc' },
+        },
       },
     });
 
-    const contagem = { RASCUNHO: 0, APROVADO: 0, APROVADO_PARCIALMENTE: 0, REJEITADO: 0 };
-    let valorTotal = 0, valorAprovado = 0;
+    const contagem = { RASCUNHO: 0, APROVADO: 0, APROVADO_PARCIALMENTE: 0, REJEITADO: 0, CANCELADO: 0 };
+    let valorTotal = 0, valorAprovado = 0, valorRejeitado = 0;
     const porProp   = new Map(); // id → { nome, quantidade, total, aceito }
     const porAnimal = new Map(); // nome → { nome, total, aceito }
 
     for (const o of lista) {
       const total  = o.itens.reduce((s, i) => s + (i.valorTotal ?? 0), 0);
       const aceito = o.itens.filter(i => i.statusItem === 'ACEITO').reduce((s, i) => s + (i.valorTotal ?? 0), 0);
+      // O rejeitado é o que o cliente recusou de fato — item REJEITADO. Item PENDENTE
+      // não entra: ele ainda não foi decidido, e contá-lo como recusa inventaria uma
+      // decisão que ninguém tomou.
+      const recusado = o.itens.filter(i => i.statusItem === 'REJEITADO').reduce((s, i) => s + (i.valorTotal ?? 0), 0);
       contagem[o.status] = (contagem[o.status] ?? 0) + 1;
-      valorTotal    += total;
-      valorAprovado += aceito;
+      valorTotal     += total;
+      valorAprovado  += aceito;
+      valorRejeitado += recusado;
 
       const p = porProp.get(o.proprietario.id) ?? { nome: o.proprietario.fullName, quantidade: 0, total: 0, aceito: 0 };
       p.quantidade++; p.total += total; p.aceito += aceito;
@@ -516,6 +763,89 @@ const orcamentos = async (req, res) => {
       }
     }
 
+    // O motivo mora nas colunas novas, lidas por SQL cru (§11) — ver
+    // `lib/orcamentoRecusa.js`. Uma consulta para os orçamentos, outra para os itens.
+    //
+    // 🔴 O MOTIVO POR ITEM É O QUE FAZ O "APROVADO PARCIALMENTE" TER SENTIDO (a pedido,
+    // 2026-09-08): saber que 3 de 7 caíram, sem saber QUAIS e POR QUÊ, não permite
+    // renegociar nada. Por isso a linha do orçamento carrega a quebra por item.
+    const motivosOrc = await motivosDeOrcamentos(lista.map(o => o.id));
+    const motivosItem = await motivosDeItens(
+      lista.flatMap(o => o.itens.filter(i => i.statusItem === 'REJEITADO').map(i => i.id)),
+    );
+
+    /**
+     * Linha do detalhe, na forma que o pedido fixou: proprietário, animal, data do
+     * orçamento, valor e o MOTIVO.
+     *
+     * ⚠️ O motivo vem de três lugares distintos, nesta ordem, porque são três atos:
+     *   1. recusa do orçamento inteiro (`motivo_recusa`);
+     *   2. cancelamento — manual ou pelo cron de validade —, que o sistema ACRESCENTA
+     *      à `observacao` (mesmo padrão do `orcamentoCronService`);
+     *   3. nada disso: o orçamento não foi recusado, e a coluna sai vazia.
+     */
+    const linhaDeOrcamento = (o) => {
+      const total  = o.itens.reduce((s, i) => s + (i.valorTotal ?? 0), 0);
+      // Um orçamento pode ter itens de vários animais — a coluna diz quantos, em vez
+      // de escolher um e esconder os outros.
+      const nomes  = [...new Set(o.itens.map(i => i.animal?.nome).filter(Boolean))];
+      const motivoDoOrcamento = motivosOrc.get(o.id) || null;
+      // O item recusado SEM motivo próprio herda o do orçamento — é assim que a
+      // decisão é gravada (um motivo só quando a razão é uma só), e a tela precisa
+      // mostrar o mesmo que foi decidido, não uma lacuna.
+      const doItem = (i) => ({
+        id:        i.id,
+        descricao: i.descricao,
+        tipo:      i.tipo,
+        animal:    i.animal?.nome ?? null,
+        valor:     i.valorTotal ?? 0,
+        motivo:    i.statusItem === 'REJEITADO'
+          ? (motivosItem.get(i.id) || motivoDoOrcamento || null)
+          : null,
+      });
+      const aprovados = o.itens.filter(i => i.statusItem === 'ACEITO');
+      const recusados = o.itens.filter(i => i.statusItem === 'REJEITADO');
+      // PENDENTE existe enquanto ninguém decidiu (rascunho). Somá-lo a um dos dois
+      // lados afirmaria uma decisão que não houve.
+      const pendentes = o.itens.filter(i => i.statusItem === 'PENDENTE');
+
+      return {
+        id:           o.id,
+        numero:       o.numero,
+        proprietario: o.proprietario?.fullName ?? '—',
+        animal:       nomes.length === 0 ? null
+                    : nomes.length === 1 ? nomes[0]
+                    : `${nomes[0]} +${nomes.length - 1}`,
+        data:         o.createdAt,
+        valor:        total,
+        status:       o.status,
+        motivo:       motivoDoOrcamento || (o.status === 'CANCELADO' ? (o.observacao || null) : null),
+        // Quebra por item — o que o card "Aprovados parcial." precisa mostrar.
+        itens: {
+          total:      o.itens.length,
+          aprovados:  aprovados.length,
+          recusados:  recusados.length,
+          pendentes:  pendentes.length,
+          valorAprovado: aprovados.reduce((s, i) => s + (i.valorTotal ?? 0), 0),
+          valorRecusado: recusados.reduce((s, i) => s + (i.valorTotal ?? 0), 0),
+          lista: [...aprovados.map(doItem), ...recusados.map(doItem), ...pendentes.map(doItem)]
+            .map((it, idx) => ({
+              ...it,
+              // O status vem da posição na concatenação acima — mais barato que
+              // reprocessar, e a ordem é a que a tela mostra: aprovados primeiro.
+              statusItem: idx < aprovados.length ? 'ACEITO'
+                        : idx < aprovados.length + recusados.length ? 'REJEITADO'
+                        : 'PENDENTE',
+            })),
+        },
+      };
+    };
+
+    const linhas = lista.map(linhaDeOrcamento);
+    const doStatus = (st) => linhas.filter(l => l.status === st);
+    // "Valor" é o do card: nos de VALOR a lista é a mesma do recorte que o número soma.
+    const comValorRejeitado = linhas.filter(l => l.status === 'REJEITADO' || l.status === 'APROVADO_PARCIALMENTE');
+
     return res.json({ dados: {
       resumo: {
         total:       lista.length,
@@ -523,13 +853,25 @@ const orcamentos = async (req, res) => {
         parciais:    contagem.APROVADO_PARCIALMENTE,
         rejeitados:  contagem.REJEITADO,
         rascunhos:   contagem.RASCUNHO,
-        valorTotal, valorAprovado,
+        cancelados:  contagem.CANCELADO,
+        valorTotal, valorAprovado, valorRejeitado,
+      },
+      detalhes: {
+        valorTotal:     linhas,
+        valorAprovado:  linhas.filter(l => l.status === 'APROVADO' || l.status === 'APROVADO_PARCIALMENTE'),
+        valorRejeitado: comValorRejeitado,
+        aprovados:      doStatus('APROVADO'),
+        parciais:       doStatus('APROVADO_PARCIALMENTE'),
+        rejeitados:     doStatus('REJEITADO'),
+        cancelados:     doStatus('CANCELADO'),
+        rascunhos:      doStatus('RASCUNHO'),
       },
       porStatus: [
         { status: 'Aprovado',              quantidade: contagem.APROVADO },
         { status: 'Aprovado Parcialmente', quantidade: contagem.APROVADO_PARCIALMENTE },
         { status: 'Rejeitado',             quantidade: contagem.REJEITADO },
         { status: 'Rascunho',              quantidade: contagem.RASCUNHO },
+        { status: 'Cancelado',             quantidade: contagem.CANCELADO },
       ],
       porProprietario: [...porProp.values()].sort((a, b) => b.total - a.total),
       porAnimal:       [...porAnimal.values()].sort((a, b) => b.total - a.total),

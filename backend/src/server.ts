@@ -339,6 +339,7 @@ const dashboardRoutes          = require('./routes/dashboard');
 const mapaAtendimentoRoutes    = require('./routes/mapa-atendimento');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const relatoriosGerenciaisRoutes = require('./routes/relatoriosGerenciais');
+const recibosPrestadorRoutes     = require('./routes/recibosPrestador');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const monitoracaoRoutes        = require('./routes/monitoracao');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -404,6 +405,7 @@ app.use('/api/vacinas/estoque',       estoqueVacinaRoutes);
 app.use('/api/dashboard',             dashboardRoutes);
 app.use('/api/mapa-atendimento',      mapaAtendimentoRoutes);
 app.use('/api/relatorios',            relatoriosGerenciaisRoutes);
+app.use('/api/recibos-prestador',     recibosPrestadorRoutes);
 app.use('/api/monitoracao',           monitoracaoRoutes);
 app.use('/api/busca',                 buscaRoutes); // busca global do header
 app.use('/api/midia',                 midiaRoutes); // download AUTORIZADO de arquivo (substitui /uploads)
@@ -549,7 +551,13 @@ if (process.env.CRON_CLI !== '1') {
     logger.info('Servidor iniciado', { port: PORT, env: process.env.NODE_ENV ?? 'development' });
     // Agenda todas as tarefas com base em CronAgenda (banco), aplicando os padrões
     // quando não configurado. Reagendamento posterior é ao vivo (cronManager.reagendar).
-    iniciarJobs().catch((e: unknown) => logger.error(`[CronManager] Falha ao iniciar jobs: ${e instanceof Error ? e.message : e}`));
+    // Agenda primeiro; SÓ ENTÃO recupera o que foi perdido — a recuperação lê o estado
+    // (`ativo`) que `iniciarJobs` acabou de carregar do banco, e job com a agenda
+    // desligada pelo ADMIN não é ressuscitado aqui.
+    // Em segundo plano, e sem `await`: a subida do HTTP não espera por tarefa nenhuma.
+    iniciarJobs()
+      .then(() => recuperarJobsPerdidos())
+      .catch((e: unknown) => logger.error(`[CronManager] Falha ao iniciar jobs: ${e instanceof Error ? e.message : e}`));
   });
 }
 
@@ -558,9 +566,9 @@ if (process.env.CRON_CLI !== '1') {
 const { executarScraping } = require('./services/crmvScraperService');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { reportarCron } = require('./lib/cronAlert');
-const { ehManual } = require('./lib/cronTrace');
+const { origemAtual } = require('./lib/cronTrace');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { registrarJob, iniciarJobs } = require('./lib/cronManager');
+const { registrarJob, iniciarJobs, recuperarJobsPerdidos } = require('./lib/cronManager');
 
 // Executa uma tarefa agendada e reporta:
 // - LOG: TODA execução vira linha em `tb_cron_execucoes`, inclusive a que não teve
@@ -583,11 +591,12 @@ async function comAlerta(nome: string, fn: () => Promise<ResultadoCron>) {
   // decidiu "hoje não é dia" e saía sem deixar rastro. `?? {}` no lugar do `return`.
   const resultado = r ?? {};
   if (resultado.ok === false) logger.error(`[Cron:${nome}] ERRO: ${resultado.erro}`);
-  // `ehManual()` lê o contexto que `cronManager.executarAgora` abre — é como a origem
-  // chega ao log sem mudar a assinatura dos 12 jobs.
+  // `origemAtual()` lê o contexto que `cronManager` abre — é como a origem chega ao log
+  // sem mudar a assinatura dos 12 jobs. Três valores: AUTOMATICA (a agenda disparou),
+  // MANUAL (botão "Executar agora") e RECUPERACAO (disparo perdido, rodado na subida).
   await reportarCron(nome, {
     ...resultado,
-    origem:    ehManual() ? 'MANUAL' : 'AUTOMATICA',
+    origem:    origemAtual(),
     duracaoMs: Date.now() - inicio,
   });
 }
@@ -1126,10 +1135,58 @@ registrarJob('cancelar_doses_prescricao_perdidas', {
 // configurada não expira nada.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { cancelarOrcamentosVencidos } = require('./services/orcamentoCronService');
+// 🔴 RODA TODO DIA, E RECUPERA O DIA PERDIDO (2026-09-09).
+//
+// A varredura sempre foi por DATA — `createdAt < agora - validade` — e nunca por
+// "o que venceu desde a última execução". Isso já a torna idempotente e auto-corretiva:
+// o orçamento que venceu numa noite em que o backend estava fora do ar continua vencido
+// na noite seguinte e é cancelado então. O que faltava era o job VOLTAR A RODAR: o
+// `node-cron` não recupera disparo perdido, e em ambiente onde o processo raramente
+// está no ar às 23:50 ele simplesmente nunca acontecia (caso real: orçamento de 10/08
+// ainda aberto em 08/09, com o job correto e ZERO execuções no log).
+//
+// `recuperarSePerdido` fecha esse buraco na SUBIDA do backend: passadas 26h sem uma
+// execução BEM-SUCEDIDA, ele roda na hora, marcado como RECUPERACAO no histórico.
+// Cobre os dois casos do pedido — servidor indisponível no horário E execução que
+// terminou em erro (a que falhou não conta como feita).
+//
+// ⚠️ É seguro justamente porque o critério é a data do orçamento: rodar às 09:00 de
+// hoje o que devia ter rodado às 23:50 de ontem dá o MESMO resultado. Não ligar em job
+// que MANDA MENSAGEM — ver a nota em `cronManager.registrarJob`.
 registrarJob('cancelar_orcamentos_vencidos', {
   nome: 'Cancelamento de orçamentos vencidos',
   exprPadrao: '50 23 * * *', // diariamente às 23:50
+  recuperarSePerdido: true,
   fn: () => comAlerta('Cancelamento de orçamentos vencidos', cancelarOrcamentosVencidos),
+});
+
+// ===================== CRON — AVISOS DE ORÇAMENTO EM ABERTO =====================
+//
+// Dois avisos por WhatsApp ao(s) GESTOR(es), pedidos em 2026-09-08. O orçamento parado
+// não avisa sozinho: sem eles, ele só reaparece no dia em que o sistema o cancela —
+// quando já não há o que negociar.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { avisarOrcamentosEmAberto, avisarOrcamentosAExpirar } = require('./services/orcamentoAvisoService');
+
+// 🔴 SEMANAL EM DIA FIXO, não "a cada 7 dias" contados do último envio.
+//
+// `*/7` no dia do mês NÃO é de 7 em 7 dias: ele reinicia todo mês (dias 1, 8, 15, 22,
+// 29, e então 1 de novo — dois dias depois). Segunda-feira é a leitura honesta de
+// "a cada 7 dias" em cron, e ainda cai no começo da semana comercial, que é quando o
+// gestor tem o que fazer com a informação.
+registrarJob('avisar_orcamentos_em_aberto', {
+  nome: 'Aviso semanal de orçamentos em aberto',
+  exprPadrao: '0 9 * * 1', // segundas-feiras às 09:00
+  fn: () => comAlerta('Aviso semanal de orçamentos em aberto', avisarOrcamentosEmAberto),
+});
+
+// DIÁRIO, cedo: o alerta da véspera só serve se chegar com o dia inteiro pela frente.
+// ⚠️ Roda ANTES do cancelamento (23:50), de propósito — no mesmo dia em que o aviso
+// sai, o orçamento ainda está vivo; quem decidir hoje o mantém.
+registrarJob('avisar_orcamentos_a_expirar', {
+  nome: 'Aviso de véspera do cancelamento de orçamentos',
+  exprPadrao: '0 8 * * *', // diariamente às 08:00
+  fn: () => comAlerta('Aviso de véspera do cancelamento de orçamentos', avisarOrcamentosAExpirar),
 });
 
 // ===================== CRON — HIGIENE DOS DESAFIOS DE 2FA =====================

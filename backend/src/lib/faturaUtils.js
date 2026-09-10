@@ -168,13 +168,21 @@ async function adicionarOuSomarFaturaItem(tx, opts) {
 }
 
 /**
- * Lança um exame clínico na fatura ABERTA do proprietário com VALOR ZERADO, de forma
- * IDEMPOTENTE: se já houver um FaturaItem vinculado a este exame (exameClinicoId), não
- * duplica. Usado ao finalizar a evolução (exames solicitados) e ao concluir o exame.
+ * Lança um exame clínico na fatura ABERTA do proprietário, de forma IDEMPOTENTE: se já
+ * houver um FaturaItem vinculado a este exame (exameClinicoId), não duplica. Usado ao
+ * finalizar a evolução (exames solicitados) e ao concluir o exame.
  * Deve ser chamado dentro de uma transaction (tx).
  *
+ * 🔴 VALOR (2026-09-09): usa `exame.valorCobrado` quando ele existe — o preço do exame
+ * de imagem, resolvido e congelado no PEDIDO (`lib/exameImagemValor.js`) a partir do
+ * vínculo do prestador ou do valor padrão da empresa.
+ * ⚠️ Sem ele a linha nasce ZERADA, como sempre nasceu: é o que vale para todo exame
+ * laboratorial, para base sem preço cadastrado e para todo exame anterior a esta leva.
+ * `null` aqui é "não sei o preço", nunca "é de graça" — por isso o `??` e não `||`
+ * (com `||`, um exame legitimamente gratuito viraria... também 0, mas por acidente).
+ *
  * @param {object} tx
- * @param {object} exame               - { id, animalId, veterinarioId, tipo, descricao, numero }
+ * @param {object} exame               - { id, animalId, veterinarioId, tipo, descricao, numero, valorCobrado? }
  * @param {number|null} proprietarioUserId - Animal.userId (dono do animal)
  * @param {number|null} empresaId          - empresa do contexto (`req.empresaId`) — Fatura é POR EMPRESA
  * @returns {Promise<boolean>} true se lançou; false se já estava faturado ou sem proprietário
@@ -184,6 +192,18 @@ async function lancarExameNaFatura(tx, exame, proprietarioUserId, empresaId = nu
   const jaFaturado = await tx.faturaItem.findFirst({ where: { exameClinicoId: exame.id } });
   if (jaFaturado) return false;
 
+  // Quem chama a partir de um exame LIDO do banco (finalização da evolução, conclusão
+  // do exame) não tem `valorCobrado` no objeto: a coluna é nova e o client pode não
+  // conhecê-la. Buscar aqui é o que faz os quatro gatilhos cobrarem o mesmo valor —
+  // require LOCAL para não criar ciclo de import entre as duas libs.
+  let valorCobrado = exame.valorCobrado ?? null;
+  if (valorCobrado == null) {
+    try {
+      const { lerPrestadorEValor } = require('./exameImagemValor');
+      valorCobrado = (await lerPrestadorEValor(tx, exame.id)).get(exame.id)?.valorCobrado ?? null;
+    } catch { /* base sem as colunas — segue com a linha zerada, como antes */ }
+  }
+
   const exNum     = `EX-${String(exame.numero).padStart(4, '0')}`;
   const descricao = `[${exNum}] ${exame.tipo}: ${exame.descricao}`;
   const fatura    = await getOrCreateFatura(tx, proprietarioUserId, empresaId);
@@ -192,7 +212,7 @@ async function lancarExameNaFatura(tx, exame, proprietarioUserId, empresaId = nu
     animalId:       exame.animalId,
     tipo:           'EXAME',
     descricao,
-    valor:          0,
+    valor:          valorCobrado ?? 0,
     quantidade:     1,
     veterinarioId:  exame.veterinarioId,
     exameClinicoId: exame.id,
@@ -475,6 +495,13 @@ function faturaEditavel(status) {
  */
 function statusAoReabrir(statusAtual, statusPedido) {
   if (statusPedido !== 'ABERTA') return statusPedido;
+  // ⚠️ REABERTA também vira REABERTA: uma fatura que JÁ passou por um fechamento não
+  // volta a ser "aberta" nunca mais. Sem esta linha, reabrir duas vezes a rebaixava
+  // para ABERTA e ela voltava a ser a fatura CORRENTE do mês — apagando, em silêncio,
+  // o fato de o cliente já ter recebido aquele documento uma vez.
+  if (statusAtual === 'REABERTA') return 'REABERTA';
+  // CANCELADA fica de fora de propósito: desfazer um cancelamento é um UNDO (a fatura
+  // nunca chegou a fechar), não uma reabertura.
   return STATUS_FATURA_FECHADOS.includes(statusAtual) ? 'REABERTA' : statusPedido;
 }
 

@@ -121,6 +121,10 @@ const PERMISSOES_PADRAO = {
     'nutricao.dietas.exportar':     'FULL',
     'nutricao.dietas.ativar':       'FULL',
 
+    'nutricao.catalogo.criar':   'FULL',
+    'nutricao.catalogo.editar':  'FULL',
+    'nutricao.catalogo.deletar': 'FULL',
+
     'nutricao.relatorios.ler':      'FULL',
     'nutricao.relatorios.criar':    'FULL',
     'nutricao.relatorios.imprimir': 'FULL',
@@ -134,6 +138,8 @@ const PERMISSOES_PADRAO = {
     'financeiro.faturas.exportar': 'FULL',
     'financeiro.faturas.fechar':   'FULL',
     'financeiro.faturas.lancar':   'FULL',
+    'financeiro.recibos.ler':      'FULL',
+    'financeiro.recibos.imprimir': 'FULL',
 
     'equipe.membros.ler':    'FULL',
     'equipe.membros.editar': 'FULL',
@@ -309,6 +315,10 @@ const PERMISSOES_PADRAO = {
     'nutricao.dietas.ativar':       'PROPRIO',
 
     // Nutrição — Relatórios
+    'nutricao.catalogo.criar':   'PROPRIO',
+    'nutricao.catalogo.editar':  'PROPRIO',
+    'nutricao.catalogo.deletar': 'PROPRIO',
+
     'nutricao.relatorios.ler':      'EQUIPE',
     'nutricao.relatorios.criar':    'PROPRIO',
     'nutricao.relatorios.imprimir': 'EQUIPE',
@@ -323,6 +333,8 @@ const PERMISSOES_PADRAO = {
     'financeiro.faturas.exportar': 'PROPRIO',
     'financeiro.faturas.fechar':   'PROPRIO',
     'financeiro.faturas.lancar':   'PROPRIO',
+    'financeiro.recibos.ler':      'NENHUM',
+    'financeiro.recibos.imprimir': 'NENHUM',
 
     // Equipe (gestão de membros — só gestor pode)
     'equipe.membros.ler':    'LEITURA',
@@ -422,6 +434,10 @@ const PERMISSOES_PADRAO = {
     'nutricao.dietas.compartilhar': 'NENHUM',
     'nutricao.dietas.exportar':     'NENHUM',
     'nutricao.dietas.ativar':       'NENHUM',
+
+    'nutricao.catalogo.criar':   'NENHUM',
+    'nutricao.catalogo.editar':  'NENHUM',
+    'nutricao.catalogo.deletar': 'NENHUM',
 
     'nutricao.relatorios.ler':      'NENHUM',
     'nutricao.relatorios.criar':    'NENHUM',
@@ -537,6 +553,10 @@ const PERMISSOES_PADRAO = {
     'nutricao.dietas.exportar':     'NENHUM',
     'nutricao.dietas.ativar':       'NENHUM',
 
+    'nutricao.catalogo.criar':   'NENHUM',
+    'nutricao.catalogo.editar':  'NENHUM',
+    'nutricao.catalogo.deletar': 'NENHUM',
+
     'nutricao.relatorios.ler':      'NENHUM',
     'nutricao.relatorios.criar':    'NENHUM',
     'nutricao.relatorios.imprimir': 'NENHUM',
@@ -550,6 +570,8 @@ const PERMISSOES_PADRAO = {
     'financeiro.faturas.exportar': 'NENHUM',
     'financeiro.faturas.fechar':   'NENHUM',
     'financeiro.faturas.lancar':   'NENHUM',
+    'financeiro.recibos.ler':      'NENHUM',
+    'financeiro.recibos.imprimir': 'NENHUM',
 
     'equipe.membros.ler':    'NENHUM',
     'equipe.membros.editar': 'NENHUM',
@@ -715,6 +737,10 @@ const PERMISSOES_PADRAO = {
     'nutricao.dietas.ativar':       'NENHUM',
 
     // Nutrição — Relatórios
+    'nutricao.catalogo.criar':   'NENHUM',
+    'nutricao.catalogo.editar':  'NENHUM',
+    'nutricao.catalogo.deletar': 'NENHUM',
+
     'nutricao.relatorios.ler':      'EQUIPE',
     'nutricao.relatorios.criar':    'NENHUM',
     'nutricao.relatorios.imprimir': 'NENHUM',
@@ -729,6 +755,8 @@ const PERMISSOES_PADRAO = {
     'financeiro.faturas.exportar': 'NENHUM',
     'financeiro.faturas.fechar':   'NENHUM',
     'financeiro.faturas.lancar':   'NENHUM',
+    'financeiro.recibos.ler':      'NENHUM',
+    'financeiro.recibos.imprimir': 'NENHUM',
 
     // Equipe
     'equipe.membros.ler':    'LEITURA',
@@ -888,6 +916,10 @@ const PERMISSOES_PADRAO = {
     'nutricao.dietas.exportar':     'NENHUM',
     'nutricao.dietas.ativar':       'NENHUM',
 
+    'nutricao.catalogo.criar':   'NENHUM',
+    'nutricao.catalogo.editar':  'NENHUM',
+    'nutricao.catalogo.deletar': 'NENHUM',
+
     'nutricao.relatorios.ler':      'NENHUM',
     'nutricao.relatorios.criar':    'NENHUM',
     'nutricao.relatorios.imprimir': 'NENHUM',
@@ -901,6 +933,8 @@ const PERMISSOES_PADRAO = {
     'financeiro.faturas.exportar': 'EQUIPE',
     'financeiro.faturas.fechar':   'PROPRIO',
     'financeiro.faturas.lancar':   'PROPRIO',
+    'financeiro.recibos.ler':      'NENHUM',
+    'financeiro.recibos.imprimir': 'NENHUM',
 
     'equipe.membros.ler':    'LEITURA',
     'equipe.membros.editar': 'NENHUM',
@@ -1055,6 +1089,10 @@ const PERMISSOES_PADRAO = {
     'nutricao.dietas.exportar':     'NENHUM',
     'nutricao.dietas.ativar':       'NENHUM',
 
+    'nutricao.catalogo.criar':   'NENHUM',
+    'nutricao.catalogo.editar':  'NENHUM',
+    'nutricao.catalogo.deletar': 'NENHUM',
+
     'nutricao.relatorios.ler':      'NENHUM',
     'nutricao.relatorios.criar':    'NENHUM',
     'nutricao.relatorios.imprimir': 'NENHUM',
@@ -1068,6 +1106,8 @@ const PERMISSOES_PADRAO = {
     'financeiro.faturas.exportar': 'EQUIPE',
     'financeiro.faturas.fechar':   'EQUIPE',
     'financeiro.faturas.lancar':   'EQUIPE',
+    'financeiro.recibos.ler':      'EQUIPE',
+    'financeiro.recibos.imprimir': 'EQUIPE',
 
     'equipe.membros.ler':    'LEITURA',
     'equipe.membros.editar': 'NENHUM',
@@ -1219,6 +1259,10 @@ const PERMISSOES_PADRAO = {
     'nutricao.dietas.exportar':     'NENHUM',
     'nutricao.dietas.ativar':       'NENHUM',
 
+    'nutricao.catalogo.criar':   'NENHUM',
+    'nutricao.catalogo.editar':  'NENHUM',
+    'nutricao.catalogo.deletar': 'NENHUM',
+
     'nutricao.relatorios.ler':      'EQUIPE',
     'nutricao.relatorios.criar':    'NENHUM',
     'nutricao.relatorios.imprimir': 'EQUIPE',
@@ -1232,6 +1276,8 @@ const PERMISSOES_PADRAO = {
     'financeiro.faturas.exportar': 'NENHUM',
     'financeiro.faturas.fechar':   'NENHUM',
     'financeiro.faturas.lancar':   'NENHUM',
+    'financeiro.recibos.ler':      'NENHUM',
+    'financeiro.recibos.imprimir': 'NENHUM',
 
     'equipe.membros.ler':    'LEITURA',
     'equipe.membros.editar': 'NENHUM',
@@ -1275,6 +1321,19 @@ const PERMISSOES_PADRAO = {
     'procedimentos.catalogo.imprimir': 'NENHUM',
   },
 };
+
+// 🔴 PRESTADOR NASCE COM A MESMA MATRIZ DE FORNECEDOR — por CÓPIA, não por transcrição.
+//
+// Os dois cargos são o mesmo profissional EXTERNO (ver `lib/cargosPrestador.js`); o que
+// os separa é o CADASTRO a que o login se amarra (tb_fornecedores × tb_prestadores),
+// nunca o que eles podem fazer no sistema. Duplicar as ~130 linhas à mão daria duas
+// listas que divergiriam no primeiro slug novo — e a divergência apareceria como
+// "o mesmo prestador enxerga coisas diferentes conforme o cargo que o gestor escolheu",
+// que é o tipo de defeito que ninguém relaciona à causa.
+//
+// ⚠️ Isto é só o PADRÃO de partida. Depois de semeada, cada equipe edita a Matriz de
+// Perfis do PRESTADOR de forma independente da do FORNECEDOR — como deve ser.
+PERMISSOES_PADRAO.PRESTADOR = { ...PERMISSOES_PADRAO.FORNECEDOR };
 
 // Definição dos módulos do sistema — sincronizada com ModuloSistema na DB.
 // Cada entrada vira um registro em tb_modulos_sistema.
@@ -1415,6 +1474,17 @@ const MODULOS_SISTEMA = [
   { slug: 'nutricao.dietas.exportar',     modulo: 'nutricao', submodulo: 'dietas', acao: 'exportar',     label: 'Dietas — Exportar',      ordemExib: 53.4 },
   { slug: 'nutricao.dietas.ativar',       modulo: 'nutricao', submodulo: 'dietas', acao: 'ativar',       label: 'Dietas — Ativar/Inativar', ordemExib: 53.6 },
 
+  // ── Nutrição — Catálogo (alimento, nutriente, composição) ───────────────────
+  // Só ESCRITA: a LEITURA do catálogo não é gateada de propósito — ele alimenta os
+  // dropdowns de Dieta, Relatório Nutricional e Análise NRC, e um slug de leitura
+  // esvaziaria essas telas para quem não o tivesse.
+  // ⚠️ O que estes três slugs liberam é o cadastro DA CLÍNICA. Linha do sistema
+  // (empresa_id nulo) continua sendo só do ADMIN da plataforma, decidido no backend
+  // (`lib/catalogoNutricional.js#bloqueioDeEscrita`) — nível de matriz não a alcança.
+  { slug: 'nutricao.catalogo.criar',   modulo: 'nutricao', submodulo: 'catalogo', acao: 'criar',   label: 'Catálogo — Criar',   ordemExib: 55 },
+  { slug: 'nutricao.catalogo.editar',  modulo: 'nutricao', submodulo: 'catalogo', acao: 'editar',  label: 'Catálogo — Editar',  ordemExib: 56 },
+  { slug: 'nutricao.catalogo.deletar', modulo: 'nutricao', submodulo: 'catalogo', acao: 'deletar', label: 'Catálogo — Excluir', ordemExib: 57 },
+
   // ── Nutrição — Relatórios ───────────────────────────────────────────────────
   { slug: 'nutricao.relatorios.ler',      modulo: 'nutricao', submodulo: 'relatorios', acao: 'ler',      label: 'Relatórios — Visualizar', ordemExib: 60 },
   { slug: 'nutricao.relatorios.criar',    modulo: 'nutricao', submodulo: 'relatorios', acao: 'criar',    label: 'Relatórios — Gerar',      ordemExib: 61 },
@@ -1430,6 +1500,13 @@ const MODULOS_SISTEMA = [
   { slug: 'financeiro.faturas.exportar', modulo: 'financeiro', submodulo: 'faturas', acao: 'exportar', label: 'Faturas — Exportar',         ordemExib: 73.4 },
   { slug: 'financeiro.faturas.fechar',   modulo: 'financeiro', submodulo: 'faturas', acao: 'fechar',   label: 'Faturas — Fechar Fatura',    ordemExib: 73.6 },
   { slug: 'financeiro.faturas.lancar',   modulo: 'financeiro', submodulo: 'faturas', acao: 'lancar',   label: 'Faturas — Lançar Cobrança',  ordemExib: 73.8 },
+
+  // Recibo de pagamento ao PRESTADOR (2026-09-08) — submódulo PRÓPRIO, não uma ação
+  // de `faturas`: a fatura é o que a clínica COBRA do cliente, o recibo é o que ela
+  // PAGA a terceiros. Quem emite fatura não deve, por isso, ver a remuneração de
+  // quem presta serviço — são decisões separadas na prática.
+  { slug: 'financeiro.recibos.ler',      modulo: 'financeiro', submodulo: 'recibos', acao: 'ler',      label: 'Recibos de Prestador — Visualizar', ordemExib: 74 },
+  { slug: 'financeiro.recibos.imprimir', modulo: 'financeiro', submodulo: 'recibos', acao: 'imprimir', label: 'Recibos de Prestador — Imprimir',   ordemExib: 74.2 },
 
   // ── Equipe ──────────────────────────────────────────────────────────────────
   { slug: 'equipe.membros.ler',    modulo: 'equipe', submodulo: 'membros', acao: 'ler',    label: 'Equipe — Visualizar', ordemExib: 80 },

@@ -395,6 +395,18 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
   const profissionalNome = ex?.veterinario?.fullName ?? user?.fullName ?? '';
   const abrirSeletorRef = useRef<(() => void) | null>(null);
   const [divergencia, setDivergencia] = useState<string | null>(null);
+  /**
+   * O QUE O LOTE ANALISADO ERA — nomes dos arquivos e o nome do exame que a IA leu
+   * DENTRO deles.
+   *
+   * 🔴 Existe porque o modal de divergência mostrava `descricao`, e `descricao` quase
+   * sempre é a descrição DO PEDIDO: a regra "o que já está escrito não é sobrescrito"
+   * (logo abaixo) a preserva, então as duas linhas do modal saíam com o MESMO texto
+   * ("Pedido: Laboratorial · Hemograma" / "Arquivo anexado: Hemograma"). Comparar uma
+   * coisa com ela mesma não ajuda a decidir se o laudo anexado é o errado — que é a
+   * única pergunta daquela tela.
+   */
+  const [loteAnalisado, setLoteAnalisado] = useState<{ nomes: string[]; nomeLido: string | null } | null>(null);
   // Divergência que o usuário JÁ decidiu prosseguir — vira faixa âmbar fixa no
   // formulário. Sem isto, quem confirma no susto perde a informação de vista e salva
   // o laudo divergente sem lembrar do aviso.
@@ -444,6 +456,13 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
       setProgresso(100);
       const d = res.data?.dados;
       if (d) {
+        // Retrato do lote ANALISADO, para o modal de divergência poder dizer o que
+        // chegou. `files` é o lote desta análise (não `arquivos`, que no modo ADICIONAR
+        // já traz os anteriores e faria o modal citar arquivo que não foi lido agora).
+        setLoteAnalisado({
+          nomes:    files.map(f => f.name),
+          nomeLido: String(d.descricao ?? '').trim() || null,
+        });
         if (Array.isArray(d.naoTranscritos) && d.naoTranscritos.length > 0) setNaoTranscritos(d.naoTranscritos);
         // CONFERÊNCIA PEDIDO × ARQUIVO — só quando existe pedido (`ex`): no fluxo
         // avulso não há o que conferir, o exame É o que o arquivo diz. Roda sobre o
@@ -592,6 +611,7 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
    *  revisado à mão. */
   const descartarLoteDivergente = () => {
     setArquivos([]);
+    setLoteAnalisado(null);
     setDivergencia(null);
     setDivergenciaAceita(null);
     setNaoTranscritos([]);
@@ -902,8 +922,20 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
                 <div className="text-xs bg-gray-50 border border-gray-100 rounded-xl px-3 py-2.5 space-y-1">
                   <p><span className="text-gray-400">Pedido:</span>{' '}
                     <span className="font-semibold text-gray-800">{ex.tipo} · {ex.descricao}</span></p>
+                  {/* O NOME DO ARQUIVO, que é o que a linha promete. Ele é o único
+                      dado que a pessoa reconhece de imediato ao decidir "anexei o laudo
+                      errado?" — o nome do exame lido pela IA vai na linha seguinte, e
+                      só quando ela achou algum. */}
                   <p><span className="text-gray-400">Arquivo anexado:</span>{' '}
-                    <span className="font-semibold text-gray-800">{descricao || 'não identificado'}</span></p>
+                    <span className="font-semibold text-gray-800">
+                      {loteAnalisado?.nomes.length
+                        ? loteAnalisado.nomes.join(', ')
+                        : (arquivos.length ? arquivos.map(a => a.name).join(', ') : 'nenhum arquivo')}
+                    </span></p>
+                  {loteAnalisado?.nomeLido && (
+                    <p><span className="text-gray-400">Identificado no arquivo:</span>{' '}
+                      <span className="font-semibold text-gray-800">{loteAnalisado.nomeLido}</span></p>
+                  )}
                 </div>
               )}
               <p className="text-xs text-gray-500">

@@ -46,17 +46,6 @@ const ROTAS_ADMIN = [
 const ehRotaAdmin = (pathname: string) => ROTAS_ADMIN.some(r => pathname.startsWith(r));
 
 // ─── Detectar seção ativa ─────────────────────────────────────────────────────
-/**
- * 🔴 MAPA DE ATENDIMENTO ESCONDIDO DO MENU (a pedido, 2026-09-05) — desligado, NÃO
- * removido. A rota `/mapa-atendimento`, a tela (`pages/MapaAtendimento.tsx`), o
- * controller e a permissão `dashboard.geral.ler` continuam montados e funcionando:
- * chega-se a ela pela URL, como ao editor de modelos de documento (§12, 30/08).
- * ⚠️ Para voltar a exibir, basta `true` aqui — nenhuma outra linha precisa mudar.
- * ⚠️ Não apagar o item nem o gate `podeVerDashboard` enquanto isto for `false`: é o
- * que mantém a volta em uma palavra em vez de uma reconstrução.
- */
-const MOSTRAR_MAPA_ATENDIMENTO = false;
-
 type ActiveSection = 'geral' | 'agenda' | 'clinica' | 'nutricional' | 'admin' | 'estoque' | 'exames' | 'enfermagem' | 'cadastro' | 'mapa';
 
 function detectSection(pathname: string): ActiveSection {
@@ -124,6 +113,7 @@ export default function Sidebar() {
   const podeVerDieta           = podeExecutar('nutricao.dietas.ler');
   const podeVerRelatorio       = podeExecutar('nutricao.relatorios.ler');
   const podeVerFaturas         = podeExecutar('financeiro.faturas.ler');
+  const podeVerRecibos         = podeExecutar('financeiro.recibos.ler');
   const podeVerFarmacia        = podeExecutar('farmacia.estoque.ler');
   const podeVerEstoqueVacina   = isGestor || podeExecutar('vacina.estoque.ler');
   // Medicamentos/Procedimentos (catálogo GLOBAL): os links abaixo são ADMIN-only
@@ -332,8 +322,17 @@ export default function Sidebar() {
             </div>
           )}
 
-          {/* ── 2. Mapa de Atendimento ─── ESCONDIDO (ver MOSTRAR_MAPA_ATENDIMENTO) ─ */}
-          {MOSTRAR_MAPA_ATENDIMENTO && podeVerDashboard && (
+          {/* ── Mapa de Atendimento ─────────────────────────────────────────────
+              De VOLTA ao menu (a pedido, 2026-09-09). Ele foi ESCONDIDO em 2026-09-05
+              por um flag (`MOSTRAR_MAPA_ATENDIMENTO = false`), nunca removido: rota,
+              tela, controller e permissão seguiram montados o tempo todo, e só o item
+              do menu ficou de fora. Foi essa escolha que fez a volta custar uma linha
+              em vez de uma reconstrução — o flag saiu junto, porque um `if (true)` não
+              configura nada.
+              ⚠️ Para esconder de novo, esconda o ITEM (e diga por quê aqui); não apague
+              a rota nem a tela. ⚠️ Sem número na seção de propósito: renumerar as nove
+              seguintes só para encaixar um item seria ruído. */}
+          {podeVerDashboard && (
             <div className="space-y-0.5">
               {navLink('/mapa-atendimento', <LayoutDashboard size={20} />, 'Mapa de Atendimento', isMapaActive)}
             </div>
@@ -524,11 +523,11 @@ export default function Sidebar() {
                   )}
 
                   {/* ── 7. Financeiro (Orçamento + Faturamento) ───────────── */}
-                  {(podeVerFaturas || podeVerOrcamento) && (
+                  {(podeVerFaturas || podeVerOrcamento || podeVerRecibos) && (
                     <div>
                       <button onClick={() => toggleGroup('financeiro')}
                         className={`flex items-center justify-between w-full px-5 py-3 text-sm font-semibold rounded-3xl transition-colors ${
-                          p.startsWith('/faturamento') || p.startsWith('/orcamento')
+                          p.startsWith('/faturamento') || p.startsWith('/orcamento') || p.startsWith('/recibos-prestador')
                             ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
                         }`}>
                         <span className="flex items-center gap-3"><DollarSign size={20} /> Financeiro</span>
@@ -540,6 +539,11 @@ export default function Sidebar() {
                               os itens OUTROS caem na fatura. */}
                           {podeVerOrcamento && subLink('/orcamento',   <Receipt    size={14} />, 'Orçamento',   p.startsWith('/orcamento'))}
                           {podeVerFaturas   && subLink('/faturamento', <DollarSign size={14} />, 'Faturamento', p.startsWith('/faturamento'))}
+                          {/* Recibo de prestador: o outro lado do balcão da fatura —
+                              o que a clínica PAGA a quem executou o procedimento.
+                              Fica depois do Faturamento porque é dele que a execução
+                              nasce (procedimento só entra nos dois depois de executado). */}
+                          {podeVerRecibos   && subLink('/recibos-prestador', <Receipt size={14} />, 'Recibos de Prestador', p.startsWith('/recibos-prestador'))}
                         </div>
                       )}
                     </div>

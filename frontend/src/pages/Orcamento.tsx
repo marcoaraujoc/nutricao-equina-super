@@ -1930,6 +1930,11 @@ function DetalheOrcamentoModal({ orc, podeAprovar, onClose, onSalvo }: {
   const [salvando, setSalvando] = useState(false);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
+  // Motivo da recusa (2026-09-08): um GERAL, que vale para a recusa total e serve de
+  // padrão aos itens, e um POR ITEM para a recusa parcial — onde cada linha pode ter
+  // caído por uma razão diferente.
+  const [motivoGeral, setMotivoGeral] = useState('');
+  const [motivos, setMotivos] = useState<Record<number, string>>({});
 
   const toggle = (id: number) => setAceitos(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
@@ -1960,10 +1965,38 @@ function DetalheOrcamentoModal({ orc, podeAprovar, onClose, onSalvo }: {
     const idsAceitos = orc.itens
       .filter(i => modo === 'ACEITAR' ? aceitos.has(i.id) : !aceitos.has(i.id))
       .map(i => i.id);
+    const recusados = orc.itens.filter(i => !idsAceitos.includes(i.id));
+
+    // 🔴 O QUE NÃO FOI APROVADO DIZ POR QUÊ (a pedido, 2026-09-08). Sem o motivo, a
+    // clínica sabe que o item caiu e não sabe se foi preço, prazo ou o cliente ter
+    // resolvido tratar em outro lugar — que é o que permitiria renegociar.
+    // ⚠️ Recusa TOTAL pede um motivo só; PARCIAL pede por item — sete justificativas
+    // idênticas transformariam a regra em obstáculo.
+    if (recusados.length > 0) {
+      const geral = motivoGeral.trim();
+      const faltando = recusados.length === orc.itens.length
+        ? geral.length < 3
+        : recusados.some(i => (motivos[i.id] ?? geral).trim().length < 3);
+      if (faltando) {
+        setErroInline(recusados.length === orc.itens.length
+          ? 'Informe o motivo da recusa do orçamento.'
+          : 'Informe o motivo de cada item não aprovado.');
+        return;
+      }
+    }
 
     setSalvando(true);
     try {
-      const body = { decisoes: idsAceitos.map(itemId => ({ itemId, statusItem: 'ACEITO' })) };
+      const body = {
+        motivoRecusa: motivoGeral.trim() || undefined,
+        decisoes: orc.itens.map(i => (
+          idsAceitos.includes(i.id)
+            ? { itemId: i.id, statusItem: 'ACEITO' }
+            // O backend rejeita tudo que não vier como ACEITO; mandar o item recusado
+            // explicitamente é o que leva o motivo DELE junto.
+            : { itemId: i.id, statusItem: 'REJEITADO', motivoRecusa: (motivos[i.id] ?? motivoGeral).trim() }
+        )),
+      };
       await api.post(`/orcamentos/${orc.id}/decidir`, body);
       toast.success('Decisão registrada');
       onSalvo();
@@ -2018,7 +2051,8 @@ function DetalheOrcamentoModal({ orc, podeAprovar, onClose, onSalvo }: {
             // confundir com o que apenas não foi marcado (a decisão já foi tomada).
             const rejeitado = i.statusItem === 'REJEITADO';
             return (
-              <button key={i.id} disabled={!podeAprovar} onClick={() => toggle(i.id)}
+              <div key={i.id}>
+              <button disabled={!podeAprovar} onClick={() => toggle(i.id)}
                 className={`w-full flex items-center gap-3 px-5 py-3 text-left transition-colors ${
                   rejeitado ? 'bg-red-50/60' : aceito ? 'bg-emerald-50/60' : 'hover:bg-gray-50'
                 } ${!podeAprovar ? 'cursor-default' : ''}`}>
@@ -2047,6 +2081,27 @@ function DetalheOrcamentoModal({ orc, podeAprovar, onClose, onSalvo }: {
                   {brl(i.valorTotal)}
                 </span>
               </button>
+
+              {/* MOTIVO da recusa deste item (2026-09-08). Aparece só no modo de
+                  decisão e só no item NÃO marcado — que é o que vai ser recusado.
+                  ⚠️ FORA do <button> da linha: input dentro de botão é HTML inválido e
+                  cada tecla digitada alternaria a seleção do item.
+                  ⚠️ Em branco, vale o motivo GERAL do rodapé — é o que evita repetir a
+                  mesma frase em sete linhas quando a razão é uma só. */}
+              {podeAprovar && !aceito && (
+                <div className="px-5 pb-3 -mt-1">
+                  <input
+                    value={motivos[i.id] ?? ''}
+                    onChange={e => setMotivos(m => ({ ...m, [i.id]: e.target.value }))}
+                    placeholder={motivoGeral.trim()
+                      ? `Motivo (vazio usa: ${motivoGeral.trim().slice(0, 40)})`
+                      : 'Motivo da recusa deste item'}
+                    className="w-full border border-red-200 bg-red-50/40 rounded-lg px-3 py-1.5 text-xs
+                               focus:outline-none focus:border-red-400 placeholder:text-red-300"
+                  />
+                </div>
+              )}
+              </div>
             );
           })}
         </div>
@@ -2080,6 +2135,24 @@ function DetalheOrcamentoModal({ orc, podeAprovar, onClose, onSalvo }: {
           <span className="text-gray-600">Total: <b className="text-gray-900">{brl(total)}</b></span>
           <span className="text-emerald-700 font-semibold">Aceito: {brl(aceito)}</span>
         </div>
+
+        {/* MOTIVO GERAL da recusa (2026-09-08) — obrigatório quando o orçamento
+            INTEIRO é rejeitado, e padrão dos itens que não tiverem motivo próprio.
+            Só aparece quando há algo a recusar: com tudo marcado, nada será recusado
+            e o campo seria um pedido sem objeto. */}
+        {podeAprovar && aceitos.size < orc.itens.length && (
+          <div className="px-5 py-3 border-t border-gray-100">
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+              Motivo da recusa {aceitos.size === 0 ? '*' : '(padrão dos itens sem motivo próprio)'}
+            </label>
+            <input
+              value={motivoGeral}
+              onChange={e => setMotivoGeral(e.target.value)}
+              placeholder="Ex.: valor acima do previsto pelo cliente"
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-red-400"
+            />
+          </div>
+        )}
 
         {/* Decisão: os três juntos à direita, na ordem Aceitar · Rejeitar · Fechar */}
         {podeAprovar ? (

@@ -104,6 +104,7 @@ import ExecucaoPrescricao  from './pages/ExecucaoPrescricao';
 
 // Pages — Financeiro
 import Faturamento from './pages/Faturamento';
+import RecibosPrestador from './pages/RecibosPrestador';
 
 import { SelectedAnimalProvider } from './contexts/SelectedAnimalContext';
 import { EmpresaProvider } from './contexts/EmpresaContext';
@@ -263,6 +264,7 @@ function ProtectedApp() {
 
                           {/* Financeiro */}
                           <Route path="/faturamento" element={<Faturamento />} />
+                          <Route path="/recibos-prestador" element={<RecibosPrestador />} />
 
                           {/* Equipe */}
                           <Route path="/equipe"           element={<Equipe />} />

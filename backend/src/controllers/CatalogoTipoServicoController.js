@@ -16,8 +16,17 @@
 const prisma = require('../lib/prisma').default;
 const { getNivelEfetivo, NIVEL_ORDINAL, resolverContextoPermissao } = require('../middlewares/permissao.middleware');
 
-const CATEGORIAS_VALIDAS = ['FORNECEDOR', 'PRESTADOR'];
-const SLUG_CRIAR = { FORNECEDOR: 'cadastro.fornecedor.criar', PRESTADOR: 'cadastro.prestador.criar' };
+// LOCALIZACAO entrou em 2026-09-08: os tipos de local eram uma lista FECHADA no
+// código (`LocalizacaoAnimalController.TIPO_ESPECIES`), e a clínica que atende num
+// tipo que não estava lá não tinha como cadastrá-lo. Reusar esta tabela — em vez de
+// criar outra — traz de graça o tenant, a policy de RLS e o gate de permissão que ela
+// já tem; um catálogo novo exigiria repetir os três.
+const CATEGORIAS_VALIDAS = ['FORNECEDOR', 'PRESTADOR', 'LOCALIZACAO'];
+const SLUG_CRIAR = {
+  FORNECEDOR:  'cadastro.fornecedor.criar',
+  PRESTADOR:   'cadastro.prestador.criar',
+  LOCALIZACAO: 'cadastro.localizacao.criar',
+};
 const normalizarTexto = v => (v ?? '').trim().toLowerCase();
 const ehAdminPlataforma = req => req.user?.role === 'ADMIN' || req.user?.userType === 'ADMIN';
 

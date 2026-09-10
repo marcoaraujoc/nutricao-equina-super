@@ -373,7 +373,16 @@ export function ListaCamposInput({
     setBusca('');
   };
 
-  /** Filtro do dropdown — sem acento e sem caixa, como o resto do sistema. */
+  /**
+ * Quantas opções o dropdown desenha de uma vez.
+ *
+ * O teto existe para a lista não montar centenas de botões num portal que já rola, mas
+ * ele NUNCA pode ser silencioso: passando dele, a última linha diz quantas faltam. Ver
+ * a nota no `slice` mais abaixo.
+ */
+const MAX_OPCOES_VISIVEIS = 200;
+
+/** Filtro do dropdown — sem acento e sem caixa, como o resto do sistema. */
   const filtradas = (termo: string): OpcaoLista[] => {
     const t = normalizarTexto(termo);
     if (!t) return catalogo;
@@ -515,7 +524,13 @@ export function ListaCamposInput({
           }}
           className="z-[80] overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg"
         >
-          {filtradas(busca).slice(0, 60).map(o => (
+          {/* 🔴 O CORTE DEIXOU DE SER SILENCIOSO. Eram `.slice(0, 60)` sem aviso, e o
+              catálogo de vacinas tem 231 nomes: tudo depois do 60º (alfabético) era
+              invisível e nada dizia que a lista havia sido cortada — foi assim que "a
+              combo não retorna todas as vacinas" apareceu. O teto SUBIU (a lista rola
+              dentro do portal) e, quando ainda corta, a última linha diz quantas
+              faltam e o que fazer. */}
+          {filtradas(busca).slice(0, MAX_OPCOES_VISIVEIS).map(o => (
             <button
               key={o.rotulo}
               type="button"
@@ -523,11 +538,28 @@ export function ListaCamposInput({
               // escolher no catálogo não fecha a lista por blur antes do clique
               // registrar (mesmo motivo do combo da Agenda).
               onMouseDown={e => { e.preventDefault(); escolherOpcao(aberto, o.rotulo); setAberto(null); setBusca(''); }}
-              className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-emerald-50"
+              className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-emerald-50 flex items-center gap-1.5"
             >
-              {o.rotulo}
+              {/* ✅ = já aplicada NESTE paciente no último ano. É a informação que
+                  decide o preenchimento de um atestado de vacinação, e por isso vem
+                  antes do nome — quem lê a lista está procurando exatamente isso. */}
+              {o.aplicada && <span aria-hidden className="flex-shrink-0">✅</span>}
+              <span className="flex-1 truncate">{o.rotulo}</span>
+              {o.aplicada && o.aplicadaEm && (
+                <span className="flex-shrink-0 text-[10px] text-emerald-700 font-semibold">
+                  {o.aplicadaEm}
+                </span>
+              )}
             </button>
           ))}
+          {/* Quantas ficaram de fora do teto. Sem esta linha, a lista cortada é
+              indistinguível de uma lista completa. */}
+          {filtradas(busca).length > MAX_OPCOES_VISIVEIS && (
+            <p className="px-3 py-2 text-[11px] text-gray-500 border-t border-gray-100 bg-gray-50">
+              Mostrando {MAX_OPCOES_VISIVEIS} de {filtradas(busca).length} — digite para
+              filtrar o resto.
+            </p>
+          )}
           {onCriarOpcao && podeCriar(busca) && (
             <button
               type="button"

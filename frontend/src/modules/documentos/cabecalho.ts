@@ -36,13 +36,43 @@
 import { resolverVariaveis } from './catalogo';
 import type { ContextoVariaveis } from './catalogo';
 import type { Bloco } from './types';
-import type { MarcaFolha } from './BlocoView';
+import type { EmpresaFolha, MarcaFolha } from './BlocoView';
 
 export interface DadosCabecalho {
   logoUrl:     string | null;
   /** Usado só quando NÃO há logo — melhor o nome da clínica do que faixa vazia. */
   empresaNome: string;
   titulo:      string;
+  /**
+   * 🔴 TIMBRE DO ESTABELECIMENTO (a pedido, 2026-09-08) — razão social, endereço
+   * completo, CNPJ, Inscrição Estadual e registro no CRMV.
+   *
+   * Fica no CABEÇALHO, e não no corpo dos modelos, por um motivo só: precisa
+   * alcançar TODO documento, inclusive o que a clínica ENVIOU (que não tem bloco de
+   * identificação nenhum) e o que ela redigiu do zero. É a mesma razão pela qual a
+   * logo mora aqui.
+   *
+   * ⚠️ `null` quando a clínica é pessoa FÍSICA (empresa com CPF — o veterinário
+   * autônomo). Imprimir "CNPJ:" e "Inscrição Estadual:" no papel dele seria afirmar
+   * registro que não existe, num documento com valor legal. Quem decide é o backend
+   * (`lib/documentoVariaveis.js`), nunca a tela.
+   *
+   * ⚠️ Cada linha some sozinha quando o cadastro está em branco — é a regra do campo
+   * vazio (§12, 26/08) aplicada ao timbre: nada de "CNPJ: —".
+   */
+  empresa:     EmpresaFolha | null;
+}
+
+/** As linhas do timbre, na ordem do papel, já sem as que o cadastro não tem. */
+export function linhasDoEstabelecimento(e: EmpresaFolha | null | undefined): string[] {
+  if (!e) return [];
+  const registros = [
+    e.cnpj              ? `CNPJ: ${e.cnpj}` : '',
+    e.inscricaoEstadual ? `Inscrição Estadual: ${e.inscricaoEstadual}` : '',
+    e.crmv              ? `CRMV: ${e.crmv}` : '',
+  ].filter(Boolean).join(' · ');
+  const contato = [e.telefone, e.email].filter(Boolean).join(' · ');
+  return [e.endereco, registros, contato].filter(Boolean);
 }
 
 /**
@@ -77,6 +107,7 @@ export function prepararFolha({ blocos, nome, contexto, marca }: {
       logoUrl:     marca?.logoUrl ?? null,
       empresaNome: marca?.empresaNome ?? '',
       titulo,
+      empresa:     marca?.empresa ?? null,
     },
     corpo: absorve ? lista.filter((_, i) => i !== iTitulo) : lista,
   };
@@ -84,4 +115,4 @@ export function prepararFolha({ blocos, nome, contexto, marca }: {
 
 /** Cabeçalho sem nada a mostrar não vira faixa vazia no papel. */
 export const cabecalhoVazio = (c: DadosCabecalho): boolean =>
-  !c.logoUrl && !c.empresaNome && !c.titulo;
+  !c.logoUrl && !c.empresaNome && !c.titulo && linhasDoEstabelecimento(c.empresa).length === 0;

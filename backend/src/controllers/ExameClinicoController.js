@@ -6,6 +6,9 @@ const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 const { lancarExameNaFatura, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
+// Preço/prestador do exame de imagem — colunas novas, lidas e gravadas por SQL cru.
+const exameValor = require('../lib/exameImagemValor');
+const vinculoPrestador = require('../lib/procedimentoPrestador');
 // `.doc` legado vira `.docx` no INGEST (convert-on-ingest) — ver lib/documentoConversao.js.
 // Sem isto o laudo `.doc` fica sem pre-visualizacao E sem leitura por IA.
 const { normalizarDocsLegados } = require('../lib/documentoConversao');
@@ -157,6 +160,56 @@ async function exameDuplicado(animalId, tipo, descricao, dataISO, ignorarId = nu
   }) ?? null;
 }
 
+/**
+ * 🔴 RECIBO DO PRESTADOR do exame de imagem (2026-09-09).
+ *
+ * A CONCLUSÃO do exame é o equivalente, aqui, à EXECUÇÃO do procedimento: é quando o
+ * serviço se completa e a clínica passa a dever a quem o executou. Sem esta linha, o
+ * prestador que faz a radiografia é cobrado do cliente e não aparece em recibo nenhum.
+ *
+ * ⚠️ Só com PRESTADOR: exame executado pela própria equipe não gera recibo.
+ * ⚠️ Best-effort e NUNCA lança — a conclusão do exame é ato clínico e não pode cair
+ * porque o recibo não registrou. `registrarExecucao` já engole o próprio erro.
+ * ⚠️ Idempotente por construção: `finalizar` recusa exame que já está CONCLUIDO, então
+ * não há como gerar duas linhas para a mesma conclusão.
+ */
+async function registrarReciboDoExame(tx, req, exame, animalNome) {
+  try {
+    if (!req.empresaId) return;
+    const dados = (await exameValor.lerPrestadorEValor(tx, exame.id)).get(exame.id);
+    if (!dados?.prestadorId) return;
+
+    const prestador = await tx.prestador.findFirst({
+      where:  { id: dados.prestadorId, empresaId: req.empresaId },
+      select: { tipoPagamento: true, formaPagamento: true, valorPagamento: true },
+    });
+
+    // `valorPrestador` do vínculo — o que ELE cobra da clínica. Resolvido pelo nome
+    // do exame, como no pedido.
+    const preco = await exameValor.precoDoPedido(
+      tx, req.empresaId,
+      String(exame.descricao ?? '').split(',').map(x => x.trim()).filter(Boolean),
+      dados.prestadorId,
+    );
+
+    await vinculoPrestador.registrarExecucao(tx, {
+      empresaId:        req.empresaId,
+      prestadorId:      dados.prestadorId,
+      animalId:         exame.animalId,
+      animalNome,
+      procedimentoNome: String(exame.descricao ?? '').slice(0, 255),
+      quantidade:       1,
+      valorCliente:     dados.valorCobrado ?? 0,
+      valorPrestador:   preco.valorPrestador,
+      tipoPagamento:    prestador?.tipoPagamento  ?? null,
+      formaPagamento:   prestador?.formaPagamento ?? null,
+      valorPagamento:   prestador?.valorPagamento ?? null,
+      executadoEm:      new Date(),
+      executadoPorId:   req.user?.id ?? null,
+    });
+  } catch { /* recibo não derruba a conclusão do exame */ }
+}
+
 const ExameClinicoController = {
 
   // GET /clinica/exames/animal/:animalId?page=1&limit=10
@@ -215,7 +268,13 @@ const ExameClinicoController = {
   // body: { animalId, tipo, descricao, evolucaoId, laboratorio?, tipoAmostra?, indicacaoClinica?, observacao? }
   criar: async (req, res) => {
     try {
-      const { animalId, tipo, descricao, evolucaoId, laboratorio, tipoAmostra, qtdAmostra, indicacaoClinica, observacao, grupoNome, grupos } = req.body;
+      const {
+        animalId, tipo, descricao, evolucaoId, laboratorio, tipoAmostra, qtdAmostra,
+        indicacaoClinica, observacao, grupoNome, grupos,
+        // Exame de IMAGEM com catálogo unificado (2026-09-09): quem executa e a
+        // lista de exames escolhidos, que é o que permite resolver o preço.
+        prestadorId, examesNomes,
+      } = req.body;
 
       if (!animalId || !tipo || !descricao?.trim()) {
         return res.status(400).json({ error: 'animalId, tipo e descricao são obrigatórios' });
@@ -307,11 +366,36 @@ const ExameClinicoController = {
           include: INCLUDE,
         });
 
-        // Lança na fatura (valor zerado) JÁ na solicitação. Antes isso só acontecia ao
-        // FINALIZAR a evolução ou ao concluir o exame — exame pedido depois da evolução
-        // finalizada, ou que nunca foi concluído, nunca chegava ao financeiro.
+        // ── PREÇO E PRESTADOR (exame de imagem, 2026-09-09) ──────────────────
+        // O valor é resolvido AQUI e congelado no pedido: é o preço do dia, e
+        // recalculá-lo na leitura faria o exame de março ser cobrado pelo valor
+        // renegociado em setembro.
+        // ⚠️ Best-effort — `gravarPrestadorEValor` nunca lança. Base sem a migration
+        // devolve `false` e o exame segue sendo lançado com valor 0, como antes.
+        let valorCobrado = null;
+        const prestNum = Number(prestadorId) || null;
+        if (req.empresaId) {
+          const nomes = Array.isArray(examesNomes) && examesNomes.length > 0
+            ? examesNomes
+            // Sem a lista explícita, cai na descrição — que é a MESMA lista que a tela
+            // concatenou. Não é palpite: é o formato que `buildCurrentGroup` monta.
+            : String(descricao).split(',').map(x => x.trim()).filter(Boolean);
+          const preco = await exameValor.precoDoPedido(tx, req.empresaId, nomes, prestNum);
+          valorCobrado = preco.valorCliente;
+          await exameValor.gravarPrestadorEValor(tx, criado.id, {
+            prestadorId: prestNum, valorCobrado,
+          });
+        }
+
+        // Lança na fatura JÁ na solicitação. Antes isso só acontecia ao FINALIZAR a
+        // evolução ou ao concluir o exame — exame pedido depois da evolução finalizada,
+        // ou que nunca foi concluído, nunca chegava ao financeiro.
         // `lancarExameNaFatura` é idempotente: os outros gatilhos não duplicam.
-        await lancarExameNaFatura(tx, criado, animalDoExame?.userId ?? null, req.empresaId ?? null);
+        // ⚠️ `valorCobrado` null mantém o comportamento antigo (linha zerada), que é o
+        // que vale para todo exame laboratorial e para base sem preço cadastrado.
+        await lancarExameNaFatura(
+          tx, { ...criado, valorCobrado }, animalDoExame?.userId ?? null, req.empresaId ?? null,
+        );
         return criado;
       });
 
@@ -953,16 +1037,18 @@ const ExameClinicoController = {
 
       res.json({ dados: atualizado });
 
-      // Lança na fatura com valor zerado (idempotente — não duplica se o exame já foi
-      // lançado ao finalizar a evolução). Exame clínico não tem preço automático.
+      // Lança na fatura (idempotente — não duplica se o exame já foi lançado na
+      // solicitação ou ao finalizar a evolução) e, havendo prestador, registra a
+      // execução no ledger do RECIBO.
       setImmediate(async () => {
         try {
           const animal = await prisma.animal.findUnique({
             where:  { id: item.animalId },
-            select: { userId: true },
+            select: { userId: true, nome: true },
           });
           await prisma.$transaction(async (tx) => {
             await lancarExameNaFatura(tx, item, animal?.userId, req.empresaId ?? null);
+            await registrarReciboDoExame(tx, req, item, animal?.nome ?? '');
           });
         } catch { /* silencioso — fatura não bloqueia a finalização */ }
       });

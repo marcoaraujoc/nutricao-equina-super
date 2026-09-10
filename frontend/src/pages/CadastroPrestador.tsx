@@ -7,12 +7,13 @@
 // Ver CLAUDE.md §5.
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
   Pencil, Search, Loader2, X, HardHat,
   ToggleLeft, ToggleRight, Building2, User as UserIcon,
-  Phone, MapPin, BadgeCheck, AlertCircle, Wallet, Clock3, Plus, Trash2,
+  Phone, MapPin, BadgeCheck, AlertCircle, Wallet, Clock3, Plus, Trash2, Wrench,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -30,6 +31,7 @@ import TipoServicoSelect from '../components/TipoServicoSelect';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
+import GerenciarAcessoPrestadorModal from '../components/GerenciarAcessoPrestadorModal';
 import { formatDate } from '../utils/dateUtils';
 import {
   LocalizacaoCombobox, HoraInput, TIPOS_PAGAMENTO,
@@ -53,7 +55,12 @@ const TIPOS_SERVICO_PADRAO = [
   'Fisioterapeuta',
   'Quiroprata',
   'Radiologista',
-  'Secretária',
+  // ⚠️ "Secretária" SAIU (a pedido, 2026-09-08): o Prestador é o profissional EXTERNO
+  // contratado por serviço (ferrador, fisioterapeuta), e secretaria é função INTERNA —
+  // quem a cadastra usa Incluir Membro, com o perfil SECRETARIA e o Controle de Acesso.
+  // ⚠️ Isto é só o PONTO DE PARTIDA do combobox: prestador já cadastrado como
+  // "Secretária" continua existindo, e o catálogo por empresa
+  // (`tb_catalogo_tipo_servico`) segue oferecendo o que a clínica já usou.
   'Veterinário',
 ] as const;
 
@@ -62,6 +69,22 @@ type TipoDoc = 'cpf' | 'cnpj';
 // Local de trabalho do Prestador — sem especialidade/tempo de consulta (Prestador não
 // entra na Agenda) e sem herança de expediente da empresa: em branco = sem horário
 // definido, nunca "vale o da empresa".
+/**
+ * Tipos de pagamento do PRESTADOR — `TIPOS_PAGAMENTO` (do Incluir Membro) MAIS
+ * "Por procedimento".
+ *
+ * 🔴 NÃO se acrescenta o valor àquela constante, e por isso a lista é montada aqui:
+ * ela é compartilhada com o formulário de MEMBRO DE EQUIPE, e oferecer "por
+ * procedimento" a um estagiário não significa nada — o trabalho dele não é contado
+ * procedimento a procedimento, e o backend do membro não conhece o valor
+ * (`TIPOS_PAGAMENTO` de `lib/usuarioEmpresa.js`). Mesma separação do lado do
+ * servidor, em `lib/procedimentoPrestador.js`.
+ */
+const TIPOS_PAGAMENTO_PRESTADOR: Array<{ value: 'SALARIO' | 'COMISSAO' | 'POR_PROCEDIMENTO'; label: string }> = [
+  ...TIPOS_PAGAMENTO,
+  { value: 'POR_PROCEDIMENTO', label: 'Por procedimento' },
+];
+
 interface LocalTrabalhoPrestador {
   id:                 number;
   localizacaoId:      number;
@@ -135,10 +158,16 @@ interface Prestador {
   estado:         string | null;
   ativo:          boolean;
   userId:         number | null;
-  tipoPagamento:  'SALARIO' | 'COMISSAO' | null;
+  /** Equipe onde o cartão de acesso foi emitido — habilita "Gerenciar Acesso".
+   *  Vem do backend (`lib/acessoExterno.js#anexarEquipeDoAcesso`), NÃO do `equipeId`
+   *  do cadastro: aquele é nulo em empresa com CNPJ (o seletor resolve por empresa). */
+  acessoEquipeId?: number | null;
+  tipoPagamento:  'SALARIO' | 'COMISSAO' | 'POR_PROCEDIMENTO' | null;
   formaPagamento: 'VALOR' | 'PERCENTUAL' | null;
   valorPagamento: number | null;
   acessoSistema:  boolean;
+  /** Opcional: cadastro anterior à coluna não devolve o campo. */
+  restringirPorLocal?: boolean;
   locaisTrabalho: LocalTrabalhoPrestador[];
   createdAt:      string;
   // Trilha de ativação/inativação (quem fez, quando) — ver lib/cadastroAtivacao.js
@@ -163,10 +192,13 @@ interface FormPrest {
   bairro:      string;
   cidade:      string;
   estado:      string;
-  tipoPagamento:  'SALARIO' | 'COMISSAO' | '';
+  tipoPagamento:  'SALARIO' | 'COMISSAO' | 'POR_PROCEDIMENTO' | '';
   formaPagamento: 'VALOR' | 'PERCENTUAL';
   valorPagamento: string;
   acessoSistema:  boolean;
+  /** "Atender somente no local de trabalho" — mesmo campo do Incluir Membro
+   *  (`MembroEquipe.restringirPorLocal`). false = atende em qualquer local. */
+  restringirPorLocal: boolean;
   locaisTrabalho: LocalTrabalhoDraft[];
 }
 
@@ -178,6 +210,9 @@ const FORM_INICIAL: FormPrest = {
   // Acesso nasce DESMARCADO — diferente do Incluir Membro: aqui a maioria é externa
   // e não deve ganhar login sem decisão explícita do gestor.
   tipoPagamento: '', formaPagamento: 'VALOR', valorPagamento: '', acessoSistema: false,
+  // Nasce DESMARCADO, como no Incluir Membro: restringir é a exceção, e ligá-la por
+  // padrão esconderia pacientes de quem nunca pediu isso.
+  restringirPorLocal: false,
   locaisTrabalho: [],
 };
 
@@ -471,6 +506,30 @@ function ModalPrestador({
             <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
               <Clock3 size={12} /> Local de trabalho
             </h4>
+
+            {/* "Atender somente no local de trabalho" (a pedido, 2026-09-08) — o MESMO
+                controle do Incluir Membro, e o mesmo efeito no backend
+                (`lib/animalScope.js`): desmarcado não muda nada; marcado, o prestador
+                só enxerga os pacientes que estão HOJE num dos locais configurados
+                abaixo.
+                ⚠️ Para o prestador ele acumula com a regra de DESIGNAÇÃO
+                (`DesignacaoPrestador`, deny-by-default): a restrição por local
+                ESTREITA o que a designação já liberou — nunca amplia. */}
+            <label className="flex items-start gap-2.5 mb-3 p-3 bg-gray-50 border border-gray-100 rounded-xl cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!form.restringirPorLocal}
+                onChange={e => onFormChange({ restringirPorLocal: e.target.checked })}
+                className="mt-0.5 w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-400"
+              />
+              <span className="text-xs text-gray-600 leading-snug">
+                <span className="font-semibold text-gray-800">Atender somente no local de trabalho</span>
+                <br />
+                Desmarcado, o prestador atende o paciente em qualquer local — nada muda.
+                Marcado, ele só verá os pacientes que estão, hoje, num dos locais de trabalho
+                configurados abaixo.
+              </span>
+            </label>
             {form.locaisTrabalho.length > 0 && (
               <div className="space-y-1.5 mb-2">
                 {form.locaisTrabalho.map((l, idx) => (
@@ -558,15 +617,33 @@ function ModalPrestador({
                 <label className="block text-xs text-gray-500 mb-1">Tipo de pagamento</label>
                 <select value={form.tipoPagamento}
                   onChange={e => {
-                    const tipo = e.target.value as 'SALARIO' | 'COMISSAO' | '';
+                    const tipo = e.target.value as 'SALARIO' | 'COMISSAO' | 'POR_PROCEDIMENTO' | '';
                     const forma = tipo === 'COMISSAO' ? 'PERCENTUAL' : tipo === 'SALARIO' ? 'VALOR' : form.formaPagamento;
                     onFormChange({ tipoPagamento: tipo, formaPagamento: forma, valorPagamento: mascaraValorPagamento(form.valorPagamento, forma) });
                   }}
                   className={inputCls}>
                   <option value="">Selecionar…</option>
-                  {TIPOS_PAGAMENTO.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  {TIPOS_PAGAMENTO_PRESTADOR.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
               </div>
+              {/* 🔴 "Por procedimento" NÃO tem valor único: o que se paga é o "Valor
+                  Cobrado pelo Prestador" de CADA procedimento, cadastrado em
+                  Cadastro › Procedimentos. Um campo de valor aqui daria duas fontes
+                  possíveis para o mesmo pagamento, e o recibo teria de escolher uma
+                  sem ninguém saber qual. Por isso o campo é SUBSTITUÍDO pela
+                  explicação, e não apenas desabilitado. */}
+              {form.tipoPagamento === 'POR_PROCEDIMENTO' ? (
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Valor</label>
+                  <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2.5">
+                    <p className="text-xs text-emerald-800 leading-snug">
+                      O valor é o de <strong>cada procedimento</strong>, definido em{' '}
+                      <strong>Cadastro › Procedimentos</strong> no campo
+                      {' '}“Valor Cobrado pelo Prestador”.
+                    </p>
+                  </div>
+                </div>
+              ) : (
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Valor</label>
                 <div className="flex items-stretch border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
@@ -589,6 +666,15 @@ function ModalPrestador({
                   </select>
                 </div>
               </div>
+              )}
+              {/* Comissão em % incide sobre o Valor Cobrado para o Cliente — dizer isso
+                  aqui evita a dúvida de "percentual de quê?" na hora de negociar. */}
+              {form.tipoPagamento === 'COMISSAO' && form.formaPagamento === 'PERCENTUAL' && (
+                <p className="sm:col-span-2 text-[11px] text-gray-500 -mt-1">
+                  O percentual é calculado sobre o <strong>Valor Cobrado para o Cliente</strong> de cada
+                  procedimento executado.
+                </p>
+              )}
             </div>
           </section>
 
@@ -680,6 +766,28 @@ export default function CadastroPrestador() {
   const [saving,          setSaving]          = useState(false);
   const [dupInativoInfo,  setDupInativoInfo]  = useState<{ mensagem: string } | null>(null);
 
+  /**
+   * FLUXO GUIADO vindo da PRESCRIÇÃO (2026-09-08). Quando o veterinário precisa de um
+   * prestador que ainda não existe, a tela de prescrição manda para cá com
+   * `?novo=1&nome=<digitado>&depois=<rota>`:
+   *   • `novo=1`  abre o formulário já aberto — chegar numa lista e ter de achar o
+   *               botão desfaz o encaminhamento;
+   *   • `nome`    entra pré-preenchido, porque ele já foi digitado uma vez;
+   *   • `depois`  é para onde ir DEPOIS de salvar — normalmente
+   *               `/cadastro/procedimentos`, onde se define o valor e se atrela o
+   *               procedimento ao prestador. Sem esse retorno, o cadastro terminaria
+   *               sem preço e o procedimento sairia na fatura por R$ 0,00.
+   *
+   * ⚠️ `depois` é usado como rota INTERNA e só se começar com "/": um valor absoluto
+   * ("https://…") transformaria a query em redirecionamento aberto.
+   */
+  const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const depoisDeSalvar = (() => {
+    const d = params.get('depois') ?? '';
+    return d.startsWith('/') && !d.startsWith('//') ? d : null;
+  })();
+
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
@@ -694,6 +802,24 @@ export default function CadastroPrestador() {
   }, [busca, filtroAtivo]);
 
   useEffect(() => { if (!loadingPerms) carregar(); }, [carregar, loadingPerms]);
+
+  // Abre o formulário quando a prescrição encaminhou para cá. A query é CONSUMIDA
+  // (`novo` e `nome` removidos) para o modal não reabrir a cada recarga da lista;
+  // `depois` permanece, porque ele só é usado ao SALVAR.
+  useEffect(() => {
+    if (loadingPerms || !podeCriar) return;
+    if (params.get('novo') !== '1') return;
+    const nome = params.get('nome') ?? '';
+    setEditando(null);
+    setErroModal(null);
+    setForm({ ...FORM_INICIAL, nome });
+    setShowModal(true);
+    const limpo = new URLSearchParams(params);
+    limpo.delete('novo');
+    limpo.delete('nome');
+    setParams(limpo, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadingPerms, podeCriar, params]);
 
   const abrirNovo = () => { setEditando(null); setForm(FORM_INICIAL); setErroModal(null); setShowModal(true); };
 
@@ -718,6 +844,9 @@ export default function CadastroPrestador() {
       formaPagamento: p.formaPagamento ?? 'VALOR',
       valorPagamento: mascaraValorPagamento(formatarValorSalvo(p.valorPagamento), p.formaPagamento ?? 'VALOR'),
       acessoSistema:  p.acessoSistema === true,
+      // `=== true` pelo mesmo motivo do acesso: o backend pode não devolver o campo
+      // (cadastro anterior à coluna), e `undefined` marcaria a caixa sozinho.
+      restringirPorLocal: p.restringirPorLocal === true,
       locaisTrabalho: p.locaisTrabalho.map(l => ({
         localizacaoId:      l.localizacaoId,
         localizacaoNome:    l.localizacao?.nome ?? '',
@@ -766,9 +895,15 @@ export default function CadastroPrestador() {
       cidade:      form.cidade      || null,
       estado:      form.estado      || null,
       tipoPagamento:  form.tipoPagamento  || undefined,
-      formaPagamento: form.tipoPagamento  ? form.formaPagamento : undefined,
-      valorPagamento: form.tipoPagamento  ? String(valorPagamentoNumero(form.valorPagamento)) : undefined,
+      // "Por procedimento" não tem forma nem valor único — o backend grava os dois como
+      // NULL. Mandá-los aqui deixaria um valor órfão gravado, e o recibo passaria a ter
+      // duas fontes possíveis para o mesmo pagamento.
+      formaPagamento: form.tipoPagamento && form.tipoPagamento !== 'POR_PROCEDIMENTO' ? form.formaPagamento : undefined,
+      valorPagamento: form.tipoPagamento && form.tipoPagamento !== 'POR_PROCEDIMENTO'
+        ? String(valorPagamentoNumero(form.valorPagamento))
+        : undefined,
       acessoSistema:  form.acessoSistema,
+      restringirPorLocal: form.restringirPorLocal,
       locaisTrabalho: form.locaisTrabalho.map(l => ({
         localizacaoId:      l.localizacaoId,
         diasTrabalho:       l.diasTrabalho,
@@ -788,6 +923,10 @@ export default function CadastroPrestador() {
       }
       fecharModal();
       setBusca('');
+      // Encaminhado pela prescrição: segue para onde o valor é definido, em vez de
+      // parar na lista. É a segunda metade do fluxo — o cadastro sem preço deixaria o
+      // procedimento sair na fatura por R$ 0,00.
+      if (depoisDeSalvar) { navigate(depoisDeSalvar); return; }
       carregar();
     } catch (err: unknown) {
       const errData = (err as { response?: { data?: { mensagem?: string; inativo?: boolean } } })?.response?.data;
@@ -803,6 +942,9 @@ export default function CadastroPrestador() {
   // (ativar continua direto, sem modal). `viaModal` diferencia se o toggle veio
   // da lista ou de dentro do modal de edição (para saber se sincroniza `editando`).
   const [inativando, setInativando] = useState<{ p: Prestador; viaModal: boolean } | null>(null);
+  // Designação de pacientes — o que substitui o "Gerenciar Acesso" que vivia no
+  // Controle de Acesso enquanto o prestador ainda era tratado como equipe.
+  const [modalAcesso, setModalAcesso] = useState<{ equipeId: number; userId: number; nome: string } | null>(null);
 
   const handleToggle = (p: Prestador) => {
     setErroLista(null);
@@ -823,6 +965,15 @@ export default function CadastroPrestador() {
       <AcoesRegistro>
         <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar"
           visivel={podeEditar} onClick={() => abrirEdicao(p)} />
+        {/* 🔴 A DESIGNAÇÃO MORA AQUI desde 2026-09-09: o prestador não é equipe, então
+            o "Gerenciar Acesso" saiu do Controle de Acesso e veio para o cadastro dele.
+            É ela que define QUAIS pacientes ele enxerga (deny-by-default).
+            ⚠️ Só aparece com cartão de acesso emitido (login + equipe): sem um dos dois
+            a rota de designação não existe, e o botão só falharia depois do clique. */}
+        <AcaoRegistro tom="ver" icone={Wrench} rotulo="Gerenciar Acesso"
+          titulo="Definir quais pacientes este prestador pode acessar"
+          visivel={podeEditar && !!p.userId && !!p.acessoEquipeId}
+          onClick={() => setModalAcesso({ equipeId: p.acessoEquipeId as number, userId: p.userId as number, nome: p.nome })} />
         <AcaoRegistro tom="ativar" icone={p.ativo ? ToggleRight : ToggleLeft}
           rotulo={p.ativo ? 'Inativar' : 'Ativar'}
           visivel={podeAtivar} onClick={() => handleToggle(p)} />
@@ -1093,6 +1244,15 @@ export default function CadastroPrestador() {
         onConfirmar={(motivo) => { if (inativando) confirmarToggle(inativando.p, inativando.viaModal, motivo); }}
         onFechar={() => setInativando(null)}
       />
+
+      {modalAcesso && (
+        <GerenciarAcessoPrestadorModal
+          equipeId={modalAcesso.equipeId}
+          prestadorUserId={modalAcesso.userId}
+          prestadorNome={modalAcesso.nome}
+          onClose={() => setModalAcesso(null)}
+        />
+      )}
     </PageContainer>
   );
 }

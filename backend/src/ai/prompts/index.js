@@ -377,7 +377,14 @@ ${JSON.stringify(eventos.map(e => ({
   //     uma linha por tópico: num paciente com 80 eventos virava uma lista de 80 linhas,
   //     que não resume nada.
   'memoria_clinica': {
-    version: 'v4',
+    // v5 (2026-09-08): os HIGHLIGHTS saíam com os IDS DOS TÓPICOS dentro do texto
+    // ("Recorrência de dor lombar em 06/09/2026: t3, t6, t7, t9, t11."), com UMA data
+    // quando havia várias, e sem dizer o que foi prescrito/executado naquele
+    // atendimento. Ver a seção HIGHLIGHTS.
+    // ⚠️ Bump de versão FORÇA reconstrução completa da memória de todos os pacientes
+    // (`versao_prompt` em tb_resumo_atendimento_ia) — é o que corrige os highlights
+    // já gravados com o defeito.
+    version: 'v5',
     build: ({ topicosAtuais, eventos, atendimentos, resumoAnterior, animalNome }) => `Consolide a memória clínica do paciente${animalNome ? ` "${animalNome}"` : ''}.
 
 Você recebe os TÓPICOS JÁ CONSOLIDADOS e os EVENTOS NOVOS. Descreva o que está
@@ -416,14 +423,46 @@ Gere um tópico para CADA evento novo, na ordem recebida.
 # HIGHLIGHTS
 Recalcule sobre TODOS os tópicos (consolidados + novos). Máximo 6, ordenados do
 mais relevante para o menos. Um highlight só existe se 2 ou mais tópicos o comprovam.
+
+🔴 CADA PADRÃO APARECE UMA VEZ SÓ. Dois highlights sobre o mesmo achado (a mesma
+queixa, o mesmo valor, o mesmo tratamento) são um só: junte as datas e os fatos numa
+frase e descarte o outro. Repetição aqui é o que faz a lista deixar de ser leitura
+rápida e virar ruído.
 Cada highlight é um padrão VERIFICÁVEL nos registros:
 - evolução de um valor medido ao longo das datas;
 - repetição do mesmo achado, queixa ou procedimento;
 - item registrado como solicitado e sem resultado registrado depois;
 - tratamento prescrito e não aplicado (doses aplicadas abaixo do previsto);
 - alteração de conduta registrada entre atendimentos.
-- "texto": máximo 120 caracteres, com as datas e os números que sustentam o padrão.
-  Exemplo de forma: "Perda progressiva de peso: 70 kg (20/06) → 60 kg (22/06) → 50 kg (27/07)."
+- "texto": até 220 caracteres, uma frase inteira, em português do Brasil.
+
+  🔴 NUNCA escreva ids de tópico ("t3", "t6", "t11") dentro de "texto". Eles são
+  identificadores internos e não significam nada para quem lê. O lugar deles é o
+  campo "topicos", e SÓ ele. Um highlight que termina em ": t3, t6, t7" está errado.
+
+  🔴 TODAS AS DATAS que sustentam o padrão, não a primeira nem a última: cinco
+  ocorrências pedem as cinco datas (DD/MM), separadas por vírgula e "e".
+
+  🔴 DIGA O QUE FOI REGISTRADO NAQUELE ATENDIMENTO, não só o achado. O que o
+  veterinário escreveu na evolução e o que foi prescrito, aplicado, pedido ou vacinado
+  na MESMA consulta são a mesma história — encadeie os dois na frase.
+
+  🔴 O ESTADO DE EXECUÇÃO ENTRA NA FRASE, com as palavras que o distinguem:
+    executado    → "aplicada", "realizada", "feita"
+    não aplicado → "aguardando a execução de", "ainda sem aplicação"
+  Chamar de aplicado o que está em 0% é o erro mais grave deste prompt.
+
+  Forma a imitar (repare: nome do paciente, todas as datas, o que foi feito, e nenhum
+  id à vista):
+    "Thor teve recorrência (06/09, 07/09 e 10/09) de dor lombar leve, com massagem
+     com NGF-5 feita e ivermectina aplicada para vermifugar."
+    "Thor teve recorrência (06/09 e 07/09) de dor lombar leve, aguardando a execução
+     da massagem com NGF-5 e a aplicação da ivermectina para vermifugar."
+    "Perda progressiva de peso: 70 kg (20/06), 60 kg (22/06) e 50 kg (27/07)."
+
+  ⚠️ Continua valendo a proibição de INFERIR: só entra na frase o que está escrito na
+  evolução, na prescrição, no exame ou na vacina. Não deduza a razão do tratamento, não
+  qualifique o quadro além do que o texto diz, não some sintoma que ninguém registrou.
 - "tipo": TENDENCIA | RECORRENCIA | PENDENCIA | ALTERACAO
 - "direcao": aumento | reducao | estavel | nao_aplicavel
 - "topicos": ids dos tópicos que comprovam o padrão, em ordem cronológica.

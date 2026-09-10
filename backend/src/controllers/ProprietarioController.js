@@ -17,6 +17,7 @@ const { cancelarPendenciasDoAnimal } = require('../lib/cancelamentoPendencias');
 const localidadesProp = require('../lib/proprietarioLocalidades');
 // Tabela de ligação usuário × empresa — perfil PROPRIETARIO + cadastro da empresa
 const { salvarVinculo, ehProfissionalNaEmpresa, definirAtivoNaEmpresa } = require('../lib/usuarioEmpresa');
+const { gerarSenhaInicial } = require('../lib/senhaInicial');
 
 // Dia de vencimento da fatura: obrigatório, inteiro entre 1 e 25
 // (rejeita vazio, 0, negativo e > 25 — espelha a validação inline do frontend).
@@ -331,7 +332,7 @@ const ProprietarioController = {
       }
 
       // Sem senha no payload → padrão do sistema, com troca obrigatória no primeiro acesso
-      const senhaEfetiva = senha || 'Inicial_001';
+      const senhaEfetiva = senha || gerarSenhaInicial({ email, nome: fullName, telefone: phone });
       const passwordHash = await bcrypt.hash(senhaEfetiva, 10);
       const criadoPor = req.user?.fullName ?? 'sua clínica';
       const equipeDoContexto = req.empresaId
@@ -569,8 +570,14 @@ const ProprietarioController = {
         data:   { ativo: !existe.ativo },
         select: { id: true, fullName: true, ativo: true },
       });
+      // 🔴 INATIVACAO/ATIVACAO, não ALTERACAO (2026-09-08). Paciente, fornecedor,
+      // prestador e tratador sempre gravaram assim; só o CLIENTE caía em ALTERACAO,
+      // e por isso ele não aparecia em nenhum recorte de "quem foi inativado". É a
+      // categoria que os Relatórios de Cadastro consultam.
+      // ⚠️ Linha JÁ GRAVADA continua como ALTERACAO — o AuditLog é imutável. O
+      // relatório só enxerga o que for inativado daqui em diante.
       await registrarAuditoria(prisma, req, {
-        categoria:  'ALTERACAO',
+        categoria:  proprietario.ativo ? 'ATIVACAO' : 'INATIVACAO',
         entidade:   'PROPRIETARIO',
         entidadeId: proprietario.id,
         detalhes:   `${req.user.fullName ?? req.user.email} ${proprietario.ativo ? 'ativou' : 'inativou'} o proprietário ${proprietario.fullName} (acesso global)`,
@@ -707,7 +714,11 @@ const ProprietarioController = {
         }
 
         await registrarAuditoria(tx, req, {
-          categoria:  'EXCLUSAO',
+          // 🔴 INATIVACAO, não EXCLUSAO (2026-09-08): remover o cliente da empresa NÃO
+          // apaga nada — inativa o cadastro dele nesta clínica (§5, exclusão lógica).
+          // Chamando de exclusão, o ato não aparecia no recorte de inativados e a
+          // trilha sugeria um apagamento que não houve.
+          categoria:  'INATIVACAO',
           entidade:   'PROPRIETARIO',
           entidadeId: Number(id),
           motivo,
@@ -760,7 +771,8 @@ const ProprietarioController = {
           await registrarAtivacao(tx, 'proprietario', perfilAtualizado.id, req.user.id);
         }
         await registrarAuditoria(tx, req, {
-          categoria:  'ALTERACAO',
+          // Ver a nota do `toggle`: reativar cliente é ATIVACAO, como em todo o resto.
+          categoria:  'ATIVACAO',
           entidade:   'PROPRIETARIO',
           entidadeId: Number(id),
           motivo,

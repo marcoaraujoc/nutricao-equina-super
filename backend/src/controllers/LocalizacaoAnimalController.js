@@ -6,8 +6,11 @@ const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
 const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 
 // Mapeamento estático: tipoLocalizacao → espécies atendidas (null = TODOS)
+// ⚠️ CANIL, GATIL, PETSHOP e PROPRIETARIO SAÍRAM da lista oferecida (a pedido,
+// 2026-09-08). Continuam em `TIPOS_LEGADOS` porque localização JÁ CADASTRADA com um
+// deles não pode virar inválida: ela seguiria existindo no banco e o `atualizar`
+// passaria a recusar qualquer edição daquele registro, inclusive corrigir o nome.
 const TIPO_ESPECIES = {
-  CANIL:               ['Canino'],
   CENTRO_REPRODUCAO:   ['Equino', 'Canino', 'Felino', 'Bovino'],
   CENTRO_TREINAMENTO:  ['Equino', 'Canino', 'Felino', 'Bovino'],
   CLINICA:             null,
@@ -15,15 +18,48 @@ const TIPO_ESPECIES = {
   CLUBE_HIPICO:        ['Equino'],
   CRIADOR:             null,
   FAZENDA:             null,
-  GATIL:               ['Felino'],
   HARAS:               ['Equino'],
   HOSPITAL:            null,
   HOTEL_ANIMAL:        ['Canino', 'Felino', 'Réptil'],
   ONG:                 null,
   OUTRO:               null,
-  PETSHOP:             ['Canino', 'Felino', 'Réptil'],
-  PROPRIETARIO:        null,
 };
+
+/** Tipos que não são mais oferecidos, mas continuam ACEITOS no que já existe. */
+const TIPOS_LEGADOS = {
+  CANIL:        ['Canino'],
+  GATIL:        ['Felino'],
+  PETSHOP:      ['Canino', 'Felino', 'Réptil'],
+  PROPRIETARIO: null,
+};
+
+/**
+ * Tipo CRIADO PELA CLÍNICA (`tb_catalogo_tipo_servico`, categoria LOCALIZACAO).
+ *
+ * 🔴 A lista fechada era o problema: a clínica que atende num tipo fora dela não
+ * tinha como cadastrá-lo. O catálogo é POR EMPRESA e passa pela MESMA policy de RLS
+ * das outras categorias — nenhuma clínica vê o tipo da outra.
+ *
+ * ⚠️ SQL cru com `catch`: a tabela pode não existir numa base antiga, e derrubar o
+ * cadastro de localização por causa do catálogo seria trocar um limite por uma falha.
+ */
+async function tiposDaEmpresa() {
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT nome FROM schs2vet.tb_catalogo_tipo_servico WHERE categoria = 'LOCALIZACAO' ORDER BY nome ASC`,
+  ).catch(() => []);
+  return (rows ?? []).map(r => String(r.nome));
+}
+
+/**
+ * Aceita o tipo? Vale o oferecido, o legado e o que a clínica criou.
+ * ⚠️ É `async` porque o catálogo mora no banco — o `TIPOS_VALIDOS` estático não
+ * enxerga o tipo criado pela empresa e recusaria justamente o que ela acabou de criar.
+ */
+async function tipoAceito(tipo) {
+  if (!tipo) return false;
+  if (tipo in TIPO_ESPECIES || tipo in TIPOS_LEGADOS) return true;
+  return (await tiposDaEmpresa()).includes(tipo);
+}
 
 const TIPOS_VALIDOS = Object.keys(TIPO_ESPECIES);
 
@@ -77,11 +113,17 @@ const LocalizacaoAnimalController = {
       }
 
       if (especie) {
-        const tiposCompativeis = TIPOS_VALIDOS.filter(tipo => {
-          const especies = TIPO_ESPECIES[tipo];
+        // ⚠️ O LEGADO entra no filtro: uma localização cadastrada como PETSHOP para um
+        // felino continua sendo dele, e sumir da lista por causa do tipo ter deixado
+        // de ser oferecido apagaria da tela o local onde o animal está.
+        const todos = { ...TIPO_ESPECIES, ...TIPOS_LEGADOS };
+        const tiposCompativeis = Object.keys(todos).filter(tipo => {
+          const especies = todos[tipo];
           return especies === null || especies.includes(especie);
         });
-        where.tipoLocalizacao = { in: tiposCompativeis };
+        // Tipo criado pela clínica não declara espécie — vale para todas, senão o
+        // local que ela acabou de criar não apareceria em nenhum cadastro de animal.
+        where.tipoLocalizacao = { in: [...tiposCompativeis, ...(await tiposDaEmpresa())] };
       }
 
       // Localização é CORPORATIVA (cross entre todas as empresas): não há escopo por
@@ -126,12 +168,18 @@ const LocalizacaoAnimalController = {
 
   // GET /api/cadastro/localizacoes/tipos
   listarTipos: async (_req, res) => {
-    const tipos = TIPOS_VALIDOS.map(tipo => ({
+    // O que a clínica criou entra na lista junto dos padrão — sem espécie associada
+    // (o tipo é dela, e o sistema não tem como saber que espécies ele atende).
+    const daEmpresa = (await tiposDaEmpresa()).map(nome => ({
+      value: nome, label: nome, especies: ['TODOS'], daEmpresa: true,
+    }));
+    const padrao = TIPOS_VALIDOS.map(tipo => ({
       value:   tipo,
       label:   tipo.replace(/_/g, ' '),
       especies: TIPO_ESPECIES[tipo] ?? ['TODOS'],
     }));
-    res.json({ sucesso: true, dados: tipos });
+    // Os da empresa vêm PRIMEIRO: quem criou um tipo o criou porque é o dele.
+    res.json({ sucesso: true, dados: [...daEmpresa, ...padrao] });
   },
 
   // GET /api/cadastro/localizacoes/:id
@@ -154,7 +202,8 @@ const LocalizacaoAnimalController = {
 
     if (!nome?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
-    if (!tipoLocalizacao || !TIPOS_VALIDOS.includes(tipoLocalizacao))
+    // Aceita o oferecido, o LEGADO e o que a própria clínica criou no catálogo.
+    if (!(await tipoAceito(tipoLocalizacao)))
       return res.status(400).json({ sucesso: false, mensagem: 'Tipo de localização inválido' });
 
     const tipoEntrada = req.user?.role === 'ADMIN' ? 'SYSTEM' : 'CLIENTE';
@@ -203,7 +252,9 @@ const LocalizacaoAnimalController = {
 
     if (!nome?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
-    if (tipoLocalizacao && !TIPOS_VALIDOS.includes(tipoLocalizacao))
+    // ⚠️ Na EDIÇÃO o legado tem de passar: sem isso, corrigir o NOME de uma
+    // localização cadastrada como PETSHOP seria recusado por causa do tipo dela.
+    if (tipoLocalizacao && !(await tipoAceito(tipoLocalizacao)))
       return res.status(400).json({ sucesso: false, mensagem: 'Tipo de localização inválido' });
 
     try {

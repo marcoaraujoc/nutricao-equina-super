@@ -14,6 +14,7 @@ const {
 const { buildAnimalScopeWhere } = require('../lib/animalScope');
 const { proprietarioAtivoNaEmpresa } = require('../lib/visibilidade');
 const { registrarAuditoria } = require('../lib/auditoria');
+const { salvarMotivoOrcamento, salvarMotivoItem, faltaMotivoDeRecusa } = require("../lib/orcamentoRecusa");
 const { recalcularTotal, normalizarDesconto, descontoDoItem } = require('../lib/faturaUtils');
 const {
   garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa, normalizarEspecies,
@@ -360,27 +361,85 @@ const OrcamentoController = {
       const orc = await prisma.orcamento.findFirst({ where: { id, empresaId: req.empresaId ?? -1, ativo: true }, select: { id: true } });
       if (!orc) return res.status(404).json({ error: 'Orçamento não encontrado.' });
 
-      const { aceitarTudo, decisoes } = req.body;
+      const { aceitarTudo, decisoes, motivoRecusa } = req.body;
+
+      // 🔴 O QUE NÃO FOI APROVADO PRECISA DIZER POR QUÊ (a pedido, 2026-09-08).
+      //
+      // Sem isso a clínica sabe que "3 de 7 itens caíram" e não sabe se foi preço,
+      // prazo ou o cliente ter resolvido tratar em outro lugar — que é justamente o
+      // que permitiria renegociar. E o relatório de orçamentos ficava com a coluna
+      // Motivo vazia em toda linha recusada.
+      //
+      // ⚠️ Recusa PARCIAL pede o motivo por ITEM; recusa TOTAL aceita um motivo só
+      // (`motivoRecusa`), porque ali o cliente recusou o documento, não sete linhas.
+      // Exigir sete justificativas iguais transformaria a regra em obstáculo.
+      const idsAceitos = aceitarTudo
+        ? null
+        : (Array.isArray(decisoes)
+            ? (decisoes.filter(d => d.statusItem === 'ACEITO').map(d => Number(d.itemId)).filter(Number.isInteger))
+            : []);
+
+      if (!aceitarTudo) {
+        const todosItens = await prisma.orcamentoItem.findMany({
+          where: { orcamentoId: id }, select: { id: true },
+        });
+        const aceitosSet = new Set(idsAceitos);
+        const recusados  = todosItens.filter(i => !aceitosSet.has(i.id)).map(i => i.id);
+
+        if (recusados.length > 0) {
+          const recusaTotal = recusados.length === todosItens.length;
+          // Motivo por item, quando veio na decisão.
+          const motivoPorItem = new Map(
+            (Array.isArray(decisoes) ? decisoes : [])
+              .filter(d => d.statusItem !== 'ACEITO')
+              .map(d => [Number(d.itemId), String(d.motivoRecusa ?? '').trim()]),
+          );
+          // A REGRA mora em `lib/orcamentoRecusa.js` — função pura, com teste próprio.
+          if (faltaMotivoDeRecusa({
+            idsRecusados: recusados, totalDeItens: todosItens.length,
+            motivoGeral: motivoRecusa, motivoPorItem,
+          })) {
+            return res.status(400).json({
+              error: recusaTotal
+                ? 'Informe o motivo da recusa do orçamento.'
+                : 'Informe o motivo de cada item não aprovado.',
+              code: 'MOTIVO_RECUSA_OBRIGATORIO',
+            });
+          }
+        }
+      }
 
       await prisma.$transaction(async (tx) => {
         if (aceitarTudo) {
           await tx.orcamentoItem.updateMany({ where: { orcamentoId: id }, data: { statusItem: 'ACEITO' } });
+          // Aprovou tudo: um motivo de recusa que tenha sobrado de uma decisão
+          // anterior deixa de valer, e mantê-lo faria o relatório mostrar recusa num
+          // orçamento aprovado.
+          await salvarMotivoOrcamento(tx, id, null);
         } else if (Array.isArray(decisoes)) {
-          const aceitos = decisoes
-            .filter(d => d.statusItem === 'ACEITO')
-            .map(d => Number(d.itemId))
-            .filter(Number.isInteger);
           // [-1] representa "conjunto vazio" com segurança: nenhum id real é negativo,
           // então `in` não casa nada e `notIn` casa todos os itens do orçamento.
-          const idsAceitos = aceitos.length ? aceitos : [-1];
+          const paraAceitar = idsAceitos.length ? idsAceitos : [-1];
           await tx.orcamentoItem.updateMany({
-            where: { orcamentoId: id, id: { in: idsAceitos } },
+            where: { orcamentoId: id, id: { in: paraAceitar } },
             data:  { statusItem: 'ACEITO' },
           });
           await tx.orcamentoItem.updateMany({
-            where: { orcamentoId: id, id: { notIn: idsAceitos } },
+            where: { orcamentoId: id, id: { notIn: paraAceitar } },
             data:  { statusItem: 'REJEITADO' },
           });
+
+          // Motivos — colunas novas, gravadas por SQL cru (§11: o client pode não
+          // estar regenerado). O item ACEITO tem o motivo LIMPO: manter o texto de uma
+          // recusa anterior faria o relatório contradizer o status.
+          const motivoGeral = String(motivoRecusa ?? '').trim() || null;
+          await salvarMotivoOrcamento(tx, id, motivoGeral);
+          for (const d of decisoes) {
+            const itemId = Number(d.itemId);
+            if (!Number.isInteger(itemId)) continue;
+            await salvarMotivoItem(tx, itemId,
+              d.statusItem === 'ACEITO' ? null : (String(d.motivoRecusa ?? '').trim() || motivoGeral));
+          }
         }
         const itens = await tx.orcamentoItem.findMany({ where: { orcamentoId: id }, select: { statusItem: true } });
         await tx.orcamento.update({ where: { id }, data: { status: calcularStatus(itens) } });
