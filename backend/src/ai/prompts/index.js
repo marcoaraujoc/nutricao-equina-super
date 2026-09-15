@@ -1028,6 +1028,11 @@ ${texto.slice(0, 20000)}`,
   // Também em arquivo próprio. Multimodal: recebe as páginas do arquivo anexadas
   // junto do texto extraído. O que decide é a separação variável × lacuna — ver lá.
   ...require('./converterDocumento'),
+
+  // ── Produtos: NOTA FISCAL do fornecedor vira itens de cadastro ─────────────
+  // Também multimodal e em arquivo próprio. O que decide ali é NUNCA inventar:
+  // quantidade ou preço adivinhados viram estoque e dívida que não existem.
+  ...require('./lerNotaFiscal'),
 };
 
 /**

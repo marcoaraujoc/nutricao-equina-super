@@ -23,6 +23,7 @@ import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
+import CadastroCatalogoModal, { type ItemCatalogoCriado } from '../components/CadastroCatalogoModal';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -168,6 +169,9 @@ export default function Farmacia() {
 
   const [itens,        setItens]        = useState<EstoqueItem[]>([]);
   const [medicamentos, setMedicamentos] = useState<Medicamento[]>([]);
+  // Cadastro rápido do medicamento que não existe no catálogo — mesmo modal da
+  // Prescrição e da tela de Vacina. Guarda o NOME digitado na busca do seletor.
+  const [cadastroMedNome, setCadastroMedNome] = useState<string | null>(null);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
   // Erro do SALVAR do painel de formulário — no topo da página fica fora da vista
@@ -218,12 +222,26 @@ export default function Farmacia() {
   const [pesoPorEmbalagem, setPesoPorEmbalagem] = useState<number | ''>('');
   const [buscaMed,       setBuscaMed]       = useState('');
   const [dropdownMedAberto, setDropdownMedAberto] = useState(false);
+  // 🔴 UNIDADE DO ITEM, escolhida AQUI (2026-09-12). Ela vem do catálogo GLOBAL e quase
+  // sempre é de peso/volume ('g', 'ml'), mas a clínica conta e cobra em EMBALAGENS —
+  // era essa diferença que fazia estoque e fatura saírem "em gramas". Trocá-la num item
+  // global cria a CÓPIA da empresa no backend (lib/unidadeMedicamento.js); o global,
+  // que é de todas as clínicas, nunca é alterado.
+  const [unidadeSel,     setUnidadeSel]     = useState('');
+  // Opções do CATÁLOGO da empresa (global + o próprio dela), nunca lista fixa no
+  // código — uma constante aqui divergiria do banco no primeiro item novo. O backend
+  // garante a opção 'Un.' quando nenhuma das existentes já significa isso.
+  const [unidadesCatalogo, setUnidadesCatalogo] = useState<string[]>([]);
   const comboboxRef = useRef<HTMLDivElement>(null);
 
 
   // ── Busca medicamento selecionado ─────────────────────────────────────────
 
   const medSelecionado    = medicamentos.find((m) => m.id === form.medicamentoId) ?? null;
+  // Opções do catálogo + a unidade ATUAL do item, para o seletor nunca abrir em branco
+  // (a grafia gravada pode não estar na lista deduplicada — 'Kg' onde o catálogo tem 'kg').
+  const unidadesOpcoes = [...new Set([...unidadesCatalogo, unidadeSel].filter(Boolean))]
+    .sort((x, y) => x.localeCompare(y, 'pt-BR'));
   const estoqueExistente  = !editandoId && form.medicamentoId
     ? itens.find((i) => i.medicamentoId === form.medicamentoId && i.ativo) ?? null
     : null;
@@ -294,6 +312,17 @@ export default function Farmacia() {
 
   useEffect(() => { if (!loadingPerm) carregarEstoque(); }, [carregarEstoque, loadingPerm]);
 
+  // Opções de unidade: UMA vez, fora de `carregarEstoque` — elas não mudam com a busca
+  // nem com a aba, e refazer a consulta a cada tecla digitada seria desperdício.
+  useEffect(() => {
+    if (loadingPerm) return;
+    let vivo = true;
+    api.get('/medicamentos/opcoes-catalogo', { params: { tipo: 'medicamento' } })
+      .then((res) => { if (vivo) setUnidadesCatalogo(res.data?.dados?.unidades ?? []); })
+      .catch(() => { /* silencioso: o seletor cai na unidade do próprio item */ });
+    return () => { vivo = false; };
+  }, [loadingPerm]);
+
   // Recarrega só a lista de fornecedores da farmácia (após cadastrar um novo pelo seletor).
   const recarregarFornecedores = useCallback(async (): Promise<FornecedorItem[]> => {
     try {
@@ -342,6 +371,25 @@ export default function Farmacia() {
         m.nome.toLowerCase().includes(buscaMed.toLowerCase()) ||
         m.formaFarmaceutica.toLowerCase().includes(buscaMed.toLowerCase())
       );
+
+  // Só sem correspondência EXATA de nome — senão o seletor convidaria a criar a
+  // duplicata de um medicamento que já está na lista (mesmo critério da Prescrição
+  // e da tela de Vacina).
+  const termoBuscaMed = buscaMed.trim();
+  const mostraCriarMed = termoBuscaMed !== '' &&
+    !medicamentos.some((m) => m.nome.toLowerCase() === termoBuscaMed.toLowerCase());
+
+  // O item volta pronto do backend: entra na lista local (sem refazer a carga) e já
+  // fica escolhido na entrada de estoque que estava sendo preenchida.
+  const medicamentoCadastrado = (item: ItemCatalogoCriado) => {
+    const novo = item as unknown as Medicamento;
+    setMedicamentos((prev) => [novo, ...prev.filter((m) => m.id !== novo.id)]);
+    setForm((f) => ({ ...f, medicamentoId: novo.id }));
+    setUnidadeSel(novo.unidade ?? '');
+    setCadastroMedNome(null);
+    setDropdownMedAberto(false);
+    setBuscaMed('');
+  };
 
   // ── Filtro local ──────────────────────────────────────────────────────────
 
@@ -410,8 +458,12 @@ export default function Farmacia() {
   const preencherEdicao = (item: EstoqueItem) => {
     // Mínimo/alarmante são armazenados na unidade maior do catálogo (L, kg...);
     // o formulário exibe/edita na subunidade (mL, g...) — converte na ida e na volta
-    const medDoItem = medicamentos.find(m => m.id === item.medicamentoId) ?? null;
-    const fator     = fatorSubUnidade(medDoItem?.unidade ?? '');
+    // ⚠️ A unidade sai do PRÓPRIO item (`item.medicamento`), não de `medicamentos`: a
+    // lista da tela é recortada por espécie e pode não conter o medicamento da linha —
+    // aí o seletor abriria em branco e o salvar mandaria unidade vazia.
+    const unidadeDoItem = item.medicamento?.unidade ?? '';
+    const fator         = fatorSubUnidade(unidadeDoItem);
+    setUnidadeSel(unidadeDoItem);
     setForm({
       medicamentoId:    item.medicamentoId,
       valor:            item.valor,
@@ -439,6 +491,7 @@ export default function Farmacia() {
 
   const limparForm = () => {
     setForm({ ...FORM_VAZIO });
+    setUnidadeSel('');
     setValorStr('');
     setValorRepassadoStr('');
     setRepassadoEditado(false);
@@ -456,6 +509,9 @@ export default function Farmacia() {
     if (editandoId && !podeEditar) { semPermissao('editar estoque'); return; }
     if (!editandoId && !podeCriar) { semPermissao('criar entrada de estoque'); return; }
     if (!form.medicamentoId) return setErroAcao({ mensagem: 'Selecione um medicamento do catálogo.', campos: ['medicamentoId'] });
+    // Campo com asterisco precisa ter efeito, senão o formulário recusa sem dizer onde.
+    // Item já movimentado tem a unidade travada e chega aqui com o valor de origem.
+    if (!unidadeSel)         return setErroAcao({ mensagem: 'Informe a unidade do item.', campos: ['unidade'] });
     if (!form.lote.trim())   return setErroAcao({ mensagem: 'Lote é obrigatório.', campos: ['lote'] });
     if (!form.validade)      return setErroAcao({ mensagem: 'Validade é obrigatória.', campos: ['validade'] });
     // Não permite validade vencida (anterior a hoje) sempre que o campo for editável —
@@ -481,8 +537,11 @@ export default function Farmacia() {
         lote:             form.lote || null,
         validade:         form.validade || null,
         // Formulário trabalha na subunidade — converte para a unidade maior ao salvar
-        estoqueMinimo:    form.estoqueMinimo / fatorSubUnidade(medSelecionado?.unidade ?? ''),
-        estoqueAlarmante: form.estoqueAlarmante / fatorSubUnidade(medSelecionado?.unidade ?? ''),
+        estoqueMinimo:    form.estoqueMinimo / fatorSubUnidade(unidadeSel),
+        estoqueAlarmante: form.estoqueAlarmante / fatorSubUnidade(unidadeSel),
+        // Unidade escolhida na tela. O backend compara com a gravada e só age quando
+        // MUDA — salvar sem mexer nela não cria cópia nenhuma no catálogo.
+        unidade:          unidadeSel || undefined,
         ativo:            form.ativo,
         fornecedorId:     form.fornecedorId || null,
         notaFiscal:       form.notaFiscal.trim() || null,
@@ -852,6 +911,18 @@ export default function Farmacia() {
         </div>
       </div>
 
+      {/* Cadastro do medicamento que não existe no catálogo — mesmo modal da
+          Prescrição e da tela de Vacina. Fica FORA do bloco do formulário de estoque
+          porque tem z-index próprio (acima dele) e vida própria: fechar o cadastro
+          não pode fechar a entrada de estoque que estava sendo preenchida. */}
+      <CadastroCatalogoModal
+        aberto={cadastroMedNome !== null}
+        tipo="medicamento"
+        nomeInicial={cadastroMedNome ?? ''}
+        onCriado={medicamentoCadastrado}
+        onFechar={() => setCadastroMedNome(null)}
+      />
+
       {/* ── Modal: formulário de estoque ──────────────────────────────────── */}
       {modalFormAberto && (
         <>
@@ -902,7 +973,7 @@ export default function Farmacia() {
                       />
                       <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
                         <ul className="max-h-44 overflow-y-auto">
-                          {medsFiltrados.length === 0 ? (
+                          {medsFiltrados.length === 0 && !mostraCriarMed ? (
                             <li className="px-3 py-3 text-xs text-gray-400 text-center">Nenhum medicamento encontrado.</li>
                           ) : (
                             medsFiltrados.map((m) => (
@@ -911,6 +982,9 @@ export default function Farmacia() {
                                   type="button"
                                   onMouseDown={() => {
                                     setForm((f) => ({ ...f, medicamentoId: m.id }));
+                                    // Abre na unidade que o catálogo tem hoje — é ela
+                                    // que o seletor deixa corrigir.
+                                    setUnidadeSel(m.unidade ?? '');
                                     setDropdownMedAberto(false);
                                     setBuscaMed('');
                                   }}
@@ -925,6 +999,20 @@ export default function Farmacia() {
                               </li>
                             ))
                           )}
+                          {/* Medicamento que ainda não existe no catálogo: abre a MESMA
+                              tela de cadastro da Prescrição. `onMouseDown` dispara antes
+                              do blur que fecha o dropdown. */}
+                          {mostraCriarMed && (
+                            <li>
+                              <button
+                                type="button"
+                                onMouseDown={() => setCadastroMedNome(termoBuscaMed)}
+                                className="w-full text-left px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 transition-colors flex items-center gap-1.5 font-medium border-t border-gray-50">
+                                <Plus size={13} className="flex-shrink-0" />
+                                Cadastrar "{termoBuscaMed}" como novo medicamento
+                              </button>
+                            </li>
+                          )}
                         </ul>
                       </div>
                     </div>
@@ -938,7 +1026,9 @@ export default function Farmacia() {
                   <p className="font-semibold text-indigo-700 text-[11px] uppercase tracking-wider mb-1">Do Catálogo</p>
                   <div className="grid grid-cols-2 gap-1">
                     <p><span className="text-gray-400">Forma:</span> {medSelecionado.formaFarmaceutica}</p>
-                    <p><span className="text-gray-400">Unidade:</span> {medSelecionado.unidade}</p>
+                    {/* A UNIDADE saiu daqui: deixou de ser leitura do catálogo e virou
+                        campo do formulário, ao lado da calculadora de embalagens. Manter
+                        as duas daria dois valores para o mesmo dado na mesma tela. */}
                     <p><span className="text-gray-400">Apresentação:</span> {medSelecionado.apresentacao}</p>
                     <p><span className="text-gray-400">Controlado:</span> {medSelecionado.controlado ? '✓ Sim' : 'Não'}</p>
                   </div>
@@ -1045,8 +1135,9 @@ export default function Farmacia() {
                 </div>
               </div>
 
-              {/* Calculadora de Embalagens */}
-              <div className="grid grid-cols-2 gap-3">
+              {/* Calculadora de Embalagens — a UNIDADE entra aqui porque é ela que dá
+                  sentido às outras duas: "10 embalagens × 1 Un." ou "10 × 500 g". */}
+              <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
                     Nº de Embalagens <span className="text-red-500">*</span>
@@ -1072,7 +1163,7 @@ export default function Farmacia() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Peso/Vol por Embalagem{medSelecionado && <span className="text-gray-400 font-normal ml-1">({medSelecionado.unidade})</span>}
+                    Qtd por Embalagem{unidadeSel && <span className="text-gray-400 font-normal ml-1">({unidadeSel})</span>}
                   </label>
                   <input
                     type="number" min={0}
@@ -1091,19 +1182,48 @@ export default function Farmacia() {
                     className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-400"
                   />
                 </div>
+                {/* 🔴 UNIDADE — preenchida à mão, não mais herdada do catálogo global.
+                    É ela que decide em que o estoque é CONTADO e em que o item é COBRADO
+                    na fatura: com 'g', dez frascos de 500 viram 5.000 g e o preço sai em
+                    R$/g; com 'Un.', viram 10 e o preço sai por unidade. */}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                    Unidade <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={unidadeSel}
+                    disabled={!form.medicamentoId || (!!editandoId && editandoEmUso)}
+                    title={editandoId && editandoEmUso
+                      ? 'Item já movimentado — a unidade não pode ser alterada'
+                      : 'Unidade em que este item é contado no estoque e cobrado na fatura'}
+                    onChange={(e) => setUnidadeSel(e.target.value)}
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-gray-900 disabled:bg-gray-100 disabled:text-gray-400">
+                    <option value="">Selecione...</option>
+                    {unidadesOpcoes.map((u) => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
+                  </select>
+                  {/* Aviso de CONSEQUÊNCIA, não de cosmética: a troca vale para o
+                      medicamento inteiro nesta clínica, e no catálogo global ela nasce
+                      como cópia da empresa (o global é de todas as clínicas). */}
+                  {unidadeSel && medSelecionado && unidadeSel !== medSelecionado.unidade && (
+                    <p className="text-[10px] text-amber-600 mt-1">
+                      Unidade alterada ({medSelecionado.unidade} → {unidadeSel}): passa a valer
+                      para este medicamento apenas nesta clínica.
+                    </p>
+                  )}
+                </div>
               </div>
 
-              {/* Total computado */}
-              {Number(frascos) > 0 && (
+              {/* Total computado — é o valor que VAI SER GRAVADO, na unidade escolhida.
+                  ⚠️ Aparece também na EDIÇÃO sem embalagens reinformadas: trocar 'g' por
+                  'Un.' não mexe no número, então 5.000 g passariam a ser lidos como
+                  "5.000 Un.". Mostrar o total aqui é o que dá para perceber isso ANTES
+                  de salvar — quem corrige é o nº de embalagens ao lado. */}
+              {unidadeSel && (Number(frascos) > 0 || (editandoId && form.qtdEstoque > 0)) && (
                 <p className="text-xs text-gray-500 -mt-1">
                   Total em estoque:{' '}
-                  <b className="text-emerald-700">
-                    {fmtQtd(
-                      pesoPorEmbalagem !== '' && Number(pesoPorEmbalagem) > 0
-                        ? Number(frascos) * Number(pesoPorEmbalagem)
-                        : Number(frascos)
-                    )} {medSelecionado?.unidade ?? ''}
-                  </b>
+                  <b className="text-emerald-700">{fmtQtd(form.qtdEstoque)} {unidadeSel}</b>
                 </p>
               )}
 
@@ -1113,7 +1233,7 @@ export default function Farmacia() {
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
                       <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />
-                      Mínimo <span className="text-gray-400 font-normal">({subUnidade(medSelecionado?.unidade ?? 'un')})</span>
+                      Mínimo <span className="text-gray-400 font-normal">({subUnidade(unidadeSel || 'un')})</span>
                     </label>
                     <input type="number" min={0} value={form.estoqueMinimo === 0 ? '' : form.estoqueMinimo}
                       onChange={(e) => setForm((f) => ({ ...f, estoqueMinimo: e.target.value === '' ? 0 : Number(e.target.value) }))}
@@ -1123,7 +1243,7 @@ export default function Farmacia() {
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
                       <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
-                      Alarmante <span className="text-gray-400 font-normal">({subUnidade(medSelecionado?.unidade ?? 'un')})</span>
+                      Alarmante <span className="text-gray-400 font-normal">({subUnidade(unidadeSel || 'un')})</span>
                     </label>
                     <input type="number" min={0} value={form.estoqueAlarmante === 0 ? '' : form.estoqueAlarmante}
                       onChange={(e) => setForm((f) => ({ ...f, estoqueAlarmante: e.target.value === '' ? 0 : Number(e.target.value) }))}

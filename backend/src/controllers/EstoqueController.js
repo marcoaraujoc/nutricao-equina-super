@@ -4,18 +4,27 @@
 const prisma = require('../lib/prisma').default;
 const { registrarAuditoria } = require('../lib/auditoria');
 const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
+// 🔴 UNIDADE DO MEDICAMENTO ESCOLHIDA PELA CLÍNICA (copy-on-write no catálogo misto).
+// A tela de estoque é onde ela se define — ver lib/unidadeMedicamento.js.
+const { definirUnidadeDoMedicamento, UnidadeIndisponivelError } = require('../lib/unidadeMedicamento');
 
-// Calcula preço por unidade base (R$/g ou R$/mL) a partir do preço total e
-// da quantidade em sua unidade de medida. Retorna null quando não é possível
-// calcular (unidade desconhecida ou quantidade zero).
+// Calcula o preço por unidade base a partir do preço total e da quantidade na unidade
+// do item: R$/g para peso, R$/mL para volume e R$/unidade para o que é CONTADO
+// ('Un.', 'Comprimido', 'Frasco'...). Retorna null só quando não há o que dividir
+// (quantidade ou preço zerados).
 const FATOR_BASE_ESTOQUE = {
   'g': 1, 'mg': 0.001, 'kg': 1000, 'mcg': 0.000001,
   'ml': 1, 'l': 1000,
 };
 function calcPrecoUnitarioBase(valorRepassado, qtd, unidade) {
   if (!qtd || qtd <= 0 || !valorRepassado || valorRepassado <= 0) return null;
-  const fator = FATOR_BASE_ESTOQUE[(unidade ?? '').trim().toLowerCase()];
-  if (fator == null) return null; // unidade incompatível (ex: 'un', 'balde') — não calcula
+  // 🔴 UNIDADE CONTÁVEL USA FATOR 1 — antes devolvia `null` ("unidade incompatível") e
+  // o campo ficava vazio. Com `precoUnitarioBase` nulo, a execução da prescrição cai no
+  // CAMINHO LEGADO (`precoUnitarioDoEstoque`), que divide o valor pelo estoque RESTANTE:
+  // o preço unitário SUBIA a cada dose aplicada, e era isso que ia para a fatura do
+  // cliente. Para quem conta em 'Un.', R$/unidade é a conta certa — e, congelada na
+  // entrada, ela não se move mais.
+  const fator   = FATOR_BASE_ESTOQUE[(unidade ?? '').trim().toLowerCase()] ?? 1;
   const qtdBase = qtd * fator;
   return qtdBase > 0 ? valorRepassado / qtdBase : null;
 }
@@ -50,6 +59,34 @@ function getEmpresaScope(req) {
 function pertenceAEmpresa(item, req) {
   if (req.user?.userType === 'ADMIN') return true;
   return req.empresaId != null && item.empresaId === req.empresaId;
+}
+
+/**
+ * Resolve a UNIDADE informada na tela, devolvendo o medicamento a gravar no estoque.
+ *
+ * ⚠️ Roda em transaction PRÓPRIA: `definirUnidadeDoMedicamento` pode CRIAR a cópia da
+ * empresa e REAPONTAR estoque e prescrições pendentes — um passo falhando no meio
+ * deixaria metade disso feito.
+ * ⚠️ `empresaId` vem do CONTEXTO, nunca do corpo (o RLS também recusaria a escrita de
+ * catálogo carimbada para outra clínica, mas a intenção fica explícita aqui).
+ *
+ * @returns {Promise<{id:number, unidade:string, copiado:boolean, alterado:boolean}>}
+ */
+async function resolverUnidade(req, medicamentoId, unidade, ignorarEstoqueId = null) {
+  return prisma.$transaction((tx) => definirUnidadeDoMedicamento(tx, {
+    medicamentoId,
+    unidade,
+    empresaId: req.empresaId ?? null,
+    ignorarEstoqueId,
+  }));
+}
+
+/** 400/404 da regra de unidade; qualquer outro erro segue para o catch do controller. */
+function responderErroUnidade(res, err) {
+  if (err instanceof UnidadeIndisponivelError) {
+    return res.status(err.status).json({ error: err.message, code: err.code });
+  }
+  return null;
 }
 
 // ─── Listar estoque da clínica ────────────────────────────────────────────────
@@ -144,6 +181,7 @@ const criar = async (req, res) => {
       estoqueAlarmante = 0,
       fornecedorId,
       notaFiscal,
+      unidade,
     } = req.body;
 
     if (!medicamentoId)
@@ -156,10 +194,27 @@ const criar = async (req, res) => {
     if (Number(qtdEstoque) < 0 || Number(estoqueMinimo) < 0 || Number(estoqueAlarmante) < 0)
       return res.status(400).json({ error: 'Quantidades não podem ser negativas.' });
 
-    const med = await prisma.medicamento.findUnique({ where: { id: Number(medicamentoId) } });
+    // A unidade informada na tela decide o medicamento a gravar: trocá-la num item do
+    // catálogo GLOBAL produz a CÓPIA da empresa, e é nela que a entrada vai apontar.
+    let unidadeResolvida;
+    try {
+      unidadeResolvida = await resolverUnidade(req, medicamentoId, unidade);
+    } catch (err) {
+      const resposta = responderErroUnidade(res, err);
+      if (resposta) return resposta;
+      throw err;
+    }
+    const medicamentoIdFinal = unidadeResolvida.id;
+
+    const med = await prisma.medicamento.findUnique({ where: { id: medicamentoIdFinal } });
     if (!med) return res.status(404).json({ error: 'Medicamento não encontrado no catálogo.' });
 
-    const eId           = empresaId ? Number(empresaId) : (req.empresaId ?? null);
+    // ⚠️ Só o ADMIN da plataforma escolhe a empresa por parâmetro; para os demais o
+    // tenant é o do CONTEXTO. Aceitar `empresaId` do corpo faria a entrada nascer para
+    // outra clínica (o RLS recusaria, mas como erro 500 sem explicação).
+    const eId           = req.user?.userType === 'ADMIN'
+      ? (empresaId ? Number(empresaId) : (req.empresaId ?? null))
+      : (req.empresaId ?? null);
     const loteNorm      = normLote(lote);
     const validadeStr   = normValidade(validade);
     const precoNovo     = calcPrecoUnitarioBase(Number(valorRepassado), Number(qtdEstoque), med.unidade);
@@ -167,7 +222,7 @@ const criar = async (req, res) => {
 
     // ── Busca candidatos para consolidação (mesmo medicamento, empresa, ativo) ─
     const candidatos = await prisma.estoqueClinica.findMany({
-      where: { medicamentoId: Number(medicamentoId), empresaId: eId, ativo: true },
+      where: { medicamentoId: medicamentoIdFinal, empresaId: eId, ativo: true },
       include: INCLUDE,
     });
 
@@ -224,7 +279,7 @@ const criar = async (req, res) => {
     const item = await prisma.$transaction(async (tx) => {
       const entry = await tx.estoqueClinica.create({
         data: {
-          medicamentoId:    Number(medicamentoId),
+          medicamentoId:    medicamentoIdFinal,
           empresaId:        eId,
           valor:            Number(valor),
           valorRepassado:   Number(valorRepassado),
@@ -263,7 +318,7 @@ const criar = async (req, res) => {
 const atualizar = async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { valor, valorRepassado, lote, validade, estoqueMinimo, estoqueAlarmante, ativo, fornecedorId, notaFiscal, qtdEstoque, qtdEmbalagens, pesoPorEmbalagem } = req.body;
+    const { valor, valorRepassado, lote, validade, estoqueMinimo, estoqueAlarmante, ativo, fornecedorId, notaFiscal, qtdEstoque, qtdEmbalagens, pesoPorEmbalagem, unidade } = req.body;
 
     // Lote e validade são obrigatórios — não podem ser apagados na edição
     if (lote     !== undefined && !lote?.trim()) return res.status(400).json({ error: 'Lote é obrigatório.' });
@@ -322,16 +377,43 @@ const atualizar = async (req, res) => {
       if (pesoPorEmbalagem !== undefined) data.pesoPorEmbalagem = pesoPorEmbalagem ? Number(pesoPorEmbalagem) : null;
     }
 
-    // Recalcula precoUnitarioBase quando valorRepassado ou quantidade mudarem
-    if (valorRepassado !== undefined || data.qtdEstoque !== undefined) {
-      const med = await prisma.medicamento.findUnique({ where: { id: existe.medicamentoId }, select: { unidade: true } });
-      const vrFinal  = valorRepassado !== undefined ? Number(valorRepassado) : existe.valorRepassado;
-      const qtdFinal = data.qtdEstoque !== undefined ? data.qtdEstoque : existe.qtdEstoque;
-      const novoPreco = calcPrecoUnitarioBase(vrFinal, qtdFinal, med?.unidade);
-      if (novoPreco !== null) data.precoUnitarioBase = novoPreco;
+    // 🔴 UNIDADE + GRAVAÇÃO NA MESMA TRANSACTION. A troca de unidade CRIA a cópia da
+    // empresa e REAPONTA estoque e prescrições pendentes; resolvê-la antes das
+    // validações acima deixaria a unidade alterada mesmo quando o salvar é recusado.
+    let item;
+    try {
+      item = await prisma.$transaction(async (tx) => {
+        // `ignorarEstoqueId` é ESTA entrada: ela não conta como "outra entrada com a
+        // quantidade na unidade antiga", porque é aqui que a quantidade é reexpressa.
+        const u = await definirUnidadeDoMedicamento(tx, {
+          medicamentoId:    existe.medicamentoId,
+          unidade,
+          empresaId:        req.empresaId ?? null,
+          ignorarEstoqueId: id,
+        });
+
+        // O reapontamento da cópia cobre as entradas ATIVAS da empresa; carimbar aqui
+        // alcança também a INATIVA que está sendo editada, deixada de fora de propósito.
+        if (u.id !== existe.medicamentoId) data.medicamentoId = u.id;
+
+        // Recalcula precoUnitarioBase quando valor, quantidade OU UNIDADE mudarem — sem
+        // a unidade na conta, trocar 'g' por 'Un.' deixaria o preço gravado em R$/g
+        // valendo como R$/unidade na fatura do cliente.
+        if (valorRepassado !== undefined || data.qtdEstoque !== undefined || u.alterado) {
+          const vrFinal   = valorRepassado !== undefined ? Number(valorRepassado) : existe.valorRepassado;
+          const qtdFinal  = data.qtdEstoque !== undefined ? data.qtdEstoque : existe.qtdEstoque;
+          const novoPreco = calcPrecoUnitarioBase(vrFinal, qtdFinal, u.unidade);
+          if (novoPreco !== null) data.precoUnitarioBase = novoPreco;
+        }
+
+        return tx.estoqueClinica.update({ where: { id }, data, include: INCLUDE });
+      });
+    } catch (err) {
+      const resposta = responderErroUnidade(res, err);
+      if (resposta) return resposta;
+      throw err;
     }
 
-    const item = await prisma.estoqueClinica.update({ where: { id }, data, include: INCLUDE });
     return res.json({ dados: item });
   } catch (err) {
     console.error('EstoqueController.atualizar:', err);
@@ -499,4 +581,10 @@ const listarMovimentos = async (req, res) => {
   }
 };
 
-module.exports = { listar, obterPorId, criar, atualizar, excluir, toggle, ajustarEstoque, listarMovimentos };
+module.exports = {
+  listar, obterPorId, criar, atualizar, excluir, toggle, ajustarEstoque, listarMovimentos,
+  // Exportado para teste: é o preço que vai para a FATURA do cliente, e o caso da
+  // unidade CONTÁVEL ('Un.') quebra em silêncio — devolvia null e a cobrança caía no
+  // cálculo dinâmico, que sobe conforme o estoque baixa.
+  calcPrecoUnitarioBase,
+};

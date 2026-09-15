@@ -14,7 +14,7 @@ import {
   ClipboardCheck, Activity, Utensils, FileBarChart,
   FileText, Syringe, Microscope, Scan,
   FolderOpen, UserCog, Truck, MapPin, CalendarClock,
-  Package, UserPlus, ScrollText, Building2,
+  Package, UserPlus, ScrollText, Building2, Wallet,
   Bell, Gauge, ListChecks, Receipt, Layers, HardHat, FileDown,
 } from 'lucide-react';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -115,6 +115,8 @@ export default function Sidebar() {
   const podeVerFaturas         = podeExecutar('financeiro.faturas.ler');
   const podeVerRecibos         = podeExecutar('financeiro.recibos.ler');
   const podeVerFarmacia        = podeExecutar('farmacia.estoque.ler');
+  // Financeiro > Pagamentos (2026-09-10)
+  const podeVerPagamentos      = podeExecutar('financeiro.pagamentos.ler');
   const podeVerEstoqueVacina   = isGestor || podeExecutar('vacina.estoque.ler');
   // Medicamentos/Procedimentos (catálogo GLOBAL): os links abaixo são ADMIN-only
   // por decisão — a rota (`requireAdmin` em routes/medicamentos.js) só aceita o
@@ -126,6 +128,10 @@ export default function Sidebar() {
   const podeVerTratadores      = isAdmin || isGestor || podeExecutar('cadastro.tratador.ler');
   const podeVerFornecedores    = isAdmin || isGestor || podeExecutar('cadastro.fornecedor.ler');
   const podeVerPrestadores     = isAdmin || isGestor || podeExecutar('cadastro.prestador.ler');
+  // Cadastro > PRODUTOS — medicamento e vacina da clínica, com fornecedor e entrada de
+  // estoque. A tela existia e estava montada em App.tsx desde 2026-09-10, mas NUNCA
+  // ganhou entrada no menu: só se chegava nela pela URL (2026-09-12).
+  const podeVerProdutos        = isAdmin || isGestor || podeExecutar('cadastro.produto.ler');
   const podeVerLocalizacoes    = isAdmin || isGestor || podeExecutar('cadastro.localizacao.ler');
   const podeVerEquipe          = isAdmin || isGestor || podeExecutar('equipe.membros.ler');
   const podeVerRelatorios      = isGestor || podeExecutar('relatorios.gerencial.ler');
@@ -179,6 +185,7 @@ export default function Sidebar() {
     podeVerEquipe ||
     podeVerFornecedores ||
     podeVerPrestadores ||
+    podeVerProdutos ||
     podeVerLocalizacoes ||
     podeVerCadProcedimentos ||
     podeVerProprietarios ||
@@ -207,7 +214,8 @@ export default function Sidebar() {
   const [openGroup, setOpenGroup] = useState<string | null>(() => {
     // Atendimento, Vacina e Execução de Prescrição são módulos FOLHA (link direto,
     // sem sub-itens) — não abrem grupo nenhum.
-    if (p.startsWith('/faturamento') || p.startsWith('/orcamento'))  return 'financeiro';
+    if (p.startsWith('/faturamento') || p.startsWith('/orcamento') ||
+        p.startsWith('/financeiro/') || p.startsWith('/recibos-prestador')) return 'financeiro';
     if (p.startsWith('/estoque-vacina') || p.startsWith('/farmacia')) return 'estoque';
     if (p.startsWith('/exames'))                                     return 'exames';
     if (p.startsWith('/dieta') ||
@@ -371,6 +379,9 @@ export default function Sidebar() {
                   {podeVerEquipe        && subLink('/equipe',                 <Users2 size={14} />,  'Equipe',        p === '/equipe')}
                   {podeVerFornecedores  && subLink('/cadastro/fornecedores',  <Truck size={14} />,   'Fornecedores',  p.startsWith('/cadastro/fornecedores'))}
                   {podeVerPrestadores   && subLink('/cadastro/prestadores',   <HardHat size={14} />, 'Prestadores',   p.startsWith('/cadastro/prestadores'))}
+                  {/* Fica logo abaixo de Fornecedores: é de quem se compra o produto,
+                      e o cadastro de um leva ao do outro. */}
+                  {podeVerProdutos      && subLink('/cadastro/produtos',      <Package size={14} />, 'Produtos',      p.startsWith('/cadastro/produtos'))}
                   {podeVerLocalizacoes  && subLink('/cadastro/localizacoes',  <MapPin size={14} />,  'Localizações',  p.startsWith('/cadastro/localizacoes'))}
                   {podeVerCadProcedimentos && subLink('/cadastro/procedimentos', <ListChecks size={14} />, 'Procedimentos', p.startsWith('/cadastro/procedimentos'))}
                   {podeVerProprietarios && subLink('/cadastro/proprietarios', <Users size={14} />,   'Proprietários', p.startsWith('/cadastro/proprietarios'))}
@@ -523,11 +534,12 @@ export default function Sidebar() {
                   )}
 
                   {/* ── 7. Financeiro (Orçamento + Faturamento) ───────────── */}
-                  {(podeVerFaturas || podeVerOrcamento || podeVerRecibos) && (
+                  {(podeVerFaturas || podeVerOrcamento || podeVerRecibos || podeVerPagamentos) && (
                     <div>
                       <button onClick={() => toggleGroup('financeiro')}
                         className={`flex items-center justify-between w-full px-5 py-3 text-sm font-semibold rounded-3xl transition-colors ${
-                          p.startsWith('/faturamento') || p.startsWith('/orcamento') || p.startsWith('/recibos-prestador')
+                          p.startsWith('/faturamento') || p.startsWith('/orcamento') ||
+                          p.startsWith('/recibos-prestador') || p.startsWith('/financeiro/')
                             ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
                         }`}>
                         <span className="flex items-center gap-3"><DollarSign size={20} /> Financeiro</span>
@@ -544,6 +556,10 @@ export default function Sidebar() {
                               Fica depois do Faturamento porque é dele que a execução
                               nasce (procedimento só entra nos dois depois de executado). */}
                           {podeVerRecibos   && subLink('/recibos-prestador', <Receipt size={14} />, 'Recibos de Prestador', p.startsWith('/recibos-prestador'))}
+                          {/* PAGAMENTOS — o que a clínica DEVE a fornecedor e prestador,
+                              no molde da fatura (abrir → fechar → pagar). Fica por último
+                              porque é dela e do recibo que os lançamentos nascem. */}
+                          {podeVerPagamentos && subLink('/financeiro/pagamentos', <Wallet size={14} />, 'Pagamentos', p.startsWith('/financeiro/pagamentos'))}
                         </div>
                       )}
                     </div>

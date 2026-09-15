@@ -2,8 +2,16 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+// PRODUTO DE FORNECEDOR — o item que a clínica NÃO estoca mas consegue pedir.
+// Lido por SQL cru: a tabela é da migration 20261006000000 e o client pode não
+// conhecê-la (§11). Sem ela, a lista sai como saía antes.
+const produtoFornecedor = require('../lib/produtoFornecedor');
 const { registrarAuditoria } = require('../lib/auditoria');
-const { garantirMedicamentoDaEmpresa } = require('../lib/catalogoManual');
+const { garantirMedicamentoDaEmpresa, dedupPorCaixa, viaExcluidaDoSeletor,
+        preferirCopiaDaEmpresa } = require('../lib/catalogoManual');
+// Garante a opção 'Un.' no seletor de unidade quando o catálogo da empresa não tem
+// nenhuma equivalente — ver lib/unidadeMedicamento.js.
+const { garantirUnidadeAvulsa } = require('../lib/unidadeMedicamento');
 
 const INCLUDE = {
   vias: { select: { id: true, via: true }, orderBy: { via: 'asc' } },
@@ -66,6 +74,101 @@ function escopoCatalogo(req) {
   const empresaId = req.empresaId ? Number(req.empresaId) : null;
   return { OR: [{ empresaId: null }, ...(empresaId ? [{ empresaId }] : [])] };
 }
+
+// Espécies que valem para o item cadastrado SEM paciente na tela (Entrada de Estoque
+// da Farmácia e Estoque de Vacinas). A espécie é o que faz o item aparecer nas buscas
+// depois — sem ela, o medicamento/vacina recém-criado nasce FORA do filtro da própria
+// tela que o criou, e a pessoa conclui que o cadastro não funcionou.
+//
+// 🔴 É a UNIÃO das duas fontes que as telas usam para recortar o catálogo, porque elas
+// não são a mesma:
+//   • `listar` (Farmácia, `especieDaEmpresa=true`) → espécies dos ANIMAIS ativos;
+//   • `EstoqueVacinaController.getEspeciesIds` → para VETERINARIO, as espécies
+//     DECLARADAS no perfil (`tb_vet_especies`), caindo nos animais só quando não há
+//     nenhuma declarada.
+// Cobrir só uma deixaria o item invisível na outra. Espécie a mais não vaza nada: o
+// item é privado da empresa e o RLS de `tb_medicamentos` o mantém assim.
+async function especiesParaItemSemPaciente(req) {
+  const empresaId = req.empresaId ?? null;
+  const equipeId  = req.equipeId  ?? null;
+  const ids = new Set();
+
+  if (empresaId || equipeId) {
+    const where = { ativo: true };
+    if (equipeId) where.equipeId  = Number(equipeId);
+    else          where.empresaId = Number(empresaId);
+
+    const linhas = await prisma.animal.findMany({
+      where, select: { especieId: true }, distinct: ['especieId'],
+    });
+    for (const a of linhas) if (a.especieId) ids.add(a.especieId);
+  }
+
+  if (req.user?.userType === 'VETERINARIO' && req.user?.id) {
+    const doVet = await prisma.vetEspecie.findMany({
+      where:  { vetPerfil: { userId: Number(req.user.id) } },
+      select: { especieId: true }, distinct: ['especieId'],
+    }).catch(() => []);
+    for (const e of doVet) if (e.especieId) ids.add(e.especieId);
+  }
+
+  return [...ids];
+}
+
+// GET /medicamentos/opcoes-catalogo?tipo=medicamento|vacina
+//
+// Valores que JÁ EXISTEM no catálogo visível da empresa, para os seletores da tela de
+// cadastro rápido (Prescrição, Vacina e Entrada de Estoque). NÃO é lista fixa no código:
+// uma constante no front divergiria do banco no primeiro item novo, e o cadastro passaria
+// a criar variações do que já existe ("Frasco" × "frasco ampola") sem ninguém notar.
+//
+// ⚠️ Recortado por `tipo`: a vacina tem forma, unidade e via PRÓPRIAS ('dose',
+// 'Subcutânea (SC)'), e oferecer 'Comprimido' num cadastro de vacina seria oferecer o
+// que não existe ali.
+const opcoesCatalogo = async (req, res) => {
+  try {
+    const isVacina = req.query.tipo === 'vacina';
+    const escopo   = escopoCatalogo(req);
+
+    const where = {
+      ativo: true,
+      ...(isVacina ? { classificacao: { contains: 'vacin', mode: 'insensitive' } }
+                   : { NOT: { classificacao: { contains: 'vacin', mode: 'insensitive' } } }),
+      ...(escopo.OR ? { AND: [escopo] } : {}),
+    };
+
+    // `groupBy` (e não `distinct`) porque a CONTAGEM é que resolve a duplicata de
+    // caixa: com 'kg' e 'Kg' no catálogo, o seletor mostrava as duas como se fossem
+    // unidades diferentes. Fica a grafia MAIS USADA — escolher a primeira alfabética
+    // faria 'Kg' vencer 'kg' por acidente de ordenação.
+    const [formas, unidades, apresentacoes, vias] = await Promise.all([
+      prisma.medicamento.groupBy({ by: ['formaFarmaceutica'], where, _count: { _all: true } }),
+      prisma.medicamento.groupBy({ by: ['unidade'],           where, _count: { _all: true } }),
+      prisma.medicamento.groupBy({ by: ['apresentacao'],      where, _count: { _all: true } }),
+      prisma.medicamentoVia.groupBy({ by: ['via'], where: { medicamento: where }, _count: { _all: true } }),
+    ]);
+
+    const limpar = dedupPorCaixa;
+
+    // Curadoria do seletor de vias (não mexe no catálogo — ver `viaExcluidaDoSeletor`).
+    const viasLimpas = limpar(vias, 'via').filter(v => !viaExcluidaDoSeletor(v, isVacina));
+
+    return res.json({
+      dados: {
+        formas:        limpar(formas,        'formaFarmaceutica'),
+        // 🔴 A unidade é a ÚNICA opção do seletor com um valor GARANTIDO: a clínica
+        // conta o item em embalagens ('Un.'), e o catálogo global quase sempre só traz
+        // peso/volume — sem a garantia, a tela de estoque não teria como corrigir isso.
+        unidades:      garantirUnidadeAvulsa(limpar(unidades, 'unidade')),
+        apresentacoes: limpar(apresentacoes, 'apresentacao'),
+        vias:          viasLimpas,
+      },
+    });
+  } catch (err) {
+    console.error('MedicamentoController.opcoesCatalogo:', err);
+    return res.status(500).json({ error: 'Erro ao carregar as opções do catálogo.' });
+  }
+};
 
 // ─── Listar ──────────────────────────────────────────────────────────────────
 
@@ -138,7 +241,9 @@ const listar = async (req, res) => {
     ]);
 
     return res.json({
-      dados: medicamentos,
+      // Medicamento GLOBAL cuja cópia a empresa já tem (troca de unidade) sai da lista —
+      // as duas linhas têm o mesmo nome e a tela não teria como distingui-las.
+      dados: preferirCopiaDaEmpresa(medicamentos),
       meta: {
         total,
         totalControlados,
@@ -387,23 +492,57 @@ const excluir = async (req, res) => {
 // catálogo global, ADMIN-only, nunca é tocado por aqui).
 const garantirCatalogoManual = async (req, res) => {
   try {
-    const { nome, tipo = 'medicamento', animalId, unidade } = req.body;
+    const { nome, tipo = 'medicamento', animalId, unidade,
+            formaFarmaceutica, apresentacao, controlado, vias, fabricante } = req.body;
     const n = String(nome ?? '').trim();
     if (!n) return res.status(400).json({ error: 'Nome é obrigatório.' });
-    if (!animalId) return res.status(400).json({ error: 'animalId é obrigatório.' });
-
-    const animal = await prisma.animal.findUnique({
-      where:  { id: Number(animalId) },
-      select: { especieId: true },
-    });
-    if (!animal) return res.status(404).json({ error: 'Animal não encontrado.' });
 
     const isVacina = tipo === 'vacina';
+
+    // A tela de cadastro (Prescrição, Vacina e Entrada de Estoque) manda os campos e
+    // exige TODOS eles. O caminho antigo — só o nome — continua valendo para quem
+    // chama sem formulário; ali o item nasce com os padrões de `catalogoManual.js`.
+    const comFormulario = formaFarmaceutica !== undefined
+      || apresentacao !== undefined || vias !== undefined;
+    const viasLista = Array.isArray(vias) ? vias.map(v => String(v ?? '').trim()).filter(Boolean) : [];
+    if (comFormulario) {
+      const faltando = [];
+      if (!String(formaFarmaceutica ?? '').trim()) faltando.push('Forma');
+      if (!String(unidade ?? '').trim())           faltando.push('Unidade');
+      if (!String(apresentacao ?? '').trim())      faltando.push('Apresentação');
+      if (viasLista.length === 0)                  faltando.push('Vias');
+      if (faltando.length > 0) {
+        return res.status(400).json({ error: `Preencha: ${faltando.join(', ')}.`, campos: faltando });
+      }
+    }
+
+    // A ESPÉCIE é o que faz o item aparecer nas buscas depois (`paraAtendimento` e o
+    // filtro `especieDaEmpresa` de `listar` recortam por ela). Com paciente na tela,
+    // é a dele; sem paciente — a Entrada de Estoque não tem um —, são as espécies dos
+    // animais ATIVOS da empresa, exatamente o conjunto que aquele filtro consulta.
+    // Sem nenhuma das duas o item nasceria invisível na própria tela que o criou.
+    let especieIds = [];
+    if (animalId) {
+      const animal = await prisma.animal.findUnique({
+        where:  { id: Number(animalId) },
+        select: { especieId: true },
+      });
+      if (!animal) return res.status(404).json({ error: 'Animal não encontrado.' });
+      especieIds = animal.especieId ? [animal.especieId] : [];
+    } else {
+      especieIds = await especiesParaItemSemPaciente(req);
+    }
+
     const id = await garantirMedicamentoDaEmpresa(prisma, {
       nome:       n,
       unidade,
+      formaFarmaceutica,
+      apresentacao,
+      fabricante,
+      controlado: controlado === true || controlado === 'true',
+      vias:       viasLista,
       vacina:     isVacina,
-      especieIds: animal.especieId ? [animal.especieId] : [],
+      especieIds,
     }, req.empresaId ?? null);
 
     // Mesmo formato de `paraAtendimento` — o front trata o resultado como mais um
@@ -415,8 +554,13 @@ const garantirCatalogoManual = async (req, res) => {
     return res.status(201).json({
       dados: {
         id: criado.id, nome: criado.nome, formaFarmaceutica: criado.formaFarmaceutica,
-        unidade: criado.unidade, vias: criado.vias,
+        unidade: criado.unidade, apresentacao: criado.apresentacao,
+        fabricante: criado.fabricante,
+        controlado: criado.controlado, ativo: criado.ativo, vias: criado.vias,
         emEstoque: false, qtdEstoque: null, precoUnitarioBase: null, valorPorDose: null,
+        // Item recém-criado à mão não tem fornecedor cadastrado — cadastrar isso é
+        // ato à parte, na tela de Produtos.
+        ehProduto: false, fornecedores: [],
       },
     });
   } catch (err) {
@@ -490,7 +634,35 @@ const paraAtendimento = async (req, res) => {
       ...(take ? { take } : {}),
     });
 
-    const dados = medicamentos.map(m => {
+    // Fornecedores de TODOS os itens da página, numa consulta só. Nunca por item:
+    // o catálogo tem milhares de linhas e uma ida ao banco por linha derrubaria a tela.
+    const produtos = await produtoFornecedor.produtosPorMedicamento(
+      empresaId, medicamentos.map(m => m.id),
+    );
+
+    /**
+     * 🔴 O item é PRODUTO quando tem fornecedor cadastrado E não está no estoque
+     * (decisão de 2026-09-10). São coisas diferentes: em ESTOQUE a clínica já tem o
+     * frasco; PRODUTO ela pede ao fornecedor quando prescreve. Marcar como produto o
+     * que já está em estoque faria a cor deixar de distinguir as duas coisas — que é
+     * justamente para o que ela serve.
+     */
+    const infoProduto = (id, emEstoque) => {
+      const lista = produtos.get(id) ?? [];
+      if (emEstoque || lista.length === 0) return { ehProduto: false, fornecedores: [] };
+      return {
+        ehProduto: true,
+        fornecedores: lista.map(p => ({
+          id: p.fornecedorId, nome: p.fornecedorNome,
+          valorUnitario: p.valorUnitario, valorVenda: p.valorVenda, unidade: p.unidade,
+        })),
+      };
+    };
+
+    // Medicamento GLOBAL de que a empresa já tem a CÓPIA (troca de unidade pela tela de
+    // estoque) sai da busca: as duas linhas têm o mesmo nome, e a global apareceria
+    // "sem estoque" ao lado da cópia que tem o frasco — ver preferirCopiaDaEmpresa.
+    const dados = preferirCopiaDaEmpresa(medicamentos).map(m => {
       if (isVacina) {
         // Preço por dose do lote FEFO disponível (para pré-preencher o orçamento);
         // null quando não há estoque — a vacina ainda aparece (preço editável).
@@ -498,36 +670,49 @@ const paraAtendimento = async (req, res) => {
         const valorPorDose = lote
           ? Number(lote.valorUnitarioRepassado ?? lote.valorUnitario ?? 0) / (Number(lote.dosesPorFrasco) || 1)
           : null;
+        const emEstoque = (m.lotes ?? []).length > 0;
         return {
           id: m.id, nome: m.nome, formaFarmaceutica: m.formaFarmaceutica,
           unidade: m.unidade, vias: m.vias,
-          emEstoque: (m.lotes ?? []).length > 0,
+          emEstoque,
           valorPorDose,
+          ...infoProduto(m.id, emEstoque),
         };
       }
       const estoques = m.estoques ?? [];
       const qtdTotal = estoques.reduce((s, e) => s + (e.qtdEstoque ?? 0), 0);
       // Preço base do estoque (R$/g ou R$/mL) para pré-preencher o orçamento
       const precoUnitarioBase = estoques.find(e => e.precoUnitarioBase != null)?.precoUnitarioBase ?? null;
+      const emEstoque = estoques.length > 0;
       return {
         id: m.id, nome: m.nome, formaFarmaceutica: m.formaFarmaceutica,
         unidade: m.unidade, vias: m.vias,
-        emEstoque:   estoques.length > 0,
-        qtdEstoque:  estoques.length > 0 ? qtdTotal : null,
+        emEstoque,
+        qtdEstoque:  emEstoque ? qtdTotal : null,
         precoUnitarioBase,
+        ...infoProduto(m.id, emEstoque),
       };
     });
 
-    // Vacina: em estoque primeiro (alfabético), depois as sem estoque (alfabético) —
-    // pedido explícito do seletor de vacina (Orçamento e SubModuloVacina, que
-    // compartilham este endpoint). `orderBy: nome` do Prisma já deixa cada grupo
-    // alfabético; só falta separar os dois grupos.
-    if (isVacina) {
-      dados.sort((a, b) => {
-        if (a.emEstoque !== b.emEstoque) return a.emEstoque ? -1 : 1;
-        return a.nome.localeCompare(b.nome, 'pt-BR');
-      });
-    }
+    /**
+     * 🔴 TRÊS GRUPOS, nesta ordem (pedido de 2026-09-10): EM ESTOQUE → PRODUTO de
+     * fornecedor → o resto. Alfabético dentro de cada um.
+     *
+     * ⚠️ Vale para MEDICAMENTO e VACINA. Antes só a vacina era ordenada — o
+     * medicamento saía em ordem alfabética pura, então o que a clínica tem em mãos
+     * ficava misturado com o que ela não tem, e a lista de milhares de itens não
+     * ajudava a decidir nada.
+     *
+     * ⚠️ A ordem é do BACKEND, não da tela: é aqui que se sabe o que há em estoque e
+     * quem fornece. Mandar as flags e deixar cada tela ordenar seria a mesma regra
+     * escrita três vezes (prescrição, vacina, orçamento) — e a terceira divergiria.
+     */
+    const posto = (x) => (x.emEstoque ? 0 : x.ehProduto ? 1 : 2);
+    dados.sort((a, b) => {
+      const pa = posto(a), pb = posto(b);
+      if (pa !== pb) return pa - pb;
+      return a.nome.localeCompare(b.nome, 'pt-BR');
+    });
 
     return res.json({ dados });
   } catch (err) {
@@ -536,4 +721,4 @@ const paraAtendimento = async (req, res) => {
   }
 };
 
-module.exports = { listar, listarVacinas, listarEspecies, obterPorId, criar, atualizar, excluir, paraAtendimento, garantirCatalogoManual };
+module.exports = { listar, listarVacinas, listarEspecies, obterPorId, criar, atualizar, excluir, paraAtendimento, garantirCatalogoManual, opcoesCatalogo };

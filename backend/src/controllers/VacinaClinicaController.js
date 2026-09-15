@@ -3,6 +3,11 @@ const prisma = require('../lib/prisma').default;
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { ANIMAL_VISIVEL } = require('../lib/visibilidade');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem } = require('../lib/faturaUtils');
+// CONTA A PAGAR do fornecedor da vacina (2026-09-10) — o outro lado do balcão da
+// fatura. Lido/gravado por SQL cru: as tabelas são da migration 20261006000000.
+const contasPagar       = require('../lib/contasPagar');
+const produtoFornecedor = require('../lib/produtoFornecedor');
+const formaCobranca     = require('../lib/formaCobrancaEstoque');
 const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 const { animalEstaInativo, bloquearSeAnimalInativo, lerInativosEmLote } = require('../lib/animalInativo');
@@ -1073,9 +1078,39 @@ async function executar(req, res) {
  * clínica ainda assim entregou a dose — para ela, quem chama é o `finalizar`.
  * Chamar sempre dentro de uma transaction (recebe o `tx`).
  */
+// Retrato dos LOTES em estoque (preço POR DOSE e doses disponíveis) do mesmo
+// medicamento, na empresa. É daqui que saem MAIOR_VALOR e CUSTO_MEDIO — lido ANTES
+// da baixa, porque a forma de cobrança olha o que a clínica TEM no momento em que
+// cobra. Ver lib/formaCobrancaEstoque.js.
+async function entradasCobrancaVacina(tx, medicamentoCatId, empresaId) {
+  if (!medicamentoCatId) return [];
+  try {
+    const params = empresaId ? [Number(medicamentoCatId), Number(empresaId)] : [Number(medicamentoCatId)];
+    const filtro = empresaId ? 'AND (empresa_id = $2 OR empresa_id IS NULL)' : '';
+    const rows = await tx.$queryRawUnsafe(
+      `SELECT COALESCE(valor_unitario_repassado, valor_unitario, 0)::float AS "valorBruto",
+              doses_por_frasco AS "dosesPorFrasco",
+              qtd_disponivel   AS "qtdDisponivel"
+         FROM schs2vet.tb_lotes_vacina
+        WHERE medicamento_cat_id = $1 AND ativo = true AND qtd_disponivel > 0 ${filtro}`,
+      ...params,
+    );
+    return (rows ?? []).map(r => ({
+      preco: Number(r.valorBruto) / (Number(r.dosesPorFrasco) || 1),
+      qtd:   Number(r.qtdDisponivel),
+    }));
+  } catch {
+    return []; // sem retrato, `precoDeVenda` cai no preço do lote debitado
+  }
+}
+
 async function darBaixaEFaturar(tx, { vacina, info, qtd, veterinarioId, empresaIdEfetivo, agora, evolucao, animal }) {
   let loteIdFinal = vacina.loteId ?? null;
   let loteValor   = 0;
+
+  // Forma de cobrança + retrato do estoque, os DOIS antes de qualquer baixa.
+  const cfgCobranca = await formaCobranca.lerForma(tx, empresaIdEfetivo);
+  const entradas    = await entradasCobrancaVacina(tx, info.medicamentoCatId, empresaIdEfetivo);
 
   // Reserva feita ao FINALIZAR (fila do plantão) — consome ela primeiro: é o débito de
   // VERDADE, já apurado por FEFO no momento em que o pedido entrou na fila, podendo
@@ -1129,6 +1164,12 @@ async function darBaixaEFaturar(tx, { vacina, info, qtd, veterinarioId, empresaI
     }
   }
 
+  // 🔴 FORMA DE COBRANÇA — aplicada UMA vez, depois de saber de qual lote a dose saiu:
+  // VALOR_REPASSADO devolve o preço daquele lote (o que sempre foi), PERCENTUAL soma o
+  // acréscimo e MAIOR_VALOR/CUSTO_MEDIO trocam pelo preço tirado do estoque inteiro.
+  // Sem lote debitado não há o que precificar — a linha nasce zerada, como antes.
+  if (loteIdFinal) loteValor = formaCobranca.precoDeVenda(cfgCobranca, loteValor, entradas);
+
   if (animal?.userId) {
     const vcNum     = `VC-${String(info.numero ?? vacina.id).padStart(4, '0')}`;
     const evNum     = evolucao ? `[${formatAtendimentoNum(evolucao.tipoAtendimento, evolucao.numero)}] ` : '';
@@ -1146,6 +1187,52 @@ async function darBaixaEFaturar(tx, { vacina, info, qtd, veterinarioId, empresaI
       veterinarioId,
       vacinaClinicaId: vacina.id,
     });
+  }
+
+  // 🔴 CONTA A PAGAR DO FORNECEDOR (2026-09-10) — a vacina que a clínica NÃO estoca
+  // e pediu ao fornecedor vira dívida com ele no MESMO momento em que o cliente é
+  // cobrado. Espelho exato do que a prescrição faz com o medicamento.
+  //
+  // ⚠️ Fica FORA do `if (animal?.userId)` de propósito: o que a clínica DEVE ao
+  // fornecedor não depende de o paciente ter dono cadastrado para ser cobrado. A
+  // vacina foi pedida e entregue de qualquer jeito.
+  //
+  // ⚠️ Só quando NÃO houve lote debitado (`!loteIdFinal`): com lote, a vacina saiu
+  // do estoque próprio — já foi comprada antes, na entrada da nota, e cobrá-la de
+  // novo aqui contaria a mesma compra duas vezes.
+  //
+  // ⚠️ Sem preço de COMPRA cadastrado no produto, não lança: dívida de valor
+  // inventado é pior que dívida ausente.
+  if (!loteIdFinal && info.medicamentoCatId && !info.cliente) {
+    const produto = await produtoFornecedor.fornecedorDoItem(
+      tx, empresaIdEfetivo, info.medicamentoCatId,
+    );
+    if (produto?.valorUnitario != null) {
+      // Quem SOLICITOU: o veterinário que registrou a vacina — a compra foi
+      // provocada por ele, não por quem aplicou a dose no plantão.
+      const solicitante = vacina.veterinarioId
+        ? await tx.user.findUnique({
+            where: { id: Number(vacina.veterinarioId) }, select: { id: true, fullName: true },
+          }).catch(() => null)
+        : null;
+      await contasPagar.lancarItem(tx, {
+        empresaId:   empresaIdEfetivo,
+        tipo:        'FORNECEDOR',
+        credorId:    produto.fornecedorId,
+        credorNome:  produto.fornecedorNome ?? '',
+        animalId:    vacina.animalId,
+        animalNome:  animal?.nome ?? '',
+        descricao:   vacina.nome,
+        quantidade:  qtd,
+        valor:       produto.valorUnitario,
+        solicitanteId:   solicitante?.id ?? null,
+        solicitanteNome: solicitante?.fullName ?? '',
+        ocorridoEm:  agora,
+        // Uma linha por REGISTRO de vacina — reprocessar não duplica.
+        origemTipo:  contasPagar.ORIGENS.VACINA,
+        origemId:    vacina.id,
+      });
+    }
   }
 }
 

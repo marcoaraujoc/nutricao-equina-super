@@ -28,6 +28,11 @@ export const MODULOS_IA = {
   AGENDA:          'AGENDA',
   TRANSCRICAO:     'TRANSCRICAO',
   DOCUMENTOS:      'DOCUMENTOS',
+  // Leitura de NOTA FISCAL na tela de Produtos (2026-09-10). Módulo próprio, e
+  // não FINANCEIRO: o relatório de consumo por módulo existe para responder
+  // "quem gastou IA", e somá-la ao financeiro esconderia o custo de uma função
+  // nova dentro de um número que já existia.
+  PRODUTOS:        'PRODUTOS',
 } as const;
 
 export type ModuloIA = typeof MODULOS_IA[keyof typeof MODULOS_IA];

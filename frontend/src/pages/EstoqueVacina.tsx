@@ -21,6 +21,7 @@ import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
+import CadastroCatalogoModal, { type ItemCatalogoCriado } from '../components/CadastroCatalogoModal';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -145,6 +146,9 @@ export default function EstoqueVacina() {
   // Combobox vacina
   const [buscaVac,          setBuscaVac]          = useState('');
   const [dropdownVacAberto, setDropdownVacAberto] = useState(false);
+  // Cadastro rápido da vacina que não existe no catálogo — mesmo modal da Prescrição,
+  // da tela de Vacina e da Entrada de Estoque da Farmácia. Guarda o NOME digitado.
+  const [cadastroVacNome,   setCadastroVacNome]   = useState<string | null>(null);
   const comboboxRef = useRef<HTMLDivElement>(null);
 
   // Display states para campos de data (DD/MM/AAAA)
@@ -303,6 +307,31 @@ export default function EstoqueVacina() {
         v.nome.toLowerCase().includes(buscaVac.toLowerCase()) ||
         (v.fabricante ?? '').toLowerCase().includes(buscaVac.toLowerCase())
       );
+
+  // Só sem correspondência EXATA de nome — senão o seletor convidaria a criar a
+  // duplicata de uma vacina que já está na lista (mesmo critério das outras telas).
+  const termoBuscaVac  = buscaVac.trim();
+  const mostraCriarVac = termoBuscaVac !== '' &&
+    !vacinas.some(v => v.nome.toLowerCase() === termoBuscaVac.toLowerCase());
+
+  // A vacina volta pronta do backend: entra na lista local (sem refazer a carga, que
+  // é filtrada por fabricante e poderia devolvê-la de fora do recorte) e já fica
+  // escolhida no lote que estava sendo lançado.
+  const vacinaCadastrada = (item: ItemCatalogoCriado) => {
+    const nova: MedCatItem = {
+      id: item.id, nome: item.nome, fabricante: item.fabricante,
+      formaFarmaceutica: item.formaFarmaceutica, apresentacao: item.apresentacao,
+      vias: item.vias,
+    };
+    setVacinas(prev => [nova, ...prev.filter(v => v.id !== nova.id)]);
+    setForm(f => ({ ...f, medicamentoCatId: nova.id }));
+    // O filtro de fabricante volta para "Todos": a vacina nova pode ter outro
+    // laboratório (ou nenhum) e sumiria da lista assim que a carga fosse refeita.
+    setFabricanteSel('');
+    setCadastroVacNome(null);
+    setDropdownVacAberto(false);
+    setBuscaVac('');
+  };
 
   // ── Status de validade ────────────────────────────────────────────────────
 
@@ -756,6 +785,19 @@ export default function EstoqueVacina() {
         </div>
       </div>
 
+      {/* Cadastro da vacina que não existe no catálogo — mesmo modal das demais
+          telas, com os campos da VACINA (sem "controlado", com fabricante opcional).
+          Fica FORA do bloco do formulário de entrada: tem z-index próprio (acima
+          dele) e vida própria — fechar o cadastro não pode fechar o lançamento do
+          lote que estava sendo preenchido. */}
+      <CadastroCatalogoModal
+        aberto={cadastroVacNome !== null}
+        tipo="vacina"
+        nomeInicial={cadastroVacNome ?? ''}
+        onCriado={vacinaCadastrada}
+        onFechar={() => setCadastroVacNome(null)}
+      />
+
       {/* ── Modal: formulário de entrada ───────────────────────────────────── */}
       {modalFormAberto && (
         <>
@@ -824,7 +866,7 @@ export default function EstoqueVacina() {
                         </div>
                       </div>
                       <ul className="max-h-44 overflow-y-auto">
-                        {vacinasFiltradas.length === 0 ? (
+                        {vacinasFiltradas.length === 0 && !mostraCriarVac ? (
                           <li className="px-3 py-3 text-xs text-gray-400 text-center">Nenhuma vacina encontrada.</li>
                         ) : vacinasFiltradas.map(v => (
                           <li key={v.id}>
@@ -845,6 +887,19 @@ export default function EstoqueVacina() {
                             </button>
                           </li>
                         ))}
+                        {/* Vacina que ainda não existe no catálogo: abre a MESMA tela
+                            de cadastro das outras telas, com os campos da vacina. */}
+                        {mostraCriarVac && (
+                          <li>
+                            <button
+                              type="button"
+                              onClick={() => setCadastroVacNome(termoBuscaVac)}
+                              className="w-full text-left px-3 py-2 text-sm text-teal-700 hover:bg-teal-50 transition-colors flex items-center gap-1.5 font-medium border-t border-gray-50">
+                              <Plus size={13} className="flex-shrink-0" />
+                              Cadastrar "{termoBuscaVac}" como nova vacina
+                            </button>
+                          </li>
+                        )}
                       </ul>
                     </div>
                   )}

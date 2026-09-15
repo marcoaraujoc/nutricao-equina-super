@@ -40,6 +40,7 @@ import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
   FileText, ChevronDown, Loader2, CheckCircle2, X, AlertTriangle, Eye, Upload,
+  Search, Check,
 } from 'lucide-react';
 
 import PageContainer from '../components/PageContainer';
@@ -48,7 +49,7 @@ import InlineError from '../components/InlineError';
 import ErroAcao from '../components/ErroAcao';
 import ModalJustificativa from '../components/ModalJustificativa';
 import api from '../services/api';
-import { rotuloOpcaoAnimal } from '../utils/animalInfo';
+import { rotuloOpcaoAnimal, localDoAnimal } from '../utils/animalInfo';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 
@@ -82,6 +83,9 @@ interface AnimalDoc {
   user?:    { fullName: string; email: string } | null;
   /** Paciente INATIVO (somente leitura) — aparece na lista, marcado. */
   inativo?: boolean | null;
+  /** Local cadastrado > texto legado — só usados no DESEMPATE do combobox de busca. */
+  local?:       string | null;
+  localizacao?: { nome: string } | null;
 }
 
 /**
@@ -106,11 +110,6 @@ interface DocumentoPendente {
 /** Busca sem acento e sem caixa — "atestado obito" acha "Atestado de Óbito". */
 const normalizar = (v: string): string =>
   v.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
-
-const CLASSE_SELECT =
-  'w-full text-sm border border-gray-200 rounded-xl pl-3 pr-8 py-2.5 bg-gray-50 text-gray-800 ' +
-  'font-medium outline-none cursor-pointer appearance-none focus:border-emerald-500 ' +
-  'disabled:opacity-50 disabled:cursor-not-allowed';
 
 export default function Documentos() {
   const [params] = useSearchParams();
@@ -162,6 +161,11 @@ export default function Documentos() {
 
   const [cancelando, setCancelando] = useState<DocumentoEmitido | null>(null);
 
+  // ── Combobox do paciente (mesmo padrão de `/clinica/agenda`) ──────────────
+  const [buscaAnimal,       setBuscaAnimal]       = useState('');
+  const [comboAnimalAberto, setComboAnimalAberto] = useState(false);
+  const comboAnimalRef = useRef<HTMLDivElement>(null);
+
   // ── Combobox do documento (digitação livre) ───────────────────────────────
   const [buscaDoc,    setBuscaDoc]    = useState('');
   const [comboAberto, setComboAberto] = useState(false);
@@ -182,6 +186,50 @@ export default function Documentos() {
 
   const animal   = useMemo(() => animais.find(a => a.id === animalId) ?? null, [animais, animalId]);
   const template = useMemo(() => templates.find(t => t.id === templateId) ?? null, [templates, templateId]);
+
+  /**
+   * Texto que o combobox do PACIENTE mostra no campo. Reflete `animalId` — vale para
+   * a escolha feita na própria lista E para o `?animalId=` que chega pela URL, sem
+   * precisar de um segundo ponto gravando o texto.
+   * ⚠️ NÃO depende de `buscaAnimal`: se dependesse, sobrescreveria o que a pessoa
+   * está digitando enquanto procura outro paciente (o `animalId` só muda quando ela
+   * ESCOLHE um da lista).
+   */
+  useEffect(() => {
+    setBuscaAnimal(animal ? rotuloOpcaoAnimal(animal) : '');
+  }, [animal]);
+
+  const buscaAnimalTrim = buscaAnimal.trim();
+  /**
+   * ⚠️ Mesma armadilha do combo de documento logo abaixo (§12, 2026-08-04): enquanto o
+   * texto for o rótulo do JÁ escolhido, ele não conta como busca — sem isso, reabrir a
+   * lista depois de escolher mostraria "nenhum paciente encontrado" para o próprio
+   * paciente selecionado.
+   */
+  const buscandoAnimal = buscaAnimalTrim !== '' &&
+    normalizar(buscaAnimalTrim) !== normalizar(animal ? rotuloOpcaoAnimal(animal) : '');
+
+  const animaisFiltrados = useMemo(() => {
+    if (!buscandoAnimal) return animais;
+    const alvo = normalizar(buscaAnimalTrim);
+    return animais.filter(a => normalizar(a.nome).includes(alvo));
+  }, [animais, buscandoAnimal, buscaAnimalTrim]);
+
+  const escolherAnimal = useCallback((a: AnimalDoc) => {
+    setAnimalId(a.id);
+    setComboAnimalAberto(false);
+  }, []);
+
+  // Clique fora fecha a lista — mesma lógica do combo de documento (`mousedown`, não
+  // `click`, para fechar antes de o clique chegar a outro controle da tela).
+  useEffect(() => {
+    if (!comboAnimalAberto) return;
+    const aoClicar = (e: MouseEvent) => {
+      if (comboAnimalRef.current && !comboAnimalRef.current.contains(e.target as Node)) setComboAnimalAberto(false);
+    };
+    document.addEventListener('mousedown', aoClicar);
+    return () => document.removeEventListener('mousedown', aoClicar);
+  }, [comboAnimalAberto]);
 
   // ── Carga: pacientes e modelos ────────────────────────────────────────────
   // ⚠️ Espera `empresaLoading`: nenhum fetch escopado por empresa antes de o contexto
@@ -749,30 +797,67 @@ export default function Documentos() {
       <div className="bg-white border border-gray-200 rounded-2xl p-4 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
 
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1" ref={comboAnimalRef}>
             <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Paciente</label>
+            {/* Combobox de busca — no mesmo formato do seletor de paciente de
+                `/clinica/agenda` (`Agendamentos.tsx`): campo de texto com ícone de
+                lupa, dropdown com os que casam a digitação (nome, sem acento/caixa) e
+                selo de check quando já há um escolhido. Substitui o `<select>` nativo,
+                que obrigava a rolar a lista inteira para achar o paciente.
+                ⚠️ Só o NOME do paciente aparece no CAMPO (a pedido, 2026-09-01): o
+                proprietário segue visível no cabeçalho da folha e no histórico logo
+                abaixo — repeti-lo aqui alongaria o texto sem ajudar a decidir. Já na
+                LISTA do dropdown o local entra como desempate, como na Agenda. */}
             <div className="relative">
-              <select
-                value={animalId ?? ''}
-                onChange={e => setAnimalId(e.target.value ? Number(e.target.value) : null)}
+              <Search size={13} className="absolute left-3 top-3 text-gray-400 pointer-events-none z-10" />
+              <input
+                type="text"
+                value={buscaAnimal}
+                autoComplete="off"
+                onChange={e => {
+                  setBuscaAnimal(e.target.value);
+                  setComboAnimalAberto(true);
+                }}
+                // `onFocus` seleciona o texto: com um paciente já escolhido, digitar
+                // por cima troca a escolha em vez de concatenar no rótulo.
+                // `onClick` ALÉM de `onFocus`: a escolha na lista usa `onMouseDown` com
+                // `preventDefault`, então o foco nunca sai do campo — e `focus` não
+                // dispara de novo num campo já focado (armadilha do combo da Agenda,
+                // §12 de 2026-08-04).
+                onFocus={e => { setComboAnimalAberto(true); e.target.select(); }}
+                onClick={() => setComboAnimalAberto(true)}
                 disabled={carregandoLista}
-                className={CLASSE_SELECT}
-              >
-                <option value="">
-                  {carregandoLista ? 'Carregando…' : 'Selecione o paciente'}
-                </option>
-                {animais.map(a => (
-                  // Só o NOME do paciente (a pedido, 2026-09-01): o `<option>`
-                  // concatenava o proprietário e a linha ficava longa demais para o
-                  // campo. O proprietário segue visível no cabeçalho da folha e no
-                  // histórico logo abaixo.
-                  // ⚠️ O selo de INATIVO não é exceção a isso: aquela decisão foi
-                  // sobre não repetir a IDENTIDADE do dono, e este é o ESTADO do
-                  // paciente — emissão para paciente congelado o backend recusa.
-                  <option key={a.id} value={a.id}>{rotuloOpcaoAnimal(a)}</option>
-                ))}
-              </select>
-              <ChevronDown size={13} className="absolute right-3 top-3.5 text-gray-400 pointer-events-none" />
+                placeholder={carregandoLista ? 'Carregando…' : 'Buscar paciente…'}
+                className="w-full text-sm border border-gray-200 rounded-xl pl-8 pr-8 py-2.5 bg-gray-50 text-gray-800 font-medium outline-none focus:border-emerald-500 disabled:opacity-50"
+              />
+              {animalId != null
+                ? <Check size={14} className="absolute right-3 top-3 text-emerald-600 pointer-events-none" />
+                : <ChevronDown size={13} className="absolute right-3 top-3.5 text-gray-400 pointer-events-none" />}
+
+              {comboAnimalAberto && !carregandoLista && (
+                <div className="absolute z-30 mt-1 w-full max-h-72 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg">
+                  {animaisFiltrados.length === 0 ? (
+                    <p className="px-3 py-2.5 text-xs text-gray-400 text-center">Nenhum paciente encontrado.</p>
+                  ) : (
+                    animaisFiltrados.slice(0, 40).map(a => (
+                      <button
+                        key={a.id}
+                        type="button"
+                        onMouseDown={e => { e.preventDefault(); escolherAnimal(a); }}
+                        className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+                          a.id === animalId ? 'bg-emerald-50 text-emerald-800 font-semibold' : 'text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        {a.nome}
+                        {localDoAnimal(a) && <span className="ml-1.5 text-[11px] text-gray-400">({localDoAnimal(a)})</span>}
+                        {/* ⚠️ O paciente inativo CONTINUA na lista, marcado — ver
+                            `rotuloOpcaoAnimal`: ele não some, fica em somente leitura. */}
+                        {a.inativo && <span className="ml-1.5 text-[10px] text-amber-600 font-semibold uppercase tracking-wide">Inativo</span>}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

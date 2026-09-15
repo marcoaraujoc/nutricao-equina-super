@@ -60,6 +60,20 @@ export const ORDINAIS = ['1º', '2º', '3º', '4º', '5º', '6º', '7º', '8º',
 export const VALIDADE_ORC_MIN = 1;
 export const VALIDADE_ORC_MAX = 365;
 
+// Forma de cobrança do que SAI DO ESTOQUE (medicamento e vacina). Os valores são os
+// mesmos do backend (`lib/formaCobrancaEstoque.js`) — rótulo aqui, regra lá.
+export type FormaCobranca = 'VALOR_REPASSADO' | 'PERCENTUAL' | 'MAIOR_VALOR' | 'CUSTO_MEDIO';
+
+export const FORMAS_COBRANCA: { v: FormaCobranca; l: string; ajuda: string }[] = [
+  { v: 'VALOR_REPASSADO', l: 'Valor Repassado',   ajuda: 'Cobra o valor repassado do lote de onde a dose saiu.' },
+  { v: 'PERCENTUAL',      l: 'Percentual',        ajuda: 'Valor repassado do lote + o percentual informado.' },
+  { v: 'MAIOR_VALOR',     l: 'Maior valor do mês', ajuda: 'Cobra o maior valor repassado entre os lotes em estoque.' },
+  { v: 'CUSTO_MEDIO',     l: 'Custo médio',       ajuda: 'Média dos valores repassados, ponderada pela quantidade em estoque.' },
+];
+
+export const PERC_COBRANCA_MIN = 0;
+export const PERC_COBRANCA_MAX = 1000;
+
 // Espécies que a empresa pode declarar como atendidas. O catálogo de especialidades
 // tem mais espécies (Canino/Felino/Réptil), mas esta tela só oferece as que o produto
 // atende hoje — a lista fica presa a nomes, não a IDs, porque o id de Especie varia
@@ -234,6 +248,10 @@ export function useConfiguracaoOperacional() {
   const [horaFim,    setHoraFim]    = useState('');
   const [tempoConsultaPadrao, setTempoConsultaPadrao] = useState('');
   const [validadeOrcamento, setValidadeOrcamento] = useState('');
+  // Forma de cobrança de medicamento/vacina. Nunca nasce vazia: sem configuração o
+  // que vale é VALOR_REPASSADO, e um seletor em branco esconderia a regra em vigor.
+  const [formaCobranca,      setFormaCobranca]      = useState<FormaCobranca>('VALOR_REPASSADO');
+  const [percentualCobranca, setPercentualCobranca] = useState('');
   // ⚠️ O `fusoLabel` que este hook expunha foi REMOVIDO em 2026-08-24, junto com o
   // campo só-leitura "Fuso Horário" da tela de Configurações — sem consumidor, ele
   // seria estado morto. O backend CONTINUA devolvendo `fusoLabel` em
@@ -261,6 +279,10 @@ export function useConfiguracaoOperacional() {
         setEspeciesAtendidas(Array.isArray(dados.especiesAtendidas) ? dados.especiesAtendidas : []);
         setTempoConsultaPadrao(dados.tempoConsultaPadraoMin ? String(dados.tempoConsultaPadraoMin) : '');
         setValidadeOrcamento(dados.validadeOrcamentoDias ? String(dados.validadeOrcamentoDias) : '');
+        setFormaCobranca((dados.formaCobrancaEstoque as FormaCobranca) ?? 'VALOR_REPASSADO');
+        setPercentualCobranca(
+          dados.percentualCobrancaEstoque != null ? String(dados.percentualCobrancaEstoque) : '',
+        );
 
         if (dados.tipoFechamento === 'DIA_UTIL') {
           setTipoSelecao('DIA_UTIL');
@@ -393,6 +415,17 @@ export function useConfiguracaoOperacional() {
       }
     }
 
+    if (formaCobranca === 'PERCENTUAL') {
+      const p = Number(percentualCobranca.trim().replace(',', '.'));
+      if (percentualCobranca.trim() === '' || !Number.isFinite(p) || p < PERC_COBRANCA_MIN || p > PERC_COBRANCA_MAX) {
+        setErroAcao({
+          mensagem: `Informe o percentual a ser acrescido (de ${PERC_COBRANCA_MIN} a ${PERC_COBRANCA_MAX}).`,
+          campos: ['percentualCobranca'],
+        });
+        return false;
+      }
+    }
+
     try {
       const fd = new FormData();
       fd.append('tipoFechamento', tipoFechamento);
@@ -404,6 +437,11 @@ export function useConfiguracaoOperacional() {
       fd.append('horaFimAtendimento', horaFim);
       fd.append('tempoConsultaPadraoMin', tempoConsultaPadrao);
       fd.append('validadeOrcamentoDias', validadeTrim);
+      fd.append('formaCobrancaEstoque', formaCobranca);
+      // Fora da forma PERCENTUAL o campo vai VAZIO: é o backend que grava null, para
+      // um número esquecido aqui não voltar a valer ao trocar a forma de volta.
+      fd.append('percentualCobrancaEstoque',
+        formaCobranca === 'PERCENTUAL' ? percentualCobranca.trim().replace(',', '.') : '');
       if (logoFile) fd.append('logo', logoFile);
       if (logoRemovido) fd.append('removerLogo', 'true');
 
@@ -421,7 +459,7 @@ export function useConfiguracaoOperacional() {
       setErroAcao({ mensagem: 'Erro ao salvar as configurações operacionais.' });
       return false;
     }
-  }, [tipoSelecao, diaEspecifico, nDiaUtil, whatsapp, especiesAtendidas, diasAtend, horaInicio, horaFim, tempoConsultaPadrao, validadeOrcamento, logoFile, logoRemovido]);
+  }, [tipoSelecao, diaEspecifico, nDiaUtil, whatsapp, especiesAtendidas, diasAtend, horaInicio, horaFim, tempoConsultaPadrao, validadeOrcamento, formaCobranca, percentualCobranca, logoFile, logoRemovido]);
 
   return {
     loading, erroAcao,
@@ -442,6 +480,8 @@ export function useConfiguracaoOperacional() {
     horaFim, setHoraFim,
     tempoConsultaPadrao, setTempoConsultaPadrao,
     validadeOrcamento, setValidadeOrcamento,
+    formaCobranca, setFormaCobranca,
+    percentualCobranca, setPercentualCobranca,
 
     especies, especiesAtendidas, setEspeciesAtendidas,
 

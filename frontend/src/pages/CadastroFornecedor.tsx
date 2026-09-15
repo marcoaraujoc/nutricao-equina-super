@@ -1,7 +1,7 @@
 // frontend/src/pages/CadastroFornecedor.tsx
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
@@ -420,6 +420,7 @@ function ModalFornecedor({
 
 export default function CadastroFornecedor() {
   const location                                = useLocation();
+  const navigate                                = useNavigate();
   const { podeExecutar, loading: loadingPerms } = usePermissoes();
   const { user } = useAuth();
   const isAdmin = user?.role === 'ADMIN';
@@ -474,14 +475,50 @@ export default function CadastroFornecedor() {
 
   const abrirNovo = () => { setEditando(null); setForm(FORM_INICIAL); setErroModal(null); setShowModal(true); };
 
-  // Veio de "Incluir Membro" (Equipe) via "+ Cadastrar Novo Fornecedor" — abre o modal direto
+  /**
+   * Chegada guiada — abre o modal já preenchido.
+   *
+   * Dois caminhos usam isto:
+   *   • "Incluir Membro" (Equipe) → só `abrirNovo`, formulário em branco;
+   *   • **Produtos → leitura da NOTA FISCAL** (2026-09-10) → `dados` com o que a nota
+   *     trouxe do emitente, e `depois` com a rota de volta.
+   *
+   * ⚠️ Os dados vêm no `state` do router, NÃO na query: são ~10 campos (incluindo
+   * endereço completo), e uma URL com tudo isso ficaria ilegível e sujeita ao limite
+   * de tamanho. O `state` também não sobrevive a um F5, o que é adequado — depois de
+   * recarregar, o certo é ler a nota de novo, não cadastrar a partir de um rascunho
+   * que ninguém mais vê.
+   *
+   * ⚠️ `history.replaceState({})` CONSOME o state: sem isso o modal reabriria a cada
+   * remontagem da rota, por cima do que estivesse sendo digitado.
+   */
   useEffect(() => {
-    if ((location.state as { abrirNovo?: boolean } | null)?.abrirNovo) {
-      abrirNovo();
-      window.history.replaceState({}, '');
-    }
+    const st = location.state as {
+      abrirNovo?: boolean;
+      dados?: Partial<FormForn>;
+      depois?: string;
+    } | null;
+    if (!st?.abrirNovo) return;
+
+    setEditando(null);
+    setErroModal(null);
+    // O que a nota não trouxe fica em BRANCO — nunca um palpite. Fornecedor com
+    // telefone inventado é cadastro que não serve para ligar.
+    setForm({ ...FORM_INICIAL, ...(st.dados ?? {}) });
+    setShowModal(true);
+    if (st.depois) setVoltarPara(st.depois);
+    window.history.replaceState({}, '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * Rota de retorno depois de salvar (só quando a chegada foi guiada).
+   * ⚠️ Aceita apenas rota INTERNA (começa com "/" e não com "//"): valor absoluto
+   * transformaria o state num redirecionamento aberto.
+   */
+  const [voltarPara, setVoltarParaBruto] = useState<string | null>(null);
+  const setVoltarPara = (destino: string) =>
+    setVoltarParaBruto(/^\/(?!\/)/.test(destino) ? destino : null);
 
   const abrirEdicao = (f: Fornecedor) => {
     setErroModal(null);
@@ -547,8 +584,16 @@ export default function CadastroFornecedor() {
         await api.put(`/cadastro/fornecedores/${editando.id}`, payload);
         toast.success('Fornecedor atualizado');
       } else {
-        await api.post('/cadastro/fornecedores', payload);
+        const criado = await api.post('/cadastro/fornecedores', payload);
         toast.success('Fornecedor cadastrado');
+        // Chegada guiada (Produtos → nota fiscal): volta para a tela de origem com o
+        // fornecedor recém-criado JÁ escolhido. Sem isso o gestor teria de reencontrar
+        // a nota e refazer o que começou — que é o atrito que a leitura veio remover.
+        if (voltarPara) {
+          const id = criado?.data?.dados?.id;
+          navigate(voltarPara, { state: { fornecedorNovoId: id ?? null, fornecedorNovoNome: payload.nome } });
+          return;
+        }
       }
       fecharModal();
       setBusca(''); // volta a listar todos os fornecedores da empresa

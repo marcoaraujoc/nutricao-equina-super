@@ -32,6 +32,10 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.criar':   'FULL',
     'cadastro.fornecedor.editar':  'FULL',
     'cadastro.fornecedor.deletar': 'FULL',
+    'cadastro.produto.ler':       'FULL',
+    'cadastro.produto.criar':     'FULL',
+    'cadastro.produto.editar':    'FULL',
+    'cadastro.produto.deletar':   'FULL',
     'cadastro.fornecedor.ativar':  'FULL',
     'cadastro.prestador.ler':      'FULL',
     'cadastro.prestador.criar':    'FULL',
@@ -140,6 +144,9 @@ const PERMISSOES_PADRAO = {
     'financeiro.faturas.lancar':   'FULL',
     'financeiro.recibos.ler':      'FULL',
     'financeiro.recibos.imprimir': 'FULL',
+    'financeiro.pagamentos.ler':    'FULL',
+    'financeiro.pagamentos.lancar': 'FULL',
+    'financeiro.pagamentos.pagar':  'FULL',
 
     'equipe.membros.ler':    'FULL',
     'equipe.membros.editar': 'FULL',
@@ -212,6 +219,10 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.criar':   'PROPRIO',
     'cadastro.fornecedor.editar':  'PROPRIO',
     'cadastro.fornecedor.deletar': 'NENHUM',
+    'cadastro.produto.ler':       'EQUIPE',
+    'cadastro.produto.criar':     'PROPRIO',
+    'cadastro.produto.editar':    'PROPRIO',
+    'cadastro.produto.deletar':   'NENHUM',
     'cadastro.fornecedor.ativar':  'PROPRIO',
     'cadastro.prestador.ler':      'EQUIPE',
     'cadastro.prestador.criar':    'PROPRIO',
@@ -335,6 +346,9 @@ const PERMISSOES_PADRAO = {
     'financeiro.faturas.lancar':   'PROPRIO',
     'financeiro.recibos.ler':      'NENHUM',
     'financeiro.recibos.imprimir': 'NENHUM',
+    'financeiro.pagamentos.ler':    'NENHUM',
+    'financeiro.pagamentos.lancar': 'NENHUM',
+    'financeiro.pagamentos.pagar':  'NENHUM',
 
     // Equipe (gestão de membros — só gestor pode)
     'equipe.membros.ler':    'LEITURA',
@@ -401,6 +415,15 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.criar':   'NENHUM',
     'cadastro.fornecedor.editar':  'NENHUM',
     'cadastro.fornecedor.deletar': 'NENHUM',
+    'cadastro.produto.ler':       'NENHUM',
+    'cadastro.produto.criar':     'NENHUM',
+    'cadastro.produto.editar':    'NENHUM',
+    'cadastro.produto.deletar':   'NENHUM',
+    // Cliente não vê o que a clínica paga a terceiros — é informação
+    // comercial dela, não do atendimento dele.
+    'financeiro.pagamentos.ler':    'NENHUM',
+    'financeiro.pagamentos.lancar': 'NENHUM',
+    'financeiro.pagamentos.pagar':  'NENHUM',
     'cadastro.fornecedor.ativar':  'NENHUM',
     'cadastro.prestador.ler':      'NENHUM',
     'cadastro.prestador.criar':    'NENHUM',
@@ -462,6 +485,10 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.criar':   'NENHUM',
     'cadastro.fornecedor.editar':  'NENHUM',
     'cadastro.fornecedor.deletar': 'NENHUM',
+    'cadastro.produto.ler':       'NENHUM',
+    'cadastro.produto.criar':     'NENHUM',
+    'cadastro.produto.editar':    'NENHUM',
+    'cadastro.produto.deletar':   'NENHUM',
     'cadastro.fornecedor.ativar':  'NENHUM',
     'cadastro.prestador.ler':      'NENHUM',
     'cadastro.prestador.criar':    'NENHUM',
@@ -572,6 +599,9 @@ const PERMISSOES_PADRAO = {
     'financeiro.faturas.lancar':   'NENHUM',
     'financeiro.recibos.ler':      'NENHUM',
     'financeiro.recibos.imprimir': 'NENHUM',
+    'financeiro.pagamentos.ler':    'NENHUM',
+    'financeiro.pagamentos.lancar': 'NENHUM',
+    'financeiro.pagamentos.pagar':  'NENHUM',
 
     'equipe.membros.ler':    'NENHUM',
     'equipe.membros.editar': 'NENHUM',
@@ -633,6 +663,10 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.criar':   'NENHUM',
     'cadastro.fornecedor.editar':  'NENHUM',
     'cadastro.fornecedor.deletar': 'NENHUM',
+    'cadastro.produto.ler':       'EQUIPE',
+    'cadastro.produto.criar':     'NENHUM',
+    'cadastro.produto.editar':    'NENHUM',
+    'cadastro.produto.deletar':   'NENHUM',
     'cadastro.fornecedor.ativar':  'NENHUM',
     'cadastro.prestador.ler':      'EQUIPE',
     'cadastro.prestador.criar':    'NENHUM',
@@ -757,6 +791,9 @@ const PERMISSOES_PADRAO = {
     'financeiro.faturas.lancar':   'NENHUM',
     'financeiro.recibos.ler':      'NENHUM',
     'financeiro.recibos.imprimir': 'NENHUM',
+    'financeiro.pagamentos.ler':    'NENHUM',
+    'financeiro.pagamentos.lancar': 'NENHUM',
+    'financeiro.pagamentos.pagar':  'NENHUM',
 
     // Equipe
     'equipe.membros.ler':    'LEITURA',
@@ -828,6 +865,10 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.criar':   'NENHUM',
     'cadastro.fornecedor.editar':  'NENHUM',
     'cadastro.fornecedor.deletar': 'NENHUM',
+    'cadastro.produto.ler':       'EQUIPE',
+    'cadastro.produto.criar':     'NENHUM',
+    'cadastro.produto.editar':    'NENHUM',
+    'cadastro.produto.deletar':   'NENHUM',
     'cadastro.fornecedor.ativar':  'NENHUM',
     'cadastro.prestador.ler':      'EQUIPE',
     'cadastro.prestador.criar':    'NENHUM',
@@ -935,6 +976,9 @@ const PERMISSOES_PADRAO = {
     'financeiro.faturas.lancar':   'PROPRIO',
     'financeiro.recibos.ler':      'NENHUM',
     'financeiro.recibos.imprimir': 'NENHUM',
+    'financeiro.pagamentos.ler':    'NENHUM',
+    'financeiro.pagamentos.lancar': 'NENHUM',
+    'financeiro.pagamentos.pagar':  'NENHUM',
 
     'equipe.membros.ler':    'LEITURA',
     'equipe.membros.editar': 'NENHUM',
@@ -1001,6 +1045,10 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.criar':   'NENHUM',
     'cadastro.fornecedor.editar':  'NENHUM',
     'cadastro.fornecedor.deletar': 'NENHUM',
+    'cadastro.produto.ler':       'NENHUM',
+    'cadastro.produto.criar':     'NENHUM',
+    'cadastro.produto.editar':    'NENHUM',
+    'cadastro.produto.deletar':   'NENHUM',
     'cadastro.fornecedor.ativar':  'NENHUM',
     'cadastro.prestador.ler':      'NENHUM',
     'cadastro.prestador.criar':    'NENHUM',
@@ -1108,6 +1156,9 @@ const PERMISSOES_PADRAO = {
     'financeiro.faturas.lancar':   'EQUIPE',
     'financeiro.recibos.ler':      'EQUIPE',
     'financeiro.recibos.imprimir': 'EQUIPE',
+    'financeiro.pagamentos.ler':    'EQUIPE',
+    'financeiro.pagamentos.lancar': 'EQUIPE',
+    'financeiro.pagamentos.pagar':  'EQUIPE',
 
     'equipe.membros.ler':    'LEITURA',
     'equipe.membros.editar': 'NENHUM',
@@ -1168,6 +1219,10 @@ const PERMISSOES_PADRAO = {
     'cadastro.fornecedor.criar':   'NENHUM',
     'cadastro.fornecedor.editar':  'NENHUM',
     'cadastro.fornecedor.deletar': 'NENHUM',
+    'cadastro.produto.ler':       'NENHUM',
+    'cadastro.produto.criar':     'NENHUM',
+    'cadastro.produto.editar':    'NENHUM',
+    'cadastro.produto.deletar':   'NENHUM',
     'cadastro.fornecedor.ativar':  'NENHUM',
     'cadastro.prestador.ler':      'NENHUM',
     'cadastro.prestador.criar':    'NENHUM',
@@ -1278,6 +1333,9 @@ const PERMISSOES_PADRAO = {
     'financeiro.faturas.lancar':   'NENHUM',
     'financeiro.recibos.ler':      'NENHUM',
     'financeiro.recibos.imprimir': 'NENHUM',
+    'financeiro.pagamentos.ler':    'NENHUM',
+    'financeiro.pagamentos.lancar': 'NENHUM',
+    'financeiro.pagamentos.pagar':  'NENHUM',
 
     'equipe.membros.ler':    'LEITURA',
     'equipe.membros.editar': 'NENHUM',
@@ -1353,6 +1411,14 @@ const MODULOS_SISTEMA = [
   { slug: 'cadastro.tratador.ativar',  modulo: 'cadastro', submodulo: 'tratador', acao: 'ativar',  label: 'Tratadores — Ativar/Inativar', ordemExib: 12.5 },
 
   // ── Cadastro — Fornecedor ────────────────────────────────────────────────────
+  // PRODUTOS (2026-09-10) — a tela da CLÍNICA que reúne o cadastro de medicamento e
+  // vacina, o fornecedor de cada um e a entrada opcional no estoque. Submódulo
+  // próprio, e não uma ação de `fornecedor`: o que se controla aqui é o CATÁLOGO de
+  // compra da clínica, não o cadastro de quem vende.
+  { slug: 'cadastro.produto.ler',        modulo: 'cadastro', submodulo: 'produto',    acao: 'ler',     label: 'Produtos — Visualizar',        ordemExib: 12.5 },
+  { slug: 'cadastro.produto.criar',      modulo: 'cadastro', submodulo: 'produto',    acao: 'criar',   label: 'Produtos — Criar',             ordemExib: 12.6 },
+  { slug: 'cadastro.produto.editar',     modulo: 'cadastro', submodulo: 'produto',    acao: 'editar',  label: 'Produtos — Alterar',           ordemExib: 12.7 },
+  { slug: 'cadastro.produto.deletar',    modulo: 'cadastro', submodulo: 'produto',    acao: 'deletar', label: 'Produtos — Excluir',           ordemExib: 12.8 },
   { slug: 'cadastro.fornecedor.ler',     modulo: 'cadastro', submodulo: 'fornecedor', acao: 'ler',     label: 'Fornecedores — Visualizar',    ordemExib: 13 },
   { slug: 'cadastro.fornecedor.criar',   modulo: 'cadastro', submodulo: 'fornecedor', acao: 'criar',   label: 'Fornecedores — Cadastrar',     ordemExib: 14 },
   { slug: 'cadastro.fornecedor.editar',  modulo: 'cadastro', submodulo: 'fornecedor', acao: 'editar',  label: 'Fornecedores — Editar',        ordemExib: 15 },
@@ -1507,6 +1573,15 @@ const MODULOS_SISTEMA = [
   // quem presta serviço — são decisões separadas na prática.
   { slug: 'financeiro.recibos.ler',      modulo: 'financeiro', submodulo: 'recibos', acao: 'ler',      label: 'Recibos de Prestador — Visualizar', ordemExib: 74 },
   { slug: 'financeiro.recibos.imprimir', modulo: 'financeiro', submodulo: 'recibos', acao: 'imprimir', label: 'Recibos de Prestador — Imprimir',   ordemExib: 74.2 },
+
+  // PAGAMENTOS (2026-09-10) — o que a clínica DEVE a fornecedor e prestador, no molde
+  // da fatura (abrir → fechar → pagar). Submódulo próprio pelo mesmo motivo de
+  // `recibos`: quem emite fatura não deve, por isso, enxergar o que a clínica paga a
+  // terceiros. `pagar` é separado de `lancar` de propósito — lançar é registrar a
+  // dívida; PAGAR é dar por quitada, e nem todo mundo que lança decide isso.
+  { slug: 'financeiro.pagamentos.ler',    modulo: 'financeiro', submodulo: 'pagamentos', acao: 'ler',    label: 'Pagamentos — Visualizar',       ordemExib: 75 },
+  { slug: 'financeiro.pagamentos.lancar', modulo: 'financeiro', submodulo: 'pagamentos', acao: 'lancar', label: 'Pagamentos — Lançar',           ordemExib: 75.2 },
+  { slug: 'financeiro.pagamentos.pagar',  modulo: 'financeiro', submodulo: 'pagamentos', acao: 'fechar', label: 'Pagamentos — Fechar/Pagar',     ordemExib: 75.4 },
 
   // ── Equipe ──────────────────────────────────────────────────────────────────
   { slug: 'equipe.membros.ler',    modulo: 'equipe', submodulo: 'membros', acao: 'ler',    label: 'Equipe — Visualizar', ordemExib: 80 },

@@ -1,5 +1,161 @@
 # S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-09-12 (parte 2) (🔴 **PRODUTO MULTIDOSE — e a tela de Produtos
+#   de volta ao menu.** Três coisas ligadas:
+#   1. **A TELA EXISTIA E NINGUÉM A ALCANÇAVA.** `/cadastro/produtos` está montada em
+#      `App.tsx` desde 2026-09-10, com controller, rotas e permissões — o que nunca
+#      nasceu foi o ITEM DO SIDEBAR: só se chegava nela pela URL. Voltou em
+#      **Cadastro › Produtos**, logo abaixo de Fornecedores (é de quem se compra).
+#   2. 🔴 **CHECKBOX "PRODUTO MULTIDOSE" + doses por embalagem.** O frasco rende N
+#      aplicações. Não é rótulo: é o dado que faltava desde que a UNIDADE virou da
+#      clínica (parte 1 desta data). Com o estoque contado em EMBALAGENS ("Un.") e a
+#      prescrição em mL, `mesmoGrupo('mL','Un.')` é FALSO — a baixa caía no valor
+#      BRUTO e **uma dose de 10 mL debitava 10 FRASCOS e cobrava 10 frascos na
+#      fatura**, sem erro nenhum. Agora cada aplicação tira **1/N da embalagem**, e a
+#      linha sai pelo **preço do frasco ÷ N** — a cobrança POR DOSE que foi pedida.
+#      ⚠️ O preço NÃO precisou mudar: o valor já é `qtdDebitada × preço unitário`; o
+#      que estava errado era a QUANTIDADE. `qtdDoEstoque` é a fonte única dessa conta.
+#      ⚠️ Vale na RESERVA também — reservar o frasco inteiro por aplicação faria o
+#      estoque "acabar" na primeira receita — e nas TRÊS verificações de estoque,
+#      senão o alerta barraria uma prescrição que cabe.
+#      ⚠️ **Item sem a marca não muda de comportamento**, e base sem a migration
+#      também não: o mapa sai vazio e tudo cai na conversão de sempre.
+#      ⚠️ "Doses/frasco" SAIU da seção de estoque: quem informa o número é o checkbox,
+#      e é dele que o lote de vacina o recebe. Dois campos para o mesmo dado
+#      divergiriam — e o que divergiria é o número que desconta a dose do frasco.
+#   3. **ESCOLHER O ITEM CARREGA O QUE JÁ ESTÁ CADASTRADO** (`GET
+#      /cadastro/produtos/detalhe`): unidade do catálogo + o vínculo do fornecedor
+#      (preços, nota, multidose), tudo EDITÁVEL, com faixa dizendo que o produto já
+#      existe. Antes o formulário abria em branco e salvar sobrescrevia um cadastro
+#      que a pessoa nunca viu. Refaz ao TROCAR DE FORNECEDOR (o preço é por par) e, no
+#      fluxo do DOCUMENTO DE COMPRA, o que a nota trouxe VENCE o cadastro antigo.
+#      A lista ganhou **Alterar** (laranja, §6) e o selo "N doses/emb.".
+#   ✅ **MIGRATION APLICADA** (autorizada) — `20261008000000_produto_multidose`:
+#   `multidose` + `doses_por_embalagem` em **`tb_produtos_fornecedor`**, que já é da
+#   EMPRESA e já tem RLS de tenant direto (ENABLE+FORCE conferidos, intactos).
+#   🔴 **ARMADILHA NOVA: ela falhou na primeira tentativa com `42501 must be owner
+#   of table`** — foi rodada com o usuário da APLICAÇÃO (`zls2vetp1`), e `ALTER TABLE`
+#   exige OWNERSHIP. O dono é `nutriadmin`, que é quem `DATABASE_URL_MIGRATIONS` usa;
+#   com ele passou de primeira. ⚠️ Migration falha BLOQUEIA a fila inteira: o conserto
+#   é `migrate resolve --rolled-back` (seguro aqui — `steps=0`, nada aplicado) e
+#   então `migrate deploy` com a URL certa. **Nunca `--applied`**: marcaria como feito
+#   o que o banco não tem. ⚠️ **NUNCA em `tb_medicamentos`**: a linha
+#   é GLOBAL e marcá-la mudaria a cobrança de TODAS as clínicas — a mesma armadilha
+#   que obrigou a unidade a nascer com copy-on-write. ADITIVA, sem backfill, default
+#   `false`. Suíte: **936**. Detalhes na §12.)
+# Atualizado em: 2026-09-12 (🔴 **A UNIDADE DO MEDICAMENTO PASSOU A SER DA CLÍNICA.**
+#   O estoque e a fatura saíam "em gramas" onde a clínica conta EMBALAGENS: a unidade
+#   vinha do CATÁLOGO GLOBAL (mantido pelo ADMIN), quase sempre peso/volume, e era ela
+#   que governava `EstoqueClinica.qtdEstoque` (10 frascos × 500 = 5.000 g) e o
+#   `precoUnitarioBase` (R$/g), que é o preço que vira linha de fatura.
+#   1. **Seletor de UNIDADE na Entrada de Estoque** (`/farmacia`), terceira coluna da
+#      calculadora de embalagens, na criação E na edição. As opções saem do CATÁLOGO
+#      (`/medicamentos/opcoes-catalogo`), nunca de lista fixa; o backend GARANTE a opção
+#      **"Un."** quando nenhuma das existentes significa isso. ⚠️ Com 'un' no catálogo
+#      NÃO acrescenta 'Un.' — seriam duas opções para a mesma unidade, a duplicata que
+#      `dedupPorCaixa` existe para resolver.
+#   2. 🔴 **COPY-ON-WRITE, a mesma regra de `DocumentoTemplate`**: trocar a unidade de um
+#      medicamento GLOBAL cria a **CÓPIA DA EMPRESA** (com vias e espécies) e reaponta
+#      para ela o estoque ATIVO da clínica, as PRESCRIÇÕES PENDENTES e os produtos de
+#      fornecedor. Medicamento que já é da empresa é alterado no lugar. A linha global
+#      NUNCA é tocada — alterar a unidade dela mudaria o preço de TODAS as clínicas.
+#      ⚠️ **Reapontar a prescrição pendente não é cosmético**: `consumirReservas`/
+#      `debitarEstoqueDia` acham o estoque por `medicamentoId: item.medicamentoCatId` —
+#      com o item no medicamento antigo e o estoque na cópia, o `findFirst` devolve null,
+#      o `if (!estoque) continue` engole o caso e a dose é executada SEM baixa e SEM
+#      linha na fatura. Silêncio total. Grupo EXECUTADO/CANCELADO fica intocado.
+#      ⚠️ Entrada de estoque INATIVA não é reapontada: é histórico na unidade antiga.
+#   3. **DOIS GUARDS, porque a unidade vale para TODO o estoque do medicamento**: recusa
+#      quando há OUTRA entrada ativa (a quantidade dela está na unidade antiga) e quando
+#      já houve SAÍDA (consumo, e às vezes fatura, na unidade antiga). Quem reexpressa a
+#      quantidade é a calculadora de embalagens, e ela só alcança a entrada aberta.
+#   4. 🔴 **`calcPrecoUnitarioBase` deixou de devolver `null` para unidade CONTÁVEL** —
+#      era isso que jogava a cobrança no caminho LEGADO (`precoUnitarioDoEstoque`), que
+#      divide o valor pelo estoque RESTANTE: o preço unitário SUBIA a cada dose aplicada.
+#      Agora 'Un.'/'Comprimido' usam fator 1 e o preço fica congelado na entrada.
+#   5. **`preferirCopiaDaEmpresa`** (novo, `lib/catalogoManual.js`) esconde o global
+#      homônimo nas listagens: sem ele a busca da Prescrição e a lista da Farmácia
+#      mostrariam "Dipirona" duas vezes (a cópia com estoque e a global sem).
+#   ✅ **MULTI-TENANT/RLS VERIFICADO AO VIVO** (transactions revertidas): a policy de
+#   `tb_medicamentos` é ENABLE+FORCE e assimétrica (USING global+próprio, WITH CHECK só
+#   próprio); o UPDATE da unidade na linha GLOBAL é **RECUSADO pelo banco (42501)**; o
+#   INSERT da cópia é aceito; e a empresa 58 enxerga 0 linhas da cópia da 42.
+#   ⚠️ E o WITH CHECK **ACEITA** um UPDATE que setasse `empresa_id` NA LINHA GLOBAL
+#   (roubar o global para uma clínica) — quem impede isso é o CÓDIGO, e há gate
+#   estrutural travando. **SEM MIGRATION** (nenhuma coluna nova). Suíte: **908**.
+#   Detalhes na §12.)
+# Atualizado em: 2026-09-11 (parte 2) (🔴 **O PRESTADOR SAIU DAS TRÊS TELAS** — a pedido,
+#   "voltar como estava antes". Só o FRONT; nenhuma migration, nenhum endpoint removido.
+#   1. **`/cadastro/procedimentos`**: saíram as colunas **Prestador** e **Valor
+#      Prestador**, as linhas/cards de prestador, o `PrestadorCombo` e os DOIS buscadores
+#      por prestador (um em cada aba). A grade voltou a ser
+#      *Procedimento · Categoria · Valor Cliente*, com o par Salvar/Cancelar da linha
+#      (2026-09-11 parte 1) INTACTO. No modal de COMBO os campos também saíram.
+#      ⚠️ O combo **REENVIA `prestadorId`/`valorPrestador` gravados** no salvar: o
+#      backend grava `null` quando o campo não vem, e sem isso editar o nome de um combo
+#      APAGARIA em silêncio o prestador de quem o cadastrou enquanto o campo existia.
+#      É o único resquício deliberado — estado sem UI, comentado no arquivo.
+#   2. **`/clinica/exames/:id` (aba Imagem)**: a cadeia virou **CATEGORIA → EXAME**. Saiu
+#      o passo do prestador, o aviso âmbar de "sem valor cadastrado" e o atalho
+#      "Cadastrar os valores agora" (com ele, o `?codigos=`/`?vincularPrestador=` da
+#      chegada guiada, que só ele produzia). O valor na linha do exame FICA — sem
+#      prestador o backend já devolve o **valor padrão da empresa** (`ImagemExameController`),
+#      e `POST /clinica/exames` sem `prestadorId` resolve o preço por `examesNomes` do
+#      mesmo jeito. ⚠️ `laboratorio` do pedido de imagem voltou a sair de `outroLabNome`.
+#   3. **`/clinica/prescricao/:id`**: saiu o campo **PRESTADOR QUE VAI EXECUTAR** e os
+#      dois atalhos de cadastro/definição de valor. ⚠️ Não enviar `prestadorId` PRESERVA
+#      o gravado (`gravarPrestadorDoItem` sai cedo em `undefined`) — nada é apagado.
+#   ⚠️ **O BACKEND NÃO FOI TOCADO**: `tb_procedimento_prestadores`, o ledger do recibo,
+#   `/recibos-prestador`, `POR_PROCEDIMENTO` e as rotas `…/cadastro/prestador*` seguem
+#   existindo e funcionando. O que sumiu é a porta de entrada nessas três telas.
+#   🔴 **AS SEÇÕES DE 08 A 11/09 DESCREVEM A UI ANTERIOR** — leia-as como histórico, não
+#   como regra vigente, e não reintroduza os campos sem pedido.
+#   `tsc -b` e `vite build` limpos. ⚠️ NÃO verificado em navegador — sem ferramenta de
+#   browser nesta sessão.)
+# Atualizado em: 2026-09-10 (parte 4) (🔴 **FORMA DE COBRANÇA DE MEDICAMENTO/VACINA.**
+#   Campo novo no Cadastro da Empresa decide o PREÇO do item que sai do ESTOQUE:
+#   **Valor Repassado** (o do lote — o que sempre foi), **Percentual** (o do lote + N%,
+#   com o campo do % só nessa forma), **Maior valor** (o maior repassado em estoque) e
+#   **Custo médio** (Σ(preço×qtd)/Σ(qtd), ponderado pelo saldo).
+#   🔴 A forma muda o NÚMERO DE LINHAS da fatura: as duas primeiras precificam POR LOTE
+#   (saída de dois lotes = duas linhas), as duas últimas dão preço único (uma linha com
+#   a quantidade somada) — e isso saiu de graça, sem tocar no lançamento, porque
+#   `adicionarOuSomarFaturaItem` já consolida linha de mesmo valor unitário.
+#   🔴 FONTE ÚNICA `lib/formaCobrancaEstoque.js`, com o cálculo numa função PURA:
+#   medicamento e vacina resolvem preço por caminhos diferentes, e duas cópias da regra
+#   divergiriam no valor cobrado do cliente. ⚠️ O retrato do estoque é tirado ANTES da
+#   baixa; lote sem saldo fica fora; sem saldo nenhum cai no preço do lote, nunca em
+#   zero; valor digitado à mão continua vencendo. ✅ **MIGRATION APLICADA** (autorizada,
+#   `20261007000000`): aditiva e sem backfill — as 6 linhas de configuração existentes
+#   ficaram INTACTAS, então toda clínica segue em Valor Repassado. ⚠️ `prisma generate`
+#   falhou com EPERM (§11) e não faz falta: tudo por SQL cru. Suíte: 872. Ver §12.)
+# Atualizado em: 2026-09-10 (parte 3) (🔴 **PRODUTOS DE FORNECEDOR + CONTAS A PAGAR.**
+#   A clinica so sabia falar de item que ELA GUARDA: o que ela nao estoca e pede ao
+#   fornecedor aparecia como "Sem estoque", cinza, igual ao que ninguem fornece. E nao
+#   existia o outro lado do balcao da compra - `tb_faturas` e o que se COBRA do cliente.
+#   1. **Tela `/cadastro/produtos`** (Cadastro): medicamento e vacina num lugar so, com
+#      o FORNECEDOR de cada um e um checkbox "dar entrada no estoque" - e ele que separa
+#      PRODUTO (tenho de quem comprar) de ESTOQUE (tenho o frasco). ⚠️ NAO substitui
+#      `/medicamentos` (catalogo global do ADMIN) nem `/cadastro-vacina`.
+#   2. **Leitura do DOCUMENTO DE COMPRA** por IA (`ler_nota_fiscal@v2`, multimodal):
+#      traz itens, valores e o emitente. ⚠️ NADA e inventado e NADA e gravado - e
+#      proposta. Fornecedor que nao existe abre o cadastro JA preenchido e volta com
+#      ele escolhido. 🔴 O criterio e COMPRA, nao FISCAL (ampliado no mesmo dia): vale
+#      nota fiscal, cupom, ORCAMENTO DE BALCAO e recibo - o balcao veterinario entrega
+#      papel com "SEM VALOR FISCAL" impresso, e ele traz tudo o que a tela precisa.
+#   3. **Na prescricao e na vacina**: ordem EM ESTOQUE -> PRODUTO -> o resto, com o
+#      produto em VERDE trazendo o nome do fornecedor. ⚠️ `ehProduto` so quando NAO
+#      ha estoque.
+#   4. **`/financeiro/pagamentos`** - o que a clinica DEVE, no molde da fatura
+#      (abrir -> fechar -> pagar), com FORNECEDOR e PRESTADOR na mesma tela. Lancado na
+#      EXECUCAO, na MESMA transaction que cobra o cliente. ⚠️ Sem preco de compra
+#      cadastrado NAO lanca - divida de valor inventado e pior que divida ausente.
+#   ✅ A "fatura do prestador" do pedido JA EXISTIA (`/recibos-prestador` + o ledger da
+#   execucao) e foi REAPROVEITADA como fonte - nada recalculado.
+#   ✅ **MIGRATION APLICADA e SEED RODADO** (autorizados): as 3 tabelas com ENABLE +
+#   FORCE + policy, 7 slugs novos em 54 linhas de matriz cada, e o fluxo verificado ao
+#   vivo em transaction revertida — idempotencia, valor zero que nao vira divida, total
+#   recalculado e RLS isolando a clinica vizinha. Suite: 827. Detalhes na §12.)
 # Atualizado em: 2026-09-11 (🔴 **A GRADE DE PROCEDIMENTOS DEIXOU DE SALVAR SOZINHA** +
 #   o atalho "cadastrar os valores agora".
 #   1. Os valores seguem SEMPRE editáveis, mas gravar virou ato EXPLÍCITO: alterou,
@@ -3126,6 +3282,602 @@ New-Item -ItemType Junction `
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
 
+### Sessão 2026-09-12 (parte 2) — Produto multidose e a tela de Produtos no menu
+
+> ✅ **MIGRATION APLICADA** (autorizada) — `20261008000000_produto_multidose`:
+> `multidose BOOLEAN NOT NULL DEFAULT false` + `doses_por_embalagem INTEGER` em
+> `tb_produtos_fornecedor`. **ADITIVA e sem backfill** — nenhum item passou a ser
+> cobrado de forma diferente. Sem RLS novo: a tabela já é da EMPRESA, com policy de
+> tenant direto criada em `20261006000000` (ENABLE+FORCE conferidos, intactos).
+> Conferido no `information_schema`: `multidose` NOT NULL DEFAULT false,
+> `doses_por_embalagem` INTEGER nulável. E **a tabela estava VAZIA** (0 produtos,
+> conferido COM o carimbo `app.plataforma` — sem ele o FORCE RLS devolve 0 e parece
+> tabela vazia, armadilha 42): zero linha a migrar, coerente com a tela nunca ter
+> tido entrada no menu.
+> `prisma generate` refeito sem EPERM nesta sessão. Não era obrigatório — as colunas
+> são lidas e gravadas por SQL cru (`lib/produtoFornecedor.js`), e a leitura DETECTA
+> a ausência delas e devolve o comportamento antigo (§11).
+>
+> 🔴 **ELA FALHOU NA PRIMEIRA TENTATIVA — `42501: must be owner of table
+> tb_produtos_fornecedor`.** Não era o SQL: a migration foi rodada com o usuário da
+> APLICAÇÃO (`zls2vetp1`), e `ALTER TABLE ... ADD COLUMN` exige **OWNERSHIP**, não
+> `GRANT`. O dono de toda tabela do schema é `nutriadmin` — exatamente quem
+> `DATABASE_URL_MIGRATIONS` usa; com ele passou de primeira.
+> ⚠️ **Migration FALHA BLOQUEIA TODA A FILA** (mesma lição de 2026-09-10 parte 2). O
+> conserto é `migrate resolve --rolled-back` e então `migrate deploy` com a URL certa.
+> Aqui foi seguro porque o registro tinha **`steps=0`** e as colunas NÃO existiam —
+> o Prisma roda cada migration em transaction, então não sobra estado parcial.
+> ⚠️ **NUNCA `--applied` nesse caso**: marcaria como feito o que o banco não tem, e a
+> próxima leitura do detector diria "a coluna existe" sobre uma coluna inexistente.
+> ⚠️ `migrate status` diz **"Database schema is up to date!"** logo após o
+> `--rolled-back` — não confie nessa linha para saber se falta aplicar; confira as
+> COLUNAS.
+>
+> ✅ **VERIFICADO AO VIVO**, em transaction REVERTIDA contra a base real (empresa 58,
+> 0 produtos ao fim): gravou o produto com `multidose=true, doses=5`; o lookup
+> devolveu 5; a **empresa 42 enxergou 0** (RLS isolando); a lista trouxe a marca e o
+> número; **desmarcar** tirou o item do lookup (o número é zerado junto); e salvar
+> SEM mencionar multidose **preservou** a marca — o PATCH parcial que evita um
+> salvamento de preço desfazer o cadastro de dose.
+> ⚠️ O reconhecimento do script precisou de `comEscopoPlataforma`: sem o carimbo ele
+> concluiu "sem fornecedor cadastrado" sobre uma base cheia (armadilha 42 de novo).
+
+- [x] 🔴 **A TELA DE PRODUTOS NUNCA TEVE PORTA DE ENTRADA.** `/cadastro/produtos`
+      está em `App.tsx` desde 2026-09-10, com `ProdutoController`, rotas, os 4 slugs
+      `cadastro.produto.*` semeados e a tela inteira escrita — o que faltou foi o item
+      do Sidebar. Na prática a função existia e só era alcançável digitando a URL.
+      Entrou em **Cadastro › Produtos**, logo abaixo de Fornecedores (é de quem se
+      compra o produto, e o cadastro de um leva ao do outro), gateado por
+      `cadastro.produto.ler` no mesmo molde dos vizinhos.
+      ⚠️ `/cadastro/produtos` já casava com o `p.startsWith('/cadastro/')` que abre o
+      grupo — não foi preciso tocar em `detectSection` nem em `openGroup`.
+      ⚠️ Há teste travando a presença do item: a tela some do alcance do usuário sem
+      que nada quebre, que é o modo de falhar mais silencioso possível.
+- [x] 🔴 **O DEFEITO QUE O CHECKBOX RESOLVE — e ele não é de interface.** Desde que a
+      UNIDADE passou a ser da clínica (parte 1 desta data), o estoque é contado em
+      EMBALAGENS: 10 frascos, unidade "Un.". A prescrição continua em mL/mg, e
+      `mesmoGrupo('mL', 'Un.')` é **FALSO** — sem conversão possível,
+      `debitarEstoqueDia` caía no valor BRUTO:
+      ```
+      dose de 10 mL  ->  restante = 10  ->  debita 10 "Un." (dez frascos)
+                     ->  valorDaDose = 10 x R$/frasco  ->  a fatura cobra dez frascos
+      ```
+      Nenhum erro, nenhuma tela acusando. O dado que faltava é "quantas aplicações
+      saem de um frasco".
+- [x] **`multidose` + `dosesPorEmbalagem` em `tb_produtos_fornecedor`.**
+      ⚠️ **NUNCA em `tb_medicamentos`**: a linha do catálogo é GLOBAL na imensa
+      maioria dos casos, e marcá-la mudaria a cobrança de TODAS as clínicas do SaaS —
+      exatamente a armadilha que obrigou a unidade a nascer com copy-on-write. Aqui a
+      tabela já é da empresa: nada de policy nova, nada de cópia de catálogo.
+      ⚠️ **Booleano PRÓPRIO, não deduzido de `doses > 1`**: "não é multidose" e "é
+      multidose e ainda não informei quantas" são estados diferentes, e o segundo
+      precisa aparecer como PENDÊNCIA em vez de voltar a cobrar o frasco em silêncio.
+      ⚠️ `null` em `doses_por_embalagem` **não é 1**: com null a regra não entra em
+      vigor. Tratá-lo como 1 afirmaria "o frasco é dose única", o oposto do que a
+      clínica marcou.
+- [x] 🔴 **A REGRA MORA NA QUANTIDADE, NÃO NO PREÇO** — `qtdDoEstoque(qtdPrescrita,
+      unidadePrescrita, unidadeEstoque, doses, dosesPorEmbalagem)`, fonte única:
+      ```
+      multidose             -> doses / N   (frações de embalagem)
+      unidades compatíveis  -> conversão de base (500 g -> 0,5 kg), como sempre foi
+      incompatíveis         -> valor bruto, como sempre foi
+      ```
+      O valor da linha já é `qtdDebitada × preço unitário`, e a unidade contável tem
+      fator 1 — então 1/5 de frasco × R$/frasco **é** o preço do frasco ÷ 5. Nenhuma
+      linha do cálculo de PREÇO precisou mudar, e é isso que torna a mudança segura.
+      ⚠️ **Multidose VENCE a conversão de unidade**, inclusive em mL × mL: a clínica
+      declarou que conta em embalagens, e deixar a conversão numérica prevalecer
+      reintroduziria a cobrança por volume pelas costas.
+- [x] **A CONTAGEM de aplicações é o par da DOSAGEM** — `dosesDoDia`/`dosesDoCurso`,
+      e o parâmetro `resolverDoses` de `debitarEstoqueDia` (o par de `resolverQtd`).
+      Na execução, `resolverDosesExecucao` devolve **1** no fluxo por dose e o dia
+      inteiro no legado, espelhando `resolverQtdExecucao`.
+      ⚠️ Esquecer de passá-lo faz a dose voltar a ser cobrada pela DOSAGEM — o defeito
+      original, de volta sem aviso. Há gate estrutural travando a chamada.
+- [x] **Vale na RESERVA e nas TRÊS verificações de estoque**, não só na baixa:
+      reservar o frasco inteiro por aplicação faria o estoque da clínica "acabar" na
+      primeira receita, e a verificação compararia o frasco contra a dose e barraria
+      uma prescrição que cabe. `verificarEstoqueParaDia`, `verificarEstoqueParaExecucao`
+      e `verificarDisponibilidade` comparam **na unidade do estoque** quando há
+      multidose — não existe base comum entre "mL" e "frasco".
+- [x] ⚠️ **O lookup é EM BLOCO e com o client da TRANSAÇÃO** (`mapaMultidose(tx, …)`).
+      Um item por consulta multiplicaria as idas ao banco pelo número de medicamentos
+      do documento; e com o `prisma` global dentro da transaction o RLS devolveria
+      ZERO linha em silêncio — a armadilha de 2026-08-23 (parte 4), que aqui
+      apareceria como "o multidose não faz efeito".
+      ⚠️ Divergência entre fornecedores do mesmo item (o vínculo é por par) resolve
+      pelo **mais antigo** (`DISTINCT ON … ORDER BY id ASC`): o maior baratearia a
+      dose abaixo do que a clínica paga, o menor cobraria a mais.
+- [x] 🔴 **ESCOLHER O ITEM CARREGA O QUE JÁ ESTÁ CADASTRADO** — `GET
+      /cadastro/produtos/detalhe?medicamentoId=`. Antes, escolher um medicamento que a
+      clínica já compra abria o formulário EM BRANCO: a pessoa redigitava preço,
+      unidade e fornecedor que estavam no banco e, ao salvar, sobrescrevia um cadastro
+      que nunca viu. Agora vêm o item do catálogo e o VÍNCULO do fornecedor, tudo
+      editável, com faixa dizendo que o produto já existe.
+      ⚠️ **MULTI-TENANT**: só devolve linha GLOBAL ou da PRÓPRIA empresa — item de
+      outra clínica responde **404**, nunca os dados. Os vínculos saem de
+      `listarDaEmpresa`, escopado por `empresa_id`.
+      ⚠️ **Refaz ao trocar de FORNECEDOR**: o preço é por (item, fornecedor), e manter
+      o do anterior gravaria o cadastro de um no outro.
+      ⚠️ Vindo do DOCUMENTO DE COMPRA (`origemNota`), o que a nota trouxe **vence** o
+      cadastro antigo e o detalhe só preenche o que está vazio — o preço da nota é
+      mais recente, e sobrescrevê-lo desfaria a leitura que a pessoa acabou de
+      conferir.
+      ⚠️ `ultimoDetalhe` (ref com a chave item|fornecedor) impede o efeito de rebuscar
+      a cada render — e `editarProduto` a carimba ANTES de preencher, senão a carga
+      sobrescreveria o que acabou de ser posto na tela.
+- [x] **O salvar continua sendo o POST** — `salvarProduto` é idempotente pelo unique
+      (empresa, item, fornecedor), então re-salvar ATUALIZA o vínculo. Um PUT separado
+      deixaria a alteração sem o passo de entrada no estoque, que só o POST faz.
+      ⚠️ O gate acompanha o caso: `cadastro.produto.editar` quando há vínculo,
+      `cadastro.produto.criar` quando não — são permissões distintas na matriz, e o
+      botão que só falha depois do clique é a armadilha 28-d.
+- [x] **"Doses/frasco" SAIU da seção de estoque.** Quem informa o número é o checkbox
+      de multidose, e é dele que `dosesPorFrasco` do lote de vacina passa a vir. Dois
+      campos para o mesmo dado divergiriam — e o que divergiria é justamente o número
+      que desconta a dose do frasco. Na vacina, aquele campo virou "Estoque mínimo".
+- [x] Testes: `__tests__/produtoMultidose.test.js` (28 casos) — a conta da dose nos
+      dois sentidos (com e sem a marca), o frasco inteiro cobrado ao longo das N doses
+      e nunca N vezes, `null ≠ 1`, a contagem por frequência (inclusive a família
+      multi-dia), a migration ser aditiva e não tocar no catálogo global, o escopo por
+      `empresa_id`, o 404 do item de outra clínica, e um GATE ESTRUTURAL nos elos que
+      somem em silêncio (baixa, reserva, execução, client da transação, item do menu).
+      ✅ **Verificado que REPROVA**: removida a contagem da execução, a conversão
+      reescrita à mão na baixa e a multidose da reserva, **3 casos falharam**;
+      restaurado, os 28 voltaram. Suíte: **936**; `tsc --noEmit` (backend), `tsc -b` e
+      `vite build` limpos.
+      ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+- [ ] A VACINA não passa pela regra: ela tem contagem própria em doses
+      (`LoteVacina.dosesPorFrasco`, debitado por `consumirReservaVacina`), e o
+      checkbox só alimenta esse campo na entrada. Se a vacina precisar da mesma
+      cobrança fracionada, o lugar é `VacinaClinicaController.darBaixaEFaturar`.
+- [ ] A FARMÁCIA (entrada de estoque por `/farmacia`) não oferece o checkbox — quem
+      declara multidose é o cadastro de Produtos. Item que só existe no estoque, sem
+      produto de fornecedor cadastrado, continua sem a regra.
+- [ ] A descrição da linha na fatura não diz "1 dose de N do frasco" — continua sendo
+      a do item. Quem quiser auditar o rateio precisa abrir o cadastro do produto.
+
+### Sessão 2026-09-12 — A unidade do medicamento é da clínica (estoque e fatura em embalagens)
+
+> **SEM MIGRATION.** Nenhuma coluna nova: `Medicamento.unidade` já existe e é
+> `VarChar(100)`. O que mudou é QUEM a define e o que acontece quando ela muda.
+
+- [x] 🔴 **O DEFEITO, como foi relatado:** "o estoque e a fatura estão vindo errado
+      porque está sendo levado em consideração a qtd em gramas e não a quantidade de
+      embalagens". Causa: `Medicamento.unidade` vem do CATÁLOGO GLOBAL (ADMIN) e quase
+      sempre é peso/volume. Ela governa duas coisas a jusante:
+      `EstoqueClinica.qtdEstoque` (a calculadora da tela faz `nº embalagens × peso por
+      embalagem` → 10 frascos × 500 = **5.000 g**) e `precoUnitarioBase` (**R$/g**), que
+      é o preço que vira linha de fatura. A clínica compra, conta e cobra em EMBALAGENS.
+- [x] **Seletor de UNIDADE na Entrada de Estoque** (`Farmacia.tsx`), terceira coluna da
+      calculadora de embalagens — é ela que dá sentido às outras duas ("10 × 1 Un." ×
+      "10 × 500 g"). Vale na CRIAÇÃO e na EDIÇÃO (o pedido "isso mesmo para os
+      medicamentos já cadastrados").
+      ⚠️ A linha "Unidade:" SAIU do bloco de leitura "Do Catálogo": dois lugares para o
+      mesmo dado na mesma tela é o que faz um contradizer o outro.
+      ⚠️ A unidade da EDIÇÃO sai de `item.medicamento.unidade`, não da lista
+      `medicamentos` — ela é recortada por espécie e pode não conter o medicamento da
+      linha; aí o seletor abriria em branco e o salvar mandaria unidade vazia.
+      ⚠️ O "Total em estoque" passou a aparecer TAMBÉM na edição sem embalagens
+      reinformadas: trocar 'g' por 'Un.' não mexe no número, então 5.000 g passariam a
+      ser lidos como "5.000 Un." — mostrar o total na unidade escolhida é o que dá para
+      perceber isso ANTES de salvar. Quem corrige é o nº de embalagens ao lado.
+- [x] **As opções vêm do CATÁLOGO, com a garantia do "Un."** — `garantirUnidadeAvulsa`
+      (`lib/unidadeMedicamento.js`), aplicada em `MedicamentoController.opcoesCatalogo`.
+      ⚠️ **Só ACRESCENTA quando falta**: com 'un' no catálogo, somar 'Un.' criaria DUAS
+      opções para a mesma unidade — exatamente a duplicata que `dedupPorCaixa` existe
+      para resolver, e cada cadastro passaria a escolher uma grafia ao acaso. Reconhece
+      un / Un. / unid / unidade.
+      ⚠️ Lista fixa no código divergiria do banco no primeiro item novo — é a mesma
+      razão pela qual `opcoesCatalogo` nasceu lendo o catálogo.
+- [x] 🔴 **COPY-ON-WRITE — `lib/unidadeMedicamento.js#definirUnidadeDoMedicamento`.**
+      `tb_medicamentos` é CATÁLOGO MISTO: `empresa_id` NULO = linha GLOBAL que toda
+      clínica LÊ e nenhuma ESCREVE. Alterar a unidade de uma linha global mudaria a
+      unidade — e o PREÇO — do medicamento de todas as clínicas do SaaS. Então:
+      ```
+      medicamento GLOBAL      → nasce a CÓPIA da empresa com a unidade nova
+      medicamento da EMPRESA  → alterado no lugar
+      de OUTRA empresa        → 404 (o RLS já o esconderia; o guard é para o ADMIN)
+      sem empresa no contexto → 400 (não há de quem a cópia seria)
+      ```
+      ⚠️ A cópia leva **vias e espécies**: sem o vínculo de ESPÉCIE o item nasce
+      INVISÍVEL na busca do atendimento (`paraAtendimento` filtra por `especies.some`) e
+      no filtro `especieDaEmpresa` da Farmácia — a clínica trocaria a unidade e o item
+      desapareceria das telas, sem erro nenhum.
+      ⚠️ `classificacao` é copiada porque carrega o recorte "é vacina?"
+      (`contains 'vacin'`), que separa a Farmácia do Estoque de Vacinas.
+      ⚠️ **Idempotente**: cópia anterior da mesma empresa (trocou, voltou, trocou) é
+      REAPROVEITADA e reativada, nunca empilhada — mesma chave de
+      `garantirMedicamentoDaEmpresa` (nome + empresa, sem caixa).
+      ⚠️ **Grafia não é troca** (`mesmaUnidade`): 'un' × 'Un.' e 'kg' × 'Kg' são a mesma
+      unidade. Sem isso, abrir e salvar a tela sem mexer em nada criaria uma cópia a
+      cada gravação, porque o `<select>` devolve a grafia da opção.
+- [x] 🔴 **O REAPONTAMENTO é obrigatório, não arrumação.** `reapontarParaCopia` move, na
+      MESMA transaction: o estoque ATIVO da empresa, os itens de prescrição de grupo
+      **SALVO/FINALIZADO** e os produtos de fornecedor.
+      🔴 **Prescrição pendente**: `consumirReservas`/`debitarEstoqueDia` acham o estoque
+      por `medicamentoId: item.medicamentoCatId`. Com o item apontando para o medicamento
+      antigo e o estoque na cópia, o `findFirst` devolve null, o `if (!estoque) continue`
+      engole o caso, e a dose é executada **sem baixa de estoque e sem linha na fatura** —
+      falha silenciosa, o pior resultado possível.
+      ⚠️ Grupo **EXECUTADO/CANCELADO** fica intocado: é histórico.
+      ⚠️ Entrada de estoque **INATIVA** não é reapontada — é histórico com a quantidade na
+      unidade ANTIGA (5.000 g); arrastá-la reescreveria o que ela afirma. Por isso
+      `atualizar` carimba `data.medicamentoId` à parte, cobrindo a inativa em edição.
+      ⚠️ Todo `updateMany` leva `empresaId` no `where` — o RLS recusaria linha de outra
+      clínica, mas depender só dele deixaria a intenção implícita.
+      ⚠️ `tb_produtos_fornecedor` vai por SQL cru com `catch`: a tabela é da migration
+      20261006000000 e o client pode não conhecê-la (§11).
+- [x] 🔴 **DOIS GUARDS — a unidade é do MEDICAMENTO, logo vale para TODO o estoque dele.**
+      `qtdEstoque` está expresso na unidade ANTIGA, e quem o reexpressa é a calculadora de
+      embalagens, que só alcança a entrada aberta. Recusa (400) quando:
+      **(a) `OUTRAS_ENTRADAS_DE_ESTOQUE`** — a empresa tem outra entrada ATIVA daquele
+      medicamento (a que está sendo salva não conta, via `ignorarEstoqueId`);
+      **(b) `ESTOQUE_JA_MOVIMENTADO`** — já houve SAÍDA na unidade antiga, isto é, consumo
+      e (quando houve cobrança) fatura emitida; trocar a unidade aí reescreveria o
+      significado do que já foi entregue ao cliente. A mensagem diz o caminho: cadastrar a
+      unidade correta numa entrada nova.
+      ⚠️ Os guards rodam DEPOIS do `mesmaUnidade`: salvar a tela sem mexer na unidade não
+      pode ser recusado por uma regra que só existe para a TROCA.
+- [x] 🔴 **`calcPrecoUnitarioBase` deixou de devolver `null` para unidade CONTÁVEL.**
+      Ele computa R$/g e R$/mL e, para unidade sem fator conhecido ('Un.', 'Comprimido',
+      'Frasco'), devolvia `null` com o comentário "unidade incompatível — não calcula".
+      Com o campo vazio, a execução da prescrição cai no CAMINHO LEGADO
+      (`precoUnitarioDoEstoque`), que divide o valor pelo estoque **RESTANTE**: o preço
+      unitário SUBIA a cada dose aplicada, e era esse preço que ia para a fatura. Agora o
+      fator é 1 (R$ por unidade), congelado na entrada. Exportado para teste, porque
+      quebra em silêncio.
+      ⚠️ `atualizar` recalcula o preço TAMBÉM quando só a unidade muda: sem isso, trocar
+      'g' por 'Un.' deixaria o R$/g gravado valendo como R$/unidade na fatura.
+- [x] 🔴 **A gravação é ATÔMICA com a troca.** Em `atualizar`, a resolução da unidade
+      acontece DENTRO da `$transaction` do `update` — resolvê-la antes deixaria a unidade
+      alterada (com cópia criada e reapontamento feito) mesmo quando o salvar é recusado
+      por uma validação seguinte. Em `criar`, ela roda depois de TODAS as validações de
+      entrada.
+- [x] **`preferirCopiaDaEmpresa`** (`lib/catalogoManual.js`) — o global homônimo sai das
+      listagens quando a empresa tem a própria cópia. Até aqui nada criava duas linhas de
+      mesmo nome no escopo visível (`garantirMedicamentoDaEmpresa` REAPROVEITA o global em
+      vez de copiar); o copy-on-write cria a cópia de propósito, e sem o recorte a busca
+      da Prescrição e a lista da Farmácia mostrariam **"Dipirona" duas vezes** — a cópia
+      (com estoque e a unidade certa) e a global (sem estoque), indistinguíveis pelo nome.
+      Aplicado em `listar` e `paraAtendimento`.
+      ⚠️ Filtra o que se EXIBE, nunca o que existe.
+      ⚠️ `garantirMedicamentoDaEmpresa` ganhou `orderBy: { empresaId: 'asc' }` — o PRÓPRIO
+      da empresa vence o global de mesmo nome. `asc` e não `desc`: no Postgres ASC é NULLS
+      LAST, então o não-nulo vem primeiro; `desc` é NULLS FIRST e faria o global ganhar.
+- [x] **Tenancy endurecida em `EstoqueController.criar`**: `empresaId` do CORPO só é aceito
+      do ADMIN da plataforma; para os demais vale o CONTEXTO. Antes o corpo vencia para
+      qualquer perfil — o RLS recusaria a escrita, mas como 500 sem explicação.
+- [x] ✅ **MULTI-TENANT/RLS CONFERIDO AO VIVO** contra a base, em transactions REVERTIDAS
+      (nada gravado): a policy de `tb_medicamentos` é **ENABLE + FORCE** e assimétrica —
+      `USING (app_plataforma() OR empresa_id = app_empresa_id() OR empresa_id IS NULL)`,
+      `WITH CHECK (app_plataforma() OR empresa_id = app_empresa_id())`; o UPDATE da unidade
+      na linha GLOBAL sob o tenant 42 é **RECUSADO pelo banco** (`42501 new row violates
+      row-level security policy`); o INSERT da cópia com `empresa_id = 42` é aceito e o
+      UPDATE da unidade NELA também; e a empresa 58 enxerga **0 linhas** da cópia da 42.
+      🔴 **O que o RLS NÃO impede**: um UPDATE que setasse `empresa_id = <minha empresa>`
+      na linha GLOBAL passa pelo `WITH CHECK` (medido: 1 linha afetada) e ROUBARIA para uma
+      clínica o medicamento que é de todas. **Quem impede é o CÓDIGO** — a lib só faz
+      `create` da cópia —, e há GATE ESTRUTURAL travando: os únicos `medicamento.update` da
+      lib são os de unidade, e nenhum menciona `empresaId`.
+- [x] Testes: `__tests__/unidadeMedicamento.test.js` (36 casos) — grafia × troca, a
+      garantia do 'Un.' sem duplicata, a cópia com vias/espécies, o reapontamento de
+      estoque e de prescrição pendente (com o `empresaId` em todo `where`), os dois guards,
+      o preço da unidade contável, o dedup global × cópia, e os gates estruturais.
+      ✅ **Verificado que REPROVA**: removido o reapontamento do estoque e a cópia
+      "simplificada" para um UPDATE na linha global, **7 casos falharam** (inclusive o gate
+      do `empresaId`); restaurado, os 36 voltaram. Suíte: **908**; `tsc --noEmit` (backend),
+      `tsc -b` e `vite build` limpos.
+      ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+- [ ] `ProdutoController.criar` (tela `/cadastro/produtos`, checkbox "dar entrada no
+      estoque") também cria `EstoqueClinica` e continua usando a unidade do CATÁLOGO, sem
+      seletor. O pedido foi sobre a tela de estoque de medicamentos; ligar lá é chamar a
+      MESMA lib no mesmo ponto da transaction.
+- [ ] A VACINA (`tb_lotes_vacina`, `dosesPorFrasco`) tem contagem própria em doses e ficou
+      fora — a Farmácia exclui vacinas (`excluirVacinas=true`), então a troca de unidade
+      nunca alcança um lote de vacina.
+- [ ] Prescrição cuja unidade do ITEM não converte para a do estoque ('mg' prescrito ×
+      'Un.' no estoque) continua subtraindo direto (1 mg → 1 Un.) — comportamento legado de
+      `mesmoGrupo`, que não conhece unidade contável. Hoje o caminho é a clínica escolher
+      unidades compatíveis; converter exigiria saber quantos mg tem cada unidade, dado que
+      o sistema não guarda.
+
+### Sessão 2026-09-10 (parte 4) — Forma de cobrança de medicamento/vacina
+
+> ✅ **MIGRATION APLICADA** (autorizada) — `20261007000000_forma_cobranca_estoque`:
+> `forma_cobranca_estoque VARCHAR(20)` + `percentual_cobranca_estoque DOUBLE PRECISION`
+> em `tb_empresa_configuracoes`. **ADITIVA e SEM BACKFILL**: `null` = VALOR_REPASSADO,
+> que é o comportamento que toda clínica tem hoje — ninguém muda de preço ao aplicá-la.
+> Sem RLS novo (a tabela já é escopada).
+> Conferido no `information_schema`: as duas colunas NULÁVEIS, `VARCHAR(20)` e
+> `DOUBLE PRECISION`; e as **6 linhas de configuração existentes ficaram INTACTAS**
+> (0 com forma, 0 com percentual) — ou seja, toda clínica segue em Valor Repassado.
+> ⚠️ A contagem exigiu `set_config('app.plataforma','on',true)` **na leitura**, senão
+> o FORCE RLS devolve 0 e parece que a migration não gravou nada (armadilha 42).
+>
+> ✅ **VERIFICADO AO VIVO**, em transaction revertida contra a base real: gravou
+> `PERCENTUAL 10` no escopo de uma empresa PESSOAL (empresa 42 / equipe 39), releu pelo
+> escopo exato E pelo fallback de `lerForma`, e o preço saiu **132** sobre um lote de
+> 120 — depois revertida, com 0 linhas configuradas ao fim.
+>
+> ⚠️ **`npx prisma generate` FALHOU com `EPERM`** (o backend em execução segura o
+> `query_engine-windows.dll`, §11) e ficou PENDENTE. **Não faz falta aqui**: as duas
+> colunas são lidas/gravadas por SQL cru (`lib/formaCobrancaEstoque.js`) e nenhum
+> caminho passa pelo client tipado. Rodar na próxima parada do backend, só para o
+> schema tipado acompanhar.
+
+- [x] **Campo novo "Forma Cobrança Medicamentos/Vacina"** no Cadastro da Empresa
+      (`/cadastro/empresa`), ao lado de Fechamento/Tempo de Consulta/Validade. Quatro
+      formas, e o que elas decidem é o PREÇO do item que SAI DO ESTOQUE na fatura:
+      ```
+      VALOR_REPASSADO  preço repassado DAQUELE lote            (o que sempre foi)
+      PERCENTUAL       o do lote + N% (campo do % só aparece nesta forma)
+      MAIOR_VALOR      o MAIOR repassado entre os lotes EM ESTOQUE
+      CUSTO_MEDIO      Σ(preço_i × qtd_i) / Σ(qtd_i), ponderado pelo saldo
+      ```
+- [x] 🔴 **A FORMA MUDA O NÚMERO DE LINHAS DA FATURA, e isso não é cosmético.**
+      VALOR_REPASSADO e PERCENTUAL dão preço POR LOTE, então uma saída tirada de dois
+      lotes com preços diferentes sai em DUAS linhas; MAIOR_VALOR e CUSTO_MEDIO dão o
+      MESMO preço a todo lote e a saída vira UMA linha com a quantidade somada.
+      ⚠️ **Nenhuma mudança foi necessária no lançamento da fatura para isso** — quem já
+      consolida linha de mesmo valor unitário é `adicionarOuSomarFaturaItem`. Mexer na
+      estrutura da linha para "forçar" o agrupamento teria quebrado a consolidação de
+      doses de um curso de 7 dias, que é outra regra.
+      Conferido com o exemplo do pedido (estoque 2 un a 120 + 6 un a 150; saída de 1 un
+      de cada): 120+150 · 132+165 · 2×150=300 · 2×142,50=285.
+- [x] 🔴 **FONTE ÚNICA `lib/formaCobrancaEstoque.js`**, com o cálculo numa função PURA
+      (`precoDeVenda(cfg, precoDoLote, entradas)`). Medicamento e vacina resolvem preço
+      em arquivos distintos e por caminhos distintos (unidade base × dose de frasco) —
+      duas cópias da regra divergiriam na primeira correção, e o que divergiria seria o
+      valor cobrado do cliente.
+      ⚠️ **Entrada SEM SALDO fica fora de MAIOR_VALOR e de CUSTO_MEDIO**: ela não está
+      "dentro do estoque", e um lote zerado e caro puxaria o preço de todo mundo.
+      ⚠️ **Sem nenhuma entrada com saldo** (execução forçada) cai no preço do lote,
+      NUNCA em zero — zero afirmaria que o item é gratuito.
+      ⚠️ O percentual é gravado como `null` fora da forma PERCENTUAL: um número
+      esquecido ali voltaria a valer sozinho ao trocar a forma de volta.
+      ⚠️ Base ainda não migrada devolve o PADRÃO (`catch`), não erro: o pior caso é
+      cobrar como sempre cobrou, nunca derrubar a execução clínica.
+- [x] 🔴 **O RETRATO DO ESTOQUE É TIRADO ANTES DA BAIXA.** MAIOR_VALOR e CUSTO_MEDIO
+      olham o que a clínica TEM no momento em que cobra; calculado depois, cada lote
+      debitado mudaria o preço dos seguintes DENTRO da mesma execução. Vale nos dois
+      lados — `debitarEstoqueDia` (antes do laço) e `darBaixaEFaturar` (antes de
+      `consumirReservaVacina`, que já dá baixa). Há gate estrutural travando a ORDEM.
+- [x] **Extraído `precoUnitarioDoEstoque`** (`PrescricaoGrupoController`): a dupla
+      "`precoUnitarioBase` fixo da entrada × cálculo dinâmico legado" estava escrita
+      duas vezes no arquivo. Comportamento idêntico — o legado continua existindo,
+      com o defeito conhecido de subir o preço conforme o estoque baixa.
+- [x] ⚠️ **Valor digitado à mão VENCE a forma de cobrança**, nos dois fluxos: o
+      `valorOrcado` do item (medicamento) e o `valor` informado no registro (vacina)
+      têm precedência, como já tinham. A forma decide o preço que o sistema DEDUZ do
+      estoque, não a decisão de quem digitou um valor.
+- [x] Multi-tenant/RLS preservados: a configuração é lida pelo escopo (empresa CNPJ →
+      `equipeId` null; pessoal → por equipe, com o mesmo fallback de `fusoDaEmpresa`) e
+      o retrato do estoque sai das MESMAS consultas já escopadas por `empresaId`. A
+      leitura roda com o `tx` da transação — o `prisma` global ali não enxergaria nada
+      (armadilha de 2026-08-23, parte 4).
+- [x] Testes: `__tests__/formaCobrancaEstoque.test.js` (23 casos) — a matriz das quatro
+      formas com os números do pedido, o lote zerado, a base não migrada, as aspas de
+      `"empresaId"` (armadilha 41) e um GATE ESTRUTURAL nos três elos que somem em
+      silêncio (medicamento, vacina, tela de configuração).
+      ✅ **Verificado que REPROVA**: removida a chamada na vacina e quebrado o peso do
+      custo médio, **3 casos falharam**; restaurado, os 23 voltaram. Suíte: **872**;
+      `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+- [ ] O ORÇAMENTO não passa pela forma de cobrança: ele é cotado antes de existir lote
+      debitado, e o valor orçado tem precedência na execução (é o que impede o cliente
+      receber um preço e ser cobrado outro). Se a clínica quiser orçar já pela forma
+      configurada, é decisão de produto — e o lugar é `OrcamentoController`.
+- [ ] "Maior valor do mês" foi implementado como **maior valor EM ESTOQUE** (o que o
+      pedido descreve na linha seguinte ao título). Se a intenção for a janela de tempo
+      literal — o maior repassado das ENTRADAS do mês corrente, inclusive de lote já
+      consumido —, muda o retrato (`MovimentoEstoque`/`createdAt`), não o cálculo.
+
+### Sessão 2026-09-10 (parte 3) — Produtos de fornecedor e Contas a Pagar
+
+> ✅ **MIGRATION APLICADA** (autorizada) — `20261006000000_produtos_contas_pagar`.
+> ADITIVA e sem backfill: três tabelas novas (`tb_produtos_fornecedor`,
+> `tb_contas_pagar`, `tb_conta_pagar_itens`) e duas colunas em `tb_lotes_vacina`
+> (`fornecedor_id`, `nota_fiscal`). Conferido no banco: as três com **ENABLE + FORCE**
+> e policy `tenant_*`, os três índices no lugar (dois PARCIAIS) e **0 linhas** nas três
+> — nada de dado existente foi tocado. `migrate status`: schema em dia, 194 migrations.
+> **Funciona sem `prisma generate`**: tudo é lido/gravado por SQL cru
+> (`lib/produtoFornecedor.js`, `lib/contasPagar.js`) — §11.
+>
+> ✅ **SEED RODADO** (`node backend/seed.js`, autorizado): os 7 slugs novos entraram no
+> catálogo e **54 linhas de matriz por slug** (6 equipes × 9 perfis). Conferido: GESTOR
+> FULL nos dois; FINANCEIRO com `pagamentos` EQUIPE e `produto` NENHUM; VET/ESTAGIÁRIO/
+> SECRETARIA com `produto` EQUIPE e `pagamentos` NENHUM; PROPRIETARIO NENHUM em tudo.
+>
+> ✅ **As três já entraram em `TENANT_PLANE`** (`__tests__/tenancyRls.test.js`) — só
+> depois de existirem, porque o teste 3 recusa tabela inexistente.
+>
+> ✅ **VERIFICADO AO VIVO**, em transaction revertida contra a base real (Patyvet):
+> produto salvo → `fornecedorDoItem` devolveu o fornecedor e o valor de compra →
+> lançamento criou a conta → **o segundo lançamento da MESMA origem NÃO duplicou**
+> (1 item, idempotência do índice parcial) → **valor zero devolveu `null`** (não virou
+> dívida) → **total recalculado em 24,68** (12,34 × 2) → `contaAbertaDoCredor` chamada
+> de novo devolveu a MESMA conta, o que prova que o `ON CONFLICT ... WHERE status =
+> 'ABERTA'` casou com o índice parcial (a armadilha 42P10 NÃO ocorreu) → e a empresa
+> vizinha enxergou **0 contas**, com o RLS isolando.
+
+- [x] 🔴 **O PROBLEMA: a clínica só sabia falar de item que ELA GUARDA.**
+      `tb_estoque_clinica` e `tb_lotes_vacina` são ESTOQUE FÍSICO (quantidade, lote,
+      validade). O item que a clínica NÃO estoca — pede ao fornecedor quando o vet
+      prescreve — não tinha onde existir: aparecia como "Sem estoque", cinza,
+      indistinguível do que ninguém fornece. E não existia o outro lado do balcão da
+      compra: `tb_faturas` é o que se COBRA do cliente; o que a clínica DEVE não era
+      apurado em lugar nenhum.
+- [x] **`tb_produtos_fornecedor` — "de quem eu compro este item, e por quanto".**
+      🔴 **NÃO é estoque**: não tem quantidade, lote nem validade, porque o item não
+      está na clínica.
+      ⚠️ Por (empresa, medicamento, fornecedor) e não por (empresa, medicamento): o
+      mesmo item costuma ter mais de um fornecedor com preços diferentes, e guardar um
+      só obrigaria a apagar a cotação anterior para registrar a nova.
+      ⚠️ `medicamento_id` aponta para `tb_medicamentos`, o catálogo dos DOIS tipos (a
+      vacina é a linha cuja `classificacao` contém "vacin") — uma tabela por tipo
+      duplicaria a mesma regra de compra em dois lugares.
+      ⚠️ `valor_unitario` NULO = "compro dele, mas o preço não foi cadastrado", NUNCA
+      zero. É a diferença entre "não sei quanto pago" e "recebo de graça", e é ela que
+      decide se a conta a pagar é lançada.
+- [x] 🔴 **PRODUTO × ESTOQUE — a distinção que a tela nova existe para registrar**
+      (decidido com o usuário):
+      ```
+      EM ESTOQUE → a clínica tem o frasco.         selo EMERALD, com o saldo
+      PRODUTO    → tem de quem comprar, sem saldo.  selo VERDE, com o FORNECEDOR
+      NENHUM     → ninguém fornece.                 selo CINZA
+      ```
+      ⚠️ `ehProduto` é `true` **só quando NÃO está em estoque**. Marcar os dois faria a
+      cor deixar de distinguir "tenho" de "preciso pedir" — que é para o que ela serve.
+      ⚠️ Quem decide é o BACKEND (`MedicamentoController.paraAtendimento`), que também
+      ORDENA: **em estoque → produto → o resto**, alfabético dentro de cada grupo.
+      Antes só a vacina era ordenada; o medicamento saía em ordem alfabética pura, e o
+      que a clínica tem em mãos ficava perdido numa lista de milhares de itens.
+      Mandar as flags e deixar cada tela ordenar seria a mesma regra escrita três vezes
+      (prescrição, vacina, orçamento) — e a terceira divergiria.
+- [x] **Tela `/cadastro/produtos`** — abas Medicamentos × Vacinas (o padrão do cadastro
+      de procedimentos), o item do catálogo, o fornecedor, os dois preços e o
+      **checkbox "dar entrada no estoque"**, que é o que separa produto de estoque.
+      ⚠️ **NÃO substitui `/medicamentos` nem `/cadastro-vacina`** (decidido com o
+      usuário): a primeira é o catálogo GLOBAL do ADMIN, com 4.878 itens que valem para
+      todas as clínicas. Aqui nasce o item PRÓPRIO da empresa, que só ela vê —
+      reaproveitando `garantirMedicamentoDaEmpresa`, que já é idempotente por
+      (nome, empresa, tipo).
+      ⚠️ Tudo numa transaction: catálogo + vínculo + entrada de estoque nascem juntos
+      ou não nascem. Uma falha no meio deixaria o item sem fornecedor (invisível como
+      produto) ou o estoque apontando para um vínculo que não existe.
+      ⚠️ A entrada de medicamento cria o `MovimentoEstoque` de ENTRADA — sem ele o item
+      nasce com saldo que não veio de lugar nenhum e o relatório não fecha.
+- [x] 🔴 **LEITURA DO DOCUMENTO DE COMPRA** — `ler_nota_fiscal@v2` (multimodal) +
+      `services/notaFiscalService.js`. Lê nome, quantidade, valor, data e o emitente.
+      🔴 **O CRITÉRIO É "DOCUMENTO DE COMPRA", NÃO "DOCUMENTO FISCAL"** (a v1 exigia
+      NOTA FISCAL; ampliado no MESMO dia, depois de um caso real). O balcão do
+      fornecedor veterinário entrega o tempo todo papel com **"ORÇAMENTO - SEM VALOR
+      FISCAL"** impresso, trazendo emitente, data, itens, quantidade e preço — ou seja,
+      TUDO o que a tela precisa. A IA lia certo e recusava certo: o critério é que
+      estava errado, e o resultado era o cadastro manual que esta função veio evitar.
+      Passam nota fiscal, DANFE, cupom, **orçamento/pedido de balcão** e recibo.
+      ⚠️ **Validade FISCAL nunca foi requisito aqui**: daqui sai catálogo de produto,
+      preço de compra e (quando a clínica manda) entrada de estoque — nada disso é
+      escrituração contábil, e `tb_lotes_vacina.nota_fiscal` é texto de REFERÊNCIA.
+      ⚠️ **Não afrouxar mais que isto**: papel que não registra COMPRA (receita, laudo,
+      exame, foto) continua recusado — dali não sai item nem preço, e aceitar encheria
+      o formulário com o que não é produto.
+      ⚠️ **A chave da saída continua `ehNotaFiscal`**, de propósito: renomeá-la para
+      `ehDocumentoCompra` obrigaria a tocar serviço, controller, front e gate sem mudar
+      comportamento nenhum — a mesma decisão de `tb_procedimento_combos.valor`.
+      ⚠️ **A RECUSA DIZ O QUE É ACEITO.** "Não parece ser uma nota fiscal" não dava a
+      quem tinha o orçamento na mão como saber se o problema era o papel, a foto ou o
+      sistema — o texto agora nomeia nota/cupom/orçamento/recibo.
+      ⚠️ **O RÓTULO DA TELA acompanha o critério**: enquanto o botão dizia só "Ler nota
+      fiscal", quem tinha um orçamento não tentava, e a recusa acontecia ANTES do
+      upload. Virou **"Ler documento de compra"**, e o texto de ajuda lista os quatro.
+      🔴 **NADA É INVENTADO**: campo que a nota não traz volta `null`. Quantidade
+      adivinhada vira estoque que não existe; preço adivinhado vira dívida que ninguém
+      contraiu. Rede de segurança depois do modelo: item sem nome é descartado,
+      quantidade/valor negativos viram `null` (são linha de desconto/devolução).
+      🔴 **O RESULTADO É PROPOSTA, NUNCA CADASTRO** — o controller não grava nada. A
+      pessoa confere na tela e só então salva; assim um erro de leitura custa uma
+      correção de campo, não um produto errado no catálogo.
+      ⚠️ **Fornecedor que não existe abre o cadastro JÁ PREENCHIDO** com o que a nota
+      trouxe, e a volta traz o fornecedor novo selecionado — sem isso o gestor teria de
+      reencontrar a nota e recomeçar. Os dados vão no `state` do router, não na query:
+      são ~10 campos e uma URL com tudo isso ficaria ilegível.
+      ⚠️ **O que sobe é sempre IMAGEM** — PDF é convertido no navegador, reusando
+      `modules/documentos/upload.ts`. Uma segunda conversão divergiria da primeira, e o
+      que divergiria é a legibilidade do que a IA lê.
+      ⚠️ Falha NÃO é erro de tela: responde **200** com `ehNotaFiscal: false` e o
+      MOTIVO, e o cadastro segue manual. O único erro propagado é o **429 de QUOTA**.
+      ⚠️ Multimodal não passa por `callAI`, então o **gate de quota** e o log de uso são
+      feitos à mão — esquecê-los deixaria este caminho fora do teto do plano (§7).
+      Módulo de IA novo `MODULOS_IA.PRODUTOS`: somá-lo ao FINANCEIRO esconderia o custo
+      de uma função nova dentro de um número que já existia.
+- [x] 🔴 **CONTAS A PAGAR — `tb_contas_pagar` + `tb_conta_pagar_itens`**, no molde da
+      fatura (abrir → fechar → pagar).
+      🔴 **UMA tabela para FORNECEDOR e PRESTADOR**, separados por `tipo`. São o mesmo
+      documento com o mesmo ciclo; duas tabelas dariam duas telas, dois totalizadores e
+      duas regras de fechamento, que divergiriam na primeira correção — a `Fatura`
+      também é uma só para todo tipo de item cobrado.
+      ⚠️ `credor_id` é id de `tb_fornecedores` OU de `tb_prestadores` conforme o tipo:
+      as duas são independentes desde 2026-08-21 e não compartilham id. SEM FK, pelo
+      motivo de `tb_prescricoes.prestador_id` — registro financeiro não muda de dono
+      nem some porque um cadastro foi excluído. `credor_nome` é SNAPSHOT.
+      ⚠️ O item grava **ANIMAL, valor, DATA e QUEM SOLICITOU** — o que o pedido exige
+      que apareça. Nome do animal e do solicitante são gravados junto do id, pela mesma
+      razão do ledger do prestador.
+      ⚠️ **UMA conta ABERTA por (empresa, tipo, credor, mês)** — índice único PARCIAL.
+      Sem ele, duas contas correntes do mesmo fornecedor partem o mês em duas e metade
+      dos lançamentos some da vista (a mesma guarda de `abrirProximaFatura`).
+- [x] 🔴 **O LANÇAMENTO É NA EXECUÇÃO, na MESMA transaction da fatura do cliente**
+      (decidido com o usuário). Ou o cliente é cobrado e o terceiro entra na conta, ou
+      nada acontece: fora da transaction existiria a janela em que a clínica cobrou e
+      não deve a ninguém.
+      ⚠️ **Só o que é PRODUTO**: item de estoque próprio já foi comprado antes, na
+      entrada da nota — cobrá-lo de novo contaria a mesma compra duas vezes. Na vacina,
+      o critério equivalente é `!loteIdFinal` (não houve lote debitado).
+      ⚠️ **Sem preço de compra cadastrado, NÃO lança** — dívida de valor inventado é
+      pior que dívida ausente, e a tela de Produtos avisa onde isso se resolve.
+      ⚠️ O valor é o de COMPRA, nunca o cobrado do cliente: usar o segundo afirmaria
+      que a clínica paga o que cobra, e zeraria a margem dela no relatório.
+      ⚠️ **Quem SOLICITOU é quem PRESCREVEU**, não quem executou: a compra foi
+      provocada pela prescrição, e o plantonista que aplica a dose não decidiu comprar
+      nada. Resolvido UMA vez, fora do laço — dentro seria uma consulta por item.
+      ⚠️ O valor do PRESTADOR sai de `calcularValorAPagar`, a MESMA fonte do recibo —
+      recalcular daria dois números para a mesma dívida, com recibo e conta a pagar
+      discordando entre si.
+- [x] 🔴 **IDEMPOTÊNCIA por (origem_tipo, origem_id)**, com índice único PARCIAL: a
+      mesma execução não vira duas linhas, e é isso que permite chamar o lançamento sem
+      contar quantas vezes rodou. Parcial porque o lançamento MANUAL não tem origem, e
+      vários deles na mesma conta são legítimos.
+      🔴 **`ON CONFLICT` sobre índice PARCIAL exige o predicado REPETIDO** na cláusula
+      — a armadilha 42P10 que já mordeu no seed 005 (2026-09-09). Erro de EXECUÇÃO:
+      `node --check` passa e só o banco reprova. Há gate para os dois `ON CONFLICT`.
+- [x] **Tela `/financeiro/pagamentos`** — abas Fornecedores × Prestadores, o
+      `PeriodoSelector` de sempre, total do período e "a pagar", e uma linha por
+      lançamento com animal, item, solicitante, data e valor. Ações: **Fechar**,
+      **Marcar como paga** e **Cancelar** (com justificativa, §33).
+      ⚠️ **CANCELADA fica fora do total**: ela é registro do que deixou de valer, e
+      somá-la afirmaria uma dívida que a clínica já desfez.
+      ⚠️ Conta **PAGA é somente leitura** — remover item de um pagamento já quitado
+      mudaria um documento que o credor recebeu.
+      ⚠️ `pagar` é slug SEPARADO de `lancar`: lançar é registrar a dívida; PAGAR é dar
+      por quitada, e nem todo mundo que lança decide isso.
+- [x] **Slugs novos em TODOS os 9 perfis** — `cadastro.produto.*` espelha o nível de
+      `cadastro.fornecedor.*` (é o mesmo ato de cadastro de compra) e
+      `financeiro.pagamentos.*` espelha `financeiro.recibos.*`.
+      ⚠️ **NÃO espelha `financeiro.faturas`**: a fatura é o que se COBRA do cliente;
+      pagamentos é o que se PAGA a terceiros, inclusive remuneração — reaproveitar
+      aquele nível daria a folha de pagamento de terceiros a todo mundo que fatura.
+      Há teste travando isso.
+- [x] ✅ **A "fatura do prestador" do pedido JÁ EXISTIA e foi REAPROVEITADA.**
+      `/recibos-prestador` e o ledger `tb_execucoes_procedimento_prestador` (gravado na
+      execução, com o valor do cadastro prestador × procedimento) continuam sendo a
+      fonte — nada foi recalculado e nenhuma migration tocou neles. O que nasceu foi a
+      conta a pagar do prestador, alimentada do MESMO ponto, para ele ter o ciclo de
+      abrir/fechar/pagar que o recibo não tem. O recibo segue como o comprovante
+      impresso.
+- [x] Testes: `__tests__/produtosContasPagar.test.js` (29 casos) — RLS das três tabelas
+      (ENABLE + FORCE + USING **e** WITH CHECK), a migration ser aditiva, os dois
+      índices parciais, o `null ≠ 0`, o total recalculado (nunca incrementado), o
+      `NULLS LAST` da escolha do fornecedor, a leitura de nota que não grava nada, e um
+      GATE ESTRUTURAL nos elos que somem em silêncio (o lançamento na execução da
+      prescrição, da vacina e do procedimento, a origem em todo lançamento automático,
+      e a ordenação em três grupos).
+      ✅ **Verificado que REPROVA**: removidos o predicado do `ON CONFLICT`, o
+      lançamento do fornecedor e a ordenação em três grupos, **3 casos falharam**;
+      restaurado, os 29 voltaram. Suíte: **827** (+4 do critério de compra);
+      `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+- [ ] O lançamento do fornecedor usa o valor de compra **por unidade × a quantidade da
+      dose**. Item vendido em embalagem (frasco de 100 mL usado 10 mL por vez) fica com
+      a conta proporcional, não pelo frasco inteiro — o que é correto para consumo, mas
+      não para reposição. Se a clínica quiser a conta por EMBALAGEM comprada, é outra
+      regra e precisa ser dita.
+- [ ] A conta a pagar não tem **fechamento automático** (o da fatura tem cron). Hoje o
+      financeiro fecha à mão na tela; se isso incomodar, o lugar é um job espelhando
+      `fecharFaturasDoMes`.
+- [ ] `tb_lotes_vacina.fornecedor_id` é gravado na entrada por Produtos, mas as telas
+      de `/estoque-vacina` e `/farmacia` ainda não exibem nem editam o fornecedor do
+      lote — só a de Produtos o preenche.
+
 ### Sessão 2026-09-11 — Salvar/Cancelar na grade e o atalho "cadastrar os valores agora"
 
 - [x] 🔴 **A GRADE DE PROCEDIMENTOS DEIXOU DE SALVAR SOZINHA** (a pedido). Os valores
@@ -5032,7 +5784,7 @@ New-Item -ItemType Junction `
 - [x] **ASSUMIR e ALTERAR já estavam auditados** por `TRANSFERENCIA` e `ALTERACAO`
       (com antes → depois e o dono de cada lado) — não foi preciso categoria nova
       para eles. O que faltava na trilha era só a TENTATIVA recusada.
-- [x] **Testes**: `__tests__/concorrenciaEdicao.test.js` (27 casos) — trava otimista,
+- [x] **Testes**: `__tests__/concorrenciaEdicao.test.js` (28 casos) — trava otimista,
       corrida de assunção, autoria preservada, leitura, resposta 409, tempo real e
       o cenário completo com o SSE caído. Mais um GATE ESTRUTURAL que varre o código
       e reprova `assumir` sem `assumirComLock`, `atualizar` sem `reservarVersao` e

@@ -31,6 +31,14 @@ const SCHEMA = 'schs2vet';
 // ─── TENANT PLANE — protegidas por RLS ────────────────────────────────────────
 // Vazia na fase 1: nenhuma tabela tem RLS ainda (medido — 0 de 90).
 const TENANT_PLANE = [
+  // ✅ 2026-09-10 — PRODUTOS DE FORNECEDOR + CONTAS A PAGAR (migration
+  // `20261006000000_produtos_contas_pagar`, APLICADA). As duas primeiras com TENANT
+  // DIRETO (`empresa_id` próprio) e a terceira com TENANT VIA PAI (`tb_contas_pagar`,
+  // como `tb_fatura_itens` — duplicar o dono em duas tabelas cria a possibilidade de
+  // eles DIVERGIREM, e aí não há qual dos dois acreditar). Todas com ENABLE + FORCE +
+  // policy com USING e WITH CHECK. Guardam o PREÇO DE COMPRA e o que a clínica PAGA a
+  // terceiros: vazamento aqui expõe a margem dela para a clínica vizinha.
+  'tb_produtos_fornecedor', 'tb_contas_pagar', 'tb_conta_pagar_itens',
   // ✅ 2026-09-10 — PRESTADOR NO PROCEDIMENTO + RECIBO (migration
   // `20261001000000_procedimento_prestador`, APLICADA). As duas nascem com
   // ENABLE + FORCE + policy de TENANT DIRETO. Guardam PREÇO e REMUNERAÇÃO de

@@ -24,9 +24,16 @@ import { useOrdenacao, ThOrdenavel, ordenarLista, valorDataPura } from '../compo
 import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
 import { formatNumeroClinico, numeroClinicoComHash } from '../utils/numeroClinico';
 import { DOSES, INTERVALO_REFORCO_MESES, VIAS_PADRAO, normalizeVia } from '../utils/vacina';
+import CadastroCatalogoModal, { type ItemCatalogoCriado } from '../components/CadastroCatalogoModal';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+/** Fornecedor de uma vacina que a clínica NÃO estoca — ver `ehProduto`. */
+interface FornecedorDaVacina {
+  id: number; nome: string;
+  valorUnitario: number | null; valorVenda: number | null; unidade: string | null;
+}
 
 interface MedicamentoCatalogo {
   id:                number;
@@ -35,6 +42,42 @@ interface MedicamentoCatalogo {
   valorUnitario:     number | null;
   vias:              { id: number; via: string }[];
   emEstoque:         boolean;
+  /**
+   * 🔴 PRODUTO DE FORNECEDOR (2026-09-10) — mesma regra da prescrição: a clínica não
+   * tem o frasco, mas tem de quem comprá-lo. `true` só quando NÃO está em estoque.
+   * Quem decide é o backend (`MedicamentoController.paraAtendimento`), que também
+   * ordena a lista: em estoque → produto → o resto.
+   */
+  ehProduto?:        boolean;
+  fornecedores?:     FornecedorDaVacina[];
+}
+
+/**
+ * 🔴 O SELO DE DISPONIBILIDADE DA VACINA — espelho do da prescrição (2026-09-10).
+ *
+ *   NO ESTOQUE (emerald)    → há lote disponível na clínica.
+ *   FORNECEDOR (verde-lima) → não há lote, mas a clínica compra de alguém. Mostra o
+ *                             NOME, que é o que responde "de quem peço?".
+ *   SEM ESTOQUE (cinza)     → ninguém fornece.
+ *
+ * ⚠️ Mesma aparência da prescrição de propósito: é a MESMA informação, e duas caras
+ * para ela obrigariam o vet a reaprender a lista ao trocar de aba.
+ */
+function SeloVacinaDisponivel({ m }: { m: MedicamentoCatalogo }) {
+  const cls = 'text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap';
+  if (m.emEstoque)
+    return <span className={`${cls} text-emerald-600 bg-emerald-50`}>No estoque</span>;
+
+  const forn = m.fornecedores ?? [];
+  if (m.ehProduto && forn.length > 0) {
+    return (
+      <span className={`${cls} text-green-700 bg-green-100 border border-green-200`}
+        title={forn.map(f => f.nome).join(' · ')}>
+        {forn[0].nome}{forn.length > 1 ? ` +${forn.length - 1}` : ''}
+      </span>
+    );
+  }
+  return <span className={`${cls} text-gray-400 bg-gray-100`}>Sem estoque</span>;
 }
 
 interface LoteDisponivel {
@@ -505,11 +548,12 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   // ── Combobox medicamento ───────────────────────────────────────────────────
   const [buscaMed,          setBuscaMed]          = useState('');
   const [dropdownMedAberto, setDropdownMedAberto] = useState(false);
-  // "Cadastrar nova vacina": ao contrário do medicamento da Prescrição (que só
-  // resolve o catálogo ao SALVAR), aqui o id é necessário JÁ no clique — a tela
-  // usa `medicamentoId` na hora para buscar lote/estoque/via. Por isso cria de
-  // verdade (POST /medicamentos/garantir) e entra na lista como qualquer outra.
-  const [criandoVacina,     setCriandoVacina]     = useState(false);
+  // "Cadastrar nova vacina": abre a TELA DE CADASTRO (`CadastroCatalogoModal`, a
+  // mesma da Prescrição e da Entrada de Estoque) e guarda o nome digitado na busca.
+  // O item é criado de verdade lá (POST /medicamentos/garantir) — aqui o id é
+  // necessário JÁ no clique, porque a tela usa `medicamentoId` na hora para buscar
+  // lote/estoque/via.
+  const [cadastroVacinaNome, setCadastroVacinaNome] = useState<string | null>(null);
   const comboboxRef = useRef<HTMLDivElement>(null);
   const formRef     = useRef<HTMLDivElement>(null);
 
@@ -766,25 +810,22 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   const mostraCriarNovaVacina = termoBusca !== '' &&
     !catalogo.some(m => m.nome.toLowerCase() === termoBusca.toLowerCase());
 
-  // Cadastra a vacina PRIVADA da empresa (lib/catalogoManual.js) e já a seleciona —
-  // dali em diante ela é só mais um item do catálogo (lote/estoque/via seguem o
-  // fluxo normal; como acabou de nascer, entra sem lote e sem estoque).
-  const criarVacinaLivre = async (nome: string) => {
-    setCriandoVacina(true);
+  // Abre a tela de cadastro com o nome já preenchido. A vacina nasce PRIVADA da
+  // empresa (lib/catalogoManual.js) e, dali em diante, é só mais um item do catálogo
+  // (lote/estoque/via seguem o fluxo normal; como acabou de nascer, entra sem lote e
+  // sem estoque).
+  const criarVacinaLivre = (nome: string) => {
     setErroForm(null);
-    try {
-      const res = await api.post('/medicamentos/garantir', { nome, tipo: 'vacina', animalId });
-      const novo: MedicamentoCatalogo = res.data?.dados;
-      if (!novo) throw new Error('sem dados');
-      setCatalogo(prev => [novo, ...prev.filter(m => m.id !== novo.id)]);
-      setMedicamentoId(novo.id);
-      setDropdownMedAberto(false);
-      setBuscaMed('');
-    } catch {
-      setErroForm({ mensagem: `Erro ao cadastrar "${nome}" como nova vacina` });
-    } finally {
-      setCriandoVacina(false);
-    }
+    setDropdownMedAberto(false);
+    setCadastroVacinaNome(nome);
+  };
+
+  const vacinaCadastrada = (item: ItemCatalogoCriado) => {
+    const nova = item as unknown as MedicamentoCatalogo;
+    setCatalogo(prev => [nova, ...prev.filter(m => m.id !== nova.id)]);
+    setMedicamentoId(nova.id);
+    setCadastroVacinaNome(null);
+    setBuscaMed('');
   };
 
   // ── Loaders ────────────────────────────────────────────────────────────────
@@ -1216,6 +1257,17 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
             />
           )}
 
+          {/* Cadastro da vacina que não existe no catálogo — mesmo modal da
+              Prescrição e da Entrada de Estoque. */}
+          <CadastroCatalogoModal
+            aberto={cadastroVacinaNome !== null}
+            tipo="vacina"
+            nomeInicial={cadastroVacinaNome ?? ''}
+            animalId={animalId}
+            onCriado={vacinaCadastrada}
+            onFechar={() => setCadastroVacinaNome(null)}
+          />
+
           {/* Aviso de edição de item importado (ainda não gravado) */}
           {editandoKey && (
             <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-700">
@@ -1288,10 +1340,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                               <p className="text-sm font-medium">{m.nome}</p>
                               <div className="flex items-center gap-2 mt-0.5">
                                 {m.formaFarmaceutica && <p className="text-xs text-gray-400">{m.formaFarmaceutica}</p>}
-                                {m.emEstoque
-                                  ? <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">No estoque</span>
-                                  : <span className="text-[10px] font-semibold text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full">Sem estoque</span>
-                                }
+                                <SeloVacinaDisponivel m={m} />
                               </div>
                             </button>
                           </li>
@@ -1300,13 +1349,10 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                           <li>
                             <button
                               type="button"
-                              disabled={criandoVacina}
                               onClick={() => criarVacinaLivre(termoBusca)}
-                              className="w-full text-left px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 transition-colors flex items-center gap-1.5 font-medium disabled:opacity-60"
+                              className="w-full text-left px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 transition-colors flex items-center gap-1.5 font-medium"
                             >
-                              {criandoVacina
-                                ? <Loader2 size={13} className="flex-shrink-0 animate-spin" />
-                                : <Plus size={13} className="flex-shrink-0" />}
+                              <Plus size={13} className="flex-shrink-0" />
                               Cadastrar "{termoBusca}" como nova vacina
                             </button>
                           </li>
@@ -1325,9 +1371,20 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                   Selecione a vacina primeiro
                 </div>
               ) : !medSelecionado?.emEstoque ? (
-                <div className="px-3 py-2.5 border border-gray-200 bg-gray-50 rounded-xl text-xs text-gray-500">
-                  Sem estoque cadastrado — registro sem débito de estoque
-                </div>
+                /* Sem lote na clínica. Havendo fornecedor cadastrado, o aviso DIZ de
+                   quem a vacina vem — é a mesma informação do selo, no ponto em que
+                   quem registra pergunta "e o lote?". Sem fornecedor, o texto de
+                   sempre. */
+                medSelecionado?.ehProduto && (medSelecionado.fornecedores?.length ?? 0) > 0 ? (
+                  <div className="px-3 py-2.5 border border-green-200 bg-green-50 rounded-xl text-xs text-green-800">
+                    Sem lote em estoque — pedido ao fornecedor{' '}
+                    <strong>{medSelecionado.fornecedores?.[0].nome}</strong>. O registro segue sem débito de estoque.
+                  </div>
+                ) : (
+                  <div className="px-3 py-2.5 border border-gray-200 bg-gray-50 rounded-xl text-xs text-gray-500">
+                    Sem estoque cadastrado — registro sem débito de estoque
+                  </div>
+                )
               ) : loadingLotes ? (
                 <div className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-xs text-gray-400">
                   <Loader2 size={13} className="animate-spin" /> Buscando lotes…

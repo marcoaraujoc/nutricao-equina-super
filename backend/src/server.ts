@@ -307,6 +307,9 @@ const proprietariosRoutes      = require('./routes/proprietarios');
 const tratadoresRoutes         = require('./routes/tratadores');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const fornecedoresRoutes       = require('./routes/fornecedores');
+// Cadastro > Produtos e Financeiro > Pagamentos (2026-09-10)
+const produtosRoutes           = require('./routes/produtos');
+const contasPagarRoutes        = require('./routes/contas-pagar');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const prestadoresRoutes        = require('./routes/prestadores');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -396,6 +399,7 @@ app.use('/api/orcamentos',            orcamentosRoutes);
 app.use('/api/cadastro/proprietarios', proprietariosRoutes);
 app.use('/api/cadastro/tratadores',   tratadoresRoutes);
 app.use('/api/cadastro/fornecedores', fornecedoresRoutes);
+app.use('/api/cadastro/produtos',      produtosRoutes);
 app.use('/api/cadastro/prestadores',  prestadoresRoutes);
 app.use('/api/cadastro/tipos-servico', catalogoTipoServicoRoutes);
 app.use('/api/cadastro/localizacoes', localizacoesRoutes);
@@ -406,6 +410,8 @@ app.use('/api/dashboard',             dashboardRoutes);
 app.use('/api/mapa-atendimento',      mapaAtendimentoRoutes);
 app.use('/api/relatorios',            relatoriosGerenciaisRoutes);
 app.use('/api/recibos-prestador',     recibosPrestadorRoutes);
+// O outro lado do balcão da fatura — o que a clínica DEVE a fornecedor e prestador.
+app.use('/api/financeiro/contas-pagar', contasPagarRoutes);
 app.use('/api/monitoracao',           monitoracaoRoutes);
 app.use('/api/busca',                 buscaRoutes); // busca global do header
 app.use('/api/midia',                 midiaRoutes); // download AUTORIZADO de arquivo (substitui /uploads)

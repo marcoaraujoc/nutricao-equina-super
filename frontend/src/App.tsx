@@ -23,6 +23,7 @@ import CadastroProprietario from './pages/CadastroProprietario';
 import CadastroTratador     from './pages/CadastroTratador';
 import CadastroProcedimento from './pages/CadastroProcedimento';
 import CadastroFornecedor   from './pages/CadastroFornecedor';
+import Produtos            from './pages/Produtos';
 import CadastroPrestador    from './pages/CadastroPrestador';
 import CadastroLocalizacao  from './pages/CadastroLocalizacao';
 import CadastroVacina       from './pages/CadastroVacina';
@@ -105,6 +106,7 @@ import ExecucaoPrescricao  from './pages/ExecucaoPrescricao';
 // Pages — Financeiro
 import Faturamento from './pages/Faturamento';
 import RecibosPrestador from './pages/RecibosPrestador';
+import Pagamentos       from './pages/Pagamentos';
 
 import { SelectedAnimalProvider } from './contexts/SelectedAnimalContext';
 import { EmpresaProvider } from './contexts/EmpresaContext';
@@ -171,6 +173,7 @@ function ProtectedApp() {
                           <Route path="/cadastro/tratadores"    element={<CadastroTratador />} />
                           <Route path="/cadastro/procedimentos" element={<CadastroProcedimento />} />
                           <Route path="/cadastro/fornecedores"  element={<CadastroFornecedor />} />
+                          <Route path="/cadastro/produtos"      element={<Produtos />} />
                           <Route path="/cadastro/prestadores"   element={<CadastroPrestador />} />
                           <Route path="/cadastro/localizacoes"  element={<CadastroLocalizacao />} />
 
@@ -265,6 +268,8 @@ function ProtectedApp() {
                           {/* Financeiro */}
                           <Route path="/faturamento" element={<Faturamento />} />
                           <Route path="/recibos-prestador" element={<RecibosPrestador />} />
+                          {/* O outro lado do balcão da fatura — o que a clínica DEVE. */}
+                          <Route path="/financeiro/pagamentos" element={<Pagamentos />} />
 
                           {/* Equipe */}
                           <Route path="/equipe"           element={<Equipe />} />

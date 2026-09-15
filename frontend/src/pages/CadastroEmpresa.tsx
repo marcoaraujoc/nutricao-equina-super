@@ -45,7 +45,9 @@ import UsuarioFormModal, {
 } from '../components/UsuarioFormModal';
 import {
   useConfiguracaoOperacional, maskWhatsapp, DIAS_SEMANA, ORDINAIS,
-  VALIDADE_ORC_MIN, VALIDADE_ORC_MAX, type TipoSelecao,
+  VALIDADE_ORC_MIN, VALIDADE_ORC_MAX, FORMAS_COBRANCA,
+  PERC_COBRANCA_MIN, PERC_COBRANCA_MAX,
+  type TipoSelecao, type FormaCobranca,
 } from '../hooks/useConfiguracaoOperacional';
 
 interface UsoAssentos {
@@ -936,6 +938,49 @@ export default function CadastroEmpresa() {
                   </div>
                   <p className="text-xs text-gray-400 mt-1">
                     Em branco, o orçamento não expira.
+                  </p>
+                </div>
+
+                {/* ── Forma de cobrança de medicamento/vacina ──────────────────────
+                    Decide o preço do que SAI DO ESTOQUE na fatura do cliente. O
+                    percentual só existe na forma PERCENTUAL — nas outras ele nem é
+                    exibido, porque não seria usado (e um número parado ali passaria
+                    a impressão de que está valendo). Regra em
+                    `backend/src/lib/formaCobrancaEstoque.js`. */}
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">
+                    Forma Cobrança Medicamentos/Vacina
+                  </label>
+                  <select
+                    value={op.formaCobranca}
+                    disabled={!podeEditar}
+                    onChange={e => op.setFormaCobranca(e.target.value as FormaCobranca)}
+                    className={`${INPUT} bg-white`}
+                  >
+                    {FORMAS_COBRANCA.map(f => (
+                      <option key={f.v} value={f.v}>{f.l}</option>
+                    ))}
+                  </select>
+
+                  {op.formaCobranca === 'PERCENTUAL' && (
+                    <div className="flex items-center gap-2 mt-2">
+                      <input
+                        type="number"
+                        min={PERC_COBRANCA_MIN}
+                        max={PERC_COBRANCA_MAX}
+                        step="0.01"
+                        disabled={!podeEditar}
+                        value={op.percentualCobranca}
+                        onChange={e => op.setPercentualCobranca(e.target.value)}
+                        placeholder="Ex: 10"
+                        className={classeErro(op.erroAcao, 'percentualCobranca', inputEstreito('w-24'))}
+                      />
+                      <span className="text-sm text-gray-500">% de acréscimo</span>
+                    </div>
+                  )}
+
+                  <p className="text-xs text-gray-400 mt-1">
+                    {FORMAS_COBRANCA.find(f => f.v === op.formaCobranca)?.ajuda}
                   </p>
                 </div>
 

@@ -959,6 +959,14 @@ model LoteVacina {
   // Justificativa da inativação (migration 20260901000001) — obrigatória em
   // EstoqueVacinaController.toggle, exibida na aba Inativos.
   inativoMotivo          String?   @map("inativo_motivo") @db.Text
+  /// Fornecedor do frasco e nota fiscal da entrada (migration 20261006000000).
+  /// `tb_estoque_clinica` (farmácia) já tinha os dois; o lote de vacina não — então
+  /// a entrada de vacina não sabia dizer de quem veio, e a leitura da nota fiscal
+  /// não teria onde gravar isso. Sem FK: a compra registrada não muda de dono nem
+  /// desaparece porque o cadastro do fornecedor foi excluído.
+  /// 🔴 LEITURA/ESCRITA por SQL cru (`lib/produtoFornecedor.js`) — §11.
+  fornecedorId           Int?      @map("fornecedor_id")
+  notaFiscal             String?   @map("nota_fiscal") @db.VarChar(100)
   createdAt              DateTime  @default(now()) @map("created_at")
 
   vacina         Vacina?                @relation(fields: [vacinaId], references: [id], onDelete: Cascade)
@@ -971,6 +979,135 @@ model LoteVacina {
   @@index([empresaId])
   @@index([medicamentoCatId])
   @@map("tb_lotes_vacina")
+  @@schema("schs2vet")
+}
+
+/// PRODUTO DE FORNECEDOR (migration 20261006000000) — "de quem eu compro este item,
+/// e por quanto".
+///
+/// 🔴 NÃO É ESTOQUE. `EstoqueClinica` e `LoteVacina` são estoque FÍSICO (quantidade,
+/// lote, validade); aqui não há nada disso, porque o item NÃO está na clínica: ele é
+/// pedido ao fornecedor quando o vet o prescreve. É o que faz o item aparecer na
+/// prescrição como PEDÍVEL (verde, com o nome do fornecedor) em vez de "Sem estoque".
+///
+/// ⚠️ Por (empresa, medicamento, fornecedor): o mesmo item costuma ter mais de um
+/// fornecedor com preços diferentes, e guardar um só obrigaria a apagar a cotação
+/// anterior para registrar a nova.
+///
+/// ⚠️ `medicamentoId` aponta para `Medicamento`, o catálogo dos DOIS tipos (a vacina
+/// é a linha cuja `classificacao` contém "vacin") — uma tabela por tipo duplicaria a
+/// mesma regra de compra em dois lugares.
+///
+/// 🔴 LEITURA/ESCRITA: SEMPRE por `lib/produtoFornecedor.js` (SQL cru) — o client
+/// pode não conhecer esta tabela (§11).
+model ProdutoFornecedor {
+  id            Int      @id @default(autoincrement())
+  empresaId     Int      @map("empresa_id")
+  medicamentoId Int      @map("medicamento_id")
+  fornecedorId  Int      @map("fornecedor_id")
+  /// Preço de COMPRA. `null` = "compro dele, mas o preço não foi cadastrado" —
+  /// diferente de 0, que afirmaria que o fornecedor entrega de graça.
+  valorUnitario Float?   @map("valor_unitario")
+  /// Preço de VENDA sugerido. `null` = a tela de origem resolve como já resolve hoje.
+  valorVenda    Float?   @map("valor_venda")
+  unidade       String?  @db.VarChar(30)
+  notaFiscal    String?  @map("nota_fiscal") @db.VarChar(100)
+  observacao    String?  @db.Text
+  /// MULTIDOSE (migration 20261008000000) — a embalagem rende mais de uma aplicação.
+  /// É ela que faz cada dose debitar 1/N do frasco e a linha da fatura sair pelo
+  /// preço do frasco ÷ N, em vez de cobrar o frasco inteiro por aplicação.
+  /// ⚠️ Mora AQUI, e não em `Medicamento`: a linha do catálogo é GLOBAL e marcá-la
+  /// mudaria a cobrança de todas as clínicas (mesma armadilha da unidade).
+  multidose     Boolean  @default(false)
+  /// Quantas aplicações saem de UMA embalagem. `null` = marcado e ainda não
+  /// informado — PENDÊNCIA de cadastro, nunca "dose única": com null a regra não
+  /// entra em vigor e a cobrança segue como sempre foi.
+  dosesPorEmbalagem Int? @map("doses_por_embalagem")
+  ativo         Boolean  @default(true)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@unique([empresaId, medicamentoId, fornecedorId], map: "tb_produtos_fornecedor_unico")
+  @@index([empresaId])
+  @@index([medicamentoId])
+  @@index([fornecedorId])
+  @@map("tb_produtos_fornecedor")
+  @@schema("schs2vet")
+}
+
+/// CONTA A PAGAR (migration 20261006000000) — o outro lado do balcão da `Fatura`.
+///
+/// A fatura é o que a clínica COBRA do cliente; esta é o que ela DEVE a um terceiro.
+///
+/// 🔴 UMA tabela para FORNECEDOR e PRESTADOR, separados por `tipo`. São o mesmo
+/// documento, com o mesmo ciclo (abrir → fechar → pagar); duas tabelas dariam duas
+/// telas, dois totalizadores e duas regras de fechamento, que divergiriam na primeira
+/// correção — a `Fatura` também é uma só para todo tipo de item cobrado.
+///
+/// ⚠️ `credorId` é id de `Fornecedor` OU de `Prestador` conforme o `tipo`: as duas
+/// tabelas são independentes desde 2026-08-21 e não compartilham id. SEM FK, pelo
+/// mesmo motivo de `Prescricao.prestadorId` — registro financeiro não muda de dono
+/// nem some porque um cadastro foi excluído. `credorNome` é SNAPSHOT.
+///
+/// 🔴 LEITURA/ESCRITA: SEMPRE por `lib/contasPagar.js` (SQL cru).
+model ContaPagar {
+  id            Int       @id @default(autoincrement())
+  empresaId     Int       @map("empresa_id")
+  /// FORNECEDOR | PRESTADOR
+  tipo          String    @db.VarChar(20)
+  credorId      Int       @map("credor_id")
+  credorNome    String    @default("") @map("credor_nome") @db.VarChar(255)
+  mesReferencia String?   @map("mes_referencia") @db.VarChar(7)
+  total         Float     @default(0)
+  /// ABERTA | FECHADA | PAGA | CANCELADA
+  status        String    @default("ABERTA") @db.VarChar(20)
+  observacao    String?   @db.Text
+  pagoEm        DateTime? @map("pago_em")
+  pagoPorId     Int?      @map("pago_por_id")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  itens ContaPagarItem[] @relation("ContaPagarItens")
+
+  @@index([empresaId])
+  @@index([empresaId, tipo, credorId, status])
+  @@map("tb_contas_pagar")
+  @@schema("schs2vet")
+}
+
+/// Item da conta a pagar — o que o pedido exige que apareça: o ANIMAL, o valor, a
+/// data e QUEM solicitou.
+///
+/// ⚠️ `animalNome`/`solicitanteNome`/`descricao` são GRAVADOS junto do id (snapshot),
+/// pela mesma razão do ledger do prestador: a conta tem de dizer o que foi consumido
+/// mesmo que o paciente seja renomeado ou o item saia do catálogo.
+///
+/// ⚠️ `origemTipo`/`origemId` são o que torna o lançamento automático IDEMPOTENTE —
+/// há um índice único PARCIAL sobre eles no banco (só quando os dois existem), então
+/// reprocessar a mesma execução não cria a segunda linha. Lançamento MANUAL não tem
+/// origem, e vários deles na mesma conta são legítimos.
+model ContaPagarItem {
+  id              Int      @id @default(autoincrement())
+  contaId         Int      @map("conta_id")
+  animalId        Int?     @map("animal_id")
+  animalNome      String   @default("") @map("animal_nome") @db.VarChar(255)
+  descricao       String   @db.Text
+  quantidade      Float    @default(1)
+  valor           Float    @default(0)
+  solicitanteId   Int?     @map("solicitante_id")
+  solicitanteNome String   @default("") @map("solicitante_nome") @db.VarChar(255)
+  /// Data do FATO GERADOR (a execução), não a do lançamento.
+  ocorridoEm      DateTime @default(now()) @map("ocorrido_em")
+  /// PRESCRICAO_ITEM | VACINA | EXECUCAO_PRESTADOR | MANUAL
+  origemTipo      String?  @map("origem_tipo") @db.VarChar(30)
+  origemId        Int?     @map("origem_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  conta ContaPagar @relation("ContaPagarItens", fields: [contaId], references: [id], onDelete: Cascade)
+
+  @@index([contaId])
+  @@index([animalId])
+  @@map("tb_conta_pagar_itens")
   @@schema("schs2vet")
 }
 
@@ -2245,6 +2382,13 @@ model EmpresaConfiguracao {
   // de Orcamento.createdAt, o cron cancela o que não foi aprovado (nem parcialmente).
   // null = sem validade — o orçamento não expira.
   validadeOrcamentoDias  Int?      @map("validade_orcamento_dias")
+  // Forma de cobrança do item que SAI DO ESTOQUE — medicamento e vacina
+  // (migration 20261007000000): VALOR_REPASSADO | PERCENTUAL | MAIOR_VALOR | CUSTO_MEDIO.
+  // `percentualCobrancaEstoque` só vale (e só é gravado) na forma PERCENTUAL.
+  // null = VALOR_REPASSADO, que é o comportamento histórico — por isso a migration
+  // não tem backfill. 🔴 LEITURA/ESCRITA por SQL cru (`lib/formaCobrancaEstoque.js`) — §11.
+  formaCobrancaEstoque      String? @map("forma_cobranca_estoque") @db.VarChar(20)
+  percentualCobrancaEstoque Float?  @map("percentual_cobranca_estoque")
   // Fuso horário da clínica (IANA, ex.: "America/Manaus") — migration 20260823000000.
   // A aplicação roda nos 4 fusos do Brasil (UTC−2 a UTC−5); sem isto o backend
   // assumia America/Sao_Paulo fixo e a fila do plantão / e-mail / WhatsApp saíam

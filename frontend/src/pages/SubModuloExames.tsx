@@ -1,7 +1,7 @@
 // frontend/src/pages/SubModuloExames.tsx — requisições de exames clínicos com catálogo
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import {
   FlaskConical, Scan, Ban, Eye, Loader2, X, Pencil,
   ChevronLeft, ChevronRight, FileText, Check, Plus,
@@ -24,7 +24,7 @@ import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import JanelaLista from '../components/JanelaLista';
 import { useOrdenacao, ThOrdenavel, ordenarLista, valorDataPura } from '../components/OrdenacaoLista';
-import ImagemSeletorUnificado, { type ImagemExameProc, type ImagemPrestador } from '../components/ImagemSeletorUnificado';
+import ImagemSeletorUnificado, { type ImagemExameProc } from '../components/ImagemSeletorUnificado';
 import LaudoTexto from '../components/LaudoTexto';
 
 
@@ -55,9 +55,9 @@ interface ImagemExameItemCat { id: number; codigo: string; nome: string; sigla: 
 
 /**
  * 🔴 CATÁLOGO UNIFICADO DE IMAGEM (2026-09-09) — o exame de imagem passou a ser um
- * PROCEDIMENTO (`tb_procedimentos_vet`, tipo IMAGEM) e com isso ganhou categoria,
- * prestador e valor. A aba lê `/clinica/imagem-exames/{categorias,prestadores,exames}`;
- * os tipos e o seletor moram em `components/ImagemSeletorUnificado`.
+ * PROCEDIMENTO (`tb_procedimentos_vet`, tipo IMAGEM) e com isso ganhou categoria e
+ * valor. A aba lê `/clinica/imagem-exames/{categorias,exames}`; os tipos e o seletor
+ * moram em `components/ImagemSeletorUnificado`.
  * ⚠️ Enquanto a base não tiver rodado o seed 005, `porProcedimento` volta `false` e a
  * aba segue no catálogo ANTIGO (grupos) — sem esse desvio ela abriria VAZIA e pareceria
  * defeito, não seed pendente.
@@ -105,13 +105,6 @@ interface PendingExamGroup {
   laudoCompra:      null;
   examsDisplay:     string[];
   labNomeDisplay:   string;
-  /**
-   * Prestador que EXECUTA o exame de imagem (catálogo unificado, 2026-09-09).
-   * ⚠️ Vai no GRUPO, não no pedido inteiro: dois grupos do mesmo pedido podem ter
-   * prestadores diferentes, e uma marca por pedido obrigaria a abrir dois.
-   */
-  prestadorId:      number | null;
-  prestadorNome:    string | null;
 }
 
 interface ExameResultadoItem { id: number; parametro: string; valor: string | null; unidade: string | null; referencia: string | null; ordem: number }
@@ -676,7 +669,6 @@ export default function SubModuloExames({
   const procDropdownRef    = useRef<HTMLDivElement>(null);
   const procSearchRef      = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
-  const location = useLocation();
 
   const imagemDropdownRef  = useRef<HTMLDivElement>(null);
   const imagemSearchRef    = useRef<HTMLInputElement>(null);
@@ -716,15 +708,12 @@ export default function SubModuloExames({
   const [imagemProcSearch,    setImagemProcSearch]    = useState('');
   const [showImagemProcDrop,  setShowImagemProcDrop]  = useState(false);
 
-  // ── Catálogo UNIFICADO de imagem (categoria → prestador → exame) ───────────
+  // ── Catálogo UNIFICADO de imagem (categoria → exame) ───────────────────────
   /** `null` = ainda não sei qual catálogo vale; evita piscar a tela antiga antes da resposta. */
   const [imagemUnificado,     setImagemUnificado]     = useState<boolean | null>(null);
   const [imagemCategorias,    setImagemCategorias]    = useState<string[]>([]);
   const [imagemCategoria,     setImagemCategoria]     = useState('');
-  const [imagemPrestadores,   setImagemPrestadores]   = useState<ImagemPrestador[]>([]);
-  const [imagemPrestadorId,   setImagemPrestadorId]   = useState<number | null>(null);
   const [imagemExamesProc,    setImagemExamesProc]    = useState<ImagemExameProc[]>([]);
-  const [loadingImagemPrest,  setLoadingImagemPrest]  = useState(false);
 
   // ── Selection ──────────────────────────────────────────────────────────────
   const [selectedExams,   setSelectedExams]   = useState<string[]>([]);
@@ -953,29 +942,14 @@ export default function SubModuloExames({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mainTab, imagemUnificado]);
 
-  // ── Cascata do catálogo unificado: CATEGORIA → PRESTADOR → EXAME ───────────
-  // Prestadores da categoria escolhida. Todos os ativos da empresa entram; quem já
-  // tem vínculo vem marcado (`temValor`), porque o vínculo é configuração do gestor
-  // e travar o pedido por causa dele pararia o atendimento.
-  useEffect(() => {
-    if (!imagemCategoria || imagemUnificado !== true) { setImagemPrestadores([]); return; }
-    setLoadingImagemPrest(true);
-    api.get('/clinica/imagem-exames/prestadores', { params: { categoria: imagemCategoria } })
-      .then(res => { if (res.data) setImagemPrestadores(res.data.dados ?? []); })
-      .catch(() => {})
-      .finally(() => setLoadingImagemPrest(false));
-  }, [imagemCategoria, imagemUnificado]);
-
-  // Exames da categoria, já com o valor resolvido para o prestador escolhido.
-  // ⚠️ Refaz ao trocar o PRESTADOR: é o vínculo dele que define o Valor Cliente, e
-  // manter a lista anterior mostraria o preço de outro profissional.
+  // ── Cascata do catálogo unificado: CATEGORIA → EXAME ───────────────────────
+  // Exames da categoria, já com o valor padrão da empresa resolvido.
   useEffect(() => {
     if (!imagemCategoria || imagemUnificado !== true) { setImagemExamesProc([]); return; }
     setLoadingImagemExames(true);
     api.get('/clinica/imagem-exames/exames', {
       params: {
         categoria: imagemCategoria,
-        ...(imagemPrestadorId ? { prestadorId: imagemPrestadorId } : {}),
         // ⚠️ Sem filtro por espécie do paciente: `AnimalInfo` (a prop que esta tela
         // recebe) não carrega a espécie. O endpoint aceita `especie` e está pronto
         // para quando ela chegar aqui; até lá a lista mostra o catálogo inteiro da
@@ -986,7 +960,7 @@ export default function SubModuloExames({
       .catch(() => {})
       .finally(() => setLoadingImagemExames(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imagemCategoria, imagemPrestadorId, imagemUnificado]);
+  }, [imagemCategoria, imagemUnificado]);
 
   // Carrega itens ao trocar grupo de imagem
   useEffect(() => {
@@ -1175,58 +1149,14 @@ export default function SubModuloExames({
   /**
    * ── Cadastro rápido a partir do pedido de exame ────────────────────────────
    *
-   * O que falta se cadastra na tela DONA daquele dado, e a volta é automática: o
-   * prestador em `/cadastro/prestadores` (exige nome E telefone — um campo livre
-   * aqui produziria cadastro incompleto) e o exame em `/cadastro/procedimentos`, que
-   * é onde ele ganha categoria, valor e prestador.
-   *
-   * ⚠️ A rota de volta sai do ROUTER (`useLocation`), NUNCA de `window.location`: o
-   * app usa HashRouter, então `window.location.pathname` é sempre "/" e o retorno
-   * cairia na home (§14 do CLAUDE.md).
+   * O exame que falta se cadastra na tela DONA dele — `/cadastro/procedimentos`, que
+   * é onde ele ganha categoria e valor.
    */
-  const voltaParaCa = () => `${location.pathname}${location.search}`;
-
-  const irCadastrarPrestadorImagem = () => {
-    navigate(`/cadastro/prestadores?${new URLSearchParams({ novo: '1', depois: voltaParaCa() })}`);
-  };
-
   const irCadastrarExameImagem = () => {
     // `especialidade` é a chave que o cadastro de procedimentos lê da URL — ela aceita
     // tanto especialidade clínica quanto categoria de imagem.
     navigate(`/cadastro/procedimentos?${new URLSearchParams({
       ...(imagemCategoria ? { especialidade: imagemCategoria } : {}),
-    })}`);
-  };
-
-  /**
-   * 🔴 EXAMES MARCADOS QUE O PRESTADOR AINDA NÃO EXECUTA POR UM VALOR (2026-09-11).
-   *
-   * `temVinculo: false` significa que não há preço cadastrado para o par
-   * (exame, prestador) — o exame sairia na fatura pelo valor padrão da empresa, ou por
-   * R$ 0,00 se nem esse existir. É a pendência que o gestor precisa fechar.
-   *
-   * ⚠️ Só faz sentido com prestador ESCOLHIDO: sem ele o exame é da própria equipe e o
-   * valor padrão é o correto, não uma pendência.
-   */
-  const examesSemValorDoPrestador = imagemPrestadorId
-    ? imagemExamesProc.filter(e => selectedExams.includes(e.nome) && !e.temVinculo)
-    : [];
-
-  /**
-   * Abre o cadastro de procedimentos com a lista RECORTADA nesses exames e já vincula o
-   * prestador em cada um — o gestor só digita os valores.
-   *
-   * ⚠️ Manda CÓDIGO, não id: é a chave estável do catálogo (PR-0302…), a mesma do seed.
-   * ⚠️ Exame sem código (cadastrado à mão pela clínica) fica de fora do recorte — sem
-   * chave não há como pedi-lo ao backend; a categoria inteira continua alcançável pelo
-   * botão "Ver todos" de lá.
-   */
-  const irCadastrarValoresDosExames = () => {
-    const codigos = examesSemValorDoPrestador.map(e => e.codigo).filter(Boolean).join(',');
-    navigate(`/cadastro/procedimentos?${new URLSearchParams({
-      ...(imagemCategoria ? { especialidade: imagemCategoria } : {}),
-      ...(codigos ? { codigos } : {}),
-      ...(imagemPrestadorId ? { vincularPrestador: String(imagemPrestadorId) } : {}),
     })}`);
   };
 
@@ -1298,20 +1228,14 @@ export default function SubModuloExames({
     return true;
   };
 
-  /** Prestador escolhido na aba Imagem (catálogo unificado). */
-  const prestadorImagem = imagemPrestadores.find(p => p.id === imagemPrestadorId) ?? null;
-
   const buildCurrentGroup = (): PendingExamGroup => {
     const tipo: TipoExame = mainTab === 'imagem' ? 'Imagem' : 'Laboratorial';
     return {
       localId:          `${Date.now()}-${Math.random()}`,
       tipo,
       descricao:        examesEfetivos.join(', '),
-      // Em IMAGEM quem executa é o PRESTADOR, e é ele que ocupa o papel que o
-      // laboratório tem no exame laboratorial ("quem faz"). Sem prestador, cai no
-      // nome livre que a aba já aceitava.
       laboratorio:      mainTab === 'imagem'
-                          ? (prestadorImagem?.nome ?? (outroLabNome.trim() || null))
+                          ? (outroLabNome.trim() || null)
                           : (laboratorioNomeSalvo.trim() || null),
       dataHoraColeta:   dataHoraColeta || null,
       tipoAmostra:      tipoAmostra.trim() || null,
@@ -1324,8 +1248,6 @@ export default function SubModuloExames({
       laudoCompra:      null,
       examsDisplay:     [...selectedExams],
       labNomeDisplay:   mainTab === 'laboratorial' ? laboratorioNomeSalvo : (outroLabNome || ''),
-      prestadorId:      prestadorImagem?.id   ?? null,
-      prestadorNome:    prestadorImagem?.nome ?? null,
     };
   };
 
@@ -1338,11 +1260,8 @@ export default function SubModuloExames({
       setImagemExamesCat([]);
       setImagemProcSearch('');
       setShowImagemProcDrop(false);
-      // Catálogo unificado: a CATEGORIA é mantida de propósito (pedir dois exames da
-      // mesma categoria em sequência é o caso comum), mas o PRESTADOR e a lista de
-      // exames voltam ao início — o valor exibido depende do prestador, e mantê-lo
-      // colado faria o próximo pedido nascer com quem talvez não o execute.
-      setImagemPrestadorId(null);
+      // Catálogo unificado: a CATEGORIA é mantida de propósito — pedir dois exames da
+      // mesma categoria em sequência é o caso comum.
       // Faltavam aqui — só o ramo laboratorial (abaixo) resetava. "Quantidade de
       // imagens" usa o MESMO estado `qtdAmostra` de "Qtd. de Amostras" (só muda o
       // rótulo conforme a aba), então ficava com o valor do exame anterior depois de
@@ -1441,10 +1360,9 @@ export default function SubModuloExames({
           grupoNome:        null,
           dataSolicitacao:  gruposDoLab[0].dataSolicitacao,
           grupos:           gruposPayload,
-          // Exame de IMAGEM: quem EXECUTA e a lista exata dos exames escolhidos. É a
-          // lista que permite ao backend resolver o preço item a item — a `descricao`
-          // concatenada serve de reserva, mas quebra em exame cujo nome tenha vírgula.
-          prestadorId:      gruposDoLab.find(g => g.prestadorId)?.prestadorId ?? null,
+          // A lista exata dos exames escolhidos é o que permite ao backend resolver o
+          // preço item a item — a `descricao` concatenada serve de reserva, mas quebra
+          // em exame cujo nome tenha vírgula.
           examesNomes:      gruposDoLab.flatMap(g => g.examsDisplay),
         });
       }
@@ -1999,26 +1917,17 @@ export default function SubModuloExames({
                       );
                     })()}
 
-                    {/* Imagem: catálogo dinâmico por grupo */}
-                    {/* Imagem: catálogo UNIFICADO — categoria → prestador → exame */}
+                    {/* Imagem: catálogo UNIFICADO — categoria → exame */}
                     {mainTab === 'imagem' && imagemUnificado === true && (
                       <ImagemSeletorUnificado
                         categorias={imagemCategorias}
                         categoria={imagemCategoria}
                         onCategoria={cat => {
                           setImagemCategoria(cat);
-                          // Trocar de categoria zera prestador e exames: o vínculo é por par
-                          // (exame, prestador), e manter a escolha anterior exibiria o preço
-                          // de quem talvez nem execute a categoria nova.
-                          setImagemPrestadorId(null);
                           setSelectedExams([]);
                           setImagemGrupoNome(cat);
                           setShowImagemProcDrop(false);
                         }}
-                        prestadores={imagemPrestadores}
-                        prestadorId={imagemPrestadorId}
-                        onPrestador={setImagemPrestadorId}
-                        carregandoPrestadores={loadingImagemPrest}
                         exames={imagemExamesProc}
                         carregandoExames={loadingImagemExames}
                         selecionados={selectedExams}
@@ -2029,10 +1938,7 @@ export default function SubModuloExames({
                         onAberto={setShowImagemProcDrop}
                         dropdownRef={imagemDropdownRef}
                         buscaRef={imagemSearchRef}
-                        onCadastrarPrestador={irCadastrarPrestadorImagem}
                         onCadastrarExame={irCadastrarExameImagem}
-                        semValor={examesSemValorDoPrestador.map(e => e.nome)}
-                        onCadastrarValores={irCadastrarValoresDosExames}
                       />
                     )}
 

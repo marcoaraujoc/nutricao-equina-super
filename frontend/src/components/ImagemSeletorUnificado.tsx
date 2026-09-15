@@ -1,23 +1,14 @@
 // frontend/src/components/ImagemSeletorUnificado.tsx
 //
-// 🔴 SELETOR DE EXAME DE IMAGEM — CATEGORIA → PRESTADOR → EXAME (2026-09-09)
+// 🔴 SELETOR DE EXAME DE IMAGEM — CATEGORIA → EXAME (2026-09-09)
 //
 // Nasceu quando o exame de imagem deixou de viver num catálogo próprio e passou a ser
-// um PROCEDIMENTO (`tb_procedimentos_vet`, tipo IMAGEM). Com isso ele ganhou o que já
-// existia para procedimento: valor por empresa e vínculo com prestador (com os dois
-// valores). A tela precisa refletir essa cadeia.
+// um PROCEDIMENTO (`tb_procedimentos_vet`, tipo IMAGEM). Com isso ele ganhou o valor
+// por empresa, que é o que a linha de cada exame exibe.
 //
-// ⚠️ A ORDEM não é estética: o PRESTADOR é quem define o Valor Cliente do exame (o
-// vínculo é por par exame×prestador), então escolhê-lo DEPOIS do exame mostraria um
-// preço que muda debaixo do que já foi marcado.
-//
-// ⚠️ O prestador é OPCIONAL — sem ele o exame é executado pela própria equipe e vale o
-// valor padrão da empresa. Exigi-lo pararia o atendimento por causa de um cadastro que
-// talvez ninguém tenha feito ainda.
-//
-// ⚠️ Prestador SEM vínculo no exame ganha aviso âmbar e NUNCA some da lista: é esse
-// aviso que evita o exame sair na fatura por R$ 0,00 sem ninguém notar — a mesma
-// decisão do campo de prestador da tela de prescrição.
+// ⚠️ O passo de PRESTADOR foi REMOVIDO a pedido (2026-09-11): o exame é do catálogo da
+// clínica e sai pelo valor padrão dela. Não reintroduzir sem pedido — a cadeia com
+// prestador trazia junto o aviso de pendência e o atalho de cadastro de valores.
 
 import type { RefObject } from 'react';
 import { Scan, Loader2, X, Check, ChevronDown, Plus } from 'lucide-react';
@@ -31,21 +22,9 @@ export interface ImagemExameProc {
   subcategoria:   string | null;
   especie:        string | null;
   valorPadrao:    number | null;
-  /** Valor cobrado do cliente já resolvido (vínculo do prestador ou padrão da empresa). */
+  /** Valor cobrado do cliente já resolvido (padrão da empresa). */
   valorCliente:   number | null;
-  valorPrestador: number | null;
-  /** O prestador escolhido tem vínculo NESTE exame? `false` = sairia sem valor próprio. */
-  temVinculo:     boolean;
   empresaId:      number | null;
-}
-
-/** Prestador vindo de `/clinica/imagem-exames/prestadores`. */
-export interface ImagemPrestador {
-  id:          number;
-  nome:        string;
-  tipoServico: string | null;
-  /** Já tem vínculo (e portanto valor) em algum exame desta categoria. */
-  temValor:    boolean;
 }
 
 /** R$ para a tela do pedido. `null` vira "—": valor não informado não é zero. */
@@ -56,10 +35,6 @@ interface Props {
   categorias:            string[];
   categoria:             string;
   onCategoria:           (c: string) => void;
-  prestadores:           ImagemPrestador[];
-  prestadorId:           number | null;
-  onPrestador:           (id: number | null) => void;
-  carregandoPrestadores: boolean;
   exames:                ImagemExameProc[];
   carregandoExames:      boolean;
   selecionados:          string[];
@@ -71,18 +46,8 @@ interface Props {
   // React 18: `useRef<T>(null)` produz RefObject<T>, e é o que a tela passa.
   dropdownRef:           RefObject<HTMLDivElement>;
   buscaRef:              RefObject<HTMLInputElement>;
-  /** Leva ao cadastro de PRESTADORES e volta para cá. */
-  onCadastrarPrestador:  () => void;
   /** Leva ao cadastro de PROCEDIMENTOS, na categoria de imagem escolhida. */
   onCadastrarExame:      () => void;
-  /**
-   * Nomes dos exames MARCADOS que o prestador escolhido ainda não executa por um valor
-   * cadastrado. Vazio quando não há prestador (aí o valor padrão é o correto, não uma
-   * pendência).
-   */
-  semValor:              string[];
-  /** Abre o cadastro de procedimentos RECORTADO nesses exames, já com o prestador. */
-  onCadastrarValores:    () => void;
 }
 
 const selectCls =
@@ -90,13 +55,10 @@ const selectCls =
 
 export default function ImagemSeletorUnificado({
   categorias, categoria, onCategoria,
-  prestadores, prestadorId, onPrestador, carregandoPrestadores,
   exames, carregandoExames, selecionados, onToggleExame,
   busca, onBusca, aberto, onAberto, dropdownRef, buscaRef,
-  onCadastrarPrestador, onCadastrarExame, semValor, onCadastrarValores,
+  onCadastrarExame,
 }: Props) {
-  const prestadorEscolhido = prestadores.find(p => p.id === prestadorId) ?? null;
-
   const visiveis = busca.trim()
     ? exames.filter(e =>
         e.nome.toLowerCase().includes(busca.toLowerCase()) ||
@@ -117,82 +79,7 @@ export default function ImagemSeletorUnificado({
         </select>
       </div>
 
-      {/* ── 2. PRESTADOR ─────────────────────────────────────────────────── */}
-      <div>
-        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
-          Prestador{' '}
-          <span className="text-gray-300 normal-case font-normal tracking-normal">(opcional)</span>
-        </label>
-
-        {!categoria ? (
-          <p className="text-xs text-gray-400 italic py-2">Escolha a categoria para ver os prestadores.</p>
-        ) : carregandoPrestadores ? (
-          <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
-            <Loader2 size={13} className="animate-spin" /> Carregando prestadores...
-          </div>
-        ) : prestadores.length === 0 ? (
-          /* Nenhum cadastrado na clínica: o caminho é o CADASTRO, não um campo de texto
-             livre — o prestador só existe de verdade com nome E telefone. */
-          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
-            <p className="text-xs text-amber-800 leading-snug">Nenhum prestador cadastrado nesta clínica.</p>
-            <button type="button" onClick={onCadastrarPrestador}
-              className="mt-1.5 inline-flex items-center gap-1 text-xs font-semibold text-amber-900 hover:underline">
-              <Plus size={12} /> Cadastrar prestador
-            </button>
-          </div>
-        ) : (
-          <>
-            <select
-              value={prestadorId ?? ''}
-              onChange={e => onPrestador(Number(e.target.value) || null)}
-              className={selectCls}
-            >
-              <option value="">Sem prestador — executado pela equipe</option>
-              {/* Quem JÁ tem valor cadastrado vem em bloco próprio: é a diferença entre
-                  "executa isto aqui" e "só está cadastrado na clínica". */}
-              {prestadores.some(p => p.temValor) && (
-                <optgroup label="Com valor cadastrado nesta categoria">
-                  {prestadores.filter(p => p.temValor).map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.nome}{p.tipoServico ? ` · ${p.tipoServico}` : ''}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              {prestadores.some(p => !p.temValor) && (
-                <optgroup label="Sem valor cadastrado">
-                  {prestadores.filter(p => !p.temValor).map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.nome}{p.tipoServico ? ` · ${p.tipoServico}` : ''}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-            </select>
-
-            <div className="flex items-center justify-between gap-2 mt-1">
-              <p className="text-[10px] text-gray-400">
-                Sem prestador, o exame é executado pela própria equipe.
-              </p>
-              <button type="button" onClick={onCadastrarPrestador}
-                className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 hover:underline flex-shrink-0">
-                <Plus size={11} /> Cadastrar prestador
-              </button>
-            </div>
-
-            {prestadorEscolhido && !prestadorEscolhido.temValor && (
-              <div className="mt-1.5 rounded-lg bg-amber-50 border border-amber-200 px-2.5 py-1.5">
-                <p className="text-[11px] text-amber-800 leading-snug">
-                  <strong>{prestadorEscolhido.nome}</strong> ainda não tem valor cadastrado nesta
-                  categoria — o exame sai pelo valor padrão da empresa.
-                </p>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* ── 3. EXAME ─────────────────────────────────────────────────────── */}
+      {/* ── 2. EXAME ─────────────────────────────────────────────────────── */}
       <div className="space-y-1">
         <div className="flex items-center gap-2">
           <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest">
@@ -267,7 +154,7 @@ export default function ImagemSeletorUnificado({
                       Nenhum resultado para &ldquo;{busca}&rdquo;
                     </p>
                     {/* Exame que não existe no catálogo se cadastra na tela de
-                        Procedimentos — é lá que ele ganha categoria, valor e prestador. */}
+                        Procedimentos — é lá que ele ganha categoria e valor. */}
                     <button type="button" onMouseDown={e => e.preventDefault()} onClick={onCadastrarExame}
                       className="mt-1.5 inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:underline">
                       <Plus size={12} /> Cadastrar exame nesta categoria
@@ -294,7 +181,7 @@ export default function ImagemSeletorUnificado({
                         {ex.subcategoria && <span className="text-[10px] text-gray-400">{ex.subcategoria}</span>}
                       </div>
                       {/* O VALOR mora na linha do exame: é o que se cobra do cliente por
-                          ele, com ESTE prestador. "—" = ainda sem valor cadastrado. */}
+                          ele. "—" = ainda sem valor cadastrado. */}
                       <span className={`text-[11px] font-semibold flex-shrink-0 ${ex.valorCliente != null ? 'text-emerald-700' : 'text-gray-300'}`}>
                         {brlExame(ex.valorCliente)}
                       </span>
@@ -306,26 +193,6 @@ export default function ImagemSeletorUnificado({
           </div>
         )}
       </div>
-
-      {/* ── PENDÊNCIA: exame marcado sem valor para este prestador ───────────
-          🔴 O aviso é o que impede o exame sair na fatura sem o preço DELE. Vem
-          DEPOIS da escolha, e não antes, porque só existe quando há exame marcado:
-          alertar sobre 56 radiografias que ninguém pediu seria ruído.
-          ⚠️ Não BLOQUEIA o pedido — o exame pode ser pedido e o valor ajustado
-          depois; travar aqui pararia o atendimento por causa de um cadastro. */}
-      {semValor.length > 0 && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
-          <p className="text-xs text-amber-900 leading-snug">
-            <strong>{semValor.length === 1 ? '1 exame marcado' : `${semValor.length} exames marcados`}</strong>{' '}
-            sem valor cadastrado para este prestador
-            {semValor.length <= 3 && <> — {semValor.join(', ')}</>}.
-          </p>
-          <button type="button" onClick={onCadastrarValores}
-            className="mt-1.5 inline-flex items-center gap-1 text-xs font-semibold text-amber-900 hover:underline">
-            <Plus size={12} /> Cadastrar os valores agora
-          </button>
-        </div>
-      )}
     </div>
   );
 }

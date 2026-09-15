@@ -7,6 +7,11 @@ const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 const { buildAnimalScopeWhere } = require('../lib/animalScope');
 const { ANIMAL_VISIVEL } = require('../lib/visibilidade');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, adicionarOuSomarFaturaItem, removerFaturaItensDaOrigem, recalcularTotal } = require('../lib/faturaUtils');
+// CONTA A PAGAR — o outro lado do balcão da fatura (2026-09-10). O que a clínica
+// DEVE ao fornecedor do medicamento e ao prestador do procedimento.
+const contasPagar      = require('../lib/contasPagar');
+const produtoFornecedor = require('../lib/produtoFornecedor');
+const formaCobranca     = require('../lib/formaCobrancaEstoque');
 const { garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
 const vinculoPrestador = require('../lib/procedimentoPrestador');
 const { registrarAuditoria, registrarAlteracao, registrarTransferencia, resumoTexto } = require('../lib/auditoria');
@@ -102,6 +107,30 @@ function deBase(qtyBase, unidade) {
   return f != null ? qtyBase / f : qtyBase;
 }
 
+// Preço UNITÁRIO (R$ por unidade base — g/mL, ou por unidade quando não conversível)
+// de uma entrada do estoque. Fonte única das duas regras que já existiam espalhadas:
+// `precoUnitarioBase` é gravado na ENTRADA e permanece fixo; o cálculo dinâmico é o
+// caminho legado (itens sem o campo) e tem o defeito conhecido de o preço subir
+// conforme o estoque baixa — só continua aqui para não mudar a cobrança do que já
+// está cadastrado assim.
+function precoUnitarioDoEstoque(estoque, unidadeEstoque) {
+  if (estoque.precoUnitarioBase != null && estoque.precoUnitarioBase > 0) {
+    return estoque.precoUnitarioBase;
+  }
+  const precoVenda = estoque.valorRepassado > 0 ? estoque.valorRepassado : (estoque.valor ?? 0);
+  const qtdBase    = paraBase(estoque.qtdEstoque, unidadeEstoque);
+  return qtdBase > 0 ? precoVenda / qtdBase : 0;
+}
+
+// Retrato do estoque ANTES da baixa, no formato que `precoDeVenda` consome —
+// é dele que saem MAIOR_VALOR e CUSTO_MEDIO.
+function entradasParaCobranca(estoques, unidadeEstoque) {
+  return estoques.map(e => ({
+    preco: precoUnitarioDoEstoque(e, unidadeEstoque),
+    qtd:   paraBase(e.qtdEstoque, unidadeEstoque),
+  }));
+}
+
 function mesmoGrupo(u1, u2) {
   const g1 = GRUPO_UNIDADE[(u1 ?? '').trim().toLowerCase()];
   const g2 = GRUPO_UNIDADE[(u2 ?? '').trim().toLowerCase()];
@@ -125,6 +154,55 @@ function calcularQuantidadeDiaria(item) {
   if (item.frequencia === 'agora') return qtdPorDose;
   const dosesPorDia = DOSES_POR_DIA[item.frequencia] ?? 1;
   return qtdPorDose * dosesPorDia;
+}
+
+// ─── MULTIDOSE: a CONTAGEM de aplicações ─────────────────────────────────────
+//
+// 🔴 POR QUE A CONTAGEM IMPORTA: as funções acima devolvem a DOSAGEM (10 mL, 500 mg).
+// Para o item que a clínica conta em EMBALAGENS — o frasco multidose —, o que sai do
+// estoque não é "10 mL", é "uma das N aplicações daquele frasco". Sem a contagem, a
+// conversão mL → Un. é impossível (`mesmoGrupo` é falso) e `debitarEstoqueDia` caía no
+// valor BRUTO: uma dose de 10 mL debitava 10 FRASCOS e cobrava 10 frascos na fatura.
+
+function dosesDoDia(item) {
+  if (item.frequencia === 'agora') return 1;
+  return DOSES_POR_DIA[item.frequencia] ?? 1;
+}
+
+function dosesDoCurso(item) {
+  if (item.frequencia === 'agora') return 1;
+  return dosesDoDia(item) * Math.max(Number(item.duracaoDias) || 1, 1);
+}
+
+/**
+ * Quanto SAI DO ESTOQUE, na unidade do estoque.
+ *
+ * 🔴 MULTIDOSE VENCE A CONVERSÃO DE UNIDADE: declarado que o frasco rende N
+ * aplicações, cada aplicação tira 1/N do frasco — e é isso que faz a linha da fatura
+ * sair pelo preço do frasco ÷ N, porque o valor já é `qtdDebitada × preço unitário`.
+ * Nada precisou mudar no cálculo de PREÇO; o que estava errado era a QUANTIDADE.
+ *
+ * ⚠️ Sem N informado (o caso de toda base hoje) cai na conversão de sempre — é o que
+ * garante que nenhuma cobrança existente mude de valor.
+ */
+function qtdDoEstoque(qtdPrescrita, unidadePrescrita, unidadeEstoque, doses, dosesPorEmbalagem) {
+  if (dosesPorEmbalagem >= 1) return doses / dosesPorEmbalagem;
+  if (!mesmoGrupo(unidadePrescrita, unidadeEstoque)) return qtdPrescrita;
+  return deBase(paraBase(qtdPrescrita, unidadePrescrita), unidadeEstoque);
+}
+
+/**
+ * `Map<medicamentoCatId, dosesPorEmbalagem>` dos itens do documento.
+ *
+ * ⚠️ Uma consulta por LOTE de itens, nunca por item — e com o `client` da transação,
+ * senão o `prisma` global chega ao banco sem o carimbo de tenant e o RLS devolve
+ * ZERO linha em silêncio (armadilha de 2026-08-23, parte 4).
+ */
+async function mapaMultidose(client, itens, empresaId) {
+  const ids = itens
+    .filter(i => i.tipo === 'MEDICAMENTO' && i.medicamentoCatId)
+    .map(i => i.medicamentoCatId);
+  return produtoFornecedor.dosesPorEmbalagemDeMedicamentos(client, empresaId, ids);
 }
 
 // 🔴 `hojeLocalStr()` foi REMOVIDA daqui: lia o relógio do SERVIDOR (fixo em
@@ -151,18 +229,18 @@ function janelaDoItem(item, hojeStr) {
   };
 }
 
-function qtdDiariaEstoque(item, unidadeEstoque, resolverQtd = calcularQuantidadeDiaria) {
-  const qtdBruta = resolverQtd(item);
-  if (!mesmoGrupo(item.unidade, unidadeEstoque)) return qtdBruta;
-  return deBase(paraBase(qtdBruta, item.unidade), unidadeEstoque);
+function qtdDiariaEstoque(item, unidadeEstoque, resolverQtd = calcularQuantidadeDiaria,
+                          dosesPorEmbalagem = null, doses = null) {
+  return qtdDoEstoque(resolverQtd(item), item.unidade, unidadeEstoque,
+                      doses ?? dosesDoDia(item), dosesPorEmbalagem);
 }
 
 // Converte a quantidade prescrita (item.unidade) para a unidade do estoque via base.
 // Ex: 500g → kg: paraBase(500,'g')=500g → deBase(500,'kg')=0.5 kg
-function qtdNaUnidadeEstoque(item, unidadeEstoque) {
-  const qtdBruta = calcularQuantidadeTotal(item);
-  if (!mesmoGrupo(item.unidade, unidadeEstoque)) return qtdBruta; // incompatível, retorna bruto
-  return deBase(paraBase(qtdBruta, item.unidade), unidadeEstoque);
+// Item MULTIDOSE não converte: o curso inteiro tira `nº de aplicações ÷ N` embalagens.
+function qtdNaUnidadeEstoque(item, unidadeEstoque, dosesPorEmbalagem = null) {
+  return qtdDoEstoque(calcularQuantidadeTotal(item), item.unidade, unidadeEstoque,
+                      dosesDoCurso(item), dosesPorEmbalagem);
 }
 
 // ─── Multi-lote (FEFO) ───────────────────────────────────────────────────────
@@ -194,6 +272,9 @@ async function buscarEstoquesFEFO(client, medicamentoCatId, empresaId, grupoIdEx
 // (FEFO), respeitando o que já está reservado por OUTRAS prescrições. Se mesmo
 // assim faltar, o restante é reservado na última entrada (finalização forçada).
 async function criarReservas(tx, grupoId, animalId, itens, empresaId) {
+  // Item MULTIDOSE reserva por DOSE (curso ÷ N embalagens) — reservar o frasco
+  // inteiro por aplicação travaria o estoque de toda a clínica na primeira receita.
+  const multidose = await mapaMultidose(tx, itens, empresaId);
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
     // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
@@ -207,7 +288,7 @@ async function criarReservas(tx, grupoId, animalId, itens, empresaId) {
     });
 
     const unidadeEstoque = estoques[0].medicamento?.unidade;
-    let restante = qtdNaUnidadeEstoque(item, unidadeEstoque);
+    let restante = qtdNaUnidadeEstoque(item, unidadeEstoque, multidose.get(item.medicamentoCatId));
 
     for (let i = 0; i < estoques.length && restante > 0.0001; i++) {
       const e = estoques[i];
@@ -324,9 +405,17 @@ async function recalcularReservasDoGrupo(tx, grupo) {
 // proporção (evita contagem dupla: estoque já baixado + reserva ainda ativa).
 // Retorna { precos, unidades } por medicamentoCatId (para lançar na fatura) —
 // precos contém o VALOR TOTAL da quantidade debitada (soma dos lotes).
-async function debitarEstoqueDia(tx, itens, empresaId, grupoId = null, resolverQtd = calcularQuantidadeDiaria) {
+async function debitarEstoqueDia(tx, itens, empresaId, grupoId = null, resolverQtd = calcularQuantidadeDiaria,
+                                 resolverDoses = dosesDoDia) {
   const precos   = new Map();
   const unidades = new Map();
+  // 🔴 MULTIDOSE — quantas aplicações saem de uma embalagem. É o par de `resolverQtd`
+  // (que devolve a DOSAGEM): para o frasco multidose é a CONTAGEM que governa a baixa,
+  // e é dela que a fatura passa a sair por DOSE em vez de por frasco.
+  const multidose = await mapaMultidose(tx, itens, empresaId);
+  // Forma de cobrança da clínica — resolvida UMA vez por execução (é a mesma para
+  // todos os itens). Ver lib/formaCobrancaEstoque.js.
+  const cfgCobranca = await formaCobranca.lerForma(tx, empresaId);
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
     // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
@@ -335,11 +424,15 @@ async function debitarEstoqueDia(tx, itens, empresaId, grupoId = null, resolverQ
     if (estoques.length === 0) continue;
     const unidadeEstoque = estoques[0].medicamento?.unidade ?? item.unidade;
     const qtdDia         = resolverQtd(item);
+    // 🔴 O retrato do estoque é tirado ANTES do laço de baixa: MAIOR_VALOR e
+    // CUSTO_MEDIO olham o que a clínica TEM no momento da cobrança. Calculado
+    // depois, cada lote debitado mudaria o preço dos seguintes na mesma execução.
+    const entradas = entradasParaCobranca(estoques, unidadeEstoque);
 
-    // Quantidade do dia na unidade do estoque
-    let restante = mesmoGrupo(item.unidade, unidadeEstoque)
-      ? deBase(paraBase(qtdDia, item.unidade), unidadeEstoque)
-      : qtdDia;
+    // Quantidade do dia na unidade do estoque. Item MULTIDOSE não converte: cada
+    // aplicação tira 1/N da embalagem, e o valor da linha sai daí.
+    let restante = qtdDoEstoque(qtdDia, item.unidade, unidadeEstoque,
+                                resolverDoses(item), multidose.get(item.medicamentoCatId));
 
     const desc = item.dosagem
       ? `${item.dosagem}${item.unidade ? ' ' + item.unidade : ''} × ${item.frequencia} (1 dose)`
@@ -372,18 +465,15 @@ async function debitarEstoqueDia(tx, itens, empresaId, grupoId = null, resolverQ
         }
       }
 
-      // Valor da dose = qtdDebitBase × precoUnitarioBase (R$/g ou R$/mL) da ENTRADA
-      // debitada (cada lote pode ter preço próprio). precoUnitarioBase é gravado na
-      // entrada do estoque e permanece fixo; itens legados (sem o campo) caem no
-      // cálculo dinâmico, que tem o bug de aumentar o preço conforme o estoque diminui.
-      const precoVenda   = estoque.valorRepassado > 0 ? estoque.valorRepassado : (estoque.valor ?? 0);
+      // Valor da dose = qtdDebitBase × preço unitário resolvido pela FORMA DE COBRANÇA
+      // da clínica (R$/g ou R$/mL). Em VALOR_REPASSADO é o preço DAQUELE lote — o que
+      // sempre foi; em PERCENTUAL, ele + o acréscimo; em MAIOR_VALOR/CUSTO_MEDIO, um
+      // preço único tirado do estoque inteiro, e aí a fatura sai numa linha só.
       const qtdDebitBase = paraBase(deduzido, unidadeEstoque);
-      if (estoque.precoUnitarioBase != null && estoque.precoUnitarioBase > 0) {
-        valorDaDose += qtdDebitBase * estoque.precoUnitarioBase;
-      } else {
-        const qtdEstoqueBase = paraBase(estoque.qtdEstoque, unidadeEstoque);
-        valorDaDose += qtdEstoqueBase > 0 ? (qtdDebitBase * precoVenda) / qtdEstoqueBase : 0;
-      }
+      const precoUnit    = formaCobranca.precoDeVenda(
+        cfgCobranca, precoUnitarioDoEstoque(estoque, unidadeEstoque), entradas,
+      );
+      valorDaDose += qtdDebitBase * precoUnit;
 
       restante -= deduzido;
     }
@@ -444,8 +534,12 @@ async function debitarInsumoUnidade(tx, prefixoNome, empresaId, motivo) {
 // padrão, o dia inteiro) — retorna lista de alertas.
 // MULTI-LOTE: soma a quantidade de TODAS as entradas do medicamento — uma
 // entrada insuficiente não bloqueia se outra cobre o restante.
-async function verificarEstoqueParaDia(itens, empresaId, resolverQtd = calcularQuantidadeDiaria) {
+async function verificarEstoqueParaDia(itens, empresaId, resolverQtd = calcularQuantidadeDiaria,
+                                       resolverDoses = dosesDoDia) {
   const alertas = [];
+  // Sem isto, o alerta de "estoque insuficiente" do item multidose compararia o
+  // frasco inteiro por dose e barraria a execução de uma prescrição que cabe.
+  const multidose = await mapaMultidose(prisma, itens, empresaId);
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
     // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
@@ -453,18 +547,24 @@ async function verificarEstoqueParaDia(itens, empresaId, resolverQtd = calcularQ
     const estoques = await buscarEstoquesFEFO(prisma, item.medicamentoCatId, empresaId);
     if (estoques.length === 0) continue; // medicamento não cadastrado no estoque da clínica — ignorar silenciosamente
     const unidadeEstoque = estoques[0].medicamento?.unidade ?? item.unidade;
+    const dosesPorEmb     = multidose.get(item.medicamentoCatId);
     const necessario      = resolverQtd(item);
     const totalEstoque   = estoques.reduce((s, e) => s + (e.qtdEstoque ?? 0), 0);
     const disponBase     = paraBase(totalEstoque, unidadeEstoque);
     const necessarioBase = paraBase(necessario, item.unidade);
     const comparavel     = mesmoGrupo(item.unidade, unidadeEstoque);
-    const insuficiente   = comparavel ? disponBase < necessarioBase : totalEstoque < necessario;
+    // Multidose já está NA UNIDADE DO ESTOQUE (frações de embalagem): compara direto,
+    // sem passar pela base — não há base comum entre "mL" e "frasco".
+    const necessarioEstoque = qtdDiariaEstoque(item, unidadeEstoque, resolverQtd, dosesPorEmb, resolverDoses(item));
+    const insuficiente   = dosesPorEmb >= 1
+      ? totalEstoque < necessarioEstoque
+      : (comparavel ? disponBase < necessarioBase : totalEstoque < necessario);
     if (insuficiente) {
       alertas.push({
         tipo:          'INSUFICIENTE',
         medicamento:   item.medicamento,
         unidade:       unidadeEstoque,
-        qtdNecessaria: qtdDiariaEstoque(item, unidadeEstoque, resolverQtd),
+        qtdNecessaria: necessarioEstoque,
         qtdDisponivel: totalEstoque,
       });
     }
@@ -476,6 +576,7 @@ async function verificarEstoqueParaDia(itens, empresaId, resolverQtd = calcularQ
 // Compara em unidade base para evitar mismatch kg vs g.
 async function verificarEstoqueParaExecucao(itens, empresaId) {
   const alertas = [];
+  const multidose = await mapaMultidose(prisma, itens, empresaId);
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
     // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
@@ -486,16 +587,20 @@ async function verificarEstoqueParaExecucao(itens, empresaId) {
     });
     if (!estoque) continue; // medicamento não cadastrado no estoque da clínica — ignorar silenciosamente
     const unidadeEstoque  = estoque.medicamento?.unidade ?? item.unidade;
+    const dosesPorEmb     = multidose.get(item.medicamentoCatId);
     const disponBase      = paraBase(estoque.qtdEstoque ?? 0, unidadeEstoque);
     const necessarioBase  = paraBase(calcularQuantidadeTotal(item), item.unidade);
     const comparavel      = mesmoGrupo(item.unidade, unidadeEstoque);
-    const insuficiente    = comparavel ? disponBase < necessarioBase : estoque.qtdEstoque < calcularQuantidadeTotal(item);
+    const necessarioEstoque = qtdNaUnidadeEstoque(item, unidadeEstoque, dosesPorEmb);
+    const insuficiente    = dosesPorEmb >= 1
+      ? (estoque.qtdEstoque ?? 0) < necessarioEstoque
+      : (comparavel ? disponBase < necessarioBase : estoque.qtdEstoque < calcularQuantidadeTotal(item));
     if (insuficiente) {
       alertas.push({
         tipo:          'INSUFICIENTE',
         medicamento:   item.medicamento,
         unidade:       unidadeEstoque,
-        qtdNecessaria: qtdNaUnidadeEstoque(item, unidadeEstoque),
+        qtdNecessaria: necessarioEstoque,
         qtdDisponivel: estoque.qtdEstoque ?? 0,
       });
     }
@@ -511,6 +616,7 @@ async function verificarEstoqueParaExecucao(itens, empresaId) {
 // tipo 'ZERADO':       ficará zerado após esta reserva
 async function verificarDisponibilidade(itens, grupoId, empresaId) {
   const alertas = [];
+  const multidose = await mapaMultidose(prisma, itens, empresaId);
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
     // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
@@ -524,10 +630,11 @@ async function verificarDisponibilidade(itens, grupoId, empresaId) {
     const disponivel      = qtdEstoqueTotal - qtdReservada;                      // em unidadeEstoque
 
     // Compara em unidade base
+    const dosesPorEmb = multidose.get(item.medicamentoCatId);
     const dispBase  = paraBase(disponivel, unidadeEstoque);
     const necBase   = paraBase(calcularQuantidadeTotal(item), item.unidade);
     const comparavel = mesmoGrupo(item.unidade, unidadeEstoque);
-    const necessario = qtdNaUnidadeEstoque(item, unidadeEstoque); // em unidadeEstoque para exibição
+    const necessario = qtdNaUnidadeEstoque(item, unidadeEstoque, dosesPorEmb); // em unidadeEstoque para exibição
 
     const reservasInfo = todasReservas.map(r => ({
       animalNome:       r.animal.nome,
@@ -535,8 +642,13 @@ async function verificarDisponibilidade(itens, grupoId, empresaId) {
       quantidade:       r.quantidade,
     }));
 
-    const dispInsuf  = comparavel ? dispBase < necBase        : disponivel < calcularQuantidadeTotal(item);
-    const dispZerado = comparavel ? Math.abs(dispBase - necBase) < 0.001 : Math.abs(disponivel - calcularQuantidadeTotal(item)) < 0.001;
+    // Multidose compara na UNIDADE DO ESTOQUE (frações de embalagem) — ver a nota em
+    // `verificarEstoqueParaDia`.
+    const dispInsuf  = dosesPorEmb >= 1 ? disponivel < necessario
+                     : comparavel ? dispBase < necBase : disponivel < calcularQuantidadeTotal(item);
+    const dispZerado = dosesPorEmb >= 1 ? Math.abs(disponivel - necessario) < 0.001
+                     : comparavel ? Math.abs(dispBase - necBase) < 0.001
+                     : Math.abs(disponivel - calcularQuantidadeTotal(item)) < 0.001;
 
     if (dispInsuf) {
       alertas.push({
@@ -2083,10 +2195,14 @@ const executar = async (req, res) => {
     // (legado) — ver lib/agendaDoses.js e a nota em `debitarEstoqueDia`.
     const resolverQtdExecucao = (item) =>
       elegivelParaFluxoNovo(item) ? (parseFloat(item.dosagem) || 1) : calcularQuantidadeDiaria(item);
+    // Par de `resolverQtdExecucao` para o item MULTIDOSE: aquele devolve a DOSAGEM,
+    // este a CONTAGEM de aplicações — 1 no fluxo por dose, o dia inteiro no legado.
+    // É a contagem que faz a fatura sair por DOSE em vez de por frasco.
+    const resolverDosesExecucao = (item) => (elegivelParaFluxoNovo(item) ? 1 : dosesDoDia(item));
 
     const empresaIdEfetivo = grupo.empresaId ?? req.empresaId ?? null;
 
-    const alertasEstoque = await verificarEstoqueParaDia(itensHoje, empresaIdEfetivo, resolverQtdExecucao);
+    const alertasEstoque = await verificarEstoqueParaDia(itensHoje, empresaIdEfetivo, resolverQtdExecucao, resolverDosesExecucao);
     if (alertasEstoque.length > 0) {
       return res.status(409).json({ erro: 'ESTOQUE_INSUFICIENTE', alertas: alertasEstoque });
     }
@@ -2098,11 +2214,22 @@ const executar = async (req, res) => {
       ? formatAtendimentoNum(grupo.evolucao.tipoAtendimento, grupo.evolucao.numero)
       : null;
 
+    // Quem SOLICITOU — é o que a conta a pagar precisa dizer ("quem fez a
+    // solicitação", no pedido de 2026-09-10). É QUEM PRESCREVEU, não quem executou:
+    // a compra foi provocada pela prescrição, e o plantonista que aplica a dose não
+    // decidiu comprar nada. Resolvido UMA vez, fora do laço — dentro dele seria uma
+    // consulta por item.
+    const solicitante = grupo.veterinarioId
+      ? await prisma.user.findUnique({
+          where: { id: Number(grupo.veterinarioId) }, select: { id: true, fullName: true },
+        }).catch(() => null)
+      : null;
+
     await prisma.$transaction(async (tx) => {
       // Debita a quantidade resolvida por item (multi-lote FEFO) e retorna
       // preços/unidades por medicamento. Passa o grupoId para abater as reservas
       // deste grupo junto com a baixa.
-      const { precos, unidades } = await debitarEstoqueDia(tx, itensHoje, empresaIdEfetivo, grupoId, resolverQtdExecucao);
+      const { precos, unidades } = await debitarEstoqueDia(tx, itensHoje, empresaIdEfetivo, grupoId, resolverQtdExecucao, resolverDosesExecucao);
 
       // Lança na fatura ABERTA do proprietário NESTA empresa
       const fatura = await getOrCreateFatura(tx, proprietarioId, empresaIdEfetivo);
@@ -2180,10 +2307,14 @@ const executar = async (req, res) => {
           const doVinculo = await vinculoPrestador.resolverValoresPorNome(
             tx, empresaIdEfetivo, item.medicamento, item.prestadorId,
           );
-          const prestador = await tx.prestador.findUnique({
+          // `nome` entrou junto (2026-09-10): a conta a pagar grava o nome do credor
+          // como SNAPSHOT, para dizer a quem se deve mesmo que o cadastro seja
+          // renomeado ou inativado depois.
+          const prestadorCadastro = await tx.prestador.findUnique({
             where:  { id: Number(item.prestadorId) },
-            select: { tipoPagamento: true, formaPagamento: true, valorPagamento: true },
+            select: { nome: true, tipoPagamento: true, formaPagamento: true, valorPagamento: true },
           });
+          const prestador = prestadorCadastro;
           await vinculoPrestador.registrarExecucao(tx, {
             empresaId:        empresaIdEfetivo,
             prestadorId:      item.prestadorId,
@@ -2208,6 +2339,79 @@ const executar = async (req, res) => {
             // sozinho — ele é o documento do outro lado, não um espelho da fatura.
             faturaItemId:     null,
           });
+
+          // 🔴 CONTA A PAGAR DO PRESTADOR (2026-09-10) — a mesma execução que gera o
+          // recibo passa a abrir/alimentar a conta do mês dele, no molde da fatura.
+          // ⚠️ O VALOR sai do ledger que acabou de ser gravado, não de uma segunda
+          // conta: `calcularValorAPagar` é a fonte única da regra (POR_PROCEDIMENTO ×
+          // PERCENTUAL × VALOR fixo × SALARIO), e recalcular aqui daria dois números
+          // para a mesma dívida — com o recibo e a conta discordando entre si.
+          const { valorAPagar } = vinculoPrestador.calcularValorAPagar({
+            valorCliente:   item.medicamentoCliente ? 0 : valorDaDose,
+            valorPrestador: doVinculo.valorPrestador,
+            tipoPagamento:  prestador?.tipoPagamento  ?? null,
+            formaPagamento: prestador?.formaPagamento ?? null,
+            valorPagamento: prestador?.valorPagamento ?? null,
+            quantidade:     1,
+          });
+          await contasPagar.lancarItem(tx, {
+            empresaId:   empresaIdEfetivo,
+            tipo:        'PRESTADOR',
+            credorId:    item.prestadorId,
+            credorNome:  prestadorCadastro?.nome ?? '',
+            animalId:    grupo.animalId,
+            animalNome:  grupo.animal?.nome ?? '',
+            descricao:   item.medicamento,
+            quantidade:  1,
+            valor:       valorAPagar,
+            solicitanteId:   solicitante?.id ?? null,
+            solicitanteNome: solicitante?.fullName ?? '',
+            ocorridoEm:  agora,
+            // Idempotência: uma linha por ITEM de prescrição executado. Reprocessar a
+            // mesma execução não cria a segunda (índice único parcial no banco).
+            origemTipo:  contasPagar.ORIGENS.EXECUCAO_PRESTADOR,
+            origemId:    item.id,
+          });
+        }
+
+        // 🔴 CONTA A PAGAR DO FORNECEDOR (2026-09-10) — o medicamento que a clínica
+        // NÃO estoca e pediu ao fornecedor vira dívida com ele NESTE momento, o mesmo
+        // em que o cliente é cobrado. Na MESMA transaction, pela mesma razão do
+        // recibo: fora dela existiria a janela em que a clínica cobrou e não deve.
+        //
+        // ⚠️ Só MEDICAMENTO (aqui a vacina tem caminho próprio, em
+        // `VacinaClinicaController`) e só o que é PRODUTO — item de estoque próprio já
+        // foi comprado antes, na entrada da nota; cobrá-lo de novo aqui contaria a
+        // mesma compra duas vezes.
+        //
+        // ⚠️ O valor é o de COMPRA cadastrado no produto, nunca o cobrado do cliente:
+        // usar o segundo afirmaria que a clínica paga ao fornecedor o mesmo que cobra,
+        // e zeraria a margem dela no relatório. Sem preço de compra cadastrado, NÃO
+        // lança — dívida de valor inventado é pior que dívida ausente, e a tela de
+        // Produtos é onde isso se resolve.
+        if (item.tipo === 'MEDICAMENTO' && !item.medicamentoCliente && item.medicamentoCatId) {
+          const produto = await produtoFornecedor.fornecedorDoItem(
+            tx, empresaIdEfetivo, item.medicamentoCatId,
+          );
+          if (produto?.valorUnitario != null) {
+            const qtd = Number(resolverQtdExecucao(item)) || 1;
+            await contasPagar.lancarItem(tx, {
+              empresaId:   empresaIdEfetivo,
+              tipo:        'FORNECEDOR',
+              credorId:    produto.fornecedorId,
+              credorNome:  produto.fornecedorNome ?? '',
+              animalId:    grupo.animalId,
+              animalNome:  grupo.animal?.nome ?? '',
+              descricao:   item.medicamento,
+              quantidade:  qtd,
+              valor:       produto.valorUnitario,
+              solicitanteId:   solicitante?.id ?? null,
+              solicitanteNome: solicitante?.fullName ?? '',
+              ocorridoEm:  agora,
+              origemTipo:  contasPagar.ORIGENS.PRESCRICAO_ITEM,
+              origemId:    item.id,
+            });
+          }
         }
 
         // Via injetável (IV/IM/ID/SC/EV): 1 seringa + 1 agulha por dose aplicada.
@@ -2681,4 +2885,9 @@ module.exports = {
   criarReservas,
   liberarReservas,
   anexarAplicadaProprietario,
+  // Exportadas para TESTE: a regra da dose multidose quebra em silêncio (o valor da
+  // fatura sai errado sem erro nenhum), então precisa de gate sobre a conta PURA.
+  qtdDoEstoque,
+  dosesDoDia,
+  dosesDoCurso,
 };

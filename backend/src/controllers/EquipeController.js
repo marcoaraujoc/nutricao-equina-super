@@ -14,6 +14,7 @@ const { resolverComoCliente } = require('../lib/tipoContexto');
 const { storage }      = require('../storage');
 const { TIPOS_FECHAMENTO_VALIDOS } = require('../lib/faturaUtils');
 const { normalizarValidade, lerValidade, salvarValidade } = require('../lib/validadeOrcamento');
+const formaCobranca = require('../lib/formaCobrancaEstoque');
 // Fuso horário da clínica — a aplicação roda nos 4 fusos do Brasil (ver lib/fusoEmpresa.js).
 const { normalizarFuso, salvarFuso, fusoDaEmpresa, rotuloFuso } = require('../lib/fusoEmpresa');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
@@ -1134,6 +1135,8 @@ const EquipeController = {
           })
         : null;
 
+      const cobranca = await formaCobranca.lerFormaDoEscopo(prisma, escopo.empresaId, escopo.equipeId);
+
       // Mesma resolução de compat que deveFecharHoje (faturaUtils.js): nunca retorna
       // tipoFechamento null pro frontend — sempre o efetivamente aplicado hoje.
       const tipoFechamentoEfetivo = config?.tipoFechamento
@@ -1160,6 +1163,12 @@ const EquipeController = {
           validadeOrcamentoDias: config
             ? await lerValidade(prisma, escopo.empresaId, escopo.equipeId)
             : null,
+          // Forma de cobrança de medicamento/vacina — nunca null para a tela: sem
+          // configuração, o que vale é VALOR_REPASSADO (o comportamento de sempre),
+          // e devolver null faria o seletor abrir em branco sobre uma regra que já
+          // está valendo. Ver lib/formaCobrancaEstoque.js.
+          formaCobrancaEstoque:      cobranca.forma,
+          percentualCobrancaEstoque: cobranca.percentual,
           // Fuso EFETIVO da clínica — DEDUZIDO do endereço (CEP/UF) que o cadastro
           // já coletou. O gestor não escolhe fuso: a tela só EXIBE qual foi detectado,
           // para ele conferir. Ver lib/fusoEmpresa.js#fusoPorEndereco.
@@ -1266,7 +1275,14 @@ const EquipeController = {
         tipoFechamento, diaFechamentoFatura, removerLogo, whatsapp,
         diasAtendimento, horaInicioAtendimento, horaFimAtendimento,
         especiesAtendidas, tempoConsultaPadraoMin, validadeOrcamentoDias, fusoHorario,
+        formaCobrancaEstoque, percentualCobrancaEstoque,
       } = req.body;
+
+      // Forma de cobrança de medicamento/vacina. undefined = não altera; vazio = volta
+      // ao padrão (VALOR_REPASSADO). O percentual só é aceito na forma PERCENTUAL —
+      // ver lib/formaCobrancaEstoque.js#normalizarForma.
+      const cobranca = formaCobranca.normalizarForma(formaCobrancaEstoque, percentualCobrancaEstoque);
+      if (cobranca.erro) return res.status(400).json({ sucesso: false, mensagem: cobranca.erro });
 
       // Fuso da clínica. undefined = não altera; vazio = volta ao padrão do sistema.
       const fuso = normalizarFuso(fusoHorario);
@@ -1442,6 +1458,14 @@ const EquipeController = {
         ? validadeFinal
         : await lerValidade(prisma, escopo.empresaId, escopo.equipeId);
 
+      // Forma de cobrança: mesmo caminho (SQL cru, depois do upsert). Devolve o que
+      // ficou EFETIVO — com a coluna ainda não migrada, a leitura cai no padrão e a
+      // tela mostra a regra que de fato está valendo, não a que foi enviada.
+      await formaCobranca.salvarForma(
+        prisma, escopo.empresaId, escopo.equipeId, cobranca.forma, cobranca.percentual,
+      );
+      const cobrancaAtual = await formaCobranca.lerFormaDoEscopo(prisma, escopo.empresaId, escopo.equipeId);
+
       // Fuso: o gestor NÃO envia este campo (a tela só exibe o detectado), então
       // `fusoFinal` é `undefined` no fluxo normal e nada é gravado. O caminho de
       // escrita segue existindo como OVERRIDE do ADMIN para o caso raro em que o
@@ -1463,6 +1487,8 @@ const EquipeController = {
           tempoConsultaPadraoMin: config.tempoConsultaPadraoMin ?? null,
           tempoConsultaPadraoSistema: TEMPO_CONSULTA_PADRAO_SISTEMA,
           validadeOrcamentoDias:  validadeAtual,
+          formaCobrancaEstoque:      cobrancaAtual.forma,
+          percentualCobrancaEstoque: cobrancaAtual.percentual,
           fusoHorario:            fusoAtual,
           fusoLabel:              rotuloFuso(fusoAtual),
         },
