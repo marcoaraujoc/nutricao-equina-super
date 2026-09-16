@@ -22,6 +22,17 @@ import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import CadastroCatalogoModal, { type ItemCatalogoCriado } from '../components/CadastroCatalogoModal';
+// O campo de texto do "cadastrar novo" e o POST do catálogo vêm do MESMO lugar que os
+// tipos de fornecedor/prestador/localização usam — ver TipoServicoSelect.
+import { NovoTipoInput, criarTipoCatalogo } from '../components/TipoServicoSelect';
+
+// Sentinela da opção "Outros" do seletor de laboratório. Precisa ser IDÊNTICA à do
+// backend (`EstoqueVacinaController.SEM_FABRICANTE`): é ela que pede as vacinas cujo
+// cadastro não informou laboratório. String vazia já significa "todos", e nenhum
+// laboratório de verdade se chamaria assim.
+const SEM_FABRICANTE = '__SEM_FABRICANTE__';
+// Valor só da TELA (nunca vai ao backend): abre o campo de cadastro de laboratório.
+const OPCAO_NOVO_LAB = '__novo_lab__';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -112,6 +123,12 @@ export default function EstoqueVacina() {
 
   const [lotes,        setLotes]        = useState<LoteVacina[]>([]);
   const [fabricantes,  setFabricantes]  = useState<string[]>([]);
+  // Existe vacina SEM laboratório informado? É o que decide se a opção "Outros" aparece —
+  // opção que não filtra nada é botão morto (a mesma regra da aba vazia). Quem responde é
+  // o BACKEND: a tela só conhece as vacinas do laboratório filtrado no momento.
+  const [temSemFabricante, setTemSemFabricante] = useState(false);
+  // "+ Cadastrar novo laboratório..." troca o <select> pelo campo de texto.
+  const [adicionandoLab, setAdicionandoLab] = useState(false);
   const [vacinas,      setVacinas]      = useState<MedCatItem[]>([]);
   const [meta,         setMeta]         = useState<Meta>({ totalLotes: 0, totalVencidos: 0, totalVencendo: 0, totalDoses: 0, totalAbaixoMinimo: 0, totalAbaixoAlarmante: 0 });
   const [loading,      setLoading]      = useState(false);
@@ -238,7 +255,10 @@ export default function EstoqueVacina() {
       if (!lotesRes.data) return;
       setLotes(lotesRes.data.dados ?? []);
       setMeta(lotesRes.data.meta ?? { totalLotes: 0, totalVencidos: 0, totalVencendo: 0, totalDoses: 0, totalAbaixoMinimo: 0, totalAbaixoAlarmante: 0 });
-      if (fabRes.data) setFabricantes(fabRes.data.dados ?? []);
+      if (fabRes.data) {
+        setFabricantes(fabRes.data.dados ?? []);
+        setTemSemFabricante(Boolean(fabRes.data.semFabricante));
+      }
     } catch { setErroInline('Erro ao carregar estoque de vacinas.'); }
     finally { setLoading(false); }
   }, [busca, filtroTab]);
@@ -325,6 +345,21 @@ export default function EstoqueVacina() {
     };
     setVacinas(prev => [nova, ...prev.filter(v => v.id !== nova.id)]);
     setForm(f => ({ ...f, medicamentoCatId: nova.id }));
+    // 🔴 LABORATÓRIO NOVO DIGITADO NO CADASTRO JÁ APARECE AQUI. A lista de
+    // laboratórios só é recarregada em `carregarLotes`, então sem isto o nome recém-
+    // digitado no modal só apareceria depois de recarregar a tela — e a pessoa
+    // concluiria que o cadastro dele não pegou. Dedup sem olhar a caixa, como no backend.
+    const labNovo = (item.fabricante ?? '').trim();
+    if (labNovo) {
+      setFabricantes(prev => (
+        prev.some(f => f.toLocaleLowerCase('pt-BR') === labNovo.toLocaleLowerCase('pt-BR'))
+          ? prev
+          : [...prev, labNovo].sort((a, b) => a.localeCompare(b, 'pt-BR'))
+      ));
+    } else {
+      // Vacina cadastrada SEM laboratório: agora existe algo em "Outros".
+      setTemSemFabricante(true);
+    }
     // O filtro de fabricante volta para "Todos": a vacina nova pode ter outro
     // laboratório (ou nenhum) e sumiria da lista assim que a carga fosse refeita.
     setFabricanteSel('');
@@ -810,22 +845,58 @@ export default function EstoqueVacina() {
 
             <div className="p-4 space-y-3 flex-1 overflow-y-auto">
 
-              {/* ── Fabricante ─────────────────────────────────────────────── */}
+              {/* ── Laboratório ────────────────────────────────────────────────
+                  Filtra o seletor de vacina logo abaixo. Três coisas além da lista:
+                  • "Todos" — sem recorte (o padrão);
+                  • "Outros" — as vacinas cujo CADASTRO não informou laboratório. Sem
+                    ela, essas vacinas só eram alcançáveis por "Todos": escolher
+                    qualquer laboratório as escondia, e não havia como isolá-las;
+                  • "+ Cadastrar novo laboratório" — grava no catálogo da clínica
+                    (`tb_catalogo_tipo_servico`, categoria LABORATORIO), então o nome
+                    passa a existir ANTES de haver qualquer vacina dele.
+                  ⚠️ Só aparece com `temSemFabricante`: opção que não filtraria nada seria
+                  botão morto. */}
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Fabricante</label>
-                <select
-                  value={fabricanteSel}
-                  onChange={e => {
-                    setFabricanteSel(e.target.value);
-                    setForm(f => ({ ...f, medicamentoCatId: 0 }));
-                  }}
-                  disabled={!!editandoId}
-                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white text-gray-900 disabled:bg-gray-100 disabled:cursor-not-allowed">
-                  <option value="">Todos os fabricantes...</option>
-                  {fabricantes.map(f => (
-                    <option key={f} value={f}>{f}</option>
-                  ))}
-                </select>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">Laboratório</label>
+                {adicionandoLab ? (
+                  <NovoTipoInput
+                    rotulo="laboratório"
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white text-gray-900"
+                    onCancelar={() => setAdicionandoLab(false)}
+                    onConfirmar={async nome => {
+                      const criado = await criarTipoCatalogo('LABORATORIO', nome);
+                      setFabricantes(prev => (
+                        prev.some(f => f.toLocaleLowerCase('pt-BR') === criado.toLocaleLowerCase('pt-BR'))
+                          ? prev
+                          : [...prev, criado].sort((a, b) => a.localeCompare(b, 'pt-BR'))
+                      ));
+                      // Já deixa escolhido: quem acabou de cadastrar o laboratório vai
+                      // lançar a vacina dele em seguida.
+                      setFabricanteSel(criado);
+                      setForm(f => ({ ...f, medicamentoCatId: 0 }));
+                      setAdicionandoLab(false);
+                    }}
+                  />
+                ) : (
+                  <select
+                    value={fabricanteSel}
+                    onChange={e => {
+                      if (e.target.value === OPCAO_NOVO_LAB) { setAdicionandoLab(true); return; }
+                      setFabricanteSel(e.target.value);
+                      setForm(f => ({ ...f, medicamentoCatId: 0 }));
+                    }}
+                    disabled={!!editandoId}
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white text-gray-900 disabled:bg-gray-100 disabled:cursor-not-allowed">
+                    <option value="">Todos os laboratórios...</option>
+                    {fabricantes.map(f => (
+                      <option key={f} value={f}>{f}</option>
+                    ))}
+                    {temSemFabricante && (
+                      <option value={SEM_FABRICANTE}>Outros (sem laboratório informado)</option>
+                    )}
+                    <option value={OPCAO_NOVO_LAB}>+ Cadastrar novo laboratório...</option>
+                  </select>
+                )}
               </div>
 
               {/* ── Vacina (combobox) ──────────────────────────────────────── */}

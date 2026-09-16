@@ -2088,6 +2088,34 @@ const executar = async (req, res) => {
     // o MESMO nos dois caminhos; o que muda é só quem responde ao 400.
     const justificativa = String(req.body?.justificativa ?? '').trim();
 
+    /**
+     * 🔴 QUEM EXECUTOU O PROCEDIMENTO, informado NA EXECUÇÃO (2026-09-15).
+     *
+     * O prestador já podia ser escolhido na PRESCRIÇÃO, mas quem prescreve nem sempre
+     * sabe quem vai executar — e é a execução que gera o recibo e a conta a pagar.
+     * A tela de plantão passa a oferecer o campo, e o que vier aqui VENCE o que estava
+     * gravado no item.
+     *
+     * ⚠️ NUNCA é obrigatório: sem prestador escolhido a execução segue normalmente e
+     * o item fica como estava (sem recibo, se nunca teve). Exigi-lo pararia o
+     * atendimento por causa de um cadastro.
+     * ⚠️ Só PROCEDIMENTO — `gravarPrestadorDoItem` ignora medicamento por construção,
+     * e aceitar o campo ali criaria linha de recibo por dose de remédio.
+     * ⚠️ Formato `{ "<itemId>": prestadorId }`: o "Executar Todos" manda vários
+     * procedimentos de uma vez, e cada um pode ter sido feito por uma pessoa.
+     */
+    const prestadoresDaExecucao = new Map();
+    {
+      const bruto = req.body?.prestadores;
+      if (bruto && typeof bruto === 'object') {
+        for (const [chave, valor] of Object.entries(bruto)) {
+          const itemId = Number(chave);
+          const presId = Number(valor);
+          if (Number.isInteger(itemId) && Number.isInteger(presId)) prestadoresDaExecucao.set(itemId, presId);
+        }
+      }
+    }
+
     const grupo = await prisma.prescricaoGrupo.findUnique({
       where:   { id: grupoId },
       include: {
@@ -2233,6 +2261,26 @@ const executar = async (req, res) => {
 
       // Lança na fatura ABERTA do proprietário NESTA empresa
       const fatura = await getOrCreateFatura(tx, proprietarioId, empresaIdEfetivo);
+
+      // 🔴 O PRESTADOR INFORMADO NA EXECUÇÃO é aplicado ANTES do laço: o valor do
+      // procedimento (`resolverValorProcedimento`), o recibo e a conta a pagar leem
+      // `item.prestadorId`, e aplicá-lo depois deixaria a cobrança com um prestador e o
+      // recibo com outro. Gravado no item na MESMA transaction — sem isso o plantão
+      // seguinte não saberia quem executou.
+      // ⚠️ Prestador de OUTRA empresa é descartado: o id vem do cliente, e o RLS
+      // recusaria a leitura — mas depender só dele deixaria a intenção implícita.
+      for (const item of itensHoje) {
+        if (item.tipo !== 'PROCEDIMENTO') continue;
+        const escolhido = prestadoresDaExecucao.get(item.id);
+        if (!escolhido || Number(escolhido) === Number(item.prestadorId)) continue;
+        const valido = await tx.prestador.findFirst({
+          where:  { id: escolhido, ...(empresaIdEfetivo ? { empresaId: empresaIdEfetivo } : {}) },
+          select: { id: true },
+        });
+        if (!valido) continue;
+        item.prestadorId = escolhido;
+        await vinculoPrestador.gravarPrestadorDoItem(tx, item.id, escolhido, 'PROCEDIMENTO');
+      }
 
       for (const item of itensHoje) {
         // precos já contém o valor proporcional da dose (regra de 3)

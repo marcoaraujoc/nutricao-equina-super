@@ -6,11 +6,13 @@ const emailService     = require('../services/emailService');
 const PermissaoService = require('../services/PermissaoService');
 const { PERMISSOES_PADRAO } = require('../seeds/002_permissoes_padrao.seed');
 const { ehCargoPrestador, SEM_EXTERNOS } = require('../lib/cargosPrestador');
-const { getEquipeIdsDoProprietario } = require('../middlewares/permissao.middleware');
+const { getEquipeIdsDoProprietario, ehGestorNoContexto } = require('../middlewares/permissao.middleware');
+const { cadastroDaPessoaNaEmpresa, montarResposta } = require('../lib/cadastroPorEmail');
 // "Tem cadastro de cliente nesta empresa?" — mesmo critério do tipo por empresa,
 // reusado pela regra "mais de um papel na mesma empresa soma" (ver `ajusteperfil`
 // na memória e `minhasPermissoes` abaixo).
 const { resolverComoCliente } = require('../lib/tipoContexto');
+const { responderErro } = require('../lib/erroResposta');
 const { storage }      = require('../storage');
 const { TIPOS_FECHAMENTO_VALIDOS } = require('../lib/faturaUtils');
 const { normalizarValidade, lerValidade, salvarValidade } = require('../lib/validadeOrcamento');
@@ -787,8 +789,8 @@ const EquipeController = {
       // Usuário novo nasce VETERINARIO com senha padrão + troca obrigatória. Usuário que
       // JÁ existia mantém os próprios dados — o telefone/endereço digitados aqui só valem
       // para conta nova; quem já tem login administra o próprio cadastro.
-      const SENHA_INICIAL = gerarSenhaInicial({ email: emailNorm, nome: fullNameTrim, telefone });
       const emailNorm = normalizeEmail(emailTrim);
+      const SENHA_INICIAL = gerarSenhaInicial({ email: emailNorm, nome: fullNameTrim, telefone });
       let usuario = await findUserByEmail(prisma, emailNorm);
       let usuarioNovo = false;
       if (!usuario) {
@@ -2803,6 +2805,46 @@ const EquipeController = {
     }
   },
 
+  // GET /api/equipes/cadastro-por-email?email=X
+  //
+  // "Este e-mail já é conhecido NESTA clínica?" — para o Incluir Membro parar de pedir
+  // de novo o nome/telefone/endereço de quem a empresa já cadastrou em outro papel (a
+  // prestadora que passa a ser estagiária, o cliente que vira secretário).
+  //
+  // ⚠️ Aqui a resposta é SEMPRE do tipo PESSOA — o vínculo do membro não é "carregado
+  // para edição" a partir deste formulário: quem edita membro é a linha da lista, que
+  // tem o fluxo próprio (`PUT /equipes/membros/:id`). O que este endpoint faz é
+  // PREENCHER o vazio. `jaMembro` é AVISO ANTECIPADO, não veredito: a inclusão é por
+  // EQUIPE e quem decide continua sendo `incluirMembroDireto` (409 "já faz parte").
+  //
+  // GATE: gestor da empresa ativa — exatamente quem pode incluir membro. Sem isso, a
+  // rota entregaria CPF e endereço de qualquer pessoa da empresa a quem só tem leitura.
+  buscarCadastroPorEmail: async (req, res) => {
+    const email = normalizeEmail(req.query.email);
+    if (!email) return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório' });
+    if (!ehGestorNoContexto(req)) {
+      return res.status(403).json({ sucesso: false, mensagem: 'Somente o gestor da empresa consulta o cadastro por e-mail.' });
+    }
+
+    try {
+      const pessoa = await cadastroDaPessoaNaEmpresa(email, req.empresaId, prisma);
+      if (!pessoa) return res.json({ sucesso: true, dados: { encontrado: false } });
+
+      const membro = await prisma.membroEquipe.findFirst({
+        where:  { userId: pessoa.userId, equipe: { empresaId: Number(req.empresaId) } },
+        select: { id: true },
+      });
+
+      return res.json({
+        sucesso: true,
+        dados: { ...montarResposta({ pessoa }), jaMembro: !!membro },
+      });
+    } catch (err) {
+      console.error('[EquipeController.buscarCadastroPorEmail]', err);
+      return res.status(500).json({ sucesso: false, mensagem: 'Erro ao consultar o e-mail' });
+    }
+  },
+
   // ── Inclusão direta (sem fluxo de aceite) ───────────────────────────────────
   incluirMembroDireto: async (req, res) => {
     try {
@@ -4308,7 +4350,10 @@ const EquipeController = {
       return res.json({ sucesso: true, dados: resultado, mensagem: `Permissões globais de ${userType} aplicadas em ${resultado.equipesAtualizadas} equipe(s).` });
     } catch (err) {
       console.error('Erro ao salvar matriz global:', err);
-      return res.status(500).json({ sucesso: false, mensagem: err.message ?? 'Erro interno' });
+      return responderErro(res, err, {
+        contexto: 'EquipeController.salvarMatrizGlobalUserType',
+        mensagem: 'Não foi possível salvar a matriz de permissões.',
+      });
     }
   },
 

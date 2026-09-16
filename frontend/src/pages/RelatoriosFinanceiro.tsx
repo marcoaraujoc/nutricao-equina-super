@@ -32,7 +32,7 @@ interface Financeiro {
   contasVencidas: number;
   inadimplencia:  number;
   fluxoCaixa: { mediaMensal: number; historico: FluxoItem[]; projecao: FluxoItem[] };
-  lucroBruto: { receita: number; custoProdutos: number; lucro: number; margemPct: number };
+  lucroBruto: { receita: number; custoProdutos: number; comissaoPrestadores?: number; lucro: number; margemPct: number };
 }
 interface FluxoItem { mes: string; valor: number; tipo: 'realizado' | 'projetado' }
 
@@ -119,6 +119,12 @@ export default function RelatoriosFinanceiro() {
               <div className="px-5 py-4 space-y-2 text-sm">
                 <Linha label="Receita do período"    valor={formatBRL(dados.lucroBruto.receita)} />
                 <Linha label="Custo dos produtos"    valor={'− ' + formatBRL(dados.lucroBruto.custoProdutos)} tom="text-red-600" />
+                {/* Comissão de prestador: o cliente paga o procedimento INTEIRO, mas
+                    parte dele sai da clínica para quem executou. A linha "Procedimentos"
+                    da receita por categoria já vem líquida desse valor. */}
+                {!!dados.lucroBruto.comissaoPrestadores && (
+                  <Linha label="Comissão de prestadores" valor={'− ' + formatBRL(dados.lucroBruto.comissaoPrestadores)} tom="text-red-600" />
+                )}
                 <div className="border-t border-gray-100 pt-2 flex items-center justify-between">
                   <span className="font-semibold text-gray-700">Lucro bruto</span>
                   <span className={`font-bold ${dados.lucroBruto.lucro >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>

@@ -8,6 +8,8 @@ const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib
 const { anexarEquipeDoAcesso } = require('../lib/acessoExterno');
 const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 const { definirAtivoNaEmpresa } = require('../lib/usuarioEmpresa');
+const { normalizeEmail, whereEmailInsensitive } = require('../lib/email');
+const { cadastroDaPessoaNaEmpresa, montarResposta } = require('../lib/cadastroPorEmail');
 
 // Whitelist fixa SAIU (2026-08-25) — o tipo de fornecedor agora vem do catálogo
 // tenant-scoped (tb_catalogo_tipo_servico, CatalogoTipoServicoController), que
@@ -87,6 +89,26 @@ function buildMensagemInativo(tipo, f) {
   return `Fornecedor "${f.nome}" com ${contato} já existe (inativo).`;
 }
 
+// Escopo por empresa/equipe: não-ADMIN vê globais (empresaId null = SYSTEM/legado)
+// + fornecedores da empresa ativa, segregados pela equipe do contexto (igual Animal).
+//
+// ⚠️ FONTE ÚNICA da visibilidade desta tela — `listar` e `buscarPorEmail` usam a MESMA
+// cláusula (ver o mesmo helper em PrestadorController). Duas cópias divergiriam, e o
+// que divergiria é a resposta a "este cadastro existe aqui?".
+async function escopoVisivel(req) {
+  if (req.user?.role === 'ADMIN') return null;
+  const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);
+  return {
+    OR: [
+      { empresaId: null },
+      { empresaId: req.empresaId ?? -1, equipeId: null },
+      ...(equipeScope
+        ? [{ empresaId: req.empresaId ?? -1, equipeId: { in: equipeScope } }]
+        : [{ empresaId: req.empresaId ?? -1 }]),
+    ],
+  };
+}
+
 const FornecedorController = {
 
   // GET /api/cadastro/fornecedores?busca=X&ativo=true|false|all
@@ -99,20 +121,8 @@ const FornecedorController = {
       else if (ativo !== undefined) where.ativo = ativo === 'true';
       else where.ativo = true;
 
-      // Escopo por empresa/equipe: não-ADMIN vê globais (empresaId null = SYSTEM/legado)
-      // + fornecedores da empresa ativa, segregados pela equipe do contexto (igual Animal)
-      if (req.user?.role !== 'ADMIN') {
-        const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);
-        where.AND = [{
-          OR: [
-            { empresaId: null },
-            { empresaId: req.empresaId ?? -1, equipeId: null },
-            ...(equipeScope
-              ? [{ empresaId: req.empresaId ?? -1, equipeId: { in: equipeScope } }]
-              : [{ empresaId: req.empresaId ?? -1 }]),
-          ],
-        }];
-      }
+      const escopo = await escopoVisivel(req);
+      if (escopo) where.AND = [escopo];
 
       if (busca?.trim()) {
         where.OR = [
@@ -137,6 +147,46 @@ const FornecedorController = {
     } catch (err) {
       console.error('Erro ao listar fornecedores:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar fornecedores' });
+    }
+  },
+
+  // GET /api/cadastro/fornecedores/por-email?email=X
+  //
+  // Mesma regra do Prestador (ver PrestadorController.buscarPorEmail e
+  // lib/cadastroPorEmail.js): CADASTRO → carrega para edição; PESSOA → preenche o
+  // vazio com o que a EMPRESA já sabe; nada → e-mail desconhecido AQUI (nunca se
+  // revela que ele existe em outra clínica).
+  buscarPorEmail: async (req, res) => {
+    const email = normalizeEmail(req.query.email);
+    if (!email) return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório' });
+
+    try {
+      const escopo = await escopoVisivel(req);
+      const registro = await prisma.fornecedor.findFirst({
+        where: {
+          ...whereEmailInsensitive(email),
+          ...(escopo ? { AND: [escopo] } : {}),
+        },
+        include: { especialidades: { select: { especialidadeId: true } } },
+        orderBy: [{ ativo: 'desc' }, { id: 'asc' }],
+      });
+
+      const pessoa = await cadastroDaPessoaNaEmpresa(email, req.empresaId, prisma);
+
+      if (!registro) return res.json({ sucesso: true, dados: montarResposta({ pessoa }) });
+
+      const { especialidades, ...dados } = registro;
+      const [enriquecido] = await anexarEquipeDoAcesso(prisma, await anexarTrilha([dados], 'fornecedor'));
+      return res.json({
+        sucesso: true,
+        dados: montarResposta({
+          registro: { ...enriquecido, especialidadeIds: especialidades.map(e => e.especialidadeId) },
+          pessoa,
+        }),
+      });
+    } catch (err) {
+      console.error('[FornecedorController.buscarPorEmail]', err);
+      return res.status(500).json({ sucesso: false, mensagem: 'Erro ao consultar o e-mail' });
     }
   },
 

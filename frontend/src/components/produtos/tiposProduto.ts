@@ -3,46 +3,32 @@
 // Tipos compartilhados entre a tela de Produtos e os componentes dela.
 // Ficam num arquivo próprio para o formulário e a lista não importarem a PÁGINA (o
 // que criaria um ciclo de imports).
+//
+// 🔴 O QUE MUDOU EM 2026-09-15: a tela deixou de cadastrar o VÍNCULO com o fornecedor
+// (de quem se compra, por quanto, com entrada no estoque) e passou a cadastrar o ITEM
+// — medicamento e vacina com forma, apresentação, unidade, via, controlado e doses por
+// embalagem. Fornecedor, nota fiscal, preços, leitura do documento de compra e a
+// entrada no estoque saíram a pedido: quem trata de compra e de saldo é a Farmácia /
+// o Estoque de Vacinas.
 
-/** Item do catálogo (`tb_medicamentos`) — global ou próprio da empresa. */
+/** Uma linha da lista / o item do catálogo visível da clínica. */
 export interface ItemCatalogo {
   id:                number;
   nome:              string;
   formaFarmaceutica: string;
   unidade:           string;
-  empresaId:         number | null;
-  apresentacao?:     string | null;
+  apresentacao:      string;
   classificacao?:    string | null;
   fabricante?:       string | null;
-  controlado?:       boolean;
-  ehVacina?:         boolean;
-}
-
-/** Fornecedor disponível para vincular ao produto. */
-export interface FornecedorOpcao {
-  id:          number;
-  nome:        string;
-  tipoServico: string | null;
-}
-
-/** Uma linha da lista de produtos cadastrados. */
-export interface ProdutoCadastrado {
-  id:              number;
-  medicamentoId:   number;
-  medicamentoNome: string;
-  fornecedorId:    number;
-  fornecedorNome:  string | null;
-  valorUnitario:   number | null;
-  valorVenda:      number | null;
-  unidade:         string | null;
-  unidadeCatalogo: string | null;
-  notaFiscal:      string | null;
-  observacao:      string | null;
-  ativo:           boolean;
-  ehVacina:        boolean;
-  criadoEm:        string | null;
+  controlado:        boolean;
+  ativo:             boolean;
+  empresaId:         number | null;
+  /** `false` = item do catálogo GLOBAL. Alterá-lo cria a cópia DESTA clínica. */
+  daEmpresa:         boolean;
+  ehVacina:          boolean;
+  vias:              { id: number; via: string }[];
   /** O frasco rende mais de uma aplicação — governa a baixa e a cobrança POR DOSE. */
-  multidose:        boolean;
+  multidose:         boolean;
   /** Quantas aplicações saem de uma embalagem. `null` = marcado e ainda não informado. */
   dosesPorEmbalagem: number | null;
 }
@@ -50,59 +36,62 @@ export interface ProdutoCadastrado {
 /**
  * O formulário.
  *
- * ⚠️ Os valores são STRING, não number: são campos de digitação e o vazio precisa ser
- * distinguível de zero — `valorUnitario` em branco significa "não cadastrei o preço"
- * (e a conta a pagar não é lançada), enquanto 0 afirmaria que o fornecedor entrega de
- * graça. A conversão acontece na borda, ao salvar.
+ * ⚠️ `dosesPorEmbalagem` é STRING: é campo de digitação e o vazio precisa ser
+ * distinguível de zero — em branco significa "não informei", e o item continua sendo
+ * cobrado pela embalagem inteira. A conversão acontece na borda, ao salvar.
  */
 export interface FormProdutoDados {
-  nome:            string;
-  medicamentoId:   number | null;
-  unidade:         string;
-  fornecedorId:    number | null;
-  notaFiscal:      string;
-  valorUnitario:   string;
-  valorVenda:      string;
-  entrarNoEstoque: boolean;
-  quantidade:      string;
-  lote:            string;
-  validade:        string;
-  estoqueMinimo:   string;
-  /**
-   * 🔴 MULTIDOSE — o frasco rende N aplicações.
-   *
-   * Não é cosmético: é ele que faz cada dose debitar `1/N` da embalagem e a linha da
-   * fatura sair pelo preço do frasco ÷ N. Sem ele, o item contado em embalagens
-   * ("Un.") debitava e cobrava o frasco INTEIRO a cada aplicação.
-   */
+  /** Item que está sendo EDITADO. `null` = produto novo. */
+  medicamentoId:     number | null;
+  nome:              string;
+  formaFarmaceutica: string;
+  unidade:           string;
+  apresentacao:      string;
+  vias:              string[];
+  controlado:        boolean;
+  fabricante:        string;
   multidose:         boolean;
   dosesPorEmbalagem: string;
-  /** Vínculo já existente (empresa+item+fornecedor) que o formulário está editando. */
-  produtoId:         number | null;
+  /** Item de origem GLOBAL — salvar cria a cópia desta clínica. */
+  daEmpresa:         boolean;
 }
 
 export const FORM_PRODUTO_VAZIO: FormProdutoDados = {
-  nome: '', medicamentoId: null, unidade: '', fornecedorId: null, notaFiscal: '',
-  valorUnitario: '', valorVenda: '', entrarNoEstoque: false,
-  quantidade: '', lote: '', validade: '', estoqueMinimo: '',
-  multidose: false, dosesPorEmbalagem: '', produtoId: null,
+  medicamentoId: null, nome: '', formaFarmaceutica: '', unidade: '', apresentacao: '',
+  vias: [], controlado: false, fabricante: '',
+  multidose: false, dosesPorEmbalagem: '', daEmpresa: true,
 };
 
-/**
- * "1.234,56" ou "1234.56" → 1234.56. Vazio → null.
- *
- * ⚠️ `null` e 0 são coisas diferentes aqui, e é por isso que a função não devolve 0
- * no vazio: sem preço cadastrado a conta a pagar NÃO é lançada; com preço 0 ela seria
- * lançada afirmando que o item é de graça.
- */
-export function paraNumero(v: string): number | null {
-  const t = String(v ?? '').trim();
-  if (!t) return null;
-  const bruto = /,\d{1,2}$/.test(t) ? t.replace(/\./g, '').replace(',', '.') : t.replace(/,/g, '');
-  const n = Number(bruto);
-  return Number.isFinite(n) ? n : null;
+/** Item do backend → formulário. */
+export function formDoItem(item: ItemCatalogo): FormProdutoDados {
+  return {
+    medicamentoId:     item.id,
+    nome:              item.nome ?? '',
+    formaFarmaceutica: item.formaFarmaceutica ?? '',
+    unidade:           item.unidade ?? '',
+    apresentacao:      item.apresentacao ?? '',
+    vias:              (item.vias ?? []).map(v => v.via),
+    controlado:        !!item.controlado,
+    fabricante:        item.fabricante ?? '',
+    multidose:         !!item.multidose,
+    dosesPorEmbalagem: item.dosesPorEmbalagem != null ? String(item.dosesPorEmbalagem) : '',
+    daEmpresa:         !!item.daEmpresa,
+  };
 }
 
-/** R$ para a tela. `null` vira "—": valor não informado não é zero. */
-export const brlProduto = (v: number | null | undefined) =>
-  v == null ? '—' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+/**
+ * "Dipirona 500 " → "dipirona 500" — espelho do `normalizarNome` do backend
+ * (`ProdutoController`). Os dois lados precisam concordar: é essa comparação que
+ * decide se o nome digitado é O MESMO do cadastro que voltou, e uma divergência faria
+ * a tela avisar "já existe" sobre um item de outro nome (ou não avisar sobre o certo).
+ */
+export function normalizarNomeProduto(v: string): string {
+  return v.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** O formulário está vazio fora o nome? Decide se a carga automática pode sobrescrever. */
+export function formSoTemNome(f: FormProdutoDados): boolean {
+  return !f.formaFarmaceutica && !f.apresentacao && !f.unidade
+    && f.vias.length === 0 && !f.fabricante.trim() && !f.dosesPorEmbalagem && !f.controlado;
+}

@@ -3,6 +3,7 @@
 
 const PermissaoService = require('../services/PermissaoService');
 const prisma = require('../lib/prisma').default;
+const { responderErro } = require('../lib/erroResposta');
 
 // ─── Autorização: ADMIN, GESTOR da equipe ou dono da empresa da equipe ─────────
 // Perfis/permissões são POR EQUIPE — um gestor de outra equipe/empresa não pode
@@ -61,7 +62,9 @@ const PermissaoController = {
       return res.json({ sucesso: true, dados });
     } catch (err) {
       console.error('[PermissaoController.getPermissoesMembro]', err);
-      return res.status(500).json({ sucesso: false, mensagem: err.message });
+      return responderErro(res, err, {
+        contexto: 'PermissaoController', mensagem: 'Não foi possível concluir a operação de permissões.',
+      });
     }
   },
 
@@ -105,7 +108,9 @@ const PermissaoController = {
       return res.json({ sucesso: true, dados });
     } catch (err) {
       console.error('[PermissaoController.getPermissoesProprietarios]', err);
-      return res.status(500).json({ sucesso: false, mensagem: err.message });
+      return responderErro(res, err, {
+        contexto: 'PermissaoController', mensagem: 'Não foi possível concluir a operação de permissões.',
+      });
     }
   },
 
@@ -133,7 +138,9 @@ const PermissaoController = {
       return res.json({ sucesso: true, ...resultado });
     } catch (err) {
       console.error('[PermissaoController.atualizarPermissoesProprietario]', err);
-      return res.status(500).json({ sucesso: false, mensagem: err.message });
+      return responderErro(res, err, {
+        contexto: 'PermissaoController', mensagem: 'Não foi possível concluir a operação de permissões.',
+      });
     }
   },
 
@@ -147,7 +154,9 @@ const PermissaoController = {
       return res.json({ sucesso: true, dados });
     } catch (err) {
       console.error('[PermissaoController.getPerfisByEquipe]', err);
-      return res.status(500).json({ sucesso: false, mensagem: err.message });
+      return responderErro(res, err, {
+        contexto: 'PermissaoController', mensagem: 'Não foi possível concluir a operação de permissões.',
+      });
     }
   },
 
@@ -162,7 +171,9 @@ const PermissaoController = {
       return res.json({ sucesso: true, dados });
     } catch (err) {
       console.error('[PermissaoController.getMatrizPorCargo]', err);
-      return res.status(500).json({ sucesso: false, mensagem: err.message });
+      return responderErro(res, err, {
+        contexto: 'PermissaoController', mensagem: 'Não foi possível concluir a operação de permissões.',
+      });
     }
   },
 
@@ -190,7 +201,9 @@ const PermissaoController = {
       return res.json({ sucesso: true, ...resultado });
     } catch (err) {
       console.error('[PermissaoController.salvarMatrizPorCargo]', err);
-      return res.status(500).json({ sucesso: false, mensagem: err.message });
+      return responderErro(res, err, {
+        contexto: 'PermissaoController', mensagem: 'Não foi possível concluir a operação de permissões.',
+      });
     }
   },
 
@@ -244,7 +257,9 @@ const PermissaoController = {
       return res.json({ sucesso: true, ...dados });
     } catch (err) {
       console.error('[PermissaoController.getAuditoria]', err);
-      return res.status(500).json({ sucesso: false, mensagem: err.message });
+      return responderErro(res, err, {
+        contexto: 'PermissaoController', mensagem: 'Não foi possível concluir a operação de permissões.',
+      });
     }
   },
 };

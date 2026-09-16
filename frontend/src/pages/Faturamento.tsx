@@ -1865,10 +1865,13 @@ function FiltroStatusLista({ valor, onChange, base, className = '' }: {
   base:       ProprietarioItem[];
   className?: string;
 }) {
+  const contar = (key: FiltroLista) =>
+    key === 'TODAS' ? base.length : base.filter(p => temStatusNaLista(p, key)).length;
+
   return (
-    <div className={`flex items-center gap-1.5 overflow-x-auto pb-0.5 ${className}`}>
+    <div className={`flex flex-wrap items-center gap-1.5 lg:flex-nowrap ${className}`}>
       {STATUS_LISTA.map(({ key, label, cor }) => {
-        const qtd = key === 'TODAS' ? base.length : base.filter(p => temStatusNaLista(p, key)).length;
+        const qtd = contar(key);
         return (
           <button
             key={key}
@@ -2201,11 +2204,28 @@ export default function Faturamento() {
 
   // Trocar de proprietário — ou o filtro de status da lista — realinha o detalhe: com
   // "Atrasada" filtrado, abrir o cliente na aba "Aberta" mostraria vazio justamente no
-  // estado que a pessoa acabou de pedir. Sem filtro, mantém o padrão de sempre (Aberta).
+  // estado que a pessoa acabou de pedir.
+  // ⚠️ Em "Todas" o status é o PRIMEIRO que o cliente realmente tem, na ordem
+  // Aberta → Reaberta → Atrasada → Fechada → Paga (o padrão segue sendo a Aberta).
+  // Isto passou a importar quando a barra "Fatura:" do detalhe foi removida: fixar
+  // ABERTA deixaria o painel VAZIO, sem nenhuma pista, para o cliente que só tem
+  // fatura fechada — e não há mais pílula desabilitada ali dizendo o que ele tem.
   useEffect(() => {
-    setFiltroStatus(filtroLista === 'TODAS' ? 'ABERTA' : filtroLista);
+    setFiltroStatus(
+      filtroLista !== 'TODAS' ? filtroLista
+      : selecionado?.faturaAtiva    ? 'ABERTA'
+      : selecionado?.faturaReaberta ? 'REABERTA'
+      : selecionado?.faturaAtrasada ? 'ATRASADA'
+      : selecionado?.faturaFechada  ? 'FECHADA'
+      : selecionado?.faturaPaga     ? 'PAGA'
+      :                               'ABERTA',
+    );
     setMesView(null);
-  }, [selecionado?.id, filtroLista]);
+    // ⚠️ Deps PRIMITIVAS, nunca o objeto `selecionado`: ele troca de identidade a
+    // cada recarga da lista, e o efeito zeraria o mês que a pessoa acabou de escolher.
+  }, [selecionado?.id, !!selecionado?.faturaAtiva, !!selecionado?.faturaReaberta,
+      !!selecionado?.faturaAtrasada, !!selecionado?.faturaFechada, !!selecionado?.faturaPaga,
+      filtroLista]);
   // Trocar o tipo de fatura reseta o mês visualizado.
   useEffect(() => { setMesView(null); }, [filtroStatus]);
 
@@ -2298,17 +2318,17 @@ export default function Faturamento() {
           {dropdownAberto && (
             <div className="absolute z-30 top-full left-0 right-0 mt-1.5 bg-white border border-gray-200 rounded-2xl shadow-xl overflow-hidden flex flex-col max-h-[70vh]">
               {/* Busca */}
-              <div className="relative p-2 border-b border-gray-100 flex-shrink-0">
-                <Search size={13} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"/>
-                <input
-                  autoFocus
-                  value={busca}
-                  onChange={e => setBusca(e.target.value)}
-                  placeholder="Buscar proprietário..."
-                  className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-indigo-400 bg-white"
-                />
-              </div>
-              <div className="px-2 pt-2 pb-1 border-b border-gray-100 flex-shrink-0">
+              <div className="p-2 border-b border-gray-100 flex-shrink-0 space-y-2">
+                <div className="relative">
+                  <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400"/>
+                  <input
+                    autoFocus
+                    value={busca}
+                    onChange={e => setBusca(e.target.value)}
+                    placeholder="Buscar proprietário..."
+                    className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-indigo-400 bg-white"
+                  />
+                </div>
                 <FiltroStatusLista valor={filtroLista} onChange={setFiltroLista} base={porBusca} />
               </div>
               {/* Lista */}
@@ -2354,12 +2374,14 @@ export default function Faturamento() {
 
           {/* Lista de proprietários — só desktop (mobile/tablet usa o seletor acima) */}
           <div className="hidden lg:flex lg:w-60 lg:flex-shrink-0 flex-col lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-120px)]">
-            <div className="relative mb-3 flex-shrink-0">
+            {/* ⚠️ SÓ a busca mora na coluna de 240px. O filtro de status virou a BARRA
+                ao lado (início da coluna do detalhe): na largura da coluna as pílulas
+                quebravam em duas/três linhas e empurravam a lista para baixo. */}
+            <div className="mb-3 flex-shrink-0 relative">
               <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
               <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar proprietário..."
                 className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-xl text-xs focus:outline-none focus:border-indigo-400 bg-white"/>
             </div>
-            <FiltroStatusLista valor={filtroLista} onChange={setFiltroLista} base={porBusca} className="mb-3 flex-shrink-0" />
             <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
               {loading ? (
                 <div className="flex justify-center py-8"><Loader2 size={18} className="animate-spin text-indigo-400"/></div>
@@ -2388,30 +2410,30 @@ export default function Faturamento() {
 
           {/* Detalhe da fatura — compartilhado (mobile: abaixo do seletor; desktop: à direita) */}
           <div className="flex-1 min-w-0 flex flex-col">
+            {/* Status da LISTA — na mesma faixa da barra "Fatura:" logo abaixo, e na
+                mesma linha da busca (é o primeiro elemento das duas colunas).
+                ⚠️ FORA do `selecionado ?`: sem cliente escolhido o filtro tem de
+                continuar recortando a lista — é justamente aí que se procura quem
+                está em atraso. ⚠️ `hidden lg:flex`: no mobile a lista vive dentro do
+                dropdown, que tem a própria cópia do filtro. */}
+            <div className="hidden lg:flex items-center gap-2 mb-3 bg-white rounded-2xl border border-gray-100 shadow-sm px-3 py-2.5 overflow-x-auto">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider self-center mr-1 flex-shrink-0">Status:</p>
+              <FiltroStatusLista valor={filtroLista} onChange={setFiltroLista} base={porBusca} />
+            </div>
             {selecionado ? (
               <>
-                {/* Filtros de tipo de fatura + seletor de mês/ano (só p/ Fechada/Paga) */}
-                <div className="flex items-center gap-2 mb-3 bg-white rounded-2xl border border-gray-100 shadow-sm px-3 py-2.5 overflow-x-auto">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider self-center mr-1">Fatura:</p>
-                  {[
-                    { key: 'ABERTA'   as FiltroTipo, label: 'Aberta',   cor: 'bg-amber-500',   existe: !!selecionado.faturaAtiva    },
-                    { key: 'REABERTA' as FiltroTipo, label: 'Reaberta', cor: 'bg-orange-600',  existe: !!selecionado.faturaReaberta },
-                    { key: 'FECHADA'  as FiltroTipo, label: 'Fechada',  cor: 'bg-indigo-600',  existe: !!selecionado.faturaFechada  },
-                    { key: 'ATRASADA' as FiltroTipo, label: 'Atrasada', cor: 'bg-red-600',     existe: !!selecionado.faturaAtrasada },
-                    { key: 'PAGA'     as FiltroTipo, label: 'Paga',     cor: 'bg-emerald-600', existe: !!selecionado.faturaPaga     },
-                  ].map(({ key, label, cor, existe }) => (
-                    <button
-                      key={key}
-                      onClick={() => { setFiltroStatus(key); setMesView(null); }}
-                      disabled={!existe}
-                      className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
-                        filtroStatus === key ? `${cor} text-white` : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                      }`}>
-                      {label}
-                    </button>
-                  ))}
-                  {(filtroStatus === 'FECHADA' || filtroStatus === 'ATRASADA' || filtroStatus === 'PAGA') &&
-                    faturaMeta.meses.filter(m => m.status === filtroStatus).length > 0 && (
+                {/* ⚠️ A barra "Fatura:" (pílulas de status DENTRO do cliente) foi REMOVIDA a
+                    pedido — quem escolhe qual fatura o painel mostra passou a ser a
+                    barra "Status:" da lista: o efeito de `filtroLista` já realinhava o
+                    `filtroStatus`, então duas barras diziam a mesma coisa em lugares
+                    diferentes. Com "Todas" o painel abre na ABERTA, como sempre.
+                    ⚠️ O seletor de MÊS FICOU: ele é o único caminho até a fatura de um
+                    mês anterior, e sai no mobile também (a barra de status é
+                    `lg:` — no celular o filtro vive dentro do dropdown da lista). */}
+                {(filtroStatus === 'FECHADA' || filtroStatus === 'ATRASADA' || filtroStatus === 'PAGA') &&
+                  faturaMeta.meses.filter(m => m.status === filtroStatus).length > 0 && (
+                  <div className="flex items-center gap-2 mb-3 bg-white rounded-2xl border border-gray-100 shadow-sm px-3 py-2.5">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider self-center mr-1 flex-shrink-0">Mês:</p>
                     <select value={mesView ?? faturaMeta.mesAtual ?? ''}
                       onChange={e => setMesView(e.target.value)}
                       className="ml-auto border border-gray-300 rounded-lg px-2.5 py-1 text-[11px] bg-white focus:outline-none focus:border-indigo-400">
@@ -2419,8 +2441,8 @@ export default function Faturamento() {
                         <option key={m.id} value={m.mesReferencia ?? ''}>{formatMes(m.mesReferencia) || 'Mês atual'}</option>
                       ))}
                     </select>
-                  )}
-                </div>
+                  </div>
+                )}
 
                 <PainelFatura
                   key={`${selecionado.id}-${filtroStatus}`}

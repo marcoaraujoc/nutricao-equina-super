@@ -304,6 +304,13 @@ async function definirUnidadeDoMedicamento(tx, { medicamentoId, unidade, empresa
 }
 
 module.exports = {
+  // Reusados por `lib/catalogoEmpresa.js`, que aplica o MESMO copy-on-write a todos
+  // os campos do item (forma, apresentação, via, controlado…) e não só à unidade.
+  // Duas implementações da cópia divergiriam — e o que divergiria é para onde o
+  // estoque e a prescrição pendente passam a apontar.
+  copiaExistente,
+  criarCopiaDaEmpresa,
+  reapontarParaCopia,
   UNIDADE_AVULSA,
   UnidadeIndisponivelError,
   normalizarUnidade,

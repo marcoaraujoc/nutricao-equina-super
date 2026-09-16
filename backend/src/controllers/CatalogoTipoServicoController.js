@@ -21,11 +21,21 @@ const { getNivelEfetivo, NIVEL_ORDINAL, resolverContextoPermissao } = require('.
 // tipo que não estava lá não tinha como cadastrá-lo. Reusar esta tabela — em vez de
 // criar outra — traz de graça o tenant, a policy de RLS e o gate de permissão que ela
 // já tem; um catálogo novo exigiria repetir os três.
-const CATEGORIAS_VALIDAS = ['FORNECEDOR', 'PRESTADOR', 'LOCALIZACAO'];
+// LABORATORIO entrou em 2026-09-15 pela MESMA razão: o laboratório da vacina não tem
+// tabela própria — ele só existia como texto na coluna `fabricante` de `tb_medicamentos`,
+// ou seja, só passava a existir DEPOIS que alguém cadastrasse uma vacina com ele. O
+// Estoque de Vacinas precisa do contrário: cadastrar o laboratório ali, antes da vacina.
+// ⚠️ SEM MIGRATION — `categoria` é VARCHAR(20) sem CHECK (conferido no banco), e
+// 'LABORATORIO' tem 11 caracteres.
+const CATEGORIAS_VALIDAS = ['FORNECEDOR', 'PRESTADOR', 'LOCALIZACAO', 'LABORATORIO'];
 const SLUG_CRIAR = {
   FORNECEDOR:  'cadastro.fornecedor.criar',
   PRESTADOR:   'cadastro.prestador.criar',
   LOCALIZACAO: 'cadastro.localizacao.criar',
+  // Quem dá entrada de vacina é quem conhece o laboratório — ensinar um nome novo ao
+  // catálogo é parte do mesmo ato. NÃO reusa `medicamentos.catalogo.criar`, que é
+  // ADMIN-only (catálogo GLOBAL) e deixaria a opção morta para a clínica.
+  LABORATORIO: 'vacina.estoque.criar',
 };
 const normalizarTexto = v => (v ?? '').trim().toLowerCase();
 const ehAdminPlataforma = req => req.user?.role === 'ADMIN' || req.user?.userType === 'ADMIN';

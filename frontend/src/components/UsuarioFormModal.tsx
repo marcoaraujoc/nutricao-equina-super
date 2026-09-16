@@ -6,15 +6,20 @@
 // com troca obrigatória no primeiro acesso. Em edição, `permitirSenha` exibe o
 // campo "Nova senha" (admin: qualquer usuário; gestor: membros da própria equipe).
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   X, AlertCircle, Info, Eye, EyeOff, Loader2, Plus,
   User as UserIcon, MapPin, Users, Pencil, Trash2, Wallet,
 } from 'lucide-react';
 import api from '../services/api';
+import NovaLocalizacaoModal from './NovaLocalizacaoModal';
 import { isValidEmail } from '../utils/validators';
 import EspecialidadeSelector from './EspecialidadeSelector';
 import InlineError from './InlineError';
+import AvisoCadastroEncontrado from './AvisoCadastroEncontrado';
+import {
+  consultarCadastroPorEmail, preencherVazios, fraseCadastroEncontrado,
+} from '../utils/cadastroPorEmail';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -385,6 +390,8 @@ export function LocalizacaoCombobox({
   const [aberto, setAberto] = useState(false);
   const [opcoes, setOpcoes] = useState<LocalizacaoOpcao[]>([]);
   const [carregando, setCarregando] = useState(false);
+  /** Nome digitado quando a busca não achou nada — abre o cadastro rápido com ele. */
+  const [novoNome, setNovoNome] = useState<string | null>(null);
 
   useEffect(() => { setBusca(nome); }, [nome]);
 
@@ -429,8 +436,31 @@ export function LocalizacaoCombobox({
               {o.nome}
             </button>
           ))}
+          {/* 🔴 Local que ainda não existe é cadastrado NA HORA (a pedido, 2026-09-15).
+              ⚠️ `onMouseDown`, nunca `onClick`: o `onBlur` do campo fecha a lista em
+              180ms e o clique nunca chegaria a registrar. */}
+          {!carregando && busca.trim() && !opcoes.some(o => o.nome.toLowerCase() === busca.trim().toLowerCase()) && (
+            <button type="button"
+              onMouseDown={() => { setNovoNome(busca.trim()); setAberto(false); }}
+              className="w-full text-left px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 font-medium border-t border-gray-100">
+              + Cadastrar “{busca.trim()}”
+            </button>
+          )}
         </div>
       )}
+
+      <NovaLocalizacaoModal
+        aberto={novoNome !== null}
+        nomeInicial={novoNome ?? ''}
+        onCriado={loc => {
+          // Devolve o local JÁ ESCOLHIDO: sem isso a pessoa teria de reabrir o combo
+          // e procurar o que acabou de criar.
+          onSelect(loc.id, loc.nome);
+          setBusca(loc.nome);
+          setNovoNome(null);
+        }}
+        onFechar={() => setNovoNome(null)}
+      />
     </div>
   );
 }
@@ -723,6 +753,52 @@ export default function UsuarioFormModal({
   const set = (field: keyof UsuarioFormValues, value: string | boolean | string[]) =>
     setForm(prev => ({ ...prev, [field]: value }));
 
+  // ─── Preenchimento automático pelo E-MAIL ──────────────────────────────────
+  //
+  // A prestadora que vira estagiária, o cliente que vira secretário: a clínica já tem
+  // o cadastro dessa pessoa e mandava redigitá-lo. Ao SAIR do campo, o que a EMPRESA
+  // já sabe entra nos campos VAZIOS (nunca por cima do que foi digitado).
+  //
+  // ⚠️ Só no cadastro NOVO e só onde o vínculo é da empresa (`comVinculoEmpresa`) — a
+  // tela de Usuários do ADMIN é global e não tem "cadastro desta empresa" a trazer.
+  // O gate real é do BACKEND (gestor da empresa ativa); isto aqui só evita a chamada.
+  //
+  // ⚠️ Diferente de Prestador/Fornecedor/Proprietário, aqui NUNCA se "carrega para
+  // edição": quem edita membro é a linha da lista, com o fluxo próprio. `jaMembro` é
+  // aviso ANTECIPADO — o veredito continua sendo do salvar (409 "já faz parte").
+  const [avisoEmail, setAvisoEmail] = useState<{ mensagem: string; tom: 'carregado' | 'preenchido' } | null>(null);
+  const emailConsultado = useRef('');
+
+  const consultarEmail = async (email: string) => {
+    if (modoEdicao || !comVinculoEmpresa) return;
+    const e = email.trim().toLowerCase();
+    if (!e || e === emailConsultado.current) return;
+    emailConsultado.current = e;
+
+    const r = await consultarCadastroPorEmail<never>('/equipes/cadastro-por-email', e);
+    if (!r.encontrado || r.origem !== 'PESSOA') { setAvisoEmail(null); return; }
+
+    setForm(prev => ({
+      ...prev,
+      ...preencherVazios(prev, r.cadastro, {
+        fullName:    { campo: 'fullName' },
+        phone:       { campo: 'phone', formatar: v => mascaraTelefone(v.replace(/\D/g, '')) },
+        cep:         { campo: 'cep' },
+        endereco:    { campo: 'endereco' },
+        complemento: { campo: 'complemento' },
+        bairro:      { campo: 'bairro' },
+        cidade:      { campo: 'cidade' },
+        estado:      { campo: 'estado' },
+      }),
+    }));
+    setAvisoEmail({
+      mensagem: r.jaMembro
+        ? 'Esta pessoa JÁ faz parte da equipe desta clínica — altere o cadastro dela pela lista, em vez de incluir de novo. Os campos em branco foram preenchidos com o que a clínica já tem.'
+        : fraseCadastroEncontrado(r, 'membro'),
+      tom: r.jaMembro ? 'carregado' : 'preenchido',
+    });
+  };
+
   const toggleCargo = (valor: string, checked: boolean) => {
     const atual = form.cargos ?? [form.perfil];
     const next = checked ? [...atual, valor] : atual.filter(c => c !== valor);
@@ -964,13 +1040,24 @@ export default function UsuarioFormModal({
 
                     <div>
                       <label className={labelCls}>E-mail *</label>
+                      {/* Ao SAIR do campo: se a clínica já cadastrou esta pessoa (em
+                          qualquer papel), o que está em branco é preenchido. */}
                       <input type="email" value={form.email}
                         onChange={e => set('email', e.target.value)}
+                        onBlur={e => consultarEmail(e.target.value)}
                         disabled={emailBloqueado}
                         title={emailBloqueado ? 'O e-mail de acesso não pode ser alterado aqui' : undefined}
                         placeholder="email@exemplo.com"
                         className={`${inputCls} ${emailBloqueado ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`} />
                     </div>
+
+                    {avisoEmail && (
+                      <div className="sm:col-span-2">
+                        <AvisoCadastroEncontrado
+                          mensagem={avisoEmail.mensagem} tom={avisoEmail.tom}
+                          onFechar={() => setAvisoEmail(null)} />
+                      </div>
+                    )}
 
                     {comVinculoEmpresa && (
                       // pt-5 = altura do label dos campos ao lado (text-xs 16px + mb-1),

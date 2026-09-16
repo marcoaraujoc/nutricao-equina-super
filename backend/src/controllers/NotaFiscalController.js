@@ -60,7 +60,11 @@ async function acharFornecedor(empresaId, { cnpj, cpf, nome }) {
   return null;
 }
 
-// POST /api/cadastro/produtos/nota-fiscal  (multipart: paginas[] + texto)
+// ⚠️ A ROTA FOI DESMONTADA em 2026-09-15: "Ler documento de compra" saiu da tela de
+// Produtos (que passou a cadastrar o ITEM, não a compra). Este controller e
+// `services/notaFiscalService` continuam inteiros e podem ser remontados em uma linha
+// em `routes/produtos.js` — provavelmente na Farmácia, que é quem trata de compra.
+// Rota anterior: POST /api/cadastro/produtos/nota-fiscal  (multipart: paginas[] + texto)
 const ler = async (req, res, next) => {
   try {
     const paginas = (req.files ?? []).map(f => ({ buffer: f.buffer, mimetype: f.mimetype }));
@@ -78,7 +82,10 @@ const ler = async (req, res, next) => {
       // manual é aceitável; cair sem saber por quê, não (lição de 2026-09-01).
       console.error('NotaFiscalController.ler:', err);
       return res.json({
-        dados: { ehNotaFiscal: false, motivo: err.message || 'Não foi possível ler a nota.' },
+        // ⚠️ O motivo aparece NA TELA. Ele precisa dizer o que a pessoa pode fazer —
+        // a mensagem crua da biblioteca ("fetch failed", dump do Prisma) não diz.
+        // O detalhe fica no log acima, que é onde se investiga.
+        dados: { ehNotaFiscal: false, motivo: 'Não foi possível ler o documento enviado. Confira se a foto/PDF está legível e tente de novo.' },
       });
     }
 

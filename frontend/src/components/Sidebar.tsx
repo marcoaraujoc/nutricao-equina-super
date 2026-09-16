@@ -361,7 +361,14 @@ export default function Sidebar() {
 
               {openGroup === 'cadastro' && (
                 <div className="mt-1 pl-6 space-y-0.5">
+                  {/* ── ORDEM PEDIDA (2026-09-15) ──────────────────────────
+                      Pessoal · Equipe · Paciente · Proprietário · Localização ·
+                      Tratador · Prestador · Fornecedor · Produtos · Procedimentos.
+                      É a ordem em que a clínica cadastra as coisas: quem opera, quem
+                      é atendido, onde, e só então de quem se compra e o que se faz. */}
                   {podVerCadastroPessoal && subLink('/cadastro-pessoal', <User size={14} />, 'Pessoal', p.startsWith('/cadastro-pessoal'))}
+
+                  {podeVerEquipe        && subLink('/equipe',                 <Users2 size={14} />,  'Equipe',        p === '/equipe')}
 
                   {temAcessoClinico
                     ? (podeVerAnimais && (
@@ -376,16 +383,13 @@ export default function Sidebar() {
                     : subLink('/meus-animais', <Zap size={14} />, 'Animais', p.startsWith('/meus-animais'))
                   }
 
-                  {podeVerEquipe        && subLink('/equipe',                 <Users2 size={14} />,  'Equipe',        p === '/equipe')}
-                  {podeVerFornecedores  && subLink('/cadastro/fornecedores',  <Truck size={14} />,   'Fornecedores',  p.startsWith('/cadastro/fornecedores'))}
-                  {podeVerPrestadores   && subLink('/cadastro/prestadores',   <HardHat size={14} />, 'Prestadores',   p.startsWith('/cadastro/prestadores'))}
-                  {/* Fica logo abaixo de Fornecedores: é de quem se compra o produto,
-                      e o cadastro de um leva ao do outro. */}
-                  {podeVerProdutos      && subLink('/cadastro/produtos',      <Package size={14} />, 'Produtos',      p.startsWith('/cadastro/produtos'))}
-                  {podeVerLocalizacoes  && subLink('/cadastro/localizacoes',  <MapPin size={14} />,  'Localizações',  p.startsWith('/cadastro/localizacoes'))}
-                  {podeVerCadProcedimentos && subLink('/cadastro/procedimentos', <ListChecks size={14} />, 'Procedimentos', p.startsWith('/cadastro/procedimentos'))}
                   {podeVerProprietarios && subLink('/cadastro/proprietarios', <Users size={14} />,   'Proprietários', p.startsWith('/cadastro/proprietarios'))}
+                  {podeVerLocalizacoes  && subLink('/cadastro/localizacoes',  <MapPin size={14} />,  'Localizações',  p.startsWith('/cadastro/localizacoes'))}
                   {podeVerTratadores    && subLink('/cadastro/tratadores',    <UserCog size={14} />, 'Tratadores',    p.startsWith('/cadastro/tratadores'))}
+                  {podeVerPrestadores   && subLink('/cadastro/prestadores',   <HardHat size={14} />, 'Prestadores',   p.startsWith('/cadastro/prestadores'))}
+                  {podeVerFornecedores  && subLink('/cadastro/fornecedores',  <Truck size={14} />,   'Fornecedores',  p.startsWith('/cadastro/fornecedores'))}
+                  {podeVerProdutos      && subLink('/cadastro/produtos',      <Package size={14} />, 'Produtos',      p.startsWith('/cadastro/produtos'))}
+                  {podeVerCadProcedimentos && subLink('/cadastro/procedimentos', <ListChecks size={14} />, 'Procedimentos', p.startsWith('/cadastro/procedimentos'))}
                 </div>
               )}
             </div>

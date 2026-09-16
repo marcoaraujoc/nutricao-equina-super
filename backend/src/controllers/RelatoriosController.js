@@ -10,6 +10,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { totalComissaoNoPeriodo } = require('../lib/procedimentoPrestador');
 const {
   resolverEscopo,
   resolverPeriodo,
@@ -186,7 +187,26 @@ const computarFinanceiro = async (req) => {
     let custoProdutos = 0;
     for (const s of saidas) custoProdutos += (s.quantidade ?? 0) * (s.estoque?.precoUnitarioBase ?? 0);
     for (const v of vacinasPeriodo) custoProdutos += (v.quantidade ?? 1) * (v.loteVacina?.valorUnitario ?? 0);
-    const lucroBruto = faturamentoPeriodo - custoProdutos;
+    // 🔴 COMISSÃO DE PRESTADOR SAI DA LINHA "Procedimentos" (a pedido, 2026-09-15).
+    //
+    // O valor INTEIRO do procedimento vai para a fatura do cliente — é o que ele paga,
+    // e não muda. Mas parte dele pertence a quem executou e sai da clínica; deixar a
+    // receita bruta na categoria afirmaria que a clínica ficou com tudo. O que aparece
+    // no relatório é o que SOBROU.
+    //
+    // ⚠️ Sai só de "Procedimentos", nunca do FATURAMENTO do período: faturamento é o
+    // que foi cobrado, e abatê-lo ali faria o total do relatório discordar da soma das
+    // faturas emitidas.
+    // ⚠️ A categoria nunca fica NEGATIVA: com o cadastro pela metade (comissão
+    // registrada e procedimento sem valor na fatura) o piso é zero — receita negativa
+    // seria lida como estorno, que não é o que aconteceu.
+    const comissaoPrestadores = await totalComissaoNoPeriodo(empresaId, inicio, fim);
+    if (comissaoPrestadores > 0) {
+      const bruto = porCategoria.get('Procedimentos') ?? 0;
+      porCategoria.set('Procedimentos', Math.max(bruto - comissaoPrestadores, 0));
+    }
+
+    const lucroBruto = faturamentoPeriodo - custoProdutos - comissaoPrestadores;
     const margemPct  = faturamentoPeriodo > 0 ? (lucroBruto / faturamentoPeriodo) * 100 : 0;
 
     return {
@@ -196,7 +216,7 @@ const computarFinanceiro = async (req) => {
       porCategoria:     mapaParaLista(porCategoria,     'categoria',     'receita'),
       contasReceber, contasVencidas, inadimplencia,
       fluxoCaixa: { mediaMensal, historico: ultimos3.reverse(), projecao },
-      lucroBruto: { receita: faturamentoPeriodo, custoProdutos, lucro: lucroBruto, margemPct },
+      lucroBruto: { receita: faturamentoPeriodo, custoProdutos, comissaoPrestadores, lucro: lucroBruto, margemPct },
     };
   }
 };

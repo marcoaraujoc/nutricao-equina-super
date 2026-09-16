@@ -21,15 +21,22 @@
  *     vazia — que era exatamente o estado documentado em `Prestador.userId`.
  */
 
+// ⚠️ `virtual: true` SÓ em modulo que o jest realmente nao resolve — `lib/prisma` e
+// TypeScript e o babel-jest nao o transpila. `lib/logger` e `lib/usuarioEmpresa` sao
+// `.js` REAIS: com o flag, um worker que ja tivesse carregado o modulo de verdade num
+// arquivo anterior resolvia o REAL em vez do mock, e `salvarPagamentoEAcesso` deixava
+// de ser um `jest.fn()` — o caso "revogar NAO apaga o vinculo" falhava ~1 em 8
+// execucoes, SO na suite COMPLETA (isolado passava sempre). Mesma licao registrada no
+// CLAUDE.md em 2026-09-10 (parte 2).
 jest.mock('../lib/prisma', () => ({ default: {} }), { virtual: true });
-jest.mock('../lib/logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn() }), { virtual: true });
+jest.mock('../lib/logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn() }));
 // `salvarVinculo`/`salvarPagamentoEAcesso` batem no banco de verdade (e checam se as
 // colunas existem). Aqui o que se testa é o CONTRATO de `acessoExterno`: o que ele
 // manda gravar, e o que ele NUNCA manda apagar.
 jest.mock('../lib/usuarioEmpresa', () => ({
   salvarVinculo:          jest.fn().mockResolvedValue({}),
   salvarPagamentoEAcesso: jest.fn().mockResolvedValue(undefined),
-}), { virtual: true });
+}));
 
 const fs   = require('fs');
 const path = require('path');

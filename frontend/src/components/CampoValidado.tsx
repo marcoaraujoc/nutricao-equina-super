@@ -58,6 +58,15 @@ interface Props {
    * local: "E-mail já cadastrado" é um fato que o campo sozinho não tem como saber.
    */
   erro?: string | null;
+  /**
+   * Chamado ao SAIR do campo, com o valor atual — DEPOIS da validação local.
+   *
+   * Existe para o preenchimento automático por e-mail dos cadastros: sair do campo é o
+   * momento em que a pessoa terminou de digitar, e é o mesmo gatilho da validação (um
+   * gancho por tecla dispararia uma consulta por caractere). Dispara mesmo com valor
+   * inválido — quem decide se vale consultar é a tela.
+   */
+  aoSairDoCampo?: (valor: string) => void;
   /** Classe da caixa do input. O padrão acompanha o resto dos formulários. */
   className?: string;
   autoComplete?: string;
@@ -70,7 +79,7 @@ const CAIXA_PADRAO =
 export default function CampoValidado({
   value, onChange, label, validar, obrigatorio = false, mascara,
   tipo = 'text', multilinha = false, rows = 3, placeholder, disabled,
-  maxLength, ajuda, erro: erroExterno = null, className, autoComplete, ...rest
+  maxLength, ajuda, erro: erroExterno = null, aoSairDoCampo, className, autoComplete, ...rest
 }: Props) {
   const id = useId();
   const [tocado, setTocado] = useState(false);
@@ -99,6 +108,7 @@ export default function CampoValidado({
   const aoSair = () => {
     setTocado(true);
     setErroLocal(regra(value));
+    aoSairDoCampo?.(value);
   };
 
   const erro = erroExterno ?? erroLocal;

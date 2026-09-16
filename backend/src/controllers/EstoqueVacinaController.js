@@ -128,6 +128,74 @@ const listar = async (req, res) => {
   }
 };
 
+// 🔴 O LABORATÓRIO NÃO TEM TABELA PRÓPRIA. Ele existe em dois lugares, e a tela
+// precisa dos DOIS:
+//   (a) como texto na coluna `fabricante` da vacina (o que sempre foi), e
+//   (b) como entrada do catálogo genérico `tb_catalogo_tipo_servico`, categoria
+//       LABORATORIO — a MESMA tabela dos tipos de fornecedor/prestador/localização.
+// Reusá-la traz de graça o tenant, a policy de RLS (ENABLE+FORCE) e o gate de permissão
+// que ela já tem; um catálogo novo exigiria repetir os três — mesma decisão de
+// 2026-09-08 para os tipos de local.
+// ⚠️ Sem (b), o laboratório só passaria a existir DEPOIS de alguém cadastrar uma vacina
+// com ele, e o pedido é o contrário: cadastrar o laboratório na tela de estoque.
+// ⚠️ NÃO lança: catálogo indisponível (tabela ausente numa base não migrada) devolve
+// lista vazia e a tela cai no comportamento antigo — derrubar a lista de laboratórios
+// impediria toda entrada de vacina por causa de um recurso acessório.
+const CATEGORIA_LABORATORIO = 'LABORATORIO';
+
+async function labsDoCatalogo() {
+  try {
+    // O RLS (tenant_tb_catalogo_tipo_servico) já filtra por empresa — a consulta só
+    // precisa da categoria.
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT nome FROM schs2vet.tb_catalogo_tipo_servico WHERE categoria = $1 ORDER BY nome ASC`,
+      CATEGORIA_LABORATORIO,
+    );
+    return rows.map(r => r.nome).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+// Valor sentinela da opção "Outros" do seletor de laboratório. É o ÚNICO jeito de pedir
+// "as vacinas SEM laboratório informado": string vazia já significa "todos", e o nome de
+// um laboratório de verdade nunca seria este.
+const SEM_FABRICANTE = '__SEM_FABRICANTE__';
+
+// ⚠️ O vazio conta como AUSENTE (`btrim(...) = ''`), não só o NULL: o campo Fabricante do
+// cadastro é opcional e grava string vazia quando a pessoa passa por ele sem digitar.
+// Olhar só o NULL deixaria essas vacinas fora de "Outros" E fora de todo laboratório —
+// alcançáveis apenas por "Todos".
+const SQL_SEM_FABRICANTE = `(m.fabricante IS NULL OR btrim(m.fabricante) = '')`;
+
+// A opção "Outros" só é oferecida se houver vacina sem laboratório: opção que não filtra
+// nada é botão morto, a mesma regra da aba vazia.
+async function existeVacinaSemFabricante(especiesIds) {
+  try {
+    const rows = especiesIds.length > 0
+      ? await prisma.$queryRawUnsafe(
+          `SELECT 1
+             FROM schs2vet.tb_medicamentos m
+             INNER JOIN schs2vet.tb_medicamento_especies me ON me."medicamentoId" = m.id
+            WHERE m.ativo = true
+              AND lower(m.classificacao) LIKE '%vacin%'
+              AND me."especieId" = ANY($1::int[])
+              AND ${SQL_SEM_FABRICANTE}
+            LIMIT 1`,
+          especiesIds,
+        )
+      : await prisma.$queryRawUnsafe(
+          `SELECT 1 FROM schs2vet.tb_medicamentos m
+            WHERE m.ativo = true AND lower(m.classificacao) LIKE '%vacin%'
+              AND ${SQL_SEM_FABRICANTE}
+            LIMIT 1`,
+        );
+    return rows.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 // ─── Listar fabricantes do catálogo de medicamentos (filtrados por espécie) ──
 
 const listarFabricantes = async (req, res) => {
@@ -159,7 +227,19 @@ const listarFabricantes = async (req, res) => {
       );
     }
 
-    return res.json({ dados: rows.map(r => r.fabricante).filter(Boolean) });
+    // Dedup SEM OLHAR A CAIXA — 'Zoetis' e 'ZOETIS' são o mesmo laboratório, e duas
+    // linhas iguais no seletor fariam a pessoa escolher uma ao acaso. A grafia da VACINA
+    // vence a do catálogo: é a que já está gravada no item.
+    const vistos = new Map();
+    for (const nome of [...rows.map(r => r.fabricante), ...(await labsDoCatalogo())]) {
+      const limpo = (nome ?? '').trim();
+      if (!limpo) continue;
+      const chave = limpo.toLocaleLowerCase('pt-BR');
+      if (!vistos.has(chave)) vistos.set(chave, limpo);
+    }
+    const dados = [...vistos.values()].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+    return res.json({ dados, semFabricante: await existeVacinaSemFabricante(especiesIds) });
   } catch (err) {
     console.error('EstoqueVacinaController.listarFabricantes:', err);
     return res.status(500).json({ error: 'Erro ao listar fabricantes.' });
@@ -171,15 +251,19 @@ const listarFabricantes = async (req, res) => {
 const listarVacinasPorFabricante = async (req, res) => {
   try {
     const { fabricante } = req.query;
+    // Opção "Outros" do seletor de laboratório — ver SEM_FABRICANTE.
+    const semFab = fabricante === SEM_FABRICANTE;
     const empresaId   = req.empresaId ?? null;
     const especiesIds = await getEspeciesIds(empresaId, req.user?.id, req.user?.userType);
 
     let rows;
     if (especiesIds.length > 0) {
-      const fabFilter = fabricante
-        ? `AND lower(m.fabricante) = lower($2)`
-        : '';
-      const params = fabricante ? [especiesIds, fabricante] : [especiesIds];
+      // "Outros" (`SEM_FABRICANTE`) NÃO vira parâmetro: o filtro é a própria ausência
+      // do campo, e mandar a sentinela como texto procuraria um laboratório com esse nome.
+      const fabFilter = semFab
+        ? `AND ${SQL_SEM_FABRICANTE}`
+        : fabricante ? `AND lower(m.fabricante) = lower($2)` : '';
+      const params = (!semFab && fabricante) ? [especiesIds, fabricante] : [especiesIds];
       rows = await prisma.$queryRawUnsafe(
         `SELECT DISTINCT ON (m.id)
                 m.id, m.nome, m.fabricante, m."formaFarmaceutica",
@@ -194,8 +278,10 @@ const listarVacinasPorFabricante = async (req, res) => {
         ...params
       );
     } else {
-      const fabFilter = fabricante ? `AND lower(fabricante) = lower($1)` : '';
-      const params    = fabricante ? [fabricante] : [];
+      const fabFilter = semFab
+        ? `AND (fabricante IS NULL OR btrim(fabricante) = '')`
+        : fabricante ? `AND lower(fabricante) = lower($1)` : '';
+      const params    = (!semFab && fabricante) ? [fabricante] : [];
       rows = await prisma.$queryRawUnsafe(
         `SELECT id, nome, fabricante,
                 "formaFarmaceutica",
@@ -333,9 +419,24 @@ const criar = async (req, res) => {
     if (Number(estoqueMinimo) < 0 || Number(estoqueAlarmante) < 0)
       return res.status(400).json({ error: 'Quantidades não podem ser negativas.' });
 
-    const qtdFrascosN     = Number(qtdFrascos);
-    const dosesPorFrascoN = Number(dosesPorFrasco) || 1;
-    const qtdNovasDoses   = qtdFrascosN * dosesPorFrascoN;
+    const qtdFrascosN = Number(qtdFrascos);
+    // 🔴 "Quantidade de Doses" CADASTRADA NO PRODUTO vale como padrão (2026-09-15).
+    //
+    // A tela de Produtos passou a registrar quantas aplicações saem de uma embalagem
+    // (`tb_medicamentos.doses_por_embalagem`). O lote continua podendo ter o próprio
+    // número — uma remessa pode vir em frasco diferente —, mas quando a entrada NÃO o
+    // informa, ele vem do cadastro em vez de cair no 1. Sem isto, a clínica cadastrava
+    // "10 doses por frasco" no produto e o lote nascia valendo 1 dose, cobrando o
+    // frasco inteiro a cada aplicação — exatamente o defeito que a multidose corrige.
+    //
+    // ⚠️ SQL cru com `catch` (§11): a coluna é da migration 20261009000000 e o client
+    // pode não conhecê-la. Falhando, cai no 1 — o comportamento anterior.
+    let dosesPorFrascoN = Number(dosesPorFrasco) || 0;
+    if (!dosesPorFrascoN && medicamentoCatId) {
+      dosesPorFrascoN = await dosesDoCatalogo(Number(medicamentoCatId));
+    }
+    if (!dosesPorFrascoN) dosesPorFrascoN = 1;
+    const qtdNovasDoses = qtdFrascosN * dosesPorFrascoN;
 
     // Valida referência
     if (vacinaId) {
@@ -656,6 +757,23 @@ const listarLotesDisponiveisPorMed = async (req, res) => {
     return res.status(500).json({ error: 'Erro ao listar lotes disponíveis.' });
   }
 };
+
+/**
+ * Doses por embalagem gravadas no ITEM do catálogo (tela de Produtos).
+ * `0` quando não há coluna, não há valor, ou o valor é 1 — o caller então mantém o
+ * padrão de sempre.
+ */
+async function dosesDoCatalogo(medicamentoCatId) {
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT doses_por_embalagem FROM schs2vet.tb_medicamentos
+        WHERE id = $1 AND multidose = true AND doses_por_embalagem IS NOT NULL
+          AND doses_por_embalagem >= 1`,
+      Number(medicamentoCatId),
+    );
+    return Number(rows?.[0]?.doses_por_embalagem ?? 0) || 0;
+  } catch { return 0; }
+}
 
 module.exports = {
   listar,

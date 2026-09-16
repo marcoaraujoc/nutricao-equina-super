@@ -86,11 +86,22 @@ async function emitirCartaoAcesso(tx, { userId, empresaId, equipeId, cargo, cada
     where: { id: equipeAlvo }, select: { empresaId: true },
   }))?.empresaId;
   if (empresaDoCartao) {
+    // 🔴 O MESMO PROFISSIONAL PODE SER DAS DUAS COISAS NA MESMA EMPRESA (2026-09-15):
+    // veterinário da equipe (com salário) E prestador (com comissão). Os dois acordos
+    // já moram em tabelas distintas — o do membro em `tb_usuario_empresa`, o do
+    // prestador em `tb_prestadores` —, então nada precisa mudar no pagamento.
+    //
+    // O que precisava mudar é AQUI: gravar o `cadastro` do prestador por cima do
+    // vínculo sobrescrevia nome, telefone e endereço que a pessoa tem como MEMBRO,
+    // com os campos (muitas vezes mais rasos) do cadastro de prestador. Quem já é da
+    // casa mantém o próprio cadastro; o `cadastro` do prestador só preenche quando o
+    // vínculo NASCE aqui.
+    // ⚠️ Mesma razão do `perfil` logo abaixo e do cargo acima: cadastro de prestador
+    // não rebaixa nem reescreve quem já é da equipe.
     await salvarVinculo(tx, Number(userId), Number(empresaDoCartao), {
       // Perfil só é imposto quando o vínculo NASCE aqui: rebaixar o perfil de quem já
       // é da casa seria o mesmo erro do cargo acima.
-      ...(existente ? {} : { perfil: cargo }),
-      ...cadastro,
+      ...(existente ? {} : { perfil: cargo, ...cadastro }),
     });
     await salvarPagamentoEAcesso(tx, Number(userId), Number(empresaDoCartao), { acessoSistema: true });
   }

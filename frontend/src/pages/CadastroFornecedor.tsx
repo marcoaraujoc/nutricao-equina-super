@@ -21,6 +21,11 @@ import { isValidEmail } from '../utils/validators';
 import { cpfValido as validarCPF, cnpjValido as validarCNPJ } from '../utils/validacoes';
 import * as validacao from '../utils/validacoes';
 import CampoValidado from '../components/CampoValidado';
+import AvisoCadastroEncontrado from '../components/AvisoCadastroEncontrado';
+import {
+  consultarCadastroPorEmail, preencherVazios, fraseCadastroEncontrado,
+  type CadastroPessoa,
+} from '../utils/cadastroPorEmail';
 import InlineError from '../components/InlineError';
 import TipoServicoSelect from '../components/TipoServicoSelect';
 import ModalJustificativa from '../components/ModalJustificativa';
@@ -152,17 +157,22 @@ function ModalDuplicataInativa({
 // ─── Modal ────────────────────────────────────────────────────────────────────
 
 function ModalFornecedor({
-  editando, form, saving, erro,
-  onFormChange, onSalvar, onClose,
+  editando, form, saving, erro, aviso,
+  onFormChange, onSalvar, onClose, onEmailSaiu, onFecharAviso,
 }: {
   editando:    Fornecedor | null;
   form:        FormForn;
   saving:      boolean;
   /** Erro da ação do MODAL — exibido abaixo do rodapé, junto do botão clicado. */
   erro:        string | null;
+  /** Preenchimento automático por e-mail: faixa que explica o que foi trazido. */
+  aviso:       { mensagem: string; tom: 'carregado' | 'preenchido' } | null;
   onFormChange:(updates: Partial<FormForn>) => void;
   onSalvar:    () => void;
   onClose:     () => void;
+  /** Consulta o e-mail ao SAIR do campo (ver `utils/cadastroPorEmail.ts`). */
+  onEmailSaiu: (email: string) => void;
+  onFecharAviso: () => void;
 }) {
   const [buscandoCNPJ, setBuscandoCNPJ] = useState(false);
   const [buscandoCEP,  setBuscandoCEP]  = useState(false);
@@ -324,6 +334,9 @@ function ModalFornecedor({
                     onChange={val => onFormChange({ email: val })}
                     validar={validacao.email}
                     placeholder="email@exemplo.com"
+                    /* Ao SAIR do campo consulta se a clínica já conhece este e-mail —
+                       carrega o cadastro existente ou preenche o que está em branco. */
+                    aoSairDoCampo={onEmailSaiu}
                   />
                 </div>
                 <div>
@@ -333,6 +346,9 @@ function ModalFornecedor({
                     placeholder="(00) 00000-0000" className={inputCls} />
                 </div>
               </div>
+              {aviso && (
+                <AvisoCadastroEncontrado mensagem={aviso.mensagem} tom={aviso.tom} onFechar={onFecharAviso} />
+              )}
             </div>
           </section>
 
@@ -473,7 +489,17 @@ export default function CadastroFornecedor() {
 
   useEffect(() => { if (!loadingPerms) carregar(); }, [carregar, loadingPerms]);
 
-  const abrirNovo = () => { setEditando(null); setForm(FORM_INICIAL); setErroModal(null); setShowModal(true); };
+  // ─── Preenchimento automático pelo E-MAIL ──────────────────────────────────
+  // Mesma regra da tela de Prestador (e a mesma lib): ao SAIR do campo, o backend diz
+  // se a EMPRESA ATIVA já conhece este e-mail. Fornecedor de outra clínica não é
+  // encontrado — o escopo é do backend, com o RLS fail-closed por baixo.
+  const [aviso, setAviso] = useState<{ mensagem: string; tom: 'carregado' | 'preenchido' } | null>(null);
+  // `blur` dispara também quando se passa pelo campo sem alterar nada; sem isto cada
+  // passagem viraria uma consulta.
+  const emailConsultado = useRef('');
+  const limparAviso = () => { setAviso(null); emailConsultado.current = ''; };
+
+  const abrirNovo = () => { setEditando(null); setForm(FORM_INICIAL); setErroModal(null); limparAviso(); setShowModal(true); };
 
   /**
    * Chegada guiada — abre o modal já preenchido.
@@ -522,6 +548,7 @@ export default function CadastroFornecedor() {
 
   const abrirEdicao = (f: Fornecedor) => {
     setErroModal(null);
+    limparAviso();
     setEditando(f);
     setForm({
       nome:        f.nome,
@@ -541,8 +568,55 @@ export default function CadastroFornecedor() {
     setShowModal(true);
   };
 
-  const fecharModal = () => { setShowModal(false); setEditando(null); setForm(FORM_INICIAL); setErroModal(null); };
+  const fecharModal = () => { setShowModal(false); setEditando(null); setForm(FORM_INICIAL); setErroModal(null); limparAviso(); };
   const handleFormChange = (updates: Partial<FormForn>) => setForm(prev => ({ ...prev, ...updates }));
+
+  // Documento: preencher só `cpf`/`cnpj` deixaria o número INVISÍVEL atrás do botão do
+  // outro tipo — o seletor tem de acompanhar o que veio.
+  const patchDocumento = (atual: FormForn, cadastro: CadastroPessoa): Partial<FormForn> => {
+    if (atual.cpf.trim() || atual.cnpj.trim()) return {};
+    if (cadastro.cnpj) return { tipoDoc: 'cnpj', cnpj: mascaraCNPJ(cadastro.cnpj.replace(/\D/g, '')) };
+    if (cadastro.cpf)  return { tipoDoc: 'cpf',  cpf:  mascaraCPF(cadastro.cpf.replace(/\D/g, '')) };
+    return {};
+  };
+
+  const consultarEmail = async (email: string) => {
+    // Só no cadastro NOVO: em edição, trocar o registro debaixo de quem está editando
+    // seria pior que o erro que isto evita.
+    if (editando) return;
+    const e = email.trim().toLowerCase();
+    if (!e || e === emailConsultado.current) return;
+    emailConsultado.current = e;
+
+    const r = await consultarCadastroPorEmail<Fornecedor>('/cadastro/fornecedores/por-email', e);
+    if (!r.encontrado) { setAviso(null); return; }
+
+    // Já existe o fornecedor aqui: carrega e passa a EDITAR, em vez de montar a
+    // duplicata que o salvar recusaria no fim.
+    if (r.origem === 'CADASTRO') {
+      abrirEdicao(r.registro);
+      setAviso({ mensagem: fraseCadastroEncontrado(r, 'fornecedor'), tom: 'carregado' });
+      return;
+    }
+
+    // `setForm` funcional: a resposta chega depois, e um patch calculado sobre o `form`
+    // da closure apagaria o que foi digitado durante a espera.
+    setForm(prev => ({
+      ...prev,
+      ...preencherVazios(prev, r.cadastro, {
+        fullName:    { campo: 'nome' },
+        phone:       { campo: 'telefone', formatar: v => mascaraTelefone(v.replace(/\D/g, '')) },
+        cep:         { campo: 'cep',      formatar: v => mascaraCEP(v.replace(/\D/g, '')) },
+        endereco:    { campo: 'endereco' },
+        complemento: { campo: 'complemento' },
+        bairro:      { campo: 'bairro' },
+        cidade:      { campo: 'cidade' },
+        estado:      { campo: 'estado' },
+      }),
+      ...patchDocumento(prev, r.cadastro),
+    }));
+    setAviso({ mensagem: fraseCadastroEncontrado(r, 'fornecedor'), tom: 'preenchido' });
+  };
 
   const handleSalvar = async (force = false) => {
     setErroModal(null);
@@ -880,6 +954,9 @@ export default function CadastroFornecedor() {
           onFormChange={handleFormChange}
           onSalvar={handleSalvar}
           onClose={fecharModal}
+          aviso={aviso}
+          onEmailSaiu={consultarEmail}
+          onFecharAviso={() => setAviso(null)}
         />
       )}
 

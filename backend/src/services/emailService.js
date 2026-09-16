@@ -537,7 +537,7 @@ const emailService = {
   // ── Transferência de Propriedade — aviso informativo ao NOVO proprietário ────
   // Sem fluxo de aprovação (a transferência é ato do GESTOR, já concluída quando
   // este e-mail sai) — só avisa quem passou a ser dono do animal.
-  async enviarTransferenciaPropriedade({ destinatarioEmail, destinatarioNome, nomeAnimal, criadoPorNome, nomeEmpresa }) {
+  async enviarTransferenciaPropriedade({ destinatarioEmail, destinatarioNome, nomeAnimal, criadoPorNome, nomeEmpresa, senhaInicial = null }) {
     if (!podeEnviar()) {
       console.warn('[emailService] Credenciais não configuradas — e-mail de transferência de propriedade suprimido');
       return;
@@ -561,6 +561,17 @@ const emailService = {
               o novo proprietário de <strong>${nomeAnimal}</strong>. A partir de agora você poderá
               acompanhar os atendimentos, exames e faturas do animal pelo S2Vet.
             </p>
+            ${senhaInicial ? `
+            <div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:12px;padding:16px 20px;margin:20px 0;">
+              <p style="color:#065f46;margin:0 0 8px;font-size:13px;font-weight:700;">Seus dados de acesso</p>
+              <p style="color:#065f46;margin:0;font-size:13px;line-height:1.7;">
+                Usuário: <strong>${destinatarioEmail}</strong><br/>
+                Senha inicial: <strong style="font-family:monospace;font-size:15px;">${senhaInicial}</strong>
+              </p>
+              <p style="color:#047857;margin:8px 0 0;font-size:11px;">
+                Por segurança, o sistema pede a troca desta senha no primeiro acesso.
+              </p>
+            </div>` : ''}
             <div style="text-align:center;margin:28px 0;">
               <a href="${appUrl}/#/login"
                 style="display:inline-block;background:#059669;color:white;text-decoration:none;padding:14px 32px;border-radius:12px;font-weight:700;font-size:15px;">
@@ -568,7 +579,9 @@ const emailService = {
               </a>
             </div>
             <p style="color:#9ca3af;font-size:11px;border-top:1px solid #e5e7eb;padding-top:16px;margin-bottom:0;">
-              Este é um e-mail informativo. Se você já tinha conta no S2Vet, use seu login de sempre.
+              ${senhaInicial
+                ? 'Se você não reconhece este cadastro, ignore este e-mail.'
+                : 'Este é um e-mail informativo. Se você já tinha conta no S2Vet, use seu login de sempre.'}
             </p>
           </div>
         </div>

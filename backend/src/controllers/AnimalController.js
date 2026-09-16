@@ -579,6 +579,9 @@ class AnimalController {
       let proprietarioNomeParaEmail = 'Proprietário';
       let proprietarioEmailParaEmail = null;
       let isNewProprietario = false;
+      // Senha inicial do cliente CRIADO agora — calculada uma vez e usada tanto no
+      // hash quanto no e-mail de boas-vindas. Ver o bloco de criação abaixo.
+      let senhaInicialNovoProp = null;
 
             // Somente ADMIN pode redirecionar a criação para outro proprietário
             if (proprietarioId && isAdminCriando) {
@@ -599,13 +602,30 @@ class AnimalController {
                 const emailProp = normalizeEmail(propData.email);
                 let prop = await findUserByEmail(prisma, emailProp);
                 if (!prop) {
+                  // 🔴 A SENHA É CALCULADA UMA VEZ E USADA NOS DOIS LADOS (2026-09-15).
+                  //
+                  // O DEFEITO: aqui o hash era do literal `Inicial#001`, enquanto o
+                  // e-mail anunciava `gerarSenhaInicial(...)`. O cliente recebia uma
+                  // senha que NUNCA existiu e levava "Usuário ou Senha Inválidos" —
+                  // sem erro nenhum no sistema, porque as duas pontas nunca se
+                  // comparavam. É a MESMA divergência corrigida em 2026-09-08 no e-mail;
+                  // o lado do HASH ficou para trás, e o resultado foi o mesmo.
+                  //
+                  // ⚠️ O TELEFONE entra na derivação: calcular o hash com o telefone e o
+                  // e-mail sem ele (era o caso) produz duas senhas diferentes. Por isso
+                  // a variável é uma só, e é ela que viaja até o envio.
+                  senhaInicialNovoProp = gerarSenhaInicial({
+                    email:    emailProp,
+                    nome:     propData.fullName || 'Proprietário',
+                    telefone: propData.phone || null,
+                  });
                   prop = await prisma.user.create({
                     data: {
                       fullName:           propData.fullName || 'Proprietário',
                       email:              emailProp,
                       phone:              propData.phone  || null,
                       phone2:             propData.phone2 || null,
-                      passwordHash:       await bcrypt.hash('Inicial#001', 10),
+                      passwordHash:       await bcrypt.hash(senhaInicialNovoProp, 10),
                       role:               'USER',
                       userType:           'PROPRIETARIO',
                       mustChangePassword: true,
@@ -928,18 +948,11 @@ class AnimalController {
               animalNome:        animal.nome,
               vetNome:           vetNomeCompleto,
               isNewUser:         isNewProprietario,
-              // 🔴 ISTO ESTAVA ERRADO ATÉ 2026-09-08: o literal aqui era `Inicial#001`
-              // (com `#`), enquanto a senha GRAVADA era `Inicial_001` (com `_`). O
-              // cliente recebia um e-mail com uma senha que nunca existiu e não
-              // conseguia entrar — sem nenhum erro no sistema, porque as duas pontas
-              // nunca se comparavam. É exatamente o que uma FONTE ÚNICA impede.
-              senhaInicial: isNewProprietario
-                ? gerarSenhaInicial({
-                    email:    proprietarioEmailParaEmail,
-                    nome:     proprietarioNomeParaEmail,
-                    telefone: null,
-                  })
-                : undefined,
+              // 🔴 A MESMA senha que foi para o HASH — nunca recalculada aqui.
+              // Recalcular com dados diferentes (era o caso: `telefone: null`, enquanto
+              // o cadastro tinha telefone) produz outra senha, e o cliente recebe algo
+              // que não abre a conta. É exatamente o que uma FONTE ÚNICA impede.
+              senhaInicial: senhaInicialNovoProp ?? undefined,
             })
               .then(() => console.log(`[emailService] Email informativo enviado → ${proprietarioEmailParaEmail}`))
               .catch(err => console.error('[emailService] FALHA ao enviar informativo:', err?.message ?? err));
@@ -1512,6 +1525,11 @@ class AnimalController {
         nomeAnimal:        animal.nome,
         criadoPorNome:     req.user?.fullName || 'a equipe',
         nomeEmpresa:       empresa?.nome || 'a clínica',
+        // 🔴 Proprietário CRIADO agora recebe a senha de acesso (2026-09-15): antes o
+        // e-mail só avisava do animal, e a conta nascia sem ninguém saber como abri-la.
+        // ⚠️ `null` para quem JÁ tinha login — anunciar uma senha a quem já tem a sua
+        // faria a pessoa achar que a antiga foi trocada.
+        senhaInicial:      resultado.senhaInicial ?? null,
       }).catch(() => { /* fire-and-forget — falha de e-mail nunca derruba a transferência */ });
 
       const animalAtualizado = await prisma.animal.findUnique({ where: { id: animalId }, include: ANIMAL_INCLUDE });

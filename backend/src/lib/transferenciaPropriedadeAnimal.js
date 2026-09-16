@@ -36,15 +36,23 @@ async function resolverOuCriarProprietario(tx, req, { empresaId, equipeId, dados
   let user = await findUserByEmail(tx, email);
   let isNovoUsuario = false;
 
+  // 🔴 A SENHA É CALCULADA UMA VEZ E DEVOLVIDA (2026-09-15): o novo proprietário
+  // criado aqui não recebia credencial nenhuma — o e-mail de transferência só
+  // avisava do animal, e a pessoa ficava com uma conta que não sabia abrir.
+  // ⚠️ Recalculá-la no controller produziria outra senha se qualquer dado divergisse
+  // (foi o defeito do cadastro de paciente, corrigido na mesma data). Por isso ela
+  // sobe junto com o resultado, e não é recomposta em lugar nenhum.
+  let senhaInicial = null;
+
   if (!user) {
+    senhaInicial = gerarSenhaInicial({ email, nome: dados.fullName, telefone: dados.phone });
     user = await tx.user.create({
       data: {
         fullName:           dados.fullName.trim(),
         email,
         phone:              dados.phone  || null,
         phone2:             dados.phone2 || null,
-        passwordHash:       await bcrypt.hash(
-          gerarSenhaInicial({ email, nome: dados.fullName, telefone: dados.phone }), 10),
+        passwordHash:       await bcrypt.hash(senhaInicial, 10),
         role:               'USER',
         userType:           'PROPRIETARIO',
         mustChangePassword: true,
@@ -81,7 +89,7 @@ async function resolverOuCriarProprietario(tx, req, { empresaId, equipeId, dados
   const { localidades } = normalizarLocalidades(dados.localidades);
   await salvarLocalidades(tx, user.id, empresaId, localidades);
 
-  return { userId: user.id, isNovoUsuario, nome: dadosDaEmpresa.fullName, email };
+  return { userId: user.id, isNovoUsuario, nome: dadosDaEmpresa.fullName, email, senhaInicial };
 }
 
 /**
@@ -97,7 +105,7 @@ async function resolverOuCriarProprietario(tx, req, { empresaId, equipeId, dados
 async function transferirPropriedadeAnimal(tx, req, { animal, motivo, novoProprietario }) {
   const proprietarioAnteriorId = animal.userId;
 
-  const { userId: novoProprietarioId, isNovoUsuario, nome, email } = await resolverOuCriarProprietario(tx, req, {
+  const { userId: novoProprietarioId, isNovoUsuario, nome, email, senhaInicial } = await resolverOuCriarProprietario(tx, req, {
     empresaId: animal.empresaId,
     equipeId:  req.equipeId ?? animal.equipeId ?? null,
     dados:     novoProprietario,
@@ -134,7 +142,7 @@ async function transferirPropriedadeAnimal(tx, req, { animal, motivo, novoPropri
     motivo,
   });
 
-  return { novoProprietarioId, isNovoUsuario, nomeNovoProprietario: nome, emailNovoProprietario: email };
+  return { novoProprietarioId, isNovoUsuario, nomeNovoProprietario: nome, emailNovoProprietario: email, senhaInicial };
 }
 
 module.exports = { transferirPropriedadeAnimal, SENHA_PADRAO_INICIAL };

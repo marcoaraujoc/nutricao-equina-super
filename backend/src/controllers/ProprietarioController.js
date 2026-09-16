@@ -18,6 +18,7 @@ const localidadesProp = require('../lib/proprietarioLocalidades');
 // Tabela de ligação usuário × empresa — perfil PROPRIETARIO + cadastro da empresa
 const { salvarVinculo, ehProfissionalNaEmpresa, definirAtivoNaEmpresa } = require('../lib/usuarioEmpresa');
 const { gerarSenhaInicial } = require('../lib/senhaInicial');
+const { cadastroDaPessoaNaEmpresa, montarResposta } = require('../lib/cadastroPorEmail');
 
 // Dia de vencimento da fatura: obrigatório, inteiro entre 1 e 25
 // (rejeita vazio, 0, negativo e > 25 — espelha a validação inline do frontend).
@@ -214,6 +215,64 @@ const ProprietarioController = {
       res.json({ sucesso: true, dados: { ...comLocalidades, localidadesSugeridas } });
     } catch (err) {
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar proprietário' });
+    }
+  },
+
+  // GET /api/cadastro/proprietarios/por-email?email=X
+  //
+  // Mesma regra dos demais cadastros de pessoa (lib/cadastroPorEmail.js):
+  //   CADASTRO → o cliente JÁ EXISTE nesta empresa: a tela carrega para edição em vez
+  //              de mandar um POST que voltaria 409 "E-mail já cadastrado nesta empresa"
+  //              depois do formulário inteiro preenchido.
+  //   PESSOA   → o e-mail é de alguém que a empresa já cadastrou em OUTRO papel (a
+  //              veterinária que agora também vira cliente, caso explicitamente
+  //              suportado por `criar`): preenche o que estiver vazio.
+  //   nada     → desconhecido AQUI. Cliente de outra clínica NÃO é devolvido — cada
+  //              empresa mantém o próprio cadastro (§36), e devolvê-lo vazaria o que a
+  //              clínica vizinha digitou.
+  //
+  // O recorte é o MESMO de `listar`/`obterPorId` (`whereEhClienteDaEmpresa` +
+  // `whereProprietarioNoEscopo`): o que a tela consegue abrir é o que ela carrega aqui.
+  buscarPorEmail: async (req, res) => {
+    const email = normalizeEmail(req.query.email);
+    if (!email) return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório' });
+
+    try {
+      const isAdmin = req.user?.role === 'ADMIN';
+      // FAIL-CLOSED: sem empresa no contexto não existe "cliente desta empresa" a
+      // trazer — e o único que pode consultar sem empresa é o ADMIN da plataforma.
+      // Mesmo corte de `listar`, que devolve lista vazia nesse caso.
+      if (!isAdmin && !req.empresaId) {
+        return res.json({ sucesso: true, dados: { encontrado: false } });
+      }
+
+      // ⚠️ `AND`, NUNCA spread: as duas cláusulas devolvem `{ OR: [...] }`, e
+      // espalhá-las no mesmo objeto faria a segunda APAGAR a primeira — o recorte por
+      // empresa sumiria em silêncio e o e-mail da clínica vizinha seria encontrado.
+      // É o mesmo motivo pelo qual `listar` as empilha em `where.AND`.
+      const where = {
+        ...whereEmailInsensitive(email),
+        AND: [whereEhClienteDaEmpresa(req.empresaId)],
+      };
+      if (req.empresaId) {
+        const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);
+        where.AND.push(whereProprietarioNoEscopo(req.empresaId, equipeScope));
+      }
+
+      const cliente = await prisma.user.findFirst({ where, select: SELECT_PROPRIETARIO });
+
+      const pessoa = await cadastroDaPessoaNaEmpresa(email, req.empresaId, prisma);
+
+      if (!cliente) return res.json({ sucesso: true, dados: montarResposta({ pessoa }) });
+
+      // Mesmo enriquecimento de `obterPorId` — o cadastro da EMPRESA (nunca o `users`)
+      // e as localidades atendidas, que o formulário exige preenchidas.
+      const comPerfil     = await perfilProp.aplicarPerfil(cliente, req.empresaId);
+      const comLocalidades = await localidadesProp.anexar(comPerfil, req.empresaId);
+      return res.json({ sucesso: true, dados: montarResposta({ registro: comLocalidades, pessoa }) });
+    } catch (err) {
+      console.error('[ProprietarioController.buscarPorEmail]', err);
+      return res.status(500).json({ sucesso: false, mensagem: 'Erro ao consultar o e-mail' });
     }
   },
 

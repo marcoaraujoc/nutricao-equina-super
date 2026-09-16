@@ -8,6 +8,7 @@ const { registrarAuditoria } = require('../lib/auditoria');
 // de carregar o registro — nunca excluir/alterar antes de conferir.
 const { garantirAcessoAnimal } = require('../middlewares/animalAcesso.middleware');
 const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
+const { responderErro } = require('../lib/erroResposta');
 
 // Helper seguro para converter valor (aceita número ou string com vírgula)
 const safeParseFloat = (val) => {
@@ -147,8 +148,10 @@ exports.analisarLLM = async (req, res) => {
 
     res.json({ dataExame, exames });
   } catch (error) {
-    console.error('Erro na análise LLM:', error);
-    res.status(500).json({ error: error.message });
+    responderErro(res, error, {
+      contexto: 'ExameController.analisarLaudo',
+      mensagem: 'Não foi possível ler o laudo enviado. Confira o arquivo e tente de novo.',
+    });
   }
 };
 
@@ -206,8 +209,10 @@ exports.analisarImagens = async (req, res) => {
       imagens,
     });
   } catch (error) {
-    console.error('Erro na análise de laudo/imagens:', error);
-    res.status(500).json({ error: error.message });
+    responderErro(res, error, {
+      contexto: 'ExameController.analisarLaudoImagens',
+      mensagem: 'Não foi possível ler o laudo/as imagens enviadas. Confira os arquivos e tente de novo.',
+    });
   }
 };
 

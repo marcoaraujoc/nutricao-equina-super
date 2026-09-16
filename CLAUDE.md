@@ -1,5 +1,306 @@
 # S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-09-16 (🔴 **A CHAVE ÚNICA DO CATÁLOGO IGNORAVA A EMPRESA — o
+#   COPY-ON-WRITE NUNCA FUNCIONOU** + erro cru deixou de chegar à tela.
+#   1. 🔴 **O DEFEITO RELATADO:** alterar medicamento/vacina em `/cadastro/produtos`
+#      mostrava NA TELA o dump do Prisma — "Invalid `tx.medicamento.create()` invocation
+#      in D:\Projetos\...\unidadeMedicamento.js:111 … Unique constraint failed on the
+#      (not available)". Causa: `tb_medicamentos` tem a UNIQUE
+#      `(nome, formaFarmaceutica, apresentacao)` **sem `empresa_id`**, criada em
+#      2026-05-27, quando a tabela era `tb_produtos` e o catálogo era SÓ GLOBAL.
+#      Desde 2026-09-12 o catálogo é MISTO e editar item global CRIA A CÓPIA DA EMPRESA
+#      — com o MESMO nome, forma e apresentação, que é exatamente o que a chave proibia.
+#      ⚠️ **MEDIDO: 8.255 linhas na tabela e ZERO com `empresa_id`.** Nenhuma cópia
+#      jamais foi criada: a regra existia no código e o banco a recusava desde o 1º dia —
+#      vale para `lib/catalogoEmpresa.js` E para `lib/unidadeMedicamento.js` (a troca de
+#      unidade de item global, de 2026-09-12, também nunca funcionou).
+#      🔴 E era pior que o erro na tela: sem `empresa_id` na chave, a cópia da clínica A
+#      BLOQUEARIA a da clínica B para o mesmo item global — defeito intermitente,
+#      dependente do que OUTRA clínica fez antes.
+#      ✅ **MIGRATION APLICADA** (autorizada) — `20261011000000_medicamento_unique_por_empresa`:
+#      a chave passa a ser **(nome, formaFarmaceutica, apresentacao, unidade, empresa_id)**
+#      com **`NULLS NOT DISTINCT`** (PG 15+; esta base é 18.4). `unidade` entra a pedido.
+#      ⚠️ `NULLS NOT DISTINCT` NÃO é detalhe: sem ele cada NULL é valor distinto e DUAS
+#      linhas GLOBAIS idênticas passariam a ser aceitas — o catálogo do ADMIN perderia a
+#      proteção que a chave antiga dava. Com ele, a garantia do lado global fica IDÊNTICA.
+#      ⚠️ **"vias" NÃO cabe na chave**: a via mora em `tb_medicamento_vias` (1:N) e índice
+#      único só alcança colunas da própria tabela — lá a unicidade já é
+#      `@@unique([medicamentoId, via])`.
+#      ⚠️ NÃO fica no `schema.prisma`: `@@unique` não expressa `NULLS NOT DISTINCT` — é a
+#      mesma situação da chave ANTIGA, que também vivia só no banco.
+#      ⚠️ Exige o DONO (`nutriadmin`): `DROP/CREATE INDEX` pedem OWNERSHIP, não GRANT.
+#      ✅ **PROVADA ANTES e CONFERIDA DEPOIS**, em transação REVERTIDA (0 linhas ao fim): ANTES a cópia
+#      é RECUSADA; DEPOIS a cópia da empresa 58 é ACEITA, a da 42 também, a 2ª cópia
+#      idêntica da 58 é RECUSADA, a 2ª linha GLOBAL idêntica é RECUSADA e a global com
+#      outra UNIDADE passa a ser aceita. Aplicada, o CÓDIGO REAL
+#      (`salvarItemDoCatalogo`) foi exercitado contra a base: trocar SÓ o fabricante, SÓ
+#      as vias, SÓ a unidade ou SÓ o "controlado" — em MEDICAMENTO e em VACINA globais —
+#      passou nos 5 casos, e duas edições seguidas do mesmo item REAPROVEITAM a mesma
+#      cópia (1 linha, não 2). `migrate status`: 199 migrations, banco em dia.
+#   2. 🔴 **ERRO CRU NUNCA CHEGA À TELA** — `lib/erroResposta.js` (`responderErro`).
+#      O vazamento era `res.status(500).json({ error: err.message || 'Erro ao…' })`: o
+#      `||` PARECE rede de segurança e é o oposto — a mensagem do Prisma SEMPRE existe,
+#      então o texto amigável nunca entrava e iam para a tela o caminho do arquivo no
+#      servidor e o trecho do código. O handler global de `server.ts` já fazia certo
+#      (500 → "Erro interno do servidor"); o furo estava nos try/catch PRÓPRIOS dos
+#      controllers, que respondem ANTES de o erro chegar lá.
+#      ⚠️ **Erro de REGRA DE NEGÓCIO passa INTEIRO** (`UnidadeIndisponivelError`,
+#      `FaturaPagaError`): eles têm `status` e texto escrito para ser lido ("inative a
+#      outra entrada antes de trocar a unidade"). Engoli-los trocaria instrução útil por
+#      "erro interno". P2002→409, P2003→409, P2025→404 e `IA_QUOTA_EXCEDIDA`→429 ganham
+#      tradução; o resto é 500 com a frase que o controller escolheu, e o original vai
+#      para o LOG com stack.
+#      ⚠️ **NUNCA `err.meta.target` na resposta**: são NOMES DE COLUNA do banco — e com o
+#      índice fora do schema o próprio Prisma devolve "(not available)".
+#      🔴 **O GATE ACHOU MAIS 6 TELAS com o mesmo defeito** (o pedido "se estiver
+#      ocorrendo em outras telas tem que ser corrigido"): `PermissaoController` (7
+#      handlers), `AudioController`, `ComposicaoAlimentarController`, `EquipeController`,
+#      `relatorio.controller`, `RelatorioNutricionalController`, `ExameController` (2) e
+#      `NotaFiscalController` (ali o motivo é VISÍVEL na tela e vinha do dump).
+#      ⚠️ O FRONT não foi tocado, de propósito: ele já lia `data.error ?? fallback` e
+#      exibia fielmente o que o backend mandou. Sanitizar na tela esconderia junto as
+#      mensagens de negócio, que são as úteis.
+#      Gate novo `__tests__/erroNaoVazaParaTela.test.js` (9 casos) — comportamento +
+#      varredura dos controllers, IGNORANDO COMENTÁRIOS (senão acusa a própria
+#      documentação da regra). ✅ Verificado que REPROVA: reintroduzido o `||`, 2 casos
+#      falharam. Suíte: **1032**; `tsc --noEmit` limpo.
+#      ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.)
+# Atualizado em: 2026-09-15 (parte 5) (🔴 **A POSTERGAÇÃO DA DOSE ATRASADA ESTAVA
+#   INERTE JUSTAMENTE ANTES DA 1ª EXECUÇÃO** — o defeito relatado como "essa parte não
+#   foi feita". `agendaDaDose` (parte 3 desta data) EXISTIA e era CHAMADA, mas derivava
+#   a data devida de `previsaoDaDose(item, 0)`, que devolve `null` sem ÂNCORA
+#   (`proximaDoseEm`) — e âncora só existe depois da 1ª dose dada ou com Hora Início
+#   prescrita. Resultado: `atrasoDias` saía SEMPRE 0 no único caso que ela veio
+#   corrigir, e nada quebrava. Medido no item 233 da base (acupuntura 1x/dia por 3
+#   dias, `dataInicio` 15/09, `horaInicio` **VAZIO**, 0 doses): no dia 16, com nada
+#   executado, a tela seguia anunciando 15/09 · 16/09 · 17/09.
+#   Agora a data devida sai de **`previsaoPendenteISO`** — a MESMA fonte do selo
+#   "Atrasada" da fila —, então selo e agenda contam a mesma história. Sem âncora, a
+#   data ORIGINAL de cada linha é o **dia TEÓRICO do curso** (`diaDaDose` = o
+#   `linha.dia` de `gerarResumoDoses`), 4º argumento novo: é ele que distribui certo a
+#   frequência com mais de uma dose por dia (`12em12h` → dias 1,1,2,2), coisa que um
+#   múltiplo do intervalo não faria.
+#   🔴 **E A HORA "às 09:00" NUNCA FOI PRESCRITA — era o meio-dia UTC.** O selo da fila
+#   (`atrasoDoTipo`) formatava com `formatDiaMesHora` o ISO de `previsaoPendenteISO`,
+#   que sem âncora é **DATA PURA** (meio-dia UTC, `dataDoDiaISO`). Em Brasília isso vira
+#   "às 09:00"; em Cuiabá, "às 08:00"; no Acre, "às 07:00" — um compromisso de horário
+#   que ninguém marcou, e que mudava com o fuso da clínica. O comentário acima da linha
+#   já dizia "sem âncora não existe hora a mostrar"; o código fazia o contrário.
+#   `agendaDaDose` passou a devolver **`temHorario`**, e é ele que libera
+#   `formatDiaMesHora` nos dois chamadores. ⚠️ Hora só na dose de AGORA e só com âncora.
+#   Resultado (simulado com o item real): dia 15 → "Dose 01/03 - Em Execução (15/09)";
+#   dia 16 → "Dose 01/03 - Prevista para 16/09 — prescrição em atraso desde 15/09",
+#   "Dose 02/03 - … 17/09 — … desde 16/09", "Dose 03/03 - … 18/09 — … desde 17/09".
+#   ⚠️ **SÓ EXIBIÇÃO**, como antes: o backend continua sendo quem grava a agenda na
+#   execução. CONSEQUÊNCIA CONHECIDA: a fila do backend mantém o item sem âncora apenas
+#   dentro de `dentroDaJanelaDoCurso` ([dataInicio, +duracaoDias-1]), então a dose 3
+#   exibida em 18/09 está fora dessa janela — o item some da fila e o cron
+#   `cancelar_doses_prescricao_perdidas` o cancela. Estender a janela mexeria na regra
+#   de produto de 2026-08-18 e no cron de cancelamento; não foi pedido. Ver §12.
+#   **NENHUMA MIGRATION** — correção é 100% de tela (`ExecucaoPrescricao.tsx`).
+#   `migrate status` conferido: 198 migrations, banco em dia, nada pendente.
+#   Gate novo `__tests__/agendaDosePostergada.test.js` (14 casos) que **EXECUTA** o
+#   código real do front (extraído por AST + `ts.transpileModule`) — varredura de texto
+#   não pegaria este defeito, porque a função aparecia, era chamada e o comentário em
+#   cima dela já descrevia o comportamento certo. ✅ Verificado que REPROVA: revertida a
+#   derivação para a âncora, **8 dos 14 falharam**; removido o 4º argumento, 1 falhou.
+#   Suíte: **1023**; `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.)
+# Atualizado em: 2026-09-15 (parte 4) (🔴 **O QUE É DA EMPRESA VEM ANTES DO CATÁLOGO
+#   GLOBAL** + o **LABORATÓRIO** virou cadastro de verdade no Estoque de Vacinas.
+#   1. 🔴 **ORDEM em QUATRO grupos** na busca de medicamento/vacina da Prescrição (e da
+#      Vacina e do Orçamento, que usam a MESMA rota) e na lista de medicamentos da
+#      Farmácia: **0 EM ESTOQUE → 1 PRODUTO de fornecedor → 2 CADASTRADO pela clínica →
+#      3 GLOBAL puro**, alfabético dentro de cada um. Os TRÊS PRIMEIROS são "da empresa".
+#      ⚠️ **"Da empresa" NÃO é só `empresa_id != null`** — medicamento GLOBAL que a
+#      clínica TEM EM ESTOQUE é dela para todos os efeitos: o frasco está na prateleira.
+#      Reduzir o grupo à coluna do catálogo mandaria para baixo justamente o que ela tem
+#      em mãos. Medido: o animal 93 (empresa 58) tem 2 em estoque + 3 cadastrados contra
+#      4.368 globais.
+#      ⚠️ Os três grupos de 2026-09-10 CONTINUAM valendo: o que mudou é que o antigo
+#      grupo 2 ("o resto") foi PARTIDO em dois, separando a cópia da clínica do global.
+#      🔴 **A PRIMEIRA PÁGINA SAI ORDENADA PELO BANCO** (`ordemEmpresaPrimeiro(req,
+#      relacao)`): `listar` PAGINA e a Prescrição abre o dropdown com **`limit=5`**.
+#      Ordenar só a página recebida deixaria o item da clínica FORA dela quando o nome
+#      fosse alfabeticamente tarde — e o defeito apareceria na primeira tela que a pessoa
+#      vê, sem erro nenhum.
+#      ⚠️ A contagem de estoque do `orderBy` é escopada pelo **RLS**, não por `where`
+#      (`tb_estoque_clinica` e `tb_lotes_vacina` com ENABLE+FORCE) — verificado ao vivo:
+#      empresas 58 e 42 devolvem itens diferentes no topo. E a relação muda por tipo
+#      (`lotes` na vacina, `estoques` no medicamento): errar faz a contagem sair ZERO.
+#      ⚠️ `empresaId: 'asc'` e NUNCA `'desc'` — no Postgres ASC é NULLS LAST.
+#      ⚠️ **ADMIN da plataforma fica FORA** (vê o catálogo de todas as clínicas): segue
+#      alfabético. ⚠️ A LISTA DE LOTES da Farmácia NÃO foi reordenada — ali todo item
+#      está em estoque, logo todos são "da empresa" e agrupar por origem do catálogo seria
+#      ruído.
+#   2. 🔴 **LABORATÓRIO NO ESTOQUE DE VACINAS.** O campo "Fabricante" virou
+#      **Laboratório** e ganhou três coisas: **"Outros (sem laboratório informado)"**,
+#      que isola as vacinas cujo cadastro não informou laboratório (**52 nesta base**,
+#      antes alcançáveis SOMENTE por "Todos" — escolher qualquer laboratório as escondia);
+#      **"+ Cadastrar novo laboratório"**, que grava no catálogo da clínica; e a lista
+#      passou a ser a **UNIÃO** do que está nas vacinas com esse catálogo.
+#      🔴 **SEM MIGRATION** — o laboratório não tem tabela própria e reusa
+#      `tb_catalogo_tipo_servico` na categoria **LABORATORIO**, a MESMA dos tipos de
+#      fornecedor/prestador/localização: traz de graça o tenant, a policy de RLS e o gate.
+#      `categoria` é VARCHAR(20) SEM CHECK (conferido no banco) e 'LABORATORIO' tem 11.
+#      Mesma decisão de 2026-09-08 para os tipos de local. Gate: `vacina.estoque.criar`.
+#      ⚠️ A **sentinela** `__SEM_FABRICANTE__` precisa ser IGUAL nos dois lados: string
+#      vazia já significa "todos", e divergindo o backend procuraria um laboratório com
+#      esse NOME e "Outros" voltaria vazio.
+#      ⚠️ O **vazio conta como ausente** (`btrim(...) = ''`), não só o NULL: o campo é
+#      opcional e grava string vazia. ⚠️ "Outros" só aparece havendo o que filtrar.
+#      ⚠️ Laboratório novo digitado no CADASTRO da vacina já entra no seletor sem
+#      recarregar a tela. ⚠️ A escrita passa pelo MESMO `criarTipoCatalogo` dos demais
+#      tipos (28-g). ✅ RLS conferido ao vivo, em transação REVERTIDA: a empresa 58 grava
+#      e lê; a 42 enxerga 0.
+#   **NENHUMA MIGRATION NESTA LEVA** (`migrate status`: 198, banco em dia). Suíte:
+#   **1009**; `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos. Gates novos em
+#   `__tests__/laboratorioVacina.test.js` e ampliados em `produtosContasPagar.test.js`,
+#   os dois verificados que REPROVAM.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+#   Detalhes na §12.)
+# Atualizado em: 2026-09-15 (parte 3) (🔴 **O E-MAIL PASSOU A TRAZER O CADASTRO QUE A
+#   CLÍNICA JÁ TEM.** Ao SAIR do campo de e-mail, quatro telas de cadastro de PESSOA —
+#   **Prestador, Fornecedor, Proprietário e Incluir Membro** — perguntam ao backend
+#   "esta clínica já conhece este e-mail?". Duas respostas úteis:
+#   **CADASTRO** (já existe o registro daquele tipo AQUI) → a tela CARREGA e passa a
+#   EDITAR, em vez de montar a duplicata que o salvar recusaria no fim com 409;
+#   **PESSOA** (é conhecida em OUTRO papel — a prestadora que vira estagiária, a
+#   veterinária que vira cliente) → preenche **só os campos VAZIOS**, nunca por cima do
+#   que foi digitado. Faixa explicando o que foi trazido (`AvisoCadastroEncontrado`):
+#   preencher sozinho sem dizer por quê assusta.
+#   🔴 **MULTI-TENANT — as três regras, em `lib/cadastroPorEmail.js`:** (1) o `users` é
+#   IDENTIDADE, serve só para achar o `id` (`select: { id: true }`); nome, telefone,
+#   documento e endereço saem SEMPRE de `tb_usuario_empresa` DESTA empresa (§36) — ler
+#   do `users` devolveria o cadastro que a clínica vizinha digitou; (2) **FAIL-CLOSED**
+#   sem `req.empresaId`; (3) **NUNCA `comEscopoPlataforma`** neste caminho — é ele que
+#   levanta o filtro de tenant. ⚠️ "Não existe aqui" e "existe em OUTRA clínica" são a
+#   MESMA resposta, de propósito: distingui-las faria do campo um verificador de
+#   cadastro alheio.
+#   ✅ **RLS CONFERIDO AO VIVO**: `tb_prestadores`, `tb_fornecedores`,
+#   `tb_proprietario_perfis` e `tb_usuario_empresa` estão com **ENABLE + FORCE** e
+#   policy fail-closed `app_plataforma() OR empresa_id = app_empresa_id()`. Medido: uma
+#   busca SÓ pelo e-mail, **sem nenhum filtro de empresa**, devolve a linha na sessão da
+#   dona e **NADA** na da vizinha (e nada sem contexto). O `where` do controller é
+#   defesa em profundidade, não o único gate.
+#   ⚠️ O escopo da busca é o MESMO da LISTAGEM (`escopoVisivel`, extraído e
+#   compartilhado): o que a tela consegue ABRIR é o que ela carrega aqui — senão a busca
+#   traria para edição um cadastro que a lista não mostra.
+#   ⚠️ **No Incluir Membro NUNCA se carrega para edição** (quem edita membro é a linha
+#   da lista): ali é só preenchimento, com gate de **GESTOR** — a rota devolve CPF e
+#   endereço de terceiros.
+#   **SEM MIGRATION** — só LEITURA de tabelas que já existem. Suíte: **977**;
+#   `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+#   Detalhes na §12.)
+# Atualizado em: 2026-09-15 (🔴 **PRODUTOS VIROU O CADASTRO DO ITEM** + prestador na
+#   execução + a dose atrasada que empurra as seguintes + 3 defeitos que quebravam em
+#   silêncio. Leva grande; o que mais importa saber ao voltar aqui:
+#   1. 🔴 **`/cadastro/produtos` DEIXOU DE CADASTRAR A COMPRA.** Saíram Fornecedor,
+#      Nota Fiscal, Valor de compra, Valor de venda, "Ler documento de compra" e "Dar
+#      entrada no estoque"; entraram Forma Farmacêutica*, Apresentação*, Unidade*, Via*,
+#      Controlado* e **Quantidade de Doses** (o número É a marcação de multidose — não
+#      há checkbox à parte). A BUSCA traz o que já está cadastrado (global + o da
+#      clínica) e **Alterar CARREGA os dados**. ⚠️ Editar item GLOBAL é **COPY-ON-WRITE**
+#      (`lib/catalogoEmpresa.js`): nasce a cópia DA EMPRESA, o estoque ativo e a
+#      prescrição pendente são REAPONTADOS, e o catálogo das outras clínicas não é
+#      tocado. ⚠️ Os seletores são os MESMOS do cadastro rápido da Prescrição/Vacina
+#      (`components/catalogo/SeletoresCatalogo`, extraídos de `CadastroCatalogoModal`).
+#      🔴 Item NÃO-VACINA nasce com `classificacao = 'Cadastrado na clínica'`, NUNCA
+#      nula — ver a armadilha do `NOT` sobre NULL na §12.
+#      ✅ **MIGRATION APLICADA** `20261009000000_medicamento_multidose_empresa` —
+#      `multidose`/`doses_por_embalagem` em **`tb_medicamentos`**. ⚠️ Só é seguro ali
+#      PORQUE toda edição passa pelo copy-on-write; a linha global nunca é marcada.
+#      `tb_produtos_fornecedor` **VENCE** quando existe (é o dado mais específico e é o
+#      que já está gravado). `prisma generate` falhou com EPERM (§11) — tudo por SQL cru.
+#   2. 🔴 **QUEM EXECUTOU O PROCEDIMENTO É INFORMADO NA EXECUÇÃO.** Campo novo no modal
+#      de `/execucao-prescricao`, só em PROCEDIMENTO, **OPCIONAL**. O escolhido VENCE o
+#      gravado na prescrição, é persistido no item e governa recibo + conta a pagar.
+#      "Por procedimento" SAIU do tipo de pagamento do Prestador (fica SALÁRIO ×
+#      COMISSÃO); o valor legado continua aceito no cálculo do recibo. A COMISSÃO já
+#      incidia sobre o valor do procedimento/combo cadastrado — nada mudou ali. O que
+#      mudou é o RELATÓRIO: a linha **Procedimentos** passou a sair LÍQUIDA da comissão
+#      (`totalComissaoNoPeriodo`, lida do LEDGER, nunca recalculada). ⚠️ Sai só da
+#      CATEGORIA, nunca do FATURAMENTO — este é o que foi cobrado.
+#   3. 🔴 **A DOSE ATRASADA EMPURRA AS SEGUINTES** (`agendaDaDose`, ExecucaoPrescricao).
+#      Procedimento 1x/dia por 2 dias mostrava a 2ª dose com data E HORA vencendo antes
+#      de a 1ª ser executada. Agora a dose pendente é reapresentada HOJE ("prescrição em
+#      atraso desde DD/MM") e as seguintes deslizam o mesmo tanto de dias. ⚠️ **Dose
+#      futura não tem HORÁRIO**: quem o fixa é a execução da anterior (rolling schedule);
+#      mostrar a hora prescrita afirmava um compromisso que ninguém assumiu. ⚠️ Só a
+#      dose de AGORA é pintada de atrasada.
+#   4. 🔴 **TRÊS DEFEITOS SILENCIOSOS:** (a) `criarGestor` morria com
+#      `Cannot access 'emailNorm' before initialization` (TDZ — a senha era derivada
+#      ANTES de a variável existir); (b) o cadastro de paciente hasheava o literal
+#      `Inicial#001` e o e-mail anunciava `gerarSenhaInicial(...)` — o cliente recebia
+#      uma senha que NUNCA existiu ("Usuário ou Senha Inválidos"); (c) a troca de
+#      proprietário criava o login e **não mandava senha nenhuma**. Os três agora
+#      calculam a senha UMA vez e usam nos dois lados.
+#   5. 🔴 **A TELA EM BRANCO ERA O ErrorBoundary NO LUGAR ERRADO.** Ele só existia
+#      DENTRO de `ProtectedApp`, abaixo dos providers e do Router — erro de render em
+#      qualquer um deles desmontava a árvore e sobrava página branca, sem pista (o
+#      console é noop em produção). Subiu para a RAIZ (`main.tsx`), grava o último erro
+#      em `sessionStorage` e oferece "limpar dados locais".
+#   6. **Vet + prestador na MESMA empresa:** os dois pagamentos já moravam em tabelas
+#      distintas (`tb_usuario_empresa` × `tb_prestadores`). O que faltava: o cartão de
+#      acesso do prestador SOBRESCREVIA o cadastro de quem já é membro — agora o
+#      `cadastro` só preenche quando o vínculo NASCE ali.
+#   7. **UI:** status da lista de proprietários em PILÍLULAS, numa barra "Status:" ao
+#      LADO da busca (início da coluna do detalhe, mesma faixa da barra "Fatura:", e
+#      FORA do `selecionado ?` — sem cliente escolhido o filtro precisa seguir
+#      recortando a lista). O `<select>` compacto foi revertido a pedido; na coluna de
+#      240px as pílulas quebravam em várias linhas, por isso a barra vive ao lado.
+#      🔴 A barra **"Fatura:"** do detalhe (pílulas de status DENTRO do cliente) foi
+#      REMOVIDA a pedido: o efeito de `filtroLista` JÁ realinhava o `filtroStatus`,
+#      então as duas diziam a mesma coisa em lugares diferentes. ⚠️ O seletor de
+#      **Mês** ficou (é o único caminho até a fatura de um mês anterior, e a barra
+#      de status é `lg:`). ⚠️ Em "Todas" o painel abre no PRIMEIRO status que o
+#      cliente tem — fixar ABERTA deixaria vazio, sem pista, o cliente que só tem
+#      fatura fechada (a pílula desabilitada que dizia isso deixou de existir).
+#      Cadastro da Empresa em
+#      duas linhas de três (Tempo de Consulta · Fechamento · Data de Fechamento /
+#      Validade · Forma de Cobrança · Percentual); Sidebar > Cadastro reordenado
+#      (Pessoal · Equipe · Pacientes · Proprietários · Localizações · Tratadores ·
+#      Prestadores · Fornecedores · Produtos · Procedimentos); Raça e Pelagem viraram
+#      `DropdownSelect` (abrem PARA BAIXO — o `<select>` nativo decide sozinho e não há
+#      CSS que force); **local criável na hora** no cadastro do Paciente e na troca de
+#      proprietário (`NovaLocalizacaoModal`, escopo decidido pelo BACKEND); Farmácia:
+#      "Val por Embalagem" → **Valor Unitário**, "Val Repassado por Embalagem" → **Valor
+#      Unitário Cobrado**, e o aviso "Unidade alterada (…)" saiu.
+#   7b. 🔴 **O NOME DIGITADO NO CADASTRO DE PRODUTO TRAZ O QUE JÁ EXISTE.** Em
+#      `/cadastro/produtos`, ao SAIR do campo Nome (nunca por tecla — seria uma consulta
+#      por caractere), `GET /cadastro/produtos/por-nome` responde se aquele
+#      medicamento/vacina já está no catálogo VISÍVEL (global + o da clínica) e a tela
+#      CARREGA forma, apresentação, unidade, vias, controlado, fabricante e doses. Antes
+#      a pessoa redigitava um cadastro que o sistema tem, e nascia um item da clínica
+#      DIVERGENTE do global de mesmo nome — sem nada acusar.
+#      ⚠️ **A CÓPIA DA EMPRESA VENCE o global homônimo** (`empresa_id ASC NULLS LAST`):
+#      com a cópia existente, carregar o GLOBAL faria o salvar criar uma SEGUNDA cópia
+#      da mesma clínica. Mesma precedência de `garantirMedicamentoDaEmpresa`.
+#      ⚠️ Item INATIVO também é reconhecido — `salvarItemDoCatalogo` REAPROVEITA e
+#      reativa a cópia de mesmo nome; escondê-lo faria a tela oferecer um cadastro
+#      "novo" que o salvar transformaria em edição, em silêncio.
+#      ⚠️ `coalesce(classificacao,'')` nos DOIS ramos do recorte: `NOT ILIKE` sobre NULL
+#      não é verdadeiro, e o item legado de classificação nula nunca seria reconhecido
+#      (a armadilha do `NOT` sobre NULL, a mesma de `catalogoManual`).
+#      ⚠️ `translate()`, NUNCA `unaccent()` (a extensão pode não existir na base do
+#      cliente) — e as duas cadeias precisam ter o MESMO comprimento.
+#      ⚠️ **SÓ no cadastro NOVO**: em edição, trocar o registro debaixo de quem edita
+#      seria pior que o erro que isto evita. ⚠️ Carrega SOZINHO só com o formulário
+#      vazio fora o nome; com campos digitados a faixa OFERECE o botão e quem decide é a
+#      pessoa — sobrescrever seria perder trabalho em silêncio. ⚠️ `setForm` FUNCIONAL
+#      (a resposta chega depois). ⚠️ A consulta NUNCA lança: reconhecer o nome é
+#      conveniência, e derrubá-la trocaria um atalho por um impedimento.
+#      Fonte única da normalização: `normalizarNome` (back) × `normalizarNomeProduto`
+#      (front) — os dois precisam concordar. **SEM MIGRATION** (só LEITURA).
+#      Gate: `__tests__/produtoPorNome.test.js` (16 casos), verificado que REPROVA.
+#   8. **Documentos (MarcoVet):** removidos os 6 modelos de teste e criada a **Receita
+#      Controlada** a partir da folha em papel (`seeds/007_receita_controlada.seed.js` +
+#      `scripts/receitaControladaMarcoVet.js`, rodado). ⚠️ O nome "Receita Controlada" é
+#      o elo com o recorte de controlados da Prescrição — trocá-lo quebra o recurso.
+#   Suíte: **936**. `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+#   Detalhes na §12.)
 # Atualizado em: 2026-09-12 (parte 2) (🔴 **PRODUTO MULTIDOSE — e a tela de Produtos
 #   de volta ao menu.** Três coisas ligadas:
 #   1. **A TELA EXISTIA E NINGUÉM A ALCANÇAVA.** `/cadastro/produtos` está montada em
@@ -1956,7 +2257,8 @@ FornecedorEspecialidade → especialidades do cadastro Fornecedor. unique(fornec
                     do vet usa as espécies que ele atende. Componente reutilizável: EspecialidadeSelector.tsx.
                     Agenda (Agendamentos.tsx) lê especialidades do catálogo (fallback p/ VetSubespecialidade legado).
 Prestador         → catálogo de PRESTADORES de serviço (tb_prestadores) — cópia da FORMA de
-                    Fornecedor (nome, CPF/CNPJ, contato, tipoServico livre VARCHAR(50), endereço,
+                    Fornecedor (nome, CPF/CNPJ, contato, tiposServico — VÁRIOS, CSV em
+                    `tipo_servico` VARCHAR(255) desde 2026-09-15 —, endereço,
                     tipoEntrada SYSTEM|CLIENTE, empresaId/equipeId SEM FK) mas TABELA e RLS PRÓPRIAS
                     (migration 20260821000000, decisão explícita: entidade independente, não view/
                     filtro sobre Fornecedor). RLS tenant direto igual tb_fornecedores (policy
@@ -3281,6 +3583,793 @@ New-Item -ItemType Junction `
 ---
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
+
+### Sessão 2026-09-16 — A chave única sem empresa e o erro cru na tela
+
+> ✅ **MIGRATION APLICADA** (autorizada nesta sessão) —
+> `20261011000000_medicamento_unique_por_empresa`. Substitui a UNIQUE legada
+> `(nome, formaFarmaceutica, apresentacao)` por
+> `(nome, formaFarmaceutica, apresentacao, unidade, empresa_id) NULLS NOT DISTINCT`.
+> Não altera nem remove NENHUMA linha. Aplicada com o DONO (`nutriadmin`):
+> `DATABASE_URL=$DATABASE_URL_MIGRATIONS npx prisma migrate deploy` — com o usuário da
+> APLICAÇÃO morreria com `42501 must be owner of table`.
+> `migrate status` depois: **199 migrations, "Database schema is up to date!"**, e o
+> índice conferido no banco:
+> `(nome, "formaFarmaceutica", apresentacao, unidade, empresa_id) NULLS NOT DISTINCT`.
+> **`prisma generate` não é necessário**: a chave não está no `schema.prisma` (o Prisma
+> não expressa `NULLS NOT DISTINCT`), exatamente como a chave ANTIGA também não estava.
+
+- [x] 🔴 **O COPY-ON-WRITE DO CATÁLOGO NUNCA FUNCIONOU — e o erro ia cru para a tela.**
+      O relato foi "ao alterar o medicamento explode o erro na tela", com o dump do
+      Prisma inteiro. São DOIS defeitos empilhados, e cada um precisa da sua correção:
+      o banco recusava a cópia, e o controller publicava a recusa crua.
+      **A prova de que nunca funcionou não é inferência**: `tb_medicamentos` tem 8.255
+      linhas e **ZERO** com `empresa_id` preenchido. A regra está escrita em
+      `lib/unidadeMedicamento.js` desde 2026-09-12 e em `lib/catalogoEmpresa.js` desde
+      2026-09-15; o índice a recusava desde antes das duas.
+- [x] **A chave nova**: `(nome, formaFarmaceutica, apresentacao, unidade, empresa_id)`.
+      ⚠️ `empresa_id` é o que resolve o defeito — é ele que dá a cada clínica o seu
+      espaço de nomes. `unidade` entra **a pedido** (2026-09-16) e tem efeito próprio:
+      a mesma apresentação em unidade diferente passa a poder coexistir no catálogo.
+      ⚠️ **`NULLS NOT DISTINCT`** mantém o lado GLOBAL tão protegido quanto antes: sem
+      ele, NULL seria valor distinto e duas linhas globais idênticas passariam.
+      ⚠️ **"vias" não entra**: é 1:N em `tb_medicamento_vias`, e índice único só alcança
+      colunas da própria tabela. A unicidade das vias já existe lá
+      (`@@unique([medicamentoId, via])`).
+- [x] ✅ **VERIFICADA AO VIVO, em transação REVERTIDA** (0 linhas ao fim, índice antigo
+      intacto no banco):
+      ```
+      ANTES  da migration  RECUSADO  cópia da empresa 58 (o defeito relatado)
+      DEPOIS da migration  ACEITO    cópia da empresa 58
+                           ACEITO    cópia da empresa 42 do MESMO item (tenant vizinho)
+                           RECUSADO  2ª cópia idêntica da 58
+                           RECUSADO  2ª linha GLOBAL idêntica (NULLS NOT DISTINCT)
+                           ACEITO    linha GLOBAL com outra unidade
+      ```
+- [x] 🔴 **`lib/erroResposta.js` — o erro cru parou de chegar à tela.**
+      O padrão exato do defeito era `error: err.message || 'texto amigável'`: o fallback
+      **nunca dispara**, porque a mensagem do erro quase sempre está preenchida. Para
+      quem usa o sistema, "Invalid `tx.medicamento.create()` invocation in
+      D:\Projetos\…" não diz nada acionável; e é vazamento de caminho de arquivo, nome
+      de tabela e estrutura interna do servidor.
+      ⚠️ **Regra de negócio continua passando inteira** — é a metade que importa: o
+      texto de `UnidadeIndisponivelError` ("este item já teve saída de estoque na
+      unidade atual (g)") é o que resolve o caso da pessoa. O helper distingue os dois
+      pelo `status` (4xx = escrito para ser lido).
+      Traduções: P2002→409, P2003→409, P2025→404, `IA_QUOTA_EXCEDIDA`→429. O resto é
+      500 com a frase que o controller escolheu; o original vai ao log com stack.
+      ⚠️ **`err.meta.target` NUNCA vai na resposta**: são nomes de coluna do banco, e
+      com o índice fora do schema o Prisma devolve "(not available)" — na tela viraria
+      uma frase sem sentido.
+- [x] 🔴 **O GATE ACHOU MAIS SEIS ARQUIVOS com o mesmo defeito**, que é o que o pedido
+      mandava procurar: `PermissaoController` (7 handlers iguais), `AudioController`,
+      `ComposicaoAlimentarController`, `EquipeController`, `relatorio.controller`,
+      `RelatorioNutricionalController`, `ExameController` (2) e `NotaFiscalController`
+      — neste último o `motivo` é EXIBIDO na tela e vinha da mensagem crua.
+      ⚠️ `GoogleController` usa `parsed.error.message ||` para montar um `Error`
+      INTERNO, não uma resposta — o gate foi apertado para olhar a CHAVE DE RESPOSTA
+      (`error:`/`mensagem:`/`motivo:`), senão ele acusaria código correto.
+- [x] ⚠️ **O FRONT não foi tocado, de propósito.** `Produtos.tsx` já fazia
+      `e.response?.data?.error ?? 'Erro ao salvar o produto.'` — ele exibiu fielmente o
+      que o backend mandou. Um sanitizador na tela esconderia junto as mensagens de
+      NEGÓCIO, que são justamente as que ajudam.
+- [x] Gate novo `__tests__/erroNaoVazaParaTela.test.js` (9 casos): o comportamento do
+      helper (dump não vaza, stack não vaza, negócio passa, P2002/P2025 traduzem) e a
+      VARREDURA dos controllers.
+      ⚠️ A varredura IGNORA COMENTÁRIOS — sem isso ela acusa a própria documentação da
+      regra e vira ruído que se aprende a ignorar (mesma lição do gate de e-mail).
+      ✅ **Verificado que REPROVA**: reintroduzido o `err.message || …` em
+      `ProdutoController.criar`, **2 dos 9 falharam**. Suíte: **1032**;
+      `tsc --noEmit` (backend) limpo.
+      ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+- [x] ✅ **CONFERIDO COM O CÓDIGO REAL depois de aplicar**, em transação REVERTIDA:
+      `salvarItemDoCatalogo` foi chamada contra a base trocando **só o fabricante**, **só
+      as vias**, **só a unidade** e **só o "controlado"**, em MEDICAMENTO e em VACINA
+      globais — os 5 casos passaram, todos com `copiado: true`. E duas edições SEGUIDAS
+      do mesmo item global devolvem o MESMO id (1 cópia no catálogo da clínica, não 2):
+      quem garante isso é `copiaExistente`, que casa por (nome, empresa).
+      ⚠️ A correção de TELA e a de BANCO são independentes de propósito: a primeira vale
+      para QUALQUER erro futuro, inclusive os que ainda não existem.
+- [ ] O `err.message` ainda aparece em `lib/concorrenciaRegistro.js` e no handler global
+      de `server.ts` — os dois são casos legítimos (mensagem de conflito escrita para
+      ser lida; e o global já troca 500 por "Erro interno do servidor"). O gate cobre só
+      `src/controllers`; estender a `src/lib` exigiria distinguir, um a um, os erros de
+      negócio que nascem lá.
+
+### Sessão 2026-09-15 (parte 5) — A postergação da dose atrasada estava inerte antes da 1ª execução
+
+> **NENHUMA MIGRATION.** A correção é 100% de TELA (`ExecucaoPrescricao.tsx`).
+> `migrate status` conferido: **198 migrations, "Database schema is up to date!"**, nada
+> pendente. As 29 linhas com `rolled_back_at` em `_prisma_migrations` são marcas
+> HISTÓRICAS do fluxo de recuperação (todas com `applied_steps_count = 0`, cada uma
+> seguida da reaplicação bem-sucedida) — não são migrations por aplicar.
+
+- [x] 🔴 **O DEFEITO: a função existia, era chamada, e não fazia nada.** `agendaDaDose`
+      (parte 3 desta mesma data) derivava a data devida de `previsaoDaDose(item, 0)`, e
+      essa devolve `null` quando o item não tem ÂNCORA (`proximaDoseEm`). Âncora só
+      existe depois da 1ª dose dada, ou quando há Hora Início prescrita — ou seja, a
+      postergação ficava INERTE exatamente no caso que ela veio corrigir: procedimento
+      sem hora, nenhuma dose executada. `atrasoDias` saía sempre 0, o `tsc` passava, a
+      suíte passava e o defeito seguia na tela.
+      **Medido na base** (item 233): "Acupuntura a laser", `1xDia`, `duracaoDias` 3,
+      `dataInicio` 2026-09-15, `horaInicio` **string vazia**, `doses_executadas` 0 →
+      `proxima_dose_em` **NULL** no banco (o backend devolve `horarioPrevistoDoItem`,
+      que é null sob `semAncoraDeHorario`). No dia 16, com nada executado, a tela seguia
+      anunciando 15/09 · 16/09 · 17/09 — duas doses disputando o mesmo dia.
+      ⚠️ Foi isto que fez o relato dizer "depois que a primeira foi executada ficou tudo
+      certo": executada a 1ª, nasce a âncora e o caminho ANTIGO já funcionava.
+- [x] 🔴 **A data devida passou a sair de `previsaoPendenteISO`** — a MESMA fonte que
+      `itemAtrasadoEm` (o selo "Atrasada" da fila) já usava: com âncora é o rolling
+      schedule; sem âncora é o 1º dia do curso. Unificar não é elegância: com duas
+      fontes, o selo diria "atrasada" enquanto a agenda mostra o curso em dia — ou o
+      contrário —, e era metade do que o usuário via.
+- [x] **4º argumento `diaDaDose`** (o `linha.dia` de `gerarResumoDoses`): sem âncora, a
+      data ORIGINAL de cada linha é o **dia TEÓRICO do curso**, nunca um múltiplo do
+      intervalo. É ele que distribui certo a frequência com mais de uma dose por dia —
+      `12em12h` dá dias 1,1,2,2, e a conta por intervalo espalharia as quatro doses em
+      quatro dias. ⚠️ **Com âncora ele é IGNORADO**: ali quem manda é a cadência real, e
+      deixar o dia teórico vencer desfaria o rolling schedule.
+- [x] 🔴 **A HORA "às 09:00" NUNCA FOI PRESCRITA — era o meio-dia UTC.** O selo da fila
+      (`atrasoDoTipo`) formatava com `formatDiaMesHora` o ISO de `previsaoPendenteISO`,
+      que sem âncora é **DATA PURA** (meio-dia UTC, `dataDoDiaISO`). Convertida ao fuso
+      da clínica, ela vira "às 09:00" em Brasília, "às 08:00" em Cuiabá e "às 07:00" no
+      Acre: um compromisso de horário que ninguém marcou e que muda de valor conforme
+      quem olha. É a §6 ao contrário — lá a proibição é passar INSTANTE para
+      `formatDate`; aqui era passar DATA PURA para um formatador de instante.
+      ⚠️ O comentário logo acima da linha já dizia *"sem âncora de horário não existe
+      hora a mostrar"*. O código fazia o oposto — e foi por isso que o gate novo tem de
+      **ignorar comentários**: casar com a prosa faria o teste aprovar o código errado.
+- [x] **`temHorario` no retorno de `agendaDaDose`**, e é ele que libera
+      `formatDiaMesHora` nos DOIS chamadores (o selo da fila e a linha da dose no modal).
+      ⚠️ Hora só na dose de **AGORA** e só com âncora; dose futura continua sem hora,
+      pela razão de sempre — quem a fixa é a execução da anterior.
+- [x] **O deslocamento continua em DIAS INTEIROS** sobre o instante, nunca remontando a
+      data com a hora "na mão": isso preserva as duas naturezas de uma vez — o instante
+      ancorado mantém 14:05, e a data pura de meio-dia UTC continua meio-dia UTC (logo,
+      continua data pura em todos os 4 fusos do Brasil).
+- [x] ✅ **Resultado simulado com o item REAL da base**, nada executado:
+      ```
+      dia 15/09  (sem selo)              Dose 01/03 - Em Execução (15/09)
+                                         Dose 02/03 - Prevista para 16/09
+                                         Dose 03/03 - Prevista para 17/09
+      dia 16/09  Atrasada — era 15/09    Dose 01/03 - Prevista para 16/09 — prescrição em atraso desde 15/09
+                                         Dose 02/03 - Prevista para 17/09 — prescrição em atraso desde 16/09
+                                         Dose 03/03 - Prevista para 18/09 — prescrição em atraso desde 17/09
+      ```
+      Sem "às 09:00" em lugar nenhum, e a cascata exatamente como pedida.
+
+- [x] **Gate novo `__tests__/agendaDosePostergada.test.js` (14 casos) que EXECUTA o
+      código real do front**, e não varre texto. O arquivo é extraído por **AST**
+      (`ts.createSourceFile` + `ts.ScriptKind.TSX`), as 6 funções necessárias são
+      transpiladas com `ts.transpileModule` e rodadas com `DOSES_POR_DIA` (da lib do
+      BACKEND, a fonte única da cadência) e `diaISO` injetados no escopo.
+      ⚠️ **Por AST e não por recorte de texto**: a assinatura de `agendaDaDose` tem
+      chaves no TIPO DE RETORNO (`): { iso: …; temHorario: boolean } {`), então contar
+      chaves a partir do primeiro `{` recortaria o tipo em vez do corpo.
+      ⚠️ **Varredura de texto NÃO teria pegado este defeito** — a função aparecia no
+      arquivo, era chamada com os argumentos certos e vinha precedida de um comentário
+      que descrevia o comportamento correto. Só executando se descobre que ela devolvia
+      `atrasoDias: 0`.
+      Um dos casos formata de propósito o ISO sem âncora COM hora e afirma `'09:00'`:
+      é a prova de que `temHorario` não é decorativo — é ele que separa "sei o dia" de
+      "sei a hora".
+      ✅ **Verificado que REPROVA**: revertida a derivação para `previsaoDaDose(item, 0)`
+      e devolvido o `formatDiaMesHora` incondicional ao selo, **8 dos 14 falharam**;
+      removido só o 4º argumento da chamada do modal, **1 falhou**.
+      Suíte: **1023**; `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+      ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+- [ ] 🔴 **A POSTERGAÇÃO É DE EXIBIÇÃO; A FILA DO BACKEND NÃO ACOMPANHA.** Item sem
+      âncora só entra na fila enquanto `dentroDaJanelaDoCurso` (`[dataInicio,
+      dataInicio + duracaoDias - 1]`), então o curso de 3 dias iniciado em 15/09 sai da
+      fila em 18/09 — justamente o dia em que a tela passa a prever a 3ª dose. Na
+      prática o cron `cancelar_doses_prescricao_perdidas` cancela o que ficou para trás.
+      Alinhar os dois exigiria estender a janela pelo atraso acumulado, o que mexe na
+      regra de produto de 2026-08-18 ("dose perdida não fica pendente em outros dias") e
+      no cron de cancelamento — decisão de produto, não foi pedida aqui.
+- [ ] O **Painel Principal** monta a mesma fila e já não tinha o defeito da hora (usa
+      `formatDiaMes`), mas também **não mostra a agenda por dose** — a postergação só
+      aparece no modal de `/execucao-prescricao`. Se a cascata precisar ser visível lá,
+      o gancho é o mesmo `agendaDaDose`.
+- [ ] A **VACINA** não tem agenda por dose (`SALVA → FINALIZADA → EXECUTADA`, aplicação
+      única), então nada a postergar; o selo dela usa `vacinaAtrasadaEm`, que compara
+      DATA PURA por `split('T')` e nunca inventou hora.
+
+### Sessão 2026-09-15 (parte 4) - Catálogo da empresa antes do global; laboratório da vacina
+
+> **SEM MIGRATION nas duas frentes.** `migrate status` conferido: 198 migrations, banco
+> em dia, nada pendente — e as colunas das duas últimas conferidas no
+> `information_schema`. O laboratório reusa uma tabela que JÁ EXISTE.
+
+#### A. Ordem: o que é da empresa vem antes do catálogo global
+
+- [x] 🔴 **O PROBLEMA, medido:** para o animal 93 (empresa 58, Equino) o catálogo visível
+      tem **2 medicamentos em estoque + 3 cadastrados pela clínica contra 4.368 globais**.
+      Em ordem alfabética pura os cinco ficavam perdidos no meio — e são exatamente os que
+      ela usa todo dia.
+- [x] 🔴 **"DA EMPRESA" É A UNIÃO DE TRÊS COISAS** (definição do usuário, 2026-09-15):
+      ```
+      0. EM ESTOQUE              - a clínica tem o frasco (mesmo que a linha do
+                                   catálogo seja GLOBAL: estoque é sempre de UMA empresa)
+      1. PRODUTO de fornecedor   - não tem, mas sabe de quem comprar
+      2. CADASTRADO pela clínica - a cópia dela no catálogo (`empresa_id`), que é o que
+                                   `/cadastro/produtos` grava, sem estoque nem fornecedor
+      3. GLOBAL puro             - o resto do catálogo do sistema
+      ```
+      ⚠️ **NÃO reduzir o grupo a `empresaId != null`**: foi a primeira versão desta
+      sessão, e ela mandava para baixo o medicamento GLOBAL que a clínica TEM EM ESTOQUE —
+      justamente o que está na prateleira.
+      ⚠️ Os três grupos de 2026-09-10 (estoque → produto → o resto) CONTINUAM valendo: o
+      antigo grupo 2 foi PARTIDO em dois, separando a cópia da clínica do catálogo global.
+      ⚠️ Vale para MEDICAMENTO e VACINA — é a mesma função.
+      ⚠️ `empresaId` **não vai para o payload**: a origem viaja num `Map` id → booleano
+      montado logo após a consulta, porque `dados` remonta os objetos e perderia o campo.
+- [x] 🔴 **A PRIMEIRA PÁGINA SAI ORDENADA PELO BANCO** — `ordemEmpresaPrimeiro(req,
+      relacaoEstoque)`, fonte única usada por `listar` e `paraAtendimento`:
+      `[{ <estoque>: { _count: 'desc' } }, { empresaId: 'asc' }, { nome: 'asc' }]`.
+      **Ordenar só em JS não bastaria**, e o modo de falhar é silencioso: `listar` PAGINA
+      (a Farmácia pede `limit=5000`, o catálogo do ADMIN pagina de 30 em 30) e a Prescrição
+      abre o dropdown com **`limit=5`** enquanto o catálogo completo carrega em paralelo.
+      Com `ORDER BY nome`, o item da clínica nem entraria nessa primeira página quando o
+      nome fosse alfabeticamente tarde — a pessoa abriria o seletor, veria só globais e
+      concluiria que o cadastro dela não funcionou.
+      ⚠️ **A CONTAGEM É ESCOPADA PELO RLS**, não por `where`: `tb_estoque_clinica` e
+      `tb_lotes_vacina` estão com ENABLE+FORCE, então a subconsulta do `_count` só enxerga
+      as linhas da empresa da sessão. **Verificado ao vivo**: carimbando 58 e 42, o topo
+      vem com itens diferentes e nada vaza.
+      ⚠️ Ela conta a entrada **INATIVA** também (o `_count` do Prisma não aceita filtro) —
+      aceitável: é item com que a clínica já lidou, e quem decide o grupo de verdade é o sort.
+      ⚠️ **A relação muda por TIPO** — `lotes` na vacina, `estoques` no medicamento.
+      Passar a errada faz a contagem sair sempre ZERO, em silêncio.
+      ⚠️ `empresaId: 'asc'` e NUNCA `'desc'`: no Postgres ASC é NULLS LAST, então o
+      não-nulo (a empresa) vem primeiro. Mesma precedência de `garantirMedicamentoDaEmpresa`.
+      ⚠️ **ADMIN da plataforma fica de fora** (`escopado = userType !== 'ADMIN' &&
+      req.empresaId`): ele vê o catálogo de TODAS as clínicas, e ali `empresaId asc`
+      agruparia por id de empresa — ordem sem sentido na tela dele.
+      ⚠️ O sort em JS **não é redundante**: ele conhece o vínculo de FORNECEDOR, que só
+      existe depois do mapeamento.
+- [x] ⚠️ **A LISTA DE LOTES da Farmácia NÃO foi reordenada.** Chegou a ser (primeira
+      versão) e foi REVERTIDA: ali TODO item está em estoque, logo todos são "da empresa"
+      pela definição acima, e agrupar por origem da linha do catálogo seria ruído.
+- [x] **O front não precisou de nada** — `SubModuloPrescricao` e `Farmacia` filtram com
+      `.filter` (que preserva a ordem); os únicos `.sort()` dessas telas são de
+      especialidade e de unidade.
+- [x] ✅ **Verificado ao vivo** (leitura, com `app.plataforma`/`app.empresa_id` carimbados —
+      sem carimbo o FORCE RLS devolve 0 e parece catálogo vazio, armadilha 42): a simulação
+      completa do `paraAtendimento` para o animal 93 devolveu 2 / 0 / 3 / 4.368 nos quatro
+      grupos, com a primeira página (`limit=5`) em **9 ms**. Os `orderBy` também foram
+      executados pelo client Prisma para validar o SHAPE — erro de forma de `orderBy` só
+      aparece na chamada e derrubaria a tela em runtime.
+- [x] **Gate ampliado** em `__tests__/produtosContasPagar.test.js` (4 grupos, o `Map` de
+      origem, `ordemEmpresaPrimeiro` nas duas consultas, o `_count`, o `asc` e a exclusão
+      do ADMIN). ✅ **Verificado que REPROVA** duas vezes.
+- [ ] O **Estoque de Vacinas** não entrou nesta ordenação: o seletor dele é SQL cru com
+      `ORDER BY nome ASC` e a lista de lotes é **FEFO** (`validade asc`) — ali a ordem é
+      regra clínica, não preferência de exibição.
+- [ ] A tela não DIZ de onde vem cada item (não há selo "do sistema" na busca da
+      prescrição, como já existe em `/cadastro/produtos`): a ordem agrupa sem explicar o
+      agrupamento. Se incomodar, o gancho é o mesmo `Map` de origem.
+
+#### B. Laboratório no Estoque de Vacinas
+
+- [x] 🔴 **O LABORATÓRIO NÃO TEM TABELA PRÓPRIA** — sempre foi texto na coluna
+      `fabricante` de `tb_medicamentos`. Consequência: ele só passava a existir DEPOIS que
+      alguém cadastrasse uma vacina com ele, e `listarFabricantes` filtra
+      `fabricante IS NOT NULL`. Logo, **vacina sem laboratório não tinha como ser filtrada**:
+      escolher qualquer laboratório a escondia, e só "Todos" a mostrava. Medido: **52
+      vacinas** nesse estado nesta base, contra **6 laboratórios** conhecidos.
+- [x] **O campo virou "Laboratório"** e ganhou três coisas:
+      **"Outros (sem laboratório informado)"**, **"+ Cadastrar novo laboratório..."** e a
+      lista como **UNIÃO** do que está nas vacinas com o catálogo da clínica.
+- [x] 🔴 **SEM MIGRATION — reusa `tb_catalogo_tipo_servico`, categoria `LABORATORIO`**,
+      a MESMA tabela dos tipos de fornecedor/prestador/localização. Reusá-la traz de graça
+      o tenant, a policy de RLS (ENABLE+FORCE) e o gate de permissão; um catálogo novo
+      exigiria repetir os três — **mesma decisão de 2026-09-08 para os tipos de local**.
+      Conferido no banco: `categoria` é `VARCHAR(20)` **sem CHECK** e 'LABORATORIO' tem 11
+      caracteres.
+      ⚠️ Gate `vacina.estoque.criar` — quem dá entrada de vacina é quem conhece o
+      laboratório. **NÃO** `medicamentos.catalogo.criar`, que é ADMIN-only (catálogo
+      GLOBAL) e deixaria a opção morta para a clínica.
+      ⚠️ Categoria em `CATEGORIAS_VALIDAS` **sem entrada em `SLUG_CRIAR`** faz
+      `getNivelEfetivo` receber `undefined` e devolver NENHUM: a opção aparece e nunca
+      grava, sem dizer por quê. Há gate para isso.
+- [x] 🔴 **A SENTINELA `__SEM_FABRICANTE__` precisa ser IDÊNTICA nos dois lados.** String
+      vazia já significa "todos", então "sem laboratório" precisa de valor próprio.
+      Divergindo, o backend procura um laboratório com esse NOME e "Outros" volta vazio —
+      a pessoa conclui que não há vacina sem laboratório. Há gate travando os dois arquivos.
+      ⚠️ Ela **NÃO vira parâmetro** da consulta: o filtro é a própria ausência do campo.
+- [x] ⚠️ **O VAZIO CONTA COMO AUSENTE** (`btrim(...) = ''`), não só o NULL: o campo
+      Fabricante do cadastro é opcional e grava string vazia quando alguém passa por ele sem
+      digitar. Olhando só o NULL, essas vacinas ficariam fora de "Outros" **E** de todo
+      laboratório — exatamente o problema que "Outros" veio resolver. Nos DOIS ramos da
+      consulta (com e sem recorte por espécie).
+- [x] ⚠️ **"Outros" só aparece havendo o que filtrar** (`semFabricante`, respondido pelo
+      BACKEND): opção que não filtra nada é botão morto — a mesma regra da aba vazia. Quem
+      sabe disso é o servidor: a tela só conhece as vacinas do laboratório filtrado.
+- [x] ⚠️ **Laboratório novo digitado no CADASTRO da vacina já entra no seletor**, sem
+      recarregar a tela: a lista de laboratórios só é recarregada em `carregarLotes`, e sem
+      isso o nome recém-digitado no modal só apareceria depois de um refresh — a pessoa
+      concluiria que o cadastro dele não pegou. Vacina cadastrada SEM laboratório liga o
+      `temSemFabricante`, porque agora existe algo em "Outros".
+- [x] ⚠️ **Dedup sem olhar a caixa**, nos dois lados: 'Zoetis' e 'ZOETIS' são o mesmo
+      laboratório, e duas linhas iguais no seletor fariam a pessoa escolher uma ao acaso. A
+      grafia da VACINA vence a do catálogo — é a que já está gravada no item.
+- [x] ⚠️ **A leitura do catálogo NÃO lança**: base sem a tabela devolve lista vazia e a
+      tela cai no comportamento antigo. Derrubar a lista de laboratórios impediria TODA
+      entrada de vacina por causa de um recurso acessório.
+- [x] **UM SÓ CAMINHO DE ESCRITA** — `criarTipoCatalogo(categoria, nome)` foi extraído e
+      EXPORTADO de `TipoServicoSelect.tsx`, e o `useCatalogoTipoServico` passou a usá-lo.
+      `NovoTipoInput` também foi exportado (com `rotulo` opcional, que só troca as
+      PALAVRAS). Duas versões divergiriam no QUE ENTRA no catálogo da clínica (28-g).
+      ⚠️ `__novo_lab__` é valor **só da TELA** e nunca vai ao backend — mandá-lo
+      procuraria um laboratório com esse nome e a lista de vacinas voltaria vazia.
+- [x] ✅ **RLS conferido ao vivo, em transação REVERTIDA** (0 linhas ao fim): a empresa 58
+      grava o laboratório e o lê de volta; a empresa 42 enxerga **0**.
+- [x] **Gate novo** `__tests__/laboratorioVacina.test.js` (15 casos). ✅ **Verificado que
+      REPROVA**: sentinela divergente + só NULL → 2 casos falharam; removida a chamada de
+      `labsDoCatalogo` da união → 1 caso falhou.
+      ⚠️ Um dos casos nasceu FROUXO (casava a DEFINIÇÃO de `labsDoCatalogo`, que continua
+      existindo com a chamada removida) e foi apertado para exigir a chamada dentro da
+      união. Lição repetida: "a função aparece" não é asserção — sabote e confira.
+      Suíte: **1009**; `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+      ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+- [ ] O laboratório cadastrado pela tela **NÃO é aplicado à vacina** — ele passa a existir
+      no seletor e filtra, mas quem grava `fabricante` no item continua sendo o cadastro da
+      vacina (`CadastroCatalogoModal`, campo opcional). Corrigir o laboratório de uma vacina
+      já cadastrada segue sendo pelo catálogo.
+- [ ] Não há tela para EDITAR ou REMOVER laboratório do catálogo (o
+      `CatalogoTipoServicoController` só expõe listar e criar) — vale para as quatro
+      categorias, não só esta. Nome digitado errado fica na lista.
+- [ ] A opção "Outros" existe só no seletor do FORMULÁRIO de entrada. A busca da lista de
+      lotes (topo da tela) continua por texto livre.
+
+### Sessão 2026-09-15 (parte 3) — O e-mail traz o cadastro que a clínica já tem
+
+> **SEM MIGRATION.** Nenhuma coluna nova: a funcionalidade só LÊ `tb_prestadores`,
+> `tb_fornecedores`, `tb_proprietario_perfis` e `tb_usuario_empresa`. `migrate status`
+> conferido — 198 migrations, schema em dia, nada pendente.
+
+- [x] 🔴 **O PROBLEMA: o cadastro que a clínica já tinha era redigitado — e o e-mail
+      repetido só aparecia no SALVAR.** Prestador, Fornecedor e Proprietário são
+      cadastros de PESSOA, e a mesma pessoa aparece em mais de um deles (a prestadora
+      que também é cliente, a veterinária que passa a atender como externa). Até aqui o
+      gestor preenchia documento, telefone e endereço do zero e, quando o e-mail já
+      existia, levava **409 no fim** — com o formulário inteiro preenchido.
+      Agora, ao SAIR do campo de e-mail, o backend responde uma de três coisas:
+      ```
+      CADASTRO → já existe o registro DAQUELE tipo aqui → a tela CARREGA e passa a EDITAR
+      PESSOA   → conhecida em OUTRO papel nesta empresa → preenche só o que está VAZIO
+      nada     → desconhecida AQUI                      → segue como sempre foi
+      ```
+      Vale nas QUATRO telas de cadastro de pessoa: **Prestador, Fornecedor,
+      Proprietário e Incluir Membro** (Cadastro › Equipe).
+- [x] 🔴 **FONTE ÚNICA `lib/cadastroPorEmail.js`** (espelho no front em
+      `utils/cadastroPorEmail.ts`). As três regras que não se afrouxam:
+      **(1)** o `users` é IDENTIDADE — a busca por e-mail ali pede `select: { id: true }`
+      e nada mais; nome/telefone/documento/endereço saem SEMPRE de `tb_usuario_empresa`
+      DESTA empresa (§36). Ler do `users` devolveria o cadastro que a clínica vizinha
+      digitou, e a tela o exibiria como se fosse dela — **o sintoma é um formulário
+      preenchido "certo"**, que ninguém desconfia.
+      **(2)** **FAIL-CLOSED sem `req.empresaId`**: sem empresa não existe "cadastro desta
+      empresa" a trazer. Nunca cair no vínculo mais recente.
+      **(3)** **NUNCA `comEscopoPlataforma`** neste caminho — é ele que levanta o filtro
+      de tenant, e é justamente ele que impede o vazamento. Há gate travando os três.
+      ⚠️ **"Não existe" e "existe em OUTRA clínica" são a MESMA resposta**, de propósito:
+      distingui-las transformaria o campo num verificador de cadastro alheio.
+      ⚠️ Campo `null`, vazio **ou só com espaços** não entra no pacote — `null` aqui é
+      "vazio NESTA empresa", não "use o da outra". Mandar dois espaços faria a tela dar o
+      campo por preenchido (`preencherVazios` para de vê-lo em branco) e o formulário
+      sairia com um espaço. **Foi o teste que pegou o caso do espaço em branco.**
+      ⚠️ Remuneração, mensalista e dia de vencimento ficam FORA de `CAMPOS_PESSOA`: são o
+      acordo de UM papel, e herdá-los noutro cadastro afirmaria um combinado que ninguém
+      fez. Há teste travando a lista.
+- [x] ✅ **RLS CONFERIDO AO VIVO**, e é ele quem garante — não o `where` do controller.
+      `tb_prestadores`, `tb_fornecedores`, `tb_proprietario_perfis` e
+      `tb_usuario_empresa`: **ENABLE + FORCE** com `app_plataforma() OR empresa_id =
+      app_empresa_id()`. Medido com a consulta mais frouxa possível (**só o e-mail, sem
+      nenhum filtro de empresa**): a sessão da DONA encontra, a da VIZINHA **não
+      encontra**, e sem contexto de empresa também não. Verificado também o fluxo
+      completo em transaction REVERTIDA (0 linhas ao fim): a empresa A lê o cadastro de
+      `tb_usuario_empresa`, o nome legado do `users` **não vaza**, e a empresa B não
+      enxerga nada. E os 4 endpoints foram chamados de verdade contra a base (e-mail que
+      existe → CADASTRO com o registro completo; o MESMO e-mail na clínica vizinha →
+      `encontrado: false`; sem e-mail → 400; membro sem gestor → 403).
+      ⚠️ A policy de `tb_prestadores`/`tb_fornecedores` **não tem o termo
+      `empresa_id IS NULL`** — linha GLOBAL (SYSTEM) é invisível para o tenant. O ramo
+      `{ empresaId: null }` do `where` da listagem é, na prática, letra morta sob RLS.
+- [x] 🔴 **O ESCOPO DA BUSCA É O MESMO DA LISTAGEM** — `escopoVisivel(req)` foi EXTRAÍDO
+      do `listar` de Prestador e de Fornecedor e passou a ser consumido pelos dois
+      caminhos. Duas cópias divergiriam, e o que divergiria é a resposta a "este cadastro
+      existe aqui?": a busca carregaria para edição um registro que a lista não mostra —
+      ou deixaria criar a duplicata de um que ela mostra. No Proprietário o recorte é o
+      de `listar`/`obterPorId` (`whereEhClienteDaEmpresa` + `whereProprietarioNoEscopo`).
+      ⚠️ **As duas cláusulas do Proprietário são empilhadas em `AND`, NUNCA espalhadas**:
+      as duas devolvem `{ OR: [...] }`, e no mesmo objeto a segunda APAGA a primeira —
+      o recorte por empresa sumiria em silêncio. Foi assim que a primeira versão saiu, e
+      é o que o gate estrutural trava.
+- [x] **Rotas novas, todas LITERAIS antes de `/:id`** (armadilha 1 — o Express leria
+      "por-email" como id e o formulário nunca preencheria, sem erro na tela):
+      `GET /cadastro/{prestadores,fornecedores,proprietarios}/por-email?email=` (gate
+      `cadastro.<modulo>.ler`) e `GET /equipes/cadastro-por-email?email=`.
+      ⚠️ **O Incluir Membro é GESTOR-only** (checado no controller, como o próprio
+      `incluirMembroDireto`): a rota devolve CPF e endereço de terceiros, e com só
+      leitura ela entregaria isso a qualquer um.
+      ⚠️ Lá **nunca se carrega para edição** — quem edita membro é a linha da lista, com
+      o fluxo próprio. `jaMembro` é AVISO ANTECIPADO; o veredito continua sendo o 409 do
+      salvar (a inclusão é por EQUIPE, e a checagem aqui é por EMPRESA).
+- [x] **Front**: `CampoValidado` ganhou `aoSairDoCampo` (dispara junto da validação —
+      um gancho por tecla viraria uma consulta por caractere) e nasceu
+      `components/AvisoCadastroEncontrado.tsx`, fonte ÚNICA da faixa nas quatro telas.
+      Preencher sozinho SEM dizer por quê assusta: a faixa conta de onde vieram os dados
+      e se o Salvar vai CRIAR ou ATUALIZAR (âmbar quando a consequência muda).
+      ⚠️ **Só no cadastro NOVO**: em edição, trocar o registro debaixo de quem está
+      editando seria pior que o erro que isto evita.
+      ⚠️ `setForm` **funcional**: a resposta chega depois, e um patch calculado sobre o
+      `form` da closure apagaria o que foi digitado durante a espera.
+      ⚠️ O documento preenche `cpf`/`cnpj` **e acerta o seletor CPF/CNPJ junto** — só o
+      campo deixaria o número invisível atrás do botão do outro tipo.
+      ⚠️ `emailConsultado` (ref) evita consultar de novo quando a pessoa só PASSA pelo
+      campo sem mudar nada — `blur` dispara igual.
+      ⚠️ A consulta **NUNCA lança** (`consultarCadastroPorEmail` engole falha, 403 e
+      e-mail inválido): preenchimento automático é conveniência, e derrubar o formulário
+      porque a consulta falhou trocaria um atalho por um impedimento.
+- [x] **`formDeProprietario` extraída** (`ProprietarioFormModal`) — a conversão cadastro
+      → formulário agora tem UM lugar, usado pelo "Alterar" da lista, pelo preenchimento
+      por e-mail e pela TROCA DE PROPRIETÁRIO. Nesta última o modal resolve sozinho e
+      **só preenche** (lá não existe "editar"), inclusive localidades e dia de
+      vencimento, que a transferência exige preenchidos.
+- [x] Testes: `__tests__/cadastroPorEmail.test.js` (24 casos) — o cadastro que vem do
+      vínculo da empresa, a mesma pessoa em OUTRA empresa não encontrada, o fail-closed
+      sem empresa, o `users` que não vaza, o vazio que não entra, e os GATES ESTRUTURAIS
+      (rota antes de `/:id`, escopo único, o `AND` do Proprietário, o gate de gestor e a
+      ausência de `comEscopoPlataforma`).
+      ✅ **Verificado que REPROVA**: movida a rota para depois de `/:id` e feita a lib ler
+      `fullName` do `users`, **2 casos falharam**; restaurado, os 24 voltaram.
+      Suíte: **977**; `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+      ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+- [x] 🔴 **TESTE INSTÁVEL ACHADO E CORRIGIDO NA RAIZ** (`externoNaoEhEquipe.test.js`):
+      o caso "revogar NÃO apaga o vínculo" falhava ~1 em 8 execuções da suite COMPLETA
+      (isolado passava sempre). Causa: `jest.mock(..., { virtual: true })` em
+      `lib/usuarioEmpresa` e `lib/logger`, que são `.js` REAIS — um worker que já
+      tivesse carregado o módulo verdadeiro num arquivo anterior resolvia o REAL, e
+      `salvarPagamentoEAcesso` deixava de ser um `jest.fn()`. O flag saiu dos dois.
+      ⚠️ **`virtual: true` SÓ em módulo que o jest realmente não resolve** (`lib/prisma`
+      é TypeScript). É a MESMA lição de 2026-09-10 (parte 2), e o defeito estava
+      dormindo desde 2026-09-09 — só apareceu porque o arquivo de teste novo mudou o
+      escalonamento dos workers. 10 execuções completas em verde depois da correção.
+- [ ] **Tratador não tem e-mail** (`tb_tratadores` só guarda nome/telefone/local), então
+      ficou de fora — não há chave por onde reconhecer a pessoa. Localizações, Produtos,
+      Procedimentos e Vacina não são cadastros de pessoa.
+- [ ] O cadastro do PACIENTE já trazia o proprietário por e-mail desde antes
+      (`GET /users/buscar-proprietario`, tenant-scoped), e continua no caminho próprio:
+      lá o formulário só tem nome e telefone do cliente, então não há endereço a
+      preencher. Se um dia ganhar mais campos, o lugar de unificar é este endpoint novo.
+- [ ] A consulta dispara no `blur`. Quem digita o e-mail e clica DIRETO em "Salvar" pode
+      ter o salvar no mesmo instante da consulta — o backend continua sendo a autoridade
+      (409 de duplicata), então o pior caso é o comportamento antigo.
+
+### Sessão 2026-09-15 (parte 2) — O prestador passou a ter VÁRIOS tipos de serviço
+
+> ✅ **MIGRATION APLICADA** (autorizada) — `20261010000000_prestador_tipos_servico`:
+> `tb_prestadores.tipo_servico` de `VARCHAR(50)` para `VARCHAR(255)`. ALARGAR não perde
+> dado e não muda linha nenhuma. Conferido no `information_schema`: `tb_prestadores` em
+> 255, **`tb_fornecedores` intacta em 50**; e as 3 linhas existentes seguem lá, todas com
+> um tipo só (maior = 13 caracteres).
+> ⚠️ A contagem exigiu `set_config('app.plataforma','on',true)` — sem o carimbo o FORCE
+> RLS devolve 0 e parece tabela vazia (armadilha 42). A primeira leitura caiu nisso.
+> ⚠️ `prisma generate` falhou com EPERM (§11, backend rodando) e **não faz falta**:
+> `@db.VarChar` é metadado de schema, o Client não valida comprimento — quem recusava o
+> valor era o Postgres, e ele já aceita 255. Mesmo precedente da `20260914000000`.
+
+- [x] 🔴 **O CADASTRO OBRIGAVA A ESCOLHER UMA ATUAÇÃO SÓ.** O prestador é o profissional
+      EXTERNO, e ele acumula: o mesmo profissional é ferrador **e** fisioterapeuta. Com
+      um valor só, quem cadastrava escolhia uma e a outra sumia do filtro por serviço do
+      encaminhamento — sem erro nenhum, porque o campo estava "preenchido".
+      Agora o campo é **Tipos de Serviço**, no molde do "Especialidades" do Cadastro
+      Pessoal (a pedido): um `<select>` que só ACRESCENTA + chips com X.
+- [x] 🔴 **A CONVENÇÃO JÁ EXISTIA — o que faltava era o cadastro saber produzi-la.**
+      Os leitores a jusante já tratam `tipo_servico` como LISTA:
+      `EncaminhamentoController` monta o filtro de serviços com `tipoServico.split(',')`,
+      `SubModuloEncaminhamento.servicosDoPrestador` faz o mesmo no front, e
+      `PrestadorController.normalizarTipos` já comparava a lista ORDENADA na checagem de
+      duplicidade. Por isso a lista continua na MESMA coluna, como CSV — **nenhuma tabela
+      nova, nenhuma policy de RLS nova, nenhum backfill**.
+      ⚠️ NÃO confundir com `Fornecedor.tipoServico`, que segue `VARCHAR(50)`: lá o campo é
+      DERIVADO da 1ª especialidade (`tb_fornecedor_especialidades`), nunca uma lista
+      digitada. Alargar os dois "por simetria" apagaria essa diferença.
+- [x] 🔴 **50 CARACTERES NÃO ERAM VALIDAÇÃO — ERAM UM 500 MUDO.** Três tipos cabem
+      raspando (`Fisioterapeuta, Quiroprata, Radiologista` = 40); o QUARTO passa de 50 e
+      o Postgres responde `22001 value too long`, que virava "Erro ao criar prestador" na
+      tela. É a mesma armadilha do status `VARCHAR(20)` de 2026-08-23 (parte 4).
+      O teto do controller passou a ser `LIMITE_TIPO_SERVICO = 255`, o MESMO da coluna.
+      ⚠️ E há rede: `ehColunaCurtaDeTipoServico` traduz o 22001 num **400 legível** que
+      nomeia a migration. Numa base que ainda não a aplicou, o pior caso é uma frase
+      explicando o que fazer — nunca um 500 sem motivo (a regra do fallback silencioso).
+- [x] **`sanearTiposServico` é a fonte única do que vai para a coluna**: descarta vazio e
+      vírgula solta, **remove repetido sem olhar a caixa** ("Ferrador, ferrador" → um
+      chip só) e grava com o separador `", "` que os leitores esperam.
+      ⚠️ Preserva a grafia do PRIMEIRO — é o nome que está no catálogo da clínica.
+      ⚠️ Em `atualizar`, `tipoServico === undefined` **PRESERVA** o gravado (PATCH
+      parcial); sem essa distinção, um salvar que não mencione o campo o APAGARIA.
+- [x] **Um catálogo, duas formas** — `TipoServicoSelect.tsx` ganhou
+      `TipoServicoMultiSelect` ao lado do `TipoServicoSelect` de sempre (Fornecedor e
+      Localização seguem escolhendo UM, sem alteração de API).
+      🔴 A carga do catálogo tenant-scoped e a criação de tipo novo moram em
+      `useCatalogoTipoServico`, compartilhado pelas duas: duas cópias divergiriam na
+      primeira correção, e o que divergiria é **o que ENTRA no catálogo da clínica**
+      (armadilha 28-g). Há teste travando o hook único e o POST único.
+      ⚠️ O `<select>` do multi fica em `value=""` e volta ao placeholder a cada escolha:
+      deixá-lo com o último escolhido faria o campo parecer ter UM valor, que é
+      exatamente o que ele existe para desfazer.
+      ⚠️ Tipo já gravado que não veio no catálogo desta sessão continua aparecendo como
+      CHIP (o chip sai de `value`, não das opções) — o que ele não pode é reaparecer na
+      lista de "adicionar".
+- [x] **A lista mostra um chip por tipo** (card mobile e tabela), e o cabeçalho da coluna
+      virou "Tipos de Serviço". O par `tiposServicoDaString`/`tiposServicoParaString`
+      (exportado do seletor) é quem converte nas duas pontas da tela.
+- [x] Testes: `__tests__/prestadorTiposServico.test.js` (17 casos) — o CSV canônico, a
+      duplicidade independente de ORDEM, a migration que alarga sem tocar em
+      `tb_fornecedores` nem apagar dado, o schema em dia com a coluna, e um GATE
+      ESTRUTURAL nos elos que somem em silêncio (o saneamento em criar/atualizar, o
+      `undefined` que preserva, a conversão nas duas pontas da tela e o catálogo único).
+      Suíte: **953**; `tsc -b` e `vite build` limpos.
+      ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+- [ ] `EquipeController` ainda corta o tipo em `slice(0, 50)` ao criar o cadastro a
+      partir do "Incluir Membro" (`tipoServicoNovo`). Continua correto para FORNECEDOR
+      (coluna de 50) e seguro para PRESTADOR (um tipo só, derivado da 1ª especialidade) —
+      mas se aquele caminho passar a mandar lista, é ali que o corte precisa sair.
+
+### Sessão 2026-09-15 — Produtos vira cadastro do ITEM, prestador na execução e 3 defeitos silenciosos
+
+> ✅ **MIGRATION APLICADA** (autorizada) — `20261009000000_medicamento_multidose_empresa`:
+> `multidose BOOLEAN NOT NULL DEFAULT false` + `doses_por_embalagem INTEGER` em
+> **`tb_medicamentos`**. ADITIVA, sem backfill: `false`/`NULL` = o comportamento de
+> hoje, nenhuma cobrança existente muda de valor.
+> ⚠️ **POR QUE AGORA É SEGURO PÔR ISTO NO CATÁLOGO MISTO** — o CLAUDE.md de 12/09 dizia
+> "NUNCA em `tb_medicamentos`, a linha é GLOBAL e marcá-la mudaria a cobrança de TODAS
+> as clínicas". Continua verdade, e é por isso que **toda edição da tela passa por
+> COPY-ON-WRITE** (`lib/catalogoEmpresa.js`): a linha global NUNCA é escrita, e o RLS
+> (`WITH CHECK empresa_id = app_empresa_id()`) a recusaria mesmo que o código tentasse.
+> ⚠️ `prisma generate` falhou com EPERM (§11, backend rodando) — as duas colunas são
+> lidas/gravadas por **SQL cru com `catch`**, então a base não migrada cai no
+> comportamento antigo em vez de derrubar o cadastro.
+
+- [x] 🔴 **A TELA DE PRODUTOS DEIXOU DE CADASTRAR A COMPRA E PASSOU A CADASTRAR O ITEM.**
+      Saíram (a pedido) **Fornecedor, Nota fiscal, Valor de compra, Valor de venda, "Ler
+      documento de compra" e "Dar entrada no estoque"**. Entraram **Forma Farmacêutica\*,
+      Apresentação\*, Unidade\*, Via de administração\*, Controlado\*** e **Quantidade de
+      Doses**. O nome deixou de ser seletor e virou campo livre, e o **"+" saiu dos
+      botões** — nem no rótulo nem como ícone.
+      ⚠️ **REVERTE o escopo de 2026-09-10**, mas NÃO remove o backend daquilo:
+      `tb_produtos_fornecedor`, `lib/produtoFornecedor.js`, o lançamento da conta a pagar
+      na execução e `NotaFiscalController` seguem existindo e funcionando. O que sumiu é
+      a porta de entrada NESTA tela. `POST /cadastro/produtos/nota-fiscal` foi
+      desmontada e o controller diz onde remontá-la em uma linha.
+      ⚠️ `components/produtos/LeitorNotaFiscal.tsx` foi REMOVIDO: sem chamador, seria
+      código morto apontando para uma rota que não existe mais.
+- [x] 🔴 **A BUSCA TRAZ O QUE JÁ ESTÁ CADASTRADO, e Alterar CARREGA os dados.** A lista é
+      o catálogo VISÍVEL da clínica — o global do sistema + o próprio dela —, com selo
+      "do sistema" no global. Não achou? **Novo produto** abre o formulário JÁ com o nome
+      digitado na busca.
+      ⚠️ **Excluir só aparece no item DA CLÍNICA**: o do sistema é de todas, e o botão
+      que só falha depois do clique é a armadilha 28-d. Item da empresa é INATIVADO
+      (soft delete — há prescrição e estoque apontando para ele).
+- [x] 🔴 **COPY-ON-WRITE PARA TODOS OS CAMPOS** — `lib/catalogoEmpresa.js`, construído
+      sobre `lib/unidadeMedicamento.js` (que passou a exportar `copiaExistente`,
+      `criarCopiaDaEmpresa` e `reapontarParaCopia`). Duas implementações da cópia
+      divergiriam, e o que divergiria é **para onde o estoque e a prescrição pendente
+      passam a apontar** — com o item na cópia e o estoque no antigo, a dose é executada
+      SEM baixa e SEM linha na fatura, em silêncio.
+      ```
+      item GLOBAL     → nasce a CÓPIA da empresa; ela recebe tudo; reaponta estoque
+                        ATIVO, prescrição SALVO/FINALIZADO e produto de fornecedor
+      item da EMPRESA → alterado no lugar
+      item de OUTRA   → 404 (nunca os dados)
+      ```
+      ⚠️ **Cópia anterior é REAPROVEITADA e REATIVADA** (editou, voltou, editou): sem
+      isso o catálogo da clínica encheria de linhas iguais.
+      ⚠️ **A `classificacao` só é reescrita quando o LADO muda** (medicamento ↔ vacina):
+      o global traz classificações descritivas ("Vacina viral inativada") que não devem
+      virar o genérico "Vacina" por uma edição que nem tocou nisso.
+      ⚠️ **A UNIDADE é o único campo com GUARD**, e só quando muda de verdade: com saldo
+      gravado, trocar 'g' por 'Un.' transformaria 5.000 g em "5.000 Un.". Abrir e salvar
+      sem mexer nela nunca é recusado.
+      ⚠️ **Vias são apagadas e recriadas**: `createMany({ skipDuplicates })` só sabe
+      acrescentar, e sem o delete não haveria como REMOVER uma via que saiu da escolha.
+      🔴 **NÃO-VACINA NUNCA NASCE COM `classificacao` NULA** (`CLASSIFICACAO_MEDICAMENTO
+      = 'Cadastrado na clínica'` — o MESMO valor de `lib/catalogoManual.js`). O recorte
+      de "não é vacina" é `NOT: { classificacao: { contains: 'vacin' } }`, e em SQL o NOT
+      sobre NULL **não é verdadeiro**: a linha fica FORA do filtro. Medido nesta base:
+      `NOT (classificacao ILIKE '%vacin%')` → 7.796 linhas; com `IS NULL OR NOT (...)` →
+      7.827. As 31 de diferença são INVISÍVEIS na Farmácia, na busca da Prescrição e na
+      própria aba Medicamentos. A primeira versão desta lib gravava `null` e
+      reintroduziu o defeito que `catalogoManual` já documentava; item salvo por esta
+      tela agora também CONSERTA o legado com classificação nula.
+- [x] **Quantidade de Doses: o NÚMERO É A MARCAÇÃO.** Informado (> 1), o item já nasce
+      multidose; apagado, volta a ser cobrado pela embalagem inteira. Um checkbox à parte
+      daria DOIS estados para a mesma decisão, e eles divergiriam.
+      ⚠️ `dosesPorEmbalagemDeMedicamentos` passou a consultar DUAS fontes, e **o vínculo
+      com o FORNECEDOR VENCE** quando existe: é o dado mais específico (aquele frasco,
+      daquele fornecedor) e é o que já está gravado nas bases que usaram a tela antiga —
+      mudar a precedência trocaria a cobrança por dose de quem já cadastrou.
+      ⚠️ No ESTOQUE DE VACINAS o número do catálogo vira o **padrão de `dosesPorFrasco`**
+      quando a entrada não o informa: sem isso a clínica cadastrava "10 doses" no produto
+      e o lote nascia valendo 1, cobrando o frasco inteiro a cada aplicação.
+- [x] **Os SELETORES são os MESMOS do cadastro rápido do atendimento** —
+      `components/catalogo/SeletoresCatalogo.tsx` (`SeletorBusca`, `SeletorVias`),
+      extraídos de `CadastroCatalogoModal`. Duas cópias divergiriam na primeira correção,
+      e o que divergiria é o que NASCE no catálogo — item com via numa tela e sem via na
+      outra (28-g). O modal do atendimento ganhou o campo de doses pelo mesmo motivo, e é
+      ele que a Prescrição e a Vacina abrem conforme o tipo escolhido.
+      ⚠️ As opções continuam vindo do BANCO (`/medicamentos/opcoes-catalogo`), recortadas
+      por TIPO: a vacina tem forma, unidade e via PRÓPRIAS.
+- [x] **O item novo nasce VISÍVEL nas telas de estoque** — `especiesParaItemSemPaciente`
+      (reusada do `MedicamentoController`) é a UNIÃO das duas fontes que a Farmácia
+      (`especieDaEmpresa`) e o Estoque de Vacinas (`getEspeciesIds`) consultam. Uma
+      versão própria cobriria só uma delas, e o produto ficaria visível numa tela e
+      ausente na outra.
+      ⚠️ A vacina SEM fabricante aparece no seletor de vacinas com "Todos os
+      fabricantes..." (o padrão da tela), mas NÃO entra na lista de fabricantes —
+      `listarFabricantes` exige `fabricante IS NOT NULL`. Por isso o campo Fabricante
+      existe no formulário de vacina, ainda que opcional.
+
+- [x] 🔴 **QUEM EXECUTOU O PROCEDIMENTO É INFORMADO NA EXECUÇÃO** (a pedido). Campo novo
+      no modal de `/execucao-prescricao`, só em item PROCEDIMENTO e enquanto há dose a
+      executar. O prestador escolhido **VENCE** o gravado na prescrição, é persistido no
+      item (`gravarPrestadorDoItem`) e governa o preço, o **Recibo de Prestador** e a
+      **conta a pagar** — tudo na MESMA transaction da cobrança do cliente.
+      ⚠️ **NUNCA é obrigatório**: sem escolha a execução acontece normalmente. Travar a
+      aplicação por causa de um cadastro pararia o plantão.
+      ⚠️ Aplicado ANTES do laço da fatura: depois, a cobrança sairia com um prestador e o
+      recibo com outro.
+      ⚠️ Prestador de OUTRA empresa é descartado — o id vem do cliente.
+      ⚠️ Formato `{ itemId: prestadorId }`: o "Executar Todos" manda vários procedimentos
+      e cada um pode ter sido feito por uma pessoa.
+- [x] **"Por procedimento" SAIU do tipo de pagamento do Prestador** (a pedido): ficam
+      SALÁRIO e COMISSÃO. ⚠️ O valor `POR_PROCEDIMENTO` continua ACEITO em
+      `calcularValorAPagar` — prestador já gravado assim precisa continuar tendo recibo
+      apurado. O que deixou de existir é a opção de ESCOLHER isso daqui em diante.
+- [x] ✅ **A COMISSÃO JÁ INCIDIA sobre o valor do procedimento/combo cadastrado** e o
+      **valor TOTAL já ia para a fatura do cliente** — conferido ponta a ponta, nada
+      precisou mudar (`resolverValorProcedimento` → vínculo → combo → padrão da empresa →
+      catálogo; `PERCENTUAL_CLIENTE` incide sobre esse valor).
+- [x] 🔴 **O QUE SOBRA DEPOIS DA COMISSÃO É O QUE APARECE NO RELATÓRIO.**
+      `totalComissaoNoPeriodo` (lib do prestador) soma `valor_a_pagar` do LEDGER —
+      **nunca recalcula**: o ledger é SNAPSHOT do acordo vigente na execução, e recalcular
+      faria o relatório de março usar o percentual renegociado em setembro.
+      ⚠️ Sai da CATEGORIA "Procedimentos" e do lucro bruto, **nunca do FATURAMENTO**:
+      faturamento é o que foi cobrado, e abatê-lo ali faria o total discordar da soma das
+      faturas emitidas.
+      ⚠️ A categoria nunca fica NEGATIVA (piso zero): receita negativa seria lida como
+      estorno.
+
+- [x] 🔴 **A DOSE QUE NÃO FOI DADA EMPURRA AS SEGUINTES** — `agendaDaDose`
+      (`ExecucaoPrescricao.tsx`). O DEFEITO relatado: procedimento 1x/dia por 2 dias
+      (12/09 e 13/09); no dia 13, com a dose de 12/09 ainda não executada, a tela mostrava
+      a 2ª dose com data **e hora** definidas e já vencendo — duas doses disputando o
+      mesmo dia e a segunda "atrasada" antes de a primeira acontecer.
+      A regra do sistema sempre foi ROLLING (o horário nasce da execução da ANTERIOR); o
+      que a tela fazia era ANTECIPAR essa conta a partir do calendário original.
+      Agora: a dose pendente é reapresentada HOJE com **"prescrição em atraso desde
+      DD/MM"**, e as seguintes deslizam o mesmo tanto de dias.
+      ⚠️ **Dose futura NÃO tem horário**, e isso não é omissão: quem o fixa é a execução
+      da anterior. Mostrar a hora prescrita afirmaria um compromisso que ninguém assumiu.
+      ⚠️ **Só a dose de AGORA é pintada de atrasada** — marcar as duas diria que a clínica
+      perdeu duas aplicações quando perdeu uma.
+      ⚠️ O deslocamento é em DIAS INTEIROS sobre o instante previsto, nunca remontando a
+      data com a hora "na mão": a hora prescrita é local e o ISO é UTC (§6).
+      ⚠️ É EXIBIÇÃO: quem decide o horário de verdade continua sendo o backend.
+
+- [x] 🔴 **TRÊS DEFEITOS QUE QUEBRAVAM EM SILÊNCIO:**
+      **(a) `EquipeController.criarGestor` — 500 em TODA criação de gestor.**
+      `const SENHA_INICIAL = gerarSenhaInicial({ email: emailNorm, … })` estava ANTES de
+      `const emailNorm = …`: `ReferenceError: Cannot access 'emailNorm' before
+      initialization` (TDZ do `const`). Ordem invertida.
+      **(b) O paciente mandava uma senha que NUNCA existiu.** `AnimalController.criar`
+      hasheava o literal `'Inicial#001'` e o e-mail anunciava `gerarSenhaInicial(...)` —
+      o cliente recebia credencial que não abria a conta, sem erro nenhum no sistema,
+      porque as duas pontas nunca se comparavam. É a MESMA divergência corrigida em
+      2026-09-08 no e-mail; o lado do HASH ficou para trás. ⚠️ O TELEFONE entra na
+      derivação: hash com telefone e e-mail sem ele (era o caso) dão senhas diferentes.
+      Agora a senha é calculada UMA vez (`senhaInicialNovoProp`) e usada nos dois lados.
+      **(c) A troca de proprietário criava o login e não mandava senha nenhuma.**
+      `transferirPropriedadeAnimal` passou a DEVOLVER a senha que gerou, e
+      `enviarTransferenciaPropriedade` ganhou o bloco de acesso. ⚠️ `null` para quem JÁ
+      tinha login — anunciar uma senha a quem já tem a sua faria a pessoa achar que a
+      antiga foi trocada.
+      A mensagem da tela virou **"Proprietário não encontrado, encaminhado e-mail com as
+      informações de acesso"**: a senha é DERIVADA e sai só pelo e-mail — exibi-la ali a
+      entregava a um TERCEIRO (quem cadastra).
+
+- [x] 🔴 **A TELA EM BRANCO ERA O `ErrorBoundary` NO LUGAR ERRADO.** Ele só existia
+      DENTRO de `ProtectedApp` — abaixo de `AuthProvider`, `EmpresaProvider`,
+      `PeriodoProvider`, `SelectedAnimalProvider`, do `Router` e do `Toaster`. Erro de
+      render em QUALQUER um deles passava por cima do boundary, o React desmontava a
+      árvore inteira e sobrava **página branca**; e, como o console é silenciado em
+      produção (`main.tsx`), sem nenhuma pista. Clicar não fazia nada porque não havia
+      mais nada montado — só o recarregamento completo trazia o sistema de volta, que é
+      exatamente o sintoma relatado. Agora ele também envolve a aplicação INTEIRA.
+      ⚠️ Guarda o último erro em `sessionStorage` (`s2vet_ultimo_erro`) ANTES de tudo: o
+      console de produção é noop, e sem isso não sobra rastro para investigar.
+      ⚠️ Segunda saída: **"Limpar dados locais e entrar de novo"** — recarregar sozinho
+      repete o erro quando o que está corrompido é o estado do navegador (contexto de
+      empresa, paciente selecionado, rascunhos). Limpa só o LOCAL; a sessão continua
+      sendo do cookie HttpOnly.
+      ⚠️ O boundary NÃO captura rejeição de promessa — limitação do React, não omissão.
+      ⚠️ É MITIGAÇÃO com diagnóstico, não a causa raiz identificada: o erro concreto não
+      foi reproduzido. `s2vet_ultimo_erro` é o que vai permitir achá-lo da próxima vez.
+
+- [x] **O MESMO PROFISSIONAL PODE SER VETERINÁRIO E PRESTADOR NA MESMA EMPRESA, com
+      pagamentos distintos.** Os dois acordos já moravam em tabelas separadas — o do
+      membro em `tb_usuario_empresa`, o do prestador em `tb_prestadores` —, e o recibo já
+      lia o do PRESTADOR. O que faltava: `emitirCartaoAcesso` gravava o `cadastro` do
+      prestador POR CIMA do vínculo, sobrescrevendo nome, telefone e endereço que a
+      pessoa tem como MEMBRO. Agora o `cadastro` só preenche quando o vínculo NASCE ali —
+      mesma razão do `perfil` e do cargo, que já eram preservados.
+
+- [x] **UI (a pedido):**
+      • **Faturamento** — o status da fatura saiu de baixo do card do proprietário e foi
+        para o LADO da busca. Ao lado não cabe fileira de pílulas (a coluna tem 240px),
+        então o modo compacto é um `<select>` com as MESMAS contagens.
+      • **Cadastro da Empresa** — duas linhas de três: *Tempo de Consulta · Fechamento da
+        Fatura · Data de Fechamento* / *Validade do Orçamento · Forma de Cobrança ·
+        Percentual*. ⚠️ As duas colunas variáveis ocupam lugar FIXO na grade em vez de
+        nascerem embaixo do seletor: assim a linha não se reorganiza ao trocar a forma.
+      • **Sidebar › Cadastro** reordenado: Pessoal · Equipe · Pacientes · Proprietários ·
+        Localizações · Tratadores · Prestadores · Fornecedores · Produtos · Procedimentos.
+      • **Paciente** — Raça e Pelagem viraram `DropdownSelect` (abrem PARA BAIXO; o
+        `<select>` nativo decide sozinho e não há CSS que force). **Local criável na
+        hora** (`NovaLocalizacaoModal`) no cadastro do Paciente e na troca de
+        proprietário: o campo é obrigatório, e sem isso a pessoa tinha de abandonar o
+        formulário preenchido. ⚠️ O escopo (CLIENTE + empresa/equipe do CONTEXTO) quem
+        decide é o BACKEND, nunca o corpo da requisição. ⚠️ `onMouseDown`, nunca
+        `onClick`: o `onBlur` fecha a lista antes de o clique registrar.
+      • **Farmácia** — "Val por Embalagem" → **Valor Unitário**; "Val Repassado por
+        Embalagem" → **Valor Unitário Cobrado**; o aviso "Unidade alterada (…)" saiu. A
+        REGRA da troca de unidade não mudou (segue copy-on-write) — saiu o texto.
+
+- [x] **Documentos (MarcoVet):** removidos os 6 modelos de teste nomeados no pedido
+      (`Receita Controlada`, `Receita Controlada2`, `teste1`, `rec co`,
+      `Receita Controlada 3`, `controlada 4`) e criada a **Receita Controlada** a partir
+      da folha em papel — `seeds/007_receita_controlada.seed.js` +
+      `scripts/receitaControladaMarcoVet.js` (rodado; acervo final: `teste` e a nova).
+      ⚠️ **Exclusão de verdade**, não soft delete: são modelos de TESTE, e um deles
+      precisava sair do caminho — a busca da Prescrição é PELO NOME, e dois com o mesmo
+      nome deixariam o recorte de controlados imprevisível. `DocumentoEmitido` não é
+      tocado (é SNAPSHOT, e o FK é `SetNull`).
+      ⚠️ **O modelo é DA EMPRESA, não global**: os 12 do CFMV são globais porque o
+      conteúdo mínimo vem de norma federal; esta folha é o desenho desta clínica.
+      ⚠️ A medicação usa a fonte `prescricao.controlados` com `formato: 'campos'` — nasce
+      PREENCHIDA com o recorte que a tela de Prescrição manda. Concentração, Quantidade e
+      os dados de Comprador/Fornecedor são LACUNAS: o S2Vet não os tem, e virar variável
+      "parecida" produziria documento errado com cara de documento certo.
+      ⚠️ O rodapé "Emitir em 2 vias: 1ª via: Farmácia | 2ª via: Proprietário(a) do
+      animal" é o que faz a impressão sair em DUAS VIAS (`viasDoDocumento` lê o próprio
+      papel). Some a frase, some a segunda via — e nada acusa.
+      ⚠️ Rodar exige o client de TENANT dentro de `comEscopoPlataforma`: sem o carimbo o
+      SELECT devolve 0 linhas e o INSERT é recusado, inclusive para o dono do schema
+      (armadilha 42).
+
+- [ ] O `ProdutoController` não oferece mais entrada de estoque nem preço de compra —
+      então o item cadastrado ali só vira **conta a pagar ao fornecedor** depois que
+      alguém o vincular a um fornecedor por outro caminho (`tb_produtos_fornecedor`
+      continua existindo, mas ficou sem tela). Se a clínica precisar disso, o lugar é a
+      Farmácia, que é quem trata de compra.
+- [ ] A leitura do DOCUMENTO DE COMPRA por IA (`ler_nota_fiscal@v2`) ficou sem porta de
+      entrada. `NotaFiscalController` e o serviço estão inteiros; remontar é uma linha em
+      `routes/produtos.js` (ou na Farmácia).
+- [ ] A comissão do prestador entra no relatório pelo LEDGER, que só existe a partir de
+      2026-09-10 — execução anterior a isso não tem linha e continua contando bruto.
+- [ ] As linhas LEGADAS com `classificacao` nula (**33** nesta base, medidas em
+      2026-09-15) continuam invisíveis até alguém salvá-las pela tela de Produtos. Um
+      `UPDATE` de backfill resolveria de uma vez — não foi feito por ser escrita em
+      massa no catálogo, que pede autorização.
+      ⚠️ CONSEQUÊNCIA CONHECIDA do reconhecimento por nome (§12, item 7b): o
+      `por-nome` usa `coalesce` e RECONHECE essas linhas, enquanto a LISTAGEM (que usa
+      o `NOT` do Prisma) não as mostra — então a faixa diz "já existe no catálogo do
+      sistema" sobre um item que a busca da própria tela não acha. O lado do
+      reconhecimento é o CERTO, e salvar CONSERTA a linha (`aplicarCampos` carimba a
+      classificação na cópia). Alinhar a listagem seria consertar a armadilha — muda o
+      que a aba Medicamentos exibe e não foi pedido.
 
 ### Sessão 2026-09-12 (parte 2) — Produto multidose e a tela de Produtos no menu
 

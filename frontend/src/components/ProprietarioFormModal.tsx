@@ -23,6 +23,10 @@ import {
 } from 'lucide-react';
 import { LocalizacaoCombobox } from './UsuarioFormModal';
 import ErroAcao, { classeErro, type ErroAcaoDados } from './ErroAcao';
+import AvisoCadastroEncontrado from './AvisoCadastroEncontrado';
+import {
+  consultarCadastroPorEmail, preencherVazios, fraseCadastroEncontrado,
+} from '../utils/cadastroPorEmail';
 
 // ─── Validações CPF/CNPJ ──────────────────────────────────────────────────────
 
@@ -173,6 +177,39 @@ const RASCUNHO_LOCALIDADE: LocalidadeProp = {
   localizacaoId: 0, localizacaoNome: '', frequenciaVisitas: 0,
 };
 
+/**
+ * Cadastro do cliente → formulário. FONTE ÚNICA da conversão.
+ *
+ * Usada por três caminhos: o "Alterar" da lista, o preenchimento automático por e-mail
+ * (quando o cliente JÁ existe nesta empresa) e a troca de proprietário. Três cópias
+ * divergiriam, e o que divergiria é qual campo do cadastro chega à tela.
+ *
+ * `localidades` vem à parte porque o "Alterar" da lista acrescenta as SUGERIDAS (locais
+ * que os animais do cliente já usam) ao que está confirmado.
+ */
+export function formDeProprietario(p: Proprietario, localidades = p.localidades ?? []): FormProp {
+  return {
+    fullName:          p.fullName,
+    email:             p.email,
+    phone:             p.phone ? mascaraTelefone(p.phone.replace(/\D/g, '')) : '',
+    tipoDoc:           p.cnpj ? 'cnpj' : 'cpf',
+    cpf:               p.cpf  ? mascaraCPF(p.cpf.replace(/\D/g, ''))   : '',
+    cnpj:              p.cnpj ? mascaraCNPJ(p.cnpj.replace(/\D/g, '')) : '',
+    mensalista:        p.mensalista,
+    valorAssistencia:  p.valorAssistencia
+      ? formatarMoeda(String(Math.round(p.valorAssistencia * 100)))
+      : '',
+    localidades,
+    diaVencimentoFatura: p.diaVencimentoFatura ? String(p.diaVencimentoFatura) : '5',
+    cep:               p.cep         ? mascaraCEP(p.cep.replace(/\D/g, ''))  : '',
+    endereco:          p.endereco    ?? '',
+    complemento:       p.complemento ?? '',
+    bairro:            p.bairro      ?? '',
+    cidade:            p.cidade      ?? '',
+    estado:            p.estado      ?? '',
+  };
+}
+
 // "Sociedade Hípica Brasileira · 2x/semana"
 export const resumoLocalidade = (l: LocalidadeProp): string =>
   `${l.localizacaoNome || `Local #${l.localizacaoId}`} · ${l.frequenciaVisitas}x/semana`;
@@ -258,12 +295,19 @@ interface ProprietarioFormModalProps {
   erroAcao?:     ErroAcaoDados | null;
   onFormChange?: (updates: Partial<FormProp>) => void;
   onSalvar?:     () => void;
+  /** Preenchimento automático por e-mail — faixa que explica o que foi trazido. */
+  aviso?:        { mensagem: string; tom: 'carregado' | 'preenchido' } | null;
+  /** Consulta do e-mail ao SAIR do campo. No modo TRANSFERÊNCIA o modal resolve
+   *  sozinho (lá não existe "carregar para edição": o que se faz é preencher). */
+  onEmailSaiu?:  (email: string) => void;
+  onFecharAviso?: () => void;
 }
 
 export default function ProprietarioFormModal({
   onClose, modoTransferencia,
   editando: editandoProp, form: formProp, saving: savingProp, erroAcao: erroAcaoProp,
   onFormChange: onFormChangeProp, onSalvar: onSalvarProp,
+  aviso: avisoProp, onEmailSaiu: onEmailSaiuProp, onFecharAviso: onFecharAvisoProp,
 }: ProprietarioFormModalProps) {
   const emTransferencia = !!modoTransferencia;
 
@@ -304,6 +348,68 @@ export default function ProprietarioFormModal({
   };
 
   const onSalvarClick = emTransferencia ? handleSalvarTransferencia : (onSalvarProp as () => void);
+
+  // ─── Preenchimento automático pelo E-MAIL ──────────────────────────────────
+  //
+  // No modo CONTROLADO quem consulta é o pai (a tela de Proprietários pode CARREGAR o
+  // cadastro para edição). No modo TRANSFERÊNCIA não existe "editar": o que faz
+  // sentido é PREENCHER o formulário do novo dono com o que a clínica já sabe dele —
+  // inclusive localidades e dia de vencimento, que a transferência exige preenchidos.
+  const [avisoInterno, setAvisoInterno] = useState<{ mensagem: string; tom: 'carregado' | 'preenchido' } | null>(null);
+  const emailConsultadoRef = useRef('');
+  const aviso = emTransferencia ? avisoInterno : (avisoProp ?? null);
+
+  const consultarEmailTransferencia = async (email: string) => {
+    const e = email.trim().toLowerCase();
+    if (!e || e === emailConsultadoRef.current) return;
+    emailConsultadoRef.current = e;
+
+    const r = await consultarCadastroPorEmail<Proprietario>('/cadastro/proprietarios/por-email', e);
+    if (!r.encontrado) { setAvisoInterno(null); return; }
+
+    if (r.origem === 'CADASTRO') {
+      // O cliente já é desta clínica: traz o cadastro inteiro, menos o e-mail (que é a
+      // chave que acabou de ser digitada) — e preserva o que já estiver na tela, pelo
+      // mesmo motivo de `preencherVazios`: dado antigo não apaga o que a pessoa digitou.
+      const doCadastro = formDeProprietario(r.registro);
+      setFormInterno(prev => {
+        const merge = { ...prev };
+        (Object.keys(doCadastro) as (keyof FormProp)[]).forEach(k => {
+          if (k === 'email') return;
+          const atual = prev[k];
+          const vazio = atual === '' || atual === null || atual === undefined
+            || (Array.isArray(atual) && atual.length === 0);
+          if (vazio) (merge as Record<string, unknown>)[k] = doCadastro[k];
+        });
+        return merge;
+      });
+      setAvisoInterno({ mensagem: fraseCadastroEncontrado(r, 'proprietário'), tom: 'preenchido' });
+      return;
+    }
+
+    setFormInterno(prev => ({
+      ...prev,
+      ...preencherVazios(prev, r.cadastro, {
+        fullName:    { campo: 'fullName' },
+        phone:       { campo: 'phone', formatar: v => mascaraTelefone(v.replace(/\D/g, '')) },
+        cep:         { campo: 'cep',   formatar: v => mascaraCEP(v.replace(/\D/g, '')) },
+        endereco:    { campo: 'endereco' },
+        complemento: { campo: 'complemento' },
+        bairro:      { campo: 'bairro' },
+        cidade:      { campo: 'cidade' },
+        estado:      { campo: 'estado' },
+      }),
+      ...(prev.cpf.trim() || prev.cnpj.trim()
+        ? {}
+        : r.cadastro.cnpj ? { tipoDoc: 'cnpj' as TipoDoc, cnpj: mascaraCNPJ(r.cadastro.cnpj.replace(/\D/g, '')) }
+        : r.cadastro.cpf  ? { tipoDoc: 'cpf'  as TipoDoc, cpf:  mascaraCPF(r.cadastro.cpf.replace(/\D/g, '')) }
+        : {}),
+    }));
+    setAvisoInterno({ mensagem: fraseCadastroEncontrado(r, 'proprietário'), tom: 'preenchido' });
+  };
+
+  const aoSairDoEmail = emTransferencia ? consultarEmailTransferencia : onEmailSaiuProp;
+  const fecharAviso   = emTransferencia ? () => setAvisoInterno(null)  : onFecharAvisoProp;
 
   const [buscandoCNPJ,  setBuscandoCNPJ]  = useState(false);
   const [docError,      setDocError]      = useState('');
@@ -538,7 +644,11 @@ export default function ProprietarioFormModal({
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">E-mail *</label>
+                {/* Ao SAIR do campo: se a clínica já conhece este e-mail, o cadastro
+                    dela é trazido (ver utils/cadastroPorEmail.ts). Só no cadastro NOVO —
+                    em edição o pai não passa o gancho. */}
                 <input type="email" value={form.email} onChange={e => onFormChange({ email: e.target.value })}
+                  onBlur={e => aoSairDoEmail?.(e.target.value)}
                   placeholder="email@exemplo.com" className={inputReqCls(form.email, 'email')} />
               </div>
               <div>
@@ -547,6 +657,11 @@ export default function ProprietarioFormModal({
                   onChange={e => onFormChange({ phone: mascaraTelefone(e.target.value) })}
                   placeholder="(00) 00000-0000" className={inputReqCls(form.phone, 'phone')} />
               </div>
+              {aviso && (
+                <div className="sm:col-span-2">
+                  <AvisoCadastroEncontrado mensagem={aviso.mensagem} tom={aviso.tom} onFechar={fecharAviso} />
+                </div>
+              )}
               {!editando && (
                 <div className="sm:col-span-2">
                   <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5 text-xs text-emerald-700">

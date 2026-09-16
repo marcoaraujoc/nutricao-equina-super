@@ -1,5 +1,6 @@
 const prisma = require('../lib/prisma').default;
 const { registrarAuditoria } = require('../lib/auditoria');
+const { responderErro } = require('../lib/erroResposta');
 // CATÁLOGO MISTO desde 2026-09-09 (migration 20261004000000): composição com
 // `empresaId` nulo é a do sistema; com empresa, é da clínica que a cadastrou.
 const {
@@ -288,9 +289,9 @@ const ComposicaoAlimentarController = {
       res.json({ sucesso: true, dados: resultado });
     } catch (error) {
       console.error('Erro na análise LLM de composição:', error);
-      res.status(500).json({
-        sucesso: false,
-        mensagem: error.message || 'Erro ao processar arquivo com IA',
+      responderErro(res, error, {
+        contexto: 'ComposicaoAlimentar.analisarLlm',
+        mensagem: 'Não foi possível ler o arquivo enviado. Confira o arquivo e tente de novo.',
       });
     }
   },

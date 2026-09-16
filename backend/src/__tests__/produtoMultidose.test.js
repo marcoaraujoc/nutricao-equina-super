@@ -163,8 +163,16 @@ describe('multi-tenant e RLS', () => {
   });
 
   test('base sem a migration devolve o comportamento antigo, nunca erro', () => {
+    // A função passou a consultar DUAS fontes (2026-09-15): o item do catálogo
+    // (`tb_medicamentos`, onde a tela de Produtos grava desde que deixou de pedir
+    // fornecedor) e o vínculo com o fornecedor, que VENCE quando existe. O que o gate
+    // trava continua sendo o mesmo: sem as colunas, devolve MAPA e segue — nunca
+    // estoura, e a cobrança cai na conversão de unidade de sempre.
     const fn = lib.slice(lib.indexOf('async function dosesPorEmbalagemDeMedicamentos'));
-    expect(fn).toMatch(/temColunasMultidose\(\)\)\) return vazio/);
+    expect(fn).toMatch(/temColunasMultidose\(\)\)\) return mapa/);
+    const doCatalogo = lib.slice(lib.indexOf('async function dosesNoCatalogo'));
+    expect(doCatalogo).toMatch(/catch \{[^}]*\}/);
+    expect(doCatalogo).toMatch(/return mapa/);
   });
 
   test('só entra no mapa o vínculo ATIVO, marcado e com o número informado', () => {
@@ -174,17 +182,27 @@ describe('multi-tenant e RLS', () => {
   });
 
   test('a bandeira do multidose vem JÁ NA CARGA da tela, não só no detalhe', () => {
-    // Resolvida só ao escolher um item do catálogo, o checkbox ficaria à mostra para
-    // quem digita um produto NOVO — e a marcação sumiria no salvar, em silêncio.
+    // Resolvida só ao escolher um item do catálogo, o campo ficaria à mostra para quem
+    // digita um produto NOVO — e a marcação sumiria no salvar, em silêncio.
+    // ⚠️ A tela passou a cadastrar o ITEM (2026-09-15), então a bandeira vem de
+    // `lib/catalogoEmpresa` — que é quem grava as colunas agora. O invariante não
+    // mudou: ela chega na LISTAGEM, não só no detalhe.
     const ctrl = leia('controllers/ProdutoController.js');
-    const fn = ctrl.slice(ctrl.indexOf('const listar ='), ctrl.indexOf('const listarCatalogo ='));
-    expect(fn).toMatch(/multidose: await produtoFornecedor\.temColunasMultidose\(\)/);
+    const fn = ctrl.slice(ctrl.indexOf('const listar ='), ctrl.indexOf('const detalhe ='));
+    expect(fn).toMatch(/multidose: await catalogoEmpresa\.temColunasMultidose\(prisma\)/);
   });
 
   test('o detalhe do item só devolve linha global ou da própria empresa', () => {
+    // ⚠️ O recorte virou UMA função (`escopoDaEmpresa`), usada pela listagem, pelo
+    // detalhe e pela exclusão — três cópias do mesmo `OR` divergiriam, e o que
+    // divergiria é o vazamento do catálogo privado de outra clínica.
     const ctrl = leia('controllers/ProdutoController.js');
+    const escopo = ctrl.slice(ctrl.indexOf('function escopoDaEmpresa'), ctrl.indexOf('const SELECT_ITEM'));
+    expect(escopo).toMatch(/empresaId: null/);
+    expect(escopo).toMatch(/empresaId: Number\(empresaId\)/);
+
     const fn = ctrl.slice(ctrl.indexOf('const detalhe ='), ctrl.indexOf('const criar ='));
-    expect(fn).toMatch(/OR: \[\{ empresaId: null \}, \{ empresaId: req\.empresaId \}\]/);
+    expect(fn).toMatch(/escopoDaEmpresa\(req\.empresaId\)/);
     expect(fn).toMatch(/return res\.status\(404\)/);
   });
 });

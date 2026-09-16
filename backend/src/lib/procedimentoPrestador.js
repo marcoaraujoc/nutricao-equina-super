@@ -635,7 +635,39 @@ async function listarExecucoes(empresaId, { inicio, fim, prestadorId = null } = 
   } catch { return []; }
 }
 
+/**
+ * TOTAL DE COMISSÃO/REMUNERAÇÃO de prestador apurada no período.
+ *
+ * 🔴 POR QUE O RELATÓRIO FINANCEIRO PRECISA DISTO (a pedido, 2026-09-15): o valor
+ * INTEIRO do procedimento vai para a fatura do cliente — é o que ele paga. Mas parte
+ * dele é da pessoa que executou, e sai da clínica como conta a pagar. Somar a receita
+ * bruta na linha "Procedimentos" afirmaria que a clínica ficou com tudo.
+ *
+ * ⚠️ A fonte é o LEDGER (`tb_execucoes_procedimento_prestador`), a MESMA do recibo —
+ * nunca um recálculo: o ledger é SNAPSHOT do acordo vigente na execução, e recalcular
+ * na leitura faria o relatório de março usar o percentual renegociado em setembro.
+ *
+ * ⚠️ Base não migrada (ou sem empresa no contexto) devolve 0 — o relatório volta a
+ * mostrar a receita bruta, que é o comportamento anterior.
+ *
+ * @returns {Promise<number>} soma de `valor_a_pagar` no intervalo [inicio, fim]
+ */
+async function totalComissaoNoPeriodo(empresaId, inicio, fim, { client = prisma } = {}) {
+  if (!empresaId || !inicio || !fim) return 0;
+  if (!(await temTabelas())) return 0;
+  try {
+    const rows = await client.$queryRawUnsafe(
+      `SELECT COALESCE(SUM(valor_a_pagar), 0)::float8 AS total
+         FROM schs2vet.tb_execucoes_procedimento_prestador
+        WHERE empresa_id = $1 AND executado_em >= $2 AND executado_em <= $3`,
+      Number(empresaId), inicio, fim,
+    );
+    return Number(rows?.[0]?.total ?? 0);
+  } catch { return 0; }
+}
+
 module.exports = {
+  totalComissaoNoPeriodo,
   TIPOS_PAGAMENTO_PRESTADOR,
   TIPOS_SEM_FORMA,
   BASES_CALCULO,

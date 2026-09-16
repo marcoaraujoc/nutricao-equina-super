@@ -2748,6 +2748,14 @@ model Medicamento {
   classificacao     String?  @db.VarChar(255)
   fabricante        String?  @db.VarChar(150)
   controlado        Boolean  @default(false)
+  // 🔴 MULTIDOSE (migration 20261009000000): a embalagem rende N aplicações. Fica no
+  // ITEM porque é propriedade DELE, não do fornecedor — e a tela de Produtos, que é
+  // quem o informa, deixou de pedir fornecedor. Só a CÓPIA da empresa é escrita
+  // (copy-on-write em `lib/catalogoEmpresa.js`); o catálogo global nunca é marcado.
+  // ⚠️ `dosesPorEmbalagem` NULL não é 1: com NULL a regra não entra em vigor, e
+  // tratá-lo como 1 afirmaria "o frasco é dose única".
+  multidose         Boolean  @default(false)
+  dosesPorEmbalagem Int?     @map("doses_por_embalagem")
   // null = catálogo global (ADMIN); setado = medicamento próprio da empresa
   // (criado por item manual de orçamento) — só a empresa dona vê/edita.
   empresaId         Int?     @map("empresa_id")
@@ -2959,7 +2967,16 @@ model Prestador {
   cnpj           String?   @db.VarChar(20)
   telefone       String?   @db.VarChar(30)
   email          String?   @db.VarChar(255)
-  tipoServico    String    @map("tipo_servico") @db.VarChar(50)
+  // VÁRIOS tipos de serviço por prestador (migration 20261010000000), gravados como
+  // CSV nesta MESMA coluna — é o formato que os leitores já esperam
+  // (`EncaminhamentoController` faz `tipoServico.split(',')`). Por isso a coluna
+  // ALARGOU de 50 para 255 em vez de virar tabela: 50 não comporta quatro atuações
+  // ("Fisioterapeuta, Quiroprata, Radiologista" já ocupa 40), e passar do limite NÃO
+  // dá erro de validação — dá `value too long` do Postgres, que é a armadilha do
+  // status VARCHAR(20) registrada no CLAUDE.md.
+  // ⚠️ `Fornecedor.tipoServico` continua VarChar(50): lá o campo é DERIVADO da 1ª
+  // especialidade (`FornecedorEspecialidade`), nunca uma lista digitada.
+  tipoServico    String    @map("tipo_servico") @db.VarChar(255)
   tipoEntrada    String    @default("CLIENTE") @map("tipo_entrada") @db.VarChar(10)
   cep            String?   @db.VarChar(10)
   endereco       String?   @db.VarChar(500)

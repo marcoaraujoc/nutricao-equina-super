@@ -844,63 +844,18 @@ export default function CadastroEmpresa() {
               </div>
             </div>
 
-            {/* ── Fechamento da fatura + Tempo de consulta padrão + Validade do orçamento ── */}
-            <div className="pt-2 border-t border-gray-100">
+            {/* ── Operação da clínica, em DUAS linhas de três campos (2026-09-15) ──
+                Linha 1: Tempo de Consulta · Fechamento da Fatura · o campo da DATA de
+                fechamento (dia do mês ou nº do dia útil, conforme a forma escolhida).
+                Linha 2: Validade do Orçamento · Forma de Cobrança · o PERCENTUAL.
+                ⚠️ As duas colunas variáveis (data de fechamento e percentual) ocupam
+                lugar FIXO na grade em vez de nascerem embaixo do seletor: assim a linha
+                não se reorganiza quando a pessoa troca a forma, e o campo aparece onde
+                ela está olhando. */}
+            <div className="pt-2 border-t border-gray-100 space-y-4 sm:space-y-6">
+
+              {/* Linha 1 */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">
-                    Fechamento da Fatura
-                  </label>
-                  <select
-                    value={op.tipoSelecao}
-                    disabled={!podeEditar}
-                    onChange={e => { op.setTipoSelecao(e.target.value as TipoSelecao); op.setErroDia(null); }}
-                    className={`${INPUT} bg-white`}
-                  >
-                    <option value="ULTIMO_DIA_MES">Último dia do mês</option>
-                    <option value="PRIMEIRO_DIA_MES">Primeiro dia do mês</option>
-                    <option value="DIA_ESPECIFICO">Dia específico do mês</option>
-                    <option value="DIA_UTIL">Dia útil do mês</option>
-                  </select>
-
-                  {op.tipoSelecao === 'DIA_ESPECIFICO' && (
-                    <>
-                      <input
-                        type="number"
-                        min={1}
-                        max={28}
-                        disabled={!podeEditar}
-                        value={op.diaEspecifico}
-                        onChange={e => { op.setDiaEspecifico(e.target.value); op.setErroDia(null); }}
-                        placeholder="Ex: 5 (1 a 28)"
-                        className={`${INPUT} mt-2 ${op.erroDia ? 'border-red-400 ring-1 ring-red-300' : ''}`}
-                      />
-                      {op.erroDia && <p className="text-xs text-red-600 mt-1">{op.erroDia}</p>}
-                    </>
-                  )}
-
-                  {op.tipoSelecao === 'DIA_UTIL' && (
-                    <select
-                      value={op.nDiaUtil}
-                      disabled={!podeEditar}
-                      onChange={e => op.setNDiaUtil(e.target.value)}
-                      className={`${INPUT} mt-2 bg-white`}
-                    >
-                      {ORDINAIS.map((label, i) => (
-                        <option key={i} value={i + 1}>{label} dia útil</option>
-                      ))}
-                    </select>
-                  )}
-
-                  <p className="text-xs text-gray-400 mt-1">
-                    {op.tipoSelecao === 'DIA_UTIL'
-                      ? 'Dia útil considera fins de semana e feriados nacionais.'
-                      : op.tipoSelecao === 'DIA_ESPECIFICO'
-                      ? 'O dia específico vai de 1 a 28 para existir em todos os meses do ano.'
-                      : 'Se o dia escolhido não existir no mês, a fatura fecha no último dia do mês.'}
-                  </p>
-                </div>
-
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">
                     Tempo de Consulta <span className="text-red-500">*</span>
@@ -919,6 +874,73 @@ export default function CadastroEmpresa() {
                   <p className="text-xs text-gray-400 mt-1">Padrão do sistema, se nenhum for escolhido: {TEMPO_CONSULTA_PADRAO_SISTEMA} min.</p>
                 </div>
 
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">
+                    Fechamento da Fatura
+                  </label>
+                  <select
+                    value={op.tipoSelecao}
+                    disabled={!podeEditar}
+                    onChange={e => { op.setTipoSelecao(e.target.value as TipoSelecao); op.setErroDia(null); }}
+                    className={`${INPUT} bg-white`}
+                  >
+                    <option value="ULTIMO_DIA_MES">Último dia do mês</option>
+                    <option value="PRIMEIRO_DIA_MES">Primeiro dia do mês</option>
+                    <option value="DIA_ESPECIFICO">Dia específico do mês</option>
+                    <option value="DIA_UTIL">Dia útil do mês</option>
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {op.tipoSelecao === 'DIA_UTIL'
+                      ? 'Dia útil considera fins de semana e feriados nacionais.'
+                      : op.tipoSelecao === 'DIA_ESPECIFICO'
+                      ? 'O dia específico vai de 1 a 28 para existir em todos os meses do ano.'
+                      : 'Se o dia escolhido não existir no mês, a fatura fecha no último dia do mês.'}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">
+                    Data de Fechamento
+                  </label>
+                  {op.tipoSelecao === 'DIA_ESPECIFICO' ? (
+                    <>
+                      <input
+                        type="number"
+                        min={1}
+                        max={28}
+                        disabled={!podeEditar}
+                        value={op.diaEspecifico}
+                        onChange={e => { op.setDiaEspecifico(e.target.value); op.setErroDia(null); }}
+                        placeholder="Ex: 5 (1 a 28)"
+                        className={`${INPUT} ${op.erroDia ? 'border-red-400 ring-1 ring-red-300' : ''}`}
+                      />
+                      {op.erroDia && <p className="text-xs text-red-600 mt-1">{op.erroDia}</p>}
+                    </>
+                  ) : op.tipoSelecao === 'DIA_UTIL' ? (
+                    <select
+                      value={op.nDiaUtil}
+                      disabled={!podeEditar}
+                      onChange={e => op.setNDiaUtil(e.target.value)}
+                      className={`${INPUT} bg-white`}
+                    >
+                      {ORDINAIS.map((label, i) => (
+                        <option key={i} value={i + 1}>{label} dia útil</option>
+                      ))}
+                    </select>
+                  ) : (
+                    /* Forma sem data a escolher: o campo fica desabilitado dizendo o que
+                       vale, em vez de sumir e reorganizar a linha inteira. */
+                    <input
+                      disabled
+                      value={op.tipoSelecao === 'PRIMEIRO_DIA_MES' ? 'Primeiro dia do mês' : 'Último dia do mês'}
+                      className={`${INPUT} bg-gray-50 text-gray-500`}
+                    />
+                  )}
+                </div>
+              </div>
+
+              {/* Linha 2 */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">
                     Validade do Orçamento
@@ -941,11 +963,11 @@ export default function CadastroEmpresa() {
                   </p>
                 </div>
 
-                {/* ── Forma de cobrança de medicamento/vacina ──────────────────────
+                {/* ── Forma de cobrança de medicamento/vacina ──────────────────
                     Decide o preço do que SAI DO ESTOQUE na fatura do cliente. O
-                    percentual só existe na forma PERCENTUAL — nas outras ele nem é
-                    exibido, porque não seria usado (e um número parado ali passaria
-                    a impressão de que está valendo). Regra em
+                    percentual só é EDITÁVEL na forma PERCENTUAL — nas outras ele fica
+                    desabilitado, porque não seria usado (e um número parado ali,
+                    editável, passaria a impressão de que está valendo). Regra em
                     `backend/src/lib/formaCobrancaEstoque.js`. */}
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">
@@ -961,28 +983,37 @@ export default function CadastroEmpresa() {
                       <option key={f.v} value={f.v}>{f.l}</option>
                     ))}
                   </select>
-
-                  {op.formaCobranca === 'PERCENTUAL' && (
-                    <div className="flex items-center gap-2 mt-2">
-                      <input
-                        type="number"
-                        min={PERC_COBRANCA_MIN}
-                        max={PERC_COBRANCA_MAX}
-                        step="0.01"
-                        disabled={!podeEditar}
-                        value={op.percentualCobranca}
-                        onChange={e => op.setPercentualCobranca(e.target.value)}
-                        placeholder="Ex: 10"
-                        className={classeErro(op.erroAcao, 'percentualCobranca', inputEstreito('w-24'))}
-                      />
-                      <span className="text-sm text-gray-500">% de acréscimo</span>
-                    </div>
-                  )}
-
                   <p className="text-xs text-gray-400 mt-1">
                     {FORMAS_COBRANCA.find(f => f.v === op.formaCobranca)?.ajuda}
                   </p>
                 </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">
+                    Percentual de Acréscimo
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={PERC_COBRANCA_MIN}
+                      max={PERC_COBRANCA_MAX}
+                      step="0.01"
+                      disabled={!podeEditar || op.formaCobranca !== 'PERCENTUAL'}
+                      value={op.formaCobranca === 'PERCENTUAL' ? op.percentualCobranca : ''}
+                      onChange={e => op.setPercentualCobranca(e.target.value)}
+                      placeholder={op.formaCobranca === 'PERCENTUAL' ? 'Ex: 10' : '—'}
+                      className={classeErro(op.erroAcao, 'percentualCobranca',
+                        `${inputEstreito('w-24')} ${op.formaCobranca !== 'PERCENTUAL' ? 'bg-gray-50' : ''}`)}
+                    />
+                    <span className="text-sm text-gray-500">%</span>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {op.formaCobranca === 'PERCENTUAL'
+                      ? 'Acréscimo sobre o valor repassado do lote.'
+                      : 'Só vale na forma “Percentual”.'}
+                  </p>
+                </div>
+              </div>
 
                 {/* ⚠️ O FUSO HORÁRIO NÃO APARECE MAIS AQUI (removido a pedido, 2026-08-24):
                     o campo era só leitura e não havia nada a fazer com ele nesta tela.
@@ -996,7 +1027,6 @@ export default function CadastroEmpresa() {
                     seletor ter saído da tela em 2026-08-23. Para corrigir um caso que o
                     endereço não decide, o caminho é o override
                     `EmpresaConfiguracao.fusoHorario`, fora da UI do gestor. */}
-              </div>
             </div>
 
             {/* ── Gestor Responsável e Tipo de Plano — nome/telefone/e-mail do cadastro

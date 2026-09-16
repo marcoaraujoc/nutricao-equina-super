@@ -9,6 +9,16 @@ import { hojeISO } from '../utils/dateUtils';
 import toast from 'react-hot-toast';
 import { Camera, AlertCircle, RefreshCw, MapPin, CheckCircle2, X, Plus, User2, Loader2, ChevronDown, ArrowLeftRight } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+// 🔴 Raça e Pelagem deixaram de ser `<select>` NATIVO (a pedido, 2026-09-15): o
+// navegador decide sozinho abrir a lista PARA CIMA quando calcula que não há espaço
+// embaixo, e não existe CSS que force o contrário. `DropdownSelect` é o dropdown
+// próprio que sempre abre PARA BAIXO (`absolute top-full`) — o mesmo do cadastro de
+// procedimentos.
+import DropdownSelect from '../components/DropdownSelect';
+// 🔴 Local que ainda não existe é cadastrado NA HORA (a pedido, 2026-09-15): o campo
+// é obrigatório, e sem isto a pessoa tinha de abandonar o formulário preenchido para
+// criar o local em outra tela. O escopo (empresa/equipe) quem decide é o BACKEND.
+import NovaLocalizacaoModal, { type LocalCriado } from '../components/NovaLocalizacaoModal';
 import DateInput from '../components/DateInput';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
@@ -59,6 +69,14 @@ interface Tratador {
   nome:     string;
   telefone: string | null;
 }
+
+/** Pelagens oferecidas no cadastro — lista do padrão equino, como já era. */
+const PELAGENS = [
+  'Alazão', 'Apaloosa', 'Baio', 'Castanho', 'Gateado/Dun',
+  'Isabel (Champagne/Cremello)', 'Murzelo', 'Overo', 'Palomino',
+  'Pampa/Pampeano (Pinto/Paint)', 'Preto (Tordilho preto/Zaino)',
+  'Ruão (Roano/Roan)', 'Tobiano', 'Tordilho', 'Zebrado',
+];
 
 interface Localizacao {
   id:              number;
@@ -305,6 +323,8 @@ const Animal = () => {
 
   // ── Localização do animal ──────────────────────────────────────────────────
   const [localizacoes,   setLocalizacoes]   = useState<Localizacao[]>([]);
+  /** Nome digitado quando a busca não achou nada — abre o cadastro rápido com ele. */
+  const [novoLocalNome,  setNovoLocalNome]  = useState<string | null>(null);
   const [locBusca,       setLocBusca]       = useState('');
   const [locDropdownOpen, setLocDropdownOpen] = useState(false);
 
@@ -1452,7 +1472,16 @@ const Animal = () => {
                       </button>
                     ))}
                     {filteredLocs.length === 0 && locBusca.trim() && (
-                      <p className="px-4 py-2 text-xs text-gray-400 italic">Nenhum resultado para "{locBusca}"</p>
+                      <>
+                        <p className="px-4 py-2 text-xs text-gray-400 italic">Nenhum resultado para "{locBusca}"</p>
+                        {/* ⚠️ `onMouseDown`, nunca `onClick`: o `onBlur` do campo fecha a
+                            lista em 200ms e o clique nunca chegaria a registrar. */}
+                        <button type="button"
+                          onMouseDown={() => { setNovoLocalNome(locBusca.trim()); setLocDropdownOpen(false); }}
+                          className="w-full text-left px-4 py-2.5 text-sm text-emerald-700 hover:bg-emerald-50 font-medium border-t border-gray-100">
+                          + Cadastrar “{locBusca.trim()}”
+                        </button>
+                      </>
                     )}
                   </div>
                 )}
@@ -1514,18 +1543,21 @@ const Animal = () => {
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
                   Raça <span className="text-red-500">*</span>
                 </label>
-                <div className="relative">
-                  <select
-                    value={formData.racaId || ''}
-                    onChange={e => { setFormData({ ...formData, racaId: parseInt(e.target.value) }); setErros(p => { const { racaId: _r, ...rest } = p; return rest; }); }}
-                    onBlur={() => validarCampo('racaId')}
-                    data-campo="racaId"
-                    className={`${erros.racaId ? inputClassErro : inputClass} appearance-none pr-9`}
-                  >
-                    <option value="">Selecione</option>
-                    {racasFiltradas.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
-                  </select>
-                  <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                <div data-campo="racaId">
+                  {/* ⚠️ O dropdown trabalha com TEXTO; a raça é gravada por ID. A
+                      conversão acontece aqui, na borda — casando pelo nome exato da
+                      opção que ele mesmo listou, nunca por busca parcial. */}
+                  <DropdownSelect
+                    value={racasFiltradas.find(r => r.id === formData.racaId)?.nome ?? ''}
+                    onChange={nome => {
+                      const achada = racasFiltradas.find(r => r.nome === nome);
+                      setFormData(p => ({ ...p, racaId: achada?.id ?? 0 }));
+                      setErros(p => { const { racaId: _r, ...rest } = p; return rest; });
+                    }}
+                    options={racasFiltradas.map(r => r.nome)}
+                    placeholder="Selecione"
+                    className={erros.racaId ? inputClassErro : inputClass}
+                  />
                 </div>
                 <ErroCampo campo="racaId" />
               </div>
@@ -1611,32 +1643,14 @@ const Animal = () => {
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
                   Pelagem <span className="text-red-500">*</span>
                 </label>
-                <div className="relative">
-                  <select
+                <div data-campo="pelagem">
+                  <DropdownSelect
                     value={formData.pelagem}
-                    onChange={e => { setFormData(p => ({ ...p, pelagem: e.target.value })); setErros(p => { const { pelagem: _p, ...r } = p; return r; }); }}
-                    onBlur={() => validarCampo('pelagem')}
-                    data-campo="pelagem"
-                    className={`${erros.pelagem ? inputClassErro : inputClass} appearance-none pr-9`}
-                  >
-                    <option value="">— selecione —</option>
-                    <option>Alazão</option>
-                    <option>Apaloosa</option>
-                    <option>Baio</option>
-                    <option>Castanho</option>
-                    <option>Gateado/Dun</option>
-                    <option>Isabel (Champagne/Cremello)</option>
-                    <option>Murzelo</option>
-                    <option>Overo</option>
-                    <option>Palomino</option>
-                    <option>Pampa/Pampeano (Pinto/Paint)</option>
-                    <option>Preto (Tordilho preto/Zaino)</option>
-                    <option>Ruão (Roano/Roan)</option>
-                    <option>Tobiano</option>
-                    <option>Tordilho</option>
-                    <option>Zebrado</option>
-                  </select>
-                  <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                    onChange={v => { setFormData(p => ({ ...p, pelagem: v })); setErros(p => { const { pelagem: _p, ...r } = p; return r; }); }}
+                    options={PELAGENS}
+                    placeholder="— selecione —"
+                    className={erros.pelagem ? inputClassErro : inputClass}
+                  />
                 </div>
                 {erros.pelagem && <p className="text-xs text-red-600 mt-1">{erros.pelagem}</p>}
               </div>
@@ -1959,9 +1973,13 @@ const Animal = () => {
                   {!isEditMode && proprietarioExistente === false && statusBuscaAnimal === 'nao_encontrado' && (
                     <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-xs text-blue-700">
                       <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+                      {/* 🔴 A SENHA NÃO É MAIS EXIBIDA (2026-09-15). Ela é DERIVADA do
+                          cadastro (`lib/senhaInicial.js`) e sai SÓ pelo e-mail de
+                          boas-vindas — mostrá-la aqui a entregava a um TERCEIRO (quem
+                          cadastra), e o literal escrito na tela era, ainda por cima,
+                          uma senha que nunca existiu. */}
                       <span>
-                        Proprietário não encontrado. Preencha os dados para enviar o convite.
-                        Senha inicial: <strong>Inicial#001</strong>.
+                        Proprietário não encontrado, encaminhado e-mail com as informações de acesso.
                       </span>
                     </div>
                   )}
@@ -1969,8 +1987,8 @@ const Animal = () => {
                     <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-xs text-blue-700">
                       <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
                       <span>
-                        Senha inicial: <strong>Inicial#001</strong>. Se o e-mail já estiver cadastrado,
-                        o animal será vinculado ao usuário existente.
+                        Se o e-mail ainda não estiver cadastrado, será encaminhado e-mail com as
+                        informações de acesso. Se já estiver, o animal é vinculado ao usuário existente.
                       </span>
                     </div>
                   )}
@@ -2032,6 +2050,27 @@ const Animal = () => {
 
           </form>
         </div>
+      {/* Local novo: o cadastro rápido devolve o item JÁ ESCOLHIDO no formulário —
+          sem isso a pessoa teria de reabrir o combo e procurar o que acabou de criar.
+          ⚠️ Trocar de local zera baia e tratador, que pertencem ao anterior — mesma
+          regra da escolha pela lista. */}
+      <NovaLocalizacaoModal
+        aberto={novoLocalNome !== null}
+        nomeInicial={novoLocalNome ?? ''}
+        especieNome={especies.find(e => e.id === formData.especieId)?.nome ?? null}
+        onCriado={(loc: LocalCriado) => {
+          setLocalizacoes(prev => [...prev, {
+            id: loc.id, nome: loc.nome, tipoLocalizacao: loc.tipoLocalizacao, tipoEntrada: 'CLIENTE',
+          }]);
+          setFormData(p => ({ ...p, localizacaoId: loc.id, baia: '', tratadorId: null }));
+          setTratBusca('');
+          setErros(prev => { const { localizacaoId: _l, ...r } = prev; return { ...r, baia: '', tratador: '' }; });
+          setLocBusca(loc.nome);
+          setNovoLocalNome(null);
+        }}
+        onFechar={() => setNovoLocalNome(null)}
+      />
+
     </PageContainer>
 
     {/* ── Troca de proprietário (com motivo, histórico e auditoria) ──────────

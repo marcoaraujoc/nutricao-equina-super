@@ -75,6 +75,50 @@ function escopoCatalogo(req) {
   return { OR: [{ empresaId: null }, ...(empresaId ? [{ empresaId }] : [])] };
 }
 
+// 🔴 O QUE É DA EMPRESA VEM ANTES DO CATÁLOGO GLOBAL (pedido de 2026-09-15).
+//
+// "Da empresa" NÃO é só `empresa_id` preenchido — é a UNIÃO de três coisas, nesta ordem:
+//   1. o que a clínica TEM EM ESTOQUE — o frasco está na prateleira, mesmo que a linha do
+//      catálogo seja GLOBAL (estoque é sempre de UMA empresa);
+//   2. o que ela NÃO tem em estoque mas CADASTROU em `/cadastro/produtos` — hoje isso
+//      grava a cópia da empresa (`empresa_id`, copy-on-write de `lib/catalogoEmpresa.js`)
+//      e, no modelo anterior, o vínculo com o fornecedor (`tb_produtos_fornecedor`);
+//   3. o resto do catálogo GLOBAL, que é o que sobra.
+// Medido na base: o animal 93 (empresa 58) enxerga 2 em estoque + 3 cadastrados contra
+// 4.368 globais — em ordem alfabética pura os cinco ficavam perdidos no meio.
+//
+// ⚠️ A ordem DEFINITIVA é o sort de `paraAtendimento` (que conhece estoque e fornecedor);
+// este `orderBy` é o que faz a PRIMEIRA PÁGINA já sair coerente — e isso não é detalhe:
+// `listar` PAGINA (a Farmácia pede 5.000, o catálogo do ADMIN pagina de 30 em 30) e a
+// Prescrição abre o dropdown com `limit=5` enquanto o catálogo completo carrega em
+// paralelo. Ordenando só a página recebida, o item da clínica nem entraria nela quando o
+// nome fosse alfabeticamente tarde, e o defeito apareceria justamente na primeira tela
+// que a pessoa vê — sem erro nenhum.
+//
+// ⚠️ A CONTAGEM DE ESTOQUE É ESCOPADA PELO RLS, não por um `where`: `tb_estoque_clinica`
+// e `tb_lotes_vacina` estão com ENABLE + FORCE, então a subconsulta do `_count` só enxerga
+// as linhas da empresa da sessão. Verificado ao vivo: as empresas 58 e 42 devolvem itens
+// diferentes no topo. ⚠️ Ela conta a entrada INATIVA também (o `_count` do Prisma não
+// aceita filtro) — aceitável aqui: é item com que a clínica já lidou, e quem decide o
+// grupo de verdade é o sort.
+//
+// ⚠️ `empresaId: 'asc'` e NUNCA `'desc'`: no Postgres ASC é NULLS LAST, então o não-nulo
+// (a empresa) vem primeiro e o global (`empresa_id IS NULL`) por último. `desc` é NULLS
+// FIRST e inverteria tudo. Mesma precedência de `garantirMedicamentoDaEmpresa`.
+//
+// ⚠️ ADMIN da plataforma fica FORA: ele enxerga o catálogo de TODAS as clínicas, e ali
+// `empresaId asc` agruparia por id de empresa — ordem que não significa nada na tela dele,
+// que segue alfabética.
+function ordemEmpresaPrimeiro(req, relacaoEstoque = 'estoques') {
+  const escopado = req.user?.userType !== 'ADMIN' && req.empresaId;
+  if (!escopado) return [{ nome: 'asc' }];
+  return [
+    { [relacaoEstoque]: { _count: 'desc' } },  // 1. o frasco está aqui
+    { empresaId: 'asc' },                      // 2. cadastrado pela clínica (NULLS LAST)
+    { nome: 'asc' },                           // 3. alfabético
+  ];
+}
+
 // Espécies que valem para o item cadastrado SEM paciente na tela (Entrada de Estoque
 // da Farmácia e Estoque de Vacinas). A espécie é o que faz o item aparecer nas buscas
 // depois — sem ela, o medicamento/vacina recém-criado nasce FORA do filtro da própria
@@ -234,7 +278,7 @@ const listar = async (req, res) => {
     where.AND = [...(where.AND ?? []), ...(escopo.OR ? [escopo] : [])];
 
     const [medicamentos, total, totalControlados, totalFiltrado] = await Promise.all([
-      prisma.medicamento.findMany({ where, include: INCLUDE_VACINA, orderBy: { nome: 'asc' }, take, skip }),
+      prisma.medicamento.findMany({ where, include: INCLUDE_VACINA, orderBy: ordemEmpresaPrimeiro(req), take, skip }),
       prisma.medicamento.count({ where: { ativo: true, ...escopo } }),
       prisma.medicamento.count({ where: { ativo: true, controlado: true, ...escopo } }),
       prisma.medicamento.count({ where }),
@@ -493,7 +537,8 @@ const excluir = async (req, res) => {
 const garantirCatalogoManual = async (req, res) => {
   try {
     const { nome, tipo = 'medicamento', animalId, unidade,
-            formaFarmaceutica, apresentacao, controlado, vias, fabricante } = req.body;
+            formaFarmaceutica, apresentacao, controlado, vias, fabricante,
+            multidose, dosesPorEmbalagem } = req.body;
     const n = String(nome ?? '').trim();
     if (!n) return res.status(400).json({ error: 'Nome é obrigatório.' });
 
@@ -544,6 +589,24 @@ const garantirCatalogoManual = async (req, res) => {
       vacina:     isVacina,
       especieIds,
     }, req.empresaId ?? null);
+
+    // 🔴 MULTIDOSE do item (2026-09-15) — o mesmo campo da tela de Produtos. Vai por
+    // SQL cru com `catch` (§11): a coluna é da migration 20261009000000 e o client
+    // pode não conhecê-la; falhando, o item nasce sem a marcação e é cobrado pela
+    // embalagem inteira — o comportamento anterior, nunca um erro na tela.
+    // ⚠️ `garantirMedicamentoDaEmpresa` REAPROVEITA o item existente (pode ser GLOBAL),
+    // e o global nunca é marcado: a checagem de `empresa_id` no UPDATE é o que impede
+    // um cadastro rápido mudar a cobrança de todas as clínicas do SaaS.
+    if (multidose !== undefined || dosesPorEmbalagem !== undefined) {
+      const n = Number(dosesPorEmbalagem);
+      const marcado = multidose === true && Number.isFinite(n) && n >= 1;
+      await prisma.$executeRawUnsafe(
+        `UPDATE schs2vet.tb_medicamentos
+            SET multidose = $2, doses_por_embalagem = $3
+          WHERE id = $1 AND empresa_id IS NOT NULL`,
+        Number(id), marcado, marcado ? Math.trunc(n) : null,
+      ).catch(() => {});
+    }
 
     // Mesmo formato de `paraAtendimento` — o front trata o resultado como mais um
     // item da lista, sem precisar de um tipo/caminho de dado à parte.
@@ -630,9 +693,15 @@ const paraAtendimento = async (req, res) => {
           : { estoques: { where: estoqueWhere, select: { id: true, qtdEstoque: true, precoUnitarioBase: true } } }
         ),
       },
-      orderBy: { nome: 'asc' },
+      // Vacina guarda o estoque em `lotes`; medicamento, em `estoques`. Passar a
+      // relação errada faria a contagem sair sempre ZERO — em silêncio.
+      orderBy: ordemEmpresaPrimeiro(req, isVacina ? 'lotes' : 'estoques'),
       ...(take ? { take } : {}),
     });
+
+    // `empresaId` não vai para o payload (a tela não precisa dele), mas o sort abaixo
+    // precisa: o mapa guarda a origem de cada item antes de os objetos serem remontados.
+    const daEmpresa = new Map(medicamentos.map(m => [m.id, m.empresaId != null]));
 
     // Fornecedores de TODOS os itens da página, numa consulta só. Nunca por item:
     // o catálogo tem milhares de linhas e uma ida ao banco por linha derrubaria a tela.
@@ -695,19 +764,35 @@ const paraAtendimento = async (req, res) => {
     });
 
     /**
-     * 🔴 TRÊS GRUPOS, nesta ordem (pedido de 2026-09-10): EM ESTOQUE → PRODUTO de
-     * fornecedor → o resto. Alfabético dentro de cada um.
+     * 🔴 ORDEM em QUATRO grupos — os TRÊS PRIMEIROS são "DA EMPRESA" (2026-09-15), o
+     * quarto é o catálogo GLOBAL:
+     *   0. EM ESTOQUE              — a clínica tem o frasco;
+     *   1. PRODUTO de fornecedor   — não tem, mas sabe de quem comprar;
+     *   2. CADASTRADO pela clínica — a cópia dela no catálogo (`empresa_id`), que é o que
+     *      `/cadastro/produtos` grava, ainda sem estoque nem fornecedor;
+     *   3. GLOBAL puro             — o resto do catálogo do sistema.
+     * Alfabético dentro de cada grupo.
      *
-     * ⚠️ Vale para MEDICAMENTO e VACINA. Antes só a vacina era ordenada — o
-     * medicamento saía em ordem alfabética pura, então o que a clínica tem em mãos
-     * ficava misturado com o que ela não tem, e a lista de milhares de itens não
-     * ajudava a decidir nada.
+     * ⚠️ "Da empresa" NÃO é só `empresaId != null`: medicamento GLOBAL que a clínica TEM
+     * EM ESTOQUE é dela para todos os efeitos — o frasco está na prateleira. Reduzir o
+     * grupo à coluna do catálogo mandaria para baixo justamente o que ela tem em mãos.
      *
-     * ⚠️ A ordem é do BACKEND, não da tela: é aqui que se sabe o que há em estoque e
-     * quem fornece. Mandar as flags e deixar cada tela ordenar seria a mesma regra
-     * escrita três vezes (prescrição, vacina, orçamento) — e a terceira divergiria.
+     * ⚠️ Os três grupos de 2026-09-10 (estoque → produto → o resto) continuam valendo: o
+     * que mudou é que o antigo grupo 2 ("o resto") foi PARTIDO em dois, separando a cópia
+     * da clínica do catálogo global.
+     *
+     * ⚠️ Vale para MEDICAMENTO e VACINA — é a mesma função.
+     *
+     * ⚠️ A ordem é do BACKEND, não da tela: é aqui que se sabe o que há em estoque, quem
+     * fornece e de quem é a linha do catálogo. Mandar as flags e deixar cada tela ordenar
+     * seria a mesma regra escrita três vezes (prescrição, vacina, orçamento) — e a
+     * terceira divergiria.
+     *
+     * ⚠️ NÃO é redundante com o `orderBy` da consulta: aquele ordena o que o BANCO sabe
+     * (estoque e `empresa_id`), para a primeira página já sair coerente; este é quem
+     * conhece o vínculo de FORNECEDOR, que só existe depois do mapeamento.
      */
-    const posto = (x) => (x.emEstoque ? 0 : x.ehProduto ? 1 : 2);
+    const posto = (x) => (x.emEstoque ? 0 : x.ehProduto ? 1 : daEmpresa.get(x.id) ? 2 : 3);
     dados.sort((a, b) => {
       const pa = posto(a), pb = posto(b);
       if (pa !== pb) return pa - pb;
@@ -721,4 +806,4 @@ const paraAtendimento = async (req, res) => {
   }
 };
 
-module.exports = { listar, listarVacinas, listarEspecies, obterPorId, criar, atualizar, excluir, paraAtendimento, garantirCatalogoManual, opcoesCatalogo };
+module.exports = { especiesParaItemSemPaciente, listar, listarVacinas, listarEspecies, obterPorId, criar, atualizar, excluir, paraAtendimento, garantirCatalogoManual, opcoesCatalogo };

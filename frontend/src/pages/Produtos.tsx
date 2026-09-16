@@ -1,30 +1,29 @@
 // frontend/src/pages/Produtos.tsx
 //
-// CADASTRO > PRODUTOS (2026-09-10)
+// CADASTRO > PRODUTOS
 //
-// 🔴 A TELA DA CLÍNICA. Até aqui, cadastrar um item que ela usa exigia três lugares:
-// `/medicamentos` (catálogo global, ADMIN da plataforma), `/cadastro-vacina` e depois
-// `/farmacia` ou `/estoque-vacina` para a entrada física. Aqui é um lugar só —
-// medicamento e vacina, com o fornecedor de cada um e a entrada de estoque OPCIONAL.
+// 🔴 A TELA DO CATÁLOGO DA CLÍNICA (2026-09-15). Ela cadastra o ITEM que a clínica
+// usa — medicamento e vacina — com forma farmacêutica, apresentação, unidade, via de
+// administração, controlado e quantidade de doses da embalagem.
 //
-// ⚠️ NÃO substitui as telas anteriores (decisão de 2026-09-10): `/medicamentos`
-// continua sendo o catálogo GLOBAL do ADMIN, com milhares de itens que valem para
-// todas as clínicas. Aqui nasce o item PRÓPRIO da empresa, que só ela vê.
+// ⚠️ REVERTE o escopo de 2026-09-10: fornecedor, nota fiscal, valor de compra, valor
+// de venda, "Ler documento de compra" e "Dar entrada no estoque" SAÍRAM a pedido.
+// Compra e saldo são assunto da Farmácia / do Estoque de Vacinas; tê-los aqui
+// misturava "o que é o produto" com "quanto eu tenho dele". O backend daquilo
+// (`tb_produtos_fornecedor`, a conta a pagar na execução) continua existindo — o que
+// sumiu foi a porta de entrada NESTA tela.
 //
-// 🔴 PRODUTO × ESTOQUE — a distinção que a tela existe para registrar:
-//   • PRODUTO = tenho de quem comprar. A clínica NÃO guarda o item; pede quando o vet
-//     prescreve. Na prescrição ele aparece VERDE, com o nome do fornecedor.
-//   • ESTOQUE = tenho o frasco aqui. Quantidade, lote, validade.
-// O checkbox do formulário é o que separa os dois.
+// 🔴 A BUSCA TRAZ O QUE JÁ ESTÁ CADASTRADO — medicamentos e vacinas do catálogo
+// visível da clínica (o global do sistema + o próprio dela). Achado o item, clicar em
+// Alterar CARREGA os dados dele para edição; não achado, "Novo produto" abre o
+// formulário JÁ com o nome digitado na busca.
 //
-// 🔴 O DOCUMENTO DE COMPRA preenche o formulário — nota fiscal, cupom, ORÇAMENTO DE
-// BALCÃO ou recibo, inclusive sem valor fiscal (o que a tela precisa é fornecedor,
-// item e preço, não validade tributária). Fornecedor que ainda não existe leva ao
-// cadastro dele JÁ preenchido com o que a nota trouxe, e a volta traz o fornecedor
-// novo selecionado — sem isso o gestor teria de reencontrar a nota e recomeçar.
+// 🔴 ALTERAR UM ITEM GLOBAL NÃO ALTERA O GLOBAL: o backend cria a cópia desta clínica
+// e é ela que recebe a mudança (copy-on-write, `lib/catalogoEmpresa.js`). O catálogo
+// das demais clínicas nunca é tocado, e o RLS de `tb_medicamentos` é a rede por baixo
+// disso.
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { Package, Pill, Syringe, Plus, Search, Loader2, FileText, Trash2, AlertTriangle, Layers, Pencil } from 'lucide-react';
+import { Package, Pill, Syringe, Search, Loader2, Trash2, Layers, Pencil, Globe } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import PageContainer from '../components/PageContainer';
@@ -36,18 +35,18 @@ import ModalJustificativa from '../components/ModalJustificativa';
 import JanelaLista from '../components/JanelaLista';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useEmpresa } from '../contexts/EmpresaContext';
-import LeitorNotaFiscal, { type NotaLida, type ItemNota } from '../components/produtos/LeitorNotaFiscal';
 import FormProduto from '../components/produtos/FormProduto';
+import type { OpcoesCatalogo } from '../components/catalogo/SeletoresCatalogo';
 import {
-  FORM_PRODUTO_VAZIO, paraNumero, brlProduto,
-  type FormProdutoDados, type ItemCatalogo, type FornecedorOpcao, type ProdutoCadastrado,
+  FORM_PRODUTO_VAZIO, formDoItem, normalizarNomeProduto, formSoTemNome,
+  type FormProdutoDados, type ItemCatalogo,
 } from '../components/produtos/tiposProduto';
 
 type TipoProduto = 'medicamento' | 'vacina';
 
+const OPCOES_VAZIAS: OpcoesCatalogo = { formas: [], unidades: [], apresentacoes: [], vias: [] };
+
 export default function Produtos() {
-  const navigate = useNavigate();
-  const location = useLocation();
   const { podeExecutar, loading: loadingPerms } = usePermissoes();
   const { loading: empresaLoading } = useEmpresa();
 
@@ -61,317 +60,185 @@ export default function Produtos() {
   const [mostrarForm, setMostrarForm] = useState(false);
   const [salvando, setSalvando] = useState(false);
 
-  const [produtos,     setProdutos]     = useState<ProdutoCadastrado[]>([]);
-  const [catalogo,     setCatalogo]     = useState<ItemCatalogo[]>([]);
-  const [fornecedores, setFornecedores] = useState<FornecedorOpcao[]>([]);
-  const [loading,      setLoading]      = useState(true);
-  const [buscandoCatalogo, setBuscandoCatalogo] = useState(false);
-  const [busca, setBusca] = useState('');
+  const [itens,   setItens]   = useState<ItemCatalogo[]>([]);
+  const [opcoes,  setOpcoes]  = useState<OpcoesCatalogo>(OPCOES_VAZIAS);
+  const [carregandoOpcoes, setCarregandoOpcoes] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [busca,   setBusca]   = useState('');
 
   const [erroInline, setErroInline] = useState<string | null>(null);
   const [erroForm,   setErroForm]   = useState<ErroAcaoDados | null>(null);
-  const [disponivel, setDisponivel] = useState(true);
-
-  const [carregandoItem, setCarregandoItem] = useState(false);
-  // Nasce FALSO: até a carga responder, é melhor não oferecer um campo cuja
-  // gravação talvez não exista. Mostrar e depois esconder seria pior.
+  // Nasce FALSO: até a carga responder, é melhor não oferecer um campo cuja gravação
+  // talvez não exista. Mostrar e depois esconder seria pior.
   const [multidoseDisponivel, setMultidoseDisponivel] = useState(false);
-  /**
-   * O formulário veio do DOCUMENTO DE COMPRA?
-   *
-   * ⚠️ Muda o que acontece ao carregar o item: vindo da nota, o cadastro antigo só
-   * preenche o que está VAZIO — o preço da nota é mais recente que o do cadastro, e
-   * sobrescrevê-lo desfaria em silêncio a leitura que a pessoa acabou de conferir.
-   */
-  const [origemNota, setOrigemNota] = useState(false);
-  /** Última (item, fornecedor) buscada — sem isto o efeito rebuscaria a cada render. */
-  const ultimoDetalhe = useRef('');
 
-  const [leitorAberto, setLeitorAberto] = useState(false);
-  const [excluindo,    setExcluindo]    = useState<ProdutoCadastrado | null>(null);
-  /** Itens lidos da nota que ainda faltam cadastrar — a fila do "usar N produtos". */
-  const [filaDaNota, setFilaDaNota] = useState<ItemNota[]>([]);
+  const [excluindo, setExcluindo] = useState<ItemCatalogo | null>(null);
+
+  // ── O nome digitado traz o cadastro que já existe ──────────────────────────
+  // 🔴 A pessoa digitava o nome de um produto que o sistema JÁ TEM e redigitava forma,
+  // apresentação, unidade e vias do zero — nascia um item da clínica divergente do
+  // global de mesmo nome, e nada acusava. Agora, ao SAIR do campo Nome, o backend
+  // responde "este produto já existe?" e a tela carrega o cadastro dele.
+  const [consultandoNome, setConsultandoNome] = useState(false);
+  const [itemEncontrado,  setItemEncontrado]  = useState<ItemCatalogo | null>(null);
+  const [encontradoCarregado, setEncontradoCarregado] = useState(false);
+  // Evita reconsultar quando a pessoa só PASSA pelo campo sem mudar nada — `blur`
+  // dispara igual. Guarda o nome normalizado da última consulta.
+  const nomeConsultadoRef = useRef<string>('');
 
   // ── Carga ─────────────────────────────────────────────────────────────────
-  const carregarProdutos = useCallback(async () => {
+  const carregarItens = useCallback(async () => {
     try {
-      const res = await api.get('/cadastro/produtos', { params: { busca: busca.trim() || undefined } });
+      const res = await api.get('/cadastro/produtos', {
+        params: { tipo, busca: busca.trim() || undefined },
+      });
       if (!res.data) return;                       // GET 403 resolve com data null
-      setProdutos(res.data.dados ?? []);
-      setDisponivel(res.data.recursos?.disponivel !== false);
-      // A bandeira do multidose vem já na carga — o checkbox não pode aparecer antes
-      // de se saber se a base o grava (senão a marcação some no salvar, calada).
+      setItens(res.data.dados ?? []);
+      // A bandeira do multidose vem já na carga — o campo não pode aparecer antes de
+      // se saber se a base o grava (senão a marcação some no salvar, calada).
       setMultidoseDisponivel(res.data.recursos?.multidose !== false);
     } catch { /* silencioso */ }
-  }, [busca]);
-
-  const carregarFornecedores = useCallback(async () => {
-    try {
-      const res = await api.get('/cadastro/fornecedores', { params: { ativo: 'true' } });
-      if (!res.data) return;
-      setFornecedores(res.data.dados ?? []);
-    } catch { /* silencioso */ }
-  }, []);
-
-  // O catálogo é buscado pelo que está sendo digitado — ele tem milhares de linhas e
-  // baixá-lo inteiro ao abrir a tela travaria o formulário.
-  useEffect(() => {
-    if (loadingPerms || empresaLoading || !podeVer) return;
-    const termo = form.nome.trim();
-    setBuscandoCatalogo(true);
-    const t = setTimeout(async () => {
-      try {
-        const res = await api.get('/cadastro/produtos/catalogo', { params: { tipo, busca: termo || undefined } });
-        if (res.data) setCatalogo(res.data.dados ?? []);
-      } catch { /* silencioso */ }
-      finally { setBuscandoCatalogo(false); }
-    }, 350);
-    return () => { clearTimeout(t); setBuscandoCatalogo(false); };
-  }, [form.nome, tipo, loadingPerms, empresaLoading, podeVer]);
+  }, [tipo, busca]);
 
   /**
-   * 🔴 ESCOLHER O ITEM CARREGA O QUE A CLÍNICA JÁ TEM DELE (2026-09-12).
-   *
-   * Antes, escolher um medicamento que a clínica já compra abria o formulário em
-   * branco: a pessoa redigitava preço, unidade e fornecedor que estavam no banco e,
-   * ao salvar, sobrescrevia um cadastro que nunca viu. Agora o item traz o catálogo
-   * (unidade) e o VÍNCULO do fornecedor (preços, nota, multidose) — tudo editável.
-   *
-   * ⚠️ Refaz ao TROCAR DE FORNECEDOR: o preço é por (item, fornecedor), e manter o
-   * do anterior faria o cadastro de um sair gravado no outro.
+   * As opções de Forma / Unidade / Apresentação / Via saem do BANCO, recortadas por
+   * TIPO: a vacina tem forma, unidade e via PRÓPRIAS ('dose', 'Subcutânea (SC)'), e
+   * oferecer 'Comprimido' num cadastro de vacina seria oferecer o que não existe ali.
    */
   useEffect(() => {
     if (loadingPerms || empresaLoading || !podeVer) return;
-    const medId = form.medicamentoId;
-    if (!medId) { ultimoDetalhe.current = ''; return; }
-    const chave = `${medId}|${form.fornecedorId ?? ''}`;
-    if (ultimoDetalhe.current === chave) return;
-    ultimoDetalhe.current = chave;
-
-    let cancelado = false;
-    (async () => {
-      setCarregandoItem(true);
-      try {
-        const res = await api.get('/cadastro/produtos/detalhe', { params: { medicamentoId: medId } });
-        if (cancelado || !res.data) return;
-        const { catalogo: cat, produtos: vinculos, recursos } = res.data.dados ?? {};
-        setMultidoseDisponivel(recursos?.multidose !== false);
-
-        // O vínculo do fornecedor ESCOLHIDO; sem fornecedor escolhido, o primeiro —
-        // é ele que a tela vai passar a editar.
-        const lista: ProdutoCadastrado[] = vinculos ?? [];
-        const achado = lista.find(v => v.fornecedorId === form.fornecedorId) ?? (form.fornecedorId ? null : lista[0]);
-
-        setForm(prev => {
-          // Vindo da nota, o que ela trouxe vence o cadastro (ver `origemNota`).
-          const manter = (atual: string, doCadastro: string) =>
-            origemNota ? (atual.trim() ? atual : doCadastro) : doCadastro;
-          return {
-            ...prev,
-            nome:          cat?.nome ?? prev.nome,
-            unidade:       manter(prev.unidade, achado?.unidade ?? cat?.unidade ?? ''),
-            produtoId:     achado?.id ?? null,
-            fornecedorId:  prev.fornecedorId ?? achado?.fornecedorId ?? null,
-            valorUnitario: manter(prev.valorUnitario, achado?.valorUnitario != null ? String(achado.valorUnitario) : ''),
-            valorVenda:    manter(prev.valorVenda,    achado?.valorVenda    != null ? String(achado.valorVenda)    : ''),
-            notaFiscal:    manter(prev.notaFiscal,    achado?.notaFiscal ?? ''),
-            multidose:     achado?.multidose ?? prev.multidose,
-            dosesPorEmbalagem: achado?.dosesPorEmbalagem != null
-              ? String(achado.dosesPorEmbalagem)
-              : (achado ? '' : prev.dosesPorEmbalagem),
-          };
-        });
-      } catch { /* item fora do catálogo desta clínica: segue como cadastro novo */ }
-      finally { if (!cancelado) setCarregandoItem(false); }
-    })();
-    return () => { cancelado = true; };
-  }, [form.medicamentoId, form.fornecedorId, origemNota, loadingPerms, empresaLoading, podeVer]);
+    let vivo = true;
+    setCarregandoOpcoes(true);
+    api.get('/medicamentos/opcoes-catalogo', { params: { tipo } })
+      .then(res => { if (vivo && res.data?.dados) setOpcoes(res.data.dados); })
+      .catch(() => { /* silencioso: o seletor simplesmente não oferece opções */ })
+      .finally(() => { if (vivo) setCarregandoOpcoes(false); });
+    return () => { vivo = false; };
+  }, [tipo, loadingPerms, empresaLoading, podeVer]);
 
   useEffect(() => {
     // ⚠️ Espera o contexto de empresa resolver: chamada escopada por empresa antes
     // disso cai no fallback do backend e traz o dado de OUTRA clínica (§12, 29/07).
-    if (loadingPerms || empresaLoading) return;
+    if (loadingPerms || empresaLoading || !podeVer) return;
     setLoading(true);
-    Promise.all([carregarProdutos(), carregarFornecedores()]).finally(() => setLoading(false));
-  }, [loadingPerms, empresaLoading, carregarProdutos, carregarFornecedores]);
-
-  // ── Volta do cadastro de fornecedor, com o recém-criado já escolhido ──────
-  useEffect(() => {
-    const st = location.state as { fornecedorNovoId?: number | null } | null;
-    if (!st?.fornecedorNovoId) return;
-    setForm(prev => ({ ...prev, fornecedorId: st.fornecedorNovoId ?? null }));
-    setMostrarForm(true);
-    void carregarFornecedores();
-    // Consome o state: sem isto ele reimporia o fornecedor a cada remontagem da rota.
-    window.history.replaceState({}, '');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const t = setTimeout(() => { carregarItens().finally(() => setLoading(false)); }, 300);
+    return () => clearTimeout(t);
+  }, [loadingPerms, empresaLoading, podeVer, carregarItens]);
 
   const patch = (p: Partial<FormProdutoDados>) => setForm(prev => ({ ...prev, ...p }));
 
-  // ── Nota fiscal ───────────────────────────────────────────────────────────
+  /** Traz para o formulário o item que o nome digitado reconheceu. */
+  const adotarEncontrado = useCallback((item: ItemCatalogo) => {
+    // ⚠️ `setForm` FUNCIONAL: a resposta chega depois, e um patch calculado sobre o
+    // `form` da closure apagaria o que foi digitado durante a espera.
+    setForm(prev => ({ ...formDoItem(item), nome: prev.nome }));
+    setEncontradoCarregado(true);
+  }, []);
+
   /**
-   * A nota foi lida e a pessoa escolheu os itens.
-   *
-   * Fornecedor JÁ cadastrado → preenche o formulário com o primeiro item e enfileira
-   * o resto. Fornecedor NOVO → leva ao cadastro dele com os dados da nota, e a volta
-   * (o efeito acima) retoma daqui.
+   * ⚠️ SÓ no cadastro NOVO (`medicamentoId == null`): em edição, trocar o registro
+   * debaixo de quem está editando seria pior que o erro que isto evita.
+   * ⚠️ NUNCA lança — reconhecer o nome é conveniência, e derrubar o formulário porque
+   * a consulta falhou trocaria um atalho por um impedimento.
    */
-  const usarNota = (nota: NotaLida, itens: ItemNota[]) => {
-    setLeitorAberto(false);
-    if (itens.length === 0) return;
+  const consultarNome = useCallback(async () => {
+    const atual = normalizarNomeProduto(form.nome);
+    if (form.medicamentoId != null) return;
+    if (atual.length < 2) { setItemEncontrado(null); nomeConsultadoRef.current = ''; return; }
+    if (atual === nomeConsultadoRef.current) return;
+    nomeConsultadoRef.current = atual;
+    setConsultandoNome(true);
+    try {
+      const res = await api.get('/cadastro/produtos/por-nome', { params: { tipo, nome: form.nome.trim() } });
+      const item: ItemCatalogo | null = res.data?.encontrado ? res.data.dados : null;
+      setItemEncontrado(item);
+      setEncontradoCarregado(false);
+      // ⚠️ Carrega sozinho SÓ com o formulário vazio fora o nome: com campos já
+      // digitados, sobrescrever seria perder trabalho em silêncio — aí a faixa
+      // oferece o botão e quem decide é a pessoa.
+      if (item && formSoTemNome(form)) adotarEncontrado(item);
+    } catch { setItemEncontrado(null); }
+    finally { setConsultandoNome(false); }
+  }, [form, tipo, adotarEncontrado]);
 
-    const [primeiro, ...resto] = itens;
-    setTipo(primeiro.tipo);
-    setOrigemNota(true);
-    ultimoDetalhe.current = '';
-    setForm({
-      ...FORM_PRODUTO_VAZIO,
-      nome:          primeiro.nome,
-      unidade:       primeiro.unidade ?? '',
-      notaFiscal:    nota.numero ?? '',
-      valorUnitario: primeiro.valorUnitario != null ? String(primeiro.valorUnitario) : '',
-      fornecedorId:  nota.fornecedorExistente?.id ?? null,
-      // A nota diz quanto veio: quem tem quantidade nela é item que a clínica
-      // RECEBEU, então o estoque já nasce marcado. Desmarcar é um clique.
-      entrarNoEstoque: primeiro.quantidade != null,
-      quantidade:    primeiro.quantidade != null ? String(primeiro.quantidade) : '',
-      lote:          primeiro.lote ?? '',
-      validade:      primeiro.validade ?? '',
-    });
-    setFilaDaNota(resto);
-    setMostrarForm(true);
-
-    if (!nota.fornecedorExistente) {
-      // Fornecedor novo: o cadastro abre PREENCHIDO com o que a nota trouxe, e volta
-      // para cá. É o pedido de 2026-09-10, e é o que evita redigitar CNPJ e endereço.
-      const f = nota.fornecedor;
-      navigate('/cadastro/fornecedores', {
-        state: {
-          abrirNovo: true,
-          depois: '/cadastro/produtos',
-          dados: {
-            nome: f.nome ?? '', tipoDoc: f.cnpj ? 'cnpj' : 'cpf',
-            cnpj: f.cnpj ?? '', cpf: f.cpf ?? '',
-            telefone: f.telefone ?? '', email: f.email ?? '',
-            cep: f.cep ?? '', endereco: f.endereco ?? '',
-            bairro: f.bairro ?? '', cidade: f.cidade ?? '', estado: f.estado ?? '',
-          },
-        },
-      });
-    }
+  /** Limpa o reconhecimento quando o formulário sai de cena ou o nome muda. */
+  const limparEncontrado = () => {
+    setItemEncontrado(null);
+    setEncontradoCarregado(false);
+    nomeConsultadoRef.current = '';
   };
 
   // ── Salvar ────────────────────────────────────────────────────────────────
   const salvar = async () => {
     setErroForm(null);
-    // Alterar um vínculo existente exige o slug de EDITAR; criar, o de CRIAR. São
-    // permissões distintas na matriz, e o botão que só falha depois do clique é a
-    // armadilha 28-d.
-    const editando = form.produtoId != null;
+    // Alterar exige o slug de EDITAR; criar, o de CRIAR. São permissões distintas na
+    // matriz, e o botão que só falha depois do clique é a armadilha 28-d.
+    const editando = form.medicamentoId != null;
     if (editando ? !podeEditar : !podeCriar) {
       setErroForm({ mensagem: `Sem permissão para ${editando ? 'alterar' : 'cadastrar'} produtos.` });
       return;
     }
-    if (!form.nome.trim())    { setErroForm({ mensagem: 'Informe o produto.', campos: ['nome'] }); return; }
-    if (!form.fornecedorId)   { setErroForm({ mensagem: 'Selecione o fornecedor.', campos: ['fornecedor'] }); return; }
-    if (form.entrarNoEstoque && !paraNumero(form.quantidade)) {
-      setErroForm({ mensagem: 'Informe a quantidade recebida ou desmarque a entrada no estoque.', campos: ['quantidade'] });
-      return;
-    }
-    // Multidose sem o número não muda cobrança nenhuma — barrar aqui evita o cadastro
-    // pela metade, que silenciosamente continuaria cobrando o frasco inteiro.
-    if (form.multidose && !paraNumero(form.dosesPorEmbalagem)) {
-      setErroForm({ mensagem: 'Informe quantas doses saem de uma embalagem.', campos: ['dosesPorEmbalagem'] });
+    const faltando = [
+      ...(form.nome.trim()              ? [] : ['Nome']),
+      ...(form.formaFarmaceutica        ? [] : ['Forma farmacêutica']),
+      ...(form.apresentacao             ? [] : ['Apresentação']),
+      ...(form.unidade                  ? [] : ['Unidade']),
+      ...(form.vias.length > 0          ? [] : ['Via de administração']),
+    ];
+    if (faltando.length > 0) {
+      setErroForm({ mensagem: `Preencha: ${faltando.join(', ')}.`, campos: faltando });
       return;
     }
 
     setSalvando(true);
     try {
-      // 🔴 O POST cobre os DOIS casos: `salvarProduto` é idempotente pelo unique
-      // (empresa, item, fornecedor), então re-salvar o item já cadastrado ATUALIZA o
-      // vínculo — e continua sendo o único caminho que também dá entrada no estoque.
-      // Um PUT separado deixaria a alteração sem esse passo.
-      await api.post('/cadastro/produtos', {
+      const res = await api.post('/cadastro/produtos', {
         tipo,
-        medicamentoId: form.medicamentoId,
-        nome:          form.nome.trim(),
-        unidade:       form.unidade.trim() || undefined,
-        fornecedorId:  form.fornecedorId,
-        valorUnitario: paraNumero(form.valorUnitario),
-        valorVenda:    paraNumero(form.valorVenda),
-        notaFiscal:    form.notaFiscal.trim() || undefined,
+        medicamentoId:     form.medicamentoId,
+        nome:              form.nome.trim(),
+        formaFarmaceutica: form.formaFarmaceutica,
+        apresentacao:      form.apresentacao,
+        unidade:           form.unidade,
+        vias:              form.vias,
+        controlado:        form.controlado,
+        fabricante:        form.fabricante.trim() || undefined,
         multidose:         form.multidose,
-        dosesPorEmbalagem: form.multidose ? paraNumero(form.dosesPorEmbalagem) : null,
-        entrarNoEstoque: form.entrarNoEstoque,
-        estoque: form.entrarNoEstoque ? {
-          quantidade:     paraNumero(form.quantidade),
-          lote:           form.lote.trim() || undefined,
-          validade:       form.validade || undefined,
-          valor:          paraNumero(form.valorUnitario),
-          estoqueMinimo:  paraNumero(form.estoqueMinimo),
-        } : {},
+        dosesPorEmbalagem: form.multidose ? Number(form.dosesPorEmbalagem) : null,
       });
-      toast.success(editando ? 'Produto atualizado' : 'Produto cadastrado');
-
-      // Fila da nota: emenda no próximo item, com o MESMO fornecedor e nota — é o que
-      // torna "usar 8 produtos" oito cliques em vez de oito preenchimentos.
-      if (filaDaNota.length > 0) {
-        const [prox, ...resto] = filaDaNota;
-        setTipo(prox.tipo);
-        setForm(f => ({
-          ...FORM_PRODUTO_VAZIO,
-          fornecedorId: f.fornecedorId, notaFiscal: f.notaFiscal,
-          nome:      prox.nome,
-          unidade:   prox.unidade ?? '',
-          valorUnitario: prox.valorUnitario != null ? String(prox.valorUnitario) : '',
-          entrarNoEstoque: prox.quantidade != null,
-          quantidade: prox.quantidade != null ? String(prox.quantidade) : '',
-          lote:      prox.lote ?? '',
-          validade:  prox.validade ?? '',
-        }));
-        setFilaDaNota(resto);
-        ultimoDetalhe.current = '';
-        toast(`Faltam ${resto.length + 1} produto(s) da nota.`, { icon: '📄' });
-      } else {
-        setForm(FORM_PRODUTO_VAZIO);
-        setMostrarForm(false);
-        setOrigemNota(false);
-        ultimoDetalhe.current = '';
-      }
-      await carregarProdutos();
+      toast.success(
+        res.data?.dados?.copiado
+          ? 'Produto salvo como cópia desta clínica'
+          : editando ? 'Produto atualizado' : 'Produto cadastrado',
+      );
+      setForm(FORM_PRODUTO_VAZIO);
+      limparEncontrado();
+      setMostrarForm(false);
+      await carregarItens();
     } catch (err) {
-      const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
-      if (!e.isPermissionError) setErroForm({ mensagem: e.response?.data?.error ?? 'Erro ao salvar o produto.' });
+      const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string; campos?: string[] } } };
+      if (!e.isPermissionError) {
+        setErroForm({
+          mensagem: e.response?.data?.error ?? 'Erro ao salvar o produto.',
+          campos:   e.response?.data?.campos,
+        });
+      }
     } finally { setSalvando(false); }
   };
 
-  /**
-   * Abre um produto da lista NO FORMULÁRIO, preenchido e editável.
-   *
-   * ⚠️ Carimba `ultimoDetalhe` com a chave (item, fornecedor) ANTES de preencher: o
-   * efeito de carga veria os dois campos mudarem e buscaria o mesmo vínculo de novo,
-   * sobrescrevendo o que acabou de ser posto na tela.
-   */
-  const editarProduto = (p: ProdutoCadastrado) => {
-    setTipo(p.ehVacina ? 'vacina' : 'medicamento');
-    setOrigemNota(false);
+  /** Abre um item da lista NO FORMULÁRIO, preenchido e editável. */
+  const editarItem = (item: ItemCatalogo) => {
+    setTipo(item.ehVacina ? 'vacina' : 'medicamento');
     setErroForm(null);
-    setFilaDaNota([]);
-    ultimoDetalhe.current = `${p.medicamentoId}|${p.fornecedorId}`;
-    setForm({
-      ...FORM_PRODUTO_VAZIO,
-      nome:          p.medicamentoNome,
-      medicamentoId: p.medicamentoId,
-      produtoId:     p.id,
-      fornecedorId:  p.fornecedorId,
-      unidade:       p.unidade ?? p.unidadeCatalogo ?? '',
-      valorUnitario: p.valorUnitario != null ? String(p.valorUnitario) : '',
-      valorVenda:    p.valorVenda    != null ? String(p.valorVenda)    : '',
-      notaFiscal:    p.notaFiscal ?? '',
-      multidose:     p.multidose,
-      dosesPorEmbalagem: p.dosesPorEmbalagem != null ? String(p.dosesPorEmbalagem) : '',
-    });
+    limparEncontrado();
+    setForm(formDoItem(item));
+    setMostrarForm(true);
+  };
+
+  /** "Novo produto" abre o formulário JÁ com o nome que a pessoa digitou na busca. */
+  const novoProduto = () => {
+    setErroForm(null);
+    limparEncontrado();
+    setForm({ ...FORM_PRODUTO_VAZIO, nome: busca.trim() });
     setMostrarForm(true);
   };
 
@@ -379,19 +246,16 @@ export default function Produtos() {
     if (!excluindo) return;
     try {
       await api.delete(`/cadastro/produtos/${excluindo.id}`, { data: { motivo } });
-      toast.success('Produto removido');
+      toast.success('Produto inativado');
       setExcluindo(null);
-      await carregarProdutos();
+      await carregarItens();
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
       if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao remover o produto.');
     }
   };
 
-  const daAba = useMemo(
-    () => produtos.filter(p => (tipo === 'vacina' ? p.ehVacina : !p.ehVacina)),
-    [produtos, tipo],
-  );
+  const nenhumResultado = useMemo(() => !loading && itens.length === 0, [loading, itens]);
 
   if (!loadingPerms && !podeVer) {
     return (
@@ -415,39 +279,18 @@ export default function Produtos() {
             <Package size={22} className="text-emerald-600" /> Produtos
           </h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Medicamentos e vacinas da clínica, com fornecedor e entrada de estoque.
+            Medicamentos e vacinas da clínica — forma, apresentação, unidade, via e doses da embalagem.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {podeCriar && (
-            <button onClick={() => setLeitorAberto(true)}
-              className="flex items-center gap-2 border border-emerald-200 text-emerald-700 hover:bg-emerald-50 px-4 py-2 rounded-xl text-sm font-semibold">
-              <FileText size={15} /> Ler documento de compra
-            </button>
-          )}
-          {podeCriar && !mostrarForm && (
-            <button onClick={() => {
-              setForm(FORM_PRODUTO_VAZIO); setMostrarForm(true);
-              setOrigemNota(false); ultimoDetalhe.current = '';
-            }}
-              className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-semibold">
-              <Plus size={15} /> Novo produto
-            </button>
-          )}
-        </div>
+        {podeCriar && !mostrarForm && (
+          /* ⚠️ SEM o "+" (a pedido, 2026-09-15) — nem no rótulo nem como ícone. O botão
+             diz o que faz; o sinal era ruído. */
+          <button onClick={novoProduto}
+            className="bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-semibold">
+            Novo produto
+          </button>
+        )}
       </div>
-
-      {/* Base sem a migration: DIZ o que falta, em vez de mostrar uma lista vazia que
-          se lê como "não há produto cadastrado". */}
-      {!disponivel && (
-        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-2">
-          <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-amber-800 leading-snug">
-            <strong>Produtos ainda não disponível nesta base.</strong> Falta aplicar a migration{' '}
-            <code className="font-mono">20261006000000_produtos_contas_pagar</code>.
-          </p>
-        </div>
-      )}
 
       {/* ── Abas Medicamento × Vacina, como no cadastro de procedimentos ───── */}
       <div className="flex items-center gap-2 mb-4">
@@ -455,7 +298,7 @@ export default function Produtos() {
           const ativo = tipo === t;
           const Icone = t === 'vacina' ? Syringe : Pill;
           return (
-            <button key={t} onClick={() => setTipo(t)}
+            <button key={t} onClick={() => { setTipo(t); setMostrarForm(false); setForm(FORM_PRODUTO_VAZIO); limparEncontrado(); }}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
                 ativo ? 'bg-emerald-700 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
               }`}>
@@ -467,30 +310,30 @@ export default function Produtos() {
 
       {mostrarForm && (
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-4">
-          {filaDaNota.length > 0 && (
-            <p className="mb-3 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-              Lendo a nota — este é o produto <strong>{filaDaNota.length + 1}º ao último</strong>.
-              Salvar avança para o próximo automaticamente.
-            </p>
-          )}
           <FormProduto
             tipo={tipo}
             form={form}
             onForm={patch}
-            catalogo={catalogo}
-            buscandoCatalogo={buscandoCatalogo}
-            fornecedores={fornecedores}
+            opcoes={opcoes}
+            carregandoOpcoes={carregandoOpcoes}
             salvando={salvando}
-            carregandoItem={carregandoItem}
+            camposComErro={erroForm?.campos}
             multidoseDisponivel={multidoseDisponivel}
+            onNomeSaiu={consultarNome}
+            consultandoNome={consultandoNome}
+            /* ⚠️ A faixa é DERIVADA do nome que está no campo AGORA: sem isso ela
+               continuaria falando do item anterior enquanto a pessoa digita outro
+               nome — e o aviso passaria a mentir sem nada acusar. */
+            avisoCatalogo={itemEncontrado
+              && normalizarNomeProduto(form.nome) === normalizarNomeProduto(itemEncontrado.nome) ? {
+              nome:      itemEncontrado.nome,
+              daEmpresa: itemEncontrado.daEmpresa,
+              ativo:     itemEncontrado.ativo,
+              carregado: encontradoCarregado,
+            } : null}
+            onCarregarEncontrado={() => itemEncontrado && adotarEncontrado(itemEncontrado)}
             onSalvar={salvar}
-            onCancelar={() => {
-              setMostrarForm(false); setForm(FORM_PRODUTO_VAZIO); setFilaDaNota([]);
-              setErroForm(null); setOrigemNota(false); ultimoDetalhe.current = '';
-            }}
-            onNovoFornecedor={() => navigate('/cadastro/fornecedores', {
-              state: { abrirNovo: true, depois: '/cadastro/produtos' },
-            })}
+            onCancelar={() => { setMostrarForm(false); setForm(FORM_PRODUTO_VAZIO); setErroForm(null); limparEncontrado(); }}
           />
           {/* Erro da AÇÃO fica abaixo do botão que a disparou (§6) — no topo da
               página, quem clica em Salvar no fim do formulário não o veria. */}
@@ -498,44 +341,56 @@ export default function Produtos() {
         </div>
       )}
 
-      {/* ── Lista ──────────────────────────────────────────────────────────── */}
+      {/* ── Busca ─────────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-3">
         <div className="relative max-w-sm">
           <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
           <input value={busca} onChange={e => setBusca(e.target.value)}
-            placeholder="Buscar por produto ou fornecedor..."
+            placeholder={`Buscar ${tipo === 'vacina' ? 'vacina' : 'medicamento'} cadastrado...`}
             className="w-full border border-gray-200 rounded-xl pl-8 pr-3 py-2 text-sm focus:outline-none focus:border-emerald-400" />
         </div>
       </div>
 
       {loading ? (
         <div className="flex justify-center py-14"><Loader2 size={22} className="animate-spin text-emerald-600" /></div>
-      ) : daAba.length === 0 ? (
-        <div className="text-center py-14 text-gray-400 text-sm">
-          {busca.trim()
-            ? `Nenhum produto encontrado para "${busca}".`
-            : `Nenhum ${tipo === 'vacina' ? 'a vacina' : 'medicamento'} cadastrado como produto.`}
+      ) : nenhumResultado ? (
+        <div className="text-center py-14">
+          <p className="text-gray-400 text-sm">
+            {busca.trim()
+              ? `Nenhum${tipo === 'vacina' ? 'a vacina' : ' medicamento'} encontrado para "${busca}".`
+              : `Nenhum${tipo === 'vacina' ? 'a vacina' : ' medicamento'} cadastrado.`}
+          </p>
+          {/* Não achou? O caminho é cadastrar — e o nome digitado vai junto, para a
+              pessoa não redigitar o que acabou de procurar. */}
+          {podeCriar && busca.trim() && !mostrarForm && (
+            <button onClick={novoProduto}
+              className="mt-3 inline-flex bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-semibold">
+              Cadastrar “{busca.trim()}”
+            </button>
+          )}
         </div>
       ) : (
         <>
           <div className="hidden md:block bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-            <JanelaLista maxItens={3}>
+            {/* 5 itens visíveis (a pedido) — acima disso a lista rola dentro da
+                janela, em vez de esticar a página. */}
+            <JanelaLista maxItens={5}>
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-[11px] uppercase tracking-wider text-gray-400 border-b border-gray-100">
                     <th className="px-5 py-3 font-semibold">Produto</th>
-                    <th className="px-5 py-3 font-semibold">Fornecedor</th>
-                    <th className="px-5 py-3 font-semibold text-right whitespace-nowrap">Valor compra</th>
-                    <th className="px-5 py-3 font-semibold text-right whitespace-nowrap">Valor venda</th>
-                    <th className="px-5 py-3 font-semibold">Nota</th>
+                    <th className="px-5 py-3 font-semibold">Forma</th>
+                    <th className="px-5 py-3 font-semibold">Apresentação</th>
+                    <th className="px-5 py-3 font-semibold">Unidade</th>
+                    <th className="px-5 py-3 font-semibold">Vias</th>
                     <th className="px-5 py-3" />
                   </tr>
                 </thead>
                 <tbody>
-                  {daAba.map(p => (
+                  {itens.map(p => (
                     <tr key={p.id} className="border-b border-gray-50 hover:bg-gray-50/60">
                       <td className="px-5 py-3 font-medium text-gray-900">
-                        {p.medicamentoNome}
+                        {p.nome}
                         {/* O selo diz que aquele item é cobrado POR DOSE — sem ele,
                             duas linhas iguais teriam cobranças diferentes e nada na
                             tela explicaria por quê. */}
@@ -545,25 +400,36 @@ export default function Produtos() {
                             {p.dosesPorEmbalagem ? `${p.dosesPorEmbalagem} doses/emb.` : 'multidose'}
                           </span>
                         )}
+                        {p.controlado && (
+                          <span className="ml-2 inline-flex items-center text-[10px] text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-full align-middle">
+                            controlado
+                          </span>
+                        )}
+                        {/* Item do catálogo do sistema: alterá-lo cria a cópia desta
+                            clínica. O selo evita a leitura de que a edição vale para
+                            todo mundo. */}
+                        {!p.daEmpresa && (
+                          <span className="ml-2 inline-flex items-center gap-1 text-[10px] text-gray-500 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded-full align-middle">
+                            <Globe size={10} /> do sistema
+                          </span>
+                        )}
                       </td>
-                      <td className="px-5 py-3 text-gray-600">{p.fornecedorNome ?? '—'}</td>
-                      <td className="px-5 py-3 text-right">
-                        {p.valorUnitario != null
-                          ? <span className="font-semibold text-gray-700">{brlProduto(p.valorUnitario)}</span>
-                          /* Sem preço de compra a conta a pagar não é lançada — o
-                             aviso fica na LINHA, que é onde se resolve. */
-                          : <span className="text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">sem valor</span>}
+                      <td className="px-5 py-3 text-gray-600">{p.formaFarmaceutica || '—'}</td>
+                      <td className="px-5 py-3 text-gray-600">{p.apresentacao || '—'}</td>
+                      <td className="px-5 py-3 text-gray-600">{p.unidade || '—'}</td>
+                      <td className="px-5 py-3 text-gray-500 text-xs">
+                        {p.vias.length > 0 ? p.vias.map(v => v.via).join(', ') : '—'}
                       </td>
-                      <td className="px-5 py-3 text-right text-gray-600">{brlProduto(p.valorVenda)}</td>
-                      <td className="px-5 py-3 text-gray-400 text-xs">{p.notaFiscal ?? '—'}</td>
                       <td className="px-5 py-3 text-right">
                         <AcoesRegistro>
                           {/* Ordem e cor da §6: Alterar (laranja) primeiro, Cancelar
-                              (vermelho) por último. */}
+                              (vermelho) por último. Excluir só no item DA CLÍNICA —
+                              o do sistema é de todas, e o botão que só falha depois
+                              do clique é a armadilha 28-d. */}
                           <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Alterar"
-                            visivel={podeEditar} onClick={() => editarProduto(p)} />
+                            visivel={podeEditar} onClick={() => editarItem(p)} />
                           <AcaoRegistro tom="cancelar" icone={Trash2} rotulo="Excluir"
-                            visivel={podeExcluir} onClick={() => setExcluindo(p)} />
+                            visivel={podeExcluir && p.daEmpresa} onClick={() => setExcluindo(p)} />
                         </AcoesRegistro>
                       </td>
                     </tr>
@@ -574,36 +440,43 @@ export default function Produtos() {
           </div>
 
           <div className="md:hidden space-y-2">
-            <JanelaLista maxItens={3}>
-              {daAba.map(p => (
+            <JanelaLista maxItens={5}>
+              {itens.map(p => (
                 <div key={p.id} data-item-lista className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-                  <p className="font-semibold text-gray-900 text-sm">{p.medicamentoNome}</p>
-                  <p className="text-[11px] text-gray-500 mt-0.5">{p.fornecedorNome ?? 'Sem fornecedor'}</p>
-                  {p.multidose && (
-                    <span className="mt-1 inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full">
-                      <Layers size={10} />
-                      {p.dosesPorEmbalagem ? `${p.dosesPorEmbalagem} doses/emb.` : 'multidose'}
-                    </span>
+                  <p className="font-semibold text-gray-900 text-sm">{p.nome}</p>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    {[p.formaFarmaceutica, p.apresentacao, p.unidade].filter(Boolean).join(' · ') || '—'}
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {p.multidose && (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full">
+                        <Layers size={10} />
+                        {p.dosesPorEmbalagem ? `${p.dosesPorEmbalagem} doses/emb.` : 'multidose'}
+                      </span>
+                    )}
+                    {p.controlado && (
+                      <span className="inline-flex items-center text-[10px] text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-full">
+                        controlado
+                      </span>
+                    )}
+                    {!p.daEmpresa && (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-gray-500 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded-full">
+                        <Globe size={10} /> do sistema
+                      </span>
+                    )}
+                  </div>
+                  {p.vias.length > 0 && (
+                    <p className="text-[11px] text-gray-400 mt-1">Vias: {p.vias.map(v => v.via).join(', ')}</p>
                   )}
-                  <div className="flex items-center justify-between mt-2 text-xs">
-                    <span className="text-gray-400">Compra</span>
-                    {p.valorUnitario != null
-                      ? <span className="font-semibold text-gray-700">{brlProduto(p.valorUnitario)}</span>
-                      : <span className="text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">sem valor</span>}
-                  </div>
-                  <div className="flex items-center justify-between mt-1 text-xs">
-                    <span className="text-gray-400">Venda</span>
-                    <span className="text-gray-600">{brlProduto(p.valorVenda)}</span>
-                  </div>
-                  {(podeEditar || podeExcluir) && (
+                  {(podeEditar || (podeExcluir && p.daEmpresa)) && (
                     /* ⚠️ Ações do CARD vão no RODAPÉ (§6): com rótulo, ao lado do
                        nome elas espremeriam o produto. */
                     <div className="mt-3 pt-3 border-t border-gray-50">
                       <AcoesRegistro>
                         <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Alterar"
-                          visivel={podeEditar} onClick={() => editarProduto(p)} />
+                          visivel={podeEditar} onClick={() => editarItem(p)} />
                         <AcaoRegistro tom="cancelar" icone={Trash2} rotulo="Excluir"
-                          visivel={podeExcluir} onClick={() => setExcluindo(p)} />
+                          visivel={podeExcluir && p.daEmpresa} onClick={() => setExcluindo(p)} />
                       </AcoesRegistro>
                     </div>
                   )}
@@ -614,13 +487,11 @@ export default function Produtos() {
         </>
       )}
 
-      <LeitorNotaFiscal aberto={leitorAberto} onFechar={() => setLeitorAberto(false)} onUsar={usarNota} />
-
       <ModalJustificativa
         aberto={!!excluindo}
-        titulo="Remover produto"
-        descricao={excluindo ? `Remover "${excluindo.medicamentoNome}" do fornecedor ${excluindo.fornecedorNome ?? '—'}?` : ''}
-        acaoLabel="Remover"
+        titulo="Inativar produto"
+        descricao={excluindo ? `Inativar "${excluindo.nome}" no catálogo desta clínica?` : ''}
+        acaoLabel="Inativar"
         onConfirmar={confirmarExclusao}
         onFechar={() => setExcluindo(null)}
       />

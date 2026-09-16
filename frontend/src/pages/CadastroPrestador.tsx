@@ -26,15 +26,20 @@ import { isValidEmail } from '../utils/validators';
 import { cpfValido as validarCPF, cnpjValido as validarCNPJ } from '../utils/validacoes';
 import * as validacao from '../utils/validacoes';
 import CampoValidado from '../components/CampoValidado';
+import AvisoCadastroEncontrado from '../components/AvisoCadastroEncontrado';
+import {
+  consultarCadastroPorEmail, preencherVazios, fraseCadastroEncontrado,
+  type CadastroPessoa,
+} from '../utils/cadastroPorEmail';
 import InlineError from '../components/InlineError';
-import TipoServicoSelect from '../components/TipoServicoSelect';
+import { TipoServicoMultiSelect, tiposServicoDaString, tiposServicoParaString } from '../components/TipoServicoSelect';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import GerenciarAcessoPrestadorModal from '../components/GerenciarAcessoPrestadorModal';
 import { formatDate } from '../utils/dateUtils';
 import {
-  LocalizacaoCombobox, HoraInput, TIPOS_PAGAMENTO,
+  LocalizacaoCombobox, HoraInput,
   mascaraValorPagamento, valorPagamentoNumero, formatarValorSalvo,
 } from '../components/UsuarioFormModal';
 
@@ -80,9 +85,22 @@ type TipoDoc = 'cpf' | 'cnpj';
  * (`TIPOS_PAGAMENTO` de `lib/usuarioEmpresa.js`). Mesma separação do lado do
  * servidor, em `lib/procedimentoPrestador.js`.
  */
-const TIPOS_PAGAMENTO_PRESTADOR: Array<{ value: 'SALARIO' | 'COMISSAO' | 'POR_PROCEDIMENTO'; label: string }> = [
-  ...TIPOS_PAGAMENTO,
-  { value: 'POR_PROCEDIMENTO', label: 'Por procedimento' },
+/**
+ * 🔴 "POR PROCEDIMENTO" SAIU DO SELETOR (a pedido, 2026-09-15).
+ *
+ * O que se paga ao prestador passa a ser SALÁRIO ou COMISSÃO, e a comissão incide
+ * sobre o VALOR DO PROCEDIMENTO/COMBO cadastrado em Cadastro › Procedimentos — que
+ * é o mesmo valor lançado INTEIRO na fatura do cliente. O que sobra depois da
+ * comissão é o que aparece como receita de procedimentos no relatório financeiro.
+ *
+ * ⚠️ O valor `POR_PROCEDIMENTO` continua sendo ACEITO no cálculo do recibo
+ * (`lib/procedimentoPrestador.js#calcularValorAPagar`): prestador já gravado assim
+ * antes desta data precisa continuar tendo recibo apurado. O que deixou de existir é
+ * a opção de ESCOLHER isso daqui em diante.
+ */
+const TIPOS_PAGAMENTO_PRESTADOR: Array<{ value: 'SALARIO' | 'COMISSAO'; label: string }> = [
+  { value: 'SALARIO',  label: 'Salário' },
+  { value: 'COMISSAO', label: 'Comissão' },
 ];
 
 interface LocalTrabalhoPrestador {
@@ -185,7 +203,9 @@ interface FormPrest {
   cnpj:        string;
   telefone:    string;
   email:       string;
-  tipoServico: string;
+  /** Tipos de serviço do prestador — VÁRIOS (2026-09-15). Gravados como CSV em
+   *  `tb_prestadores.tipo_servico`, que é o formato que os leitores já esperam. */
+  tiposServico: string[];
   cep:         string;
   endereco:    string;
   complemento: string;
@@ -204,7 +224,7 @@ interface FormPrest {
 
 const FORM_INICIAL: FormPrest = {
   nome: '', tipoDoc: 'cnpj', cpf: '', cnpj: '', telefone: '', email: '',
-  tipoServico: '',
+  tiposServico: [],
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
   // Pagamento nasce em branco (é acordo com a pessoa, sem padrão a chutar).
   // Acesso nasce DESMARCADO — diferente do Incluir Membro: aqui a maioria é externa
@@ -250,12 +270,17 @@ function ModalDuplicataInativa({
 // ─── Modal ────────────────────────────────────────────────────────────────────
 
 function ModalPrestador({
-  editando, form, saving, erro, togglingAtivo,
-  onFormChange, onSalvar, onClose, onToggleAtivo,
+  editando, form, saving, erro, togglingAtivo, aviso,
+  onFormChange, onSalvar, onClose, onToggleAtivo, onEmailSaiu, onFecharAviso,
 }: {
   editando:    Prestador | null;
   form:        FormPrest;
   saving:      boolean;
+  /** Preenchimento automático por e-mail: faixa que explica o que foi trazido. */
+  aviso:       { mensagem: string; tom: 'carregado' | 'preenchido' } | null;
+  /** Consulta o e-mail ao SAIR do campo (ver `utils/cadastroPorEmail.ts`). */
+  onEmailSaiu: (email: string) => void;
+  onFecharAviso: () => void;
   /** Erro da ação do MODAL — exibido abaixo do rodapé, junto do botão clicado. */
   erro:        string | null;
   /** Alternar Ativo/Inativo é assíncrono e independente do Salvar do formulário. */
@@ -420,13 +445,18 @@ function ModalPrestador({
                   placeholder="Nome do profissional ou empresa" className={inputCls} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Tipo de Serviço *</label>
-                <TipoServicoSelect
+                <label className="block text-xs text-gray-500 mb-1">Tipos de Serviço *</label>
+                {/* Vários, no molde do campo "Especialidades" do Cadastro Pessoal: o
+                    <select> so ACRESCENTA e cada escolha vira um chip com X. O mesmo
+                    prestador costuma acumular atuacoes (ferrador E fisioterapeuta), e
+                    com um valor so o cadastro obrigava a escolher uma delas. */}
+                <TipoServicoMultiSelect
                   categoria="PRESTADOR"
-                  value={form.tipoServico}
-                  onChange={tipoServico => onFormChange({ tipoServico })}
+                  value={form.tiposServico}
+                  onChange={tiposServico => onFormChange({ tiposServico })}
                   defaults={TIPOS_SERVICO_PADRAO}
                   className={inputCls}
+                  ajuda="Escolha um ou mais. Aparecem no filtro por serviço do encaminhamento."
                 />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -439,6 +469,9 @@ function ModalPrestador({
                     onChange={val => onFormChange({ email: val })}
                     validar={validacao.email}
                     placeholder="email@exemplo.com"
+                    /* Ao SAIR do campo consulta se a clínica já conhece este e-mail —
+                       carrega o cadastro existente ou preenche o que está em branco. */
+                    aoSairDoCampo={onEmailSaiu}
                   />
                 </div>
                 <div>
@@ -448,6 +481,9 @@ function ModalPrestador({
                     placeholder="(00) 00000-0000" className={inputCls} />
                 </div>
               </div>
+              {aviso && (
+                <AvisoCadastroEncontrado mensagem={aviso.mensagem} tom={aviso.tom} onFechar={onFecharAviso} />
+              )}
             </div>
           </section>
 
@@ -617,7 +653,7 @@ function ModalPrestador({
                 <label className="block text-xs text-gray-500 mb-1">Tipo de pagamento</label>
                 <select value={form.tipoPagamento}
                   onChange={e => {
-                    const tipo = e.target.value as 'SALARIO' | 'COMISSAO' | 'POR_PROCEDIMENTO' | '';
+                    const tipo = e.target.value as 'SALARIO' | 'COMISSAO' | '';
                     const forma = tipo === 'COMISSAO' ? 'PERCENTUAL' : tipo === 'SALARIO' ? 'VALOR' : form.formaPagamento;
                     onFormChange({ tipoPagamento: tipo, formaPagamento: forma, valorPagamento: mascaraValorPagamento(form.valorPagamento, forma) });
                   }}
@@ -626,24 +662,6 @@ function ModalPrestador({
                   {TIPOS_PAGAMENTO_PRESTADOR.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
               </div>
-              {/* 🔴 "Por procedimento" NÃO tem valor único: o que se paga é o "Valor
-                  Cobrado pelo Prestador" de CADA procedimento, cadastrado em
-                  Cadastro › Procedimentos. Um campo de valor aqui daria duas fontes
-                  possíveis para o mesmo pagamento, e o recibo teria de escolher uma
-                  sem ninguém saber qual. Por isso o campo é SUBSTITUÍDO pela
-                  explicação, e não apenas desabilitado. */}
-              {form.tipoPagamento === 'POR_PROCEDIMENTO' ? (
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Valor</label>
-                  <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2.5">
-                    <p className="text-xs text-emerald-800 leading-snug">
-                      O valor é o de <strong>cada procedimento</strong>, definido em{' '}
-                      <strong>Cadastro › Procedimentos</strong> no campo
-                      {' '}“Valor Cobrado pelo Prestador”.
-                    </p>
-                  </div>
-                </div>
-              ) : (
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Valor</label>
                 <div className="flex items-stretch border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
@@ -666,7 +684,6 @@ function ModalPrestador({
                   </select>
                 </div>
               </div>
-              )}
               {/* Comissão em % incide sobre o Valor Cobrado para o Cliente — dizer isso
                   aqui evita a dúvida de "percentual de quê?" na hora de negociar. */}
               {form.tipoPagamento === 'COMISSAO' && form.formaPagamento === 'PERCENTUAL' && (
@@ -821,10 +838,26 @@ export default function CadastroPrestador() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadingPerms, podeCriar, params]);
 
-  const abrirNovo = () => { setEditando(null); setForm(FORM_INICIAL); setErroModal(null); setShowModal(true); };
+  // ─── Preenchimento automático pelo E-MAIL ──────────────────────────────────
+  //
+  // O mesmo profissional já cadastrado na clínica era redigitado do zero a cada novo
+  // cadastro — e, quando o e-mail já existia, o gestor só descobria no SALVAR, depois
+  // do formulário inteiro preenchido. Agora a pergunta é feita ao SAIR do campo.
+  //
+  // ⚠️ O escopo é a EMPRESA ATIVA e quem o define é o BACKEND (que ainda tem o RLS
+  // fail-closed por baixo) — a tela nunca manda empresaId. Prestador de outra clínica
+  // simplesmente não é encontrado aqui.
+  const [aviso, setAviso] = useState<{ mensagem: string; tom: 'carregado' | 'preenchido' } | null>(null);
+  // Último e-mail consultado: `blur` dispara também quando a pessoa só passa pelo
+  // campo sem mudar nada, e sem isto cada passagem viraria uma consulta.
+  const emailConsultado = useRef('');
+  const limparAviso = () => { setAviso(null); emailConsultado.current = ''; };
+
+  const abrirNovo = () => { setEditando(null); setForm(FORM_INICIAL); setErroModal(null); limparAviso(); setShowModal(true); };
 
   const abrirEdicao = (p: Prestador) => {
     setErroModal(null);
+    limparAviso();
     setEditando(p);
     setForm({
       nome:        p.nome,
@@ -833,7 +866,7 @@ export default function CadastroPrestador() {
       cnpj:        p.cnpj ? mascaraCNPJ(p.cnpj.replace(/\D/g,'')) : '',
       telefone:    p.telefone ? mascaraTelefone(p.telefone.replace(/\D/g,'')) : '',
       email:       p.email ?? '',
-      tipoServico: p.tipoServico?.trim() ?? '',
+      tiposServico: tiposServicoDaString(p.tipoServico),
       cep:         p.cep         ? mascaraCEP(p.cep.replace(/\D/g,'')) : '',
       endereco:    p.endereco    ?? '',
       complemento: p.complemento ?? '',
@@ -858,8 +891,56 @@ export default function CadastroPrestador() {
     setShowModal(true);
   };
 
-  const fecharModal = () => { setShowModal(false); setEditando(null); setForm(FORM_INICIAL); setErroModal(null); };
+  const fecharModal = () => { setShowModal(false); setEditando(null); setForm(FORM_INICIAL); setErroModal(null); limparAviso(); };
   const handleFormChange = (updates: Partial<FormPrest>) => setForm(prev => ({ ...prev, ...updates }));
+
+  // Documento: preencher só `cpf`/`cnpj` deixaria o número INVISÍVEL atrás do botão do
+  // outro tipo — o seletor tem de acompanhar o que veio.
+  const patchDocumento = (form: FormPrest, cadastro: CadastroPessoa): Partial<FormPrest> => {
+    if (form.cpf.trim() || form.cnpj.trim()) return {};
+    if (cadastro.cnpj) return { tipoDoc: 'cnpj', cnpj: mascaraCNPJ(cadastro.cnpj.replace(/\D/g, '')) };
+    if (cadastro.cpf)  return { tipoDoc: 'cpf',  cpf:  mascaraCPF(cadastro.cpf.replace(/\D/g, '')) };
+    return {};
+  };
+
+  const consultarEmail = async (email: string) => {
+    // Só no cadastro NOVO. Em edição, trocar o registro debaixo de quem está editando
+    // seria pior que o erro que isto evita.
+    if (editando) return;
+    const e = email.trim().toLowerCase();
+    if (!e || e === emailConsultado.current) return;
+    emailConsultado.current = e;
+
+    const r = await consultarCadastroPorEmail<Prestador>('/cadastro/prestadores/por-email', e);
+    if (!r.encontrado) { setAviso(null); return; }
+
+    // Já existe o prestador aqui: carrega e passa a EDITAR — é o que impede a
+    // duplicata que o backend recusaria no fim.
+    if (r.origem === 'CADASTRO') {
+      abrirEdicao(r.registro);
+      setAviso({ mensagem: fraseCadastroEncontrado(r, 'prestador'), tom: 'carregado' });
+      return;
+    }
+
+    // A pessoa já é conhecida da clínica em outro papel: preenche só o que está vazio.
+    // `setForm` funcional porque a resposta chega depois — `form` da closure pode estar
+    // velho, e um patch calculado sobre ele apagaria o que foi digitado na espera.
+    setForm(prev => ({
+      ...prev,
+      ...preencherVazios(prev, r.cadastro, {
+        fullName: { campo: 'nome' },
+        phone:    { campo: 'telefone',    formatar: v => mascaraTelefone(v.replace(/\D/g, '')) },
+        cep:      { campo: 'cep',         formatar: v => mascaraCEP(v.replace(/\D/g, '')) },
+        endereco: { campo: 'endereco' },
+        complemento: { campo: 'complemento' },
+        bairro:   { campo: 'bairro' },
+        cidade:   { campo: 'cidade' },
+        estado:   { campo: 'estado' },
+      }),
+      ...patchDocumento(prev, r.cadastro),
+    }));
+    setAviso({ mensagem: fraseCadastroEncontrado(r, 'prestador'), tom: 'preenchido' });
+  };
 
   const handleSalvar = async (force = false) => {
     setErroModal(null);
@@ -867,7 +948,7 @@ export default function CadastroPrestador() {
     if (editando && !podeEditar) { setErroModal(msgSemPermissao('alterar prestador')); return; }
     if (!editando && !podeCriar) { setErroModal(msgSemPermissao('criar prestador')); return; }
     if (!form.nome.trim())       { setErroModal('Nome é obrigatório'); return; }
-    if (!form.tipoServico)       { setErroModal('Selecione o tipo de serviço'); return; }
+    if (form.tiposServico.length === 0) { setErroModal('Selecione ao menos um tipo de serviço'); return; }
     if (form.email.trim() && !isValidEmail(form.email)) { setErroModal('Informe um e-mail válido'); return; }
     if (form.acessoSistema && !form.email.trim()) { setErroModal('E-mail é obrigatório para conceder acesso ao sistema'); return; }
     if (!form.telefone.trim())   { setErroModal('Telefone é obrigatório'); return; }
@@ -887,7 +968,7 @@ export default function CadastroPrestador() {
       cnpj:        form.tipoDoc === 'cnpj' && docCNPJ ? form.cnpj : null,
       telefone:    form.telefone,
       email:       form.email.trim() ? form.email.trim().toLowerCase() : null,
-      tipoServico: form.tipoServico,
+      tipoServico: tiposServicoParaString(form.tiposServico),
       cep:         form.cep         || null,
       endereco:    form.endereco    || null,
       complemento: form.complemento || null,
@@ -1097,10 +1178,14 @@ export default function CadastroPrestador() {
                       </p>
                     )}
                     <p className="text-xs text-gray-400 mt-0.5">{p.cnpj ?? p.cpf ?? '—'}</p>
-                    {p.tipoServico && (
-                      <span className="inline-block text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium mt-1">
-                        {p.tipoServico}
-                      </span>
+                    {tiposServicoDaString(p.tipoServico).length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {tiposServicoDaString(p.tipoServico).map(t => (
+                          <span key={t} className="inline-block text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium">
+                            {t}
+                          </span>
+                        ))}
+                      </div>
                     )}
                   </div>
                   <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${p.ativo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
@@ -1134,7 +1219,7 @@ export default function CadastroPrestador() {
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nome</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Documento</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Telefone</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipo de Serviço</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipos de Serviço</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                   {filtroAtivo === 'ativo' && (
                     <>
@@ -1174,10 +1259,14 @@ export default function CadastroPrestador() {
                         : <span className="text-gray-300">—</span>}
                     </td>
                     <td className="px-4 py-3">
-                      {p.tipoServico ? (
-                        <span className="text-[11px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium">
-                          {p.tipoServico}
-                        </span>
+                      {tiposServicoDaString(p.tipoServico).length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {tiposServicoDaString(p.tipoServico).map(t => (
+                            <span key={t} className="text-[11px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium">
+                              {t}
+                            </span>
+                          ))}
+                        </div>
                       ) : <span className="text-gray-300">—</span>}
                     </td>
                     <td className="px-4 py-3">
@@ -1224,6 +1313,9 @@ export default function CadastroPrestador() {
           onSalvar={handleSalvar}
           onClose={fecharModal}
           onToggleAtivo={handleToggleAtivoModal}
+          aviso={aviso}
+          onEmailSaiu={consultarEmail}
+          onFecharAviso={() => setAviso(null)}
         />
       )}
 

@@ -10,6 +10,8 @@
 const fs   = require('fs');
 const path = require('path');
 
+const { responderErro } = require('../lib/erroResposta');
+
 const { callAI, MODULOS_IA }   = require('../ai');
 const { buildPrompt }          = require('../ai/prompts');
 const { transcreverAudio }     = require('../ai/geminiClient');
@@ -126,9 +128,9 @@ const AudioController = {
       // Garante a limpeza mesmo se a falha for antes do finally do transcrever
       try { fs.unlinkSync(req.file.path); } catch { /* ignora */ }
       console.error('AudioController.processar error:', error);
-      res.status(500).json({
-        sucesso:  false,
-        mensagem: error.message ?? 'Erro ao processar áudio',
+      responderErro(res, error, {
+        contexto: 'AudioController.processar',
+        mensagem: 'Não foi possível processar o áudio. Tente gravar de novo.',
       });
     }
   },

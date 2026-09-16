@@ -63,10 +63,25 @@ export interface ItemExecucao {
    *  🔴 `null` também significa "ainda SEM âncora": item sem Hora Início e sem
    *  nenhuma dose dada não tem horário previsto — quem o define é a 1ª execução. */
   proximaDoseEm?:         string | null;
+  /** PRESTADOR que executa este PROCEDIMENTO, quando já definido na prescrição.
+   *  A tela de execução pode TROCÁ-LO — quem prescreve nem sempre sabe quem vai
+   *  executar, e é a execução que gera o recibo e a conta a pagar. */
+  prestadorId?:   number | null;
+  prestadorNome?: string | null;
   /** Horário REAL de cada dose já aplicada (asc por `numeroDose`) — é daqui que
    *  sai o "Dose 01/02 — Executado às 18:00" do card. Só o `executadoEm` do item
    *  não serve: ele guarda apenas a ÚLTIMA execução. */
   doses?: DoseExecutada[] | null;
+}
+
+/** Prestador oferecido no modal de execução (GET /procedimentos/cadastro/prestadores). */
+export interface PrestadorOpcaoExec {
+  id:             number;
+  nome:           string;
+  tipoServico:    string | null;
+  tipoPagamento:  string | null;
+  formaPagamento: string | null;
+  valorPagamento: number | null;
 }
 
 export interface DoseExecutada {
@@ -420,6 +435,82 @@ export function previsaoDaDose(
   return new Date(base.getTime() + n * intervaloEmMs(item.frequencia)).toISOString();
 }
 
+/**
+ * 🔴 A DOSE QUE NÃO FOI DADA EMPURRA AS SEGUINTES (2026-09-15).
+ *
+ * O DEFEITO relatado: procedimento 1x ao dia por 2 dias (12/09 e 13/09). No dia 13,
+ * com a dose de 12/09 AINDA NÃO EXECUTADA, a tela mostrava a 2ª dose com data e HORA
+ * definidas (13/09, o horário prescrito) e já vencendo — ou seja, duas doses
+ * disputando o mesmo dia e a segunda "atrasada" antes de a primeira acontecer.
+ *
+ * A regra do sistema sempre foi ROLLING: o horário de uma dose nasce da execução da
+ * ANTERIOR (`calcularProximaDose`, backend). O que a tela fazia era ANTECIPAR essa
+ * conta a partir do calendário original, como se as doses fossem uma grade fixa.
+ *
+ * O que esta função corrige:
+ *   • a dose PENDENTE que venceu é REAPRESENTADA no dia de hoje, com a data em que
+ *     era devida ("prescção em atraso desde 12/09") — ela continua sendo a próxima;
+ *   • as doses SEGUINTES deslizam o mesmo tanto de dias, em vez de ficarem presas
+ *     ao calendário original e colidirem com a que atrasou.
+ *
+ * ⚠️ O deslocamento é em DIAS INTEIROS sobre o instante previsto — nunca remontando
+ * a data com a hora "na mão": a hora prescrita é local e o ISO é UTC, e remontar
+ * deslocaria o horário de quem atende fora de Brasília (§6).
+ * 🔴 A POSTERGAÇÃO VALE PRINCIPALMENTE ANTES DA 1ª EXECUÇÃO (2026-09-15, parte 5).
+ * A primeira versão desta função só sabia postergar quando havia ÂNCORA
+ * (`proximaDoseEm`) — e âncora só existe depois da 1ª dose dada, ou quando há Hora
+ * Início prescrita. Ou seja: ela ficava INERTE exatamente no caso que veio corrigir
+ * (procedimento sem hora, nenhuma dose executada). Medido no relato: curso 1x/dia
+ * por 3 dias começando em 15/09, visto no dia seguinte com nada executado, seguia
+ * anunciando 15/09 · 16/09 · 17/09 — a dose de hoje disputando o dia com a de amanhã.
+ * Agora o "quando a dose pendente era devida" sai de `previsaoPendenteISO` — a MESMA
+ * resposta que o selo "Atrasada" da fila usa —, então selo e agenda contam a mesma
+ * história. Sem âncora, a data ORIGINAL de cada linha é o dia TEÓRICO do curso
+ * (`diaDaDose` = o `linha.dia` de `gerarResumoDoses`), nunca um múltiplo do
+ * intervalo: é ele que já distribui certo a frequência com mais de uma dose por dia.
+ *
+ * ⚠️ `temHorario` existe para o chamador NÃO inventar hora. Sem âncora o ISO
+ * devolvido é DATA PURA (meio-dia UTC, ver `dataDoDiaISO`), e passá-lo por
+ * `formatDiaMesHora` imprime o artefato do meio-dia — "às 09:00" em Brasília,
+ * "às 08:00" em Cuiabá —, horário que ninguém prescreveu. Era o segundo defeito
+ * relatado. Quem tem hora é só a dose de AGORA de um item ancorado.
+ *
+ * ⚠️ Isto é EXIBIÇÃO. Quem decide o horário de verdade continua sendo o backend, na
+ * execução — a tela nunca grava agenda nenhuma.
+ */
+export function agendaDaDose(
+  item: Pick<ItemExecucao, 'proximaDoseEm' | 'frequencia' | 'dataInicio'>,
+  n: number,
+  hojeStr: string,
+  /** Dia do curso desta linha (1-indexado, `linha.dia`). Só é consultado sem âncora:
+   *  com ela quem manda é o rolling schedule, que já embute a cadência. */
+  diaDaDose?: number,
+): { iso: string | null; originalISO: string | null; atrasoDias: number; temHorario: boolean } {
+  const temHorario = !!item.proximaDoseEm;
+  const vazio = { iso: null, originalISO: null, atrasoDias: 0, temHorario };
+  // Quando a dose PENDENTE era devida: o rolling schedule, havendo âncora; senão o
+  // 1º dia do curso. Mesma fonte de `itemAtrasadoEm`, de propósito.
+  const previstoISO = previsaoPendenteISO(item);
+  if (!previstoISO) return vazio;
+  const diaPrevisto = diaISO(previstoISO);
+  const atrasoDias = diaPrevisto && diaPrevisto < hojeStr
+    ? Math.max(0, Math.round(
+        (Date.parse(`${hojeStr}T00:00:00Z`) - Date.parse(`${diaPrevisto}T00:00:00Z`)) / 86400000))
+    : 0;
+  const originalISO = temHorario
+    ? previsaoDaDose(item, n)
+    : (diaDaDose != null && item.dataInicio ? dataDoDiaISO(item.dataInicio, diaDaDose) : null);
+  if (!originalISO) return { ...vazio, atrasoDias };
+  // Deslocar em DIAS INTEIROS preserva as duas naturezas: o instante ancorado mantém
+  // a hora, e a data pura de meio-dia UTC continua meio-dia UTC (logo, data pura).
+  return {
+    iso: new Date(Date.parse(originalISO) + atrasoDias * 86400000).toISOString(),
+    originalISO,
+    atrasoDias,
+    temHorario,
+  };
+}
+
 const execKey      = (grupoId: number) => `s2vet_exec_${grupoId}_${hojeISO()}`;
 const doneTodayKey = (grupoId: number) => `s2vet_done_${grupoId}_${hojeISO()}`;
 
@@ -760,6 +851,43 @@ export function ModalExecucao({
   // `comLive(item)` (prop + overlay). Ver `handleExecutarItem`.
   const [itensLive, setItensLive] = useState<Record<number, Partial<ItemExecucao>>>({});
   const comLive = (i: ItemExecucao): ItemExecucao => ({ ...i, ...itensLive[i.id] });
+
+  /**
+   * 🔴 QUEM EXECUTOU O PROCEDIMENTO (2026-09-15).
+   *
+   * Só aparece em item PROCEDIMENTO, e é OPCIONAL: sem escolha nenhuma a execução
+   * segue normalmente — travar a aplicação por causa de um cadastro pararia o
+   * plantão. Escolhido um prestador, o backend grava no item, calcula a comissão
+   * pela forma de pagamento DELE e lança no Recibo de Prestador; a fatura do cliente
+   * continua recebendo o valor INTEIRO do procedimento.
+   *
+   * ⚠️ Nasce com o que já está gravado no item: reabrir o modal não pode parecer
+   * que ninguém foi definido, e um salvar seguinte apagaria a escolha da prescrição.
+   */
+  const temProcedimento = grupo.itens.some(i => i.tipo === 'PROCEDIMENTO');
+  const [prestadores, setPrestadores] = useState<PrestadorOpcaoExec[]>([]);
+  const [prestadorPorItem, setPrestadorPorItem] = useState<Record<number, number | ''>>(() =>
+    Object.fromEntries(grupo.itens.filter(i => i.tipo === 'PROCEDIMENTO')
+      .map(i => [i.id, i.prestadorId ?? ''])));
+
+  useEffect(() => {
+    if (!temProcedimento || soLeituraGrupo) return;
+    let vivo = true;
+    api.get('/procedimentos/cadastro/prestadores')
+      .then(res => { if (vivo && res.data) setPrestadores(res.data.dados ?? []); })
+      .catch(() => { /* silencioso: o campo simplesmente não oferece opções */ });
+    return () => { vivo = false; };
+  }, [temProcedimento, soLeituraGrupo]);
+
+  /** `{ itemId: prestadorId }` dos procedimentos com prestador escolhido. */
+  const prestadoresDoPayload = (ids: number[]) => {
+    const mapa: Record<number, number> = {};
+    for (const id of ids) {
+      const escolhido = prestadorPorItem[id];
+      if (escolhido) mapa[id] = Number(escolhido);
+    }
+    return Object.keys(mapa).length > 0 ? { prestadores: mapa } : {};
+  };
   // Execução fora do horário pendente de confirmação (antecipada/atrasada) — a
   // MESMA tela para os dois casos, nunca bloqueia, só avisa o horário correto.
   const [confirmacao, setConfirmacao] = useState<{
@@ -911,6 +1039,7 @@ export function ModalExecucao({
     try {
       const res = await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, {
         itemIds: [item.id],
+        ...prestadoresDoPayload([item.id]),
         ...(confirmarHorario ? { confirmarHorario: true } : {}),
         ...(justificativa ? { justificativa } : {}),
       });
@@ -1057,6 +1186,7 @@ export function ModalExecucao({
       const itemIds = itensComInfo.filter(x => !x.activeDone).map(x => x.item.id);
       await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, {
         itemIds,
+        ...prestadoresDoPayload(itemIds),
         confirmarHorario: true,
         ...(justificativa ? { justificativa } : {}),
       });
@@ -1299,6 +1429,39 @@ export function ModalExecucao({
                     {periodicidade}
                   </p>
 
+                  {/* 🔴 QUEM EXECUTOU — só em PROCEDIMENTO e só enquanto há dose a
+                      executar. OPCIONAL: em branco, a execução acontece do mesmo
+                      jeito e nada vai para o recibo. */}
+                  {item.tipo === 'PROCEDIMENTO' && !soLeituraGrupo && !cancelado && !activeDone && (
+                    <div className="mt-2">
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
+                        Prestador que executou
+                      </label>
+                      <select
+                        value={prestadorPorItem[item.id] ?? ''}
+                        onChange={e => setPrestadorPorItem(prev => ({
+                          ...prev, [item.id]: e.target.value ? Number(e.target.value) : '',
+                        }))}
+                        className="w-full max-w-xs border border-gray-200 rounded-lg px-2 py-1.5 text-xs bg-white text-gray-700 focus:outline-none focus:border-emerald-400">
+                        <option value="">Não informar</option>
+                        {prestadores.map(pr => (
+                          <option key={pr.id} value={pr.id}>
+                            {pr.nome}{pr.tipoServico ? ` · ${pr.tipoServico}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                      {/* Sem forma de pagamento cadastrada não há comissão a apurar:
+                          dizer isso AQUI evita o recibo sair zerado sem explicação. */}
+                      {!!prestadorPorItem[item.id] &&
+                        !prestadores.find(pr => pr.id === Number(prestadorPorItem[item.id]))?.tipoPagamento && (
+                        <p className="text-[10px] text-amber-600 mt-1">
+                          Este prestador não tem forma de pagamento cadastrada — a execução é
+                          registrada, mas sem valor no recibo.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   {temHistorico && (
                     // Histórico de doses dentro da própria execução: a linha já dada
                     // mostra a HORA REAL em que foi aplicada ("Executado às 18:00"),
@@ -1331,18 +1494,44 @@ export function ModalExecucao({
                         // data teórica do calendário, sem hora — é tudo que se sabe
                         // antes da 1ª execução, e inventar um horário aqui seria
                         // mentir para quem vai aplicar.
-                        const previsaoISO = previsaoDaDose(item, idx - idxAtual);
-                        const quandoPrevisto = (previsaoISO && formatDiaMesHora(previsaoISO))
-                          ?? formatDateShort(dataDoDiaISO(item.dataInicio, linha.dia));
+                        // 🔴 AGENDA COM POSTERGAÇÃO (ver `agendaDaDose`): a dose
+                        // pendente que venceu é reapresentada HOJE e as seguintes
+                        // deslizam junto, em vez de colidirem com ela no calendário
+                        // original.
+                        const passo = idx - idxAtual;
+                        const agenda = agendaDaDose(item, passo, dataRef, linha.dia);
+                        // ⚠️ DOSE FUTURA NÃO TEM HORÁRIO, e isso não é omissão: quem
+                        // fixa o horário dela é a EXECUÇÃO da anterior (rolling
+                        // schedule). Mostrar a hora prescrita ali afirmaria um
+                        // compromisso que ninguém assumiu — foi exatamente o que fez a
+                        // 2ª dose parecer vencida antes de a 1ª acontecer.
+                        // ⚠️ E a dose de AGORA só tem hora quando o item TEM ÂNCORA
+                        // (`agenda.temHorario`). Antes da 1ª execução de um item sem Hora
+                        // Início não existe horário nenhum: o ISO ali é DATA PURA, e
+                        // `formatDiaMesHora` imprimiria o meio-dia UTC como "às 09:00" —
+                        // hora que ninguém prescreveu, e que ainda mudaria com o fuso da
+                        // clínica. Só a DATA é conhecida.
+                        const quandoPrevisto = agenda.iso
+                          ? ((passo === 0 && agenda.temHorario
+                                ? formatDiaMesHora(agenda.iso)
+                                : formatDiaMes(agenda.iso))
+                              ?? formatDateShort(agenda.iso))
+                          : formatDateShort(dataDoDiaISO(item.dataInicio, linha.dia + agenda.atrasoDias));
+                        // Texto do atraso — a data em que AQUELA dose era devida.
+                        const atrasoDaLinha = agenda.atrasoDias > 0 && agenda.originalISO && !executada && !cancelado
+                          ? formatDiaMes(agenda.originalISO)
+                          : null;
 
-                        // A dose de AGORA mostra a MESMA data/hora das futuras — só o
-                        // rótulo muda. Ela é a próxima do rolling schedule
-                        // (`previsaoDaDose(item, 0)` = `proximaDoseEm`), então o horário
-                        // sempre existiu aqui; ficar só com "Em Execução" escondia de
-                        // quem vai aplicar justamente a hora em que a dose vence.
+                        // A dose de AGORA mostra a MESMA data das futuras — só o rótulo
+                        // muda (e a hora, quando o item já tem âncora). Ficar só com
+                        // "Em Execução" escondia de quem vai aplicar o dia em que a dose
+                        // vence.
                         // Dose vencida e não aplicada diz ATRASADA e a data em que ERA
                         // devida — antes saía "Em Execução (25/08 às 08:00)" dentro da
                         // fila do dia 29, o que lia como tarefa de hoje.
+                        // SÓ a dose de AGORA é pintada de atrasada. As seguintes foram
+                        // POSTERGADAS junto — marcar as duas em vermelho diria que a
+                        // clínica perdeu duas aplicações quando perdeu uma.
                         const doseAtrasada = ehAtual && itemAtrasadoEm(item, dataRef);
                         const status = executada
                           // DIA + hora, nunca só a hora: o card lista o curso inteiro
@@ -1353,10 +1542,10 @@ export function ModalExecucao({
                           : cancelado
                             ? 'Cancelada'
                             : doseAtrasada
-                              ? `Atrasada — era ${quandoPrevisto}`
+                              ? `Prevista para ${quandoPrevisto}${atrasoDaLinha ? ` — prescrição em atraso desde ${atrasoDaLinha}` : ''}`
                               : ehAtual
                                 ? `Em Execução (${quandoPrevisto})`
-                                : `Prevista para ${quandoPrevisto}`;
+                                : `Prevista para ${quandoPrevisto}${atrasoDaLinha ? ` — prescrição em atraso desde ${atrasoDaLinha}` : ''}`;
                         return (
                           <div key={idx} className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
                             {/* MOBILE: o texto da dose ocupa a linha INTEIRA (`w-full`) e
@@ -2476,12 +2665,19 @@ export default function ExecucaoPrescricao() {
   const atrasoDoTipo = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO'): string | null => {
     const vencidas = g.itens
       .filter(i => i.tipo === tipo && itemAtrasadoEm(i, dataSel))
-      .map(i => previsaoPendenteISO(i))
-      .filter((v): v is string => !!v)
-      .sort();
+      .map(i => ({ iso: previsaoPendenteISO(i), comHora: !!i.proximaDoseEm }))
+      .filter((v): v is { iso: string; comHora: boolean } => !!v.iso)
+      .sort((a, b) => a.iso.localeCompare(b.iso));
     if (vencidas.length === 0) return null;
-    // Sem âncora de horário não existe hora a mostrar — só a data do dia do curso.
-    return formatDiaMesHora(vencidas[0]) ?? formatDateShort(vencidas[0]);
+    // 🔴 SEM ÂNCORA DE HORÁRIO NÃO EXISTE HORA A MOSTRAR — e isto não é detalhe de
+    // formatação: para um item assim `previsaoPendenteISO` devolve o dia do curso
+    // como DATA PURA (meio-dia UTC, ver `dataDoDiaISO`), e `formatDiaMesHora`
+    // convertia esse meio-dia em "15/09 às 09:00" numa prescrição que não tem Hora
+    // Início nenhuma — "às 08:00" numa clínica em Cuiabá, "às 07:00" no Acre. Era o
+    // defeito relatado em 2026-09-15: o selo anunciava um compromisso de horário que
+    // ninguém marcou, justamente no item cuja grade só nasce na 1ª execução.
+    const { iso, comHora } = vencidas[0];
+    return (comHora ? formatDiaMesHora(iso) : formatDiaMes(iso)) ?? formatDateShort(iso);
   };
 
   const renderGrupoAtivo = (tipo: 'MEDICAMENTO' | 'PROCEDIMENTO') => (g: GrupoExecucao) => (

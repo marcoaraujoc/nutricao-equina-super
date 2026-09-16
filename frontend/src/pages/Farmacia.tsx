@@ -1081,7 +1081,7 @@ export default function Farmacia() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    {editandoId ? 'Valor Total Comprado (R$)' : 'Val por Embalagem (R$)'} <span className="text-red-500">*</span>
+                    {editandoId ? 'Valor Total Comprado (R$)' : 'Valor Unitário (R$)'} <span className="text-red-500">*</span>
                   </label>
                   <input type="text" inputMode="decimal" value={valorStr}
                     onChange={(e) => handleValorChange(e.target.value)}
@@ -1095,7 +1095,7 @@ export default function Farmacia() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    {editandoId ? 'Valor Total Repassado (R$)' : 'Val Repassado por Embalagem (R$)'}
+                    {editandoId ? 'Valor Total Repassado (R$)' : 'Valor Unitário Cobrado (R$)'}
                   </label>
                   <input type="text" inputMode="decimal" value={valorRepassadoStr}
                     onChange={(e) => handleValorRepassadoChange(e.target.value)}
@@ -1203,15 +1203,11 @@ export default function Farmacia() {
                       <option key={u} value={u}>{u}</option>
                     ))}
                   </select>
-                  {/* Aviso de CONSEQUÊNCIA, não de cosmética: a troca vale para o
-                      medicamento inteiro nesta clínica, e no catálogo global ela nasce
-                      como cópia da empresa (o global é de todas as clínicas). */}
-                  {unidadeSel && medSelecionado && unidadeSel !== medSelecionado.unidade && (
-                    <p className="text-[10px] text-amber-600 mt-1">
-                      Unidade alterada ({medSelecionado.unidade} → {unidadeSel}): passa a valer
-                      para este medicamento apenas nesta clínica.
-                    </p>
-                  )}
+                  {/* ⚠️ O aviso "Unidade alterada (…)" foi REMOVIDO a pedido
+                      (2026-09-15). A REGRA continua valendo e não mudou: trocar a
+                      unidade de um medicamento GLOBAL cria a cópia da empresa
+                      (`lib/unidadeMedicamento.js`, copy-on-write) — o catálogo de
+                      todas as clínicas segue intocado. O que saiu foi o texto. */}
                 </div>
               </div>
 

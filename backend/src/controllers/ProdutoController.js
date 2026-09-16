@@ -1,375 +1,373 @@
 'use strict';
 /**
- * CADASTRO > PRODUTOS (2026-09-10)
+ * CADASTRO > PRODUTOS
  *
- * 🔴 O QUE ESTA TELA REÚNE: até aqui, cadastrar um item que a clínica usa exigia
- * passar por três lugares diferentes — `/medicamentos` (catálogo, ADMIN da
- * plataforma), `/cadastro-vacina` (catálogo de vacina) e `/farmacia`
- * ou `/estoque-vacina` (a entrada física). Produtos é a tela da CLÍNICA: cadastra o
- * item, diz de quem ela compra, e — só se ela quiser — dá entrada no estoque.
+ * 🔴 O QUE ESTA TELA É, DESDE 2026-09-15: o cadastro do ITEM que a clínica usa —
+ * medicamento e vacina, com forma farmacêutica, apresentação, unidade, via,
+ * controlado e doses por embalagem. É o catálogo DELA.
  *
- * ⚠️ NÃO substitui as telas anteriores (decisão de 2026-09-10). `/medicamentos`
- * continua sendo o catálogo GLOBAL do ADMIN, com 4.878 itens que valem para todas as
- * clínicas; aqui nasce o item PRÓPRIO da empresa (`empresa_id` setado), que só ela vê.
+ * ⚠️ REVERTE o escopo de 2026-09-10, em que a tela cadastrava o VÍNCULO com o
+ * FORNECEDOR (de quem se compra, por quanto) e podia dar entrada no estoque.
+ * Fornecedor, nota fiscal, valor de compra, valor de venda, leitura do documento de
+ * compra e a entrada no estoque SAÍRAM a pedido — quem trata de compra e de saldo é a
+ * Farmácia / o Estoque de Vacinas, e ter os dois aqui misturava "o que é o produto"
+ * com "quanto eu tenho dele".
+ * ⚠️ O backend de produto-fornecedor NÃO foi removido: `tb_produtos_fornecedor`,
+ * `lib/produtoFornecedor.js` e o lançamento da conta a pagar na execução seguem
+ * existindo e funcionando. O que sumiu foi a porta de entrada NESTA tela.
  *
- * 🔴 A DIFERENÇA ENTRE "PRODUTO" E "ESTOQUE", que é o que a tela existe para
- * registrar:
- *   • PRODUTO  = tenho fornecedor para este item. A clínica NÃO o guarda; pede quando
- *                o vet prescreve. Aparece VERDE na prescrição, com o nome do fornecedor.
- *   • ESTOQUE  = tenho o frasco aqui. Quantidade, lote, validade.
- * O checkbox "dar entrada no estoque" é o que separa os dois — marcado, o item vira
- * as DUAS coisas (a clínica comprou daquele fornecedor E guardou).
+ * 🔴 EDITAR É COPY-ON-WRITE. `tb_medicamentos` é CATÁLOGO MISTO: a linha GLOBAL vale
+ * para todas as clínicas do SaaS. Alterar a forma/via/unidade de um item global
+ * mudaria o item de todo mundo — então a alteração nasce numa CÓPIA da empresa e é
+ * ela que recebe tudo (`lib/catalogoEmpresa.js`). Item que já é da empresa é alterado
+ * no lugar; item de outra clínica responde 404. O RLS de `tb_medicamentos`
+ * (ENABLE + FORCE, `WITH CHECK` só do próprio) é a rede por baixo disso.
  */
 
 const prisma = require('../lib/prisma').default;
-const { garantirMedicamentoDaEmpresa } = require('../lib/catalogoManual');
-const produtoFornecedor = require('../lib/produtoFornecedor');
+const catalogoEmpresa = require('../lib/catalogoEmpresa');
 const { registrarAuditoria } = require('../lib/auditoria');
+// Fonte Única de "erro que chega à tela": repassa regra de negócio, engole o resto.
+const { responderErro } = require('../lib/erroResposta');
 
-const num = (v) => {
-  if (v === null || v === undefined || v === '') return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+/** Filtro "é vacina?" — MESMO critério de `MedicamentoController.paraAtendimento`. */
+function filtroTipo(tipo) {
+  return tipo === 'vacina'
+    ? { classificacao: { contains: 'vacin', mode: 'insensitive' } }
+    : { NOT: { classificacao: { contains: 'vacin', mode: 'insensitive' } } };
+}
+
+/** Só o catálogo VISÍVEL da empresa: o global + o próprio dela. Nunca o de outra. */
+function escopoDaEmpresa(empresaId) {
+  return { OR: [{ empresaId: null }, ...(empresaId ? [{ empresaId: Number(empresaId) }] : [])] };
+}
+
+const SELECT_ITEM = {
+  id: true, nome: true, formaFarmaceutica: true, unidade: true,
+  apresentacao: true, classificacao: true, fabricante: true,
+  controlado: true, empresaId: true, ativo: true,
+  vias: { select: { id: true, via: true }, orderBy: { via: 'asc' } },
 };
 
-// GET /api/cadastro/produtos?busca=&ativo=
+/**
+ * GET /api/cadastro/produtos?tipo=medicamento|vacina&busca=&ativo=
+ *
+ * 🔴 A BUSCA TRAZ OS ITENS JÁ CADASTRADOS (a pedido, 2026-09-15) — medicamentos e
+ * vacinas do catálogo visível da clínica. Achado um, a tela CARREGA os dados dele
+ * para alteração; a alteração pertence só a esta empresa (copy-on-write).
+ */
 const listar = async (req, res) => {
   try {
     if (!req.empresaId) return res.json({ dados: [], recursos: { disponivel: false } });
-    const disponivel = await produtoFornecedor.temTabela();
-    const dados = disponivel
-      ? await produtoFornecedor.listarDaEmpresa(req.empresaId, {
-          busca: req.query.busca,
-          ativo: req.query.ativo === 'all' ? 'all' : req.query.ativo !== 'false',
-        })
-      : [];
-    // ⚠️ A bandeira diz se a MIGRATION foi aplicada. Sem ela a tela mostra um aviso
-    // que nomeia o que falta, em vez de uma lista vazia que se lê como "não há
-    // produto cadastrado" — o pior resultado possível (mesmo padrão do
-    // `recursos.comboPrestador` e do `recursos.porProcedimento`).
-    //
-    // ⚠️ `multidose` vem JÁ NA CARGA DA TELA, não só no detalhe do item: o checkbox
-    // precisa estar escondido desde o primeiro render. Resolvê-lo só ao escolher um
-    // item do catálogo deixaria o campo à mostra para quem digita um produto NOVO — e
-    // a marcação sumiria no salvar, em silêncio, que é o que a bandeira existe para
-    // evitar.
-    return res.json({
-      dados,
-      recursos: { disponivel, multidose: await produtoFornecedor.temColunasMultidose() },
-    });
-  } catch (err) {
-    console.error('ProdutoController.listar:', err);
-    return res.status(500).json({ error: 'Erro ao listar produtos.' });
-  }
-};
-
-// GET /api/cadastro/produtos/catalogo?tipo=medicamento|vacina&busca=
-// Itens do catálogo (global + da empresa) para o seletor da tela — é aqui que o
-// gestor escolhe SE está cadastrando um item que já existe ou criando um novo.
-const listarCatalogo = async (req, res) => {
-  try {
     const tipo  = req.query.tipo === 'vacina' ? 'vacina' : 'medicamento';
     const busca = String(req.query.busca ?? '').trim();
-    const where = { ativo: true };
-    // Mesmo critério de `MedicamentoController.paraAtendimento`: a vacina é a linha
-    // cuja `classificacao` contém "vacin". Duas regras para "isto é vacina?" fariam
-    // esta tela e o seletor do atendimento discordarem sobre o mesmo item.
-    if (tipo === 'vacina') where.classificacao = { contains: 'vacin', mode: 'insensitive' };
-    else                   where.NOT = { classificacao: { contains: 'vacin', mode: 'insensitive' } };
-    if (busca) {
-      where.OR = [
+
+    const where = {
+      ...filtroTipo(tipo),
+      AND: [escopoDaEmpresa(req.empresaId)],
+      ...(req.query.ativo === 'all' ? {} : { ativo: req.query.ativo !== 'false' }),
+      ...(busca ? { OR: [
         { nome:              { contains: busca, mode: 'insensitive' } },
         { formaFarmaceutica: { contains: busca, mode: 'insensitive' } },
-      ];
-    }
-    where.AND = [{ OR: [{ empresaId: null }, ...(req.empresaId ? [{ empresaId: req.empresaId }] : [])] }];
+        { apresentacao:      { contains: busca, mode: 'insensitive' } },
+      ] } : {}),
+    };
 
     const itens = await prisma.medicamento.findMany({
-      where,
-      select: { id: true, nome: true, formaFarmaceutica: true, unidade: true, empresaId: true },
-      orderBy: { nome: 'asc' },
-      // Teto de 50: o catálogo tem milhares de linhas e o seletor é de BUSCA, não de
+      where, select: SELECT_ITEM, orderBy: { nome: 'asc' },
+      // Teto: o catálogo global tem milhares de linhas e o campo é de BUSCA, não de
       // rolagem. Sem o corte, abrir a tela baixaria o catálogo inteiro.
-      take: 50,
+      take: busca ? 100 : 60,
     });
-    return res.json({ dados: itens });
+
+    // Multidose vem por SQL cru (coluna nova — §11) e EM BLOCO, nunca um por item.
+    const multi = await catalogoEmpresa.multidosePorItem(prisma, itens.map(i => i.id));
+
+    return res.json({
+      dados: itens.map(i => ({
+        ...i,
+        ehVacina:   catalogoEmpresa.ehVacinaPelaClassificacao(i.classificacao),
+        // `daEmpresa: false` = item GLOBAL. A tela diz isso porque alterar um global
+        // não altera o global: cria a cópia desta clínica.
+        daEmpresa:  i.empresaId != null,
+        multidose:  multi.get(i.id)?.multidose ?? false,
+        dosesPorEmbalagem: multi.get(i.id)?.dosesPorEmbalagem ?? null,
+      })),
+      recursos: { disponivel: true, multidose: await catalogoEmpresa.temColunasMultidose(prisma) },
+    });
   } catch (err) {
-    console.error('ProdutoController.listarCatalogo:', err);
-    return res.status(500).json({ error: 'Erro ao listar o catálogo.' });
+    return responderErro(res, err, {
+      contexto: 'ProdutoController.listar', mensagem: 'Não foi possível carregar a lista de produtos.',
+    });
   }
 };
 
 /**
- * GET /api/cadastro/produtos/detalhe?medicamentoId=&fornecedorId=
+ * GET /api/cadastro/produtos/detalhe?medicamentoId=
  *
- * 🔴 O QUE ESCOLHER O ITEM PASSA A CARREGAR (pedido de 2026-09-12): o formulário
- * abria em branco mesmo para um item que a clínica JÁ compra — a pessoa redigitava
- * preço, unidade e fornecedor que já estavam no banco, e ao salvar sobrescrevia o
- * cadastro sem nunca ter visto o que havia nele. Agora o item escolhido traz o que
- * está gravado, e tudo continua EDITÁVEL.
+ * O item escolhido na busca, com TUDO o que o formulário edita. Continua existindo
+ * porque a lista é recortada (`take`) e o formulário pode ser aberto por id vindo de
+ * outra tela (Prescrição / Vacina).
  *
- * Devolve o item do CATÁLOGO + os VÍNCULOS de fornecedor daquela empresa. Quem
- * escolhe qual vínculo preenche o formulário é a tela: o do fornecedor selecionado,
- * ou o primeiro quando ainda não há fornecedor escolhido.
- *
- * ⚠️ MULTI-TENANT: o catálogo é MISTO — só passa a linha GLOBAL (`empresa_id IS
- * NULL`) ou a da PRÓPRIA empresa; item de outra clínica responde 404, nunca os dados.
- * Os vínculos saem de `listarDaEmpresa`, escopado por `empresa_id`.
+ * ⚠️ MULTI-TENANT: só devolve linha GLOBAL ou da PRÓPRIA empresa — item de outra
+ * clínica responde 404, nunca os dados.
  */
 const detalhe = async (req, res) => {
   try {
     if (!req.empresaId) return res.status(400).json({ error: 'Selecione a empresa.' });
     const medicamentoId = Number(req.query.medicamentoId);
-    if (!Number.isInteger(medicamentoId)) {
-      return res.status(400).json({ error: 'Informe o item do catálogo.' });
-    }
+    if (!Number.isInteger(medicamentoId)) return res.status(400).json({ error: 'Informe o item do catálogo.' });
 
     const item = await prisma.medicamento.findFirst({
-      where: {
-        id: medicamentoId,
-        // O RLS já recusaria a linha de outra clínica; o filtro explícito é o que faz
-        // a resposta ser a mesma com e sem o carimbo de tenant (ADMIN incluído).
-        OR: [{ empresaId: null }, { empresaId: req.empresaId }],
-      },
-      select: {
-        id: true, nome: true, formaFarmaceutica: true, unidade: true,
-        apresentacao: true, classificacao: true, fabricante: true,
-        controlado: true, empresaId: true,
-      },
+      where:  { id: medicamentoId, ...escopoDaEmpresa(req.empresaId) },
+      select: SELECT_ITEM,
     });
     if (!item) return res.status(404).json({ error: 'Item não encontrado no catálogo desta clínica.' });
 
-    const produtos = (await produtoFornecedor.listarDaEmpresa(req.empresaId, { ativo: 'all' }))
-      .filter(p => p.medicamentoId === medicamentoId);
-
+    const multi = await catalogoEmpresa.multidosePorItem(prisma, [item.id]);
     return res.json({
       dados: {
-        catalogo: {
-          ...item,
-          ehVacina: /vacin/i.test(String(item.classificacao ?? '')),
-        },
-        produtos,
-        // A bandeira diz se a coluna de multidose existe — sem ela a tela esconde o
-        // checkbox em vez de oferecer um campo cuja marcação sumiria no salvar, em
-        // silêncio (mesmo padrão de `recursos.comboPrestador`).
-        recursos: { multidose: await produtoFornecedor.temColunasMultidose() },
+        ...item,
+        ehVacina:  catalogoEmpresa.ehVacinaPelaClassificacao(item.classificacao),
+        daEmpresa: item.empresaId != null,
+        multidose: multi.get(item.id)?.multidose ?? false,
+        dosesPorEmbalagem: multi.get(item.id)?.dosesPorEmbalagem ?? null,
+      },
+      recursos: { multidose: await catalogoEmpresa.temColunasMultidose(prisma) },
+    });
+  } catch (err) {
+    return responderErro(res, err, {
+      contexto: 'ProdutoController.detalhe', mensagem: 'Não foi possível carregar o produto.',
+    });
+  }
+};
+
+/**
+ * Pares do `translate()` do Postgres — a MESMA remoção de acento que `normalizarNome`
+ * faz em JS. Mesmo precedente de `lib/duplicidadeAnimal.js`: `translate()` e não
+ * `unaccent()`, porque a extensão pode não estar instalada na base do cliente — e um
+ * reconhecimento que só funciona em algumas instalações é pior que nenhum.
+ * ⚠️ As duas cadeias precisam ter o MESMO comprimento: o `translate` mapeia posição a
+ * posição, e uma sobra desloca todo o resto e passa a trocar letras erradas.
+ */
+const COM_ACENTO = 'áàâãäéèêëíìîïóòôõöúùûüçñÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑ';
+const SEM_ACENTO = 'aaaaaeeeeiiiiooooouuuucnAAAAAEEEEIIIIOOOOOUUUUCN';
+
+/** "Dipirona 500 " → "dipirona 500". Único ponto de normalização — o espelho no front
+ *  (`normalizarNomeProduto`) precisa concordar com este. */
+function normalizarNome(v) {
+  return String(v ?? '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/**
+ * GET /api/cadastro/produtos/por-nome?tipo=medicamento|vacina&nome=
+ *
+ * 🔴 O NOME DIGITADO TRAZ O QUE JÁ ESTÁ CADASTRADO (a pedido, 2026-09-15). Ao sair do
+ * campo Nome, a tela pergunta "este produto já existe?" e, existindo, carrega forma,
+ * apresentação, unidade, vias, controlado, fabricante e doses — em vez de deixar a
+ * pessoa redigitar um cadastro que o sistema tem, e nascer um item divergente do
+ * global com o mesmo nome.
+ *
+ * ⚠️ MULTI-TENANT: o escopo é o MESMO da listagem (global + o da PRÓPRIA empresa) —
+ * item privado de outra clínica responde "não encontrado", nunca os dados. Fail-closed
+ * sem `req.empresaId`.
+ * ⚠️ A CÓPIA DA EMPRESA VENCE o global homônimo (`empresa_id ASC NULLS LAST`): com a
+ * cópia já existente, carregar o GLOBAL faria o salvar criar uma SEGUNDA cópia da mesma
+ * clínica. É a mesma precedência de `garantirMedicamentoDaEmpresa`.
+ * ⚠️ Item INATIVO também é devolvido: `salvarItemDoCatalogo` REAPROVEITA e reativa a
+ * cópia da empresa de mesmo nome, então esconder o inativo aqui faria a tela oferecer
+ * um cadastro "novo" que o salvar transformaria em edição — em silêncio.
+ */
+const porNome = async (req, res) => {
+  try {
+    if (!req.empresaId) return res.json({ encontrado: false });
+    const tipo = req.query.tipo === 'vacina' ? 'vacina' : 'medicamento';
+    const alvo = normalizarNome(req.query.nome);
+    if (alvo.length < 2) return res.json({ encontrado: false });
+
+    // ⚠️ `coalesce(classificacao, '')` nos DOIS lados: em SQL o `NOT ILIKE` sobre NULL
+    // não é verdadeiro, então o item legado com classificação nula ficaria FORA do
+    // recorte de medicamento — a mesma armadilha documentada em `catalogoManual`.
+    const linhas = await prisma.$queryRawUnsafe(
+      `SELECT m.id
+         FROM schs2vet.tb_medicamentos m
+        WHERE (m.empresa_id IS NULL OR m.empresa_id = $1::int)
+          AND translate(lower(btrim(m.nome)), '${COM_ACENTO}', '${SEM_ACENTO}') = $2
+          AND (CASE WHEN $3::boolean
+                    THEN coalesce(m.classificacao, '') ILIKE '%vacin%'
+                    ELSE coalesce(m.classificacao, '') NOT ILIKE '%vacin%' END)
+        ORDER BY m.empresa_id ASC NULLS LAST, m.ativo DESC, m.id ASC
+        LIMIT 1`,
+      Number(req.empresaId), alvo, tipo === 'vacina',
+    ).catch(() => []);
+
+    if (linhas.length === 0) return res.json({ encontrado: false });
+
+    const item = await prisma.medicamento.findFirst({
+      where:  { id: Number(linhas[0].id), ...escopoDaEmpresa(req.empresaId) },
+      select: SELECT_ITEM,
+    });
+    if (!item) return res.json({ encontrado: false });
+
+    const multi = await catalogoEmpresa.multidosePorItem(prisma, [item.id]);
+    return res.json({
+      encontrado: true,
+      dados: {
+        ...item,
+        ehVacina:  catalogoEmpresa.ehVacinaPelaClassificacao(item.classificacao),
+        daEmpresa: item.empresaId != null,
+        multidose: multi.get(item.id)?.multidose ?? false,
+        dosesPorEmbalagem: multi.get(item.id)?.dosesPorEmbalagem ?? null,
       },
     });
   } catch (err) {
-    console.error('ProdutoController.detalhe:', err);
-    return res.status(500).json({ error: 'Erro ao carregar o produto.' });
+    console.error('ProdutoController.porNome:', err);
+    // Reconhecer o nome é CONVENIÊNCIA: falhar aqui não pode impedir o cadastro.
+    return res.json({ encontrado: false });
   }
 };
+
+/**
+ * Espécies a vincular no item novo.
+ *
+ * 🔴 É a ESPÉCIE que faz o item APARECER nas buscas depois — `paraAtendimento` e os
+ * filtros `especieDaEmpresa` (Farmácia) / `getEspeciesIds` (Estoque de Vacinas)
+ * recortam por ela. Sem vínculo nenhum o produto nasce INVISÍVEL nas telas de
+ * estoque, e a pessoa conclui que o cadastro não funcionou.
+ *
+ * ⚠️ Reusa `especiesParaItemSemPaciente` do `MedicamentoController` — ela já é a UNIÃO
+ * das duas fontes que essas telas consultam (animais ativos + espécies declaradas do
+ * vet). Uma versão própria aqui cobriria só uma delas, e o item ficaria visível numa
+ * tela e ausente na outra.
+ */
+const { especiesParaItemSemPaciente } = require('./MedicamentoController');
 
 /**
  * POST /api/cadastro/produtos
  *
- * Corpo: { tipo, medicamentoId?, nome?, unidade?, especieIds?, fornecedorId,
- *          valorUnitario?, valorVenda?, notaFiscal?, observacao?,
- *          entrarNoEstoque?, estoque: { quantidade, lote, validade, valor, ... } }
+ * Corpo: { tipo, medicamentoId?, nome, formaFarmaceutica, apresentacao, unidade,
+ *          vias[], controlado?, fabricante?, multidose?, dosesPorEmbalagem? }
  *
- * 🔴 TUDO numa transaction: o item de catálogo, o vínculo com o fornecedor e a
- * entrada de estoque nascem juntos ou não nascem. Sem isso, uma falha no meio
- * deixaria o item cadastrado sem fornecedor (invisível como produto) ou o estoque
- * apontando para um vínculo que não existe.
+ * Cria o item PRÓPRIO da clínica ou ALTERA o escolhido (copy-on-write).
+ * ⚠️ Numa TRANSACTION: o item, as vias e as espécies nascem juntos ou não nascem —
+ * item sem espécie vinculada nasce INVISÍVEL na busca do atendimento, e a pessoa
+ * concluiria que o cadastro falhou sem nada acusar.
  */
 const criar = async (req, res) => {
   try {
     if (!req.empresaId) return res.status(400).json({ error: 'Selecione a empresa antes de cadastrar.' });
-    if (!(await produtoFornecedor.temTabela())) {
-      return res.status(400).json({
-        error: 'Recurso de produtos ainda não disponível nesta base. Falta aplicar a migration 20261006000000_produtos_contas_pagar.',
-        code:  'MIGRATION_PENDENTE',
-      });
-    }
 
     const {
-      tipo = 'medicamento', medicamentoId, nome, unidade, especieIds = [],
-      fornecedorId, valorUnitario, valorVenda, notaFiscal, observacao,
-      multidose = false, dosesPorEmbalagem,
-      entrarNoEstoque = false, estoque = {},
+      tipo = 'medicamento', medicamentoId,
+      nome, formaFarmaceutica, apresentacao, unidade, vias, controlado, fabricante,
+      multidose, dosesPorEmbalagem,
     } = req.body ?? {};
 
     const ehVacina = tipo === 'vacina';
-    if (!fornecedorId) return res.status(400).json({ error: 'Selecione o fornecedor.' });
-    if (!medicamentoId && !String(nome ?? '').trim()) {
-      return res.status(400).json({ error: 'Escolha um item do catálogo ou informe o nome do produto novo.' });
+    const viasLista = Array.isArray(vias) ? vias.map(v => String(v ?? '').trim()).filter(Boolean) : [];
+
+    // Os obrigatórios são os MESMOS do cadastro rápido do atendimento
+    // (`CadastroCatalogoModal`): item que nasce sem forma/unidade/apresentação/via não
+    // consegue ser prescrito nem entrar no estoque depois.
+    const faltando = [];
+    if (!String(nome ?? '').trim())              faltando.push('Nome');
+    if (!String(formaFarmaceutica ?? '').trim()) faltando.push('Forma farmacêutica');
+    if (!String(unidade ?? '').trim())           faltando.push('Unidade');
+    if (!String(apresentacao ?? '').trim())      faltando.push('Apresentação');
+    if (viasLista.length === 0)                  faltando.push('Via de administração');
+    if (faltando.length > 0) {
+      return res.status(400).json({ error: `Preencha: ${faltando.join(', ')}.`, campos: faltando });
     }
+
+    const especieIds = await especiesParaItemSemPaciente(req);
 
     const resultado = await prisma.$transaction(async (tx) => {
-      // 1. O item do CATÁLOGO — reaproveita o escolhido, ou cria o da empresa.
-      // ⚠️ `garantirMedicamentoDaEmpresa` é idempotente por (nome, empresa, tipo): é
-      // ele que impede o mesmo produto virar duas linhas quando cadastrado duas vezes.
-      const medId = medicamentoId
-        ? Number(medicamentoId)
-        : await garantirMedicamentoDaEmpresa(tx, {
-            nome, unidade, vacina: ehVacina, especieIds,
-          }, req.empresaId);
-      if (!medId) throw new Error('Não foi possível resolver o item do catálogo.');
-
-      // 2. O VÍNCULO com o fornecedor — é isto que faz o item ser "produto".
-      const salvo = await produtoFornecedor.salvarProduto(tx, {
-        empresaId: req.empresaId,
-        medicamentoId: medId,
-        fornecedorId,
-        valorUnitario, valorVenda, unidade, notaFiscal, observacao,
-        multidose, dosesPorEmbalagem,
-        ativo: true,
+      const salvo = await catalogoEmpresa.salvarItemDoCatalogo(tx, {
+        medicamentoId: medicamentoId ? Number(medicamentoId) : null,
+        empresaId:     req.empresaId,
+        vacina:        ehVacina,
+        especieIds,
+        dados: {
+          nome, formaFarmaceutica, apresentacao, unidade, fabricante,
+          // Vacina não é medicamento controlado — aceitar a marcação ali produziria
+          // receituário especial para uma dose de rotina.
+          controlado: ehVacina ? false : controlado,
+          vias: viasLista,
+          multidose, dosesPorEmbalagem,
+        },
       });
-      if (salvo.erro) throw new Error(salvo.erro);
-
-      // 3. A entrada de ESTOQUE — só quando o gestor marcou o checkbox.
-      let estoqueId = null;
-      if (entrarNoEstoque) {
-        // ⚠️ "Doses por embalagem" é UM dado só: o do checkbox de multidose governa
-        // também o `dosesPorFrasco` do lote de vacina. Dois campos para a mesma coisa
-        // divergiriam, e quem diverge aqui é o número que desconta a dose do frasco.
-        const estoqueEfetivo = multidose && dosesPorEmbalagem
-          ? { ...estoque, dosesPorFrasco: estoque.dosesPorFrasco ?? dosesPorEmbalagem }
-          : estoque;
-        estoqueId = ehVacina
-          ? await entradaLoteVacina(tx, { medId, fornecedorId, notaFiscal, estoque: estoqueEfetivo, empresaId: req.empresaId })
-          : await entradaEstoqueFarmacia(tx, { medId, fornecedorId, notaFiscal, estoque: estoqueEfetivo, empresaId: req.empresaId });
-      }
 
       await registrarAuditoria(tx, req, {
-        categoria:  'CRIACAO',
+        categoria:  medicamentoId ? 'ALTERACAO' : 'CRIACAO',
         entidade:   'PRODUTO',
         entidadeId: salvo.id,
-        detalhes:   `Produto "${nome ?? `#${medId}`}" (${ehVacina ? 'vacina' : 'medicamento'})`
-                    + (entrarNoEstoque ? ' com entrada no estoque' : ''),
+        detalhes:   `${ehVacina ? 'Vacina' : 'Medicamento'} "${String(nome ?? '').trim()}"`
+                    + (salvo.copiado ? ' (cópia desta clínica criada a partir do catálogo global)' : ''),
       });
-
-      return { id: salvo.id, medicamentoId: medId, estoqueId };
+      return salvo;
     });
 
-    return res.status(201).json({ dados: resultado });
+    return res.status(medicamentoId ? 200 : 201).json({ dados: resultado });
   } catch (err) {
-    console.error('ProdutoController.criar:', err);
-    return res.status(500).json({ error: err.message || 'Erro ao cadastrar o produto.' });
+    // ⚠️ NUNCA `err.message || <fallback>`: a mensagem do Prisma SEMPRE existe, então o
+    // fallback amigável nunca entrava e o dump da invocação — com o CAMINHO do arquivo no
+    // servidor — ia inteiro para a tela. Quem decide o que a pessoa lê é `responderErro`:
+    // ele repassa o erro de REGRA DE NEGÓCIO inteiro (`UnidadeIndisponivelError` tem
+    // `status` e texto escrito para ser lido) e engole o resto, deixando-o no log.
+    return responderErro(res, err, {
+      contexto: 'ProdutoController.criar',
+      mensagem: 'Não foi possível salvar o produto. Tente novamente; se continuar, avise o suporte.',
+    });
   }
 };
 
-/**
- * Entrada de estoque da FARMÁCIA (medicamento).
- *
- * ⚠️ Espelha `EstoqueController.criar`, inclusive o `MovimentoEstoque` de ENTRADA —
- * sem ele o item nasce com saldo que não veio de lugar nenhum, e o relatório de
- * movimentação não fecha com o saldo.
- */
-async function entradaEstoqueFarmacia(tx, { medId, fornecedorId, notaFiscal, estoque, empresaId }) {
-  const qtd = num(estoque.quantidade) ?? 0;
-  const criado = await tx.estoqueClinica.create({
-    data: {
-      medicamentoId:    medId,
-      empresaId:        Number(empresaId),
-      fornecedorId:     fornecedorId ? Number(fornecedorId) : null,
-      notaFiscal:       String(notaFiscal ?? '').trim().slice(0, 100) || null,
-      valor:            num(estoque.valor) ?? 0,
-      valorRepassado:   num(estoque.valorRepassado) ?? 0,
-      precoUnitarioBase: num(estoque.precoUnitarioBase),
-      lote:             String(estoque.lote ?? '').trim().slice(0, 100) || null,
-      validade:         estoque.validade ? new Date(estoque.validade) : null,
-      qtdEstoque:       qtd,
-      qtdEmbalagens:    num(estoque.qtdEmbalagens),
-      pesoPorEmbalagem: num(estoque.pesoPorEmbalagem),
-      estoqueMinimo:    num(estoque.estoqueMinimo) ?? 0,
-      estoqueAlarmante: num(estoque.estoqueAlarmante) ?? 0,
-      ativo:            true,
-    },
-    select: { id: true },
-  });
-  if (qtd > 0) {
-    await tx.movimentoEstoque.create({
-      data: { estoqueId: criado.id, tipo: 'ENTRADA', quantidade: qtd, motivo: 'Entrada inicial (Produtos)' },
-    });
-  }
-  return criado.id;
-}
-
-/**
- * Entrada de LOTE de vacina.
- *
- * ⚠️ `fornecedor_id`/`nota_fiscal` do lote são colunas NOVAS (migration
- * 20261006000000) e vão por SQL cru depois do create — o client pode não conhecê-las
- * (§11), e passá-las ao `create` tipado derrubaria a criação inteira numa base ainda
- * não migrada. Falhando ali, o lote nasce sem fornecedor, que é o comportamento antigo.
- */
-async function entradaLoteVacina(tx, { medId, fornecedorId, notaFiscal, estoque, empresaId }) {
-  const doses = num(estoque.quantidade) ?? 0;
-  const criado = await tx.loteVacina.create({
-    data: {
-      medicamentoCatId: medId,
-      empresaId:        Number(empresaId),
-      lote:             String(estoque.lote ?? '').trim().slice(0, 100) || 'S/L',
-      // ⚠️ `validade` é NOT NULL no schema: sem data informada, o lote não pode
-      // nascer. Um ano é o padrão do estoque de vacina e é editável na tela dele.
-      validade:         estoque.validade ? new Date(estoque.validade)
-                                         : new Date(Date.now() + 365 * 24 * 3600 * 1000),
-      qtdTotal:         doses,
-      qtdDisponivel:    doses,
-      dosesPorFrasco:   num(estoque.dosesPorFrasco) ?? 1,
-      qtdFrascos:       num(estoque.qtdFrascos) ?? 0,
-      valorUnitario:    num(estoque.valor),
-      valorUnitarioRepassado: num(estoque.valorRepassado),
-      estoqueMinimo:    num(estoque.estoqueMinimo) ?? 0,
-      estoqueAlarmante: num(estoque.estoqueAlarmante) ?? 0,
-      dataRecebimento:  estoque.dataRecebimento ? new Date(estoque.dataRecebimento) : new Date(),
-      ativo:            true,
-    },
-    select: { id: true },
-  });
-  await produtoFornecedor.gravarFornecedorNoLote(tx, criado.id, { fornecedorId, notaFiscal });
-  return criado.id;
-}
-
-// PUT /api/cadastro/produtos/:id — só o vínculo (preço, unidade, nota, observação).
+/** PUT /api/cadastro/produtos/:id — o mesmo caminho do POST, com o id na rota. */
 const atualizar = async (req, res) => {
-  try {
-    if (!req.empresaId) return res.status(400).json({ error: 'Selecione a empresa.' });
-    const { medicamentoId, fornecedorId, valorUnitario, valorVenda, unidade,
-            notaFiscal, observacao, ativo, multidose, dosesPorEmbalagem } = req.body ?? {};
-    if (!medicamentoId || !fornecedorId) {
-      return res.status(400).json({ error: 'Produto e fornecedor são obrigatórios.' });
-    }
-    const salvo = await produtoFornecedor.salvarProduto(prisma, {
-      empresaId: req.empresaId, medicamentoId, fornecedorId,
-      valorUnitario, valorVenda, unidade, notaFiscal, observacao, ativo,
-      multidose, dosesPorEmbalagem,
-    });
-    if (salvo.erro) return res.status(400).json({ error: salvo.erro });
-    return res.json({ dados: { id: salvo.id } });
-  } catch (err) {
-    console.error('ProdutoController.atualizar:', err);
-    return res.status(500).json({ error: 'Erro ao atualizar o produto.' });
-  }
+  req.body = { ...(req.body ?? {}), medicamentoId: Number(req.params.id) };
+  return criar(req, res);
 };
 
-// DELETE /api/cadastro/produtos/:id  { motivo }
+/**
+ * DELETE /api/cadastro/produtos/:id  { motivo }
+ *
+ * INATIVA o item da clínica (soft delete — §10: registro de catálogo não se apaga,
+ * há prescrição e estoque apontando para ele).
+ * ⚠️ Item GLOBAL responde 400: ele é de todas as clínicas. Para tirá-lo da frente
+ * desta, o caminho é cadastrar o próprio — que o esconde por `preferirCopiaDaEmpresa`.
+ */
 const excluir = async (req, res) => {
   try {
     if (!req.empresaId) return res.status(400).json({ error: 'Selecione a empresa.' });
-    // Justificativa obrigatória + auditoria: a regra de §33 vale para toda exclusão.
     const motivo = String(req.body?.motivo ?? '').trim();
     if (motivo.length < 3) return res.status(400).json({ error: 'Informe o motivo da exclusão.' });
 
-    const ok = await prisma.$transaction(async (tx) => {
-      const removido = await produtoFornecedor.removerProduto(tx, req.empresaId, req.params.id);
-      if (!removido) return false;
-      await registrarAuditoria(tx, req, {
-        categoria:  'EXCLUSAO',
-        entidade:   'PRODUTO',
-        entidadeId: Number(req.params.id),
-        motivo,
-      });
-      return true;
+    const id = Number(req.params.id);
+    const item = await prisma.medicamento.findFirst({
+      where: { id, ...escopoDaEmpresa(req.empresaId) }, select: { id: true, empresaId: true, nome: true },
     });
-    if (!ok) return res.status(404).json({ error: 'Produto não encontrado.' });
-    return res.json({ mensagem: 'Produto removido.' });
+    if (!item) return res.status(404).json({ error: 'Produto não encontrado.' });
+    if (item.empresaId == null) {
+      return res.status(400).json({
+        error: 'Este item é do catálogo do sistema e vale para todas as clínicas — não pode ser excluído aqui.',
+        code:  'ITEM_DO_SISTEMA',
+      });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.medicamento.update({ where: { id }, data: { ativo: false } });
+      await registrarAuditoria(tx, req, {
+        categoria: 'INATIVACAO', entidade: 'PRODUTO', entidadeId: id, motivo,
+        detalhes: `Produto "${item.nome}"`,
+      });
+    });
+    return res.json({ mensagem: 'Produto inativado.' });
   } catch (err) {
-    console.error('ProdutoController.excluir:', err);
-    return res.status(500).json({ error: 'Erro ao excluir o produto.' });
+    return responderErro(res, err, {
+      contexto: 'ProdutoController.excluir', mensagem: 'Não foi possível remover o produto.',
+    });
   }
 };
 
-module.exports = { listar, listarCatalogo, detalhe, criar, atualizar, excluir };
+module.exports = { listar, detalhe, porNome, criar, atualizar, excluir };

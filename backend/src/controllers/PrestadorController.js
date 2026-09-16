@@ -12,6 +12,8 @@ const { emitirCartaoAcesso, aplicarPermissoes, revogarCartaoAcesso, anexarEquipe
 const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 const emailService = require('../services/emailService');
 const { gerarSenhaInicial } = require('../lib/senhaInicial');
+const { normalizeEmail, whereEmailInsensitive } = require('../lib/email');
+const { cadastroDaPessoaNaEmpresa, montarResposta } = require('../lib/cadastroPorEmail');
 
 // Whitelist fixa SAIU (2026-08-25) — o tipo de serviço agora vem do catálogo
 // tenant-scoped (tb_catalogo_tipo_servico, CatalogoTipoServicoController), que
@@ -31,6 +33,31 @@ const PRESTADOR_INCLUDE = {
 const normalizarDigitos = v => (v ?? '').replace(/\D/g, '');
 const normalizarTexto   = v => (v ?? '').trim().toLowerCase();
 const normalizarTipos   = v => (v ?? '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean).sort().join('|');
+
+// ─── Tipos de serviço: VÁRIOS por prestador (2026-09-15) ──────────────────────
+// O mesmo profissional externo acumula atuações (ferrador E fisioterapeuta), e o
+// cadastro obrigava a escolher uma só. Gravados como CSV na MESMA coluna
+// `tipo_servico`, que é o formato que os leitores já esperam:
+// `EncaminhamentoController` monta o filtro de serviços com `tipoServico.split(',')`
+// e a checagem de duplicidade aqui já compara a LISTA (`normalizarTipos`, acima).
+// ⚠️ Por isso NÃO nasceu tabela nova: a convenção já existia: o que faltava era o
+// cadastro saber produzi-la.
+const LIMITE_TIPO_SERVICO = 255;
+
+/** CSV recebido → CSV canônico (sem vazio, sem repetido, separador uniforme). */
+function sanearTiposServico(v) {
+  const vistos = new Set();
+  const lista  = [];
+  for (const parte of String(v ?? '').split(',')) {
+    const nome = parte.trim();
+    if (!nome) continue;
+    const chave = nome.toLowerCase();
+    if (vistos.has(chave)) continue;
+    vistos.add(chave);
+    lista.push(nome);
+  }
+  return lista.join(', ');
+}
 
 // ─── Helper: verifica duplicidade por CPF ou por nome+tipoServico+telefone ────
 async function verificarDuplicidade({ cpf, nome, tipoServico, telefone, empresaId, excludeId = null }) {
@@ -65,6 +92,18 @@ async function verificarDuplicidade({ cpf, nome, tipoServico, telefone, empresaI
 
   return null;
 }
+
+/**
+ * `22001 value too long` na coluna `tipo_servico` só acontece numa base em que a
+ * migration 20261010000000 (VARCHAR 50 → 255) ainda NÃO foi aplicada. Sem este
+ * desvio o gestor leva um 500 mudo justamente ao escolher o tipo a mais — e o
+ * motivo real fica só no log do servidor.
+ */
+function ehColunaCurtaDeTipoServico(err) {
+  const meta = `${err?.meta?.column_name ?? ''} ${err?.meta?.message ?? ''} ${err?.message ?? ''}`;
+  return (err?.code === 'P2000' || err?.code === '22001') && /tipo_servico/.test(meta);
+}
+const MSG_COLUNA_CURTA = 'A base ainda não comporta vários tipos de serviço. Aplique a migration 20261010000000_prestador_tipos_servico ou escolha menos tipos.';
 
 const MSG_DUPLICADO = {
   cpf:   'Já existe um prestador cadastrado com este CPF.',
@@ -214,6 +253,28 @@ async function gravarLocaisTrabalho(tx, prestadorId, locaisBody, empresaId, equi
   });
 }
 
+// Escopo por empresa/equipe: não-ADMIN vê globais (empresaId null = SYSTEM/legado)
+// + prestadores da empresa ativa, segregados pela equipe do contexto (igual Fornecedor).
+//
+// ⚠️ FONTE ÚNICA da visibilidade desta tela — `listar` e `buscarPorEmail` usam a MESMA
+// cláusula. Duas cópias divergiriam, e o que divergiria é a resposta a "este cadastro
+// existe aqui?": a busca por e-mail carregaria para edição um registro que a lista não
+// mostra (ou deixaria criar duplicata de um que ela mostra).
+// ADMIN da plataforma não é filtrado (é ele quem mantém o catálogo global).
+async function escopoVisivel(req) {
+  if (req.user?.role === 'ADMIN') return null;
+  const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);
+  return {
+    OR: [
+      { empresaId: null },
+      { empresaId: req.empresaId ?? -1, equipeId: null },
+      ...(equipeScope
+        ? [{ empresaId: req.empresaId ?? -1, equipeId: { in: equipeScope } }]
+        : [{ empresaId: req.empresaId ?? -1 }]),
+    ],
+  };
+}
+
 const PrestadorController = {
 
   // GET /api/cadastro/prestadores?busca=X&ativo=true|false|all
@@ -226,20 +287,8 @@ const PrestadorController = {
       else if (ativo !== undefined) where.ativo = ativo === 'true';
       else where.ativo = true;
 
-      // Escopo por empresa/equipe: não-ADMIN vê globais (empresaId null = SYSTEM/legado)
-      // + prestadores da empresa ativa, segregados pela equipe do contexto (igual Fornecedor)
-      if (req.user?.role !== 'ADMIN') {
-        const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);
-        where.AND = [{
-          OR: [
-            { empresaId: null },
-            { empresaId: req.empresaId ?? -1, equipeId: null },
-            ...(equipeScope
-              ? [{ empresaId: req.empresaId ?? -1, equipeId: { in: equipeScope } }]
-              : [{ empresaId: req.empresaId ?? -1 }]),
-          ],
-        }];
-      }
+      const escopo = await escopoVisivel(req);
+      if (escopo) where.AND = [escopo];
 
       if (busca?.trim()) {
         where.OR = [
@@ -263,6 +312,56 @@ const PrestadorController = {
     } catch (err) {
       console.error('Erro ao listar prestadores:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar prestadores' });
+    }
+  },
+
+  // GET /api/cadastro/prestadores/por-email?email=X
+  //
+  // "Este e-mail já é conhecido NESTA clínica?" — chamado ao SAIR do campo de e-mail
+  // do formulário. Três respostas possíveis (ver lib/cadastroPorEmail.js):
+  //   CADASTRO → já existe o prestador aqui: a tela CARREGA e passa a editar, em vez
+  //              de montar uma duplicata que o salvar recusaria no fim.
+  //   PESSOA   → não é prestador aqui, mas a empresa já tem o cadastro dela
+  //              (é veterinária, cliente, secretária…): a tela só PREENCHE o vazio.
+  //   nada     → e-mail desconhecido nesta empresa. NÃO se distingue "não existe" de
+  //              "existe em outra clínica" — a segunda resposta transformaria o campo
+  //              num verificador de cadastro alheio.
+  //
+  // MULTI-TENANT: o registro sai do MESMO `escopoVisivel` da listagem (empresa +
+  // equipe do contexto) e o cadastro da pessoa, de `tb_usuario_empresa` da empresa
+  // ativa. As duas tabelas ainda têm o RLS fail-closed por baixo.
+  buscarPorEmail: async (req, res) => {
+    const email = normalizeEmail(req.query.email);
+    if (!email) return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório' });
+
+    try {
+      const escopo = await escopoVisivel(req);
+      const registro = await prisma.prestador.findFirst({
+        where: {
+          ...whereEmailInsensitive(email),
+          ...(escopo ? { AND: [escopo] } : {}),
+        },
+        include: PRESTADOR_INCLUDE,
+        // Ativo primeiro: o cadastro em uso é o que interessa carregar. Havendo só o
+        // inativo, ele vem — e a tela oferece reativar em vez de criar um segundo.
+        orderBy: [{ ativo: 'desc' }, { id: 'asc' }],
+      });
+
+      const pessoa = await cadastroDaPessoaNaEmpresa(email, req.empresaId, prisma);
+
+      if (!registro) return res.json({ sucesso: true, dados: montarResposta({ pessoa }) });
+
+      // Mesmo enriquecimento da listagem — sem ele a tela carregaria o cadastro sem a
+      // trilha de inativação, sem a restrição por local e sem o `acessoEquipeId` que
+      // habilita "Gerenciar Acesso".
+      const [enriquecido] = await anexarEquipeDoAcesso(
+        prisma,
+        await anexarRestricaoPorLocal(await anexarTrilha([registro], 'prestador')),
+      );
+      return res.json({ sucesso: true, dados: montarResposta({ registro: enriquecido, pessoa }) });
+    } catch (err) {
+      console.error('[PrestadorController.buscarPorEmail]', err);
+      return res.status(500).json({ sucesso: false, mensagem: 'Erro ao consultar o e-mail' });
     }
   },
 
@@ -300,10 +399,11 @@ const PrestadorController = {
       return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
     if (!telefone?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
-    if (!tipoServico?.trim())
-      return res.status(400).json({ sucesso: false, mensagem: 'Selecione o tipo de serviço' });
-    if (tipoServico.trim().length > 50)
-      return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço muito longo (máx. 50 caracteres)' });
+    const tiposServicoCriar = sanearTiposServico(tipoServico);
+    if (!tiposServicoCriar)
+      return res.status(400).json({ sucesso: false, mensagem: 'Selecione ao menos um tipo de serviço' });
+    if (tiposServicoCriar.length > LIMITE_TIPO_SERVICO)
+      return res.status(400).json({ sucesso: false, mensagem: `Tipos de serviço muito longos (máx. ${LIMITE_TIPO_SERVICO} caracteres somados). Remova algum.` });
     if (acessoSistema === true && !email?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório para conceder acesso ao sistema.' });
 
@@ -315,7 +415,7 @@ const PrestadorController = {
     const equipeAlvo  = tipoEntrada === 'CLIENTE' ? (req.equipeId ?? null)  : null;
 
     try {
-      const dup = await verificarDuplicidade({ cpf, nome, tipoServico: tipoServico.trim(), telefone, empresaId: empresaAlvo });
+      const dup = await verificarDuplicidade({ cpf, nome, tipoServico: tiposServicoCriar, telefone, empresaId: empresaAlvo });
       if (dup) {
         if (dup.ativo) return res.status(409).json({ sucesso: false, mensagem: MSG_DUPLICADO[dup.tipo] });
         if (!req.body.force) return res.status(409).json({
@@ -338,7 +438,7 @@ const PrestadorController = {
             cnpj:        cnpj?.trim()        || null,
             telefone:    telefone.trim(),
             email:       email?.trim() ? email.trim().toLowerCase() : null,
-            tipoServico: tipoServico.trim(),
+            tipoServico: tiposServicoCriar,
             tipoEntrada,
             cep:         cep?.trim()         || null,
             endereco:    endereco?.trim()    || null,
@@ -413,6 +513,8 @@ const PrestadorController = {
       if (err.code === 'EMAIL_JA_VINCULADO') {
         return res.status(409).json({ sucesso: false, mensagem: err.message });
       }
+      if (ehColunaCurtaDeTipoServico(err))
+        return res.status(400).json({ sucesso: false, mensagem: MSG_COLUNA_CURTA });
       console.error('Erro ao criar prestador:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao criar prestador' });
     }
@@ -431,8 +533,11 @@ const PrestadorController = {
       return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
     if (!telefone?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
-    if (tipoServico && tipoServico.trim().length > 50) {
-      return res.status(400).json({ sucesso: false, mensagem: 'Tipo de serviço muito longo (máx. 50 caracteres)' });
+    // `undefined` PRESERVA o que está gravado (PATCH parcial); lista vazia enviada
+    // de propósito é recusada abaixo, junto do `tipoServicoFinal`.
+    const tiposServicoEditar = tipoServico === undefined ? undefined : sanearTiposServico(tipoServico);
+    if (tiposServicoEditar !== undefined && tiposServicoEditar.length > LIMITE_TIPO_SERVICO) {
+      return res.status(400).json({ sucesso: false, mensagem: `Tipos de serviço muito longos (máx. ${LIMITE_TIPO_SERVICO} caracteres somados). Remova algum.` });
     }
     if (acessoSistema === true && !email?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório para conceder acesso ao sistema.' });
@@ -446,7 +551,7 @@ const PrestadorController = {
       if (!podeAlterarRegistroEscopado(existe, req))
         return res.status(403).json({ sucesso: false, mensagem: 'Você não tem acesso para alterar este prestador.' });
 
-      const tipoServicoFinal = tipoServico?.trim() || existe.tipoServico;
+      const tipoServicoFinal = tiposServicoEditar || existe.tipoServico;
 
       const dup = await verificarDuplicidade({
         cpf, nome, telefone,
@@ -574,6 +679,8 @@ const PrestadorController = {
       }
       if (err.code === 'P2025')
         return res.status(404).json({ sucesso: false, mensagem: 'Prestador não encontrado' });
+      if (ehColunaCurtaDeTipoServico(err))
+        return res.status(400).json({ sucesso: false, mensagem: MSG_COLUNA_CURTA });
       console.error('Erro ao atualizar prestador:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao atualizar prestador' });
     }
@@ -640,3 +747,10 @@ const PrestadorController = {
 };
 
 module.exports = PrestadorController;
+
+// Exportados para teste: as duas decidem, EM SILÊNCIO, o que vai para a coluna
+// `tipo_servico` e se um cadastro é ou não duplicata. Errar aqui não dá erro de
+// tela — dá tipo repetido no chip ou prestador duplicado no catálogo.
+module.exports.sanearTiposServico = sanearTiposServico;
+module.exports.normalizarTipos    = normalizarTipos;
+module.exports.LIMITE_TIPO_SERVICO = LIMITE_TIPO_SERVICO;

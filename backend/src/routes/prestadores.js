@@ -7,6 +7,8 @@ const { checkPermission }   = require('../middlewares/permissao.middleware');
 
 const router = express.Router();
 
+// ⚠️ Rotas LITERAIS antes de `/:id` — senão o Express lê "por-email" como id (armadilha 1).
+router.get   ('/por-email',   authenticate, checkPermission('cadastro.prestador.ler',    'LEITURA'), PrestadorController.buscarPorEmail);
 router.get   ('/tipos',       authenticate, checkPermission('cadastro.prestador.ler',    'LEITURA'), PrestadorController.listarTipos);
 router.get   ('/',            authenticate, checkPermission('cadastro.prestador.ler',    'LEITURA'), PrestadorController.listar);
 router.post  ('/',            authenticate, checkPermission('cadastro.prestador.criar',   'PROPRIO'), PrestadorController.criar);

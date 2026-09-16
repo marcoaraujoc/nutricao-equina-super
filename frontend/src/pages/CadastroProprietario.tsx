@@ -1,6 +1,6 @@
 // frontend/src/pages/CadastroProprietario.tsx
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
@@ -11,10 +11,13 @@ import {
 import PageContainer from '../components/PageContainer';
 import ProprietarioFormModal, {
   type Proprietario, type FormProp, type LocalidadeProp,
-  FORM_INICIAL, resumoLocalidade, validarDiaVencimento,
+  FORM_INICIAL, resumoLocalidade, validarDiaVencimento, formDeProprietario,
   validarCPF, validarCNPJ, mascaraCPF, mascaraCNPJ, mascaraTelefone, mascaraCEP,
-  formatarMoeda, parseMoeda,
+  parseMoeda,
 } from '../components/ProprietarioFormModal';
+import {
+  consultarCadastroPorEmail, preencherVazios, fraseCadastroEncontrado,
+} from '../utils/cadastroPorEmail';
 import { usePermissoes } from '../hooks/usePermissoes';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
@@ -73,13 +76,24 @@ export default function CadastroProprietario() {
 
   useEffect(() => { if (!loadingPerms) carregar(); }, [carregar, loadingPerms]);
 
+  // ─── Preenchimento automático pelo E-MAIL ──────────────────────────────────
+  // Cliente que já é desta clínica deixou de virar 409 "E-mail já cadastrado nesta
+  // empresa" depois do formulário inteiro preenchido: ao SAIR do campo, o cadastro é
+  // carregado e o Salvar passa a ATUALIZAR. Cliente de OUTRA clínica não é encontrado
+  // — o escopo é do backend (§36), com o RLS fail-closed por baixo.
+  const [aviso, setAviso] = useState<{ mensagem: string; tom: 'carregado' | 'preenchido' } | null>(null);
+  const emailConsultado = useRef('');
+  const limparAviso = () => { setAviso(null); emailConsultado.current = ''; };
+
   const abrirNovo = () => {
     setEditando(null);
     setForm(FORM_INICIAL);
+    limparAviso();
     setShowModal(true);
   };
 
   const abrirEdicao = async (p: Proprietario) => {
+    limparAviso();
     // Busca fresca (não a linha da lista, que não traz sugestões): a localização já
     // usada por algum animal ATIVO do cliente que ainda não virou "localidade
     // atendida" confirmada entra pronta no repetidor, com frequência padrão 1x —
@@ -100,30 +114,55 @@ export default function CadastroProprietario() {
     } catch { /* mantém os dados da lista */ }
 
     setEditando(p);
-    setForm({
-      fullName:          p.fullName,
-      email:             p.email,
-      phone:             p.phone ? mascaraTelefone(p.phone.replace(/\D/g, '')) : '',
-      tipoDoc:           p.cnpj ? 'cnpj' : 'cpf',
-      cpf:               p.cpf  ? mascaraCPF(p.cpf.replace(/\D/g, ''))   : '',
-      cnpj:              p.cnpj ? mascaraCNPJ(p.cnpj.replace(/\D/g, '')) : '',
-      mensalista:        p.mensalista,
-      valorAssistencia:  p.valorAssistencia
-        ? formatarMoeda(String(Math.round(p.valorAssistencia * 100)))
-        : '',
-      localidades:       localidadesIniciais,
-      diaVencimentoFatura: p.diaVencimentoFatura ? String(p.diaVencimentoFatura) : '5',
-      cep:               p.cep         ? mascaraCEP(p.cep.replace(/\D/g, ''))  : '',
-      endereco:          p.endereco    ?? '',
-      complemento:       p.complemento ?? '',
-      bairro:            p.bairro      ?? '',
-      cidade:            p.cidade      ?? '',
-      estado:            p.estado      ?? '',
-    });
+    // Conversão cadastro → formulário em UM lugar só (ProprietarioFormModal): a mesma
+    // usada pela troca de proprietário e pelo preenchimento automático por e-mail.
+    setForm(formDeProprietario(p, localidadesIniciais));
     setShowModal(true);
   };
 
-  const fecharModal = () => { setShowModal(false); setEditando(null); setForm(FORM_INICIAL); };
+  const fecharModal = () => { setShowModal(false); setEditando(null); setForm(FORM_INICIAL); limparAviso(); };
+
+  const consultarEmail = async (email: string) => {
+    // Só no cadastro NOVO: em edição, trocar o registro debaixo de quem está editando
+    // seria pior que o erro que isto evita.
+    if (editando) return;
+    const e = email.trim().toLowerCase();
+    if (!e || e === emailConsultado.current) return;
+    emailConsultado.current = e;
+
+    const r = await consultarCadastroPorEmail<Proprietario>('/cadastro/proprietarios/por-email', e);
+    if (!r.encontrado) { setAviso(null); return; }
+
+    if (r.origem === 'CADASTRO') {
+      // `abrirEdicao` rebusca por id (é ela que traz as localidades SUGERIDAS pelos
+      // animais do cliente) — daí carregar por ela, e não montar o form aqui.
+      await abrirEdicao(r.registro);
+      setAviso({ mensagem: fraseCadastroEncontrado(r, 'proprietário'), tom: 'carregado' });
+      return;
+    }
+
+    // A pessoa já é conhecida da clínica em outro papel (é a veterinária que agora
+    // também vira cliente, caso que o backend suporta): preenche só o que está vazio.
+    setForm(prev => ({
+      ...prev,
+      ...preencherVazios(prev, r.cadastro, {
+        fullName:    { campo: 'fullName' },
+        phone:       { campo: 'phone', formatar: v => mascaraTelefone(v.replace(/\D/g, '')) },
+        cep:         { campo: 'cep',   formatar: v => mascaraCEP(v.replace(/\D/g, '')) },
+        endereco:    { campo: 'endereco' },
+        complemento: { campo: 'complemento' },
+        bairro:      { campo: 'bairro' },
+        cidade:      { campo: 'cidade' },
+        estado:      { campo: 'estado' },
+      }),
+      ...(prev.cpf.trim() || prev.cnpj.trim()
+        ? {}
+        : r.cadastro.cnpj ? { tipoDoc: 'cnpj' as const, cnpj: mascaraCNPJ(r.cadastro.cnpj.replace(/\D/g, '')) }
+        : r.cadastro.cpf  ? { tipoDoc: 'cpf'  as const, cpf:  mascaraCPF(r.cadastro.cpf.replace(/\D/g, '')) }
+        : {}),
+    }));
+    setAviso({ mensagem: fraseCadastroEncontrado(r, 'proprietário'), tom: 'preenchido' });
+  };
 
   const handleFormChange = (updates: Partial<FormProp>) =>
     setForm(prev => ({ ...prev, ...updates }));
@@ -530,6 +569,9 @@ export default function CadastroProprietario() {
           erroAcao={erroAcao}
           onSalvar={handleSalvar}
           onClose={fecharModal}
+          aviso={aviso}
+          onEmailSaiu={consultarEmail}
+          onFecharAviso={() => setAviso(null)}
         />
       )}
 

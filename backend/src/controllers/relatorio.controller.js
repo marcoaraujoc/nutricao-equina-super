@@ -1,5 +1,6 @@
 // backend/src/controllers/relatorio.controller.js
 const { computarRelatorio } = require('../services/relatorioNutricional.service');
+const { responderErro } = require('../lib/erroResposta');
 
 const RelatorioController = {
 
@@ -27,9 +28,9 @@ const RelatorioController = {
       res.json({ sucesso: true, dados });
     } catch (error) {
       console.error('Erro ao gerar relatório nutricional:', error);
-      res.status(500).json({
-        sucesso: false,
-        mensagem: error.message || 'Erro interno ao gerar relatório',
+      responderErro(res, error, {
+        contexto: 'RelatorioController.gerarPorAnimal',
+        mensagem: 'Não foi possível gerar o relatório nutricional deste paciente.',
       });
     }
   },

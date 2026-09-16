@@ -323,7 +323,16 @@ async function dosesPorEmbalagemDeMedicamentos(client, empresaId, medicamentoIds
   const ids = [...new Set((medicamentoIds ?? []).map(Number).filter(Number.isInteger))];
   const vazio = new Map();
   if (!empresaId || ids.length === 0) return vazio;
-  if (!(await temTabela()) || !(await temColunasMultidose())) return vazio;
+
+  // 🔴 O ITEM DO CATÁLOGO também carrega multidose desde 2026-09-15 — é lá que a
+  // tela de Produtos passou a gravá-lo, porque ela deixou de pedir fornecedor.
+  // ⚠️ O VÍNCULO COM O FORNECEDOR VENCE quando existe: é o dado mais específico
+  // (aquele frasco, daquele fornecedor) e é o que já está gravado nas bases que usaram
+  // a tela antiga — mudar a precedência trocaria a cobrança por dose de quem já
+  // cadastrou, sem ninguém ter pedido.
+  const mapa = await dosesNoCatalogo(client, ids);
+
+  if (!(await temTabela()) || !(await temColunasMultidose())) return mapa;
   try {
     const ph = ids.map((_, i) => `$${i + 2}`).join(', ');
     const rows = await client.$queryRawUnsafe(
@@ -335,10 +344,31 @@ async function dosesPorEmbalagemDeMedicamentos(client, empresaId, medicamentoIds
         ORDER BY medicamento_id, id ASC`,
       Number(empresaId), ...ids,
     );
-    const mapa = new Map();
     for (const r of rows) mapa.set(Number(r.medicamento_id), Number(r.doses_por_embalagem));
     return mapa;
-  } catch { return vazio; }
+  } catch { return mapa; }
+}
+
+/**
+ * Doses por embalagem gravadas no PRÓPRIO item do catálogo (migration
+ * 20261009000000).
+ *
+ * ⚠️ SQL cru com `catch`: base ainda não migrada devolve mapa vazio e tudo cai na
+ * conversão de unidade de sempre (§11) — nenhuma cobrança existente muda de valor.
+ */
+async function dosesNoCatalogo(client, ids) {
+  const mapa = new Map();
+  if (!ids || ids.length === 0) return mapa;
+  try {
+    const ph = ids.map((_, i) => `$${i + 1}`).join(', ');
+    const rows = await client.$queryRawUnsafe(
+      `SELECT id, doses_por_embalagem
+         FROM schs2vet.tb_medicamentos
+        WHERE multidose = true AND doses_por_embalagem IS NOT NULL
+          AND doses_por_embalagem >= 1 AND id IN (${ph})`, ...ids);
+    for (const r of rows) mapa.set(Number(r.id), Number(r.doses_por_embalagem));
+  } catch { /* coluna ainda não migrada */ }
+  return mapa;
 }
 
 /** Grava fornecedor e nota fiscal num lote de vacina (colunas novas, SQL cru). */

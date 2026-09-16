@@ -206,15 +206,44 @@ describe('elos que não podem sumir', () => {
     expect(src).not.toMatch(/contasPagar\.lancarItem\(prisma,/);
   });
 
-  it('a lista do atendimento ordena em três grupos e devolve o fornecedor', () => {
+  it('a lista do atendimento ordena em quatro grupos e devolve o fornecedor', () => {
     const src = semComentarios(lerFonte('controllers/MedicamentoController.js'));
-    // Em estoque → produto → o resto. Sem isso, o que a clínica tem em mãos fica
-    // misturado com o que ela não tem, numa lista de milhares de itens.
-    expect(src).toMatch(/const posto = \(x\) => \(x\.emEstoque \? 0 : x\.ehProduto \? 1 : 2\)/);
+    // 🔴 "Da empresa" é a UNIÃO de estoque + cadastrado em Produtos, e vem antes do
+    // catálogo global (2026-09-15):
+    //   0 em estoque → 1 produto de fornecedor → 2 cópia da clínica → 3 global puro.
+    // Reduzir o grupo a `empresaId != null` mandaria para baixo o medicamento GLOBAL que
+    // a clínica TEM EM ESTOQUE — justamente o que ela tem em mãos.
+    expect(src).toMatch(
+      /const posto = \(x\) => \(x\.emEstoque \? 0 : x\.ehProduto \? 1 : daEmpresa\.get\(x\.id\) \? 2 : 3\)/,
+    );
+    // A origem de cada item viaja num Map: `dados` remonta os objetos e perderia
+    // `empresaId`, que não vai para o payload.
+    expect(src).toMatch(/const daEmpresa = new Map\(medicamentos\.map\(m => \[m\.id, m\.empresaId != null\]\)\)/);
     expect(src).toMatch(/produtoFornecedor\.produtosPorMedicamento\(/);
     // Produto SÓ quando não está em estoque — senão a cor deixa de distinguir "tenho"
     // de "preciso pedir".
     expect(src).toMatch(/if \(emEstoque \|\| lista\.length === 0\) return \{ ehProduto: false/);
+  });
+
+  it('a primeira página já sai na ordem certa — o orderBy vem do BANCO', () => {
+    // 🔴 Ordenar apenas a página recebida não basta: `listar` PAGINA (a Farmácia pede
+    // 5.000, o catálogo do ADMIN pagina de 30 em 30) e a Prescrição abre o dropdown com
+    // `limit=5` enquanto o catálogo completo carrega em paralelo. Sem o ORDER BY, o item
+    // da clínica fica FORA da primeira página sempre que o nome for alfabeticamente
+    // tarde — e o defeito aparece na primeira tela que a pessoa vê, sem erro nenhum.
+    const src = semComentarios(lerFonte('controllers/MedicamentoController.js'));
+    expect(src).toMatch(/orderBy: ordemEmpresaPrimeiro\(req\), take, skip/);            // listar
+    expect(src).toMatch(/orderBy: ordemEmpresaPrimeiro\(req, isVacina \? 'lotes' : 'estoques'\)/);
+    // Estoque primeiro, depois a cópia da clínica, depois alfabético.
+    expect(src).toMatch(/\{ \[relacaoEstoque\]: \{ _count: 'desc' \} \}/);
+    // ⚠️ `asc` e NUNCA `desc`: no Postgres ASC é NULLS LAST, então o não-nulo (a
+    // empresa) vem primeiro e o global (empresa_id IS NULL) por último.
+    expect(src).toMatch(/\{ empresaId: 'asc' \}/);
+    expect(src).not.toMatch(/\{ empresaId: 'desc' \}/);
+    // ADMIN da plataforma vê o catálogo de TODAS as clínicas: ali `empresaId asc`
+    // agruparia por id de empresa, ordem que não significa nada na tela dele.
+    expect(src).toMatch(/const escopado = req\.user\?\.userType !== 'ADMIN' && req\.empresaId;/);
+    expect(src).toMatch(/if \(!escopado\) return \[\{ nome: 'asc' \}\];/);
   });
 
   it('nenhuma lib nova lança — falha ao registrar não derruba o ato clínico', () => {

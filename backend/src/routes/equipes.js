@@ -88,6 +88,9 @@ router.post('/convite/:token/recusar',         authenticate, EquipeController.re
 router.get   ('/minhas-permissoes',  authenticate, EquipeController.minhasPermissoes);
 
 // ─── Inclusão direta de membro (sem fluxo de convite) ─────────────────────────
+// Preenchimento automático do formulário quando a pessoa já tem cadastro NESTA
+// empresa (gate de gestor dentro do controller, como o próprio incluir-membro).
+router.get ('/cadastro-por-email', authenticate, EquipeController.buscarCadastroPorEmail);
 router.post('/incluir-membro', authenticate, EquipeController.incluirMembroDireto);
 
 // ─── Membros (rotas fixas) ─────────────────────────────────────────────────────
