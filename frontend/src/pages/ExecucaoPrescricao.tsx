@@ -139,7 +139,10 @@ export interface VacinaExecucao {
   lote:            string | null;
   dose:            string | null;
   via:             string | null;
+  /** DOSAGEM na `formaCalculo` (5 mL, 2,5 mL) — era contagem de doses até 2026-09-16. */
   quantidade:      number | null;
+  /** SNAPSHOT da unidade da dosagem no dia da aplicação. `null` = registro em doses. */
+  formaCalculo?:   string | null;
   numero:          number | null;
   tipoAtendimento: string | null;
   dataAplicacao:   string;
@@ -165,6 +168,24 @@ export interface VacinaExecucao {
   executadoEm?:    string | null;
   /** Cancelada NA DATA consultada — vai para a aba "Cancelado" do Histórico. */
   cancelada?:      boolean;
+}
+
+/**
+ * "5 mL" / "2 doses" — a dosagem da vacina com a unidade que ficou GRAVADA nela.
+ *
+ * 🔴 A FORMA DE CÁLCULO CHEGA À FILA DO PLANTÃO (2026-09-16): sem ela a linha dizia
+ * "5 doses" para uma aplicação de 5 mL — e é por essa quantidade que o lote é debitado
+ * e a fatura é calculada. Quem aplica precisa ler a MESMA unidade que o sistema usa.
+ * ⚠️ Usa o SNAPSHOT do registro, nunca o cadastro do produto de hoje: mexer no produto
+ * não pode reescrever o que já foi aplicado.
+ * ⚠️ Espelho de `SubModuloVacina.rotuloDosagemVacina` — as duas telas mostram o MESMO
+ * registro, e divergir aqui faria a fila e o histórico discordarem sobre a dose.
+ */
+function rotuloDosagemVacina(q: number | null | undefined, forma?: string | null): string | null {
+  if (q == null) return null;
+  const n = String(q).replace('.', ',');
+  if (forma) return `${n} ${forma}`;
+  return q > 1 ? `${n} doses` : `${n} dose`;
 }
 
 interface AlertaEstoque {
@@ -694,7 +715,7 @@ export function ModalExecucaoVacina({
                 <p className="text-[10px] text-gray-500 mt-0.5 leading-snug">
                   {v.dose ? `${v.dose} • ` : ''}
                   {v.via ?? '—'}
-                  {v.quantidade != null && v.quantidade > 1 ? ` • ${v.quantidade} doses` : ''}
+                  {v.quantidade != null ? ` • ${rotuloDosagemVacina(v.quantidade, v.formaCalculo)}` : ''}
                 </p>
 
                 {(v.fabricante || v.lote) && (
@@ -2336,7 +2357,7 @@ export default function ExecucaoPrescricao() {
       tipo:            'MEDICAMENTO',
       medicamento:     v.nome,
       dosagem:         v.dose,
-      unidade:         v.quantidade != null && v.quantidade > 1 ? `${v.quantidade} doses` : null,
+      unidade:         rotuloDosagemVacina(v.quantidade, v.formaCalculo),
       via:             v.via ?? '—',
       frequencia:      v.dataReforco ? `Reforço em ${formatDate(v.dataReforco)}` : 'Dose única',
       horaInicio:      null,
@@ -2733,7 +2754,7 @@ export default function ExecucaoPrescricao() {
         v.nome,
         v.dose,
         v.via,
-        v.quantidade && v.quantidade > 1 ? `${v.quantidade} doses` : null,
+        rotuloDosagemVacina(v.quantidade, v.formaCalculo),
       ].filter(Boolean).join(' · ')}
       numeroLabel="Nº Vacina"
       numeroFormatado={formatNumeroClinico(v.numero)}
@@ -2803,7 +2824,7 @@ export default function ExecucaoPrescricao() {
         v.nome,
         v.dose,
         v.via,
-        v.quantidade && v.quantidade > 1 ? `${v.quantidade} doses` : null,
+        rotuloDosagemVacina(v.quantidade, v.formaCalculo),
       ].filter(Boolean).join(' · ')}
       numeroLabel="Nº Vacina"
       numeroFormatado={formatNumeroClinico(v.numero)}
@@ -2968,7 +2989,7 @@ export default function ExecucaoPrescricao() {
                               v.nome,
                               v.dose,
                               v.via,
-                              v.quantidade && v.quantidade > 1 ? `${v.quantidade} doses` : null,
+                              rotuloDosagemVacina(v.quantidade, v.formaCalculo),
                             ].filter(Boolean).join(' · ')}
                             numeroLabel="Nº Vacina"
                             numeroFormatado={formatNumeroClinico(v.numero)}

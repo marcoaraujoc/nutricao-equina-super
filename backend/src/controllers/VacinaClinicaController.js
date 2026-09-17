@@ -1,5 +1,7 @@
 // VacinaClinicaController.js — registro clínico de vacinas por animal
 const prisma = require('../lib/prisma').default;
+// FORMA DE CÁLCULO do produto (2026-09-16) — a unidade da dosagem, do lote e da fatura.
+const catalogoEmpresa = require('../lib/catalogoEmpresa');
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { ANIMAL_VISIVEL } = require('../lib/visibilidade');
 const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem } = require('../lib/faturaUtils');
@@ -64,6 +66,53 @@ async function buscarLotesVacinaFEFO(client, medicamentoCatId, empresaId, vacina
   return lotes.map(l => ({ ...l, reservadoOutros: reservadoPorLote.get(Number(l.id)) ?? 0 }));
 }
 
+/**
+ * 🔴 A DOSAGEM DA VACINA DEIXOU DE SER CONTAGEM INTEIRA (2026-09-16).
+ *
+ * `quantidade` era "quantas doses" e vinha por `Math.max(1, …)`. Com o campo virando
+ * Valor + Forma de Cálculo, 0,5 mL é dosagem legítima — e o piso em 1 a transformava
+ * em 1 mL em SILÊNCIO, dobrando a baixa do lote e a linha da fatura.
+ *
+ * ⚠️ O fallback 1 FICA para o registro sem valor (legado, importação): ali "1" é a
+ * leitura conservadora de uma aplicação, não uma afirmação sobre volume.
+ */
+function dosagemDaVacina(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+/** A coluna `forma_calculo` da vacina existe? (migration 20261012000000) */
+let _temFormaVac = null;
+async function temColunaFormaVacina(client) {
+  if (_temFormaVac !== null) return _temFormaVac;
+  try {
+    const rows = await client.$queryRawUnsafe(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'schs2vet' AND table_name = 'tb_vacinas_clinicas'
+          AND column_name = 'forma_calculo' LIMIT 1`);
+    _temFormaVac = rows.length > 0;
+  } catch { _temFormaVac = false; }
+  return _temFormaVac;
+}
+
+/**
+ * A Forma de Cálculo do PRODUTO, para virar SNAPSHOT na aplicação.
+ *
+ * 🔴 SNAPSHOT e não leitura ao vivo: o atestado e a fatura de dois anos atrás têm de
+ * sair na unidade DAQUELE dia. Reler o cadastro faria uma vacina aplicada em "5 mL"
+ * passar a ser exibida em "5 doses" porque alguém mexeu no produto depois.
+ * ⚠️ Resolvida no SERVIDOR a partir do `medicamentoCatId`, nunca recebida do cliente:
+ * unidade vinda da tela é unidade que pode não bater com a do estoque.
+ */
+async function formaDoProduto(client, medicamentoCatId) {
+  if (!medicamentoCatId) return null;
+  const mapa = await catalogoEmpresa.multidosePorItem(client, [Number(medicamentoCatId)]);
+  const info = mapa.get(Number(medicamentoCatId));
+  return (info?.multidose && info.formaCalculo && Number(info.dosesPorEmbalagem) > 0)
+    ? info.formaCalculo
+    : null;
+}
+
 // Cria a reserva ao FINALIZAR — distribui `quantidade` entre os lotes em FEFO,
 // respeitando o que já está reservado por outras vacinas; se mesmo assim faltar, o
 // restante é reservado na ÚLTIMA entrada (mesma "finalização forçada" da prescrição —
@@ -77,7 +126,7 @@ async function criarReservaVacina(tx, { vacinaId, animalId, medicamentoCatId, qu
   const lotes = await buscarLotesVacinaFEFO(tx, medicamentoCatId, empresaId, vacinaId);
   if (lotes.length === 0) return;
 
-  let restante = Math.max(1, Number(quantidade) || 1);
+  let restante = dosagemDaVacina(quantidade);
   for (let i = 0; i < lotes.length && restante > 0; i++) {
     const l = lotes[i];
     const disponivel    = Math.max(Number(l.qtdDisponivel) - l.reservadoOutros, 0);
@@ -159,6 +208,7 @@ async function listarPorAnimal(req, res) {
                 quantidade, valor::float AS valor, cliente, status,
                 aplicada_pelo_proprietario AS "aplicadaPeloProprietario",
                 motivo_inativacao AS "motivoInativacao",
+                forma_calculo AS "formaCalculo",
                 medicamento_cat_id AS "medicamentoCatId"
          FROM schs2vet.tb_vacinas_clinicas
          WHERE id = ANY($1::int[])`,
@@ -314,7 +364,7 @@ async function registrar(req, res) {
     );
     const numero = Number(maxRows[0]?.next_numero ?? 1);
 
-    const qtdFinal   = Math.max(1, Number(quantidade) || 1);
+    const qtdFinal   = dosagemDaVacina(quantidade);
     const valorFinal = valor != null && valor !== '' ? Number(valor) : null;
 
     let loteValor   = 0;
@@ -392,6 +442,13 @@ async function registrar(req, res) {
     });
 
     // Salva campos adicionados via migration (fora do client gerado) usando raw SQL
+    const formaSnapshot = await formaDoProduto(prisma, medCatIdFinal);
+    if (await temColunaFormaVacina(prisma)) {
+      await prisma.$executeRawUnsafe(
+        `UPDATE schs2vet."tb_vacinas_clinicas" SET forma_calculo = $2 WHERE id = $1`,
+        criada.id, formaSnapshot,
+      ).catch(() => {});
+    }
     await prisma.$executeRawUnsafe(
       `UPDATE schs2vet."tb_vacinas_clinicas"
        SET "medicamento_cat_id" = $1,
@@ -470,7 +527,7 @@ async function atualizar(req, res) {
     }
     if (!nomeVacina?.trim()) return res.status(400).json({ error: 'Vacina é obrigatória' });
 
-    const qtdFinal = Math.max(1, Number(quantidade) || 1);
+    const qtdFinal = dosagemDaVacina(quantidade);
 
     let loteNumFinal = null;
     const loteIdFinal = loteId ? Number(loteId) : null;
@@ -533,6 +590,7 @@ async function atualizar(req, res) {
               quantidade, valor::float AS valor, cliente, status,
               aplicada_pelo_proprietario AS "aplicadaPeloProprietario",
               motivo_inativacao AS "motivoInativacao",
+              forma_calculo AS "formaCalculo",
               medicamento_cat_id AS "medicamentoCatId"
        FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`,
       vacina.id,
@@ -558,6 +616,7 @@ async function obterPorId(req, res) {
               quantidade, valor::float AS valor, cliente, status,
               aplicada_pelo_proprietario AS "aplicadaPeloProprietario",
               motivo_inativacao AS "motivoInativacao",
+              forma_calculo AS "formaCalculo",
               medicamento_cat_id AS "medicamentoCatId"
        FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`,
       Number(id)
@@ -641,7 +700,7 @@ async function finalizar(req, res) {
       if (cobrarAgora && !jaFaturada) {
         await darBaixaEFaturar(tx, {
           vacina, info,
-          qtd: Math.max(1, Number(info.quantidade) || 1),
+          qtd: dosagemDaVacina(info.quantidade),
           veterinarioId, empresaIdEfetivo, agora, evolucao, animal,
         });
         // A dose foi entregue ao dono e não passará pelo plantão: os reforços do
@@ -649,7 +708,6 @@ async function finalizar(req, res) {
         await agendarReforcos(tx, {
           vacina,
           dose:          vacina.dose,
-          quantidade:    Math.max(1, Number(info.quantidade) || 1),
           veterinarioId,
           empresaId:     empresaIdEfetivo,
           equipeId:      req.equipeId ?? null,
@@ -666,7 +724,7 @@ async function finalizar(req, res) {
           vacinaId:         vacina.id,
           animalId:         vacina.animalId,
           medicamentoCatId: info.medicamentoCatId,
-          quantidade:       Math.max(1, Number(info.quantidade) || 1),
+          quantidade:       dosagemDaVacina(info.quantidade),
           empresaId:        empresaIdEfetivo,
         });
       }
@@ -765,7 +823,7 @@ async function listarParaExecucao(req, res) {
     const ids = vacinas.map((v) => v.id);
     const extras = await prisma.$queryRawUnsafe(
       `SELECT id, numero, tipo_atendimento AS "tipoAtendimento", quantidade,
-              valor::float AS valor, cliente, status,
+              valor::float AS valor, cliente, status, forma_calculo AS "formaCalculo",
               aplicada_pelo_proprietario AS "aplicadaPeloProprietario"
        FROM schs2vet.tb_vacinas_clinicas WHERE id = ANY($1::int[])`,
       ids
@@ -886,7 +944,7 @@ async function listarExecutadasHoje(req, res) {
 
     const extras = await prisma.$queryRawUnsafe(
       `SELECT id, numero, tipo_atendimento AS "tipoAtendimento", quantidade,
-              valor::float AS valor, cliente, status,
+              valor::float AS valor, cliente, status, forma_calculo AS "formaCalculo",
               aplicada_pelo_proprietario AS "aplicadaPeloProprietario"
        FROM schs2vet.tb_vacinas_clinicas WHERE id = ANY($1::int[])`,
       vacinas.map((v) => v.id),
@@ -931,18 +989,19 @@ const intervaloDaDose = (dose) =>
 /**
  * Agenda as doses SEGUINTES de um esquema de reforço periódico.
  *
- * A dose aplicada agora é a PRIMEIRA da série, então de `quantidade` doses restam
- * `quantidade - 1` a agendar: 5 doses de Reforço Mensal → 4 agendamentos, em +1, +2,
- * +3 e +4 meses a partir da aplicação.
+ * 🔴 AGENDA UMA DOSE — a PRÓXIMA (2026-09-16). Antes agendava `quantidade - 1` de uma
+ * vez, porque "Qtd Doses" declarava o tamanho da série. Esse campo virou a DOSAGEM
+ * (Valor + Forma de Cálculo), então a série deixou de ser informada — e deduzi-la de
+ * um volume em mL afirmaria um esquema de reforço que ninguém prescreveu. Agendada a
+ * próxima, a execução dela agenda a seguinte, e assim por diante.
  *
  * Idempotente: se já existirem agendamentos de VACINA criados por esta mesma vacina
  * (mesma observação de rastreio), não duplica — reexecutar não enche a agenda.
  */
-async function agendarReforcos(tx, { vacina, dose, quantidade, veterinarioId, empresaId, equipeId, aplicadaEm }) {
+async function agendarReforcos(tx, { vacina, dose, veterinarioId, empresaId, equipeId, aplicadaEm }) {
   const meses = intervaloDaDose(dose);
   if (!meses) return 0;
-  const restantes = Math.max(0, (Number(quantidade) || 1) - 1);
-  if (restantes === 0) return 0;
+  const restantes = 1;   // sempre a PRÓXIMA dose — ver a nota acima
 
   const marca = `[VC-${vacina.id}]`;   // rastreio: liga o agendamento à vacina de origem
   const jaExiste = await tx.agendamentoClinico.findFirst({
@@ -1001,7 +1060,7 @@ async function executar(req, res) {
     if (info.status === 'EXECUTADA') return res.status(400).json({ error: 'Vacina já executada.' });
     if (info.status !== 'FINALIZADA') return res.status(400).json({ error: 'Apenas vacinas FINALIZADAS podem ser executadas.' });
 
-    const qtd       = Math.max(1, Number(info.quantidade) || 1);
+    const qtd       = dosagemDaVacina(info.quantidade);
     const isCliente = info.cliente === true;
     const jaFaturada = await prisma.faturaItem.findFirst({
       where: { vacinaClinicaId: vacina.id }, select: { id: true },
@@ -1042,12 +1101,10 @@ async function executar(req, res) {
         detalhes:   `${vacina.nome}${vacina.dose ? ` — ${vacina.dose}` : ''}`,
       });
 
-      // Esquema de reforço (mensal/anual) com mais de uma dose: agenda as seguintes.
-      // A aplicação de agora é a 1ª — por isso `quantidade - 1` agendamentos.
+      // Esquema de reforço (mensal/anual): agenda a PRÓXIMA dose. Ver `agendarReforcos`.
       agendados = await agendarReforcos(tx, {
         vacina,
         dose:          vacina.dose,
-        quantidade:    qtd,
         veterinarioId,
         empresaId:     empresaIdEfetivo,
         equipeId:      req.equipeId ?? null,

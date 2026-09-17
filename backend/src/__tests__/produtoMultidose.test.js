@@ -1,16 +1,20 @@
-// PRODUTO MULTIDOSE — o frasco que rende N aplicações (2026-09-12).
+// FORMA DE CÁLCULO — a embalagem deixou de ser a própria unidade (2026-09-16).
 //
 // O QUE QUEBRA EM SILÊNCIO AQUI, e é por isso que o arquivo existe:
-//   1. desde que a UNIDADE virou da clínica, o estoque é contado em EMBALAGENS. A
-//      prescrição continua em mL/mg, `mesmoGrupo('mL','Un.')` é FALSO e a baixa caía
-//      no valor BRUTO: uma dose de 10 mL debitava 10 FRASCOS e cobrava 10 frascos na
-//      fatura. Nenhum erro, nenhuma tela acusando;
-//   2. aplicar a regra da dose sem levá-la à RESERVA travaria o frasco inteiro por
-//      aplicação, e o estoque da clínica "acabaria" na primeira receita;
-//   3. esquecer a contagem (`resolverDoses`) na execução faria a dose voltar a ser
-//      cobrada pela DOSAGEM — o defeito original, de volta em silêncio;
+//   1. o frasco de 20 mL era cadastrado como "1 Un.". A receita saía em mL,
+//      `mesmoGrupo('mL','Un.')` é FALSO e a baixa caía no valor BRUTO: uma dose de
+//      5 mL debitava 5 FRASCOS e cobrava 5 frascos. Nenhum erro, nenhuma tela acusando;
+//   2. deixar o ESTOQUE contar numa unidade e a RECEITA ser escrita em outra devolve o
+//      mesmo defeito por outro caminho — por isso `unidadeDoEstoque` tem de valer na
+//      reserva, na baixa e nas três verificações, não só numa delas;
+//   3. `qtdPorEmbalagem` nulo tratado como 1 afirmaria "a embalagem tem uma unidade da
+//      forma" para todo item que não declara conteúdo;
 //   4. marcar multidose numa linha GLOBAL do catálogo mudaria a cobrança de TODAS as
 //      clínicas do SaaS.
+//
+// ⚠️ ESTE ARQUIVO SUBSTITUI a versão que testava a semântica ANTIGA de multidose
+// ("N aplicações por frasco, desconta 1/N"). Ela foi trocada a pedido: hoje o produto
+// declara QUANTO cabe na embalagem e EM QUÊ, e não há mais divisão por doses.
 'use strict';
 
 const fs   = require('fs');
@@ -18,199 +22,193 @@ const path = require('path');
 
 jest.mock('../lib/prisma', () => ({ default: {} }), { virtual: true });
 const Prescricao = require('../controllers/PrescricaoGrupoController');
+const forma      = require('../lib/formaCalculo');
 
-const { qtdDoEstoque, dosesDoDia, dosesDoCurso } = Prescricao;
+const { qtdDoEstoque } = Prescricao;
 const leia = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 // Comentários explicam a regra CITANDO as mesmas palavras; um gate que se satisfaz
 // com a própria documentação é um gate que se aprende a ignorar.
 const semComentarios = (src) =>
   src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
 
-// ─── 1. A CONTA DA DOSE ──────────────────────────────────────────────────────
+// ─── 1. A CONTA QUE VAI PARA O ESTOQUE E PARA A FATURA ───────────────────────
 describe('quantidade que sai do estoque', () => {
-  test('multidose: cada aplicação tira 1/N da embalagem — não o frasco inteiro', () => {
-    // 10 mL prescritos, estoque contado em "Un.", frasco com 5 doses.
-    expect(qtdDoEstoque(10, 'mL', 'Un.', 1, 5)).toBeCloseTo(0.2, 6);
+  test('receita e estoque na MESMA unidade: 5 mL saem de 60 mL, sem conversão', () => {
+    expect(qtdDoEstoque(5, 'mL', 'mL')).toBeCloseTo(5, 6);
   });
 
-  test('multidose: o dia inteiro de um 12/12h tira 2 doses', () => {
-    expect(qtdDoEstoque(10, 'mL', 'Un.', 2, 5)).toBeCloseTo(0.4, 6);
+  test('unidades do mesmo grupo continuam convertendo: 500 g -> 0,5 kg', () => {
+    expect(qtdDoEstoque(500, 'g', 'kg')).toBeCloseTo(0.5, 6);
+    expect(qtdDoEstoque(2, 'L', 'mL')).toBeCloseTo(2000, 6);
   });
 
-  test('SEM multidose, mL contra Un. debita o BRUTO — o defeito que a regra corrige', () => {
-    // Este é o comportamento ANTIGO, preservado para quem não marcou nada: 10 mL
-    // viram 10 "Un.". É exatamente por isso que o checkbox precisa existir.
-    expect(qtdDoEstoque(10, 'mL', 'Un.', 1, null)).toBe(10);
+  test('unidades incompatíveis subtraem direto — o comportamento legado', () => {
+    expect(qtdDoEstoque(10, 'mL', 'Un.')).toBe(10);
   });
 
-  test('sem multidose, unidades compatíveis continuam convertendo (500 g para 0,5 kg)', () => {
-    expect(qtdDoEstoque(500, 'g', 'kg', 1, null)).toBeCloseTo(0.5, 6);
-  });
-
-  test('multidose VENCE a conversão: mesmo em mL x mL a dose é 1/N', () => {
-    // A clínica declarou que conta em embalagens; a conversão numérica não pode
-    // reintroduzir a cobrança por volume pelas costas.
-    expect(qtdDoEstoque(10, 'mL', 'mL', 1, 4)).toBeCloseTo(0.25, 6);
-  });
-
-  test('N = 1 é legítimo: ampola de dose única contada em unidades', () => {
-    expect(qtdDoEstoque(2, 'mL', 'Un.', 1, 1)).toBe(1);
-  });
-
-  test('N ausente/zero NAO vira 1 — "não informei" não é "dose única"', () => {
-    expect(qtdDoEstoque(10, 'mL', 'Un.', 1, undefined)).toBe(10);
-    expect(qtdDoEstoque(10, 'mL', 'Un.', 1, 0)).toBe(10);
+  test('fração não é truncada: 2,5 mL é dosagem legítima', () => {
+    expect(qtdDoEstoque(2.5, 'mL', 'mL')).toBeCloseTo(2.5, 6);
   });
 });
 
-describe('contagem de aplicações', () => {
-  test('"agora" é uma aplicação, no dia e no curso', () => {
-    const item = { frequencia: 'agora', duracaoDias: 7 };
-    expect(dosesDoDia(item)).toBe(1);
-    expect(dosesDoCurso(item)).toBe(1);
+// ─── 2. A FATURA — o exemplo que originou a mudança ──────────────────────────
+describe('cobrança por conteúdo da embalagem', () => {
+  // Produto: Forma de Cálculo mL, Qtd 20 (a embalagem tem 20 mL).
+  // Estoque: Qtd Produto 3 -> Qtd Total 60 mL; Valor Unitário Cobrado R$ 100 por
+  // embalagem -> R$ 300 no total da entrada.
+  const QTD_POR_EMBALAGEM = 20;
+  const PRECO_EMBALAGEM   = 100;
+  const EMBALAGENS        = 3;
+
+  const qtdTotal   = EMBALAGENS * QTD_POR_EMBALAGEM;   // 60 mL
+  const valorTotal = EMBALAGENS * PRECO_EMBALAGEM;     // R$ 300
+  // É o que `calcPrecoUnitarioBase` grava na entrada: valor ÷ quantidade.
+  const precoPorMl = valorTotal / qtdTotal;            // R$ 5/mL
+
+  test('a baixa de 5 mL deixa 55 mL', () => {
+    expect(qtdTotal - qtdDoEstoque(5, 'mL', 'mL')).toBeCloseTo(55, 6);
   });
 
-  test('12em12h por 7 dias = 2 por dia, 14 no curso', () => {
-    const item = { frequencia: '12em12h', duracaoDias: 7 };
-    expect(dosesDoDia(item)).toBe(2);
-    expect(dosesDoCurso(item)).toBe(14);
+  test('a linha da fatura é qtd x valorUnitarioCobrado / qtdPorEmbalagem', () => {
+    const valorDaDose = qtdDoEstoque(5, 'mL', 'mL') * precoPorMl;
+    expect(valorDaDose).toBeCloseTo(25, 6);
+    // A MESMA conta, escrita como o pedido a descreve.
+    expect(valorDaDose).toBeCloseTo(5 * PRECO_EMBALAGEM / QTD_POR_EMBALAGEM, 6);
   });
 
-  test('1x a cada 3 dias por 21 dias = 7 aplicações no curso', () => {
-    // A família multi-dia já é fracionária por DIA (1/3); multiplicada pela duração
-    // ela devolve a contagem certa de aplicações — é o que a reserva precisa saber.
-    expect(dosesDoCurso({ frequencia: '1x3dias', duracaoDias: 21 })).toBeCloseTo(7, 6);
-  });
-
-  test('frequência desconhecida cai em 1/dia (nunca 0 — dose que não conta não é cobrada)', () => {
-    expect(dosesDoDia({ frequencia: 'sob demanda' })).toBe(1);
-    expect(dosesDoCurso({ frequencia: 'sob demanda', duracaoDias: 0 })).toBe(1);
-  });
-});
-
-// ─── 2. O VALOR QUE VAI PARA A FATURA ────────────────────────────────────────
-// `debitarEstoqueDia` computa `valorDaDose = qtdDebitada x preçoUnitário`. Como a
-// unidade contável tem fator 1, a conta abaixo é literalmente a do controller.
-describe('cobrança por dose', () => {
-  const valorDaDose = (precoDaEmbalagem, doses, dosesPorEmb) =>
-    qtdDoEstoque(10, 'mL', 'Un.', doses, dosesPorEmb) * precoDaEmbalagem;
-
-  test('frasco de R$ 100 com 5 doses: a dose entra na fatura por R$ 20', () => {
-    expect(valorDaDose(100, 1, 5)).toBeCloseTo(20, 6);
-  });
-
-  test('o frasco inteiro é cobrado ao longo das N doses — nunca N vezes o frasco', () => {
-    const total = Array.from({ length: 5 }, () => valorDaDose(100, 1, 5)).reduce((a, b) => a + b, 0);
-    expect(total).toBeCloseTo(100, 6);
-  });
-
-  test('SEM multidose o mesmo caso cobraria 10 frascos (R$ 1.000) numa dose só', () => {
-    expect(valorDaDose(100, 1, null)).toBeCloseTo(1000, 6);
+  test('o conteúdo da embalagem é cobrado UMA vez ao longo das aplicações', () => {
+    // 20 mL consumidos em 4 aplicações de 5 mL custam exatamente uma embalagem.
+    const total = [5, 5, 5, 5].reduce((s, q) => s + qtdDoEstoque(q, 'mL', 'mL') * precoPorMl, 0);
+    expect(total).toBeCloseTo(PRECO_EMBALAGEM, 6);
   });
 });
 
-// ─── 3. GATE ESTRUTURAL ──────────────────────────────────────────────────────
+// ─── 3. A LIB DA FORMA DE CÁLCULO ────────────────────────────────────────────
+describe('lib/formaCalculo', () => {
+  test('aceita a grafia gravada no banco, sem caixa', () => {
+    expect(forma.normalizarFormaCalculo('ML')).toBe('mL');
+    expect(forma.normalizarFormaCalculo(' doses ')).toBe('doses');
+    expect(forma.normalizarFormaCalculo('frasco')).toBeNull();
+    expect(forma.normalizarFormaCalculo('')).toBeNull();
+  });
+
+  test('qtdPorEmbalagem NULO não é 1 — é "não declara conteúdo"', () => {
+    expect(forma.qtdPorEmbalagemDe({ multidose: true, qtdPorEmbalagem: null })).toBeNull();
+    expect(forma.qtdPorEmbalagemDe({ multidose: false, qtdPorEmbalagem: 20 })).toBeNull();
+    expect(forma.qtdPorEmbalagemDe({ multidose: true, qtdPorEmbalagem: 20 })).toBe(20);
+    expect(forma.qtdPorEmbalagemDe({ multidose: true, qtdPorEmbalagem: 2.5 })).toBe(2.5);
+  });
+
+  test('a unidade operativa é a forma de cálculo — e cai na embalagem sem ela', () => {
+    expect(forma.unidadeOperativa({ multidose: true, formaCalculo: 'mL', qtdPorEmbalagem: 20, unidade: 'Frasco' }))
+      .toBe('mL');
+    // Marcado sem quantidade é PENDÊNCIA de cadastro, não item medido: segue na embalagem.
+    expect(forma.unidadeOperativa({ multidose: true, formaCalculo: 'mL', qtdPorEmbalagem: null, unidade: 'Frasco' }))
+      .toBe('Frasco');
+    expect(forma.unidadeOperativa({ multidose: false, unidade: 'Comprimido' })).toBe('Comprimido');
+  });
+});
+
+// ─── 4. GATE ESTRUTURAL ──────────────────────────────────────────────────────
 // Os elos abaixo somem sem erro nenhum: a execução continua funcionando e só o VALOR
-// da fatura fica errado.
+// da fatura (ou o saldo do estoque) fica errado.
 describe('elos que somem em silêncio', () => {
   const controller = semComentarios(leia('controllers/PrescricaoGrupoController.js'));
 
-  test('a baixa da dose consulta o mapa de multidose', () => {
-    expect(controller).toMatch(/async function debitarEstoqueDia[\s\S]{0,900}mapaMultidose\(/);
+  test('a baixa da dose resolve a unidade pela FORMA DE CÁLCULO', () => {
+    expect(controller).toMatch(/async function debitarEstoqueDia[\s\S]{0,900}mapaFormaCalculo\(/);
+    expect(controller).toMatch(/let restante = qtdDoEstoque\(qtdDia, item\.unidade, unidadeEstoque\)/);
   });
 
-  test('a baixa usa `qtdDoEstoque` — não a conversão de unidade escrita à mão', () => {
-    expect(controller).toMatch(/let restante = qtdDoEstoque\(qtdDia,/);
+  test('a RESERVA nasce na MESMA unidade da baixa', () => {
+    // ⚠️ RECORTADO em `criarReservas`: a mesma chamada existe em `debitarEstoqueDia` e
+    // em `verificarDisponibilidade`, então procurá-la no arquivo INTEIRO passaria mesmo
+    // com a reserva voltando a usar a unidade crua da embalagem — e uma reserva numa
+    // unidade que o débito não consome trava o saldo para toda a clínica.
+    const corpo = controller.slice(controller.indexOf('async function criarReservas'));
+    expect(corpo.slice(0, 900)).toMatch(/mapaFormaCalculo\(/);
+    expect(corpo.slice(0, 1400)).toMatch(/unidadeDoEstoque\(formas, item,/);
   });
 
-  test('a execução passa a CONTAGEM de aplicações para a baixa e para a verificação', () => {
-    expect(controller).toMatch(/debitarEstoqueDia\(tx, itensHoje, empresaIdEfetivo, grupoId, resolverQtdExecucao, resolverDosesExecucao\)/);
-    expect(controller).toMatch(/verificarEstoqueParaDia\(itensHoje, empresaIdEfetivo, resolverQtdExecucao, resolverDosesExecucao\)/);
-  });
-
-  test('a RESERVA também é por dose — senão o frasco inteiro fica travado por aplicação', () => {
-    expect(controller).toMatch(/async function criarReservas[\s\S]{0,600}mapaMultidose\(/);
-    expect(controller).toMatch(/qtdNaUnidadeEstoque\(item, unidadeEstoque, multidose\.get\(/);
+  test('as TRÊS verificações de estoque usam a mesma unidade — senão barram o que cabe', () => {
+    for (const fn of ['verificarEstoqueParaDia', 'verificarEstoqueParaExecucao', 'verificarDisponibilidade']) {
+      const corpo = controller.slice(controller.indexOf(`async function ${fn}`));
+      expect(corpo.slice(0, 1400)).toMatch(/mapaFormaCalculo\(prisma, itens\)/);
+      expect(corpo.slice(0, 1800)).toMatch(/unidadeDoEstoque\(formas, item,/);
+    }
   });
 
   test('o lookup roda com o client da TRANSAÇÃO (o prisma global não enxerga o tenant)', () => {
-    expect(controller).toMatch(/mapaMultidose\(tx, itens, empresaId\)/);
+    expect(controller).toMatch(/mapaFormaCalculo\(tx, itens\)/);
+  });
+
+  test('a divisão por doses SAIU — o item medido não converte mais nada', () => {
+    const fn = controller.slice(controller.indexOf('function qtdDoEstoque'));
+    expect(fn.slice(0, 400)).not.toMatch(/dosesPorEmbalagem/);
+  });
+
+  test('o preço do estoque é calculado na unidade OPERATIVA, não na da embalagem', () => {
+    const estoque = semComentarios(leia('controllers/EstoqueController.js'));
+    expect(estoque).toMatch(/calcPrecoUnitarioBase\(Number\(valorRepassado\), Number\(qtdEstoque\), unidadeConta\)/);
+    expect(estoque).toMatch(/async function unidadeOperativaDoItem\(/);
+  });
+
+  test('multidose marcado exige o PAR forma + quantidade', () => {
+    const prod = semComentarios(leia('controllers/ProdutoController.js'));
+    expect(prod).toMatch(/normalizarFormaCalculo\(formaCalculo\)\)\s*faltando\.push\('Forma de Cálculo'\)/);
+    expect(prod).toMatch(/numeroPositivo\(dosesPorEmbalagem\) == null\)\s*faltando\.push\('Qtd'\)/);
+  });
+
+  test('o reforço da vacina deixou de deduzir o tamanho da série da dosagem', () => {
+    const vac = semComentarios(leia('controllers/VacinaClinicaController.js'));
+    const fn  = vac.slice(vac.indexOf('async function agendarReforcos'));
+    expect(fn.slice(0, 500)).not.toMatch(/quantidade/);
+    // A dosagem não é mais travada em >= 1: 0,5 mL é cadastro legítimo.
+    expect(vac).toMatch(/function dosagemDaVacina\(/);
+    expect(vac).not.toMatch(/Math\.max\(1, Number\(quantidade\)/);
   });
 });
 
-describe('multi-tenant e RLS', () => {
-  const lib = leia('lib/produtoFornecedor.js');
+// ─── 5. MULTI-TENANT, RLS E A MIGRATION ──────────────────────────────────────
+describe('multi-tenant e migration', () => {
   const migration = fs.readFileSync(
-    path.join(__dirname, '..', '..', 'prisma', 'migrations', '20261008000000_produto_multidose', 'migration.sql'), 'utf8');
+    path.join(__dirname, '..', '..', 'prisma', 'migrations',
+              '20261012000000_forma_calculo_produto', 'migration.sql'), 'utf8');
+  const sql = migration.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n');
 
-  test('a marca NAO vai para o catálogo global — mora na tabela da empresa', () => {
-    expect(migration).toMatch(/ALTER TABLE "schs2vet"\."tb_produtos_fornecedor"/);
-    expect(migration).not.toMatch(/ALTER TABLE[^\n]*tb_medicamentos/);
-  });
-
-  test('a migration é ADITIVA: nenhum UPDATE/DELETE de dado gravado', () => {
-    const sql = migration.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n');
+  test('é ADITIVA: nenhum UPDATE/DELETE de dado gravado', () => {
     expect(sql).not.toMatch(/\b(UPDATE|DELETE|TRUNCATE|DROP)\b/i);
   });
 
-  test('o default é `false` — nenhum item passa a ser cobrado diferente ao aplicar', () => {
-    expect(migration).toMatch(/"multidose" BOOLEAN NOT NULL DEFAULT false/);
+  test('a forma de cálculo nasce NULA — nenhum cadastro existente muda de cobrança', () => {
+    expect(sql).toMatch(/ADD COLUMN IF NOT EXISTS "forma_calculo" VARCHAR\(20\)/);
+    expect(sql).not.toMatch(/forma_calculo" VARCHAR\(20\) NOT NULL/i);
   });
 
-  test('toda consulta de dose é escopada por empresa_id', () => {
-    const fn = lib.slice(lib.indexOf('async function dosesPorEmbalagemDeMedicamentos'));
-    expect(fn).toMatch(/WHERE empresa_id = \$1/);
+  test('as quantidades viram DOUBLE PRECISION — inteiro truncaria 2,5 mL em silêncio', () => {
+    for (const col of ['doses_por_embalagem', 'quantidade', 'qtd_disponivel', 'doses_por_frasco']) {
+      expect(sql).toMatch(new RegExp(`ALTER COLUMN "${col}" TYPE DOUBLE PRECISION`));
+    }
   });
 
-  test('base sem a migration devolve o comportamento antigo, nunca erro', () => {
-    // A função passou a consultar DUAS fontes (2026-09-15): o item do catálogo
-    // (`tb_medicamentos`, onde a tela de Produtos grava desde que deixou de pedir
-    // fornecedor) e o vínculo com o fornecedor, que VENCE quando existe. O que o gate
-    // trava continua sendo o mesmo: sem as colunas, devolve MAPA e segue — nunca
-    // estoura, e a cobrança cai na conversão de unidade de sempre.
-    const fn = lib.slice(lib.indexOf('async function dosesPorEmbalagemDeMedicamentos'));
-    expect(fn).toMatch(/temColunasMultidose\(\)\)\) return mapa/);
-    const doCatalogo = lib.slice(lib.indexOf('async function dosesNoCatalogo'));
-    expect(doCatalogo).toMatch(/catch \{[^}]*\}/);
-    expect(doCatalogo).toMatch(/return mapa/);
+  test('só a CÓPIA da empresa é marcada — o catálogo global nunca', () => {
+    const med = semComentarios(leia('controllers/MedicamentoController.js'));
+    expect(med).toMatch(/WHERE id = \$1 AND empresa_id IS NOT NULL/);
   });
 
-  test('só entra no mapa o vínculo ATIVO, marcado e com o número informado', () => {
-    const fn = lib.slice(lib.indexOf('async function dosesPorEmbalagemDeMedicamentos'));
-    expect(fn).toMatch(/ativo = true AND multidose = true/);
-    expect(fn).toMatch(/doses_por_embalagem IS NOT NULL/);
+  test('a gravação da forma é por SQL cru com catch — base não migrada não quebra', () => {
+    const lib = leia('lib/catalogoEmpresa.js');
+    const fn  = lib.slice(lib.indexOf('async function gravarMultidose'));
+    expect(fn.slice(0, 1600)).toMatch(/temColunaFormaCalculo\(client\)/);
+    expect(fn.slice(0, 1600)).toMatch(/\.catch\(\(\) => \{\}\)/);
   });
 
-  test('a bandeira do multidose vem JÁ NA CARGA da tela, não só no detalhe', () => {
-    // Resolvida só ao escolher um item do catálogo, o campo ficaria à mostra para quem
-    // digita um produto NOVO — e a marcação sumiria no salvar, em silêncio.
-    // ⚠️ A tela passou a cadastrar o ITEM (2026-09-15), então a bandeira vem de
-    // `lib/catalogoEmpresa` — que é quem grava as colunas agora. O invariante não
-    // mudou: ela chega na LISTAGEM, não só no detalhe.
-    const ctrl = leia('controllers/ProdutoController.js');
-    const fn = ctrl.slice(ctrl.indexOf('const listar ='), ctrl.indexOf('const detalhe ='));
-    expect(fn).toMatch(/multidose: await catalogoEmpresa\.temColunasMultidose\(prisma\)/);
-  });
-
-  test('o detalhe do item só devolve linha global ou da própria empresa', () => {
-    // ⚠️ O recorte virou UMA função (`escopoDaEmpresa`), usada pela listagem, pelo
-    // detalhe e pela exclusão — três cópias do mesmo `OR` divergiriam, e o que
-    // divergiria é o vazamento do catálogo privado de outra clínica.
-    const ctrl = leia('controllers/ProdutoController.js');
-    const escopo = ctrl.slice(ctrl.indexOf('function escopoDaEmpresa'), ctrl.indexOf('const SELECT_ITEM'));
-    expect(escopo).toMatch(/empresaId: null/);
-    expect(escopo).toMatch(/empresaId: Number\(empresaId\)/);
-
-    const fn = ctrl.slice(ctrl.indexOf('const detalhe ='), ctrl.indexOf('const criar ='));
-    expect(fn).toMatch(/escopoDaEmpresa\(req\.empresaId\)/);
-    expect(fn).toMatch(/return res\.status\(404\)/);
-  });
-});
-
-describe('a tela tem porta de entrada', () => {
-  test('Produtos está no menu (a rota existia desde 10/09 e ninguém a alcançava)', () => {
-    const sidebar = fs.readFileSync(
-      path.join(__dirname, '..', '..', '..', 'frontend', 'src', 'components', 'Sidebar.tsx'), 'utf8');
-    expect(semComentarios(sidebar)).toMatch(/subLink\('\/cadastro\/produtos'/);
+  test('o front e o backend oferecem a MESMA lista de formas', () => {
+    const ts = fs.readFileSync(
+      path.join(__dirname, '..', '..', '..', 'frontend', 'src', 'utils', 'formaCalculo.ts'), 'utf8');
+    const m = ts.match(/FORMAS_CALCULO = \[([^\]]+)\]/);
+    expect(m).toBeTruthy();
+    const doFront = m[1].split(',').map((x) => x.trim().replace(/['"]/g, '')).filter(Boolean);
+    expect(doFront).toEqual(forma.FORMAS_CALCULO);
   });
 });

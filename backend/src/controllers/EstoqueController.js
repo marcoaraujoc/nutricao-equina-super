@@ -7,6 +7,64 @@ const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib
 // 🔴 UNIDADE DO MEDICAMENTO ESCOLHIDA PELA CLÍNICA (copy-on-write no catálogo misto).
 // A tela de estoque é onde ela se define — ver lib/unidadeMedicamento.js.
 const { definirUnidadeDoMedicamento, UnidadeIndisponivelError } = require('../lib/unidadeMedicamento');
+// 🔴 FORMA DE CÁLCULO (2026-09-16): quando o produto declara conteúdo medido, é ELA a
+// unidade em que o estoque é contado e o preço é calculado — não a da embalagem.
+const catalogoEmpresa = require('../lib/catalogoEmpresa');
+const { normalizarFormaCalculo, numeroPositivo } = require('../lib/formaCalculo');
+
+/**
+ * A unidade OPERATIVA do item: a Forma de Cálculo quando o produto a declara, senão a
+ * unidade da embalagem (o comportamento de sempre).
+ *
+ * 🔴 POR QUE ISTO NÃO É COSMÉTICO: `calcPrecoUnitarioBase` converte a quantidade para a
+ * unidade BASE pelo fator da unidade recebida. Com o estoque contado em litros e a
+ * unidade do catálogo dizendo "mL", o preço sairia mil vezes errado e a baixa da dose
+ * converteria 2 L em 2.000 mL contra um saldo de 6 — sem erro nenhum na tela.
+ */
+/** Anexa a forma de cálculo ao `medicamento` de cada linha de estoque (em BLOCO). */
+async function anexarFormaAosItens(itens) {
+  const lista = Array.isArray(itens) ? itens : [];
+  if (lista.length === 0) return lista;
+  const mapa = await catalogoEmpresa.multidosePorItem(
+    prisma, lista.map((i) => i.medicamentoId).filter(Boolean));
+  return lista.map((i) => (i.medicamento ? {
+    ...i,
+    medicamento: {
+      ...i.medicamento,
+      multidose:         mapa.get(i.medicamentoId)?.multidose ?? false,
+      dosesPorEmbalagem: mapa.get(i.medicamentoId)?.dosesPorEmbalagem ?? null,
+      formaCalculo:      mapa.get(i.medicamentoId)?.formaCalculo ?? null,
+    },
+  } : i));
+}
+
+async function formaDeclaradaDoItem(client, medicamentoId) {
+  if (!medicamentoId) return null;
+  const mapa = await catalogoEmpresa.multidosePorItem(client, [Number(medicamentoId)]);
+  const info = mapa.get(Number(medicamentoId));
+  if (info?.multidose && info.formaCalculo && numeroPositivo(info.dosesPorEmbalagem) != null) {
+    return normalizarFormaCalculo(info.formaCalculo);
+  }
+  return null;
+}
+
+async function unidadeOperativaDoItem(client, medicamentoId, unidadeCatalogo) {
+  return (await formaDeclaradaDoItem(client, medicamentoId)) ?? unidadeCatalogo;
+}
+
+/**
+ * 🔴 A ENTRADA DE ESTOQUE NÃO REESCREVE A UNIDADE DE UM PRODUTO QUE DECLARA CONTEÚDO.
+ *
+ * `unidade` no corpo aciona `definirUnidadeDoMedicamento`, que faz COPY-ON-WRITE no
+ * catálogo. Com forma de cálculo declarada, a tela manda a unidade OPERATIVA ("mL") —
+ * e sem este filtro ela viraria a unidade da EMBALAGEM do produto, trocando "Frasco"
+ * por "mL" no cadastro e apagando a distinção entre embalagem e conteúdo.
+ * Quem troca a unidade do produto é a tela de Produtos, onde a troca passa pelos
+ * guards de estoque já movimentado.
+ */
+async function unidadeParaResolver(client, medicamentoId, unidadeDoCorpo) {
+  return (await formaDeclaradaDoItem(client, medicamentoId)) ? undefined : unidadeDoCorpo;
+}
 
 // Calcula o preço por unidade base a partir do preço total e da quantidade na unidade
 // do item: R$/g para peso, R$/mL para volume e R$/unidade para o que é CONTADO
@@ -126,7 +184,12 @@ const listar = async (req, res) => {
     });
 
     const itensComUso  = rawItens.map(({ _count, ...i }) => ({ ...i, emUso: (_count?.movimentos ?? 0) > 0 }));
-    const itens        = await anexarTrilha(itensComUso, 'estoque_farmacia');
+    const comTrilha    = await anexarTrilha(itensComUso, 'estoque_farmacia');
+    // 🔴 A FORMA DE CÁLCULO tem de viajar junto do item: é ela que a tela exibe como
+    // unidade do estoque. Por SQL cru (§11) — `forma_calculo` é coluna da migration
+    // 20261012000000 e, com o client desatualizado, o `include` simplesmente não a
+    // traria: a edição de uma entrada abriria dizendo "Frasco" sobre um saldo em mL.
+    const itens        = await anexarFormaAosItens(comTrilha);
 
     const [total, totalControlados] = await Promise.all([
       prisma.estoqueClinica.count({ where: { ativo: true, ...(empresaId ? { empresaId } : {}) } }),
@@ -198,7 +261,8 @@ const criar = async (req, res) => {
     // catálogo GLOBAL produz a CÓPIA da empresa, e é nela que a entrada vai apontar.
     let unidadeResolvida;
     try {
-      unidadeResolvida = await resolverUnidade(req, medicamentoId, unidade);
+      unidadeResolvida = await resolverUnidade(
+        req, medicamentoId, await unidadeParaResolver(prisma, medicamentoId, unidade));
     } catch (err) {
       const resposta = responderErroUnidade(res, err);
       if (resposta) return resposta;
@@ -217,7 +281,9 @@ const criar = async (req, res) => {
       : (req.empresaId ?? null);
     const loteNorm      = normLote(lote);
     const validadeStr   = normValidade(validade);
-    const precoNovo     = calcPrecoUnitarioBase(Number(valorRepassado), Number(qtdEstoque), med.unidade);
+    // ⚠️ `med.unidade` é a da EMBALAGEM; quem manda no preço é a unidade OPERATIVA.
+    const unidadeConta  = await unidadeOperativaDoItem(prisma, medicamentoIdFinal, med.unidade);
+    const precoNovo     = calcPrecoUnitarioBase(Number(valorRepassado), Number(qtdEstoque), unidadeConta);
     const nfMotivo      = notaFiscal?.trim() ? `NF: ${notaFiscal.trim()}` : null;
 
     // ── Busca candidatos para consolidação (mesmo medicamento, empresa, ativo) ─
@@ -253,7 +319,7 @@ const criar = async (req, res) => {
         // Soma quantidade, valores totais e embalagens; recalcula o preço unitário base
         const qtdFinal = Number(existente.qtdEstoque) + Number(qtdEstoque);
         const vrFinal  = Number(existente.valorRepassado) + Number(valorRepassado);
-        const precoConsolidado = calcPrecoUnitarioBase(vrFinal, qtdFinal, med.unidade);
+        const precoConsolidado = calcPrecoUnitarioBase(vrFinal, qtdFinal, unidadeConta);
         return tx.estoqueClinica.update({
           where: { id: existente.id },
           data: {
@@ -387,7 +453,7 @@ const atualizar = async (req, res) => {
         // quantidade na unidade antiga", porque é aqui que a quantidade é reexpressa.
         const u = await definirUnidadeDoMedicamento(tx, {
           medicamentoId:    existe.medicamentoId,
-          unidade,
+          unidade:          await unidadeParaResolver(tx, existe.medicamentoId, unidade),
           empresaId:        req.empresaId ?? null,
           ignorarEstoqueId: id,
         });
@@ -402,7 +468,9 @@ const atualizar = async (req, res) => {
         if (valorRepassado !== undefined || data.qtdEstoque !== undefined || u.alterado) {
           const vrFinal   = valorRepassado !== undefined ? Number(valorRepassado) : existe.valorRepassado;
           const qtdFinal  = data.qtdEstoque !== undefined ? data.qtdEstoque : existe.qtdEstoque;
-          const novoPreco = calcPrecoUnitarioBase(vrFinal, qtdFinal, u.unidade);
+          // ⚠️ A unidade OPERATIVA, não a da embalagem — ver `unidadeOperativaDoItem`.
+          const unidadeConta = await unidadeOperativaDoItem(tx, u.id, u.unidade);
+          const novoPreco = calcPrecoUnitarioBase(vrFinal, qtdFinal, unidadeConta);
           if (novoPreco !== null) data.precoUnitarioBase = novoPreco;
         }
 

@@ -390,7 +390,10 @@ describe('gate — a unidade é resolvida onde o estoque é gravado', () => {
 
   test('as duas listagens do catálogo escondem o global homônimo', () => {
     const src = semComentarios(ler('controllers', 'MedicamentoController.js'));
-    expect(src).toMatch(/dados: preferirCopiaDaEmpresa\(medicamentos\)/);          // listar
+    // ⚠️ O que este gate trava é o RECORTE (`preferirCopiaDaEmpresa`), não a forma da
+    // linha: desde 2026-09-16 as duas listagens passam por `anexarFormaCalculo`, que
+    // acrescenta a forma de cálculo sem mexer em QUAIS itens saem.
+    expect(src).toMatch(/dados: await anexarFormaCalculo\([^)]*preferirCopiaDaEmpresa\(medicamentos\)/); // listar
     expect(src).toMatch(/preferirCopiaDaEmpresa\(medicamentos\)\.map\(m => \{/);   // paraAtendimento
   });
 });

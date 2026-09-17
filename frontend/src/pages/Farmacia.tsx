@@ -33,11 +33,18 @@ interface Medicamento {
   id: number;
   nome: string;
   formaFarmaceutica: string;
+  /** Unidade da EMBALAGEM ("Frasco", "Un."). NÃO é em que o conteúdo é medido. */
   unidade: string;
   apresentacao: string;
   controlado: boolean;
   ativo: boolean;
   vias: Via[];
+  /** O produto declara conteúdo medido (Forma de Cálculo + Qtd) — ver /cadastro/produtos. */
+  multidose?: boolean;
+  /** QUANTO a embalagem contém, na `formaCalculo` (frasco de 20 mL → 20). */
+  dosesPorEmbalagem?: number | null;
+  /** EM QUÊ o conteúdo é medido: mL, L, g, kg, mcg, mg, doses. */
+  formaCalculo?: string | null;
 }
 
 interface FornecedorItem { id: number; nome: string; tipoServico: string }
@@ -154,6 +161,36 @@ function extrairVolume(med: Medicamento): number | null {
   return null;
 }
 
+/**
+ * 🔴 O CONTEÚDO DA EMBALAGEM VEM DO PRODUTO (2026-09-16), não mais digitado aqui.
+ *
+ * Antes a clínica informava "Qtd por Embalagem" a cada entrada de estoque, e o número
+ * não existia em lugar nenhum fora daquela linha: a prescrição não o conhecia, então
+ * uma dose de 5 mL de um frasco de 20 mL debitava 5 UNIDADES (cinco frascos). Agora
+ * quem declara é `/cadastro/produtos`, e o estoque só MULTIPLICA.
+ *
+ * ⚠️ `null` quando o produto não é multidose — e aí a embalagem é a própria unidade,
+ * que é o comportamento de sempre. `null` NÃO é 1: é "não declara conteúdo".
+ */
+function conteudoDaEmbalagem(med: Medicamento | null): number | null {
+  if (!med || med.multidose !== true) return null;
+  const n = Number(med.dosesPorEmbalagem);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * A unidade em que este item é CONTADO no estoque, escrito na receita e COBRADO.
+ *
+ * É a Forma de Cálculo quando o produto a declara; senão, a unidade da embalagem —
+ * o comportamento de antes, para nenhum cadastro existente mudar. As três respostas
+ * precisam ser a MESMA: duas unidades diferentes para o mesmo item é o que fazia
+ * 5 mL virarem 5 frascos na baixa e na fatura.
+ */
+function unidadeOperativaMed(med: Medicamento | null): string {
+  if (conteudoDaEmbalagem(med) != null && med?.formaCalculo) return med.formaCalculo;
+  return med?.unidade ?? '';
+}
+
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function Farmacia() {
@@ -228,20 +265,21 @@ export default function Farmacia() {
   // global cria a CÓPIA da empresa no backend (lib/unidadeMedicamento.js); o global,
   // que é de todas as clínicas, nunca é alterado.
   const [unidadeSel,     setUnidadeSel]     = useState('');
-  // Opções do CATÁLOGO da empresa (global + o próprio dela), nunca lista fixa no
-  // código — uma constante aqui divergiria do banco no primeiro item novo. O backend
-  // garante a opção 'Un.' quando nenhuma das existentes já significa isso.
-  const [unidadesCatalogo, setUnidadesCatalogo] = useState<string[]>([]);
+  // ⚠️ A lista de unidades do catálogo SAIU daqui em 2026-09-16: o seletor de Unidade
+  // virou leitura e o valor vem do PRODUTO (`unidadeOperativaMed`). Manter o estado
+  // sem consumidor só deixaria uma busca por página sem ninguém para ler o resultado —
+  // e o `tsc -b` reprova variável não lida.
   const comboboxRef = useRef<HTMLDivElement>(null);
 
 
   // ── Busca medicamento selecionado ─────────────────────────────────────────
 
   const medSelecionado    = medicamentos.find((m) => m.id === form.medicamentoId) ?? null;
-  // Opções do catálogo + a unidade ATUAL do item, para o seletor nunca abrir em branco
-  // (a grafia gravada pode não estar na lista deduplicada — 'Kg' onde o catálogo tem 'kg').
-  const unidadesOpcoes = [...new Set([...unidadesCatalogo, unidadeSel].filter(Boolean))]
-    .sort((x, y) => x.localeCompare(y, 'pt-BR'));
+  // Quanto a embalagem contém, na unidade operativa — vem do CADASTRO DO PRODUTO.
+  // Na EDIÇÃO cai no que ficou gravado na linha: a lista da tela é recortada por
+  // espécie e pode não conter o medicamento daquele estoque.
+  const conteudoEmbalagem = conteudoDaEmbalagem(medSelecionado)
+    ?? (pesoPorEmbalagem !== '' && Number(pesoPorEmbalagem) > 0 ? Number(pesoPorEmbalagem) : null);
   const estoqueExistente  = !editandoId && form.medicamentoId
     ? itens.find((i) => i.medicamentoId === form.medicamentoId && i.ativo) ?? null
     : null;
@@ -312,17 +350,6 @@ export default function Farmacia() {
 
   useEffect(() => { if (!loadingPerm) carregarEstoque(); }, [carregarEstoque, loadingPerm]);
 
-  // Opções de unidade: UMA vez, fora de `carregarEstoque` — elas não mudam com a busca
-  // nem com a aba, e refazer a consulta a cada tecla digitada seria desperdício.
-  useEffect(() => {
-    if (loadingPerm) return;
-    let vivo = true;
-    api.get('/medicamentos/opcoes-catalogo', { params: { tipo: 'medicamento' } })
-      .then((res) => { if (vivo) setUnidadesCatalogo(res.data?.dados?.unidades ?? []); })
-      .catch(() => { /* silencioso: o seletor cai na unidade do próprio item */ });
-    return () => { vivo = false; };
-  }, [loadingPerm]);
-
   // Recarrega só a lista de fornecedores da farmácia (após cadastrar um novo pelo seletor).
   const recarregarFornecedores = useCallback(async (): Promise<FornecedorItem[]> => {
     try {
@@ -351,7 +378,15 @@ export default function Farmacia() {
     if (editandoId) return;
     setFrascos('');
     const med = medicamentos.find(m => m.id === form.medicamentoId) ?? null;
-    setPesoPorEmbalagem(med ? (extrairVolume(med) ?? '') : '');
+    // 🔴 O CONTEÚDO DECLARADO NO PRODUTO VENCE o palpite tirado do nome/apresentação.
+    // `extrairVolume` é heurística de texto ("Frasco 20 mL") e continua como reserva
+    // para o item que ainda não foi cadastrado como multidose — mas afirmar por
+    // heurística um número que divide o preço da dose seria pior que não afirmar.
+    const conteudo = conteudoDaEmbalagem(med);
+    setPesoPorEmbalagem(conteudo ?? (med ? (extrairVolume(med) ?? '') : ''));
+    // A unidade deixou de ser escolhida aqui: é a do produto, e ela precisa ser a
+    // MESMA em que a receita é escrita e a fatura é calculada.
+    setUnidadeSel(unidadeOperativaMed(med));
   }, [form.medicamentoId, medicamentos, editandoId]);
 
   useEffect(() => {
@@ -385,7 +420,9 @@ export default function Farmacia() {
     const novo = item as unknown as Medicamento;
     setMedicamentos((prev) => [novo, ...prev.filter((m) => m.id !== novo.id)]);
     setForm((f) => ({ ...f, medicamentoId: novo.id }));
-    setUnidadeSel(novo.unidade ?? '');
+    // A unidade OPERATIVA (Forma de Cálculo quando o produto a declara), nunca a da
+    // embalagem crua — ver `unidadeOperativaMed`.
+    setUnidadeSel(unidadeOperativaMed(novo));
     setCadastroMedNome(null);
     setDropdownMedAberto(false);
     setBuscaMed('');
@@ -461,7 +498,10 @@ export default function Farmacia() {
     // ⚠️ A unidade sai do PRÓPRIO item (`item.medicamento`), não de `medicamentos`: a
     // lista da tela é recortada por espécie e pode não conter o medicamento da linha —
     // aí o seletor abriria em branco e o salvar mandaria unidade vazia.
-    const unidadeDoItem = item.medicamento?.unidade ?? '';
+    // 🔴 A unidade OPERATIVA da linha, não a da embalagem: o saldo gravado está na
+    // Forma de Cálculo quando o produto a declara, e abrir a edição dizendo "Frasco"
+    // sobre 60 mL faria a conversão do mínimo/alarmante sair pelo fator errado.
+    const unidadeDoItem = unidadeOperativaMed(item.medicamento ?? null);
     const fator         = fatorSubUnidade(unidadeDoItem);
     setUnidadeSel(unidadeDoItem);
     setForm({
@@ -982,9 +1022,10 @@ export default function Farmacia() {
                                   type="button"
                                   onMouseDown={() => {
                                     setForm((f) => ({ ...f, medicamentoId: m.id }));
-                                    // Abre na unidade que o catálogo tem hoje — é ela
-                                    // que o seletor deixa corrigir.
-                                    setUnidadeSel(m.unidade ?? '');
+                                    // A unidade vem do PRODUTO e não se corrige aqui:
+                                    // é a mesma em que a receita é escrita e a fatura
+                                    // é calculada (ver `unidadeOperativaMed`).
+                                    setUnidadeSel(unidadeOperativaMed(m));
                                     setDropdownMedAberto(false);
                                     setBuscaMed('');
                                   }}
@@ -1135,12 +1176,17 @@ export default function Farmacia() {
                 </div>
               </div>
 
-              {/* Calculadora de Embalagens — a UNIDADE entra aqui porque é ela que dá
-                  sentido às outras duas: "10 embalagens × 1 Un." ou "10 × 500 g". */}
+              {/* 🔴 QTD PRODUTO × CONTEÚDO DA EMBALAGEM = QTD TOTAL (2026-09-16).
+                  Os rótulos mudaram a pedido ("Nº de Embalagens" → Qtd Produto,
+                  "Qtd por Embalagem" → Qtd Total), mas o que mudou de verdade é a
+                  ORIGEM do número: o conteúdo deixou de ser digitado a cada entrada e
+                  passa a vir do cadastro do produto. Era esse número que a prescrição
+                  não conhecia — e por não conhecê-lo, uma dose de 5 mL de um frasco de
+                  20 mL debitava 5 UNIDADES (cinco frascos) e cobrava cinco frascos. */}
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Nº de Embalagens <span className="text-red-500">*</span>
+                    Qtd Produto <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="number" min={0}
@@ -1161,53 +1207,47 @@ export default function Farmacia() {
                   {editandoId && editandoEmUso && <p className="text-[10px] text-gray-400 mt-1">Use "Ajuste de Estoque" para alterar.</p>}
                   {editandoId && !editandoEmUso && <p className="text-[10px] text-emerald-600 mt-1">Medicamento ainda não utilizado — edição liberada.</p>}
                 </div>
+
+                {/* 🔴 QTD TOTAL é DERIVADA, não digitada: Qtd Produto × o conteúdo que o
+                    produto declara. Deixá-la editável daria DOIS números para a mesma
+                    coisa (o do produto e o desta linha), e eles divergiriam na primeira
+                    correção — com o preço da dose saindo de um e a baixa do outro. */}
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Qtd por Embalagem{unidadeSel && <span className="text-gray-400 font-normal ml-1">({unidadeSel})</span>}
+                    Qtd Total{unidadeSel && <span className="text-gray-400 font-normal ml-1">({unidadeSel})</span>}
                   </label>
                   <input
-                    type="number" min={0}
-                    disabled={!!editandoId && editandoEmUso}
-                    value={pesoPorEmbalagem === '' ? '' : pesoPorEmbalagem}
-                    onChange={e => {
-                      const p = e.target.value === '' ? '' : Number(e.target.value);
-                      setPesoPorEmbalagem(p);
-                      const n = frascos !== '' ? Number(frascos) : 0;
-                      const total = n > 0 && p !== '' && Number(p) > 0
-                        ? n * Number(p)
-                        : n;
-                      setForm(f => ({ ...f, qtdEstoque: total }));
-                    }}
-                    placeholder="Ex: 3,6"
-                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-400"
+                    type="text" readOnly disabled value={form.qtdEstoque > 0 ? fmtQtd(form.qtdEstoque) : ''}
+                    title={conteudoEmbalagem != null
+                      ? `Qtd Produto × ${fmtQtd(conteudoEmbalagem)} ${unidadeSel} por Unidade (cadastro do produto)`
+                      : 'O produto não declara conteúdo: a embalagem é a própria unidade'}
+                    placeholder="—"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-gray-100 text-gray-600"
                   />
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    {conteudoEmbalagem != null
+                      ? `${fmtQtd(conteudoEmbalagem)} ${unidadeSel} por Unidade`
+                      : 'Cadastre o produto como multidose para medir por dentro'}
+                  </p>
                 </div>
-                {/* 🔴 UNIDADE — preenchida à mão, não mais herdada do catálogo global.
-                    É ela que decide em que o estoque é CONTADO e em que o item é COBRADO
-                    na fatura: com 'g', dez frascos de 500 viram 5.000 g e o preço sai em
-                    R$/g; com 'Un.', viram 10 e o preço sai por unidade. */}
+
+                {/* 🔴 UNIDADE virou LEITURA (a pedido, 2026-09-16): ela é a do PRODUTO.
+                    Enquanto era escolhida aqui, dava para gravar o estoque em 'Un.' de
+                    um produto medido em 'mL' — e aí 5 mL da receita eram lidos como 5
+                    unidades na baixa e na fatura, sem nada acusar. Para trocá-la, o
+                    caminho é o cadastro do produto (lá a troca passa pelo
+                    copy-on-write e pelos guards de estoque já movimentado). */}
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
                     Unidade <span className="text-red-500">*</span>
                   </label>
-                  <select
-                    value={unidadeSel}
-                    disabled={!form.medicamentoId || (!!editandoId && editandoEmUso)}
-                    title={editandoId && editandoEmUso
-                      ? 'Item já movimentado — a unidade não pode ser alterada'
-                      : 'Unidade em que este item é contado no estoque e cobrado na fatura'}
-                    onChange={(e) => setUnidadeSel(e.target.value)}
-                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-gray-900 disabled:bg-gray-100 disabled:text-gray-400">
-                    <option value="">Selecione...</option>
-                    {unidadesOpcoes.map((u) => (
-                      <option key={u} value={u}>{u}</option>
-                    ))}
-                  </select>
-                  {/* ⚠️ O aviso "Unidade alterada (…)" foi REMOVIDO a pedido
-                      (2026-09-15). A REGRA continua valendo e não mudou: trocar a
-                      unidade de um medicamento GLOBAL cria a cópia da empresa
-                      (`lib/unidadeMedicamento.js`, copy-on-write) — o catálogo de
-                      todas as clínicas segue intocado. O que saiu foi o texto. */}
+                  <input
+                    type="text" readOnly disabled value={unidadeSel}
+                    title="Definida no cadastro do produto (Unidade ou Forma de Cálculo)"
+                    placeholder="Escolha o medicamento"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-gray-100 text-gray-600"
+                  />
+                  <p className="text-[10px] text-gray-400 mt-1">Vem do cadastro do produto</p>
                 </div>
               </div>
 

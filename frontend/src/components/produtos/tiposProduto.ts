@@ -27,10 +27,17 @@ export interface ItemCatalogo {
   daEmpresa:         boolean;
   ehVacina:          boolean;
   vias:              { id: number; via: string }[];
-  /** O frasco rende mais de uma aplicação — governa a baixa e a cobrança POR DOSE. */
+  /** A embalagem tem conteúdo medido — governa a baixa do estoque e a cobrança. */
   multidose:         boolean;
-  /** Quantas aplicações saem de uma embalagem. `null` = marcado e ainda não informado. */
+  /**
+   * QUANTO a embalagem contém, na `formaCalculo` (frasco de 20 mL → 20).
+   * ⚠️ O nome vem da coluna legada `doses_por_embalagem`, que até 2026-09-16
+   * significava "N aplicações por frasco". Hoje é o CONTEÚDO — ver
+   * `backend/src/lib/formaCalculo.js`. `null` = não informado (≠ 1).
+   */
   dosesPorEmbalagem: number | null;
+  /** EM QUÊ a embalagem é medida: mL, L, g, kg, mcg, mg ou doses. `null` = não é multidose. */
+  formaCalculo:      string | null;
 }
 
 /**
@@ -50,8 +57,12 @@ export interface FormProdutoDados {
   vias:              string[];
   controlado:        boolean;
   fabricante:        string;
+  /** "Produto multidose" — é ele que abre Forma de Cálculo + Qtd. */
   multidose:         boolean;
+  /** Qtd por embalagem, como TEXTO: o vazio precisa ser distinguível de zero. */
   dosesPorEmbalagem: string;
+  /** Forma de Cálculo escolhida — vazio enquanto multidose está desmarcado. */
+  formaCalculo:      string;
   /** Item de origem GLOBAL — salvar cria a cópia desta clínica. */
   daEmpresa:         boolean;
 }
@@ -59,7 +70,7 @@ export interface FormProdutoDados {
 export const FORM_PRODUTO_VAZIO: FormProdutoDados = {
   medicamentoId: null, nome: '', formaFarmaceutica: '', unidade: '', apresentacao: '',
   vias: [], controlado: false, fabricante: '',
-  multidose: false, dosesPorEmbalagem: '', daEmpresa: true,
+  multidose: false, dosesPorEmbalagem: '', formaCalculo: '', daEmpresa: true,
 };
 
 /** Item do backend → formulário. */
@@ -74,7 +85,8 @@ export function formDoItem(item: ItemCatalogo): FormProdutoDados {
     controlado:        !!item.controlado,
     fabricante:        item.fabricante ?? '',
     multidose:         !!item.multidose,
-    dosesPorEmbalagem: item.dosesPorEmbalagem != null ? String(item.dosesPorEmbalagem) : '',
+    dosesPorEmbalagem: item.dosesPorEmbalagem != null ? String(item.dosesPorEmbalagem).replace('.', ',') : '',
+    formaCalculo:      item.formaCalculo ?? '',
     daEmpresa:         !!item.daEmpresa,
   };
 }
@@ -93,5 +105,6 @@ export function normalizarNomeProduto(v: string): string {
 /** O formulário está vazio fora o nome? Decide se a carga automática pode sobrescrever. */
 export function formSoTemNome(f: FormProdutoDados): boolean {
   return !f.formaFarmaceutica && !f.apresentacao && !f.unidade
-    && f.vias.length === 0 && !f.fabricante.trim() && !f.dosesPorEmbalagem && !f.controlado;
+    && f.vias.length === 0 && !f.fabricante.trim() && !f.dosesPorEmbalagem
+    && !f.formaCalculo && !f.multidose && !f.controlado;
 }

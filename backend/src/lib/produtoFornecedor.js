@@ -319,6 +319,13 @@ async function fornecedorDoItem(client, empresaId, medicamentoId) {
  * clínica, mas o filtro é o que faz a resposta ser a mesma com e sem o carimbo
  * (ADMIN de plataforma incluído) — mesma regra do resto deste módulo.
  */
+// ⚠️ LEGADO, SEM CHAMADOR desde 2026-09-16. Ela devolve "N aplicações por frasco", a
+// semântica ANTIGA de multidose: a baixa dividia a CONTAGEM de aplicações por N. Hoje
+// quem manda é a FORMA DE CÁLCULO do produto (`lib/formaCalculo.js`) — o estoque é
+// contado na mesma unidade da receita e não há divisão nenhuma.
+// 🔴 NÃO RELIGAR sem converter o significado: reintroduzida como está, ela dividiria de
+// novo uma dose que já está na unidade do estoque, e a linha da fatura sairia N vezes
+// menor — sem erro em tela nenhuma.
 async function dosesPorEmbalagemDeMedicamentos(client, empresaId, medicamentoIds) {
   const ids = [...new Set((medicamentoIds ?? []).map(Number).filter(Number.isInteger))];
   const vazio = new Map();

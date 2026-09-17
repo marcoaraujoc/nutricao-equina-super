@@ -28,6 +28,7 @@ import ErroAcao from './ErroAcao';
 // 🔴 Os seletores moram em `catalogo/SeletoresCatalogo` desde 2026-09-15: a tela de
 // Produtos cadastra os MESMOS campos, e duas cópias divergiriam (28-g).
 import { SeletorBusca, SeletorVias, type OpcoesCatalogo } from './catalogo/SeletoresCatalogo';
+import { FORMAS_CALCULO, qtdDoNome, fmtQtdForma, numeroDoCampo } from '../utils/formaCalculo';
 
 export interface ItemCatalogoCriado {
   id: number;
@@ -75,11 +76,13 @@ export default function CadastroCatalogoModal({
   const [fabricante, setFabricante] = useState('');
   const [vias, setVias]             = useState<string[]>([]);
   const [controlado, setControlado] = useState(false);
-  // 🔴 Quantidade de doses da embalagem — o MESMO campo da tela de Produtos
-  // (2026-09-15). Informado, o item JÁ NASCE multidose: cada aplicação desconta 1/N da
-  // embalagem e é por dose que ela entra na fatura. O número É a marcação — um
-  // checkbox à parte daria dois estados para a mesma decisão, e eles divergiriam.
-  const [doses, setDoses] = useState('');
+  // 🔴 MULTIDOSE — o MESMO par da tela de Produtos (2026-09-16): a Forma de Cálculo
+  // (em QUE o conteúdo é medido) e a Qtd (QUANTO cabe na embalagem). Sem os dois o
+  // backend NÃO marca o item, e ele volta a ser cobrado pela embalagem inteira: um
+  // número sem unidade não divide preço nenhum.
+  const [multidose, setMultidose] = useState(false);
+  const [formaCalc, setFormaCalc] = useState('');
+  const [doses, setDoses]         = useState('');
 
   const [opcoes, setOpcoes]         = useState<OpcoesCatalogo>({ formas: [], unidades: [], apresentacoes: [], vias: [] });
   const [carregando, setCarregando] = useState(false);
@@ -134,8 +137,9 @@ export default function CadastroCatalogoModal({
         nome: nome.trim(), tipo, animalId: animalId ?? undefined,
         formaFarmaceutica: forma, unidade, apresentacao, vias,
         controlado: ehVacina ? false : controlado,
-        multidose:         doses !== '' && Number(doses) > 1,
-        dosesPorEmbalagem: doses !== '' ? Number(doses) : null,
+        multidose,
+        dosesPorEmbalagem: multidose ? numeroDoCampo(doses) : null,
+        formaCalculo:      multidose ? (formaCalc || null) : null,
         ...(ehVacina ? { fabricante: fabricante.trim() } : {}),
       });
       const criado: ItemCatalogoCriado | undefined = res.data?.dados;
@@ -202,19 +206,54 @@ export default function CadastroCatalogoModal({
 
           <SeletorVias valores={vias} opcoes={opcoes.vias} erro={temErro('vias')} onChange={setVias} />
 
-          <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">
-              {ehVacina ? 'Quantidade de Doses' : 'Qtd. de doses por embalagem'}
+          {/* Espelho do bloco de `/cadastro/produtos` — o item precisa nascer IGUAL,
+              seja cadastrado lá ou por aqui. Sem a forma, o backend não marca. */}
+          <div className="rounded-xl border border-gray-100 bg-gray-50/60 p-3 space-y-3">
+            <label className="flex items-start gap-2.5 cursor-pointer select-none">
+              <input type="checkbox" checked={multidose}
+                onChange={e => {
+                  const marcado = e.target.checked;
+                  // Desmarcar LIMPA o par: deixá-lo faria o item voltar a ser multidose
+                  // na gravação seguinte sem ninguém ter pedido.
+                  setMultidose(marcado);
+                  if (!marcado) { setFormaCalc(''); setDoses(''); }
+                }}
+                className="mt-0.5 w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer" />
+              <span className="min-w-0">
+                <span className="text-sm font-semibold text-gray-700">Produto multidose</span>
+                <span className="block text-[11px] text-gray-500 leading-snug">
+                  A embalagem rende mais de uma aplicação e é medida por dentro.
+                </span>
+              </span>
             </label>
-            <input type="text" inputMode="numeric" value={doses}
-              onChange={e => setDoses(e.target.value.replace(/\D/g, ''))}
-              placeholder="Ex.: 10 — em branco, a embalagem rende uma aplicação"
-              className={inputCls('doses')} />
-            {Number(doses) > 1 && (
-              <p className="text-[11px] text-emerald-700 mt-1">
-                Produto multidose: cada aplicação desconta 1/{doses} da embalagem e é
-                cobrada por esse valor.
-              </p>
+
+            {multidose && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Forma de Cálculo *</label>
+                  <select value={formaCalc}
+                    onChange={e => {
+                      // Mesma regra da tela de Produtos: trocar a forma repreenche a
+                      // Qtd a partir do NOME, e `qtdDoNome` já devolve null no que não
+                      // deve preencher (doses, ou nome sem a medida escolhida).
+                      const achada = qtdDoNome(nome, e.target.value);
+                      setFormaCalc(e.target.value);
+                      setDoses(achada != null ? fmtQtdForma(achada) : '');
+                    }}
+                    className={inputCls('formaCalculo')}>
+                    <option value="">Selecione…</option>
+                    {FORMAS_CALCULO.map(f => <option key={f} value={f}>{f}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                    Qtd {formaCalc && <span className="text-gray-400 font-normal">({formaCalc} por Unidade)</span>}
+                  </label>
+                  <input type="text" inputMode="decimal" value={doses}
+                    onChange={e => setDoses(e.target.value.replace(/[^\d.,]/g, '').replace('.', ','))}
+                    placeholder="Ex.: 20" className={inputCls('doses')} />
+                </div>
+              </div>
             )}
           </div>
 

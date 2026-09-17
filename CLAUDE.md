@@ -1,5 +1,74 @@
 # S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-09-16 (parte 2) (🔴 **A EMBALAGEM DEIXOU DE SER A PROPRIA UNIDADE** —
+#   o produto passou a declarar QUANTO cabe nela e EM QUE (**Forma de Calculo**).
+#   1. 🔴 **O DEFEITO QUE ISSO RESOLVE:** o frasco de 20 mL era cadastrado como "1 Un.".
+#      A receita saia em mL, `mesmoGrupo('mL','Un.')` e FALSO e a baixa caia no valor
+#      BRUTO: **uma dose de 5 mL debitava 5 FRASCOS e cobrava 5 frascos na fatura**, sem
+#      erro nenhum na tela. Agora:
+#      ```
+#      produto : Forma de Calculo mL, Qtd 20     estoque : Qtd Produto 3 -> Qtd Total 60 mL
+#      receita : 5 mL  -> estoque 55 mL          fatura  : 5 x 100 / 20 = R$ 25,00
+#      ```
+#      OK **VERIFICADO AO VIVO**, em transacao REVERTIDA (0 linhas ao fim): os 14 passos do
+#      exemplo acima batem, inclusive a fracao (2,5 mL -> saldo 57,5) no estoque e no lote.
+#   2. OK **MIGRATION APLICADA** (autorizada) — `20261012000000_forma_calculo_produto`:
+#      `forma_calculo` em `tb_medicamentos` e em `tb_vacinas_clinicas`, e as quantidades
+#      de `tb_lotes_vacina`/`tb_reservas_estoque_vacina`/`tb_vacinas_clinicas.quantidade`/
+#      `tb_medicamentos.doses_por_embalagem` de INTEGER para **DOUBLE PRECISION**.
+#      ⚠️ **`doses_por_embalagem` MUDOU DE SIGNIFICADO**, nao so de tipo: era "N aplicacoes
+#      por frasco, desconta 1/N" e passou a ser "a embalagem contem N da forma de calculo".
+#      E seguro porque a coluna estava VAZIA — medido: 8.255 medicamentos, ZERO com
+#      `multidose` e ZERO com o numero; `tb_estoque_clinica`, `tb_lotes_vacina` e
+#      `tb_prescricoes` tambem com 0 linhas. O NOME da coluna ficou (mesmo precedente de
+#      `tb_procedimento_combos.valor`) — leia-o sempre por `lib/formaCalculo.js`.
+#      ⚠️ INTEGER truncaria 2,5 mL em SILENCIO, e o saldo fecharia errado sem nada acusar.
+#      ⚠️ `prisma generate` falhou com EPERM (§11, backend rodando) e **NAO bloqueia**:
+#      conferido que o client desatualizado ACEITA a fracao (quem valida escala e o banco).
+#   3. 🔴 **A DIVISAO POR DOSES SAIU de `qtdDoEstoque`, e isso e SIMPLIFICACAO.** Com a
+#      forma declarada, estoque e receita falam a MESMA unidade: nao ha o que converter nem
+#      o que dividir. A fatura sai certa sozinha, porque o valor da linha sempre foi
+#      `qtd debitada x preco unitario` e o preco unitario e `embalagem / conteudo`.
+#      ⚠️ **`unidadeDoEstoque` tem de valer nos CINCO pontos** (reserva, consumo, baixa e as
+#      tres verificacoes): estoque contando numa unidade e receita escrita em outra devolve
+#      o mesmo defeito por outro caminho. Ha gate por FUNCAO para cada um — procurar a
+#      chamada no arquivo INTEIRO passava com a reserva sabotada (gate frouxo, corrigido).
+#      ⚠️ `produtoFornecedor.dosesPorEmbalagemDeMedicamentos` ficou **LEGADA E SEM CHAMADOR**,
+#      com a semantica ANTIGA. Religada como esta, dividiria de novo uma dose que ja esta
+#      na unidade do estoque — e a linha sairia N vezes menor, em silencio.
+#   4. **CADASTRO DE PRODUTO:** saiu a faixa "Este item vem do catalogo do sistema..." (a
+#      REGRA do copy-on-write nao mudou — saiu o texto; o selo "do sistema" da LISTA fica);
+#      **Unidade . Via . Controlado na MESMA linha**; e o **checkbox "Produto multidose"**
+#      voltou a ser explicito, abrindo **Forma de Calculo** (mL, L, g, kg, mcg, mg, doses)
+#      + **Qtd**. ⚠️ O numero sozinho deixou de ser a marcacao: sem a unidade ele nao
+#      divide preco nenhum. ⚠️ A Qtd e **SEMPRE EDITAVEL**; o que a forma muda e o que ela
+#      traz PREENCHIDO — `doses` nunca preenche (rotulo nao traz contagem de aplicacao) e
+#      o nome so casa com a medida ESCOLHIDA ("Dipirona 500 mg/mL" + mL -> vazio, porque o
+#      500 e massa e oferece-lo como volume poe na embalagem um numero que nao e dela).
+#   5. **ESTOQUE (Farmacia):** "N de Embalagens" -> **Qtd Produto**; "Qtd por Embalagem" ->
+#      **Qtd Total**, agora **DERIVADA** (Qtd Produto x o conteudo que o produto declara) e
+#      a **Unidade virou LEITURA**, herdada do produto. ⚠️ Enquanto ela era escolhida ali,
+#      dava para gravar em 'Un.' o estoque de um produto medido em 'mL'. ⚠️ E a entrada
+#      **nao reescreve mais a unidade do produto**: com forma declarada, `unidade` nao e
+#      enviada ao `definirUnidadeDoMedicamento` — senao o copy-on-write trocaria "Frasco"
+#      por "mL" no catalogo e apagaria a distincao entre embalagem e conteudo.
+#   6. **PRESCRICAO:** a dosagem e **Valor + Forma de Calculo** (era Valor + Unidade).
+#      ⚠️ Com forma declarada NAO ha subunidade a oferecer (mL <-> L): trocar ali
+#      reintroduziria a divergencia que a forma veio eliminar.
+#   7. 🔴 **VACINA: "QTD DOSES" VIROU "DOSAGEM" (Valor + Forma de Calculo)**, a pedido.
+#      ⚠️ **CONSEQUENCIA CLINICA REGISTRADA:** aquele campo declarava o tamanho da SERIE, e
+#      `agendarReforcos` criava `qtd - 1` agendamentos de uma vez. Sem ele, o reforco passa
+#      a agendar **so a PROXIMA dose** — deduzir a serie de um volume em mL afirmaria um
+#      esquema que ninguem prescreveu. Executada a proxima, ela agenda a seguinte.
+#      ⚠️ `Math.max(1, ...)` saiu: travava 0,5 mL em 1 mL, dobrando a baixa e a fatura.
+#      ⚠️ `forma_calculo` da vacina e **SNAPSHOT** resolvido no SERVIDOR pelo
+#      `medicamentoCatId` — mexer no produto nao pode reescrever o que ja foi aplicado.
+#   8. Produto **sem** forma de calculo segue no comportamento de sempre (a unidade da
+#      embalagem governa) — nenhum cadastro existente muda de cobranca.
+#   Gate reescrito `__tests__/produtoMultidose.test.js` (24 casos, semantica NOVA).
+#   OK **Verificado que REPROVA**: revertida a divisao por doses e a unidade da reserva,
+#   2 casos falharam. Suite: **1028**; `tsc --noEmit`, `tsc -b` e `vite build` limpos.
+#   ⚠️ NAO verificado em navegador — sem ferramenta de browser nesta sessao. Ver §12.)
 # Atualizado em: 2026-09-16 (🔴 **A CHAVE ÚNICA DO CATÁLOGO IGNORAVA A EMPRESA — o
 #   COPY-ON-WRITE NUNCA FUNCIONOU** + erro cru deixou de chegar à tela.
 #   1. 🔴 **O DEFEITO RELATADO:** alterar medicamento/vacina em `/cadastro/produtos`
@@ -3583,6 +3652,71 @@ New-Item -ItemType Junction `
 ---
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
+
+### Sessao 2026-09-16 (parte 2) - Forma de Calculo: a embalagem e o conteudo dela
+
+> OK **MIGRATION APLICADA** (autorizada nesta sessao) -
+> `20261012000000_forma_calculo_produto`, com o DONO (`nutriadmin`): `ALTER TABLE` pede
+> OWNERSHIP, nao GRANT. `migrate status`: **200 migrations, banco em dia**. As 10 colunas
+> conferidas no `information_schema` depois de aplicar.
+> ⚠️ `prisma generate` falhou com **EPERM** (§11 - o backend segurava o query engine) e
+> ficou PENDENTE. **NAO bloqueia**: conferido ao vivo que o client desatualizado ACEITA a
+> fracao nas colunas alargadas (quem valida escala numerica e o Postgres, nao o Client) -
+> mesmo precedente da `20260914000000`. Rodar na proxima parada do backend.
+
+- [x] 🔴 **O DEFEITO, medido:** embalagem e conteudo eram a mesma coisa. Frasco de 20 mL
+      cadastrado como "1 Un.", receita em mL -> `mesmoGrupo('mL','Un.')` FALSO -> a baixa
+      caia no valor BRUTO: **5 mL debitavam 5 FRASCOS e cobravam 5 frascos**. Sem erro em tela.
+- [x] **`lib/formaCalculo.js` + `utils/formaCalculo.ts`** (espelhos) - a lista de formas
+      (mL, L, g, kg, mcg, mg, doses), `qtdPorEmbalagemDe` e `unidadeOperativa`.
+      ⚠️ Ha gate travando que as **duas listas sejam iguais**: forma aceita so de um lado
+      vira cadastro que a tela grava e o servidor descarta em silencio.
+      ⚠️ **`qtdPorEmbalagem` NULO NAO E 1**: `null` = "nao declara conteudo" (a embalagem e
+      a propria unidade); 1 seria uma AFIRMACAO do cadastro.
+- [x] 🔴 **`qtdDoEstoque` perdeu a divisao por doses** - com a forma declarada, receita e
+      estoque falam a MESMA unidade e nao ha o que converter. A fatura sai certa sozinha:
+      `qtd x preco unitario`, e o preco unitario e `embalagem / conteudo`.
+      ⚠️ **`unidadeDoEstoque(formas, item, unidadeCatalogo)` nos CINCO pontos**: reserva,
+      consumo, baixa e as tres verificacoes. Faltando num deles, a reserva nasce numa
+      unidade que o debito nunca consome e o saldo trava para a clinica inteira.
+      ⚠️ `mapaFormaCalculo` vai com o **`tx` da transacao** - o `prisma` global chega sem o
+      carimbo de tenant e o RLS devolve ZERO linha em silencio (armadilha de 23/08, parte 4).
+- [x] **`EstoqueController`**: o preco base passa pela **unidade OPERATIVA**
+      (`unidadeOperativaDoItem`). Com o estoque em litros e o catalogo dizendo "mL", o
+      preco sairia mil vezes errado e 2 L virariam 2.000 mL contra um saldo de 6.
+      ⚠️ `unidadeParaResolver` impede a entrada de estoque de **reescrever a unidade do
+      produto** via copy-on-write quando ele declara forma de calculo.
+      ⚠️ `listar` anexa a forma por SQL cru: sem isso, a EDICAO de uma entrada abriria
+      dizendo "Frasco" sobre um saldo em mL.
+- [x] **Telas**: faixa do catalogo global REMOVIDA do cadastro de produto (a regra fica);
+      Unidade/Via/Controlado na mesma linha; checkbox de multidose + Forma de Calculo +
+      Qtd; **Qtd Produto** / **Qtd Total** (derivada) / Unidade em leitura na Farmacia;
+      dosagem da Prescricao e da Vacina como **Valor + Forma de Calculo**.
+      ⚠️ O **modal de cadastro rapido** (`CadastroCatalogoModal`, usado por Prescricao,
+      Vacina e Entrada de Estoque) ganhou o MESMO par: sem a forma o backend nao marca o
+      item, e o campo de la ficaria inerte - o item nasceria diferente conforme a tela.
+- [x] 🔴 **VACINA - a consequencia clinica que precisa ficar registrada:** "Qtd Doses"
+      declarava o tamanho da SERIE e `agendarReforcos` criava `quantidade - 1` agendamentos
+      de uma vez. Com o campo virando DOSAGEM, ele passa a agendar **so a proxima dose**.
+      ⚠️ Nao e regressao disfarcada: deduzir a serie de um volume em mL afirmaria um
+      esquema de reforco que ninguem prescreveu. Executada a proxima, ela agenda a seguinte.
+      ⚠️ `dosagemDaVacina` substituiu `Math.max(1, ...)`, que travava 0,5 mL em 1 mL.
+- [x] OK **VERIFICADO AO VIVO** contra a base, em transacao REVERTIDA (0 linhas ao fim): o
+      codigo REAL (`salvarItemDoCatalogo`, `calcPrecoUnitarioBase`, `qtdDoEstoque`) reproduz
+      o exemplo inteiro - 60 mL em estoque, R$ 5/mL, baixa de 5 mL -> 55 mL, fatura R$ 25,00 -
+      e o banco guarda a fracao (57,5) no estoque e no lote de vacina.
+- [x] Gate `__tests__/produtoMultidose.test.js` REESCRITO (24 casos) para a semantica nova.
+      OK **Verificado que REPROVA**: 2 casos falharam com a divisao por doses e a unidade da
+      reserva revertidas. ⚠️ O gate da reserva nasceu **FROUXO** (procurava a chamada no
+      arquivo inteiro, e ela existe em outros tres pontos) e passou com o codigo sabotado -
+      foi recortado por FUNCAO. Licao repetida: "a funcao aparece" nao e assercao.
+      Suite: **1028**; `tsc --noEmit`, `tsc -b` e `vite build` limpos.
+      ⚠️ NAO verificado em navegador - sem ferramenta de browser nesta sessao.
+- [ ] O **Estoque de Vacinas** (`/estoque-vacina`) ainda pede "doses por frasco" com o
+      rotulo antigo; o numero ja vem do catalogo (`dosesDoCatalogo`), mas a tela nao exibe a
+      Forma de Calculo ao lado, como a Farmacia passou a fazer.
+- [ ] Prescricao/vacina **anteriores** a esta leva nao tem `forma_calculo` e continuam sendo
+      exibidas em "dose(s)" - e o correto (o registro e SNAPSHOT), mas convive com os novos.
 
 ### Sessão 2026-09-16 — A chave única sem empresa e o erro cru na tela
 

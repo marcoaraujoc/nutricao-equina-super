@@ -43,6 +43,14 @@ interface MedCatItem {
   formaFarmaceutica: string;
   apresentacao: string;
   vias: { id: number; via: string }[];
+  /** O produto declara conteúdo medido — ver /cadastro/produtos. */
+  multidose?: boolean;
+  /** QUANTO o frasco rende, na `formaCalculo` (frasco de 20 mL → 20). */
+  dosesPorEmbalagem?: number | null;
+  /** EM QUÊ o conteúdo é medido: mL, L, g, kg, mcg, mg, doses. */
+  formaCalculo?: string | null;
+  /** Unidade da EMBALAGEM ("Frasco"). Reserva quando não há forma de cálculo. */
+  unidade?: string | null;
 }
 
 interface LoteVacina {
@@ -90,14 +98,11 @@ type FiltroTab = 'todos' | 'ativos' | 'inativos' | 'critico' | 'alarmante' | 've
 type ColunaLote = 'vacina' | 'doses' | 'status' | 'criadoEm' | 'ativadoEm'
                 | 'ativadoPor' | 'inativadoEm' | 'inativadoPor' | 'justificativa';
 
-const DOSES_POR_FRASCO_OPTS = [1, 2, 5, 10, 20, 50, 100];
-
 const FORM_VAZIO = {
   medicamentoCatId:       0,
   lote:                   '',
   validade:               '',
   qtdFrascos:             1,
-  dosesPorFrasco:         1,
   estoqueMinimo:          0,
   estoqueAlarmante:       0,
   validadeHoras:          '' as number | '',
@@ -200,7 +205,28 @@ export default function EstoqueVacina() {
   };
 
   const vacSelecionada = vacinas.find(v => v.id === form.medicamentoCatId) ?? null;
-  const totalDoses     = (Number(form.qtdFrascos) || 0) * (Number(form.dosesPorFrasco) || 1);
+
+  /**
+   * 🔴 QUANTO CADA FRASCO RENDE VEM DO PRODUTO (2026-09-16), não mais do seletor
+   * "Doses por Frasco" desta tela.
+   *
+   * Enquanto era digitado aqui, o número não existia em lugar nenhum fora do lote: o
+   * cadastro do produto dizia uma coisa e a entrada de estoque, outra — e é ele que
+   * divide o preço do frasco na linha da fatura.
+   * ⚠️ `null` = o produto não declara conteúdo: o frasco é a própria unidade (1), que é
+   * o comportamento de sempre. `null` NÃO é 1 — é "não declara".
+   */
+  const conteudoFrasco = (vacSelecionada?.multidose === true
+    && Number(vacSelecionada?.dosesPorEmbalagem) > 0)
+      ? Number(vacSelecionada.dosesPorEmbalagem)
+      : null;
+
+  /** A unidade em que este lote é contado e cobrado — a do PRODUTO. */
+  const unidadeVac = (conteudoFrasco != null && vacSelecionada?.formaCalculo)
+    ? vacSelecionada.formaCalculo
+    : (vacSelecionada?.unidade ?? 'doses');
+
+  const totalDoses = (Number(form.qtdFrascos) || 0) * (conteudoFrasco ?? 1);
 
   const formatarValor = (v: number | '') =>
     v === '' || v === 0 ? '' : new Intl.NumberFormat(navigator.language || 'pt-BR', {
@@ -411,7 +437,6 @@ export default function EstoqueVacina() {
       lote:                   l.lote,
       validade:               isoValidade,
       qtdFrascos:             l.qtdFrascos,
-      dosesPorFrasco:         l.dosesPorFrasco,
       estoqueMinimo:          l.estoqueMinimo,
       estoqueAlarmante:       l.estoqueAlarmante,
       validadeHoras:          l.validadeHoras ?? '',
@@ -460,7 +485,10 @@ export default function EstoqueVacina() {
         lote:                   form.lote.trim() || null,
         validade:               form.validade || null,
         qtdFrascos:             Number(form.qtdFrascos),
-        dosesPorFrasco:         Number(form.dosesPorFrasco) || 1,
+        // ⚠️ `dosesPorFrasco` NÃO é enviado: o backend o resolve pelo catálogo
+        // (`dosesDoCatalogo`). Mandar 1 daqui BLOQUEARIA essa consulta — o valor é
+        // truthy e o controller só cai no catálogo quando ele vem vazio —, e o lote
+        // nasceria contando frascos onde o produto conta mL.
         estoqueMinimo:          Number(form.estoqueMinimo)    || 0,
         estoqueAlarmante:       Number(form.estoqueAlarmante) || 0,
         validadeHoras:          form.validadeHoras !== '' ? Number(form.validadeHoras) : null,
@@ -1053,7 +1081,12 @@ export default function EstoqueVacina() {
                 </div>
               </div>
 
-              {/* ── Qtd frascos + Doses/frasco + Total de doses ────────────── */}
+              {/* 🔴 QTD DE FRASCOS × CONTEÚDO DO PRODUTO = QTD TOTAL (a pedido, 2026-09-16).
+                  "Doses por Frasco" SAIU: o número passou a vir do cadastro do produto
+                  (Forma de Cálculo + Qtd), e é ele que divide o preço do frasco na linha
+                  da fatura. Digitado aqui, o lote dizia uma coisa e o produto, outra.
+                  A linha ficou igual à da Farmácia: quantidade · total derivado · unidade
+                  em leitura. */}
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
@@ -1069,22 +1102,41 @@ export default function EstoqueVacina() {
                     className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
                   />
                 </div>
+
+                {/* DERIVADA, não digitada: Qtd de Frascos × o conteúdo que o produto
+                    declara. Editável daria DOIS números para a mesma coisa, e eles
+                    divergiriam na primeira correção. */}
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Doses por Frasco</label>
-                  <select
-                    value={form.dosesPorFrasco}
-                    onChange={e => setForm(f => ({ ...f, dosesPorFrasco: Number(e.target.value) }))}
-                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white">
-                    {DOSES_POR_FRASCO_OPTS.map(d => (
-                      <option key={d} value={d}>{d}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Total de Doses</label>
-                  <div className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-gray-50 text-gray-500 font-semibold">
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                    Qtd Total{unidadeVac && <span className="text-gray-400 font-normal ml-1">({unidadeVac})</span>}
+                  </label>
+                  <div className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-gray-100 text-gray-600 font-semibold"
+                    title={conteudoFrasco != null
+                      ? `Qtd de Frascos × ${conteudoFrasco.toLocaleString('pt-BR')} ${unidadeVac} por frasco (cadastro do produto)`
+                      : 'O produto não declara conteúdo: o frasco é a própria unidade'}>
                     {totalDoses.toLocaleString('pt-BR')}
                   </div>
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    {conteudoFrasco != null
+                      ? `${conteudoFrasco.toLocaleString('pt-BR')} ${unidadeVac} por frasco`
+                      : 'Cadastre o produto como multidose para medir por dentro'}
+                  </p>
+                </div>
+
+                {/* 🔴 UNIDADE em LEITURA, herdada do produto — igual ao medicamento.
+                    Escolhê-la aqui permitiria gravar o lote numa unidade diferente
+                    daquela em que a vacina é aplicada e cobrada. */}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                    Unidade <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text" readOnly disabled value={unidadeVac}
+                    title="Definida no cadastro do produto (Forma de Cálculo)"
+                    placeholder="Escolha a vacina"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-gray-100 text-gray-600"
+                  />
+                  <p className="text-[10px] text-gray-400 mt-1">Vem do cadastro do produto</p>
                 </div>
               </div>
 
@@ -1191,11 +1243,11 @@ export default function EstoqueVacina() {
                   <p className="text-gray-700">{loteView.qtdFrascos}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Doses por Frasco</p>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Conteúdo do Frasco</p>
                   <p className="text-gray-700">{loteView.dosesPorFrasco}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Total de Doses</p>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Qtd Total</p>
                   <p className="font-bold text-teal-700">{loteView.qtdTotal}</p>
                 </div>
                 <div>

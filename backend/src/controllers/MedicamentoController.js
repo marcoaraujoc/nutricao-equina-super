@@ -12,10 +12,34 @@ const { garantirMedicamentoDaEmpresa, dedupPorCaixa, viaExcluidaDoSeletor,
 // Garante a opção 'Un.' no seletor de unidade quando o catálogo da empresa não tem
 // nenhuma equivalente — ver lib/unidadeMedicamento.js.
 const { garantirUnidadeAvulsa } = require('../lib/unidadeMedicamento');
+// FORMA DE CÁLCULO (2026-09-16) — em que o conteúdo da embalagem é medido.
+const catalogoEmpresa = require('../lib/catalogoEmpresa');
+const { normalizarFormaCalculo, numeroPositivo } = require('../lib/formaCalculo');
 
 const INCLUDE = {
   vias: { select: { id: true, via: true }, orderBy: { via: 'asc' } },
 };
+
+/**
+ * Anexa MULTIDOSE + FORMA DE CÁLCULO à lista de itens do catálogo.
+ *
+ * 🔴 POR SQL CRU, e não pelo client tipado (§11): `forma_calculo` é coluna da migration
+ * 20261012000000 e no Windows o `prisma generate` falha com o backend rodando — pelo
+ * client desatualizado o campo simplesmente NÃO VIRIA, e a tela cairia em "produto sem
+ * forma de cálculo" sem nada acusar. `multidosePorItem` já lê as três colunas em BLOCO
+ * (uma consulta para a página inteira, nunca uma por item).
+ */
+async function anexarFormaCalculo(client, itens) {
+  const lista = Array.isArray(itens) ? itens : [];
+  if (lista.length === 0) return lista;
+  const mapa = await catalogoEmpresa.multidosePorItem(client, lista.map(i => i.id));
+  return lista.map(i => ({
+    ...i,
+    multidose:         mapa.get(i.id)?.multidose ?? false,
+    dosesPorEmbalagem: mapa.get(i.id)?.dosesPorEmbalagem ?? null,
+    formaCalculo:      mapa.get(i.id)?.formaCalculo ?? null,
+  }));
+}
 
 const INCLUDE_VACINA = {
   vias:    { select: { id: true, via: true }, orderBy: { via: 'asc' } },
@@ -287,7 +311,7 @@ const listar = async (req, res) => {
     return res.json({
       // Medicamento GLOBAL cuja cópia a empresa já tem (troca de unidade) sai da lista —
       // as duas linhas têm o mesmo nome e a tela não teria como distingui-las.
-      dados: preferirCopiaDaEmpresa(medicamentos),
+      dados: await anexarFormaCalculo(prisma, preferirCopiaDaEmpresa(medicamentos)),
       meta: {
         total,
         totalControlados,
@@ -538,7 +562,7 @@ const garantirCatalogoManual = async (req, res) => {
   try {
     const { nome, tipo = 'medicamento', animalId, unidade,
             formaFarmaceutica, apresentacao, controlado, vias, fabricante,
-            multidose, dosesPorEmbalagem } = req.body;
+            multidose, dosesPorEmbalagem, formaCalculo } = req.body;
     const n = String(nome ?? '').trim();
     if (!n) return res.status(400).json({ error: 'Nome é obrigatório.' });
 
@@ -597,14 +621,26 @@ const garantirCatalogoManual = async (req, res) => {
     // ⚠️ `garantirMedicamentoDaEmpresa` REAPROVEITA o item existente (pode ser GLOBAL),
     // e o global nunca é marcado: a checagem de `empresa_id` no UPDATE é o que impede
     // um cadastro rápido mudar a cobrança de todas as clínicas do SaaS.
-    if (multidose !== undefined || dosesPorEmbalagem !== undefined) {
-      const n = Number(dosesPorEmbalagem);
-      const marcado = multidose === true && Number.isFinite(n) && n >= 1;
+    // ⚠️ A QUANTIDADE NÃO É MAIS TRUNCADA e vem acompanhada da FORMA DE CÁLCULO
+    // (2026-09-16): `doses_por_embalagem` deixou de ser "N aplicações por frasco" e
+    // passou a ser o CONTEÚDO da embalagem (20 mL, 2,5 mL). Sem a forma, o número não
+    // diz em que unidade está — e é ele que divide o preço da dose na fatura.
+    if (multidose !== undefined || dosesPorEmbalagem !== undefined || formaCalculo !== undefined) {
+      const qtd     = numeroPositivo(dosesPorEmbalagem);
+      const forma   = normalizarFormaCalculo(formaCalculo);
+      const marcado = multidose === true && qtd != null && !!forma;
+      const temForma = await catalogoEmpresa.temColunaFormaCalculo(prisma);
       await prisma.$executeRawUnsafe(
-        `UPDATE schs2vet.tb_medicamentos
-            SET multidose = $2, doses_por_embalagem = $3
-          WHERE id = $1 AND empresa_id IS NOT NULL`,
-        Number(id), marcado, marcado ? Math.trunc(n) : null,
+        temForma
+          ? `UPDATE schs2vet.tb_medicamentos
+                SET multidose = $2, doses_por_embalagem = $3, forma_calculo = $4
+              WHERE id = $1 AND empresa_id IS NOT NULL`
+          : `UPDATE schs2vet.tb_medicamentos
+                SET multidose = $2, doses_por_embalagem = $3
+              WHERE id = $1 AND empresa_id IS NOT NULL`,
+        ...(temForma
+          ? [Number(id), marcado, marcado ? qtd : null, marcado ? forma : null]
+          : [Number(id), marcado, marcado ? qtd : null]),
       ).catch(() => {});
     }
 
@@ -731,7 +767,7 @@ const paraAtendimento = async (req, res) => {
     // Medicamento GLOBAL de que a empresa já tem a CÓPIA (troca de unidade pela tela de
     // estoque) sai da busca: as duas linhas têm o mesmo nome, e a global apareceria
     // "sem estoque" ao lado da cópia que tem o frasco — ver preferirCopiaDaEmpresa.
-    const dados = preferirCopiaDaEmpresa(medicamentos).map(m => {
+    const dados = await anexarFormaCalculo(prisma, preferirCopiaDaEmpresa(medicamentos).map(m => {
       if (isVacina) {
         // Preço por dose do lote FEFO disponível (para pré-preencher o orçamento);
         // null quando não há estoque — a vacina ainda aparece (preço editável).
@@ -761,7 +797,7 @@ const paraAtendimento = async (req, res) => {
         precoUnitarioBase,
         ...infoProduto(m.id, emEstoque),
       };
-    });
+    }));
 
     /**
      * 🔴 ORDEM em QUATRO grupos — os TRÊS PRIMEIROS são "DA EMPRESA" (2026-09-15), o

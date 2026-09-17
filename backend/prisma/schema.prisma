@@ -934,14 +934,18 @@ model LoteVacina {
   medicamentoCatId       Int?      @map("medicamento_cat_id")
   lote                   String    @db.VarChar(100)
   validade               DateTime
-  qtdTotal               Int       @default(0) @map("qtd_total")
-  qtdDisponivel          Int       @default(0) @map("qtd_disponivel")
+  // Float desde 2026-09-16: o lote passou a ser contado na FORMA DE CÁLCULO do produto
+  // (60 mL, não "60 doses"), e a aplicação pode tirar 2,5 mL dele.
+  qtdTotal               Float     @default(0) @map("qtd_total")
+  qtdDisponivel          Float     @default(0) @map("qtd_disponivel")
   // Alertas de nível de estoque (doses) — mesma lógica de EstoqueClinica.estoqueMinimo/
   // .estoqueAlarmante (farmácia): mínimo = alerta vermelho, alarmante = alerta amarelo.
   // 🔴 Migration GERADA (20260919000000), NÃO aplicada.
-  estoqueMinimo          Int       @default(0) @map("estoque_minimo")
-  estoqueAlarmante       Int       @default(0) @map("estoque_alarmante")
-  dosesPorFrasco         Int       @default(1) @map("doses_por_frasco")
+  estoqueMinimo          Float     @default(0) @map("estoque_minimo")
+  estoqueAlarmante       Float     @default(0) @map("estoque_alarmante")
+  // Quanto cada frasco rende, na forma de cálculo do produto — o par de
+  // `Medicamento.dosesPorEmbalagem`. É ele que divide o preço do frasco na fatura.
+  dosesPorFrasco         Float     @default(1) @map("doses_por_frasco")
   qtdFrascos             Int       @default(0) @map("qtd_frascos")
   validadeHoras          Int?      @map("validade_horas")
   validadeDias           Int       @default(0) @map("validade_dias")
@@ -1126,7 +1130,14 @@ model VacinaClinica {
   via                      String?   @db.VarChar(100)
   numero                   Int?
   tipoAtendimento          String?   @default("VC") @map("tipo_atendimento") @db.VarChar(2)
-  quantidade               Int?      @default(1)
+  // 🔴 `quantidade` É A DOSAGEM, não mais a contagem de doses da série (2026-09-16):
+  // o campo "Qtd Doses" da tela virou "Valor + Forma de Cálculo" a pedido. 5 mL, 2,5 mL
+  // ou 1 dose — a unidade é `formaCalculo`, gravada junto como SNAPSHOT para a folha e
+  // a fatura antigas não mudarem de unidade quando o cadastro do produto mudar.
+  // ⚠️ CONSEQUÊNCIA: `agendarReforcos` não tem mais de onde tirar o tamanho da série e
+  // passou a agendar só a PRÓXIMA dose. Ver VacinaClinicaController.
+  quantidade               Float?    @default(1)
+  formaCalculo             String?   @map("forma_calculo") @db.VarChar(20)
   valor                    Decimal?  @db.Decimal(10, 2)
   // Quem FORNECE a dose (a clínica, ou o próprio cliente traz)
   cliente                  Boolean   @default(false)
@@ -2754,8 +2765,16 @@ model Medicamento {
   // (copy-on-write em `lib/catalogoEmpresa.js`); o catálogo global nunca é marcado.
   // ⚠️ `dosesPorEmbalagem` NULL não é 1: com NULL a regra não entra em vigor, e
   // tratá-lo como 1 afirmaria "o frasco é dose única".
+  // 🔴 O SIGNIFICADO MUDOU EM 2026-09-16: `dosesPorEmbalagem` era "N aplicações por
+  // frasco, desconta 1/N"; passa a ser QUANTO a embalagem contém, na `formaCalculo`
+  // (frasco de 20 mL → 20). O nome da coluna ficou (mesmo precedente de
+  // `tb_procedimento_combos.valor`) — renomear obrigaria a tocar todos os leitores
+  // sem ganhar nada. Leia-o SEMPRE por `lib/formaCalculo.js#qtdPorEmbalagemDe`.
+  // ⚠️ `formaCalculo` é a unidade do CONTEÚDO (mL, g, doses…); `unidade`, acima, é a da
+  // EMBALAGEM ("Frasco", "Un."). Confundir as duas faz 5 mL virarem 5 frascos.
   multidose         Boolean  @default(false)
-  dosesPorEmbalagem Int?     @map("doses_por_embalagem")
+  dosesPorEmbalagem Float?   @map("doses_por_embalagem")
+  formaCalculo      String?  @map("forma_calculo") @db.VarChar(20)
   // null = catálogo global (ADMIN); setado = medicamento próprio da empresa
   // (criado por item manual de orçamento) — só a empresa dona vê/edita.
   empresaId         Int?     @map("empresa_id")
@@ -3093,7 +3112,9 @@ model ReservaEstoqueVacina {
   loteVacinaId    Int
   vacinaClinicaId Int
   animalId        Int
-  quantidade      Int
+  // Float desde 2026-09-16: a reserva acompanha a dosagem, que passou a ser medida na
+  // forma de cálculo (2,5 mL). Inteiro truncaria a fração em silêncio.
+  quantidade      Float
   criadoEm        DateTime @default(now())
 
   loteVacina    LoteVacina    @relation("LoteVacinaReservas", fields: [loteVacinaId], references: [id], onDelete: Cascade)

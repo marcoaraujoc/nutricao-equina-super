@@ -33,17 +33,19 @@ const {
   copiaExistente, criarCopiaDaEmpresa, reapontarParaCopia,
   normalizarUnidade, mesmaUnidade, UnidadeIndisponivelError,
 } = require('./unidadeMedicamento');
+// FORMA DE CÁLCULO: em que o conteúdo da embalagem é medido (mL, g, doses…).
+// Ver `lib/formaCalculo.js` — é ela que faz 5 mL saírem de um frasco de 20 mL em vez
+// de debitarem cinco frascos.
+const { normalizarFormaCalculo, numeroPositivo } = require('./formaCalculo');
 
 const texto = (v, max) => {
   const t = String(v ?? '').trim();
   return t === '' ? null : t.slice(0, max);
 };
 
-const inteiroPositivo = (v) => {
-  if (v === null || v === undefined || v === '') return null;
-  const n = Math.trunc(Number(v));
-  return Number.isFinite(n) && n >= 1 ? n : null;
-};
+// ⚠️ NÃO trunca mais para inteiro: `doses_por_embalagem` passou a ser o CONTEÚDO da
+// embalagem (20 mL, 2,5 mL) e virou `double precision` na migration 20261012000000.
+// Truncar aqui perderia a fração em silêncio — e é ela que divide o preço da dose.
 
 /**
  * `classificacao` carrega o recorte "é vacina?" (`contains 'vacin'`) — é ele que
@@ -93,18 +95,41 @@ async function temColunasMultidose(client) {
   return _temMultidose;
 }
 
-async function gravarMultidose(client, medicamentoId, { multidose, dosesPorEmbalagem }) {
-  if (multidose === undefined && dosesPorEmbalagem === undefined) return;
+/** A coluna `forma_calculo` existe? (migration 20261012000000) — detectada à parte
+ *  porque uma base pode ter a de multidose e não ter esta. */
+let _temForma = null;
+async function temColunaFormaCalculo(client) {
+  if (_temForma !== null) return _temForma;
+  try {
+    const rows = await client.$queryRawUnsafe(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'schs2vet' AND table_name = 'tb_medicamentos'
+          AND column_name = 'forma_calculo' LIMIT 1`);
+    _temForma = rows.length > 0;
+  } catch { _temForma = false; }
+  return _temForma;
+}
+
+async function gravarMultidose(client, medicamentoId, { multidose, dosesPorEmbalagem, formaCalculo }) {
+  if (multidose === undefined && dosesPorEmbalagem === undefined && formaCalculo === undefined) return;
   if (!(await temColunasMultidose(client))) return;
-  // Desmarcar LIMPA o número: deixá-lo faria o item voltar a ser multidose na
-  // gravação seguinte sem ninguém ter pedido.
+  // Desmarcar LIMPA número E forma: deixá-los faria o item voltar a ser multidose na
+  // gravação seguinte sem ninguém ter pedido — e com ele volta a divisão do preço.
   const marcado = multidose === true;
-  const doses   = marcado ? inteiroPositivo(dosesPorEmbalagem) : null;
+  const qtd     = marcado ? numeroPositivo(dosesPorEmbalagem) : null;
+  const forma   = marcado ? normalizarFormaCalculo(formaCalculo) : null;
+  const temForma = await temColunaFormaCalculo(client);
   await client.$executeRawUnsafe(
-    `UPDATE schs2vet.tb_medicamentos
-        SET multidose = $2, doses_por_embalagem = $3
-      WHERE id = $1`,
-    Number(medicamentoId), marcado, doses,
+    temForma
+      ? `UPDATE schs2vet.tb_medicamentos
+            SET multidose = $2, doses_por_embalagem = $3, forma_calculo = $4
+          WHERE id = $1`
+      : `UPDATE schs2vet.tb_medicamentos
+            SET multidose = $2, doses_por_embalagem = $3
+          WHERE id = $1`,
+    ...(temForma
+      ? [Number(medicamentoId), marcado, qtd, forma]
+      : [Number(medicamentoId), marcado, qtd]),
   ).catch(() => {});
 }
 
@@ -115,15 +140,17 @@ async function multidosePorItem(client, ids) {
   if (lista.length === 0) return vazio;
   if (!(await temColunasMultidose(client))) return vazio;
   try {
+    const temForma = await temColunaFormaCalculo(client);
     const ph = lista.map((_, i) => `$${i + 1}`).join(', ');
     const rows = await client.$queryRawUnsafe(
-      `SELECT id, multidose, doses_por_embalagem
+      `SELECT id, multidose, doses_por_embalagem${temForma ? ', forma_calculo' : ''}
          FROM schs2vet.tb_medicamentos WHERE id IN (${ph})`, ...lista);
     const mapa = new Map();
     for (const r of rows) {
       mapa.set(Number(r.id), {
         multidose: r.multidose === true,
         dosesPorEmbalagem: r.doses_por_embalagem != null ? Number(r.doses_por_embalagem) : null,
+        formaCalculo: normalizarFormaCalculo(r.forma_calculo),
       });
     }
     return mapa;
@@ -324,6 +351,7 @@ module.exports = {
   CLASSIFICACAO_MEDICAMENTO,
   multidosePorItem,
   temColunasMultidose,
+  temColunaFormaCalculo,
   ehVacinaPelaClassificacao,
   CLASSIFICACAO_VACINA,
 };

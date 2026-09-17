@@ -36,6 +36,7 @@ import JanelaLista from '../components/JanelaLista';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import FormProduto from '../components/produtos/FormProduto';
+import { numeroDoCampo } from '../utils/formaCalculo';
 import type { OpcoesCatalogo } from '../components/catalogo/SeletoresCatalogo';
 import {
   FORM_PRODUTO_VAZIO, formDoItem, normalizarNomeProduto, formSoTemNome,
@@ -184,6 +185,11 @@ export default function Produtos() {
       ...(form.apresentacao             ? [] : ['Apresentação']),
       ...(form.unidade                  ? [] : ['Unidade']),
       ...(form.vias.length > 0          ? [] : ['Via de administração']),
+      // 🔴 Multidose marcado SEM o par forma+qtd é pior que não marcar: o item nasceria
+      // dizendo "sou medido por dentro" e sem dizer em quê — e é esse par que divide o
+      // preço da embalagem na linha da fatura.
+      ...(!form.multidose || form.formaCalculo             ? [] : ['Forma de Cálculo']),
+      ...(!form.multidose || numeroDoCampo(form.dosesPorEmbalagem) != null ? [] : ['Qtd']),
     ];
     if (faltando.length > 0) {
       setErroForm({ mensagem: `Preencha: ${faltando.join(', ')}.`, campos: faltando });
@@ -203,7 +209,10 @@ export default function Produtos() {
         controlado:        form.controlado,
         fabricante:        form.fabricante.trim() || undefined,
         multidose:         form.multidose,
-        dosesPorEmbalagem: form.multidose ? Number(form.dosesPorEmbalagem) : null,
+        // Vazio NÃO é zero: `null` diz "não declara conteúdo" e o item segue cobrado
+        // pela embalagem inteira, que é o comportamento de quem não é multidose.
+        dosesPorEmbalagem: form.multidose ? numeroDoCampo(form.dosesPorEmbalagem) : null,
+        formaCalculo:      form.multidose ? (form.formaCalculo || null) : null,
       });
       toast.success(
         res.data?.dados?.copiado
@@ -397,7 +406,9 @@ export default function Produtos() {
                         {p.multidose && (
                           <span className="ml-2 inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full align-middle">
                             <Layers size={10} />
-                            {p.dosesPorEmbalagem ? `${p.dosesPorEmbalagem} doses/emb.` : 'multidose'}
+                            {p.dosesPorEmbalagem
+                              ? `${String(p.dosesPorEmbalagem).replace('.', ',')} ${p.formaCalculo ?? ''}/emb.`.replace('  ', ' ')
+                              : 'multidose'}
                           </span>
                         )}
                         {p.controlado && (
@@ -451,7 +462,9 @@ export default function Produtos() {
                     {p.multidose && (
                       <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full">
                         <Layers size={10} />
-                        {p.dosesPorEmbalagem ? `${p.dosesPorEmbalagem} doses/emb.` : 'multidose'}
+                        {p.dosesPorEmbalagem
+                          ? `${String(p.dosesPorEmbalagem).replace('.', ',')} ${p.formaCalculo ?? ''}/emb.`.replace('  ', ' ')
+                          : 'multidose'}
                       </span>
                     )}
                     {p.controlado && (

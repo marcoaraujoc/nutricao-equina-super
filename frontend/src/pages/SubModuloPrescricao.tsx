@@ -61,9 +61,16 @@ interface FornecedorDoItem {
 
 interface MedicamentoCat {
   id: number; nome: string; formaFarmaceutica: string;
+  /** Unidade da EMBALAGEM ("Frasco", "Un."). Ver `formaCalculo` para o conteúdo. */
   unidade: string; vias: { via: string }[];
   emEstoque:  boolean;
   qtdEstoque: number | null;
+  /** O produto declara conteúdo medido — ver /cadastro/produtos. */
+  multidose?: boolean;
+  /** QUANTO a embalagem contém, na `formaCalculo`. */
+  dosesPorEmbalagem?: number | null;
+  /** 🔴 EM QUÊ a dosagem é escrita, o estoque é contado e a fatura é calculada. */
+  formaCalculo?: string | null;
   /**
    * 🔴 PRODUTO DE FORNECEDOR (2026-09-10): a clínica NÃO tem o item, mas tem de quem
    * comprá-lo. Antes ele saía como "Sem estoque", cinza, indistinguível do que
@@ -248,6 +255,23 @@ const getConversaoUnidade = (u: string | null): { subunidade: string; opcoes: st
   if (lower === 'l')  return { subunidade: 'mL', opcoes: ['mL', u] };
   if (lower === 'kg') return { subunidade: 'g',  opcoes: ['g',  u] };
   return null;
+};
+
+/**
+ * 🔴 A UNIDADE DA DOSAGEM É A FORMA DE CÁLCULO DO PRODUTO (2026-09-16, a pedido).
+ *
+ * O campo era "valor + Unidade", e a Unidade era a da EMBALAGEM: num frasco cadastrado
+ * como "1 Un." a receita saía em unidades, e uma dose de 5 mL debitava cinco FRASCOS do
+ * estoque e cobrava cinco frascos. Com a forma de cálculo declarada, receita, estoque e
+ * fatura passam a falar a mesma língua e a conversão deixa de existir.
+ *
+ * ⚠️ Produto sem forma de cálculo (o não-multidose) mantém o comportamento de sempre:
+ * a unidade do catálogo, com a subunidade quando ela existe (L → mL, kg → g).
+ */
+const formaDoMedicamento = (m: MedicamentoCat | null | undefined): string | null => {
+  if (!m || m.multidose !== true || !m.formaCalculo) return null;
+  const n = Number(m.dosesPorEmbalagem);
+  return Number.isFinite(n) && n > 0 ? m.formaCalculo : null;
 };
 
 const STATUS_GRUPO: Record<StatusGrupo, { label: string; cls: string }> = {
@@ -832,14 +856,16 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
    *  de um remédio para outro. Só sobrevivem o tipo e o que vem do catálogo do
    *  medicamento novo. */
   const selecionarMedicamento = (m: MedicamentoCat) => {
-    const conv = getConversaoUnidade(m.unidade);
+    const forma = formaDoMedicamento(m);
+    const conv  = getConversaoUnidade(m.unidade);
     setErroAcao(null);
     setForm({
       ...FORM_VAZIO(),
       tipo:             form.tipo,
       medicamento:      m.nome,
       medicamentoCatId: m.id,
-      unidade:          conv ? conv.subunidade : m.unidade,
+      // A forma de cálculo VENCE: é a unidade em que o estoque deste item é contado.
+      unidade:          forma ?? (conv ? conv.subunidade : m.unidade),
       via:              m.vias[0]?.via ?? '',
     });
   };
@@ -1498,10 +1524,14 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     ? medicamentos.find(m => m.id === form.medicamentoCatId) ?? null
     : null;
   const viasDisponiveis = medCatalogo?.vias.map(v => v.via) ?? VIAS;
+  const formaCalculoItem = formaDoMedicamento(medCatalogo);
   const catalogoUnidade  = medCatalogo?.unidade ?? null;
-  const conversaoUnidade = getConversaoUnidade(catalogoUnidade);
+  // ⚠️ Com forma de cálculo NÃO há conversão a oferecer: a receita é escrita na MESMA
+  // unidade do estoque, e deixar trocar para a subunidade (mL → L) reintroduziria
+  // exatamente a divergência que a forma de cálculo veio eliminar.
+  const conversaoUnidade = formaCalculoItem ? null : getConversaoUnidade(catalogoUnidade);
   // trava o campo apenas quando NÃO há subunidade (ex: mg, mL, UI)
-  const unidadeCatalogo  = conversaoUnidade ? null : catalogoUnidade;
+  const unidadeCatalogo  = formaCalculoItem ?? (conversaoUnidade ? null : catalogoUnidade);
   const itensExibidos = isCreate ? localItens : serverItens;
   const editandoItem  = editingLocalIdx !== null || editingServerId !== null;
 

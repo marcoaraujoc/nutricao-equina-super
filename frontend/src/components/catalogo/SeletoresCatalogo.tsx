@@ -206,19 +206,6 @@ export function SeletorVias({ valores, opcoes, erro, onChange }: {
         Vias <span className="text-red-500">*</span>
       </label>
 
-      {valores.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mb-1.5">
-          {valores.map(v => (
-            <span key={v} className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg px-2 py-0.5 text-[11px] font-medium">
-              {v}
-              <button type="button" onClick={() => alternar(v)} className="text-emerald-500 hover:text-emerald-800">
-                <X size={11} />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-
       <div className="relative" ref={ancoraRef}>
         {!aberto ? (
           <button type="button" onClick={() => { setAberto(true); setBusca(''); }}
@@ -261,7 +248,23 @@ export function SeletorVias({ valores, opcoes, erro, onChange }: {
           </>
         )}
       </div>
+
+      {/* 🔴 AS VIAS ESCOLHIDAS FICAM ABAIXO DO CAMPO (a pedido, 2026-09-16). Acima, elas
+          empurravam o campo para baixo a cada escolha: na linha "Unidade · Via ·
+          Controlado" isso desalinhava as três colunas, e o próprio botão de adicionar
+          fugia de sob o cursor de quem estava marcando várias vias seguidas. */}
+      {valores.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-1.5">
+          {valores.map(v => (
+            <span key={v} className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg px-2 py-0.5 text-[11px] font-medium">
+              {v}
+              <button type="button" onClick={() => alternar(v)} className="text-emerald-500 hover:text-emerald-800">
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
-

@@ -310,10 +310,15 @@ export default function PainelPrincipal() {
    * vacina —, agrupado por item. Duas amoxicilinas em prescrições distintas viram UMA
    * linha com quantidade 2; é uma lista de separação, não o extrato das prescrições.
    *
-   * QUANTIDADE = nº de aplicações pendentes hoje (medicamento) ou nº de doses (vacina).
+   * QUANTIDADE = nº de APLICAÇÕES pendentes hoje — para medicamento e para vacina.
    * A soma da DOSAGEM ("20 mL") vai à parte, e só quando ela é numérica em todas as
    * linhas somadas — "1 ampola" não soma com "2 mL", e um total errado numa lista de
    * separação é pior do que total nenhum.
+   *
+   * ⚠️ A VACINA MUDOU EM 2026-09-16: `quantidade` era a CONTAGEM de doses e virava a
+   * quantidade da linha ("5x Vacina X"); hoje ela é a DOSAGEM na Forma de Cálculo. Uma
+   * aplicação de 5 mL é UMA aplicação — mantê-la como contagem mandaria separar cinco
+   * frascos para uma dose só.
    */
   const resumoFarmacia = useMemo(() => {
     interface LinhaFarmacia {
@@ -343,7 +348,13 @@ export default function PainelPrincipal() {
             acumular(i.medicamento, 'MEDICAMENTO', 1, i.unidade, Number.isFinite(dose) ? dose : null);
           }
         } else {
-          acumular(e.vacina.nome, 'VACINA', e.vacina.quantidade ?? 1, 'dose', null);
+          // Uma aplicação, com a dosagem na unidade GRAVADA nela (snapshot) — mesmo
+          // formato do medicamento, para as duas linhas somarem do mesmo jeito.
+          acumular(
+            e.vacina.nome, 'VACINA', 1,
+            e.vacina.formaCalculo ?? 'dose',
+            e.vacina.quantidade ?? null,
+          );
         }
       }
     }

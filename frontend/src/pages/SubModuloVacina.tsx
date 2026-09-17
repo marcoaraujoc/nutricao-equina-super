@@ -24,6 +24,20 @@ import { useOrdenacao, ThOrdenavel, ordenarLista, valorDataPura } from '../compo
 import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
 import { formatNumeroClinico, numeroClinicoComHash } from '../utils/numeroClinico';
 import { DOSES, INTERVALO_REFORCO_MESES, VIAS_PADRAO, normalizeVia } from '../utils/vacina';
+import { numeroDoCampo, fmtQtdForma } from '../utils/formaCalculo';
+
+/**
+ * "5 mL" / "2 doses" — a dosagem com a unidade que ficou GRAVADA na aplicação.
+ *
+ * ⚠️ Usa o snapshot do registro (`formaCalculo`), nunca o cadastro do produto de hoje:
+ * mexer no produto não pode reescrever o que já foi aplicado e cobrado.
+ */
+function rotuloDosagemVacina(q: number | null | undefined, forma?: string | null): string | null {
+  if (q == null) return null;
+  const n = fmtQtdForma(q);
+  if (forma) return `${n} ${forma}`;
+  return q > 1 ? `${n} doses` : `${n} dose`;
+}
 import CadastroCatalogoModal, { type ItemCatalogoCriado } from '../components/CadastroCatalogoModal';
 
 
@@ -42,6 +56,14 @@ interface MedicamentoCatalogo {
   valorUnitario:     number | null;
   vias:              { id: number; via: string }[];
   emEstoque:         boolean;
+  /** Unidade da EMBALAGEM ("Frasco"). Ver `formaCalculo` para o conteúdo. */
+  unidade?:          string | null;
+  /** O produto declara conteúdo medido — ver /cadastro/produtos. */
+  multidose?:        boolean;
+  /** QUANTO o frasco contém, na `formaCalculo`. */
+  dosesPorEmbalagem?: number | null;
+  /** 🔴 EM QUÊ a dosagem é escrita, o lote é contado e a fatura é calculada. */
+  formaCalculo?:     string | null;
   /**
    * 🔴 PRODUTO DE FORNECEDOR (2026-09-10) — mesma regra da prescrição: a clínica não
    * tem o frasco, mas tem de quem comprá-lo. `true` só quando NÃO está em estoque.
@@ -119,7 +141,10 @@ interface VacinaClinica {
   lote:              string | null;
   dose:              string | null;
   via:               string | null;
+  /** DOSAGEM na `formaCalculo` (5 mL, 2,5 mL) — era contagem de doses até 2026-09-16. */
   quantidade:        number | null;
+  /** SNAPSHOT da unidade da dosagem no dia da aplicação. `null` = registro em doses. */
+  formaCalculo?:     string | null;
   valor:             number | null;
   cliente:           boolean;
   aplicadaPeloProprietario: boolean;
@@ -184,7 +209,7 @@ function montarGrupoVacina(v: VacinaClinica, animal: AnimalInfo | null): PrintGr
     tipo:            'MEDICAMENTO',
     medicamento:     v.nome,
     dosagem:         v.dose,
-    unidade:         v.quantidade != null && v.quantidade > 1 ? `${v.quantidade} doses` : null,
+    unidade:         rotuloDosagemVacina(v.quantidade, v.formaCalculo),
     via:             v.via ?? '—',
     frequencia:      v.dataReforco ? `Reforço em ${formatDate(v.dataReforco)}` : 'Dose única',
     horaInicio:      null,
@@ -237,7 +262,7 @@ function montarTextoVacina(v: VacinaClinica): string {
     v.fabricante ? `Fabricante: ${v.fabricante}` : '',
     v.lote ? `Lote: ${v.lote}` : '',
     v.dose ? `Dose: ${v.dose}` : '',
-    v.quantidade != null && v.quantidade > 1 ? `Qtd doses: ${v.quantidade}` : '',
+    v.quantidade != null ? `Dosagem: ${rotuloDosagemVacina(v.quantidade, v.formaCalculo)}` : '',
     v.via ? `Via: ${v.via}` : '',
     `Aplicação: ${formatDate(v.dataAplicacao)}`,
     v.dataReforco ? `Reforço: ${formatDate(v.dataReforco)}` : '',
@@ -338,7 +363,7 @@ function ViewModal({ v, onFechar }: { v: VacinaClinica; onFechar: () => void }) 
             </div>
           )}
           {v.dose        && <Row label="Tipo Dose"     value={v.dose} />}
-          {v.quantidade != null && v.quantidade > 1 && <Row label="Qtd Doses"  value={String(v.quantidade)} />}
+          {v.quantidade != null && <Row label="Dosagem" value={rotuloDosagemVacina(v.quantidade, v.formaCalculo) ?? '—'} />}
           {v.via         && <Row label="Via"            value={v.via} />}
           {v.fabricante  && <Row label="Fabricante"    value={v.fabricante} />}
           {v.lote        && <Row label="Lote"           value={v.lote} />}
@@ -536,7 +561,16 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   const [lotesDisponiveis, setLotesDisponiveis] = useState<LoteDisponivel[]>([]);
   const [loadingLotes,     setLoadingLotes]     = useState(false);
   const [dose,             setDose]             = useState('');
-  const [qtd,              setQtd]              = useState(1);
+  /**
+   * 🔴 A DOSAGEM DA VACINA VIROU "VALOR + FORMA DE CÁLCULO" (2026-09-16, a pedido) —
+   * era "QTD DOSES", contagem inteira. Por isso o estado é TEXTO: com `number` e
+   * `value={qtd}`, digitar "2," era descartado a cada tecla (React reescreve o campo
+   * com o número já convertido) e 2,5 mL ficava inalcançável.
+   * ⚠️ CONSEQUÊNCIA REGISTRADA: a contagem de doses da SÉRIE deixou de ser informada,
+   * então o agendamento de reforço passou a marcar só a PRÓXIMA dose — antes ele criava
+   * `qtd - 1` agendamentos de uma vez. Ver `agendarReforcos` no backend.
+   */
+  const [qtdTexto,         setQtdTexto]         = useState('1');
   const [cliente,          setCliente]          = useState(false);
   // Quem APLICA a dose — decisão IRMÃ de `cliente` (quem FORNECE). Ver a matriz em
   // VacinaClinicaController.finalizar: é o cruzamento das duas que decide plantão e fatura.
@@ -791,6 +825,18 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   };
 
   const medSelecionado = catalogo.find(m => m.id === medicamentoId) ?? null;
+  const qtd            = numeroDoCampo(qtdTexto) ?? 0;
+  /**
+   * A unidade em que esta dosagem é escrita — a Forma de Cálculo do produto.
+   * É a MESMA em que o lote é contado e a fatura é calculada: o frasco de 20 mL a
+   * R$ 100 cobra `5 × 100 ÷ 20 = R$ 25,00` por uma aplicação de 5 mL.
+   * ⚠️ Sem forma declarada cai em "dose(s)", que é o comportamento de sempre.
+   */
+  const formaVacina    = (medSelecionado?.multidose === true
+    && medSelecionado?.formaCalculo
+    && Number(medSelecionado?.dosesPorEmbalagem) > 0)
+      ? medSelecionado.formaCalculo
+      : null;
 
   const viasDisponiveis: string[] = medSelecionado && medSelecionado.vias.length > 0
     ? [...new Set(medSelecionado.vias.map(v => normalizeVia(v.via)))]
@@ -939,7 +985,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
     setLoteId('');
     setLotesDisponiveis([]);
     setDose('');
-    setQtd(1);
+    setQtdTexto('1');
     setCliente(false);
     setAplicadaPeloProprietario(false);
     setDataAplicacao(hoje());
@@ -958,7 +1004,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
     setLotesDisponiveis(item.lotes);
     setLoteId(item.loteId);
     setDose(item.dose);
-    setQtd(item.quantidade);
+    setQtdTexto(fmtQtdForma(item.quantidade) || '1');
     setCliente(item.cliente);
     setAplicadaPeloProprietario(item.aplicadaPeloProprietario);
     setDataAplicacao(item.dataAplicacao);
@@ -1092,7 +1138,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
     setErroForm(null);
     setMedicamentoId(v.medicamentoCatId ?? '');
     setDose(v.dose ?? '');
-    setQtd(v.quantidade ?? 1);
+    setQtdTexto(fmtQtdForma(v.quantidade ?? 1) || '1');
     setCliente(v.cliente);
     setAplicadaPeloProprietario(v.aplicadaPeloProprietario);
     setDataAplicacao(v.dataAplicacao.slice(0, 10));
@@ -1440,13 +1486,24 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                 {DOSES.map(d => <option key={d} className="text-gray-900">{d}</option>)}
               </select>
             </div>
+            {/* 🔴 DOSAGEM = VALOR + FORMA DE CÁLCULO (a pedido). Era "QTD DOSES", uma
+                contagem inteira: o frasco de 20 mL não tinha como receber uma aplicação
+                de 5 mL, e a baixa saía em "doses" enquanto o produto era medido em mL.
+                A unidade vem do PRODUTO e não se escolhe aqui — é a mesma em que o lote
+                é contado e a fatura é calculada. */}
             <div>
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">QTD DOSES</label>
-              <input
-                type="number" min={1} value={qtd}
-                onChange={e => setQtd(Math.max(1, Number(e.target.value)))}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500"
-              />
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">DOSAGEM *</label>
+              <div className="flex items-center border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
+                <input
+                  type="text" inputMode="decimal" value={qtdTexto}
+                  onChange={e => setQtdTexto(e.target.value.replace(/[^\d.,]/g, '').replace('.', ','))}
+                  className="flex-1 min-w-[40px] px-3 py-2.5 text-sm text-gray-900 focus:outline-none bg-transparent"
+                />
+                <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+                <span className="px-2 py-2.5 text-sm text-gray-700 font-medium flex-shrink-0 whitespace-nowrap">
+                  {formaVacina ?? (qtd === 1 ? 'dose' : 'doses')}
+                </span>
+              </div>
             </div>
             <div>
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">DATA APLICAÇÃO</label>
@@ -1455,13 +1512,15 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
             </div>
           </div>
 
-          {/* Prévia do agendamento automático — o backend cria os reforços na EXECUÇÃO
-              (a 1ª dose é a própria aplicação, por isso qtd-1). */}
-          {INTERVALO_REFORCO_MESES[dose] && qtd > 1 && (
+          {/* Prévia do agendamento automático — o backend cria o reforço na EXECUÇÃO.
+              ⚠️ Passou a ser UMA dose (2026-09-16): com "Qtd Doses" substituída por
+              Valor + Forma de Cálculo, o tamanho da série deixou de ser informado, e
+              agendar um número deduzido seria afirmar um esquema que ninguém declarou. */}
+          {INTERVALO_REFORCO_MESES[dose] && (
             <p className="-mt-1 mb-3 text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
-              Ao executar, serão agendadas as <b>{qtd - 1} doses seguintes</b>, a cada{' '}
-              {INTERVALO_REFORCO_MESES[dose] === 1 ? 'mês' : `${INTERVALO_REFORCO_MESES[dose]} meses`}.
-              A 1ª dose é esta aplicação.
+              Ao executar, será agendada a <b>próxima dose</b>, daqui a{' '}
+              {INTERVALO_REFORCO_MESES[dose] === 1 ? 'um mês' : `${INTERVALO_REFORCO_MESES[dose]} meses`}.
+              Esta aplicação é a dose de hoje.
             </p>
           )}
 
@@ -1591,7 +1650,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                       )}
                       <ChipVac label="Dose:" value={item.dose} />
                       <ChipVac label="Via:"  value={item.via} />
-                      <ChipVac label="Qtd:"  value={String(item.quantidade)} />
+                      <ChipVac label="Dosagem:" value={rotuloDosagemVacina(item.quantidade, formaVacina) ?? ''} />
                       <ChipVac label="Lote:" value={loteLabel} />
                       <ChipVac label="Início:" value={formatDate(item.dataAplicacao)} />
                       <ChipVac label="Obs:"  value={item.observacao.trim()} />
@@ -1689,7 +1748,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                     {v.cliente && <span className="text-amber-700 font-medium">Cliente · </span>}
                     {v.aplicadaPeloProprietario && <span className="text-amber-700 font-medium">Proprietário · </span>}
                     {v.dose && <>{v.dose} · </>}
-                    {v.quantidade != null && v.quantidade > 1 && <>{v.quantidade} doses · </>}
+                    {v.quantidade != null && <>{rotuloDosagemVacina(v.quantidade, v.formaCalculo)} · </>}
                     {formatDate(v.dataAplicacao)}
                   </p>
                   {v.lote && <p className="text-[11px] text-gray-400 mt-0.5">Lote: {v.lote}</p>}
@@ -1726,7 +1785,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                   <ThOrdenavel campo="aplicacao" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Aplicação</ThOrdenavel>
                   <ThOrdenavel campo="vacina" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Vacina</ThOrdenavel>
                   <ThOrdenavel campo="dose" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Dose</ThOrdenavel>
-                  <ThOrdenavel campo="quantidade" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Qtd</ThOrdenavel>
+                  <ThOrdenavel campo="quantidade" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Dosagem</ThOrdenavel>
                   <ThOrdenavel campo="lote" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Lote</ThOrdenavel>
                   <ThOrdenavel campo="via" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Via</ThOrdenavel>
                   <ThOrdenavel campo="status" ordenacao={ordenacao} onOrdenar={alternar} alinhar="centro" className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</ThOrdenavel>
@@ -1773,7 +1832,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
                         {v.fabricante && <p className="text-xs text-gray-400">{v.fabricante}</p>}
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-600">{v.dose ?? <span className="text-gray-300">—</span>}</td>
-                      <td className="px-4 py-3 text-xs text-gray-600">{v.quantidade ?? 1}</td>
+                      <td className="px-4 py-3 text-xs text-gray-600">{rotuloDosagemVacina(v.quantidade ?? 1, v.formaCalculo)}</td>
                       <td className="px-4 py-3 text-xs text-gray-600">
                         {v.lote ?? <span className="text-gray-300">—</span>}
                         {v.loteVacina && (

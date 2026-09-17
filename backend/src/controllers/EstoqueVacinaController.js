@@ -3,6 +3,8 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+// FORMA DE CÁLCULO do produto (2026-09-16) — quanto o frasco rende e em quê.
+const catalogoEmpresa = require('../lib/catalogoEmpresa');
 const { escopoCatalogoEmpresa } = require('../middlewares/empresaAtiva.middleware');
 const { registrarAuditoria } = require('../lib/auditoria');
 const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
@@ -313,7 +315,11 @@ const listarVacinasPorFabricante = async (req, res) => {
       rows = rows.map(r => ({ ...r, vias: viasPorMed[r.id] ?? [] }));
     }
 
-    return res.json({ dados: rows });
+    // 🔴 FORMA DE CÁLCULO + CONTEÚDO DO FRASCO (2026-09-16): é o produto que declara
+    // quanto cada frasco rende e em quê, e a Entrada de Estoque só MULTIPLICA. Vai por
+    // `multidosePorItem` (SQL cru com feature-detect), nunca no SELECT acima: a coluna
+    // é de migration recente e uma base sem ela derrubaria a lista inteira de vacinas.
+    return res.json({ dados: await anexarFormaCalculo(rows) });
   } catch (err) {
     console.error('EstoqueVacinaController.listarVacinasPorFabricante:', err);
     return res.status(500).json({ error: 'Erro ao listar vacinas.' });
@@ -403,7 +409,12 @@ const criar = async (req, res) => {
       lote,
       validade,
       qtdFrascos       = 0,
-      dosesPorFrasco   = 1,
+      // ⚠️ SEM DEFAULT, de propósito (2026-09-16). Com `= 1`, o campo AUSENTE virava 1 —
+      // valor truthy — e a consulta ao catálogo logo abaixo nunca rodava. Desde que a
+      // tela deixou de pedir "Doses por Frasco", é exatamente a ausência dele que
+      // precisa acionar o cadastro do produto; caindo no 1, o lote nasceria contando
+      // frascos onde o produto conta mL, e cada aplicação cobraria o frasco inteiro.
+      dosesPorFrasco,
       validadeHoras,
       validadeDias     = 0,
       valorUnitario,
@@ -420,14 +431,16 @@ const criar = async (req, res) => {
       return res.status(400).json({ error: 'Quantidades não podem ser negativas.' });
 
     const qtdFrascosN = Number(qtdFrascos);
-    // 🔴 "Quantidade de Doses" CADASTRADA NO PRODUTO vale como padrão (2026-09-15).
+    // 🔴 O CONTEÚDO DO FRASCO VEM DO PRODUTO (2026-09-15; desde 2026-09-16 é a ÚNICA
+    // fonte na tela).
     //
-    // A tela de Produtos passou a registrar quantas aplicações saem de uma embalagem
-    // (`tb_medicamentos.doses_por_embalagem`). O lote continua podendo ter o próprio
-    // número — uma remessa pode vir em frasco diferente —, mas quando a entrada NÃO o
-    // informa, ele vem do cadastro em vez de cair no 1. Sem isto, a clínica cadastrava
-    // "10 doses por frasco" no produto e o lote nascia valendo 1 dose, cobrando o
-    // frasco inteiro a cada aplicação — exatamente o defeito que a multidose corrige.
+    // A tela de Produtos registra quanto a embalagem contém, na Forma de Cálculo
+    // (`tb_medicamentos.doses_por_embalagem`), e a Entrada de Estoque de vacinas deixou
+    // de pedir "Doses por Frasco" — ela só multiplica. O parâmetro CONTINUA aceito para
+    // quem o envie (remessa em frasco diferente, cliente antigo), mas o caminho normal
+    // é este: sem ele, vem do cadastro. Sem isto, a clínica cadastrava "20 mL por
+    // frasco" no produto e o lote nascia valendo 1, cobrando o frasco inteiro a cada
+    // aplicação — exatamente o defeito que a Forma de Cálculo corrige.
     //
     // ⚠️ SQL cru com `catch` (§11): a coluna é da migration 20261009000000 e o client
     // pode não conhecê-la. Falhando, cai no 1 — o comportamento anterior.
@@ -759,16 +772,39 @@ const listarLotesDisponiveisPorMed = async (req, res) => {
 };
 
 /**
- * Doses por embalagem gravadas no ITEM do catálogo (tela de Produtos).
- * `0` quando não há coluna, não há valor, ou o valor é 1 — o caller então mantém o
- * padrão de sempre.
+ * Anexa multidose + conteúdo + forma de cálculo à lista do catálogo de vacinas.
+ * EM BLOCO (uma consulta para a lista inteira), nunca um por item.
+ */
+async function anexarFormaCalculo(itens) {
+  const lista = Array.isArray(itens) ? itens : [];
+  if (lista.length === 0) return lista;
+  const mapa = await catalogoEmpresa.multidosePorItem(prisma, lista.map(i => i.id));
+  return lista.map(i => ({
+    ...i,
+    multidose:         mapa.get(i.id)?.multidose ?? false,
+    dosesPorEmbalagem: mapa.get(i.id)?.dosesPorEmbalagem ?? null,
+    formaCalculo:      mapa.get(i.id)?.formaCalculo ?? null,
+  }));
+}
+
+/**
+ * O CONTEÚDO da embalagem gravado no ITEM do catálogo (tela de Produtos) — quanto cada
+ * frasco rende, na Forma de Cálculo do produto.
+ *
+ * ⚠️ O nome ("doses") é o da coluna legada `doses_por_embalagem`, que até 2026-09-16
+ * significava "N aplicações por frasco" e hoje é o conteúdo (20 mL). É este número que
+ * vira `LoteVacina.dosesPorFrasco` e divide o preço do frasco na fatura.
+ * ⚠️ `> 0`, não `>= 1`: conteúdo fracionário (0,5 mL) é cadastro legítimo desde que a
+ * coluna virou `double precision`, e o piso em 1 o descartaria em silêncio.
+ *
+ * `0` quando não há coluna ou não há valor — o caller mantém o padrão de sempre.
  */
 async function dosesDoCatalogo(medicamentoCatId) {
   try {
     const rows = await prisma.$queryRawUnsafe(
       `SELECT doses_por_embalagem FROM schs2vet.tb_medicamentos
         WHERE id = $1 AND multidose = true AND doses_por_embalagem IS NOT NULL
-          AND doses_por_embalagem >= 1`,
+          AND doses_por_embalagem > 0`,
       Number(medicamentoCatId),
     );
     return Number(rows?.[0]?.doses_por_embalagem ?? 0) || 0;

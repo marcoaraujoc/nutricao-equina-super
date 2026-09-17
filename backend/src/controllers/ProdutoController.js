@@ -29,6 +29,7 @@ const catalogoEmpresa = require('../lib/catalogoEmpresa');
 const { registrarAuditoria } = require('../lib/auditoria');
 // Fonte Única de "erro que chega à tela": repassa regra de negócio, engole o resto.
 const { responderErro } = require('../lib/erroResposta');
+const { normalizarFormaCalculo, numeroPositivo } = require('../lib/formaCalculo');
 
 /** Filtro "é vacina?" — MESMO critério de `MedicamentoController.paraAtendimento`. */
 function filtroTipo(tipo) {
@@ -92,6 +93,7 @@ const listar = async (req, res) => {
         daEmpresa:  i.empresaId != null,
         multidose:  multi.get(i.id)?.multidose ?? false,
         dosesPorEmbalagem: multi.get(i.id)?.dosesPorEmbalagem ?? null,
+        formaCalculo:      multi.get(i.id)?.formaCalculo ?? null,
       })),
       recursos: { disponivel: true, multidose: await catalogoEmpresa.temColunasMultidose(prisma) },
     });
@@ -132,6 +134,7 @@ const detalhe = async (req, res) => {
         daEmpresa: item.empresaId != null,
         multidose: multi.get(item.id)?.multidose ?? false,
         dosesPorEmbalagem: multi.get(item.id)?.dosesPorEmbalagem ?? null,
+        formaCalculo:      multi.get(item.id)?.formaCalculo ?? null,
       },
       recursos: { multidose: await catalogoEmpresa.temColunasMultidose(prisma) },
     });
@@ -220,6 +223,7 @@ const porNome = async (req, res) => {
         daEmpresa: item.empresaId != null,
         multidose: multi.get(item.id)?.multidose ?? false,
         dosesPorEmbalagem: multi.get(item.id)?.dosesPorEmbalagem ?? null,
+        formaCalculo:      multi.get(item.id)?.formaCalculo ?? null,
       },
     });
   } catch (err) {
@@ -262,7 +266,7 @@ const criar = async (req, res) => {
     const {
       tipo = 'medicamento', medicamentoId,
       nome, formaFarmaceutica, apresentacao, unidade, vias, controlado, fabricante,
-      multidose, dosesPorEmbalagem,
+      multidose, dosesPorEmbalagem, formaCalculo,
     } = req.body ?? {};
 
     const ehVacina = tipo === 'vacina';
@@ -277,6 +281,14 @@ const criar = async (req, res) => {
     if (!String(unidade ?? '').trim())           faltando.push('Unidade');
     if (!String(apresentacao ?? '').trim())      faltando.push('Apresentação');
     if (viasLista.length === 0)                  faltando.push('Via de administração');
+    // 🔴 Multidose marcado exige o PAR forma + quantidade. Marcado sem eles, o item
+    // afirmaria "sou medido por dentro" sem dizer em quê nem quanto — e é justamente
+    // esse par que divide o preço da embalagem na linha da fatura. Aceitar pela
+    // metade produziria dose cobrada pelo frasco inteiro, em silêncio.
+    if (multidose === true) {
+      if (!normalizarFormaCalculo(formaCalculo))  faltando.push('Forma de Cálculo');
+      if (numeroPositivo(dosesPorEmbalagem) == null) faltando.push('Qtd');
+    }
     if (faltando.length > 0) {
       return res.status(400).json({ error: `Preencha: ${faltando.join(', ')}.`, campos: faltando });
     }
@@ -295,7 +307,7 @@ const criar = async (req, res) => {
           // receituário especial para uma dose de rotina.
           controlado: ehVacina ? false : controlado,
           vias: viasLista,
-          multidose, dosesPorEmbalagem,
+          multidose, dosesPorEmbalagem, formaCalculo,
         },
       });
 
