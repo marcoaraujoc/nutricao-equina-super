@@ -1,5 +1,86 @@
 # S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-09-17 (🔴 **PRODUTO SEM MULTIDOSE E MEDIDO EM 'Un.'** — a
+#   embalagem e a propria unidade, a pedido. + a tela de Produtos passou a listar o
+#   cadastro DA CLINICA antes do global.
+#   1. 🔴 **O DEFEITO, medido:** sem multidose a unidade caia na do CATALOGO, que e a da
+#      EMBALAGEM ('g', 'mL', 'kg'), enquanto a entrada de estoque conta EMBALAGENS
+#      (Qtd Total = Qtd Produto). Os dois lados usavam o mesmo rotulo para coisas
+#      diferentes: uma receita de "20 g" debitava 20 de um saldo de 10 bisnagas e cobrava
+#      20 x R$/g. Agora:
+#      ```
+#      produto : sem multidose        -> Forma de Calculo 'Un.'
+#      estoque : Qtd Produto 10       -> Qtd Total 10 Un.   (VR 300 -> R$ 30/Un.)
+#      receita : 1 Un.                -> estoque 9 Un.
+#      fatura  : 1 x 300 / 10 = R$ 30,00   (valorRepassado / Qtd Produto)
+#      ```
+#   2. **A regra vale nos CINCO pontos**, como a forma de calculo ja valia:
+#      `lib/formaCalculo.unidadeOperativa` (backend) e `utils/formaCalculo.
+#      unidadeOperativaProduto` (front) sao a FONTE UNICA; `unidadeDoEstoque` (prescricao)
+#      e `unidadeOperativaDoItem` (estoque) caem em **'Un.'** em vez da unidade do
+#      catalogo. ⚠️ `UNIDADE_AVULSA` nasce em `lib/unidadeMedicamento.js` e e IMPORTADA,
+#      nunca recopiada — 'Un' x 'Un.' descasaria receita e estoque. Gate trava a grafia
+#      nos dois lados.
+#   3. ⚠️ **A UNIDADE DEIXOU DE SER ENVIADA pela Entrada de Estoque.** O campo e LEITURA e
+#      mostra a unidade OPERATIVA; com 'Un.' chegando ao `definirUnidadeDoMedicamento` o
+#      copy-on-write trocaria "Frasco"/"g" por "Un." NO CATALOGO. `unidadeParaResolver`
+#      devolve `undefined` sempre; quem troca a unidade do produto e /cadastro/produtos.
+#   4. 🔴 **SAIU A HEURISTICA `extrairVolume`** da Farmacia: ela lia "frasco 20 mL" do NOME
+#      e multiplicava a Qtd Total por um numero que ninguem declarou — e era esse numero
+#      que dividia o preco da dose na fatura. Sem multidose, Qtd Total = Qtd Produto.
+#   5. ⚠️ **PRESCRICAO: sem subunidade e sem `<select>`** para item do catalogo (a unidade
+#      fica travada). `getConversaoUnidade` (mL <-> L, g <-> kg) SAIU — oferecer a troca
+#      reintroduz a divergencia que a regra elimina. Item digitado A MAO (fora do
+#      catalogo) mantem o seletor: ali nao ha estoque nem preco.
+#   6. OK **MIGRATION APLICADA** (autorizada) — `20261013000000_estoque_nao_multidose_em_unidades`:
+#      backfill das entradas ATIVAS gravadas no CONTEUDO (as que tinham
+#      `peso_por_embalagem`, vindas da heuristica). **3 das 6** linhas ativas estavam
+#      assim. Conferido DEPOIS: as 6 com `preco = valorRepassado / Qtd Produto`, saldo em
+#      embalagens e `ppe` nulo; a linha MULTIDOSE e as INATIVAS intactas.
+#      ⚠️ `set_config('app.plataforma','on',true)` e OBRIGATORIO no backfill: sem ele o
+#      UPDATE afeta ZERO linhas, com sucesso e sem aviso (armadilha 42).
+#      ⚠️ `tb_movimentos_estoque` NAO e reescrito — registra o que aconteceu, na unidade
+#      em que aconteceu. ⚠️ Sem mudanca de schema, logo **sem `prisma generate`**.
+#   7. **TELA DE PRODUTOS: o da clinica antes do global** (`orderBy: [{ empresaId: 'asc' },
+#      { nome: 'asc' }]`). ⚠️ `asc` e NULLS LAST no Postgres — `desc` inverteria. ⚠️ A
+#      ordenacao e do BANCO: o `take` corta em 60/100 sobre milhares de linhas globais, e
+#      ordenar so a pagina recebida deixaria o item da clinica FORA dela.
+#   8. **VACINA ficou de fora** de proposito (o pedido e da prescricao): ela conta doses
+#      por lote (`dosesPorFrasco`) e tem cadeia propria; sem forma declarada segue em
+#      "dose(s)".
+#   9. 🔴 **A EXECUCAO DA PRESCRICAO TAMBEM FALA EM 'Un.'** (complemento do mesmo dia): a
+#      fila exibia `item.unidade` (o SNAPSHOT da receita) e — pior — a baixa lia o numero
+#      BRUTO contra o estoque em embalagens. Medido no item 172 real: "20 mL" debitava
+#      **20 EMBALAGENS** de um saldo de 2 e cobrava **R$ 2.000** numa dose de R$ 100.
+#      `qtdDoEstoque` ganhou a `dosagem` e devolve **1 embalagem por APLICACAO** quando a
+#      receita esta em outra unidade; a fila devolve `unidadeEstoque` por item e a tela
+#      mostra "20 mL · 1 Un. por aplicacao" (a prescrita e o que quem aplica le; a do
+#      estoque e o que sai e e cobrado). ⚠️ Vale para QUALQUER unidade nao-avulsa, nao so
+#      mL/g — '%' nao tem grupo e debitava 10 embalagens. ⚠️ A unidade NAO e forcada na
+#      gravacao: isso apagaria o sinal de que a receita veio em outra unidade, e um cliente
+#      desatualizado passaria a gravar "20 Un.". Painel Principal e importacao de orcamento
+#      na mesma regra.
+#  10. 🔴 **A FARMACIA ROTULA O SALDO PELA UNIDADE OPERATIVA** (complemento 2, a pedido:
+#      "Qtd em Estoque esta aparecendo 5 g e precisa ser a Forma de Calculo"). Vale para o
+#      saldo, minimo/alarmante, historico de movimentos e Ajuste de Estoque — uma unidade
+#      diferente em qualquer um deles e uma segunda versao da verdade na MESMA tela.
+#      🔴 E a verificacao ao vivo achou uma REGRESSAO minha: o **multidose LEGADO** (com
+#      quantidade e SEM forma, cadastrado antes da `20261012000000`) tem o estoque contado
+#      no CONTEUDO, e 'Un.' fazia 19,9 mL virarem "19,9 unidades" — dose de 5 mL debitaria
+#      1 e cobraria R$ 5 no lugar de R$ 25. `unidadeOperativa` passou a conhecer os QUATRO
+#      estados do cadastro (forma+qtd -> forma; qtd SEM forma -> unidade da EMBALAGEM;
+#      forma SEM qtd -> 'Un.'; nao-multidose -> 'Un.') e virou a FONTE UNICA: prescricao e
+#      estoque nao repetem mais a condicao.
+#   Gate ampliado `__tests__/produtoMultidose.test.js` (45 casos, +21).
+#   OK **Verificado que REPROVA**: revertidas a unidade operativa, a do estoque e a ordem,
+#   **4 casos falharam**; e, no complemento, removidas a divisao pela dosagem e a
+#   `unidadeEstoque` da fila, **2 casos falharam**; e, no complemento 2, trocado um rotulo
+#   do saldo e removido o ramo do legado, **3 casos falharam**. Suite: **1049**;
+#   `tsc --noEmit`, `tsc -b` e `vite build` limpos.
+#   OK **VERIFICADO AO VIVO** com o codigo REAL: a empresa 58 lista os 4 produtos dela nas
+#   posicoes 0-3 e os globais a partir da 4; e as 6 entradas de nao-multidose devolvem
+#   'Un.' nos dois lados, baixa de 1 por Un. e fatura = VR / Qtd Produto.
+#   ⚠️ NAO verificado em navegador — sem ferramenta de browser nesta sessao. Ver §12.)
 # Atualizado em: 2026-09-16 (parte 2) (🔴 **A EMBALAGEM DEIXOU DE SER A PROPRIA UNIDADE** —
 #   o produto passou a declarar QUANTO cabe nela e EM QUE (**Forma de Calculo**).
 #   1. 🔴 **O DEFEITO QUE ISSO RESOLVE:** o frasco de 20 mL era cadastrado como "1 Un.".
@@ -3652,6 +3733,237 @@ New-Item -ItemType Junction `
 ---
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
+
+### Sessao 2026-09-17 - Produto sem multidose e medido em 'Un.' + ordem da tela de Produtos
+
+> OK **MIGRATION APLICADA** (autorizada nesta sessao) —
+> `20261013000000_estoque_nao_multidose_em_unidades`. E **backfill de DADOS**, nao de
+> schema: reexpressa em EMBALAGENS as entradas ATIVAS de produto nao-multidose que
+> estavam gravadas no CONTEUDO. `migrate status`: **201 migrations, banco em dia**.
+> **Sem `prisma generate`** — nenhuma coluna mudou.
+> ⚠️ Rodada com o DONO (`DATABASE_URL_MIGRATIONS`), e o UPDATE comeca com
+> `set_config('app.plataforma','on',true)`: `tb_estoque_clinica` esta com RLS
+> ENABLE + FORCE e a policy vale ate para o dono do schema — sem o carimbo o backfill
+> afeta ZERO linhas, **com sucesso e sem aviso** (armadilha 42).
+> OK **PROVADA ANTES** em transacao REVERTIDA (o antes/depois das 6 linhas, com o
+> rollback conferido) e **CONFERIDA DEPOIS** contra a base.
+
+- [x] 🔴 **O DEFEITO: dois rotulos para coisas diferentes.** Sem multidose a unidade caia
+      na do CATALOGO — que e a da EMBALAGEM ('g', 'mL', 'kg', 'Frasco') — enquanto a
+      entrada de estoque conta EMBALAGENS (Qtd Total = Qtd Produto). A receita era escrita
+      no CONTEUDO e a baixa acontecia sobre um saldo de embalagens: "20 g" debitava 20 de
+      um saldo de 10 bisnagas e cobrava 20 x R$/g. Nenhum erro na tela — so o saldo e a
+      fatura errados. Agora, **sem multidose a Forma de Calculo e 'Un.'**: a embalagem
+      entra inteira, e prescrita inteira e e cobrada inteira, por
+      `valorRepassado / Qtd Produto`.
+- [x] **FONTE UNICA nos dois lados**: `lib/formaCalculo.unidadeOperativa` (backend) e
+      `utils/formaCalculo.unidadeOperativaProduto` (front), consumida pela Farmacia e pela
+      Prescricao — duas copias divergiriam na primeira correcao, e o que divergiria e a
+      unidade em que o estoque e contado.
+      ⚠️ `UNIDADE_AVULSA` e IMPORTADA de `lib/unidadeMedicamento.js` (onde nasceu como a
+      opcao garantida do seletor do catalogo), nunca recopiada: 'Un' x 'Un.' faz
+      `mesmaUnidade` divergir do que a receita escreve. Gate trava a grafia nos dois lados.
+      ⚠️ `unidadeOperativaProduto` devolve **`null` para produto AUSENTE** (item digitado
+      a mao): ali nao ha estoque nem preco, e a unidade continua sendo escolhida no
+      `<select>`. Devolver 'Un.' travaria o campo de um item que nao tem cadastro.
+- [x] **`unidadeDoEstoque` (prescricao) perdeu o 3o argumento.** Ele recebia
+      `estoques[0].medicamento?.unidade` e caia nela; agora e `forma ?? UNIDADE_AVULSA`.
+      ⚠️ `item.unidade` (a unidade GRAVADA na receita) tambem NAO entra: quem decide em
+      que o estoque e contado e o PRODUTO, nunca o que foi digitado na prescricao — foi
+      essa inversao que deixou receita e estoque falando linguas diferentes. Ha gate
+      exigindo `UNIDADE_AVULSA` e reprovando `unidadeCatalogo|item.unidade` no corpo.
+- [x] **`calcPrecoUnitarioBase` sai certo sozinho**: 'Un.' nao esta em
+      `FATOR_BASE_ESTOQUE`, entao o fator e 1 e o preco e exatamente
+      `valorRepassado / qtdEstoque` — que, para o nao-multidose, e a Qtd Produto.
+      🔴 Em 'kg'/'L' o fator era 1000: 3 embalagens por R$ 300 gravavam R$ 0,10/g e a
+      receita de 1 unidade cobrava dez centavos. Ha caso de teste para esse par.
+- [x] 🔴 **A ENTRADA DE ESTOQUE NAO MANDA MAIS A UNIDADE.** O campo virou LEITURA e mostra
+      a unidade OPERATIVA; com 'Un.' chegando ao `definirUnidadeDoMedicamento`, o
+      copy-on-write trocaria "Frasco"/"g" por "Un." NO CATALOGO e apagaria a distincao
+      entre a embalagem e o que esta dentro dela. `unidadeParaResolver` devolve
+      `undefined` sempre e `unidade` saiu do destructuring dos dois handlers.
+- [x] 🔴 **SAIU A HEURISTICA `extrairVolume`** (Farmacia): ela lia "frasco 20 mL" do NOME
+      do produto e preenchia `pesoPorEmbalagem`, multiplicando a Qtd Total por um numero
+      que ninguem declarou — e e esse numero que divide o preco da dose na fatura. Era o
+      que produzia as linhas legadas que o backfill veio corrigir. O conteudo passa a vir
+      SO do cadastro do produto.
+      ⚠️ `conteudoEmbalagem` tambem parou de cair no `pesoPorEmbalagem` DA LINHA: na
+      edicao de uma entrada legada ele voltava a multiplicar, e a Qtd Total dizia "30 Un."
+      para 2 frascos de 15 mL.
+- [x] **PRESCRICAO: unidade travada e sem subunidade.** `getConversaoUnidade` (mL <-> L,
+      g <-> kg) SAIU: com a unidade decidida pelo produto, oferecer a troca reintroduz
+      exatamente a divergencia que a regra elimina. Item FORA do catalogo mantem o
+      `<select>` com `UNIDADES` — ali nao ha estoque nem preco a casar.
+- [x] **O BACKFILL, linha a linha** (medido antes e conferido depois):
+
+      id 30 Imizol 15 mL    saldo 30 -> 2      preco 6,67 -> 100
+      id 36 NGF-5 20 g      saldo 98 -> 4,9    preco 2,40 -> 48    (minimo 3 -> 0,15)
+      id 43 Equimax 30 g    saldo 150 -> 5     preco 5,00 -> 150
+      ids 35, 38, 42        INTOCADOS (ja contavam embalagens)
+
+      ⚠️ A divisao **preserva a FRACAO**: 98 g de bisnagas de 20 g sao 4,9 bisnagas, e
+      arredondar inventaria (ou apagaria) meia embalagem no saldo da clinica.
+      ⚠️ O preco sai de `valor_repassado / qtd_embalagens` (o total COMPRADO), nunca do
+      saldo restante — dividir pelo que sobrou faz o preco unitario SUBIR a cada dose, que
+      e o defeito conhecido do caminho legado de `precoUnitarioDoEstoque`.
+      ⚠️ `peso_por_embalagem` vai a NULL: e ele que marca a linha como "contada por
+      dentro", e deixa-lo faria a calculadora da tela multiplicar de novo na proxima edicao.
+      ⚠️ **So as ATIVAS.** A inativa e historico na unidade antiga — mesma decisao de
+      `reapontarParaCopia`. CONSEQUENCIA CONHECIDA: reativar uma delas (ha 2 nesta base)
+      exige reinformar a Qtd Produto na tela.
+      ⚠️ `tb_movimentos_estoque` NAO e reescrito: ele registra o que aconteceu, na unidade
+      em que aconteceu. Adultera-lo trocaria um saldo errado por um historico falso.
+- [x] **TELA DE PRODUTOS: o cadastro da CLINICA antes do GLOBAL** —
+      `orderBy: [{ empresaId: 'asc' }, { nome: 'asc' }]` em `ProdutoController.listar`.
+      ⚠️ `asc` e NULLS LAST no Postgres (o nao-nulo vem primeiro); `desc` inverteria tudo.
+      Mesma precedencia de `ordemEmpresaPrimeiro`.
+      ⚠️ A ordenacao e do BANCO, nao da pagina recebida: o `take` corta em 60/100 sobre um
+      catalogo global de milhares de linhas, e ordenando so o que chegou o item da clinica
+      nem entraria na lista quando o nome fosse alfabeticamente tarde.
+      ⚠️ Nao precisa do bypass de ADMIN que `ordemEmpresaPrimeiro` tem: aqui
+      `escopoDaEmpresa` ja recorta a global + a propria, entao nunca ha varias empresas.
+- [x] Gate ampliado `__tests__/produtoMultidose.test.js` (34 casos, +10) — a conta da
+      fatura, o par kg x Un., a unidade que nao volta ao catalogo, a entrada que nao
+      reescreve a unidade do produto, a grafia unica de 'Un.' e a ordem da tela.
+      OK **Verificado que REPROVA**: revertidas a unidade operativa, a do estoque e a
+      ordenacao, **4 casos falharam**; restaurado, os 34 voltaram.
+      Suite: **1038**; `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+      OK **VERIFICADO AO VIVO** com o codigo REAL (`ProdutoController.listar`,
+      `unidadeDoEstoque`, `calcPrecoUnitarioBase`): a empresa 58 lista os 4 produtos dela
+      nas posicoes 0-3 e os globais a partir da 4; e as 6 entradas de nao-multidose
+      devolvem 'Un.' nos dois lados, baixa de 1 por Un. e fatura = VR / Qtd Produto.
+      ⚠️ NAO verificado em navegador — sem ferramenta de browser nesta sessao.
+- [ ] A **VACINA** ficou de fora de proposito (o pedido e da prescricao): ela conta doses
+      por LOTE (`LoteVacina.dosesPorFrasco`) e tem cadeia propria de baixa e cobranca; sem
+      forma declarada o rotulo segue "dose(s)". Se a mesma regra tiver de valer la, o
+      lugar e `VacinaClinicaController.darBaixaEFaturar` + `formaVacina` na tela.
+- [ ] Entrada de estoque **INATIVA** de produto nao-multidose continua contada no conteudo
+      (2 nesta base). Reativa-la sem reinformar a Qtd Produto devolve o saldo na unidade
+      antiga.
+- [ ] O modal de **Ajuste de Estoque** ainda oferece a conversao por `pesoPorEmbalagem`
+      quando a linha o tem. Depois do backfill nenhuma linha ATIVA de nao-multidose o tem,
+      entao ele so aparece para produto multidose — que e onde faz sentido.
+
+#### Complemento (mesma data) — a EXECUCAO tambem fala em 'Un.', e a receita legada parou de cobrar 20 frascos
+
+- [x] 🔴 **O QUE O PEDIDO "a tela de execucao ainda marca a unidade" REVELOU.** A fila do
+      plantao exibia `item.unidade` — o SNAPSHOT do que foi escrito na receita. Para item
+      gravado ANTES desta leva isso e 'mL'/'g'/'%', enquanto o estoque passou a contar
+      'Un.'. **Nao era so exibicao**: `mesmoGrupo('mL','Un.')` e falso, entao a baixa caia
+      no valor BRUTO. Medido com o item 172 real da base:
+      ```
+      receita "20 mL"  ->  debita 20 EMBALAGENS de um saldo de 2
+                       ->  fatura R$ 2.000 numa dose cujo frasco custa R$ 100
+      ```
+      A tela mostrava "20 mL", nada acusava, e o defeito so apareceria na fatura do cliente.
+- [x] **A dose vale UMA embalagem por aplicacao** — `qtdDoEstoque` ganhou a `dosagem` como
+      4o argumento. Nao ha conversao possivel (o produto nao declara quanto cabe na
+      embalagem — e isso que "nao e multidose" significa), mas tambem nao precisa de
+      palpite: `qtdPrescrita` ja e dosagem x aplicacoes, entao dividir pela dosagem devolve
+      as APLICACOES, e a regra do produto diz que cada uma consome a embalagem inteira.
+      20 mL 2x/dia -> 40/20 = 2 embalagens no dia.
+      ⚠️ Vale para **QUALQUER unidade que nao seja a avulsa**, nao so mL/g: o item 179 desta
+      base esta em **'%'** ("Pasta 10%"), que nao tem grupo de conversao — restringir as
+      unidades de conteudo deixava 10 % debitando DEZ embalagens. Ha caso de teste para '%'
+      e para 'UI'.
+      ⚠️ Unidade VAZIA continua no bruto: sem rotulo, "2" ja se le como 2 unidades.
+      ⚠️ Dosagem ausente ou zero tambem: dividir por ela daria Infinity, e um chute ali vira
+      quantidade debitada e valor cobrado.
+      ⚠️ Item NOVO nao passa por aqui — nasce em 'Un.', que e a propria unidade do estoque.
+- [x] **As TRES verificacoes de estoque passaram a comparar na unidade do ESTOQUE.** Elas
+      tinham um par `paraBase` + `comparavel` que repetia a regra pela metade: no ramo
+      incomparavel comparavam a quantidade CRUA da receita ("20 mL") com o saldo em
+      embalagens (2) e acusavam falta do que cabe. Agora e `totalEstoque <
+      necessarioEstoque`, com o necessario saindo das MESMAS funcoes da baixa.
+- [x] **A fila do plantao devolve `unidadeEstoque` por item**, resolvido pelas mesmas
+      `mapaFormaCalculo` + `unidadeDoEstoque` da baixa — recalcular na tela criaria uma
+      segunda regra, e e a divergencia entre as duas que o campo existe para eliminar.
+- [x] **A tela mostra a unidade que o sistema usa** (`dosagemNaTela`):
+      ```
+      item novo      ->  "1 Un."
+      receita legada ->  "20 mL · 1 Un. por aplicacao"
+      ```
+      ⚠️ A dosagem PRESCRITA nao e apagada: "20 mL" e o que o veterinario indicou e o que
+      quem aplica precisa ler; "1 Un." e o que sai da prateleira e entra na fatura. Trocar
+      uma pela outra esconderia metade da verdade — e repetir o numero prescrito ao lado de
+      'Un.' ("20 Un.") afirmaria vinte embalagens.
+- [x] **O PAINEL PRINCIPAL le a MESMA regra** (`doseDoEstoque`, exportada): a lista de
+      separacao de farmacia diz o que TIRAR DA PRATELEIRA, entao precisa falar em
+      embalagens quando e assim que o produto e contado.
+- [x] 🔴 **A IMPORTACAO DE ORCAMENTO trazia a unidade da EMBALAGEM** e fazia nascer um item
+      **NOVO** ja divergente do estoque (o item do orcamento guarda a unidade do catalogo).
+      Passou a usar a unidade do PRODUTO. ⚠️ A dosagem continua vazia — quem a digita e o
+      vet, ja vendo a unidade travada ao lado. ⚠️ Produto ainda nao carregado na lista (a
+      busca e paginada) mantem a unidade do orcamento; o backend protege a conta nesse caso.
+- [x] ⚠️ **A unidade NAO e forcada no backend**, de proposito. Carimbar a unidade do produto
+      na gravacao destruiria justamente o sinal de que a receita foi escrita em outra — e um
+      cliente desatualizado mandando "20" + 'mL' passaria a gravar "20 Un.", isto e, vinte
+      embalagens. O front decide (campo travado) e o backend PROTEGE a conta.
+- [x] Gate ampliado para **41 casos** (+7). OK **Verificado que REPROVA**: removidas a
+      divisao pela dosagem e a `unidadeEstoque` da fila, **2 casos falharam**.
+      Suite: **1045**; `tsc --noEmit`, `tsc -b` e `vite build` limpos.
+      OK **CONFERIDO AO VIVO** com os 5 itens pendentes REAIS da base: todos passaram a
+      debitar **1 Un. por aplicacao** e a cobrar o preco da embalagem (R$ 125,00 no unico com
+      estoque), contra os 20 Un. / R$ 2.000 de antes.
+- [ ] A **VACINA** na mesma tela segue com o rotulo proprio (`rotuloDosagemVacina`, "2
+      doses") — ela conta doses por LOTE e ficou fora desta leva, como registrado acima.
+
+#### Complemento 2 (mesma data) — a FARMACIA rotula o saldo pela unidade operativa
+
+- [x] 🔴 **"Qtd em Estoque" mostrava `5 g`** (a pedido) — quantidade + unidade da
+      EMBALAGEM. `medicamento.unidade` nao diz em que o saldo esta CONTADO: a entrada de um
+      produto sem multidose grava EMBALAGENS, entao "5 g" para 5 bisnagas e o mesmo
+      descasamento que a receita e a fatura ja tinham — a tela dizia grama e o sistema
+      debitava embalagem. Agora todo numero da tela sai por `unidadeOperativaMed`.
+      ⚠️ Vale para o SALDO, os dois alertas (minimo/alarmante), o aviso de estoque ja
+      existente no formulario, o HISTORICO de movimentos e o AJUSTE de estoque (rotulo do
+      campo, resumo e delta): uma unidade diferente em qualquer um deles e uma segunda
+      versao da verdade na MESMA tela. Gate reprova `medicamento.unidade` no arquivo
+      inteiro — ignorando comentarios, senao ele acusaria a propria documentacao da regra.
+      ⚠️ CONSEQUENCIA CONHECIDA no HISTORICO: movimento gravado ANTES da normalizacao
+      (migration `20261013000000`) esta na unidade antiga e aparece sob o rotulo novo.
+      `tb_movimentos_estoque` nao e reescrito de proposito — ele registra o que aconteceu —,
+      e rotula-lo com a unidade da embalagem estaria igualmente errado e ainda contradiria
+      o saldo logo acima.
+- [x] 🔴 **REGRESSAO MINHA, ACHADA NA VERIFICACAO AO VIVO: o multidose LEGADO sem forma.**
+      Ha cadastro feito entre as migrations `20261009000000` e `20261012000000`, quando
+      `doses_por_embalagem` ja existia e `forma_calculo` ainda nao — ele e `multidose` com
+      quantidade e SEM forma. O estoque dele foi gravado MULTIPLICANDO pela quantidade, ou
+      seja, esta contado no CONTEUDO. Minha regra o jogava em 'Un.', e ai 19,9 mL de frasco
+      viravam "19,9 unidades": uma dose de 5 mL debitaria **1** em vez de 5 e cobraria
+      **R$ 5** no lugar de R$ 25. Medido: o "17 Beta - 0%, frasco-ampola" desta base esta
+      exatamente assim.
+      `unidadeOperativa` passou a conhecer os QUATRO estados do cadastro:
+      ```
+      forma + quantidade        -> a forma declarada        (item medido por dentro)
+      quantidade SEM forma      -> a unidade da EMBALAGEM   (LEGADO: contado no conteudo)
+      forma SEM quantidade      -> 'Un.'                    (pendencia: nao declara conteudo)
+      nao-multidose             -> 'Un.'                    (a embalagem e a unidade)
+      ```
+      ⚠️ NAO e exceção a regra nova: ela vale para quem NAO e multidose. No legado o produto
+      DECLARA conteudo — so nao declara em que, e a unidade da embalagem e a resposta que o
+      proprio cadastro deu antes de o campo existir.
+- [x] **A regra virou FONTE UNICA de verdade, sem copias.** `mapaFormaCalculo` (prescricao)
+      e `formaDeclaradaDoItem` (estoque) repetiam a condicao `multidose && formaCalculo &&
+      doses > 0` cada um por si; os dois passaram a chamar `unidadeOperativa`. Para isso
+      `catalogoEmpresa.multidosePorItem` passou a trazer tambem a `unidade` do catalogo (e o
+      legado precisa dela). O front espelha em `unidadeOperativaProduto`, e ha gate exigindo
+      que os quatro estados respondam igual dos dois lados — divergir faz a tela rotular o
+      saldo de um jeito e a baixa contar de outro.
+- [x] **SEM MIGRATION NOVA**: e exibicao + resolucao de unidade. `migrate status`: 201
+      migrations, banco em dia (a normalizacao das entradas legadas ja foi aplicada acima).
+- [x] Gate em **45 casos** (+4). OK **Verificado que REPROVA**: trocado UM rotulo do saldo
+      pela unidade da embalagem, 2 casos falharam; removido o ramo do legado, 1 falhou.
+      Suite: **1049**; `tsc --noEmit`, `tsc -b` e `vite build` limpos.
+      OK **CONFERIDO AO VIVO** com o `EstoqueController.listar` REAL nas duas empresas:
+      o multidose legado segue em **19,9 mL** e os nao-multidose saem em **Un.** (o Imizol
+      da empresa 42 em "2 Un.", ja normalizado).
+- [ ] A entrada de estoque **INATIVA** do "17 Beta" (id 34, nao-multidose, 100 = 2 × 50 mL)
+      aparece na aba Inativos como "100 Un.". E a consequencia ja registrada do backfill so
+      alcancar as ATIVAS — reativa-la exige reinformar a Qtd Produto.
+- [ ] O selo "Em estoque: N" da busca de medicamento da Prescricao continua SEM unidade.
+      Nao afirma nada errado; se um dia precisar do rotulo, a regra e a mesma
+      (`unidadeOperativaProduto`).
 
 ### Sessao 2026-09-16 (parte 2) - Forma de Calculo: a embalagem e o conteudo dela
 

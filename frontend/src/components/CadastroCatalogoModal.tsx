@@ -223,6 +223,7 @@ export default function CadastroCatalogoModal({
                 <span className="text-sm font-semibold text-gray-700">Produto multidose</span>
                 <span className="block text-[11px] text-gray-500 leading-snug">
                   A embalagem rende mais de uma aplicação e é medida por dentro.
+                  Desmarcado, o produto é medido em <b>Un.</b> — a embalagem inteira.
                 </span>
               </span>
             </label>

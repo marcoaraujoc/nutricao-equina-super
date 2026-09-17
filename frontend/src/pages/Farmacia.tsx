@@ -16,6 +16,7 @@ import {
   ToggleLeft, ToggleRight,
 } from 'lucide-react';
 import { formatDateShort, formatDate } from '../utils/dateUtils';
+import { unidadeOperativaProduto } from '../utils/formaCalculo';
 import DateInput from '../components/DateInput';
 import ModalNovoFornecedor, { type NovoFornecedorResult } from '../components/ModalNovoFornecedor';
 import InlineError from '../components/InlineError';
@@ -147,20 +148,6 @@ function ChartMovimentos({ movimentos }: { movimentos: MovimentoEstoque[] }) {
   );
 }
 
-// ─── Helper: extrai volume numérico de nome ou apresentação do medicamento ────
-
-function extrairVolume(med: Medicamento): number | null {
-  for (const texto of [med.apresentacao, med.nome]) {
-    if (!texto) continue;
-    const reUnidade = new RegExp(`(\\d+(?:[.,]\\d+)?)\\s*${med.unidade}`, 'i');
-    const m1 = texto.match(reUnidade);
-    if (m1) return parseFloat(m1[1].replace(',', '.'));
-    const m2 = texto.match(/(\d+(?:[.,]\d+)?)\s*(?:mL|ml|ML|L(?!\w)|g(?!\w)|mg|mcg|UI|un)/);
-    if (m2) return parseFloat(m2[1].replace(',', '.'));
-  }
-  return null;
-}
-
 /**
  * 🔴 O CONTEÚDO DA EMBALAGEM VEM DO PRODUTO (2026-09-16), não mais digitado aqui.
  *
@@ -181,15 +168,36 @@ function conteudoDaEmbalagem(med: Medicamento | null): number | null {
 /**
  * A unidade em que este item é CONTADO no estoque, escrito na receita e COBRADO.
  *
- * É a Forma de Cálculo quando o produto a declara; senão, a unidade da embalagem —
- * o comportamento de antes, para nenhum cadastro existente mudar. As três respostas
- * precisam ser a MESMA: duas unidades diferentes para o mesmo item é o que fazia
- * 5 mL virarem 5 frascos na baixa e na fatura.
+ * Forma de Cálculo quando o produto declara conteúdo; **'Un.'** quando não declara
+ * (2026-09-17, a pedido) — a embalagem é a própria unidade. As três respostas precisam
+ * ser a MESMA: duas unidades diferentes para o mesmo item é o que fazia 5 mL virarem
+ * 5 frascos na baixa e na fatura.
+ *
+ * ⚠️ Não cai mais em `med.unidade` (a da EMBALAGEM): com ela o estoque contava
+ * embalagens sob o rótulo 'g'/'mL', e a receita escrita nessa unidade debitava o
+ * conteúdo contra um saldo de embalagens.
+ * Regra ÚNICA em `utils/formaCalculo.ts` — a Prescrição lê a mesma.
  */
 function unidadeOperativaMed(med: Medicamento | null): string {
-  if (conteudoDaEmbalagem(med) != null && med?.formaCalculo) return med.formaCalculo;
-  return med?.unidade ?? '';
+  return unidadeOperativaProduto(med) ?? '';
 }
+
+// 🔴 TODO SALDO DESTA TELA É ROTULADO POR `unidadeOperativaMed`, nunca por
+// `medicamento.unidade` (2026-09-17, a pedido: "Qtd em Estoque aparece 5 g e precisa ser
+// a Forma de Cálculo — nesse caso Un.").
+//
+// `medicamento.unidade` é a unidade da EMBALAGEM ("Frasco", "g") e não diz em que o
+// saldo está contado: a entrada de um produto sem multidose grava EMBALAGENS, então
+// "5 g" para 5 bisnagas é o mesmo descasamento que a receita e a fatura já tinham — a
+// tela dizia grama, o sistema debitava embalagem. Vale para o saldo, os dois alertas
+// (mínimo/alarmante), o histórico de movimentos e o Ajuste de Estoque: uma unidade
+// diferente em qualquer um deles é uma segunda versão da verdade na MESMA tela.
+//
+// ⚠️ CONSEQUÊNCIA CONHECIDA no histórico: movimento gravado ANTES da normalização das
+// entradas legadas (migration 20261013000000) está na unidade antiga e aparece sob o
+// rótulo novo. `tb_movimentos_estoque` não é reescrito de propósito — ele registra o que
+// aconteceu —, e rotulá-lo com a unidade da embalagem estaria igualmente errado e ainda
+// contradiria o saldo logo acima.
 
 // ─── Componente principal ─────────────────────────────────────────────────────
 
@@ -278,8 +286,11 @@ export default function Farmacia() {
   // Quanto a embalagem contém, na unidade operativa — vem do CADASTRO DO PRODUTO.
   // Na EDIÇÃO cai no que ficou gravado na linha: a lista da tela é recortada por
   // espécie e pode não conter o medicamento daquele estoque.
-  const conteudoEmbalagem = conteudoDaEmbalagem(medSelecionado)
-    ?? (pesoPorEmbalagem !== '' && Number(pesoPorEmbalagem) > 0 ? Number(pesoPorEmbalagem) : null);
+  // 🔴 SÓ o que o PRODUTO declara (2026-09-17). O fallback no `pesoPorEmbalagem` desta
+  // linha voltava a multiplicar a Qtd Total pelo conteúdo de uma entrada LEGADA (as
+  // gravadas antes de o conteúdo mudar de casa) mesmo com o produto já sem multidose —
+  // e aí a Qtd Total dizia "30 Un." para 2 frascos de 15 mL.
+  const conteudoEmbalagem = conteudoDaEmbalagem(medSelecionado);
   const estoqueExistente  = !editandoId && form.medicamentoId
     ? itens.find((i) => i.medicamentoId === form.medicamentoId && i.ativo) ?? null
     : null;
@@ -378,12 +389,13 @@ export default function Farmacia() {
     if (editandoId) return;
     setFrascos('');
     const med = medicamentos.find(m => m.id === form.medicamentoId) ?? null;
-    // 🔴 O CONTEÚDO DECLARADO NO PRODUTO VENCE o palpite tirado do nome/apresentação.
-    // `extrairVolume` é heurística de texto ("Frasco 20 mL") e continua como reserva
-    // para o item que ainda não foi cadastrado como multidose — mas afirmar por
-    // heurística um número que divide o preço da dose seria pior que não afirmar.
+    // 🔴 O CONTEÚDO SAI DO CADASTRO DO PRODUTO, e SÓ dele (2026-09-17). A heurística de
+    // texto que lia "Frasco 20 mL" do nome saiu: ela afirmava um número que divide o
+    // preço da dose na fatura sem ninguém ter declarado nada, e contradizia a regra do
+    // não-multidose — sem conteúdo, a embalagem é a própria unidade ('Un.') e a Qtd
+    // Total é a Qtd Produto.
     const conteudo = conteudoDaEmbalagem(med);
-    setPesoPorEmbalagem(conteudo ?? (med ? (extrairVolume(med) ?? '') : ''));
+    setPesoPorEmbalagem(conteudo ?? '');
     // A unidade deixou de ser escolhida aqui: é a do produto, e ela precisa ser a
     // MESMA em que a receita é escrita e a fatura é calculada.
     setUnidadeSel(unidadeOperativaMed(med));
@@ -579,9 +591,10 @@ export default function Farmacia() {
         // Formulário trabalha na subunidade — converte para a unidade maior ao salvar
         estoqueMinimo:    form.estoqueMinimo / fatorSubUnidade(unidadeSel),
         estoqueAlarmante: form.estoqueAlarmante / fatorSubUnidade(unidadeSel),
-        // Unidade escolhida na tela. O backend compara com a gravada e só age quando
-        // MUDA — salvar sem mexer nela não cria cópia nenhuma no catálogo.
-        unidade:          unidadeSel || undefined,
+        // ⚠️ A UNIDADE NÃO É ENVIADA: o campo da tela é LEITURA e mostra a unidade
+        // OPERATIVA do produto ('mL' com forma declarada, 'Un.' sem ela). Mandá-la
+        // acionaria o copy-on-write do catálogo e trocaria a unidade da EMBALAGEM
+        // ("Frasco"/"g") por ela. Quem troca a unidade do produto é /cadastro/produtos.
         ativo:            form.ativo,
         fornecedorId:     form.fornecedorId || null,
         notaFiscal:       form.notaFiscal.trim() || null,
@@ -872,7 +885,7 @@ export default function Farmacia() {
                           <td className="px-4 py-3 text-center whitespace-nowrap">
                             <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${qtdCls}`}>
                               {nivel !== 'ok' && <AlertTriangle size={10} className={nivel === 'critico' ? 'text-red-500' : 'text-amber-500'} />}
-                              {fmtQtd(item.qtdEstoque)} {item.medicamento.unidade}
+                              {fmtQtd(item.qtdEstoque)} {unidadeOperativaMed(item.medicamento)}
                             </span>
                             <p className="text-[10px] text-gray-400 mt-0.5">mín {fmtQtd(item.estoqueMinimo)}</p>
                           </td>
@@ -922,7 +935,7 @@ export default function Farmacia() {
                         </button>
                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold flex-shrink-0 ${qtdCls}`}>
                           {nivel !== 'ok' && <AlertTriangle size={10} className={nivel === 'critico' ? 'text-red-500' : 'text-amber-500'} />}
-                          {fmtQtd(item.qtdEstoque)} {item.medicamento.unidade}
+                          {fmtQtd(item.qtdEstoque)} {unidadeOperativaMed(item.medicamento)}
                         </span>
                       </div>
                       <p className="text-[11px] text-gray-400">
@@ -1082,7 +1095,7 @@ export default function Farmacia() {
               {/* Banner: medicamento já existe no estoque */}
               {estoqueExistente && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-xs text-gray-700">
-                  <p>Estoque atual: <span className="font-bold">{fmtQtd(estoqueExistente.qtdEstoque)} {estoqueExistente.medicamento.unidade}</span></p>
+                  <p>Estoque atual: <span className="font-bold">{fmtQtd(estoqueExistente.qtdEstoque)} {unidadeOperativaMed(estoqueExistente.medicamento)}</span></p>
                   <p className="mt-1 text-gray-500">Se lote, validade e valor forem iguais à entrada existente, as quantidades serão somadas. Caso contrário, uma nova entrada será criada.</p>
                 </div>
               )}
@@ -1332,7 +1345,7 @@ export default function Farmacia() {
                 </div>
                 <div>
                   <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Qtd em Estoque</p>
-                  <p className="font-bold text-emerald-700">{fmtQtd(itemView.qtdEstoque)} {itemView.medicamento.unidade}</p>
+                  <p className="font-bold text-emerald-700">{fmtQtd(itemView.qtdEstoque)} {unidadeOperativaMed(itemView.medicamento)}</p>
                 </div>
                 <div>
                   <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Status</p>
@@ -1374,11 +1387,11 @@ export default function Farmacia() {
                 )}
                 <div>
                   <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Est. Mínimo</p>
-                  <p className="text-gray-700">{fmtQtd(itemView.estoqueMinimo)} {itemView.medicamento.unidade}</p>
+                  <p className="text-gray-700">{fmtQtd(itemView.estoqueMinimo)} {unidadeOperativaMed(itemView.medicamento)}</p>
                 </div>
                 <div>
                   <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Est. Alarmante</p>
-                  <p className="text-gray-700">{fmtQtd(itemView.estoqueAlarmante)} {itemView.medicamento.unidade}</p>
+                  <p className="text-gray-700">{fmtQtd(itemView.estoqueAlarmante)} {unidadeOperativaMed(itemView.medicamento)}</p>
                 </div>
               </div>
             </div>
@@ -1439,7 +1452,7 @@ export default function Farmacia() {
                           <li key={e.id} className="flex items-center justify-between text-xs">
                             <span className="text-gray-700">{e.motivo}</span>
                             <span className="font-semibold text-emerald-700 ml-4 whitespace-nowrap">
-                              +{fmtQtd(e.quantidade)} {modalHistorico?.medicamento.unidade}
+                              +{fmtQtd(e.quantidade)} {modalHistorico ? unidadeOperativaMed(modalHistorico.medicamento) : ''}
                             </span>
                           </li>
                         ))}
@@ -1536,7 +1549,7 @@ export default function Farmacia() {
                                     }`}>
                                     <span className="block truncate">{i.medicamento.nome}</span>
                                     <span className="text-[11px] text-gray-400">
-                                      {fmtQtd(i.qtdEstoque)} {i.medicamento.unidade}
+                                      {fmtQtd(i.qtdEstoque)} {unidadeOperativaMed(i.medicamento)}
                                       {i.lote && ` · Lote ${i.lote}`}
                                       {i.medicamento.formaFarmaceutica && ` · ${i.medicamento.formaFarmaceutica}`}
                                     </span>
@@ -1558,11 +1571,11 @@ export default function Farmacia() {
                   <p className="font-semibold text-indigo-700 text-[11px] uppercase tracking-wider mb-1">Item Selecionado</p>
                   <div className="grid grid-cols-2 gap-1">
                     <p><span className="text-gray-400">Estoque atual:</span>{' '}
-                      <b className="text-emerald-700">{fmtQtd(itemAjuste.qtdEstoque)} {itemAjuste.medicamento.unidade}</b></p>
+                      <b className="text-emerald-700">{fmtQtd(itemAjuste.qtdEstoque)} {unidadeOperativaMed(itemAjuste.medicamento)}</b></p>
                     {mlPorFrasco > 0 && (
                       <p><span className="text-gray-400">Frascos:</span>{' '}
                         <b className="text-emerald-700">{fmtQtd(frascosDe(itemAjuste.qtdEstoque) || 0)}</b>
-                        <span className="text-gray-400"> ({fmtQtd(mlPorFrasco)} {itemAjuste.medicamento.unidade}/frasco)</span></p>
+                        <span className="text-gray-400"> ({fmtQtd(mlPorFrasco)} {unidadeOperativaMed(itemAjuste.medicamento)}/frasco)</span></p>
                     )}
                     <p><span className="text-gray-400">Lote:</span> {itemAjuste.lote ?? '—'}</p>
                     <p><span className="text-gray-400">Forma:</span> {itemAjuste.medicamento.formaFarmaceutica}</p>
@@ -1595,7 +1608,7 @@ export default function Farmacia() {
                   <div>
                     {mlPorFrasco > 0 && (
                       <span className="block text-[10px] text-gray-400 mb-0.5">
-                        {itemAjuste?.medicamento.unidade ?? 'Total'}
+                        {itemAjuste ? unidadeOperativaMed(itemAjuste.medicamento) : 'Total'}
                       </span>
                     )}
                     <input type="number" min={0} step="0.01" value={ajusteQtd === '' ? '' : ajusteQtd}
@@ -1606,13 +1619,13 @@ export default function Farmacia() {
                         setAjusteQtd(v);
                         setAjusteFrascos(frascosDe(v));
                       }}
-                      placeholder={mlPorFrasco > 0 ? `Total (${itemAjuste?.medicamento.unidade ?? ''})` : '0'}
+                      placeholder={mlPorFrasco > 0 ? `Total (${itemAjuste ? unidadeOperativaMed(itemAjuste.medicamento) : ''})` : '0'}
                       className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                   </div>
                 </div>
                 {itemAjuste && (
                   <p className="text-[10px] text-gray-400 mt-1">
-                    Informe a quantidade real em estoque{mlPorFrasco > 0 ? ' (frascos ou ' + itemAjuste.medicamento.unidade + ')' : ''} — a diferença será registrada como ajuste.
+                    Informe a quantidade real em estoque{mlPorFrasco > 0 ? ' (frascos ou ' + unidadeOperativaMed(itemAjuste.medicamento) + ')' : ''} — a diferença será registrada como ajuste.
                   </p>
                 )}
               </div>
@@ -1640,7 +1653,7 @@ export default function Farmacia() {
                   <p className="text-xs text-gray-600">
                     Diferença a registrar:{' '}
                     <b className={delta > 0 ? 'text-emerald-700' : 'text-red-600'}>
-                      {delta > 0 ? '+' : '−'}{fmtQtd(Math.abs(delta))} {itemAjuste.medicamento.unidade}
+                      {delta > 0 ? '+' : '−'}{fmtQtd(Math.abs(delta))} {unidadeOperativaMed(itemAjuste.medicamento)}
                     </b>
                     {' '}({fmtQtd(itemAjuste.qtdEstoque)} → {fmtQtd(novaQtd)})
                     {mlPorFrasco > 0 && (

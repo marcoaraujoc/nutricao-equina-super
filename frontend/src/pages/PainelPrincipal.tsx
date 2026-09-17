@@ -42,7 +42,7 @@ import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import {
   ModalExecucao, ModalExecucaoVacina, itemPendenteEm,
   itemAtrasadoEm, previsaoPendenteISO, vacinaAtrasadaEm,
-  type GrupoExecucao, type ItemExecucao, type VacinaExecucao,
+  type GrupoExecucao, type ItemExecucao, type VacinaExecucao, doseDoEstoque,
 } from './ExecucaoPrescricao';
 import { hojeISO, formatHora, formatDiaMes, formatDateShort } from '../utils/dateUtils';
 
@@ -344,8 +344,12 @@ export default function PainelPrincipal() {
         if (e.kind === 'PRESC') {
           for (const i of e.itens) {
             if (i.tipo !== 'MEDICAMENTO') continue;   // procedimento não se carrega no carro
-            const dose = Number(String(i.dosagem ?? '').replace(',', '.'));
-            acumular(i.medicamento, 'MEDICAMENTO', 1, i.unidade, Number.isFinite(dose) ? dose : null);
+            // 🔴 NA UNIDADE EM QUE O ITEM SAI DO ESTOQUE (2026-09-17): esta lista é de
+            // SEPARAÇÃO — diz o que tirar da prateleira —, então precisa falar em
+            // embalagens quando é assim que o produto é contado. Regra ÚNICA em
+            // `doseDoEstoque` (ExecucaoPrescricao), a mesma que a fila usa no texto.
+            const { unidade: unItem, dose } = doseDoEstoque(i);
+            acumular(i.medicamento, 'MEDICAMENTO', 1, unItem, dose);
           }
         } else {
           // Uma aplicação, com a dosagem na unidade GRAVADA nela (snapshot) — mesmo

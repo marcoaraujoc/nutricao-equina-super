@@ -40,7 +40,17 @@ export interface ItemExecucao {
   status?:         string | null;
   medicamento:     string;
   dosagem:         string | null;
+  /** SNAPSHOT do que foi escrito na receita — pode ser 'mL' num produto hoje contado
+   *  em embalagens. Ver `unidadeEstoque`. */
   unidade:         string | null;
+  /**
+   * 🔴 A unidade em que o item é DEBITADO e COBRADO (2026-09-17, a pedido) — a Forma de
+   * Cálculo do produto, ou 'Un.' quando ele não declara conteúdo. Vem do BACKEND, das
+   * mesmas funções da baixa: recalculá-la aqui criaria uma segunda regra, e é a
+   * divergência entre as duas que este campo existe para eliminar.
+   * `null` em procedimento e em item sem vínculo com o catálogo.
+   */
+  unidadeEstoque?: string | null;
   via:             string;
   frequencia:      string;
   horaInicio:      string | null;
@@ -168,6 +178,51 @@ export interface VacinaExecucao {
   executadoEm?:    string | null;
   /** Cancelada NA DATA consultada — vai para a aba "Cancelado" do Histórico. */
   cancelada?:      boolean;
+}
+
+/** Duas grafias da MESMA unidade ('un' × 'Un.', 'kg' × 'Kg') — espelho de
+ *  `lib/unidadeMedicamento.mesmaUnidade`, para a tela não mostrar "1 Un. (1 un)". */
+function mesmaUnidadeTela(a?: string | null, b?: string | null): boolean {
+  const x = String(a ?? '').trim().toLocaleLowerCase('pt-BR');
+  const y = String(b ?? '').trim().toLocaleLowerCase('pt-BR');
+  if (x === y) return true;
+  const avulsa = /^(un\.?|unid\.?|unidade)$/;
+  return avulsa.test(x) && avulsa.test(y);
+}
+
+/**
+ * A dosagem como a tela deve exibi-la: na unidade em que o item é DEBITADO e COBRADO.
+ *
+ * Igual à prescrita (o caso normal) → "10 mL". Divergente (receita escrita antes de o
+ * produto passar a ser medido em 'Un.') → "20 mL · 1 Un. por aplicação": o primeiro é o
+ * que o veterinário indicou, o segundo é o que sai do estoque e entra na fatura.
+ * ⚠️ Uma aplicação consome UMA embalagem — é a definição do produto sem multidose, e a
+ * mesma conta que `qtdDoEstoque` faz no backend. Repetir a dosagem prescrita ao lado de
+ * 'Un.' ("20 Un.") afirmaria vinte embalagens.
+ */
+export function doseDoEstoque(
+  item: { dosagem: string | null; unidade: string | null; unidadeEstoque?: string | null },
+): { unidade: string | null; dose: number | null } {
+  const num = Number(String(item.dosagem ?? '').replace(',', '.'));
+  const dose = Number.isFinite(num) && num > 0 ? num : null;
+  const un = item.unidadeEstoque;
+  if (!un) return { unidade: item.unidade, dose };
+  // Receita escrita em outra unidade: uma aplicação consome UMA embalagem — a mesma
+  // conta do backend. Manter o número prescrito ao lado de 'Un.' faria a lista de
+  // separação pedir vinte frascos para uma dose de 20 mL.
+  if (item.unidade && !mesmaUnidadeTela(item.unidade, un)) return { unidade: un, dose: 1 };
+  return { unidade: un, dose };
+}
+
+function dosagemNaTela(item: { dosagem: string | null; unidade: string | null; unidadeEstoque?: string | null }): string {
+  if (!item.dosagem) return '';
+  const prescrita = `${item.dosagem}${item.unidade ? ' ' + item.unidade : ''}`;
+  const un = item.unidadeEstoque;
+  if (!un) return prescrita;
+  if (!item.unidade || mesmaUnidadeTela(item.unidade, un)) {
+    return `${item.dosagem} ${un}`;
+  }
+  return `${prescrita} · 1 ${un} por aplicação`;
 }
 
 /**
@@ -1368,7 +1423,13 @@ export function ModalExecucao({
             // `gerarResumoDoses`), a melhor previsão disponível antes de a dose
             // anterior ser executada de verdade.
             const linhasVisiveis = resumo;
-            const doseTxt = item.dosagem ? `${item.dosagem}${item.unidade ? ' ' + item.unidade : ''}` : '';
+            // 🔴 A DOSE É MOSTRADA NA UNIDADE QUE O SISTEMA DEBITA E COBRA.
+            // Quando a receita foi escrita em outra (item gravado antes de o produto
+            // passar a ser medido em 'Un.'), as DUAS aparecem: a prescrita é o que o
+            // veterinário indicou e quem aplica precisa ler; a do estoque é o que sai
+            // da prateleira e entra na fatura. Esconder uma das duas deixaria a tela
+            // discordando da baixa — que foi o defeito relatado.
+            const doseTxt = dosagemNaTela(item);
             // "1x a cada N dias" (inclui "1x por semana"): `duracaoDias` é guardado em
             // DIAS (vezes × intervalo, para o backend contar as doses certas) — mas o
             // texto fala na MESMA unidade da frequência, nunca em dias brutos (28 dias

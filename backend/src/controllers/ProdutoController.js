@@ -74,8 +74,20 @@ const listar = async (req, res) => {
       ] } : {}),
     };
 
+    // 🔴 O QUE É DA CLÍNICA VEM ANTES DO GLOBAL (2026-09-17, a pedido): primeiro o
+    // produto CADASTRADO pela empresa, depois o do catálogo do sistema, alfabético
+    // dentro de cada grupo.
+    //
+    // ⚠️ `empresaId: 'asc'` e NUNCA `'desc'`: no Postgres ASC é NULLS LAST, então o
+    // não-nulo (a empresa) vem primeiro e o global (`empresa_id IS NULL`) por último.
+    // Mesma precedência de `ordemEmpresaPrimeiro` e de `garantirMedicamentoDaEmpresa`.
+    //
+    // ⚠️ A ordenação é do BANCO, não da página recebida: o `take` abaixo corta em 60/100
+    // sobre um catálogo global de milhares de linhas. Ordenando só o que chegou, o item
+    // da clínica nem entraria na lista quando o nome fosse alfabeticamente tarde — e o
+    // defeito apareceria já na primeira tela, sem erro nenhum.
     const itens = await prisma.medicamento.findMany({
-      where, select: SELECT_ITEM, orderBy: { nome: 'asc' },
+      where, select: SELECT_ITEM, orderBy: [{ empresaId: 'asc' }, { nome: 'asc' }],
       // Teto: o catálogo global tem milhares de linhas e o campo é de BUSCA, não de
       // rolagem. Sem o corte, abrir a tela baixaria o catálogo inteiro.
       take: busca ? 100 : 60,

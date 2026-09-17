@@ -13,6 +13,10 @@ const contasPagar      = require('../lib/contasPagar');
 const produtoFornecedor = require('../lib/produtoFornecedor');
 // FORMA DE CÁLCULO do item (2026-09-16): a unidade em que o estoque dele é contado.
 const catalogoEmpresa = require('../lib/catalogoEmpresa');
+// 'Un.' — a unidade do produto que NÃO é multidose (a embalagem é a própria
+// unidade). Ver `unidadeDoEstoque` e `lib/formaCalculo.js`.
+const { UNIDADE_AVULSA, unidadeOperativa } = require('../lib/formaCalculo');
+const { mesmaUnidade } = require('../lib/unidadeMedicamento');
 const formaCobranca     = require('../lib/formaCobrancaEstoque');
 const { garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
 const vinculoPrestador = require('../lib/procedimentoPrestador');
@@ -139,6 +143,12 @@ function mesmoGrupo(u1, u2) {
   return g1 != null && g1 === g2;
 }
 
+
+/** 'Un.', 'un', 'unidade' — a unidade do produto que NÃO declara conteúdo. */
+function ehAvulsa(u) {
+  return mesmaUnidade(u, UNIDADE_AVULSA);
+}
+
 // ─── Quantidade total do curso ────────────────────────────────────────────────
 
 function calcularQuantidadeTotal(item) {
@@ -180,9 +190,33 @@ function calcularQuantidadeDiaria(item) {
  *     3 × R$ 100 = R$ 300 por 60 mL  →  R$ 5/mL  →  5 mL = R$ 25,00
  * que é exatamente `qtd × valorUnitárioCobrado ÷ qtdPorEmbalagem`.
  */
-function qtdDoEstoque(qtdPrescrita, unidadePrescrita, unidadeEstoque) {
-  if (!mesmoGrupo(unidadePrescrita, unidadeEstoque)) return qtdPrescrita;
-  return deBase(paraBase(qtdPrescrita, unidadePrescrita), unidadeEstoque);
+function qtdDoEstoque(qtdPrescrita, unidadePrescrita, unidadeEstoque, dosagemPorAplicacao = null) {
+  if (mesmoGrupo(unidadePrescrita, unidadeEstoque)) {
+    return deBase(paraBase(qtdPrescrita, unidadePrescrita), unidadeEstoque);
+  }
+  // 🔴 RECEITA EM CONTEÚDO CONTRA ESTOQUE EM EMBALAGENS (2026-09-17).
+  //
+  // O item foi escrito em mL/g ANTES de o produto passar a ser medido em 'Un.' — e o
+  // valor BRUTO ali é catastrófico, não só impreciso: "20 mL" debitava 20 EMBALAGENS
+  // de um saldo de 2 e cobrava 20 × o preço do frasco (R$ 2.000 numa dose de R$ 100).
+  //
+  // Não existe conversão possível: o produto não declara quanto cabe na embalagem (é
+  // justamente o que "não é multidose" significa). O que existe é a REGRA do produto —
+  // a embalagem sai inteira a cada aplicação —, e o número de aplicações é dedutível
+  // sem palpite: `qtdPrescrita` já é dosagem × aplicações, então a divisão pela dosagem
+  // devolve as aplicações. 20 mL 2x/dia → 40/20 = 2 embalagens no dia.
+  //
+  // ⚠️ Item NOVO não passa por aqui: ele nasce em 'Un.', que não tem grupo, e cai no
+  // retorno bruto abaixo — "2 Un." são 2 embalagens, sem conversão nenhuma.
+  // ⚠️ Vale para QUALQUER unidade que não seja a avulsa — não só mL/g. O item 179 desta
+  // base está em '%' ("Pasta 10%"), que não tem grupo de conversão: restringir às
+  // unidades de conteúdo deixava 10 % debitando DEZ embalagens.
+  const dose = Number(dosagemPorAplicacao);
+  const receitaEmOutraUnidade = String(unidadePrescrita ?? '').trim() !== '' && !ehAvulsa(unidadePrescrita);
+  if (ehAvulsa(unidadeEstoque) && receitaEmOutraUnidade && Number.isFinite(dose) && dose > 0) {
+    return qtdPrescrita / dose;
+  }
+  return qtdPrescrita;
 }
 
 /**
@@ -202,21 +236,33 @@ async function mapaFormaCalculo(client, itens) {
     .map(i => i.medicamentoCatId);
   const mapa = await catalogoEmpresa.multidosePorItem(client, ids);
   const forma = new Map();
+  // ⚠️ Quem decide é `lib/formaCalculo.unidadeOperativa`, não uma cópia da regra aqui:
+  // ela conhece os quatro estados do cadastro (declara conteúdo, LEGADO sem forma,
+  // marcado sem quantidade, não-multidose) e é a MESMA que o estoque e as telas leem.
   for (const [id, info] of mapa) {
-    if (info?.multidose && info.formaCalculo && Number(info.dosesPorEmbalagem) > 0) {
-      forma.set(id, info.formaCalculo);
-    }
+    forma.set(id, unidadeOperativa(info));
   }
   return forma;
 }
 
 /**
  * A unidade em que ESTE item é contado no estoque.
- * Forma de cálculo quando o produto a declara; senão a unidade do catálogo — o
- * comportamento de sempre, para nenhum cadastro existente mudar de conta.
+ *
+ * Forma de cálculo quando o produto a declara; senão **'Un.'** — a embalagem é a
+ * própria unidade (2026-09-17, a pedido).
+ *
+ * 🔴 NÃO cai mais na unidade do CATÁLOGO, e a diferença é a conta da fatura: aquela é
+ * a unidade da EMBALAGEM e pode ser 'g'/'mL'/'kg', enquanto a entrada de estoque de um
+ * produto sem multidose conta EMBALAGENS (Qtd Total = Qtd Produto). Com 'g' dos dois
+ * lados, uma receita de "20 g" debitava 20 de um saldo de 10 bisnagas e cobrava
+ * 20 × R$/g. Em 'Un.', 1 embalagem debita 1 e custa `valorRepassado ÷ Qtd Produto`.
+ *
+ * ⚠️ `item.unidade` (a unidade GRAVADA na receita) não entra aqui de propósito: quem
+ * decide em que o estoque é contado é o PRODUTO, não o que foi digitado na prescrição
+ * — foi essa inversão que deixou receita e estoque falando línguas diferentes.
  */
-function unidadeDoEstoque(formaMap, item, unidadeCatalogo) {
-  return formaMap?.get(item.medicamentoCatId) ?? unidadeCatalogo ?? item.unidade;
+function unidadeDoEstoque(formaMap, item) {
+  return formaMap?.get(item.medicamentoCatId) ?? UNIDADE_AVULSA;
 }
 
 // 🔴 `hojeLocalStr()` foi REMOVIDA daqui: lia o relógio do SERVIDOR (fixo em
@@ -244,14 +290,14 @@ function janelaDoItem(item, hojeStr) {
 }
 
 function qtdDiariaEstoque(item, unidadeEstoque, resolverQtd = calcularQuantidadeDiaria) {
-  return qtdDoEstoque(resolverQtd(item), item.unidade, unidadeEstoque);
+  return qtdDoEstoque(resolverQtd(item), item.unidade, unidadeEstoque, item.dosagem);
 }
 
 // Converte a quantidade prescrita (item.unidade) para a unidade do estoque via base.
 // Ex: 500g → kg: paraBase(500,'g')=500g → deBase(500,'kg')=0.5 kg
 // Com a FORMA DE CÁLCULO as duas unidades coincidem e a conversão é a identidade.
 function qtdNaUnidadeEstoque(item, unidadeEstoque) {
-  return qtdDoEstoque(calcularQuantidadeTotal(item), item.unidade, unidadeEstoque);
+  return qtdDoEstoque(calcularQuantidadeTotal(item), item.unidade, unidadeEstoque, item.dosagem);
 }
 
 // ─── Multi-lote (FEFO) ───────────────────────────────────────────────────────
@@ -299,7 +345,7 @@ async function criarReservas(tx, grupoId, animalId, itens, empresaId) {
       where: { prescricaoGrupoId: grupoId, estoqueId: { in: estoques.map(e => e.id) } },
     });
 
-    const unidadeEstoque = unidadeDoEstoque(formas, item, estoques[0].medicamento?.unidade);
+    const unidadeEstoque = unidadeDoEstoque(formas, item);
     let restante = qtdNaUnidadeEstoque(item, unidadeEstoque);
 
     for (let i = 0; i < estoques.length && restante > 0.0001; i++) {
@@ -333,7 +379,7 @@ async function consumirReservas(tx, grupoId, itens, empresaId) {
       include: { medicamento: { select: { unidade: true } } },
     });
     if (!estoque) continue;
-    const unidadeEstoque = unidadeDoEstoque(formas, item, estoque.medicamento?.unidade);
+    const unidadeEstoque = unidadeDoEstoque(formas, item);
     const qtdTotal       = calcularQuantidadeTotal(item);
 
     let novaQtd;
@@ -434,7 +480,7 @@ async function debitarEstoqueDia(tx, itens, empresaId, grupoId = null, resolverQ
     if (item.aplicadaPeloProprietario) continue;
     const estoques = await buscarEstoquesFEFO(tx, item.medicamentoCatId, empresaId);
     if (estoques.length === 0) continue;
-    const unidadeEstoque = unidadeDoEstoque(formas, item, estoques[0].medicamento?.unidade);
+    const unidadeEstoque = unidadeDoEstoque(formas, item);
     const qtdDia         = resolverQtd(item);
     // 🔴 O retrato do estoque é tirado ANTES do laço de baixa: MAIOR_VALOR e
     // CUSTO_MEDIO olham o que a clínica TEM no momento da cobrança. Calculado
@@ -442,7 +488,7 @@ async function debitarEstoqueDia(tx, itens, empresaId, grupoId = null, resolverQ
     const entradas = entradasParaCobranca(estoques, unidadeEstoque);
 
     // Quantidade do dia na unidade do estoque.
-    let restante = qtdDoEstoque(qtdDia, item.unidade, unidadeEstoque);
+    let restante = qtdDoEstoque(qtdDia, item.unidade, unidadeEstoque, item.dosagem);
 
     const desc = item.dosagem
       ? `${item.dosagem}${item.unidade ? ' ' + item.unidade : ''} × ${item.frequencia} (1 dose)`
@@ -556,14 +602,16 @@ async function verificarEstoqueParaDia(itens, empresaId, resolverQtd = calcularQ
     if (item.aplicadaPeloProprietario) continue;
     const estoques = await buscarEstoquesFEFO(prisma, item.medicamentoCatId, empresaId);
     if (estoques.length === 0) continue; // medicamento não cadastrado no estoque da clínica — ignorar silenciosamente
-    const unidadeEstoque = unidadeDoEstoque(formas, item, estoques[0].medicamento?.unidade);
-    const necessario      = resolverQtd(item);
+    const unidadeEstoque = unidadeDoEstoque(formas, item);
     const totalEstoque   = estoques.reduce((s, e) => s + (e.qtdEstoque ?? 0), 0);
-    const disponBase     = paraBase(totalEstoque, unidadeEstoque);
-    const necessarioBase = paraBase(necessario, item.unidade);
-    const comparavel     = mesmoGrupo(item.unidade, unidadeEstoque);
+    // 🔴 A COMPARAÇÃO É NA UNIDADE DO ESTOQUE, e só nela (2026-09-17).
+    // `qtdDiariaEstoque`/`qtdNaUnidadeEstoque` JÁ devolvem o necessário nessa unidade
+    // (convertendo quando há grupo comum e contando embalagens quando o produto é
+    // avulso). O par `paraBase` + `comparavel` que existia aqui repetia essa regra pela
+    // metade: no ramo incomparável comparava a quantidade CRUA da receita ("20 mL")
+    // com o saldo em embalagens (2) e acusava falta do que cabe.
     const necessarioEstoque = qtdDiariaEstoque(item, unidadeEstoque, resolverQtd);
-    const insuficiente   = comparavel ? disponBase < necessarioBase : totalEstoque < necessario;
+    const insuficiente   = totalEstoque < necessarioEstoque;
     if (insuficiente) {
       alertas.push({
         tipo:          'INSUFICIENTE',
@@ -591,13 +639,15 @@ async function verificarEstoqueParaExecucao(itens, empresaId) {
       include: { medicamento: { select: { nome: true, unidade: true } } },
     });
     if (!estoque) continue; // medicamento não cadastrado no estoque da clínica — ignorar silenciosamente
-    const unidadeEstoque  = unidadeDoEstoque(formas, item, estoque.medicamento?.unidade);
-    const disponBase      = paraBase(estoque.qtdEstoque ?? 0, unidadeEstoque);
-    const necessarioBase  = paraBase(calcularQuantidadeTotal(item), item.unidade);
-    const comparavel      = mesmoGrupo(item.unidade, unidadeEstoque);
+    const unidadeEstoque  = unidadeDoEstoque(formas, item);
+    // 🔴 A COMPARAÇÃO É NA UNIDADE DO ESTOQUE, e só nela (2026-09-17).
+    // `qtdDiariaEstoque`/`qtdNaUnidadeEstoque` JÁ devolvem o necessário nessa unidade
+    // (convertendo quando há grupo comum e contando embalagens quando o produto é
+    // avulso). O par `paraBase` + `comparavel` que existia aqui repetia essa regra pela
+    // metade: no ramo incomparável comparava a quantidade CRUA da receita ("20 mL")
+    // com o saldo em embalagens (2) e acusava falta do que cabe.
     const necessarioEstoque = qtdNaUnidadeEstoque(item, unidadeEstoque);
-    const insuficiente    = comparavel ? disponBase < necessarioBase
-                                       : estoque.qtdEstoque < calcularQuantidadeTotal(item);
+    const insuficiente    = (estoque.qtdEstoque ?? 0) < necessarioEstoque;
     if (insuficiente) {
       alertas.push({
         tipo:          'INSUFICIENTE',
@@ -626,17 +676,19 @@ async function verificarDisponibilidade(itens, grupoId, empresaId) {
     if (item.aplicadaPeloProprietario) continue;
     const estoques = await buscarEstoquesFEFO(prisma, item.medicamentoCatId, empresaId, grupoId);
     if (estoques.length === 0) continue;
-    const unidadeEstoque = unidadeDoEstoque(formas, item, estoques[0].medicamento?.unidade);
+    const unidadeEstoque = unidadeDoEstoque(formas, item);
     const qtdEstoqueTotal = estoques.reduce((s, e) => s + (e.qtdEstoque ?? 0), 0);
     const todasReservas   = estoques.flatMap(e => e.reservas ?? []);
     const qtdReservada    = todasReservas.reduce((s, r) => s + r.quantidade, 0); // em unidadeEstoque
     const disponivel      = qtdEstoqueTotal - qtdReservada;                      // em unidadeEstoque
 
-    // Compara em unidade base
-    const dispBase  = paraBase(disponivel, unidadeEstoque);
-    const necBase   = paraBase(calcularQuantidadeTotal(item), item.unidade);
-    const comparavel = mesmoGrupo(item.unidade, unidadeEstoque);
-    const necessario = qtdNaUnidadeEstoque(item, unidadeEstoque); // em unidadeEstoque para exibição
+    // 🔴 A COMPARAÇÃO É NA UNIDADE DO ESTOQUE, e só nela (2026-09-17).
+    // `qtdDiariaEstoque`/`qtdNaUnidadeEstoque` JÁ devolvem o necessário nessa unidade
+    // (convertendo quando há grupo comum e contando embalagens quando o produto é
+    // avulso). O par `paraBase` + `comparavel` que existia aqui repetia essa regra pela
+    // metade: no ramo incomparável comparava a quantidade CRUA da receita ("20 mL")
+    // com o saldo em embalagens (2) e acusava falta do que cabe.
+    const necessario = qtdNaUnidadeEstoque(item, unidadeEstoque); // na unidade do estoque
 
     const reservasInfo = todasReservas.map(r => ({
       animalNome:       r.animal.nome,
@@ -644,9 +696,8 @@ async function verificarDisponibilidade(itens, grupoId, empresaId) {
       quantidade:       r.quantidade,
     }));
 
-    const dispInsuf  = comparavel ? dispBase < necBase : disponivel < calcularQuantidadeTotal(item);
-    const dispZerado = comparavel ? Math.abs(dispBase - necBase) < 0.001
-                     : Math.abs(disponivel - calcularQuantidadeTotal(item)) < 0.001;
+    const dispInsuf  = disponivel < necessario;
+    const dispZerado = Math.abs(disponivel - necessario) < 0.001;
 
     if (dispInsuf) {
       alertas.push({
@@ -2797,11 +2848,30 @@ const listarParaExecucao = async (req, res) => {
     // qualquer outro status ele foi removido da prescrição e não deve aparecer.
     const itensVisiveis = g => (g.status === 'CANCELADO' ? g.itens : g.itens.filter(i => i.ativo));
 
+    // 🔴 A UNIDADE QUE A TELA MOSTRA É A QUE O SISTEMA USA (2026-09-17, a pedido).
+    //
+    // A fila exibia `item.unidade` — o SNAPSHOT do que foi escrito na receita. Para o
+    // produto que não declara conteúdo o estoque passou a ser contado em 'Un.', então a
+    // tela dizia "20 mL" enquanto a baixa e a fatura falavam em embalagens. Quem aplica
+    // a dose precisa ler a MESMA unidade que o sistema debita e cobra.
+    //
+    // ⚠️ `unidadeEstoque` vem das MESMAS funções da baixa (`mapaFormaCalculo` +
+    // `unidadeDoEstoque`) — recalculá-la na tela criaria uma segunda regra, e é a
+    // divergência entre as duas que este campo existe para eliminar.
+    // ⚠️ A dosagem PRESCRITA não é reescrita: ela segue no item, e a tela a mostra ao
+    // lado quando difere. Apagá-la esconderia de quem aplica os "20 mL" que o
+    // veterinário indicou.
+    const itensDeTodos = gruposCrus.flatMap(g => g.itens ?? []);
+    const formasFila   = await mapaFormaCalculo(prisma, itensDeTodos);
+
     const grupos = (await anexarFlagEmGrupos(prisma, gruposCrus))
       .map(g => ({
         ...g,
         itens: itensVisiveis(g)
-          .filter(i => !i.aplicadaPeloProprietario && !FREQUENCIAS_FORA_DA_EXECUCAO.has(i.frequencia)),
+          .filter(i => !i.aplicadaPeloProprietario && !FREQUENCIAS_FORA_DA_EXECUCAO.has(i.frequencia))
+          .map(i => (i.tipo === 'MEDICAMENTO' && i.medicamentoCatId
+            ? { ...i, unidadeEstoque: unidadeDoEstoque(formasFila, i) }
+            : i)),
       }))
       .filter(g => g.itens.length > 0);
 
@@ -2930,4 +3000,7 @@ module.exports = {
   // Exportadas para TESTE: a regra da dose multidose quebra em silêncio (o valor da
   // fatura sai errado sem erro nenhum), então precisa de gate sobre a conta PURA.
   qtdDoEstoque,
+  // Idem: "em que unidade este item é contado" decide a baixa E o preço da linha, e
+  // errá-la não produz erro nenhum — só um saldo e uma fatura errados.
+  unidadeDoEstoque,
 };

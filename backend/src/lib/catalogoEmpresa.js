@@ -143,7 +143,10 @@ async function multidosePorItem(client, ids) {
     const temForma = await temColunaFormaCalculo(client);
     const ph = lista.map((_, i) => `$${i + 1}`).join(', ');
     const rows = await client.$queryRawUnsafe(
-      `SELECT id, multidose, doses_por_embalagem${temForma ? ', forma_calculo' : ''}
+      // ⚠️ `unidade` entra porque `formaCalculo.unidadeOperativa` precisa dela para o
+      // LEGADO "multidose com quantidade e sem forma" — ali o estoque foi contado no
+      // CONTEÚDO, e a unidade do catálogo é o que o descreve.
+      `SELECT id, multidose, doses_por_embalagem, unidade${temForma ? ', forma_calculo' : ''}
          FROM schs2vet.tb_medicamentos WHERE id IN (${ph})`, ...lista);
     const mapa = new Map();
     for (const r of rows) {
@@ -151,6 +154,7 @@ async function multidosePorItem(client, ids) {
         multidose: r.multidose === true,
         dosesPorEmbalagem: r.doses_por_embalagem != null ? Number(r.doses_por_embalagem) : null,
         formaCalculo: normalizarFormaCalculo(r.forma_calculo),
+        unidade: r.unidade ?? null,
       });
     }
     return mapa;

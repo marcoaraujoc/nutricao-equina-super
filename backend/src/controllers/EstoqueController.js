@@ -10,7 +10,7 @@ const { definirUnidadeDoMedicamento, UnidadeIndisponivelError } = require('../li
 // 🔴 FORMA DE CÁLCULO (2026-09-16): quando o produto declara conteúdo medido, é ELA a
 // unidade em que o estoque é contado e o preço é calculado — não a da embalagem.
 const catalogoEmpresa = require('../lib/catalogoEmpresa');
-const { normalizarFormaCalculo, numeroPositivo } = require('../lib/formaCalculo');
+const { UNIDADE_AVULSA, unidadeOperativa } = require('../lib/formaCalculo');
 
 /**
  * A unidade OPERATIVA do item: a Forma de Cálculo quando o produto a declara, senão a
@@ -38,32 +38,50 @@ async function anexarFormaAosItens(itens) {
   } : i));
 }
 
-async function formaDeclaradaDoItem(client, medicamentoId) {
+async function formaDeclaradaDoItem(client, medicamentoId, unidadeCatalogo = null) {
   if (!medicamentoId) return null;
   const mapa = await catalogoEmpresa.multidosePorItem(client, [Number(medicamentoId)]);
   const info = mapa.get(Number(medicamentoId));
-  if (info?.multidose && info.formaCalculo && numeroPositivo(info.dosesPorEmbalagem) != null) {
-    return normalizarFormaCalculo(info.formaCalculo);
-  }
-  return null;
-}
-
-async function unidadeOperativaDoItem(client, medicamentoId, unidadeCatalogo) {
-  return (await formaDeclaradaDoItem(client, medicamentoId)) ?? unidadeCatalogo;
+  if (!info) return null;
+  // Fonte ÚNICA: `unidadeOperativa` conhece os quatro estados do cadastro (declara
+  // conteúdo, LEGADO sem forma, marcado sem quantidade, não-multidose). Repetir a
+  // condição aqui daria duas respostas para "em que este item é contado".
+  return unidadeOperativa({ ...info, unidade: info.unidade ?? unidadeCatalogo });
 }
 
 /**
- * 🔴 A ENTRADA DE ESTOQUE NÃO REESCREVE A UNIDADE DE UM PRODUTO QUE DECLARA CONTEÚDO.
+ * A unidade em que ESTA entrada é contada e precificada.
+ *
+ * 🔴 Sem forma declarada devolve **'Un.'**, não a unidade do catálogo (2026-09-17, a
+ * pedido): a entrada de um produto que não é multidose grava `qtdEstoque = Qtd Produto`
+ * (embalagens), então é em EMBALAGEM que ela é contada. Com a unidade do catálogo
+ * ('g', 'kg', 'L') o fator de base entrava na conta e `precoUnitarioBase` saía por
+ * grama/mililitro sobre um número que conta embalagens — mil vezes errado em 'kg'/'L'.
+ * Em 'Un.' o fator é 1 e o preço é exatamente `valorRepassado ÷ Qtd Produto`.
+ *
+ * ⚠️ O parâmetro `unidadeCatalogo` FICOU só para as chamadas existentes e é ignorado —
+ * quem decide a unidade é o PRODUTO (forma de cálculo), nunca a embalagem.
+ */
+async function unidadeOperativaDoItem(client, medicamentoId, unidadeCatalogo) {
+  return (await formaDeclaradaDoItem(client, medicamentoId, unidadeCatalogo)) ?? UNIDADE_AVULSA;
+}
+
+/**
+ * 🔴 A ENTRADA DE ESTOQUE NUNCA REESCREVE A UNIDADE DO PRODUTO.
  *
  * `unidade` no corpo aciona `definirUnidadeDoMedicamento`, que faz COPY-ON-WRITE no
- * catálogo. Com forma de cálculo declarada, a tela manda a unidade OPERATIVA ("mL") —
- * e sem este filtro ela viraria a unidade da EMBALAGEM do produto, trocando "Frasco"
- * por "mL" no cadastro e apagando a distinção entre embalagem e conteúdo.
- * Quem troca a unidade do produto é a tela de Produtos, onde a troca passa pelos
- * guards de estoque já movimentado.
+ * catálogo. O campo Unidade desta tela virou LEITURA e mostra a unidade OPERATIVA
+ * ('mL' com forma declarada, 'Un.' sem ela) — deixá-la chegar ao copy-on-write
+ * trocaria "Frasco"/"g" por "mL"/"Un." no cadastro do produto e apagaria a distinção
+ * entre a embalagem e o que está dentro dela.
+ *
+ * ⚠️ Antes isto só valia para quem DECLARA conteúdo; desde 2026-09-17 o não-multidose
+ * também exibe uma unidade operativa ('Un.'), então o filtro passou a valer para todos.
+ * Quem troca a unidade do produto é a tela de Produtos, onde a troca passa pelos guards
+ * de estoque já movimentado.
  */
-async function unidadeParaResolver(client, medicamentoId, unidadeDoCorpo) {
-  return (await formaDeclaradaDoItem(client, medicamentoId)) ? undefined : unidadeDoCorpo;
+async function unidadeParaResolver() {
+  return undefined;
 }
 
 // Calcula o preço por unidade base a partir do preço total e da quantidade na unidade
@@ -244,7 +262,7 @@ const criar = async (req, res) => {
       estoqueAlarmante = 0,
       fornecedorId,
       notaFiscal,
-      unidade,
+      // ⚠️ `unidade` do corpo é IGNORADA de propósito — ver `unidadeParaResolver`.
     } = req.body;
 
     if (!medicamentoId)
@@ -261,8 +279,7 @@ const criar = async (req, res) => {
     // catálogo GLOBAL produz a CÓPIA da empresa, e é nela que a entrada vai apontar.
     let unidadeResolvida;
     try {
-      unidadeResolvida = await resolverUnidade(
-        req, medicamentoId, await unidadeParaResolver(prisma, medicamentoId, unidade));
+      unidadeResolvida = await resolverUnidade(req, medicamentoId, await unidadeParaResolver());
     } catch (err) {
       const resposta = responderErroUnidade(res, err);
       if (resposta) return resposta;
@@ -384,7 +401,8 @@ const criar = async (req, res) => {
 const atualizar = async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { valor, valorRepassado, lote, validade, estoqueMinimo, estoqueAlarmante, ativo, fornecedorId, notaFiscal, qtdEstoque, qtdEmbalagens, pesoPorEmbalagem, unidade } = req.body;
+    // ⚠️ `unidade` do corpo é IGNORADA de propósito — ver `unidadeParaResolver`.
+    const { valor, valorRepassado, lote, validade, estoqueMinimo, estoqueAlarmante, ativo, fornecedorId, notaFiscal, qtdEstoque, qtdEmbalagens, pesoPorEmbalagem } = req.body;
 
     // Lote e validade são obrigatórios — não podem ser apagados na edição
     if (lote     !== undefined && !lote?.trim()) return res.status(400).json({ error: 'Lote é obrigatório.' });
@@ -453,7 +471,7 @@ const atualizar = async (req, res) => {
         // quantidade na unidade antiga", porque é aqui que a quantidade é reexpressa.
         const u = await definirUnidadeDoMedicamento(tx, {
           medicamentoId:    existe.medicamentoId,
-          unidade:          await unidadeParaResolver(tx, existe.medicamentoId, unidade),
+          unidade:          await unidadeParaResolver(),
           empresaId:        req.empresaId ?? null,
           ignorarEstoqueId: id,
         });

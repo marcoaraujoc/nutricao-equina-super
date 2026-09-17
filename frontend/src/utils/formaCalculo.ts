@@ -25,6 +25,61 @@ export type FormaCalculo = (typeof FORMAS_CALCULO)[number];
 export const FORMA_DOSES: FormaCalculo = 'doses';
 
 /**
+ * 🔴 A unidade do produto que NÃO é multidose (2026-09-17, a pedido).
+ *
+ * Sem multidose a embalagem é a própria unidade: entra inteira no estoque (Qtd Total =
+ * Qtd Produto), a receita é escrita em 'Un.' e a linha da fatura sai por
+ * `valorRepassado ÷ Qtd Produto`. Antes disso a unidade era a da EMBALAGEM do catálogo
+ * ('g', 'mL', 'kg'), e a receita saía numa unidade de CONTEÚDO contra um estoque que
+ * conta embalagens — "20 g" debitava 20 de um saldo de 10 bisnagas.
+ *
+ * ⚠️ MESMA grafia de `backend/src/lib/formaCalculo.js` (que a importa de
+ * `lib/unidadeMedicamento.js`, onde ela nasceu como a opção garantida do seletor).
+ * Divergir ('Un' × 'Un.') faz a receita e o estoque deixarem de casar.
+ */
+export const UNIDADE_AVULSA = 'Un.';
+
+/** O produto declara conteúdo medido por dentro (multidose com forma e quantidade)? */
+export function temConteudoDeclarado(
+  p: { multidose?: boolean | null; formaCalculo?: string | null; dosesPorEmbalagem?: number | string | null } | null | undefined,
+): boolean {
+  if (!p || p.multidose !== true || !p.formaCalculo) return false;
+  const n = Number(p.dosesPorEmbalagem);
+  return Number.isFinite(n) && n > 0;
+}
+
+/**
+ * A unidade em que o produto é CONTADO no estoque, ESCRITO na receita e COBRADO.
+ *
+ * Forma de cálculo quando ele declara conteúdo; **'Un.'** quando não declara.
+ * As três respostas têm de ser a MESMA — duas unidades para o mesmo item é o que fazia
+ * 5 mL virarem 5 frascos na baixa e na fatura.
+ *
+ * ⚠️ `null` para produto AUSENTE (item digitado à mão, fora do catálogo): ali não há
+ * estoque nem preço, e a unidade é escolhida na mão.
+ */
+export function unidadeOperativaProduto(
+  p: {
+    multidose?: boolean | null;
+    formaCalculo?: string | null;
+    dosesPorEmbalagem?: number | string | null;
+    /** A unidade da EMBALAGEM — usada SÓ no legado descrito abaixo. */
+    unidade?: string | null;
+  } | null | undefined,
+): string | null {
+  if (!p) return null;
+  if (temConteudoDeclarado(p)) return p.formaCalculo as string;
+  // 🔴 LEGADO: multidose COM quantidade e SEM forma (cadastro feito entre as migrations
+  // `20261009000000` e `20261012000000`, quando `forma_calculo` ainda não existia). O
+  // estoque desse item foi gravado MULTIPLICANDO pela quantidade — está contado no
+  // CONTEÚDO —, e a unidade do catálogo é o que o descreve. Devolver 'Un.' faria 19,9 mL
+  // de frasco serem lidos como "19,9 unidades".
+  const qtd = Number(p.dosesPorEmbalagem);
+  if (p.multidose === true && Number.isFinite(qtd) && qtd > 0 && p.unidade) return p.unidade;
+  return UNIDADE_AVULSA;
+}
+
+/**
  * Texto livre → a forma canônica da lista (ou `null`).
  *
  * ⚠️ Compara SEM caixa e SEM acento porque o valor pode chegar do banco com a grafia

@@ -30,6 +30,7 @@ import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import JanelaLista from '../components/JanelaLista';
 import CadastroCatalogoModal, { type ItemCatalogoCriado } from '../components/CadastroCatalogoModal';
 import { useOrdenacao, ThOrdenavel } from '../components/OrdenacaoLista';
+import { unidadeOperativaProduto } from '../utils/formaCalculo';
 
 
 
@@ -247,32 +248,28 @@ const QTD_LABEL: Record<string, string> = {
 const VIAS     = ['Oral', 'Endovenosa', 'Intramuscular', 'Subcutânea', 'Tópica', 'Retal', 'Nasal', 'Oftálmica'];
 const UNIDADES = ['cápsula', 'comprimido', 'g', 'gota', 'L', 'mcg', 'mg', 'mL', 'UI'];
 
-// Unidades do catálogo que têm subunidade preferencial para prescrição
-// lookup case-insensitive; opcoes usa o valor original do banco para a unidade maior
-const getConversaoUnidade = (u: string | null): { subunidade: string; opcoes: string[] } | null => {
-  if (!u) return null;
-  const lower = u.toLowerCase();
-  if (lower === 'l')  return { subunidade: 'mL', opcoes: ['mL', u] };
-  if (lower === 'kg') return { subunidade: 'g',  opcoes: ['g',  u] };
-  return null;
-};
-
 /**
- * 🔴 A UNIDADE DA DOSAGEM É A FORMA DE CÁLCULO DO PRODUTO (2026-09-16, a pedido).
+ * 🔴 A UNIDADE DA DOSAGEM É A DO PRODUTO — nunca a da embalagem (2026-09-16, ampliada
+ * em 2026-09-17 a pedido).
  *
  * O campo era "valor + Unidade", e a Unidade era a da EMBALAGEM: num frasco cadastrado
  * como "1 Un." a receita saía em unidades, e uma dose de 5 mL debitava cinco FRASCOS do
- * estoque e cobrava cinco frascos. Com a forma de cálculo declarada, receita, estoque e
- * fatura passam a falar a mesma língua e a conversão deixa de existir.
+ * estoque e cobrava cinco frascos. Agora:
  *
- * ⚠️ Produto sem forma de cálculo (o não-multidose) mantém o comportamento de sempre:
- * a unidade do catálogo, com a subunidade quando ela existe (L → mL, kg → g).
+ *   • produto MULTIDOSE   → a Forma de Cálculo declarada (mL, g, doses…);
+ *   • produto SEM multidose → **'Un.'** — a embalagem é a própria unidade, entra
+ *     inteira no estoque e é cobrada por `valorRepassado ÷ Qtd Produto`.
+ *
+ * ⚠️ O ramo do não-multidose caía na unidade do CATÁLOGO com a subunidade (L → mL,
+ * kg → g). Era a mesma divergência por outro caminho: o estoque conta EMBALAGENS e a
+ * receita saía no CONTEÚDO, então "20 g" debitava 20 de um saldo de 10 bisnagas.
+ *
+ * ⚠️ `null` só para item FORA do catálogo (digitado à mão): ali não há estoque nem
+ * preço, e a unidade continua sendo escolhida no `<select>`.
+ * Regra ÚNICA em `utils/formaCalculo.ts` — a Farmácia lê a mesma.
  */
-const formaDoMedicamento = (m: MedicamentoCat | null | undefined): string | null => {
-  if (!m || m.multidose !== true || !m.formaCalculo) return null;
-  const n = Number(m.dosesPorEmbalagem);
-  return Number.isFinite(n) && n > 0 ? m.formaCalculo : null;
-};
+const unidadeDoProduto = (m: MedicamentoCat | null | undefined): string | null =>
+  unidadeOperativaProduto(m);
 
 const STATUS_GRUPO: Record<StatusGrupo, { label: string; cls: string }> = {
   SALVO:                { label: 'Salvo',               cls: 'bg-amber-100 text-amber-700'    },
@@ -791,7 +788,16 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
       tipo:             i.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
       medicamento:      i.descricao,
       medicamentoCatId: i.tipo === 'MEDICAMENTO' ? i.refId : null,
-      unidade:          i.unidade ?? '',
+      // 🔴 A UNIDADE É DO PRODUTO, não a que o orçamento gravou (2026-09-17). O item do
+      // orçamento carrega a unidade da EMBALAGEM do catálogo ('mL', 'g'), e importá-la
+      // fazia nascer um item NOVO divergente do estoque — que conta 'Un.' quando o
+      // produto não declara conteúdo. A dosagem continua vazia: quem a digita é o vet,
+      // já vendo a unidade travada ao lado.
+      // ⚠️ Produto ainda não carregado na lista (a busca é paginada) mantém a unidade do
+      // orçamento; o backend protege a conta nesse caso (ver `qtdDoEstoque`).
+      unidade:          (i.tipo === 'MEDICAMENTO'
+                          ? unidadeDoProduto(medicamentos.find(m => m.id === i.refId))
+                          : null) ?? i.unidade ?? '',
       // Posologia orçada volta preenchida (só medicamento tem dias/frequência)
       frequencia:       i.frequencia ?? '',
       duracaoDias:      i.dias ?? '',
@@ -856,16 +862,15 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
    *  de um remédio para outro. Só sobrevivem o tipo e o que vem do catálogo do
    *  medicamento novo. */
   const selecionarMedicamento = (m: MedicamentoCat) => {
-    const forma = formaDoMedicamento(m);
-    const conv  = getConversaoUnidade(m.unidade);
     setErroAcao(null);
     setForm({
       ...FORM_VAZIO(),
       tipo:             form.tipo,
       medicamento:      m.nome,
       medicamentoCatId: m.id,
-      // A forma de cálculo VENCE: é a unidade em que o estoque deste item é contado.
-      unidade:          forma ?? (conv ? conv.subunidade : m.unidade),
+      // A unidade do PRODUTO vence sempre: é nela que o estoque deste item é contado
+      // (Forma de Cálculo quando declarada, 'Un.' quando não).
+      unidade:          unidadeDoProduto(m) ?? m.unidade,
       via:              m.vias[0]?.via ?? '',
     });
   };
@@ -1524,14 +1529,11 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     ? medicamentos.find(m => m.id === form.medicamentoCatId) ?? null
     : null;
   const viasDisponiveis = medCatalogo?.vias.map(v => v.via) ?? VIAS;
-  const formaCalculoItem = formaDoMedicamento(medCatalogo);
-  const catalogoUnidade  = medCatalogo?.unidade ?? null;
-  // ⚠️ Com forma de cálculo NÃO há conversão a oferecer: a receita é escrita na MESMA
-  // unidade do estoque, e deixar trocar para a subunidade (mL → L) reintroduziria
-  // exatamente a divergência que a forma de cálculo veio eliminar.
-  const conversaoUnidade = formaCalculoItem ? null : getConversaoUnidade(catalogoUnidade);
-  // trava o campo apenas quando NÃO há subunidade (ex: mg, mL, UI)
-  const unidadeCatalogo  = formaCalculoItem ?? (conversaoUnidade ? null : catalogoUnidade);
+  // ⚠️ NÃO há conversão a oferecer: a receita é escrita na MESMA unidade em que o
+  // estoque é contado, e deixar trocar para a subunidade (mL → L, kg → g)
+  // reintroduziria exatamente a divergência que a unidade do produto veio eliminar.
+  // Item do catálogo tem a unidade TRAVADA; só o digitado à mão mantém o `<select>`.
+  const unidadeCatalogo  = unidadeDoProduto(medCatalogo);
   const itensExibidos = isCreate ? localItens : serverItens;
   const editandoItem  = editingLocalIdx !== null || editingServerId !== null;
 
@@ -1713,10 +1715,8 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                         ) : (
                           <select value={form.unidade} onChange={e => set('unidade', e.target.value)}
                             className="w-20 flex-shrink-0 px-1 py-2 text-sm text-gray-700 focus:outline-none bg-transparent cursor-pointer">
-                            {conversaoUnidade
-                              ? conversaoUnidade.opcoes.map(u => <option key={u}>{u}</option>)
-                              : <><option value="">—</option>{UNIDADES.map(u => <option key={u}>{u}</option>)}</>
-                            }
+                            <option value="">—</option>
+                            {UNIDADES.map(u => <option key={u}>{u}</option>)}
                           </select>
                         )}
                       </div>
@@ -1858,10 +1858,8 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                         ) : (
                           <select value={form.unidade} onChange={e => set('unidade', e.target.value)}
                             className="px-2 py-2 text-sm text-gray-700 focus:outline-none bg-transparent cursor-pointer">
-                            {conversaoUnidade
-                              ? conversaoUnidade.opcoes.map(u => <option key={u}>{u}</option>)
-                              : <><option value="">—</option>{UNIDADES.map(u => <option key={u}>{u}</option>)}</>
-                            }
+                            <option value="">—</option>
+                            {UNIDADES.map(u => <option key={u}>{u}</option>)}
                           </select>
                         )}
                       </div>

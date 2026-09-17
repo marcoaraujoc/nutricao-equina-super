@@ -244,7 +244,8 @@ export default function FormProduto({
               </span>
               <span className="block text-[11px] text-gray-500 leading-snug">
                 A embalagem rende mais de uma aplicação e é medida por dentro
-                (frasco de 20&nbsp;mL, bisnaga de 50&nbsp;g…).
+                (frasco de 20&nbsp;mL, bisnaga de 50&nbsp;g…). Desmarcado, o produto é
+                medido em <b>Un.</b>
               </span>
             </span>
           </label>
@@ -293,7 +294,9 @@ export default function FormProduto({
                   ? `Cada embalagem entra no estoque como ${form.dosesPorEmbalagem} ${form.formaCalculo}, `
                     + `a receita é escrita em ${form.formaCalculo} e a fatura sai pelo preço da embalagem ÷ ${form.dosesPorEmbalagem}.`
                   : 'Informe a Forma de Cálculo e a Qtd — é desse par que saem a baixa do estoque e o valor da dose na fatura.')
-              : 'Desmarcado, a embalagem é a própria unidade: entra inteira no estoque e é cobrada inteira a cada uso.'}
+              : 'Desmarcado, a Forma de Cálculo é Un.: a embalagem é a própria unidade — entra inteira no '
+                + 'estoque (Qtd Total = Qtd Produto), a receita é escrita em Un. e a fatura sai pelo valor '
+                + 'repassado ÷ Qtd Produto.'}
           </p>
         </div>
       )}
