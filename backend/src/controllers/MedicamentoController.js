@@ -638,9 +638,14 @@ const garantirCatalogoManual = async (req, res) => {
           : `UPDATE schs2vet.tb_medicamentos
                 SET multidose = $2, doses_por_embalagem = $3
               WHERE id = $1 AND empresa_id IS NOT NULL`,
+        // 🔴 O NÚMERO VALE NOS DOIS ESTADOS desde 2026-09-19 (ver
+        // `catalogoEmpresa.gravarMultidose`): com multidose ele é o conteúdo na FORMA
+        // DE CÁLCULO; sem, é o conteúdo na UNIDADE do produto, e diz quantas embalagens
+        // o curso gasta. Zerá-lo aqui apagaria esse cadastro em silêncio. A FORMA
+        // continua exclusiva do multidose — é ela que muda a unidade operativa.
         ...(temForma
-          ? [Number(id), marcado, marcado ? qtd : null, marcado ? forma : null]
-          : [Number(id), marcado, marcado ? qtd : null]),
+          ? [Number(id), marcado, qtd, marcado ? forma : null]
+          : [Number(id), marcado, qtd]),
       ).catch(() => {});
     }
 

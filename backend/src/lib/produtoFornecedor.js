@@ -394,8 +394,42 @@ async function gravarFornecedorNoLote(client, loteId, { fornecedorId, notaFiscal
   } catch { return false; }
 }
 
+/**
+ * O fornecedor e a NF de cada lote de vacina, em BLOCO (id → { fornecedorId, nome,
+ * notaFiscal }) — para a LISTAGEM anexar sem uma consulta por linha.
+ *
+ * ⚠️ SQL cru com `catch` (§11): as colunas são da migration `20261006000000` e o
+ * client pode não conhecê-las. Sem elas devolve o mapa VAZIO e a tela cai no
+ * comportamento anterior (sem fornecedor), em vez de derrubar o estoque inteiro.
+ * ⚠️ O nome sai do JOIN com `tb_fornecedores`, que está sob RLS — fornecedor de outra
+ * clínica não é resolvido, e a linha fica só com o id.
+ */
+async function fornecedoresDeLotes(client, loteIds) {
+  const ids = (Array.isArray(loteIds) ? loteIds : []).map(Number).filter(Boolean);
+  const mapa = new Map();
+  if (ids.length === 0 || !(await temColunasLote())) return mapa;
+  try {
+    const rows = await client.$queryRawUnsafe(
+      `SELECT l.id, l.fornecedor_id, l.nota_fiscal, f.nome AS fornecedor_nome
+         FROM schs2vet.tb_lotes_vacina l
+         LEFT JOIN schs2vet.tb_fornecedores f ON f.id = l.fornecedor_id
+        WHERE l.id = ANY($1::int[])`,
+      ids,
+    );
+    for (const r of rows ?? []) {
+      mapa.set(Number(r.id), {
+        fornecedorId:   r.fornecedor_id != null ? Number(r.fornecedor_id) : null,
+        fornecedorNome: r.fornecedor_nome ?? null,
+        notaFiscal:     r.nota_fiscal ?? null,
+      });
+    }
+  } catch { /* coluna ausente ou base sem a migration — mapa vazio */ }
+  return mapa;
+}
+
 module.exports = {
   temTabela,
+  fornecedoresDeLotes,
   temColunasLote,
   temColunasMultidose,
   dosesPorEmbalagemDeMedicamentos,

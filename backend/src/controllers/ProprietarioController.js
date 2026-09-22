@@ -16,7 +16,8 @@ const { cancelarPendenciasDoAnimal } = require('../lib/cancelamentoPendencias');
 // Localidades atendidas do cliente, com a frequência de visitas de CADA uma
 const localidadesProp = require('../lib/proprietarioLocalidades');
 // Tabela de ligação usuário × empresa — perfil PROPRIETARIO + cadastro da empresa
-const { salvarVinculo, ehProfissionalNaEmpresa, definirAtivoNaEmpresa } = require('../lib/usuarioEmpresa');
+const { salvarVinculo, ehProfissionalNaEmpresa, definirAtivoNaEmpresa,
+        salvarPagamentoEAcesso, lerPagamentoEAcesso } = require('../lib/usuarioEmpresa');
 const { gerarSenhaInicial } = require('../lib/senhaInicial');
 const { cadastroDaPessoaNaEmpresa, montarResposta } = require('../lib/cadastroPorEmail');
 
@@ -26,6 +27,57 @@ function validarDiaVencimento(valor) {
   const n = Number(valor);
   return valor !== undefined && valor !== null && valor !== '' &&
     Number.isInteger(n) && n >= 1 && n <= 25;
+}
+
+/**
+ * Liga/desliga o acesso do CLIENTE ao sistema naquela empresa (a pedido, 2026-09-18).
+ *
+ * 🔴 MESMA LÓGICA do "Terá acesso ao sistema" do Incluir Membro, e pelo mesmo caminho:
+ * `tb_usuario_empresa.acesso_sistema`, que é POR EMPRESA e é quem `podeAcessarSistema`
+ * consulta no login, no 2FA, no Google OAuth e no refresh. Não existe uma segunda
+ * chave de acesso para cliente — reimplementá-la aqui criaria duas respostas possíveis
+ * para "esta pessoa pode entrar?".
+ *
+ * ⚠️ Por SQL cru (o helper já faz isso): a coluna nasceu na migration 20260812000002 e
+ * o client Prisma pode não conhecê-la — passá-la ao `upsert` tipado derrubaria o
+ * cadastro inteiro do proprietário numa base cujo `generate` ficou para trás (§11).
+ *
+ * ⚠️ `undefined` NÃO MEXE em nada. Cliente antigo, ou tela que não manda o campo,
+ * mantém o acesso que tem — assumir `false` revogaria o login de todo mundo no
+ * primeiro salvar, em silêncio.
+ *
+ * @returns {Promise<boolean>} true quando o acesso ACABOU de ser liberado (estava
+ *   desligado e passou a ligado) — é esse o gatilho do e-mail com a senha.
+ */
+async function aplicarAcessoSistema(client, userId, empresaId, acessoSistema) {
+  if (acessoSistema === undefined || !empresaId) return false;
+  const querLiberar = acessoSistema === true;
+  let estavaBloqueado = false;
+  try {
+    // ⚠️ `lerPagamentoEAcesso` recebe uma LISTA e devolve um Map por userId — não um
+    // objeto. Passar o id solto devolveria um Map vazio e o e-mail nunca sairia.
+    const mapa = await lerPagamentoEAcesso(client, [userId], empresaId);
+    estavaBloqueado = mapa.get(Number(userId))?.acessoSistema === false;
+  } catch { /* sem vínculo lido ainda — trata como "não sei", e aí não anuncia nada */ }
+
+  await salvarPagamentoEAcesso(client, userId, empresaId, { acessoSistema: querLiberar });
+  return querLiberar && estavaBloqueado;
+}
+
+/**
+ * Anexa `acessoSistema` a cada cliente da lista — UMA consulta para a página inteira.
+ *
+ * ⚠️ Em BLOCO, nunca uma ida ao banco por linha: a lista de clientes tem centenas de
+ * itens, e é o mesmo cuidado de `anexarTrilhaAtivacaoEmLista` logo ao lado.
+ * ⚠️ Sem vínculo lido (cliente legado, coluna não migrada) devolve `true`: é o estado
+ * em que ele está hoje, e mostrar "sem acesso" faria a tela oferecer liberar algo que
+ * já está liberado.
+ */
+async function anexarAcessoEmLista(lista, empresaId) {
+  const itens = Array.isArray(lista) ? lista : [];
+  if (itens.length === 0 || !empresaId) return itens;
+  const mapa = await lerPagamentoEAcesso(prisma, itens.map(p => p?.id), empresaId);
+  return itens.map(p => ({ ...p, acessoSistema: mapa.get(Number(p?.id))?.acessoSistema !== false }));
 }
 
 const SELECT_PROPRIETARIO = {
@@ -180,6 +232,10 @@ const ProprietarioController = {
       proprietarios = await localidadesProp.anexarEmLista(proprietarios, req.empresaId);
       // Trilha de ativação/inativação (quem, quando) — abas Ativos/Inativos da tela
       proprietarios = await perfilProp.anexarTrilhaAtivacaoEmLista(proprietarios, req.empresaId);
+      // Acesso ao sistema (2026-09-18) — é o que faz o formulário abrir com o
+      // interruptor no estado REAL. Sem isso ele nasceria sempre ligado e o primeiro
+      // salvar devolveria o login a quem a clínica tinha bloqueado.
+      proprietarios = await anexarAcessoEmLista(proprietarios, req.empresaId);
 
       res.json({ sucesso: true, dados: proprietarios });
     } catch (err) {
@@ -212,7 +268,8 @@ const ProprietarioController = {
       const localidadesSugeridas = await localidadesProp.localidadesSugeridasDeAnimais(
         proprietario.id, req.empresaId,
       );
-      res.json({ sucesso: true, dados: { ...comLocalidades, localidadesSugeridas } });
+      const [comAcesso] = await anexarAcessoEmLista([comLocalidades], req.empresaId);
+      res.json({ sucesso: true, dados: { ...comAcesso, localidadesSugeridas } });
     } catch (err) {
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar proprietário' });
     }
@@ -359,6 +416,7 @@ const ProprietarioController = {
           ativo: true,
         });
         const perfilCriado = await perfilProp.salvarPerfil(prisma, existente.id, req.empresaId, { ...dadosDaEmpresa, ativo: true });
+        await aplicarAcessoSistema(prisma, existente.id, req.empresaId, req.body?.acessoSistema);
         await localidadesProp.salvarLocalidades(prisma, existente.id, req.empresaId, locParsed.localidades);
         // Perfil nasce ativo=true: grava a trilha de ativação também na CRIAÇÃO,
         // senão "Ativado em/por" fica vazio até alguém desativar e reativar.
@@ -420,6 +478,7 @@ const ProprietarioController = {
         if (req.empresaId) {
           await salvarVinculo(tx, criado.id, req.empresaId, { perfil: 'PROPRIETARIO', ...dadosDaEmpresa, ativo: true });
           const perfilCriado = await perfilProp.salvarPerfil(tx, criado.id, req.empresaId, { ...dadosDaEmpresa, ativo: true });
+          await aplicarAcessoSistema(tx, criado.id, req.empresaId, req.body?.acessoSistema);
           await localidadesProp.salvarLocalidades(tx, criado.id, req.empresaId, locParsed.localidades);
           // Perfil nasce ativo=true: grava a trilha de ativação também na CRIAÇÃO,
           // senão "Ativado em/por" fica vazio até alguém desativar e reativar.
@@ -493,6 +552,11 @@ const ProprietarioController = {
         const duplicado = await prisma.user.findFirst({ where: { ...whereEmailInsensitive(emailNovo), id: { not: Number(id) } }, select: { id: true } });
         if (duplicado) return res.status(409).json({ sucesso: false, mensagem: 'E-mail já está em uso' });
       }
+
+      // Acesso liberado NESTE salvar? É o gatilho do e-mail com os dados de acesso —
+      // preenchido dentro da transaction e lido depois do commit (o e-mail não pode
+      // sair antes de a gravação existir, nem derrubá-la se o envio falhar).
+      let liberouAcessoAgora = false;
 
       // Dados cadastrais → PERFIL DA EMPRESA ATIVA. É isto que impede que a edição
       // feita na empresa A altere o cadastro que a empresa B mantém do mesmo cliente.
@@ -593,10 +657,32 @@ const ProprietarioController = {
           ...dadosDaEmpresa,
         });
         const perfil = await perfilProp.salvarPerfil(tx, Number(id), req.empresaId, dadosDaEmpresa);
+        // 🔴 O ACESSO É APLICADO NA ALTERAÇÃO TAMBÉM (a pedido, 2026-09-18): marcar a
+        // opção libera o login "independente do momento" — cadastro novo ou edição de
+        // um cliente que já existe. É por isso que a mesma chamada está nos três
+        // caminhos, e não só na criação.
+        liberouAcessoAgora = await aplicarAcessoSistema(tx, Number(id), req.empresaId, req.body?.acessoSistema);
         await localidadesProp.salvarLocalidades(tx, Number(id), req.empresaId, locParsed.localidades);
         await registrarAlteracao(tx, req, { entidade: 'PROPRIETARIO', entidadeId: Number(id), campos: camposDiff });
         return perfilProp.mesclar(base, perfil);
       });
+
+      // 🔴 ACESSO LIBERADO NUMA ALTERAÇÃO → manda a senha (a pedido, 2026-09-18).
+      // ⚠️ A senha é DERIVADA do cadastro (`gerarSenhaInicial`), a MESMA que a criação
+      // usa — e sai SÓ pelo e-mail, nunca na resposta: quem está preenchendo este
+      // formulário é um TERCEIRO, não o dono da conta (regra de 2026-09-08).
+      // ⚠️ Determinística de propósito: reenviar o acesso não redefine a senha de quem
+      // já entrou uma vez — quem já trocou continua com a dele, e `mustChangePassword`
+      // segue sendo o que obriga a troca no primeiro acesso.
+      // ⚠️ Fire-and-forget, DEPOIS do commit: falha de e-mail não desfaz o cadastro.
+      if (liberouAcessoAgora) {
+        emailService.enviarBoasVindasProprietario({
+          destinatarioEmail: emailNovo,
+          destinatarioNome:  fullName.trim(),
+          criadoPorNome:     req.user?.fullName ?? '',
+          senhaInicial:      gerarSenhaInicial({ email: emailNovo, nome: fullName, telefone: phone }),
+        }).catch(err => console.warn('[ProprietarioController] Falha ao enviar acesso:', err?.message));
+      }
 
       res.json({ sucesso: true, dados: await localidadesProp.anexar(proprietario, req.empresaId) });
     } catch (err) {

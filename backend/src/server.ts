@@ -1108,6 +1108,25 @@ registrarJob('marcar_agendamentos_atrasados', {
     porEmpresa('AgendamentoAtraso-Cron', 'agendamento', marcarAgendamentosAtrasados)),
 });
 
+// ===================== CRON — FINALIZAÇÃO DE ATENDIMENTO ABANDONADO =====================
+// Corporativo (todas as empresas). Evolução EM_ANDAMENTO aberta há mais de 48h é
+// FINALIZADA com a justificativa "Finalizada pelo Sistema", arrastando a cascata de
+// sempre (agendamento → FINALIZADO, prescrição/vacina SALVAS → plantão).
+// 🔴 A rotina NÃO existia (foi relatada como existente em 2026-09-18): o cron de
+// agendamento encerrava o AG e deixava a evolução aberta para sempre — ver o cabeçalho
+// de `services/evolucaoCronService.js`.
+// ⚠️ 23:50, DEPOIS do cancelamento de agendamentos (23:30) e das prescrições (23:40):
+// rodando antes, ela finalizaria o atendimento e mandaria a prescrição ao plantão no
+// mesmo minuto em que o outro cron a cancelaria por fim de janela.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { finalizarEvolucoesAbandonadas } = require('./services/evolucaoCronService');
+registrarJob('finalizar_evolucoes_abandonadas', {
+  nome: 'Finalização de atendimentos em aberto há mais de 48h',
+  exprPadrao: '50 23 * * *', // diariamente às 23:50
+  fn: () => comAlerta('Finalização de atendimentos abandonados',
+    porEmpresa('EvolucaoAbandonada-Cron', 'atendimento', finalizarEvolucoesAbandonadas)),
+});
+
 // ===================== CRON — CANCELAMENTO DE PRESCRIÇÕES NÃO EXECUTADAS =====================
 // Corporativo (todas as empresas). Grupos FINALIZADO cuja janela de tratamento de todos os
 // itens já passou: sem nenhuma execução → CANCELADO; execução parcial → CANCELADO_PARCIALMENTE

@@ -20,6 +20,30 @@
 
 const prisma = require('../lib/prisma').default;
 const notaFiscalService = require('../services/notaFiscalService');
+const { ehFalhaTransitoria } = require('../ai/retentativa');
+
+/**
+ * O motivo que vai À TELA, a partir da falha real.
+ *
+ * 🔴 A MENSAGEM ÚNICA MENTIA SOBRE A CAUSA (2026-09-19). Toda falha saía como
+ * "confira se a foto/PDF está legível" — inclusive o `Gemini API error 503: high
+ * demand`, que foi o que aconteceu de verdade (log de IA id 517). A pessoa tinha um
+ * cupom perfeitamente legível na mão, já lido com sucesso sete minutos antes, e a
+ * tela mandava ela desconfiar da foto: refotografar, recortar, trocar o arquivo —
+ * tudo sobre o que estava certo, enquanto a ação útil era esperar um minuto.
+ * ⚠️ Mensagem que aponta a causa errada é pior que mensagem genérica: ela não só
+ * deixa de ajudar, ela MANDA trabalhar no lugar errado.
+ * ⚠️ O texto cru do provedor não vai à tela ("fetch failed", dump de JSON): ele não
+ * diz o que fazer. O detalhe fica no log, que é onde se investiga (lição de
+ * 2026-09-01, `documentoConversaoService`).
+ */
+function motivoDaFalha(err) {
+  if (ehFalhaTransitoria(err)) {
+    return 'O serviço de leitura automática está sobrecarregado neste momento — '
+         + 'não é problema do seu documento. Aguarde alguns instantes e tente de novo.';
+  }
+  return 'Não foi possível ler o documento enviado. Confira se a foto/PDF está legível e tente de novo.';
+}
 
 /**
  * O fornecedor lido na nota JÁ existe nesta empresa?
@@ -60,11 +84,14 @@ async function acharFornecedor(empresaId, { cnpj, cpf, nome }) {
   return null;
 }
 
-// ⚠️ A ROTA FOI DESMONTADA em 2026-09-15: "Ler documento de compra" saiu da tela de
-// Produtos (que passou a cadastrar o ITEM, não a compra). Este controller e
-// `services/notaFiscalService` continuam inteiros e podem ser remontados em uma linha
-// em `routes/produtos.js` — provavelmente na Farmácia, que é quem trata de compra.
-// Rota anterior: POST /api/cadastro/produtos/nota-fiscal  (multipart: paginas[] + texto)
+// ⚠️ DUAS ROTAS, UM CONTROLLER — não duplicar ao acrescentar uma terceira tela:
+//   POST /api/farmacia/estoque/documento-compra   (gate farmacia.estoque.criar)
+//   POST /api/vacinas/estoque/documento-compra    (gate vacina.estoque.criar)
+// Só o GATE difere; o que muda na tela é `tipoItem`, resolvido no front. Duas leituras
+// divergiriam na primeira correção (armadilha 28-g).
+// Histórico: nasceu em `/cadastro/produtos/nota-fiscal`, foi desmontada em 2026-09-15
+// (a tela de Produtos passou a cadastrar o ITEM, não a compra) e remontada na Farmácia
+// em 2026-09-18 — o controller ficou inteiro de propósito, e a volta custou uma linha.
 const ler = async (req, res, next) => {
   try {
     const paginas = (req.files ?? []).map(f => ({ buffer: f.buffer, mimetype: f.mimetype }));
@@ -82,10 +109,11 @@ const ler = async (req, res, next) => {
       // manual é aceitável; cair sem saber por quê, não (lição de 2026-09-01).
       console.error('NotaFiscalController.ler:', err);
       return res.json({
-        // ⚠️ O motivo aparece NA TELA. Ele precisa dizer o que a pessoa pode fazer —
-        // a mensagem crua da biblioteca ("fetch failed", dump do Prisma) não diz.
-        // O detalhe fica no log acima, que é onde se investiga.
-        dados: { ehNotaFiscal: false, motivo: 'Não foi possível ler o documento enviado. Confira se a foto/PDF está legível e tente de novo.' },
+        // ⚠️ O motivo aparece NA TELA e precisa dizer o que a pessoa pode fazer —
+        // "tente de novo" e "troque a foto" são ações DIFERENTES, e mandar a errada
+        // custa o trabalho de refazer um documento que estava certo. Ver
+        // `motivoDaFalha` acima. O detalhe técnico fica no log, que é onde se investiga.
+        dados: { ehNotaFiscal: false, motivo: motivoDaFalha(err) },
       });
     }
 

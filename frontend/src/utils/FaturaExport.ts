@@ -27,6 +27,32 @@ interface ItemMin   {
   // Agrupamento de insumo de aplicação (seringa/agulha) sob o medicamento — ver
   // utils/faturaInsumos.ts. A fatura impressa segue a MESMA ordem da tela.
   prescricaoItemId?: number | null; insumoDe?: number | null;
+  // Contribuições da linha — de qual atendimento/vacina veio cada unidade (2026-09-17).
+  origens?: { id: number; quantidade: number; data: string | null; numero: string | null }[];
+}
+
+/**
+ * A observação da linha, em texto — "AG-0012 · 15/09 · 3 un.", uma por execução.
+ *
+ * 🔴 NÃO É ENFEITE NO PAPEL. Antes da consolidação, cada aplicação era uma LINHA na
+ * fatura do cliente, com o número do atendimento e a data dela. Consolidar sem trazer
+ * esse detalhe junto entregaria ao cliente um "Quant.: 5" que ele não tem como
+ * conferir — menos informação do que ele recebia antes, não mais.
+ *
+ * ⚠️ Uma contribuição só não vira observação: a linha inteira já diz o mesmo, e repetir
+ * o número embaixo de cada item de fatura de aplicação única viraria ruído em toda
+ * folha. Insumo (seringa/agulha) também fica de fora — é filho da dose logo acima.
+ */
+function observacaoOrigens(i: ItemMin): string {
+  const origens = i.insumoDe != null ? [] : (i.origens ?? []);
+  if (origens.length < 2) return '';
+  const linhas = origens.map(o => {
+    const data = o.data
+      ? new Date(o.data).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
+      : '—';
+    return `${o.numero ?? 'Sem número'} &middot; ${data} &middot; ${o.quantidade} un.`;
+  });
+  return `<br/><small style="color:#6b7280">${linhas.join('<br/>')}</small>`;
 }
 
 // Desconto e total líquido do item — mesma regra do backend (lib/faturaUtils.js)
@@ -139,7 +165,7 @@ export function gerarHtmlFatura(
     const linhasItens = ordenarComInsumos(g.itens).map(i => `
       <tr>
         <td><span class="badge ${i.tipo.toLowerCase()}">${i.tipo}</span></td>
-        <td${i.insumoDe != null ? ' style="padding-left:22px;color:#4b5563;font-size:11px"' : ''}>${i.descricao}${labelDesconto(i) ? `<br/><small style="color:#dc2626">Desconto ${labelDesconto(i)} (−${brl(descontoItem(i))})</small>` : ''}</td>
+        <td${i.insumoDe != null ? ' style="padding-left:22px;color:#4b5563;font-size:11px"' : ''}>${i.descricao}${observacaoOrigens(i)}${labelDesconto(i) ? `<br/><small style="color:#dc2626">Desconto ${labelDesconto(i)} (−${brl(descontoItem(i))})</small>` : ''}</td>
         <td class="center">${i.quantidade}</td>
         <td class="right">${brl(i.valor)}</td>
         <td class="right">${brl(totalItem(i))}</td>

@@ -8,6 +8,11 @@ const catalogoEmpresa = require('../lib/catalogoEmpresa');
 const { escopoCatalogoEmpresa } = require('../middlewares/empresaAtiva.middleware');
 const { registrarAuditoria } = require('../lib/auditoria');
 const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
+// 🔴 A COMPRA DE VACINA PASSOU A VIRAR CONTA A PAGAR (2026-09-19) — ver
+// `lancarCompraDaVacina` logo abaixo. A farmácia já lançava desde 2026-09-18; o
+// estoque de vacinas gravava o lote e a dívida não existia em lugar nenhum.
+const contasPagar     = require('../lib/contasPagar');
+const produtoFornecedor = require('../lib/produtoFornecedor');
 
 const INCLUDE_LOTE = {
   vacina:         { select: { id: true, nome: true, fabricante: true, via: true, ativo: true } },
@@ -108,7 +113,17 @@ const listar = async (req, res) => {
       include: INCLUDE_LOTE,
       orderBy: { validade: 'asc' },
     });
-    const lotes = await anexarTrilha(lotesRaw, 'lote_vacina');
+    const comTrilha = await anexarTrilha(lotesRaw, 'lote_vacina');
+    // 🔴 DE QUEM VEIO O FRASCO — em BLOCO, nunca uma consulta por linha. Sem isto a
+    // tela abriria a EDIÇÃO com o fornecedor em branco e o salvar o APAGARIA, em
+    // silêncio (a mesma lição do `temposConsulta` em 2026-07-28 parte 4).
+    const forns = await produtoFornecedor.fornecedoresDeLotes(prisma, comTrilha.map(l => l.id));
+    const lotes = comTrilha.map(l => ({
+      ...l,
+      fornecedorId:   forns.get(l.id)?.fornecedorId   ?? null,
+      fornecedorNome: forns.get(l.id)?.fornecedorNome ?? null,
+      notaFiscal:     forns.get(l.id)?.notaFiscal     ?? null,
+    }));
 
     const hoje = new Date();
     const em30 = new Date(); em30.setDate(em30.getDate() + 30);
@@ -400,6 +415,67 @@ function normValidade(v) {
 
 // ─── Criar lote de vacina ────────────────────────────────────────────────────
 
+/**
+ * 🔴 A COMPRA DE VACINA VIRA CONTA A PAGAR DO FORNECEDOR (2026-09-19).
+ *
+ * Espelho de `EstoqueController.lancarCompraDoFornecedor` (farmácia): a clínica
+ * comprava o frasco, o saldo subia e a dívida não existia em lugar nenhum. A única
+ * conta de vacina que nascia era a da EXECUÇÃO — o item que a clínica NÃO estoca e
+ * pede ao fornecedor (`VacinaClinicaController`).
+ *
+ * 🔴 VALOR = `valorUnitario` (POR FRASCO) × `qtdFrascos`, **independente de doses**.
+ * `valor` na linha é UNITÁRIO: quem multiplica é `recalcularTotal`
+ * (`SUM(valor * quantidade)`) e a tela de Pagamentos. Usar `qtdTotal` (as doses)
+ * cobraria 60 frascos de quem entregou 3 num lote de 20 mL — a mesma armadilha que a
+ * farmácia tem com `qtdEstoque`.
+ *
+ * ⚠️ IDEMPOTÊNCIA — a assimetria abaixo é deliberada. A farmácia ancora a origem no
+ * `MovimentoEstoque` (uma linha por COMPRA), e a vacina **não tem tabela de
+ * movimento** (decisão registrada em `ajustar`: o motivo do ajuste vive no AuditLog).
+ * Então:
+ *   • entrada NOVA    → `origemId` = id do LOTE (id novo a cada compra, idempotente);
+ *   • CONSOLIDAÇÃO    → `origemId` NULO. O id do lote se repetiria, o índice único
+ *     parcial casaria no `ON CONFLICT` e a segunda compra do mesmo lote seria
+ *     DESCARTADA EM SILÊNCIO — a clínica pagaria uma e deveria zero pela outra, que é
+ *     exatamente o que o comentário da farmácia adverte. `origemTipo` continua
+ *     preenchido: perde-se a idempotência, nunca a rastreabilidade.
+ *
+ * ⚠️ Best-effort e FORA da transaction: a entrada é ato de estoque e não se desfaz
+ * porque a conta a pagar falhou.
+ */
+async function lancarCompraDaVacina(client, {
+  empresaId, fornecedorId, loteId, vacinaNome, valorUnitario, qtdFrascos,
+  notaFiscal, solicitanteId, solicitanteNome, consolidado,
+}) {
+  if (!empresaId || !fornecedorId) return null;
+  try {
+    const fornecedor = await client.fornecedor.findFirst({
+      where:  { id: Number(fornecedorId), empresaId: Number(empresaId) },
+      select: { id: true, nome: true },
+    });
+    // Fornecedor de OUTRA empresa (id vindo do corpo) não vira dívida desta clínica.
+    if (!fornecedor) return null;
+
+    const frascos = Number(qtdFrascos) > 0 ? Number(qtdFrascos) : 1;
+    return await contasPagar.lancarItem(client, {
+      empresaId:   Number(empresaId),
+      tipo:        'FORNECEDOR',
+      credorId:    fornecedor.id,
+      credorNome:  fornecedor.nome,
+      descricao:   `${vacinaNome || 'Vacina'}${notaFiscal ? ` — NF ${notaFiscal}` : ''}`,
+      quantidade:  frascos,
+      valor:       Number(valorUnitario),
+      solicitanteId,
+      solicitanteNome,
+      origemTipo:  'ESTOQUE_VACINA_ENTRADA',
+      origemId:    consolidado ? null : (loteId ? Number(loteId) : null),
+    });
+  } catch (err) {
+    console.error('EstoqueVacinaController.lancarCompraDaVacina:', err.message);
+    return null;
+  }
+}
+
 const criar = async (req, res) => {
   try {
     const {
@@ -422,6 +498,11 @@ const criar = async (req, res) => {
       dataRecebimento,
       estoqueMinimo    = 0,
       estoqueAlarmante = 0,
+      // 🔴 DE QUEM VEIO O FRASCO (2026-09-19) — as colunas existem desde a migration
+      // `20261006000000` e só a tela de Produtos as gravava; a Entrada de Vacina não
+      // sabia dizer o fornecedor, então a compra não virava conta a pagar.
+      fornecedorId,
+      notaFiscal,
     } = req.body;
 
     if (!vacinaId && !medicamentoCatId)
@@ -499,6 +580,27 @@ const criar = async (req, res) => {
         },
         include: INCLUDE_LOTE,
       });
+      // ⚠️ SÓ PREENCHE O QUE ESTÁ VAZIO: o lote já registrou de quem veio a primeira
+      // compra, e sobrescrever reescreveria o histórico dele. A DÍVIDA, essa sim, é
+      // de quem entregou AGORA — por isso o lançamento abaixo usa o do corpo.
+      const jaTem = await produtoFornecedor.fornecedoresDeLotes(prisma, [existente.id]);
+      if (fornecedorId && !jaTem.get(existente.id)?.fornecedorId) {
+        await produtoFornecedor.gravarFornecedorNoLote(prisma, existente.id, {
+          fornecedorId, notaFiscal: notaFiscal ?? null,
+        });
+      }
+      await lancarCompraDaVacina(prisma, {
+        empresaId:    eId,
+        fornecedorId,
+        loteId:       existente.id,
+        vacinaNome:   loteAtualizado.medicamentoCat?.nome ?? loteAtualizado.vacina?.nome ?? null,
+        valorUnitario: valorNovo,
+        qtdFrascos:   qtdFrascosN,
+        notaFiscal:   (notaFiscal ?? '').trim() || null,
+        solicitanteId:   req.user?.id ?? null,
+        solicitanteNome: req.user?.fullName ?? null,
+        consolidado:  true,
+      });
       return res.status(200).json({ dados: loteAtualizado, consolidado: true, mensagem: 'Frascos somados ao lote existente.' });
     }
 
@@ -527,7 +629,30 @@ const criar = async (req, res) => {
       include: INCLUDE_LOTE,
     });
 
-    return res.status(201).json({ dados: loteVacina, consolidado: false });
+    // Fora da transaction, DEPOIS do commit: a compra já entrou no estoque e não pode
+    // ser desfeita porque o registro do fornecedor ou da dívida falhou.
+    if (fornecedorId || (notaFiscal ?? '').trim()) {
+      await produtoFornecedor.gravarFornecedorNoLote(prisma, loteVacina.id, {
+        fornecedorId, notaFiscal: notaFiscal ?? null,
+      });
+    }
+    await lancarCompraDaVacina(prisma, {
+      empresaId:     eId,
+      fornecedorId,
+      loteId:        loteVacina.id,
+      vacinaNome:    loteVacina.medicamentoCat?.nome ?? loteVacina.vacina?.nome ?? null,
+      valorUnitario: valorNovo,
+      qtdFrascos:    qtdFrascosN,
+      notaFiscal:    (notaFiscal ?? '').trim() || null,
+      solicitanteId:   req.user?.id ?? null,
+      solicitanteNome: req.user?.fullName ?? null,
+      consolidado:   false,
+    });
+
+    return res.status(201).json({
+      dados: { ...loteVacina, fornecedorId: fornecedorId ? Number(fornecedorId) : null, notaFiscal: (notaFiscal ?? '').trim() || null },
+      consolidado: false,
+    });
   } catch (err) {
     console.error('EstoqueVacinaController.criar:', err);
     return res.status(500).json({ error: 'Erro ao criar lote de vacina.' });
@@ -542,7 +667,7 @@ const atualizar = async (req, res) => {
     const {
       lote, validade, qtdFrascos, dosesPorFrasco,
       validadeHoras, validadeDias, valorUnitario, valorUnitarioRepassado, dataRecebimento, ativo,
-      estoqueMinimo, estoqueAlarmante,
+      estoqueMinimo, estoqueAlarmante, fornecedorId, notaFiscal,
     } = req.body;
 
     const existe = await prisma.loteVacina.findUnique({ where: { id } });
@@ -578,7 +703,29 @@ const atualizar = async (req, res) => {
     if (estoqueAlarmante       !== undefined) data.estoqueAlarmante       = Number(estoqueAlarmante) || 0;
 
     const loteAtualizado = await prisma.loteVacina.update({ where: { id }, data, include: INCLUDE_LOTE });
-    return res.json({ dados: loteAtualizado });
+
+    // 🔴 CORRIGIR o fornecedor/NF do lote é EDIÇÃO, não COMPRA: não lança conta a
+    // pagar nenhuma (a dívida nasce na ENTRADA). Mesma regra da farmácia, onde
+    // `atualizar` também não chama `lancarCompraDoFornecedor`.
+    // ⚠️ `undefined` PRESERVA o que está gravado (PATCH parcial). Sem essa distinção,
+    // salvar o lote sem mencionar o campo APAGARIA o fornecedor em silêncio.
+    if (fornecedorId !== undefined || notaFiscal !== undefined) {
+      const atual = await produtoFornecedor.fornecedoresDeLotes(prisma, [id]);
+      await produtoFornecedor.gravarFornecedorNoLote(prisma, id, {
+        fornecedorId: fornecedorId !== undefined ? fornecedorId : atual.get(id)?.fornecedorId ?? null,
+        notaFiscal:   notaFiscal   !== undefined ? notaFiscal   : atual.get(id)?.notaFiscal   ?? null,
+      });
+    }
+
+    const depois = await produtoFornecedor.fornecedoresDeLotes(prisma, [id]);
+    return res.json({
+      dados: {
+        ...loteAtualizado,
+        fornecedorId:   depois.get(id)?.fornecedorId   ?? null,
+        fornecedorNome: depois.get(id)?.fornecedorNome ?? null,
+        notaFiscal:     depois.get(id)?.notaFiscal     ?? null,
+      },
+    });
   } catch (err) {
     console.error('EstoqueVacinaController.atualizar:', err);
     return res.status(500).json({ error: 'Erro ao atualizar lote.' });

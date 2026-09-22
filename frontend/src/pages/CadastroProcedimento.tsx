@@ -16,7 +16,7 @@ import InlineError from '../components/InlineError';
 import ModalJustificativa from '../components/ModalJustificativa';
 import DropdownSelect from '../components/DropdownSelect';
 import {
-  ListChecks, Search, Pencil, X, Loader2, Check, Layers, PackagePlus, ToggleRight, ToggleLeft,
+  ListChecks, Search, Pencil, X, Loader2, Check, Layers, PackagePlus, ToggleRight, ToggleLeft, Plus,
 } from 'lucide-react';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -401,6 +401,16 @@ export default function CadastroProcedimento() {
    * ⚠️ `ehImagem` entra nas dependências: sem isso, escolher uma categoria antes de a
    * lista de categorias chegar mandaria `especialidade=Radiografia` e voltaria vazio.
    */
+  // ── Cadastro rápido pelo campo de busca (a pedido, 2026-09-18) ────────────
+  // 🔴 O CAMPO DE BUSCA VIROU A PORTA DE ENTRADA DO CADASTRO. Antes, digitar um nome
+  // que não existe devolvia "Nenhum procedimento encontrado" e acabava ali: só o
+  // ADMIN tinha o botão "Novo Procedimento" (que escreve o catálogo GLOBAL), então a
+  // clínica não tinha como cadastrar o procedimento DELA por esta tela — e ia fazê-lo
+  // digitando na prescrição, que é onde o `garantirProcedimentoDaEmpresa` já agia.
+  // Agora a lista filtra enquanto se digita (auto-preenchimento) e, quando nada casa
+  // EXATAMENTE, aparece "Cadastrar «X»".
+  const [cadastrandoProc, setCadastrandoProc] = useState(false);
+
   const carregarProcedimentos = useCallback(async (sel: string, ehImagem: boolean) => {
     if (!sel) { setProcedimentos([]); return; }
     setLoadingProcs(true);
@@ -466,6 +476,45 @@ export default function CadastroProcedimento() {
     return procedimentos.filter(p =>
       p.nome.toLowerCase().includes(q) || p.categoria.toLowerCase().includes(q));
   }, [procedimentos, busca]);
+
+  /**
+   * O nome digitado JÁ EXISTE no que está carregado?
+   *
+   * ⚠️ Casamento EXATO (sem caixa/acento), nunca `includes`: "Ferrageamento" e
+   * "Ferrageamento corretivo" são procedimentos diferentes, e usar `includes` esconderia
+   * a oferta de cadastrar o segundo só porque o primeiro aparece no filtro.
+   */
+  const normNome = (t: string) =>
+    t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+  const jaExiste = useMemo(
+    () => procedimentos.some(p => normNome(p.nome) === normNome(busca)),
+    [procedimentos, busca],
+  );
+  /** Oferece cadastrar só com especialidade escolhida e nome digitado que não existe. */
+  const podeCadastrarDigitado =
+    podeCriar && !!espSel && busca.trim().length >= 2 && !jaExiste;
+
+  const cadastrarProcedimentoDigitado = async () => {
+    const nome = busca.trim();
+    setCadastrandoProc(true);
+    try {
+      const res = await api.post('/procedimentos/cadastro/proprio', {
+        nome,
+        // ⚠️ A especialidade é a do SELETOR — é ela que define em que lista o
+        // procedimento vai aparecer depois. Sem ela o item nasceria "solto" e a
+        // pessoa não o encontraria na tela em que acabou de criá-lo.
+        especialidade: espSel,
+      });
+      toast.success(res.data?.criado
+        ? `"${nome}" cadastrado.`
+        : `"${nome}" já existia no catálogo e foi reaproveitado.`);
+      // Recarrega para o item aparecer na lista com o valor a definir.
+      await carregarProcedimentos(espSel, selEhImagem);
+    } catch (err) {
+      const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
+      if (!e.isPermissionError) toast.error(e.response?.data?.error ?? 'Erro ao cadastrar o procedimento.');
+    } finally { setCadastrandoProc(false); }
+  };
 
   // Busca pelo NOME do combo OU pelo seu CONTEÚDO (nome de qualquer procedimento
   // que o compõe) — sem isso, procurar por um procedimento que só existe dentro
@@ -719,8 +768,24 @@ export default function CadastroProcedimento() {
                 <div className="relative">
                   <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
                   <input type="text" value={busca} onChange={e => setBusca(e.target.value)}
-                    placeholder="Nome ou categoria..." className={`${inputCls} pl-8`} />
+                    onKeyDown={e => { if (e.key === 'Enter' && podeCadastrarDigitado) cadastrarProcedimentoDigitado(); }}
+                    placeholder="Digite o nome do procedimento..." className={`${inputCls} pl-8`} />
                 </div>
+                {/* A oferta fica SOB o campo, não no lugar da lista: enquanto se digita,
+                    o filtro segue mostrando o que já existe (o auto-preenchimento), e a
+                    criação é o passo seguinte — nunca o primeiro. */}
+                {podeCadastrarDigitado && (
+                  <button
+                    type="button"
+                    onClick={cadastrarProcedimentoDigitado}
+                    disabled={cadastrandoProc}
+                    className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-800 disabled:opacity-60">
+                    {cadastrandoProc
+                      ? <Loader2 size={12} className="animate-spin" />
+                      : <Plus size={12} />}
+                    Cadastrar &ldquo;{busca.trim()}&rdquo; em {espSel}
+                  </button>
+                )}
               </div>
               {isAdmin && (
                 <button
@@ -745,6 +810,20 @@ export default function CadastroProcedimento() {
           ) : procsFiltrados.length === 0 ? (
             <div className="text-center py-14 text-gray-400 text-sm">
               Nenhum procedimento encontrado para {espSel}.
+              {podeCadastrarDigitado && (
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={cadastrarProcedimentoDigitado}
+                    disabled={cadastrandoProc}
+                    className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-60">
+                    {cadastrandoProc
+                      ? <Loader2 size={14} className="animate-spin" />
+                      : <Plus size={14} />}
+                    Cadastrar &ldquo;{busca.trim()}&rdquo;
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <>

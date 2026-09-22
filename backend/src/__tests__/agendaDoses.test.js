@@ -131,7 +131,7 @@ describe('rolling schedule — a próxima dose parte do horário REAL da anterio
 describe('classificarExecucao — é ela que separa antecipada de atrasada', () => {
   const previsto = new Date(2026, 7, 23, 20, 0, 0, 0);
 
-  it('antes do horário = ANTECIPADA (execução futura, exige justificativa)', () => {
+  it('antes do horário = ANTECIPADA (execução futura — a tela pergunta antes de executar)', () => {
     expect(classificarExecucao(new Date(2026, 7, 23, 18, 0), previsto)).toBe('ANTECIPADA');
   });
 

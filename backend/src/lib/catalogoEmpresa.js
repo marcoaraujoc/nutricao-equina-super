@@ -113,10 +113,26 @@ async function temColunaFormaCalculo(client) {
 async function gravarMultidose(client, medicamentoId, { multidose, dosesPorEmbalagem, formaCalculo }) {
   if (multidose === undefined && dosesPorEmbalagem === undefined && formaCalculo === undefined) return;
   if (!(await temColunasMultidose(client))) return;
-  // Desmarcar LIMPA número E forma: deixá-los faria o item voltar a ser multidose na
-  // gravação seguinte sem ninguém ter pedido — e com ele volta a divisão do preço.
+  // 🔴 DESMARCAR LIMPA A FORMA, MAS NÃO MAIS O NÚMERO (2026-09-19). O número passou a
+  // ter significado nos DOIS estados, e são significados diferentes:
+  //
+  //   multidose ON  → quanto a embalagem contém NA FORMA DE CÁLCULO (20 mL). É a chave
+  //                   do multidose: muda a unidade operativa, o estoque passa a ser
+  //                   contado em mL e a cobrança é proporcional ao prescrito.
+  //   multidose OFF → quanto a embalagem contém NA UNIDADE DO PRODUTO (100 mL). NÃO
+  //                   muda unidade nenhuma — o estoque segue em 'Un.' — e responde uma
+  //                   pergunta só: quantas embalagens o curso gasta (125 mL de um
+  //                   frasco de 100 são DOIS). Ver `lib/formaCalculo.conteudoDaEmbalagem`.
+  //
+  // ⚠️ A razão de limpar (o item "voltar a ser multidose sozinho") continua coberta, e
+  // por quem sempre a cobriu: `qtdPorEmbalagemDe` exige `multidose === true`, então o
+  // número sozinho nunca reativa a divisão do preço. Quem precisa sumir é a FORMA — ela
+  // é que, ao lado do número, faz `unidadeOperativa` devolver mL no lugar de 'Un.'.
+  // ⚠️ Quem TROCA o estado limpa o número na TELA (`FormProduto.trocarMultidose`): ele
+  // estava expresso na outra unidade, e reaproveitá-lo afirmaria um conteúdo que
+  // ninguém declarou.
   const marcado = multidose === true;
-  const qtd     = marcado ? numeroPositivo(dosesPorEmbalagem) : null;
+  const qtd     = numeroPositivo(dosesPorEmbalagem);
   const forma   = marcado ? normalizarFormaCalculo(formaCalculo) : null;
   const temForma = await temColunaFormaCalculo(client);
   await client.$executeRawUnsafe(

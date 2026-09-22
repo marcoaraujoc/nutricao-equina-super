@@ -10,6 +10,9 @@
 const prisma = require('../lib/prisma').default;
 const { registrarAuditoria } = require('../lib/auditoria');
 const vinculoPrestador = require('../lib/procedimentoPrestador');
+// FONTE ÚNICA da criação de procedimento DA EMPRESA — o mesmo helper que a Prescrição
+// e o Orçamento usam quando alguém digita um procedimento que não está no catálogo.
+const { garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
 const {
   CATEGORIAS_IMAGEM, TIPO_IMAGEM, ESPECIALIDADE_IMAGEM,
 } = require('../seeds/005_procedimentos_imagem.seed');
@@ -650,7 +653,64 @@ const prestadoresDoProcedimento = async (req, res) => {
   }
 };
 
+/**
+ * POST /api/procedimentos/cadastro/proprio  { nome, especialidade?, valor? }
+ *
+ * 🔴 CRIA O PROCEDIMENTO DA CLÍNICA (a pedido, 2026-09-18) — a outra metade do
+ * auto-preenchimento por nome da tela de Procedimentos: digitou um nome que não
+ * existe, cadastra na hora, sem sair da tela.
+ *
+ * ⚠️ NÃO é o `POST /procedimentos` do catálogo, que é ADMIN-ONLY e escreve a linha
+ * GLOBAL, válida para TODAS as clínicas. Aqui nasce a linha DA EMPRESA
+ * (`garantirProcedimentoDaEmpresa`, o MESMO helper que a Prescrição e o Orçamento já
+ * usavam quando alguém digita um procedimento à mão). Uma cópia própria da criação
+ * divergiria dele — e o que divergiria é o escopo do que nasce: global × da clínica.
+ *
+ * ⚠️ IDEMPOTENTE por (nome, empresa), sem diferenciar maiúsculas: o helper devolve o
+ * id do que já existe em vez de criar a segunda linha. É isso que impede "Ferrageamento"
+ * e "ferrageamento" virarem dois procedimentos com preços diferentes.
+ */
+const criarProprio = async (req, res) => {
+  try {
+    if (!req.empresaId) return res.status(400).json({ error: 'Selecione a empresa.' });
+    const nome = String(req.body?.nome ?? '').trim();
+    if (nome.length < 2) return res.status(400).json({ error: 'Informe o nome do procedimento.' });
+
+    const { id, criado } = await prisma.$transaction(async (tx) => {
+      const antes = await tx.procedimentoVeterinario.findFirst({
+        where:  { ativo: true, nome: { equals: nome, mode: 'insensitive' },
+                  OR: [{ empresaId: null }, { empresaId: req.empresaId }] },
+        select: { id: true },
+      });
+      const novoId = await garantirProcedimentoDaEmpresa(tx, {
+        nome,
+        especialidade: req.body?.especialidade ?? null,
+        valor:         Number(req.body?.valor) || 0,
+      }, req.empresaId);
+      if (!antes && novoId) {
+        await registrarAuditoria(tx, req, {
+          categoria: 'CRIACAO', entidade: 'PROCEDIMENTO', entidadeId: novoId,
+          detalhes:  `Procedimento "${nome}" cadastrado pela clínica`,
+        });
+      }
+      return { id: novoId, criado: !antes };
+    });
+
+    if (!id) return res.status(400).json({ error: 'Não foi possível cadastrar o procedimento.' });
+
+    const dados = await prisma.procedimentoVeterinario.findUnique({
+      where:  { id },
+      select: { id: true, nome: true, categoria: true, especialidade: true, valorVenda: true },
+    });
+    return res.status(criado ? 201 : 200).json({ dados, criado });
+  } catch (err) {
+    console.error('ProcedimentoCadastroController.criarProprio:', err);
+    return res.status(500).json({ error: 'Erro ao cadastrar o procedimento.' });
+  }
+};
+
 module.exports = {
+  criarProprio,
   especialidadesMinhas,
   listarComValores,
   definirValor,

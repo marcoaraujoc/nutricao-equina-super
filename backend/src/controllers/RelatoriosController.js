@@ -580,8 +580,17 @@ const cadastro = async (req, res) => {
 
 // ── FARMÁCIA E ESTOQUE ──────────────────────────────────────────────────────
 
-const valorItemEstoque = (i) =>
-  i.precoUnitarioBase != null ? (i.qtdEstoque ?? 0) * i.precoUnitarioBase : (i.valorRepassado || i.valor || 0);
+// Valor do SALDO em estoque = quanto ainda há × o preço de uma unidade.
+// ⚠️ O fallback também multiplica pelo saldo (2026-09-17): `valorRepassado` deixou de
+// ser o total da compra e passou a ser o valor de UMA embalagem, então usá-lo cru
+// devolvia o preço de uma embalagem como se fosse o estoque inteiro.
+const valorItemEstoque = (i) => {
+  const qtd = i.qtdEstoque ?? 0;
+  if (i.precoUnitarioBase != null) return qtd * i.precoUnitarioBase;
+  const porEmbalagem = i.valorRepassado || i.valor || 0;
+  const conteudo     = Number(i.pesoPorEmbalagem) > 0 ? Number(i.pesoPorEmbalagem) : 1;
+  return qtd * (porEmbalagem / conteudo);
+};
 
 const farmacia = async (req, res) => {
   try {
@@ -598,6 +607,7 @@ const farmacia = async (req, res) => {
         where:  { ativo: true, ...estoqueEmpresa },
         select: {
           id: true, qtdEstoque: true, precoUnitarioBase: true, valorRepassado: true, valor: true,
+          pesoPorEmbalagem: true,
           estoqueMinimo: true, lote: true, validade: true, medicamento: { select: { nome: true } },
         },
       }),

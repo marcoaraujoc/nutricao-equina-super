@@ -22,7 +22,7 @@ import { imprimirPrescricao, type PrintGrupoPrescricao, type PrintItemPrescricao
 // quem está olhando (a aplicação roda nos 4 fusos do Brasil). Ver utils/dateUtils.ts.
 import {
   formatDate, formatDateShort, formatHora, formatDiaMes, formatDiaMesHora,
-  formatHoraComDia, diaISO, hojeISO,
+  diaISO, hojeISO,
 } from '../utils/dateUtils';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -191,38 +191,50 @@ function mesmaUnidadeTela(a?: string | null, b?: string | null): boolean {
 }
 
 /**
- * A dosagem como a tela deve exibi-la: na unidade em que o item é DEBITADO e COBRADO.
+ * O que a FARMÁCIA separa: a unidade em que o item sai do estoque e a quantidade.
  *
- * Igual à prescrita (o caso normal) → "10 mL". Divergente (receita escrita antes de o
- * produto passar a ser medido em 'Un.') → "20 mL · 1 Un. por aplicação": o primeiro é o
- * que o veterinário indicou, o segundo é o que sai do estoque e entra na fatura.
- * ⚠️ Uma aplicação consome UMA embalagem — é a definição do produto sem multidose, e a
- * mesma conta que `qtdDoEstoque` faz no backend. Repetir a dosagem prescrita ao lado de
- * 'Un.' ("20 Un.") afirmaria vinte embalagens.
+ * 🔴 Produto SEM multidose prescrito em conteúdo ("5 mL de xarope") sai como UMA
+ * EMBALAGEM — e **uma vez no curso inteiro**, não uma por aplicação (2026-09-18).
+ * Da segunda dose em diante não há nada a separar: o frasco já foi entregue, e é dele
+ * que o cliente está tirando a dose de hoje. É a mesma regra que o backend aplica na
+ * baixa e na cobrança (`entregaPorEmbalagem` em `PrescricaoGrupoController`).
+ *
+ * ⚠️ `jaEntregue` existe para a lista de separação poder OMITIR o item, em vez de
+ * pedir um frasco por dia durante dez dias. `dose` vem `null` nesse caso porque não há
+ * quantidade a somar — nunca 0, que se leria como "separar zero" numa lista que o
+ * conferente marca item a item.
  */
 export function doseDoEstoque(
-  item: { dosagem: string | null; unidade: string | null; unidadeEstoque?: string | null },
-): { unidade: string | null; dose: number | null } {
+  item: { dosagem: string | null; unidade: string | null; unidadeEstoque?: string | null; executadoEm?: string | null },
+): { unidade: string | null; dose: number | null; jaEntregue: boolean } {
   const num = Number(String(item.dosagem ?? '').replace(',', '.'));
   const dose = Number.isFinite(num) && num > 0 ? num : null;
   const un = item.unidadeEstoque;
-  if (!un) return { unidade: item.unidade, dose };
-  // Receita escrita em outra unidade: uma aplicação consome UMA embalagem — a mesma
-  // conta do backend. Manter o número prescrito ao lado de 'Un.' faria a lista de
-  // separação pedir vinte frascos para uma dose de 20 mL.
-  if (item.unidade && !mesmaUnidadeTela(item.unidade, un)) return { unidade: un, dose: 1 };
-  return { unidade: un, dose };
+  if (!un) return { unidade: item.unidade, dose, jaEntregue: false };
+  // Receita na MESMA unidade do estoque (o multidose, e o item prescrito em 'Un.'):
+  // a quantidade prescrita é a que sai da prateleira, dose a dose.
+  if (!item.unidade || mesmaUnidadeTela(item.unidade, un)) return { unidade: un, dose, jaEntregue: false };
+  // Entrega por embalagem: 1 na primeira vez, nada depois.
+  const jaEntregue = !!item.executadoEm;
+  return { unidade: un, dose: jaEntregue ? null : 1, jaEntregue };
 }
 
+/**
+ * A dosagem como a tela deve exibi-la: **o valor e a unidade que foram PRESCRITOS**
+ * (2026-09-18, a pedido).
+ *
+ * ⚠️ REVERTE o "20 mL · 1 Un. por aplicação" de 2026-09-17, que mostrava a receita e,
+ * ao lado, o que saía do estoque. Quem aplica precisa ler o que o veterinário indicou;
+ * a quantidade de embalagens é assunto da SEPARAÇÃO, e vive no checklist de farmácia do
+ * Painel Principal (`doseDoEstoque`, acima).
+ *
+ * ⚠️ Item legado SEM unidade na receita ainda cai na do estoque: número solto não diz o
+ * que significa.
+ */
 function dosagemNaTela(item: { dosagem: string | null; unidade: string | null; unidadeEstoque?: string | null }): string {
   if (!item.dosagem) return '';
-  const prescrita = `${item.dosagem}${item.unidade ? ' ' + item.unidade : ''}`;
-  const un = item.unidadeEstoque;
-  if (!un) return prescrita;
-  if (!item.unidade || mesmaUnidadeTela(item.unidade, un)) {
-    return `${item.dosagem} ${un}`;
-  }
-  return `${prescrita} · 1 ${un} por aplicação`;
+  if (item.unidade) return `${item.dosagem} ${item.unidade}`;
+  return item.unidadeEstoque ? `${item.dosagem} ${item.unidadeEstoque}` : String(item.dosagem);
 }
 
 /**
@@ -969,10 +981,11 @@ export function ModalExecucao({
   const [confirmacao, setConfirmacao] = useState<{
     item: ItemExecucao; slots: string[]; previsto: string; agora: string; classificacao: string;
   } | null>(null);
-  // Execução ANTECIPADA (dose FUTURA) barrada pelo backend: diferente da atrasada,
-  // NÃO tem "executar mesmo assim" — só sai com justificativa, que vai para a
-  // auditoria junto com o previsto e o horário real. `modo` diz qual chamada
-  // reenviar: o item do ícone ou o lote do "Executar Todos".
+  // Execução ANTECIPADA (dose FUTURA) devolvida pelo backend. 🔴 NÃO é bloqueio
+  // (2026-09-18): a tela INFORMA para quando a dose estava prevista e PERGUNTA se
+  // deseja antecipar — confirmado, segue o caminho normal, com as doses seguintes
+  // recalculadas a partir de agora. `modo` diz qual chamada reenviar: o item do
+  // ícone ou o lote do "Executar Todos".
   const [execFutura, setExecFutura] = useState<{
     modo: 'ITEM' | 'LOTE'; item?: ItemExecucao; slots: string[];
     medicamento: string; previsto: string;
@@ -1093,17 +1106,18 @@ export function ModalExecucao({
   };
 
   // Execução ITEM A ITEM: lança o item na fatura assim que ele é executado.
-  //   `confirmarHorario` → reenvio após o usuário confirmar uma dose ATRASADA
-  //     (aviso simples, não bloqueia).
-  //   `justificativa`    → reenvio após o usuário justificar uma dose ANTECIPADA
-  //     (dose FUTURA — bloqueada pelo backend sem isto).
+  //   `confirmarHorario`     → reenvio após o usuário confirmar uma dose ATRASADA.
+  //   `confirmarAntecipacao` → reenvio após o usuário confirmar uma dose ANTECIPADA
+  //     (dose FUTURA). ⚠️ Flag PRÓPRIA, nunca `confirmarHorario`: o "Executar Todos"
+  //     manda aquela fixa em true, e reaproveitá-la aqui anteciparia o curso inteiro
+  //     num clique, sem perguntar (o furo de 2026-08-23).
   const handleExecutarItem = async (
     item: ItemExecucao,
     slots: string[],
-    opts: { confirmarHorario?: boolean; justificativa?: string } = {},
+    opts: { confirmarHorario?: boolean; confirmarAntecipacao?: boolean } = {},
   ) => {
     if (salvando) return;
-    const { confirmarHorario = false, justificativa } = opts;
+    const { confirmarHorario = false, confirmarAntecipacao = false } = opts;
     // A pergunta de ajuste de horário (ver `ajusteHorario`) só faz sentido quando
     // esta chamada é a 1ª dose do item — captura ANTES do POST, porque o `item`
     // (mesma referência ao longo dos reenvios de CONFIRMACAO_NECESSARIA) ainda
@@ -1117,7 +1131,7 @@ export function ModalExecucao({
         itemIds: [item.id],
         ...prestadoresDoPayload([item.id]),
         ...(confirmarHorario ? { confirmarHorario: true } : {}),
-        ...(justificativa ? { justificativa } : {}),
+        ...(confirmarAntecipacao ? { confirmarAntecipacao: true } : {}),
       });
       const m = marcarItemFeito(execMap, item.id, slots);
       saveExecMap(grupo.id, m);
@@ -1195,7 +1209,8 @@ export function ModalExecucao({
           classificacao: dados.classificacao ?? 'ATRASADA',
         });
       } else if (dados?.erro === 'EXECUCAO_FUTURA') {
-        // Dose FUTURA: não há "executar mesmo assim" — só com justificativa.
+        // Dose FUTURA: não bloqueia — a tela diz para quando estava prevista e
+        // pergunta; o "sim" reenvia com `confirmarAntecipacao`.
         setExecFutura({
           modo: 'ITEM', item, slots,
           medicamento: dados.medicamento ?? item.medicamento,
@@ -1249,13 +1264,13 @@ export function ModalExecucao({
   // o curso inteiro de uma vez. Agora os dois caminhos passam pelo MESMO gate do
   // backend; o clique em lote vale como confirmação de dose ATRASADA (é ação
   // deliberada sobre uma dose que já era devida), mas dose FUTURA continua
-  // bloqueada e só sai com justificativa — igualzinho ao item a item.
+  // exigindo a PERGUNTA (`confirmarAntecipacao`) — igualzinho ao item a item.
   //
   // ⚠️ `itemIds` é OBRIGATÓRIO aqui: sem ele o backend executa TODOS os itens
   // pendentes do grupo, inclusive os de fora deste modal (o tipo filtrado por
   // `tipoFiltro`) — era o que fazia "Executar Todos" no card de Medicamentos
   // debitar/faturar também o Procedimento da mesma prescrição.
-  const handleExecutarTodos = async (justificativa?: string) => {
+  const handleExecutarTodos = async (confirmarAntecipacao = false) => {
     setSalvando(true);
     setErroEstoque([]);
     try {
@@ -1264,7 +1279,7 @@ export function ModalExecucao({
         itemIds,
         ...prestadoresDoPayload(itemIds),
         confirmarHorario: true,
-        ...(justificativa ? { justificativa } : {}),
+        ...(confirmarAntecipacao ? { confirmarAntecipacao: true } : {}),
       });
       let m = { ...execMap };
       for (const { item, slots, activeIdx } of itensComInfo) {
@@ -1400,21 +1415,28 @@ export function ModalExecucao({
             const idxAtual = item.dosesTotaisEsperadas != null
               ? dosesFeitas(item)
               : Math.max(0, resumo.findIndex(d => d.dia === item.diaAtual));
-            // 🔴 A linha em `idxAtual` só é DE VERDADE "Em Execução" quando a data
-            // REAL da próxima dose (`proximaDoseEm`, rolling schedule) é hoje —
-            // nunca só por `dosesFeitas` ter avançado. Sem isso, executar a dose 1
-            // de "1x/semana" hoje "empurrava" a exibição pra dose 2 na hora (ela só
-            // vence 7 dias depois — é o `proximaDoseEm` que sabe disso, o contador
-            // de doses feitas não).
             // 🔴 Item elegível ainda SEM âncora (`proximaDoseEm` null) conta como
             // "a dose de agora": não há grade definida, e é justamente esta
             // execução que vai criá-la. Sem esta perna, tornar Hora Início
             // opcional deixaria o item visível porém SEM botão de executar.
             const semAncora = item.dosesTotaisEsperadas != null && !item.proximaDoseEm;
+            // A dose da vez VENCE HOJE? Só decide o RÓTULO ("Em Execução" × "Prevista
+            // para 19/09 às 01:07") — nunca a existência do botão. Executar a dose 1
+            // de "1x/semana" hoje não pode fazer a dose 2 anunciar-se "Em Execução":
+            // ela só vence em 7 dias, e é o `proximaDoseEm` (rolling schedule) que
+            // sabe disso, não o contador de doses feitas.
             const proximaDoseRealHoje = item.dosesTotaisEsperadas == null
               || semAncora
               || (!!item.proximaDoseEm && diaISO(item.proximaDoseEm) === hojeISO());
-            const temAtual = idxAtual < resumo.length && !activeDone && proximaDoseRealHoje;
+            // 🔴 A DOSE DA VEZ SEMPRE TEM BOTÃO (2026-09-18) — `proximaDoseRealHoje`
+            // SAIU daqui. Enquanto ele entrava nesta conta, a dose cuja próxima
+            // ocorrência caía em OUTRO dia do calendário ficava sem Executar nenhum:
+            // a tela a exibia ("Prevista para 19/09 às 01:07") e não havia como
+            // acioná-la — a prescrição ficava TRAVADA esperando o dia seguinte, e a
+            // pergunta de antecipação do backend nunca chegava a ser feita, porque
+            // nada chamava o endpoint. Antecipar é decisão de quem está no plantão:
+            // quem pergunta é o `ConfirmModal` depois do clique, não o botão ausente.
+            const temAtual = idxAtual < resumo.length && !activeDone;
             // Mostra o curso INTEIRO — inclusive as doses que ainda não chegaram —
             // com a data prevista de cada uma, direto do calendário. A linha em
             // `idxAtual` só vira "Em Execução" quando `temAtual` é true (a data REAL
@@ -1615,6 +1637,11 @@ export function ModalExecucao({
                         // POSTERGADAS junto — marcar as duas em vermelho diria que a
                         // clínica perdeu duas aplicações quando perdeu uma.
                         const doseAtrasada = ehAtual && itemAtrasadoEm(item, dataRef);
+                        // "Em Execução" só na dose que VENCE HOJE. A da vez que ainda
+                        // não chegou continua dizendo "Prevista para 19/09 às 01:07" —
+                        // com o botão ao lado, para quem quiser antecipar. Anunciá-la
+                        // "Em Execução" afirmaria que ela é a tarefa de agora.
+                        const atualVenceHoje = ehAtual && proximaDoseRealHoje;
                         const status = executada
                           // DIA + hora, nunca só a hora: o card lista o curso inteiro
                           // (várias doses, dias diferentes) e "Executado às 18:00" em
@@ -1625,7 +1652,7 @@ export function ModalExecucao({
                             ? 'Cancelada'
                             : doseAtrasada
                               ? `Prevista para ${quandoPrevisto}${atrasoDaLinha ? ` — prescrição em atraso desde ${atrasoDaLinha}` : ''}`
-                              : ehAtual
+                              : atualVenceHoje
                                 ? `Em Execução (${quandoPrevisto})`
                                 : `Prevista para ${quandoPrevisto}${atrasoDaLinha ? ` — prescrição em atraso desde ${atrasoDaLinha}` : ''}`;
                         return (
@@ -1731,10 +1758,13 @@ export function ModalExecucao({
                   Fechar
                 </button>
                 <button
-                  // ⚠️ Arrow OBRIGATÓRIA: `onClick={handleExecutarTodos}` passaria o
-                  // MouseEvent como `justificativa` e todo clique viraria uma
-                  // antecipação "justificada" — o mesmo bypass silencioso que já
-                  // mordeu o `handleSalvar` de ModalNovoFornecedor (CLAUDE.md §12).
+                  // 🔴 Arrow OBRIGATÓRIA — e o risco AUMENTOU quando o 1º parâmetro
+                  // virou `confirmarAntecipacao` (2026-09-18): com
+                  // `onClick={handleExecutarTodos}` o MouseEvent chega no lugar dele,
+                  // é TRUTHY, e TODO clique passaria a antecipar o curso inteiro sem
+                  // ninguém ser perguntado — o bypass fica INVISÍVEL (a tela não
+                  // mostra erro, ela só executa). Mesmo tropeço do `handleSalvar` de
+                  // ModalNovoFornecedor (CLAUDE.md §12). Há gate travando esta linha.
                   onClick={() => handleExecutarTodos()}
                   disabled={salvando || todosFeitos}
                   className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
@@ -1791,39 +1821,48 @@ export function ModalExecucao({
       onCancelar={() => setConfirmacao(null)}
     />
 
-    {/* Dose FUTURA (antecipada) — BLOQUEADA. Ao contrário da atrasada, não há
-        "executar mesmo assim": antecipar é decisão clínica e exige justificativa,
-        que o backend grava na auditoria com o previsto e o horário real. Vale
-        igualmente para o ícone "Executar" e para o "Executar Todos". */}
-    {execFutura && (
-      <ModalJustificativa
-        aberto
-        titulo={execFutura.medicamento
-          ? `Antecipar dose — ${execFutura.medicamento}`
-          : 'Antecipar dose'}
-        descricao={
-          // "A próxima dose (03/05) está prevista para 00:55 de 24/08, deseja antecipar?"
-          // O "(NN/TT)" só entra quando o backend informa as duas contagens — item
-          // legado (sem rastreio por dose) cai na frase sem o número, em vez de
-          // exibir um "(undefined/undefined)".
-          `A próxima dose${rotuloDose(execFutura.numeroDose, execFutura.totalDoses)}` +
-          (execFutura.previsto
-            ? ` está prevista para ${formatHoraComDia(execFutura.previsto, dataRef)}, deseja antecipar?`
-            : ' ainda não chegou, deseja antecipar?')
+    {/* Dose FUTURA (antecipada) — AVISO, não bloqueio (2026-09-18). Diz para quando
+        a dose estava prevista e pergunta; confirmado, a execução segue o caminho
+        normal (estoque, fatura, auditoria) e as doses SEGUINTES são recalculadas a
+        partir de agora — o rolling schedule do backend parte sempre do horário REAL
+        da última dose. Vale igualmente para o ícone "Executar" e para o "Executar
+        Todos". ⚠️ Antes exigia justificativa por escrito; não reintroduzir sem
+        pedido — o texto obrigatório só adiava a mesma decisão. */}
+    <ConfirmModal
+      open={!!execFutura}
+      variante="aviso"
+      titulo={execFutura?.medicamento
+        ? `Antecipar dose — ${execFutura.medicamento}`
+        : 'Antecipar dose'}
+      mensagem={execFutura && (
+        <>
+          {/* "A próxima dose (03/05) estava prevista para 24/08 às 00:55." O "(NN/TT)"
+              só entra quando o backend informa as duas contagens — item legado (sem
+              rastreio por dose) cai na frase sem o número, em vez de um
+              "(undefined/undefined)". A data vem SEMPRE (formatDiaMesHora), mesmo
+              sendo hoje: a pergunta é justamente sobre QUANDO a dose era devida. */}
+          A próxima dose{rotuloDose(execFutura.numeroDose, execFutura.totalDoses)}
+          {execFutura.previsto
+            ? <> estava prevista para <strong>{formatDiaMesHora(execFutura.previsto)}</strong>.</>
+            : <> ainda não chegou.</>}
+          {' '}Executar agora antecipa a aplicação. Deseja continuar?
+          <span className="mt-2 block text-xs text-gray-500">
+            As doses seguintes serão recalculadas a partir deste horário.
+          </span>
+        </>
+      )}
+      labelConfirmar={salvando ? 'Executando…' : 'Antecipar e executar'}
+      labelCancelar="Cancelar"
+      onConfirmar={() => {
+        if (!execFutura || salvando) return;
+        if (execFutura.modo === 'ITEM' && execFutura.item) {
+          handleExecutarItem(execFutura.item, execFutura.slots, { confirmarAntecipacao: true });
+        } else {
+          handleExecutarTodos(true);
         }
-        acaoLabel="Antecipar"
-        placeholder="Por que a dose está sendo antecipada? (obrigatório)"
-        processando={salvando}
-        onConfirmar={(motivo) => {
-          if (execFutura.modo === 'ITEM' && execFutura.item) {
-            handleExecutarItem(execFutura.item, execFutura.slots, { justificativa: motivo });
-          } else {
-            handleExecutarTodos(motivo);
-          }
-        }}
-        onFechar={() => { if (!salvando) setExecFutura(null); }}
-      />
-    )}
+      }}
+      onCancelar={() => { if (!salvando) setExecFutura(null); }}
+    />
 
     {/* 1ª dose executada fora do horário prescrito (a antecipada/atrasada acima já
         foi confirmada — a dose ACONTECEU) — pergunta se atualiza a REFERÊNCIA de
@@ -2161,6 +2200,9 @@ function LinhaGrupo({
   soVisualizacao,
   executada = false,
   horaExecucao = null,
+  // No Histórico o clique ANTECIPA a próxima dose — dizer "Executar prescrição"
+  // ali faria o botão parecer repetir o que já foi feito hoje.
+  tituloExecutar = 'Executar prescrição',
   // Sem override explícito, cai no executor do DOCUMENTO inteiro (comportamento de
   // sempre) — quem precisa do executor POR TIPO passa `executorDeTipo(g, tipo)`,
   // mesmo padrão de `horaExecucao`.
@@ -2173,6 +2215,7 @@ function LinhaGrupo({
   onCancelar?: () => void;
   podeExecutarAcao: boolean;
   podeImprimir: boolean;
+  tituloExecutar?: string;
   /** `enfermagem.prescricao.deletar`. O chamador já desconta prescrição cancelada
    *  ou executada — cancelar depois da execução é recusado pelo backend (400). */
   podeCancelar?: boolean;
@@ -2238,9 +2281,16 @@ function LinhaGrupo({
             visível, são eles que dão nome ao botão no hover e no leitor de tela. */}
         <AcaoRegistro tom="ver" icone={Eye} rotulo="Ver"
           titulo="Ver prescrição" onClick={onVer} />
+        {/* 🔴 `executada` SAIU da condição (2026-09-18): ela diz que o DIA foi
+            cumprido, não que o curso acabou — e era ela que tirava o Executar da
+            linha no Histórico, onde mora a prescrição cuja próxima dose é amanhã.
+            Sem o ícone ali não havia por onde ANTECIPAR: a prescrição ficava
+            travada esperando o dia seguinte. Quem decide agora é o CHAMADOR, via
+            `podeExecutarAcao`/`soVisualizacao` — ele é quem sabe se ainda há dose
+            por vir. `executada` segue valendo para o selo de hora/executor. */}
         <AcaoRegistro tom="executar" icone={CheckCircle2} rotulo="Executar"
-          titulo="Executar prescrição" onClick={onExecutar}
-          visivel={podeExecutarAcao && !soVisualizacao && !executada && !g.animalInativo} />
+          titulo={tituloExecutar} onClick={onExecutar}
+          visivel={podeExecutarAcao && !soVisualizacao && !g.animalInativo} />
         <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
           titulo="Imprimir prescrição" onClick={onImprimir} visivel={podeImprimir} />
         <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
@@ -2475,11 +2525,6 @@ export default function ExecucaoPrescricao() {
         );
       }) : () => true);
 
-  // Item ainda a executar na data selecionada — fonte única com o Painel Principal
-  // (para hoje/passado); data futura cai na prévia teórica acima.
-  const itemPendenteHoje = (item: ItemExecucao): boolean =>
-    dataSel > hojeISO() ? itemPrevistoParaDataFutura(item, dataSel) : itemPendenteEm(item, dataSel);
-
   // Item executado NA DATA VISUALIZADA — alimenta o Histórico daquele dia.
   const itemExecutadoNaData = (item: ItemExecucao): boolean =>
     diaISO(item.executadoEm) === dataSel;
@@ -2492,12 +2537,6 @@ export default function ExecucaoPrescricao() {
     item.dosesTotaisEsperadas != null
       ? (item.dosesExecutadas ?? 0) >= item.dosesTotaisEsperadas
       : !(item.diaAtual >= 1 && item.diaAtual <= item.duracaoDias);
-
-  // Grupo (documento inteiro) concluído na data — só serve para decidir o modo do
-  // MODAL quando `modalTipo` não está disponível (ver `tipoConcluidoEm` abaixo para
-  // a decisão de qual CARD mostra o quê).
-  const foiExecutadoHoje = (g: GrupoExecucao): boolean =>
-    g.status === 'EXECUTADO' || !g.itens.some(itemPendenteHoje);
 
   // Medicamentos e Procedimentos são fluxos distintos do plantão (aplicar um remédio
   // não é o mesmo gesto que executar um procedimento) — a fila é separada por tipo de
@@ -2553,6 +2592,40 @@ export default function ExecucaoPrescricao() {
       : dataSel > hojeISO()
         ? itemPrevistoParaDataFutura(i, dataSel)
         : itemDeveDoseEm(i, dataSel);
+
+  /**
+   * 🔴 O CURSO AINDA TEM DOSE POR VIR? (2026-09-18)
+   *
+   * Não confundir com `tipoConcluidoEm`, logo abaixo: aquele responde "o DIA está
+   * cumprido?" e decide se o card desce para o Histórico — o que continua certo.
+   * Este responde "ainda existe dose neste curso?", e é ele que decide se a
+   * EXECUÇÃO segue disponível.
+   *
+   * Enquanto as duas perguntas eram a mesma, a prescrição cuja próxima dose caía
+   * no dia seguinte ficava sem NENHUM caminho de execução: descia para o Histórico
+   * (sem ícone) e, aberta pelo olho, vinha em somente leitura. A pergunta de
+   * antecipação do backend não chegava a existir, porque nada chamava o endpoint.
+   */
+  const itemTemDosePorVir = (i: ItemExecucao): boolean => {
+    if (i.status === 'CANCELADA') return false;
+    // ⚠️ SÓ o item com rastreio por dose (`dosesTotaisEsperadas`) tem grade futura a
+    // antecipar. O LEGADO ('agora', 'SOS', 'seNecessario') não tem dose seguinte
+    // nenhuma: para ele vale o que falta HOJE — senão a prescrição de dose única já
+    // aplicada voltaria a oferecer "Executar", e o backend recusaria o clique com
+    // "Nenhum item da prescrição para executar agora" (botão que só falha depois do
+    // clique, armadilha 28-d).
+    return i.dosesTotaisEsperadas != null
+      ? (i.dosesExecutadas ?? 0) < i.dosesTotaisEsperadas
+      : itemAindaPrecisaAcaoHoje(i);
+  };
+
+  const tipoTemDosePorVir = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO'): boolean =>
+    g.status !== 'CANCELADO' && !g.animalInativo &&
+    g.itens.some(i => i.tipo === tipo && itemTemDosePorVir(i));
+
+  /** Mesma pergunta para o DOCUMENTO inteiro — usada quando não há tipo filtrado. */
+  const grupoTemDosePorVir = (g: GrupoExecucao): boolean =>
+    g.status !== 'CANCELADO' && !g.animalInativo && g.itens.some(itemTemDosePorVir);
 
   const tipoConcluidoEm = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO'): boolean => {
     const itensDoTipo = g.itens.filter(i => i.tipo === tipo);
@@ -2617,6 +2690,17 @@ export default function ExecucaoPrescricao() {
     const ultimoItem = g.itens
       .filter(i => i.tipo === tipo && i.executadoEm)
       .sort((a, b) => new Date(b.executadoEm!).getTime() - new Date(a.executadoEm!).getTime())[0];
+    // 🔴 PROCEDIMENTO: QUEM EXECUTOU É O PRESTADOR INFORMADO, não quem clicou
+    // (a pedido, 2026-09-18). `executadoPorDose`/`g.executadoPor` guardam o USUÁRIO
+    // LOGADO — é ele que o backend grava em `executadoPorId`, e para medicamento isso
+    // está certo (quem aplicou a dose é quem estava no plantão). No procedimento, não:
+    // a execução tem um campo próprio para dizer quem o realizou (o prestador escolhido
+    // no modal, que já vence o gravado na prescrição e é quem governa recibo e conta a
+    // pagar). Enquanto o histórico mostrava `executadoPor`, o ferrador executava e o
+    // nome que ficava registrado ali era o da secretária que deu o clique.
+    // ⚠️ Sem prestador informado o procedimento É da própria equipe — aí o executor é
+    // mesmo quem clicou, e a regra abaixo (a de sempre) continua valendo.
+    if (tipo === 'PROCEDIMENTO' && ultimoItem?.prestadorNome) return ultimoItem.prestadorNome;
     // Item do fluxo por dose (elegível/rolling) tem o executor exato daquela dose —
     // é o caso que faltava (documento ainda não chegou a EXECUTADO como um todo).
     if (ultimoItem?.executadoPorDose) return ultimoItem.executadoPorDose.fullName;
@@ -2778,21 +2862,32 @@ export default function ExecucaoPrescricao() {
     />
   );
 
-  const renderGrupoHistorico = (tipo: 'MEDICAMENTO' | 'PROCEDIMENTO') => (g: GrupoExecucao) => (
-    <LinhaGrupo
-      key={g.id}
-      g={g}
-      onExecutar={() => {}}
-      onVer={() => { setModalVer(true); setModalTipo(tipo); setModal(g); }}
-      onImprimir={() => podeImprimir ? handleImprimirGrupo(g) : semPermissao('imprimir prescrição')}
-      podeExecutarAcao={false}
-      podeImprimir={podeImprimir}
-      soVisualizacao
-      executada
-      horaExecucao={horaExecucaoDeTipo(g, tipo)}
-      executorNome={executorDeTipo(g, tipo)}
-    />
-  );
+  const renderGrupoHistorico = (tipo: 'MEDICAMENTO' | 'PROCEDIMENTO') => (g: GrupoExecucao) => {
+    // 🔴 O card está no Histórico porque o DIA foi cumprido — e isso continua certo.
+    // Mas o CURSO pode seguir em aberto, com a próxima dose caindo amanhã: é ela que
+    // se antecipa, e sem este botão não havia por onde. O ícone só aparece HOJE (não
+    // se executa nada navegando o calendário) e com a permissão de sempre.
+    const podeAntecipar = isHoje && podeExecutarAcao && tipoTemDosePorVir(g, tipo);
+    return (
+      <LinhaGrupo
+        key={g.id}
+        g={g}
+        onExecutar={() => {
+          if (!podeExecutarAcao) { semPermissao('executar prescrição'); return; }
+          setModalVer(false); setModalTipo(tipo); setModal(g);
+        }}
+        onVer={() => { setModalVer(true); setModalTipo(tipo); setModal(g); }}
+        onImprimir={() => podeImprimir ? handleImprimirGrupo(g) : semPermissao('imprimir prescrição')}
+        podeExecutarAcao={podeAntecipar}
+        podeImprimir={podeImprimir}
+        soVisualizacao={!podeAntecipar}
+        executada
+        tituloExecutar="Antecipar a próxima dose"
+        horaExecucao={horaExecucaoDeTipo(g, tipo)}
+        executorNome={executorDeTipo(g, tipo)}
+      />
+    );
+  };
 
   /**
    * Linha da VACINA no Histórico — UMA função para as duas abas ("Executado" e
@@ -3331,8 +3426,14 @@ export default function ExecucaoPrescricao() {
           tipoFiltro={modalTipo}
           dataRef={dataSel}
           onClose={() => { setModal(null); setModalTipo(null); carregar(); }}
+          // 🔴 O que põe o modal em leitura é o CURSO TERMINADO, não o DIA cumprido
+          // (2026-09-18). Era `tipoConcluidoEm` aqui: executada a dose de hoje, o
+          // modal inteiro virava somente leitura e a dose seguinte — visível na
+          // lista, com data e hora — não tinha como ser antecipada. Continuam
+          // travando: o olho (`modalVer`), outro dia que não hoje, prescrição
+          // cancelada e paciente inativo.
           soVisualizacao={modalVer || !isHoje || modal.status === 'CANCELADO'
-            || (modalTipo ? tipoConcluidoEm(modal, modalTipo) : foiExecutadoHoje(modal))}
+            || !(modalTipo ? tipoTemDosePorVir(modal, modalTipo) : grupoTemDosePorVir(modal))}
           podeCancelar={podeCancelar}
         />
       )}

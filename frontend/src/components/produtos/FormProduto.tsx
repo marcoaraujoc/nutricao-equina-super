@@ -26,7 +26,41 @@ import type { FormProdutoDados } from './tiposProduto';
 
 const inputCls =
   'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-700 focus:outline-none focus:border-emerald-400 bg-white';
-const rotuloCls = 'block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5';
+// ⚠️ `font-normal` a pedido (2026-09-18): TODO rótulo de campo desta tela é sem
+// negrito. O único texto que segue destacado é o do checkbox "Produto multidose",
+// que tem `font-semibold` próprio logo abaixo — ele não é um campo a preencher, é a
+// CHAVE que muda o significado do cadastro (a embalagem passa a ser medida por
+// dentro), e é por isso que ele continua puxando o olho.
+const rotuloCls = 'block text-[10px] font-normal text-gray-400 uppercase tracking-widest mb-1.5';
+
+// ─── Unidades que NÃO são oferecidas (a pedido, 2026-09-18) ──────────────────────
+// "%" e "Seringa" saem da lista: nenhuma das duas é unidade de MEDIDA da embalagem —
+// "%" é concentração (a Pasta 10% é medida em g, não em "10 %") e "Seringa" é a
+// apresentação, que tem campo próprio logo acima. Enquanto estavam aqui, o estoque
+// era contado numa e a receita escrita na outra.
+const UNIDADES_FORA = ['%', 'seringa', 'seringas'];
+
+// 🔴 A FAMÍLIA DA UNIDADE AVULSA É COLAPSADA EM UMA OPÇÃO SÓ: 'Un.'.
+// O pedido foi tirar "Unidade" do seletor, e tirá-la sem mais nada QUEBRARIA o
+// cadastro — produto sem multidose é medido em 'Un.' por regra (`lib/formaCalculo.
+// unidadeOperativa`), e o backend só ACRESCENTA 'Un.' ao catálogo quando nenhuma das
+// existentes já significa isso (`garantirUnidadeAvulsa` reconhece un / Un. / unid /
+// unidade). Numa base cujo catálogo tenha só "unidade" por extenso, remover a palavra
+// deixaria o não-multidose SEM unidade nenhuma para escolher.
+// Então: as grafias por extenso somem do seletor e 'Un.' fica garantida no lugar —
+// uma opção, a canônica, que é a que `UNIDADE_AVULSA` compara no back e no front.
+const UNIDADE_AVULSA = 'Un.';
+const ehUnidadeAvulsa = (u: string) =>
+  ['un', 'un.', 'unid', 'unid.', 'unidade', 'unidades'].includes(u.trim().toLowerCase());
+
+function unidadesOferecidas(unidades: string[]): string[] {
+  const limpas = (unidades ?? []).filter(u => {
+    const k = u.trim().toLowerCase();
+    return !UNIDADES_FORA.includes(k) && !ehUnidadeAvulsa(u);
+  });
+  // A avulsa entra SEMPRE, e uma vez só — mesmo que o catálogo não a tivesse.
+  return [UNIDADE_AVULSA, ...limpas];
+}
 
 interface Props {
   tipo: 'medicamento' | 'vacina';
@@ -74,7 +108,13 @@ export default function FormProduto({
    * ninguém ter pedido — e o que volta junto é a divisão do preço da dose na fatura.
    */
   const trocarMultidose = (marcado: boolean) => {
-    onForm(marcado ? { multidose: true } : { multidose: false, formaCalculo: '', dosesPorEmbalagem: '' });
+    // ⚠️ TROCAR O ESTADO LIMPA O NÚMERO nos dois sentidos, e não é zelo: ele muda de
+    // UNIDADE junto com o checkbox (conteúdo na Forma de Cálculo × conteúdo na Unidade
+    // do produto). Reaproveitá-lo faria o cadastro AFIRMAR um conteúdo que ninguém
+    // declarou — 20 mL de forma virando "20 frascos por embalagem".
+    onForm(marcado
+      ? { multidose: true,  formaCalculo: '', dosesPorEmbalagem: '' }
+      : { multidose: false, formaCalculo: '', dosesPorEmbalagem: '' });
   };
 
   /**
@@ -184,7 +224,7 @@ export default function FormProduto({
           Deixar o vão faria a grade ler como campo que sumiu. */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <SeletorBusca label="Unidade" valor={form.unidade}
-          opcoes={opcoes.unidades} placeholder="Selecione a unidade…"
+          opcoes={unidadesOferecidas(opcoes.unidades)} placeholder="Selecione a unidade…"
           erro={erro('Unidade')} onChange={v => onForm({ unidade: v })} />
         <SeletorVias valores={form.vias} opcoes={opcoes.vias}
           erro={erro('Via de administração')} onChange={v => onForm({ vias: v })} />
@@ -288,15 +328,55 @@ export default function FormProduto({
             </div>
           )}
 
+          {/* ── CONTEÚDO da embalagem do produto SEM multidose ─────────────────
+              🔴 O QUE ELE RESOLVE (2026-09-19, a pedido): "foi comprado um frasco de
+              100 mL mas foram receitadas 5 doses de 25 mL". 125 mL não cabem num
+              frasco — o curso consome DOIS —, e até aqui o sistema não tinha como
+              saber os 100 mL: o conteúdo só existia com o multidose marcado. Sem ele,
+              a regra da entrega assumia UMA embalagem para o curso inteiro e a clínica
+              entregava dois frascos cobrando um.
+              ⚠️ NÃO é "meio multidose": a unidade operativa continua sendo Un., o
+              estoque continua contado em embalagens e a receita continua escrita na
+              Unidade do produto. O número serve para UMA conta só — quantas embalagens
+              o curso gasta. Quem muda a unidade é o checkbox acima, e só ele.
+              ⚠️ OPCIONAL: em branco, tudo segue como antes (uma embalagem por curso),
+              que é o comportamento de todo cadastro existente. */}
+          {!form.multidose && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className={rotuloCls}>
+                  Conteúdo da embalagem
+                  {form.unidade && (
+                    <span className="text-gray-400 font-normal normal-case tracking-normal ml-1">
+                      ({form.unidade} por embalagem)
+                    </span>
+                  )}
+                </label>
+                <input
+                  type="text" inputMode="decimal" value={form.dosesPorEmbalagem}
+                  onChange={e => onForm({
+                    dosesPorEmbalagem: e.target.value.replace(/[^\d.,]/g, '').replace('.', ','),
+                  })}
+                  placeholder="Ex.: 100"
+                  className={inputCls}
+                />
+              </div>
+            </div>
+          )}
+
           <p className={`text-[11px] leading-snug ${form.multidose ? 'text-emerald-700' : 'text-gray-500'}`}>
             {form.multidose
               ? (qtdPreenchida
                   ? `Cada embalagem entra no estoque como ${form.dosesPorEmbalagem} ${form.formaCalculo}, `
                     + `a receita é escrita em ${form.formaCalculo} e a fatura sai pelo preço da embalagem ÷ ${form.dosesPorEmbalagem}.`
                   : 'Informe a Forma de Cálculo e a Qtd — é desse par que saem a baixa do estoque e o valor da dose na fatura.')
-              : 'Desmarcado, a Forma de Cálculo é Un.: a embalagem é a própria unidade — entra inteira no '
-                + 'estoque (Qtd Total = Qtd Produto), a receita é escrita em Un. e a fatura sai pelo valor '
-                + 'repassado ÷ Qtd Produto.'}
+              : (form.dosesPorEmbalagem.trim()
+                  ? `A embalagem entra inteira no estoque (Qtd Total = Qtd Produto) e a receita é escrita em `
+                    + `${form.unidade || 'Un.'}. Com ${form.dosesPorEmbalagem} ${form.unidade || ''} por embalagem, o curso `
+                    + `consome quantas embalagens forem necessárias — e é isso que sai do estoque e vai à fatura.`
+                  : 'Desmarcado, a embalagem é a própria unidade: entra inteira no estoque '
+                    + '(Qtd Total = Qtd Produto) e a receita é escrita na Unidade do produto. Informe o '
+                    + 'Conteúdo da embalagem para o curso que não cabe num frasco consumir mais de um.')}
           </p>
         </div>
       )}

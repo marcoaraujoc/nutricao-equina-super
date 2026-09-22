@@ -11,6 +11,10 @@ const { definirUnidadeDoMedicamento, UnidadeIndisponivelError } = require('../li
 // unidade em que o estoque é contado e o preço é calculado — não a da embalagem.
 const catalogoEmpresa = require('../lib/catalogoEmpresa');
 const { UNIDADE_AVULSA, unidadeOperativa } = require('../lib/formaCalculo');
+// 🔴 CONTA A PAGAR DA COMPRA (2026-09-18) — a entrada de estoque é o OUTRO LADO do
+// balcão: o que a clínica comprou do fornecedor é o que ela DEVE a ele. Ver
+// `lancarCompraDoFornecedor` logo abaixo.
+const contasPagar = require('../lib/contasPagar');
 
 /**
  * A unidade OPERATIVA do item: a Forma de Cálculo quando o produto a declara, senão a
@@ -84,25 +88,137 @@ async function unidadeParaResolver() {
   return undefined;
 }
 
-// Calcula o preço por unidade base a partir do preço total e da quantidade na unidade
-// do item: R$/g para peso, R$/mL para volume e R$/unidade para o que é CONTADO
-// ('Un.', 'Comprimido', 'Frasco'...). Retorna null só quando não há o que dividir
-// (quantidade ou preço zerados).
+/**
+ * Preço por unidade base (R$/g, R$/mL ou R$/unidade contável) a partir do valor de UMA
+ * EMBALAGEM e do que ela contém.
+ *
+ * 🔴 O 2º ARGUMENTO É O CONTEÚDO DE UMA EMBALAGEM, NUNCA A QUANTIDADE TOTAL
+ * (2026-09-17, a pedido: "no estoque não multiplique o Valor Comprado e o Valor
+ * Repassado pela quantidade"). Até aqui a tela multiplicava os dois valores pela Qtd
+ * Produto antes de gravar, e esta função dividia pelo saldo inteiro — as duas operações
+ * se cancelavam e o preço saía certo, mas o BANCO ficava com o valor TOTAL da compra em
+ * campos rotulados "Valor Unitário". Quem lia o campo cru cobrava a compra inteira numa
+ * linha só: `debitarInsumoUnidade` cobrava a CAIXA de seringas por UMA seringa, e
+ * reabrir a entrada para editar trazia o total para um campo unitário.
+ *
+ * Agora o valor gravado é o da embalagem, como já era na vacina
+ * (`LoteVacina.valorUnitarioRepassado` ÷ `dosesPorFrasco`), e a conta não depende mais
+ * do saldo:
+ *   frasco de 20 mL por R$ 100  ->  100 ÷ 20      = R$ 5,00/mL
+ *   embalagem avulsa por R$ 30  ->  30  ÷ 1       = R$ 30,00/Un.
+ *   embalagem de 1 kg por R$ 100 -> 100 ÷ 1.000 g = R$ 0,10/g
+ *
+ * ⚠️ Conteúdo `null`/0 é "o produto não declara conteúdo" e vale **1** — a embalagem é a
+ * própria unidade. Não é ausência de dado: é o não-multidose, medido em 'Un.'.
+ *
+ * ⚠️ Como o saldo saiu da conta, dar baixa ou ajustar o estoque não mexe mais no preço.
+ * Era esse acoplamento que fazia o caminho legado subir o preço a cada dose aplicada.
+ *
+ * ⚠️ UNIDADE CONTÁVEL USA FATOR 1 — devolver `null` ali jogaria a cobrança no caminho
+ * legado (`precoUnitarioDoEstoque`), que divide pelo estoque RESTANTE.
+ */
 const FATOR_BASE_ESTOQUE = {
   'g': 1, 'mg': 0.001, 'kg': 1000, 'mcg': 0.000001,
   'ml': 1, 'l': 1000,
 };
-function calcPrecoUnitarioBase(valorRepassado, qtd, unidade) {
-  if (!qtd || qtd <= 0 || !valorRepassado || valorRepassado <= 0) return null;
-  // 🔴 UNIDADE CONTÁVEL USA FATOR 1 — antes devolvia `null` ("unidade incompatível") e
-  // o campo ficava vazio. Com `precoUnitarioBase` nulo, a execução da prescrição cai no
-  // CAMINHO LEGADO (`precoUnitarioDoEstoque`), que divide o valor pelo estoque RESTANTE:
-  // o preço unitário SUBIA a cada dose aplicada, e era isso que ia para a fatura do
-  // cliente. Para quem conta em 'Un.', R$/unidade é a conta certa — e, congelada na
-  // entrada, ela não se move mais.
-  const fator   = FATOR_BASE_ESTOQUE[(unidade ?? '').trim().toLowerCase()] ?? 1;
-  const qtdBase = qtd * fator;
-  return qtdBase > 0 ? valorRepassado / qtdBase : null;
+function calcPrecoUnitarioBase(valorPorEmbalagem, conteudoPorEmbalagem, unidade) {
+  const valor = Number(valorPorEmbalagem);
+  if (!valor || valor <= 0) return null;
+  const conteudo = Number(conteudoPorEmbalagem) > 0 ? Number(conteudoPorEmbalagem) : 1;
+  const fator    = FATOR_BASE_ESTOQUE[(unidade ?? '').trim().toLowerCase()] ?? 1;
+  const base     = conteudo * fator;
+  return base > 0 ? valor / base : null;
+}
+
+/**
+ * Lança a COMPRA na conta a pagar do fornecedor.
+ *
+ * 🔴 POR QUE ISTO FALTAVA (relatado 2026-09-18: "informando o fornecedor, o valor não
+ * está sendo inserido na tela de pagamentos"): a entrada de estoque GRAVAVA
+ * `fornecedorId` e parava aí — o campo servia só de etiqueta na linha do estoque.
+ * `tb_contas_pagar` nasceu em 2026-09-10 alimentada pela EXECUÇÃO (o produto que a
+ * clínica não estoca e pede ao fornecedor); a compra que ENTRA no estoque nunca teve
+ * quem a lançasse. Resultado: a clínica comprava, o saldo subia e a dívida não existia
+ * em lugar nenhum.
+ *
+ * ⚠️ A ORIGEM É O MOVIMENTO, não a entrada de estoque. Cada compra cria um
+ * `MovimentoEstoque` de ENTRADA — inclusive quando a entrada é CONSOLIDADA numa linha
+ * que já existia (mesmo lote, validade e valor). Com o id da `EstoqueClinica` como
+ * origem, a segunda compra do mesmo lote casaria no `ON CONFLICT (origem_tipo,
+ * origem_id)` e seria DESCARTADA em silêncio — a clínica pagaria uma e deveria zero
+ * pela outra. Pelo movimento, cada compra é uma dívida, e a idempotência continua
+ * valendo (reenvio do mesmo formulário não duplica).
+ *
+ * 🔴 `valor` DA LINHA É UNITÁRIO — a conta é `valor × quantidade`, e quem multiplica
+ * é `recalcularTotal` (`SUM(i.valor * i.quantidade)`) e a tela de Pagamentos. Mandar o
+ * TOTAL aqui e a quantidade ao lado multiplica DUAS vezes: medido na base em
+ * 2026-09-19, uma compra de 10 × R$ 100 aparecia como **R$ 10.000** em vez de R$ 1.000.
+ * O contrato é o mesmo dos outros três chamadores de `lancarItem` (execução de
+ * prescrição, vacina e prestador), que sempre passaram o unitário.
+ * Resultado: **valor unitário da embalagem × Qtd Produto**, que é o que a tela digita.
+ *
+ * ⚠️ A QUANTIDADE É DE EMBALAGENS, NUNCA O SALDO — é o "independente de doses". Sem
+ * `qtdEmbalagens` (entrada avulsa, cliente antigo), o saldo só serve de reserva DEPOIS
+ * de dividido pelo conteúdo que o produto declara: num multidose `qtdEstoque` é o
+ * CONTEÚDO (60 mL), e usá-lo cru cobraria 60 frascos de um fornecedor que entregou 3.
+ *
+ * ⚠️ NUNCA LANÇA sem valor > 0 (`lancarItem` já devolve null): dívida de valor
+ * inventado é pior que dívida ausente — a mesma regra do lançamento da execução.
+ *
+ * ⚠️ Best-effort e FORA da transaction do estoque: a entrada é ato de estoque e não
+ * pode ser revertida porque a conta a pagar falhou. O `catch` de `lancarItem` já
+ * engole o erro; este `try` cobre o resto (fornecedor sumido, tabela ausente).
+ */
+/**
+ * Quantas EMBALAGENS foram compradas — a quantidade da linha da conta a pagar.
+ *
+ * ⚠️ "Independente de doses": o saldo (`qtdEstoque`) é a Qtd TOTAL, e num produto
+ * multidose ele está no CONTEÚDO (3 frascos de 20 mL = 60). Ele só vira embalagem
+ * depois de dividido pelo que o produto declara conter.
+ */
+function embalagensCompradas({ qtdEmbalagens, qtdEstoque, conteudoEmbalagem }) {
+  const emb = Number(qtdEmbalagens);
+  if (emb > 0) return emb;
+  const saldo = Number(qtdEstoque) || 0;
+  const cont  = Number(conteudoEmbalagem);
+  return cont > 0 ? saldo / cont : saldo;
+}
+
+async function lancarCompraDoFornecedor(client, {
+  empresaId, fornecedorId, movimentoId, medicamentoNome,
+  valorEmbalagem, qtdEmbalagens, qtdEstoque, conteudoEmbalagem,
+  notaFiscal, solicitanteId, solicitanteNome,
+}) {
+  if (!empresaId || !fornecedorId || !movimentoId) return null;
+  try {
+    const fornecedor = await client.fornecedor.findFirst({
+      where:  { id: Number(fornecedorId), empresaId: Number(empresaId) },
+      select: { id: true, nome: true },
+    });
+    // Fornecedor de OUTRA empresa (id vindo do corpo) não vira dívida desta clínica.
+    if (!fornecedor) return null;
+
+    const embalagens = embalagensCompradas({ qtdEmbalagens, qtdEstoque, conteudoEmbalagem });
+
+    return await contasPagar.lancarItem(client, {
+      empresaId:   Number(empresaId),
+      tipo:        'FORNECEDOR',
+      credorId:    fornecedor.id,
+      credorNome:  fornecedor.nome,
+      descricao:   `${medicamentoNome || 'Produto'}${notaFiscal ? ` — NF ${notaFiscal}` : ''}`,
+      quantidade:  embalagens || 1,
+      // UNITÁRIO. Ver o cabeçalho: `recalcularTotal` e a tela de Pagamentos fazem
+      // `valor × quantidade`, então o total já multiplicado sairia ao quadrado.
+      valor:       Number(valorEmbalagem),
+      solicitanteId,
+      solicitanteNome,
+      origemTipo:  'ESTOQUE_ENTRADA',
+      origemId:    Number(movimentoId),
+    });
+  } catch (err) {
+    console.error('EstoqueController.lancarCompraDoFornecedor:', err.message);
+    return null;
+  }
 }
 
 const INCLUDE = {
@@ -300,7 +416,11 @@ const criar = async (req, res) => {
     const validadeStr   = normValidade(validade);
     // ⚠️ `med.unidade` é a da EMBALAGEM; quem manda no preço é a unidade OPERATIVA.
     const unidadeConta  = await unidadeOperativaDoItem(prisma, medicamentoIdFinal, med.unidade);
-    const precoNovo     = calcPrecoUnitarioBase(Number(valorRepassado), Number(qtdEstoque), unidadeConta);
+    // ⚠️ `valor`/`valorRepassado` chegam POR EMBALAGEM e são gravados assim — a tela não
+    // os multiplica mais pela Qtd Produto. Quem divide o preço é o CONTEÚDO da embalagem
+    // (`pesoPorEmbalagem`, que vem do cadastro do produto), nunca o saldo.
+    const conteudoEmb   = pesoPorEmbalagem ? Number(pesoPorEmbalagem) : null;
+    const precoNovo     = calcPrecoUnitarioBase(Number(valorRepassado), conteudoEmb, unidadeConta);
     const nfMotivo      = notaFiscal?.trim() ? `NF: ${notaFiscal.trim()}` : null;
 
     // ── Busca candidatos para consolidação (mesmo medicamento, empresa, ativo) ─
@@ -311,21 +431,25 @@ const criar = async (req, res) => {
 
     // Verifica se existe entrada idêntica (mesmo lote + mesma validade + mesmo
     // valor POR EMBALAGEM). Nesse caso a nova entrada é SOMADA ao item existente.
+    // ⚠️ `valor` já É por embalagem nos dois lados — a divisão por `qtdEmbalagens` que
+    // havia aqui existia só para desfazer a multiplicação da tela.
     const qtdEmbNova   = qtdEmbalagens ? Number(qtdEmbalagens) : null;
-    const valorEmbNovo = qtdEmbNova && qtdEmbNova > 0 ? Number(valor) / qtdEmbNova : Number(valor);
+    const valorEmbNovo = Number(valor);
     const existente = candidatos.find(c => {
       if (normLote(c.lote) !== loteNorm) return false;
       if (normValidade(c.validade) !== validadeStr) return false;
-      const cEmb      = c.qtdEmbalagens && c.qtdEmbalagens > 0 ? c.qtdEmbalagens : null;
-      const cValorEmb = cEmb ? Number(c.valor) / cEmb : Number(c.valor);
+      const cValorEmb = Number(c.valor);
       const maxV = Math.max(valorEmbNovo, cValorEmb);
       return maxV === 0 || Math.abs(valorEmbNovo - cValorEmb) / maxV < 0.01; // 1% de tolerância
     });
 
     if (existente) {
       // ── CONSOLIDAR: soma quantidade + cria movimento com NF ──────────────
+      let movimentoConsolidado = null;
       const updated = await prisma.$transaction(async (tx) => {
-        await tx.movimentoEstoque.create({
+        // O movimento é a ORIGEM da conta a pagar (uma dívida por COMPRA, não por
+        // linha de estoque) — por isso o id sai da transaction.
+        movimentoConsolidado = await tx.movimentoEstoque.create({
           data: {
             estoqueId: existente.id,
             tipo: 'ENTRADA',
@@ -333,16 +457,18 @@ const criar = async (req, res) => {
             motivo: nfMotivo ?? 'Entrada adicional',
           },
         });
-        // Soma quantidade, valores totais e embalagens; recalcula o preço unitário base
-        const qtdFinal = Number(existente.qtdEstoque) + Number(qtdEstoque);
-        const vrFinal  = Number(existente.valorRepassado) + Number(valorRepassado);
-        const precoConsolidado = calcPrecoUnitarioBase(vrFinal, qtdFinal, unidadeConta);
+        // Soma quantidade e embalagens. 🔴 OS VALORES NÃO SÃO SOMADOS: eles são POR
+        // EMBALAGEM, e a entrada só chega aqui porque o valor bate com o da linha
+        // existente (1% de tolerância). Somá-los dobraria o preço da embalagem — e,
+        // por tabela, a linha da fatura — a cada reentrada do mesmo lote.
+        const conteudoFinal = Number(existente.pesoPorEmbalagem) > 0
+          ? Number(existente.pesoPorEmbalagem)
+          : conteudoEmb;
+        const precoConsolidado = calcPrecoUnitarioBase(Number(valorRepassado), conteudoFinal, unidadeConta);
         return tx.estoqueClinica.update({
           where: { id: existente.id },
           data: {
             qtdEstoque:     { increment: Number(qtdEstoque) },
-            valor:          { increment: Number(valor) },
-            valorRepassado: { increment: Number(valorRepassado) },
             ...(qtdEmbNova ? { qtdEmbalagens: { increment: qtdEmbNova } } : {}),
             ...(pesoPorEmbalagem && !existente.pesoPorEmbalagem ? { pesoPorEmbalagem: Number(pesoPorEmbalagem) } : {}),
             ...(precoConsolidado !== null ? { precoUnitarioBase: precoConsolidado } : {}),
@@ -350,6 +476,22 @@ const criar = async (req, res) => {
           include: { ...INCLUDE, _count: { select: { movimentos: { where: { tipo: 'SAIDA' } } } } },
         });
       });
+      // Depois do COMMIT, de propósito: a compra já entrou no estoque e não pode ser
+      // desfeita porque o lançamento da dívida falhou.
+      await lancarCompraDoFornecedor(prisma, {
+        empresaId: eId,
+        fornecedorId,
+        movimentoId:     movimentoConsolidado?.id,
+        medicamentoNome: updated.medicamento?.nome,
+        valorEmbalagem:  valorEmbNovo,
+        qtdEmbalagens:   qtdEmbNova,
+        qtdEstoque,
+        conteudoEmbalagem: conteudoEmb,
+        notaFiscal:      notaFiscal?.trim() || null,
+        solicitanteId:   req.user?.id ?? null,
+        solicitanteNome: req.user?.fullName ?? null,
+      });
+
       const { _count, ...rest } = updated;
       return res.status(200).json({
         dados: { ...rest, emUso: (_count?.movimentos ?? 0) > 0 },
@@ -359,6 +501,7 @@ const criar = async (req, res) => {
     }
 
     // ── NOVA ENTRADA ──────────────────────────────────────────────────────────
+    let movimentoNovo = null;
     const item = await prisma.$transaction(async (tx) => {
       const entry = await tx.estoqueClinica.create({
         data: {
@@ -381,12 +524,27 @@ const criar = async (req, res) => {
       });
 
       if (Number(qtdEstoque) > 0) {
-        await tx.movimentoEstoque.create({
+        movimentoNovo = await tx.movimentoEstoque.create({
           data: { estoqueId: entry.id, tipo: 'ENTRADA', quantidade: Number(qtdEstoque), motivo: nfMotivo ?? 'Entrada inicial' },
         });
       }
 
       return entry;
+    });
+
+    // Fora da transaction — ver `lancarCompraDoFornecedor`.
+    await lancarCompraDoFornecedor(prisma, {
+      empresaId: eId,
+      fornecedorId,
+      movimentoId:     movimentoNovo?.id,
+      medicamentoNome: item.medicamento?.nome,
+      valorEmbalagem:  Number(valor),
+      qtdEmbalagens:   qtdEmbNova,
+      qtdEstoque,
+      conteudoEmbalagem: conteudoEmb,
+      notaFiscal:      notaFiscal?.trim() || null,
+      solicitanteId:   req.user?.id ?? null,
+      solicitanteNome: req.user?.fullName ?? null,
     });
 
     return res.status(201).json({ dados: { ...item, emUso: false }, consolidado: false });
@@ -480,15 +638,19 @@ const atualizar = async (req, res) => {
         // alcança também a INATIVA que está sendo editada, deixada de fora de propósito.
         if (u.id !== existe.medicamentoId) data.medicamentoId = u.id;
 
-        // Recalcula precoUnitarioBase quando valor, quantidade OU UNIDADE mudarem — sem
-        // a unidade na conta, trocar 'g' por 'Un.' deixaria o preço gravado em R$/g
-        // valendo como R$/unidade na fatura do cliente.
-        if (valorRepassado !== undefined || data.qtdEstoque !== undefined || u.alterado) {
-          const vrFinal   = valorRepassado !== undefined ? Number(valorRepassado) : existe.valorRepassado;
-          const qtdFinal  = data.qtdEstoque !== undefined ? data.qtdEstoque : existe.qtdEstoque;
+        // Recalcula precoUnitarioBase quando o valor da EMBALAGEM, o CONTEÚDO dela ou a
+        // UNIDADE mudarem — sem a unidade na conta, trocar 'g' por 'Un.' deixaria o
+        // preço gravado em R$/g valendo como R$/unidade na fatura do cliente.
+        // ⚠️ A QUANTIDADE saiu do gatilho e da conta: o valor é por embalagem, então
+        // corrigir o saldo não pode mexer no preço que já foi cobrado do cliente.
+        if (valorRepassado !== undefined || data.pesoPorEmbalagem !== undefined || u.alterado) {
+          const vrFinal = valorRepassado !== undefined ? Number(valorRepassado) : existe.valorRepassado;
+          const conteudoFinal = data.pesoPorEmbalagem !== undefined
+            ? data.pesoPorEmbalagem
+            : existe.pesoPorEmbalagem;
           // ⚠️ A unidade OPERATIVA, não a da embalagem — ver `unidadeOperativaDoItem`.
           const unidadeConta = await unidadeOperativaDoItem(tx, u.id, u.unidade);
-          const novoPreco = calcPrecoUnitarioBase(vrFinal, qtdFinal, unidadeConta);
+          const novoPreco = calcPrecoUnitarioBase(vrFinal, conteudoFinal, unidadeConta);
           if (novoPreco !== null) data.precoUnitarioBase = novoPreco;
         }
 
@@ -673,4 +835,8 @@ module.exports = {
   // unidade CONTÁVEL ('Un.') quebra em silêncio — devolvia null e a cobrança caía no
   // cálculo dinâmico, que sobe conforme o estoque baixa.
   calcPrecoUnitarioBase,
+  // Exportado para teste: é a QUANTIDADE da linha da conta a pagar, e o modo de
+  // errá-la é silencioso — com o saldo de um multidose no lugar das embalagens, a
+  // clínica passa a dever 60 frascos a quem entregou 3.
+  embalagensCompradas,
 };

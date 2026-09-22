@@ -348,7 +348,12 @@ export default function PainelPrincipal() {
             // SEPARAÇÃO — diz o que tirar da prateleira —, então precisa falar em
             // embalagens quando é assim que o produto é contado. Regra ÚNICA em
             // `doseDoEstoque` (ExecucaoPrescricao), a mesma que a fila usa no texto.
-            const { unidade: unItem, dose } = doseDoEstoque(i);
+            const { unidade: unItem, dose, jaEntregue } = doseDoEstoque(i);
+            // 🔴 Embalagem JÁ ENTREGUE não entra na lista (2026-09-18): o produto sem
+            // multidose prescrito em conteúdo sai do estoque UMA vez no curso, e da
+            // segunda dose em diante o cliente usa o frasco que já levou. Sem isto a
+            // farmácia separaria um frasco por dia durante dez dias.
+            if (jaEntregue) continue;
             acumular(i.medicamento, 'MEDICAMENTO', 1, unItem, dose);
           }
         } else {

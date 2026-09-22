@@ -1,5 +1,859 @@
 # S2Vet — CLAUDE.md
 # Contexto arquitetural permanente para Claude Code
+# Atualizado em: 2026-09-19 (parte 4) (🔴 **O CURSO QUE NÃO CABE NUM FRASCO PASSOU A
+#   CONSUMIR (E COBRAR) OS FRASCOS QUE PRECISA** + a fatura ficou legível. Leva de 5
+#   pedidos; o que mais importa saber ao voltar:
+#   1. 🔴 **A POSOLOGIA SAIU DA DESCRIÇÃO DO ITEM DE FATURA** (a pedido) —
+#      `descricaoItemFatura` devolve só `item.medicamento`. ⚠️ **ISTO INVERTE a decisão
+#      de 2026-09-17**, e o efeito NÃO é cosmético: a posologia fazia parte da CHAVE de
+#      consolidação (tipo, descrição, animal, valor unitário), então o mesmo remédio
+#      12/12h num atendimento e 8/8h em outro virava DUAS linhas — agora vira UMA:
+#      ```
+#      antes : Amoxicilina — 10mL × 12/12h   Quant.: 3
+#              Amoxicilina — 10mL × 8/8h     Quant.: 2
+#      agora : Amoxicilina                   Quant.: 5
+#      ```
+#      A razão da regra antiga ("a linha afirmaria uma posologia que metade das doses
+#      não teve") CAI justamente porque a linha não afirma mais posologia nenhuma. O
+#      detalhe de cada aplicação continua inteiro na OBSERVAÇÃO (`faturaItemOrigens`):
+#      número, data e quantidade, uma linha por execução.
+#      ⚠️ O VALOR UNITÁRIO continua na chave e é ele que separa o que precisa ser
+#      separado — doses de tamanhos diferentes têm preços diferentes.
+#      ⚠️ A interpolação de `debitarEstoqueDia` (o MOTIVO do movimento de estoque) segue
+#      com a posologia e deve seguir: ali ela descreve o que saiu da prateleira.
+#      Caso de teste INVERTIDO em `faturaOrigensConsolidadas` + gate por STRING LITERAL.
+#   2. **O ITEM DA FATURA NASCE CONTRAÍDO** (a pedido), com chevron. Contraído: tipo,
+#      descrição e total. Expandido: data, Quant., unitário, desconto, o Nº do
+#      atendimento e a observação das origens.
+#      ⚠️ O estado vive na LINHA, nunca na fatura: um controle único no cabeçalho jogaria
+#      fora o que a pessoa expandiu para conferir.
+#      ⚠️ O chevron é CROMO (cinza, fora do `AcaoRegistro`) — ele não altera registro
+#      nenhum. Sem rótulo visível, `aria-expanded` + `title` são obrigatórios.
+#   3. **PAGAMENTOS: a coluna Animal virou Qtd.** ⚠️ O animal SÓ saiu da aba FORNECEDOR
+#      (foi o pedido): a conta do fornecedor é uma COMPRA, e o paciente não tem papel
+#      nela. Na aba PRESTADOR ele FICA — lá o animal é o serviço em si ("o ferrageamento
+#      do Thor") e tirá-lo deixaria a linha sem dizer sobre quem ele trabalhou. A Qtd
+#      entra nas DUAS. ⚠️ A folha IMPRESSA não foi tocada (ela já trazia as duas colunas
+#      e é documento que vai ao credor).
+#   4. **ESTOQUE (Farmácia): coluna Qtd Produto** = `qtdEmbalagens`, o MESMO campo que o
+#      formulário de entrada chama assim. ⚠️ É o que foi COMPRADO, não o saldo: não desce
+#      com o consumo. Quem responde "quanto ainda tenho" é a coluna Estoque ao lado, na
+#      unidade OPERATIVA — num multidose as duas dizem coisas diferentes de propósito
+#      (3 frascos comprados × 55 mL restantes).
+#   5. 🔴 **O CURSO PASSOU A CONSUMIR N EMBALAGENS, NÃO UMA** — o pedido: "foi comprado
+#      um frasco de 100 mL mas foi receitado 5 doses de 25 mL: é preciso na prescrição
+#      informar que serão usados dois frascos e lançar na fatura os dois frascos".
+#      ⚠️ **VALE SÓ PARA O PRODUTO SEM MULTIDOSE** (decisão do usuário). No multidose a
+#      sobra do frasco volta para a prateleira e a cobrança segue PROPORCIONAL —
+#      arredondar ali cobraria um frasco inteiro de cada paciente que recebesse uma dose.
+#      a. 🔴 **O CADASTRO PASSOU A DECLARAR O CONTEÚDO SEM MULTIDOSE.** Era o dado que
+#         faltava: `qtdPorEmbalagemDe` exige `multidose === true`, e o formulário LIMPAVA
+#         os campos ao desmarcar — o sistema não tinha como saber os 100 mL. Campo novo
+#         **"Conteúdo da embalagem"** (em `FormProduto`), na UNIDADE do produto.
+#         🔴 **SEM MIGRATION**: reusa `tb_medicamentos.doses_por_embalagem`, que já existe
+#         e é nulável. O número passou a ter significado nos DOIS estados —
+#         multidose ON: conteúdo na FORMA DE CÁLCULO (muda a unidade operativa);
+#         multidose OFF: conteúdo na UNIDADE do produto (não muda unidade nenhuma).
+#         ⚠️ `conteudoDaEmbalagem` é DELIBERADAMENTE separada de `qtdPorEmbalagemDe`, e as
+#         duas nunca respondem juntas: se a nova entrasse em `unidadeOperativa`, todo
+#         produto que declarasse o conteúdo viraria multidose por acidente e a cobrança
+#         voltaria a ser proporcional. Há teste travando que a unidade segue 'Un.'.
+#         ⚠️ `gravarMultidose` parou de zerar o número ao desmarcar (só a FORMA é
+#         limpa) — zerá-lo apagaria o cadastro no primeiro salvar. A razão original de
+#         limpar ("o item voltar a ser multidose sozinho") continua coberta por
+#         `qtdPorEmbalagemDe`, que exige a flag. MESMA mudança em `MedicamentoController`
+#         (o cadastro rápido do atendimento), senão os dois caminhos divergiriam.
+#         ⚠️ Trocar o checkbox LIMPA o número NA TELA: ele muda de UNIDADE junto, e
+#         reaproveitá-lo afirmaria um conteúdo que ninguém declarou.
+#      b. 🔴 **A BAIXA É ACUMULADA, NÃO POR DOSE** (`embalagensDaExecucao`, função PURA
+#         e exportada). Compara quantas embalagens o curso já tinha abertas com quantas
+#         passa a ter, e entrega a diferença:
+#         ```
+#         frasco 100 mL · 5 doses de 25 mL
+#           dose 1  acum  25 -> 1 aberta (antes 0)  entrega 1
+#           doses 2-4                               entrega 0
+#           dose 5  acum 125 -> 2 abertas (antes 1) entrega 1   CURSO: 2 frascos
+#         ```
+#         ⚠️ É isto que faz o curso INTERROMPIDO não cobrar frasco que ninguém abriu. A
+#         alternativa (cobrar `ceil(curso inteiro)` na 1ª dose) deixaria dois frascos
+#         cobrados numa prescrição cancelada na segunda aplicação — há caso de teste
+#         guardando exatamente isso.
+#         ⚠️ **O LEGADO NÃO TEM CONTADOR**: `dosesExecutadas` só é incrementado no fluxo
+#         POR DOSE (`elegivelParaFluxoNovo`). Sem a perna `item.executadoEm && doses === 0`,
+#         um item legado já executado cai na conta com "nada consumido" e volta a debitar
+#         e cobrar uma embalagem A CADA execução — o defeito de 2026-09-17 de volta.
+#         ⚠️ `embalagensPara` tem piso 1 (é a entrega única de quem não declara conteúdo),
+#         então o "antes" da 1ª dose é 0 EXPLÍCITO — senão a primeira entrega sairia
+#         1 − 1 = 0 e o item nunca seria debitado nem cobrado.
+#      c. ⚠️ **QUANTIDADE E VALOR UNITÁRIO ANDAM JUNTOS na linha da fatura**, nas DUAS
+#         pontas (execução e finalização): `quantidade` = embalagens entregues e `valor`
+#         = o TOTAL debitado ÷ elas. Mexer num sem o outro DOBRA (ou divide) a cobrança,
+#         e nada acusa. Gate travando o par nos dois lugares.
+#      d. **Reserva e as TRÊS verificações passaram a dimensionar o CURSO em embalagens**
+#         (`qtdNaUnidadeEstoque(item, unidade, conteudo)`): reservar 1 deixaria o segundo
+#         frasco livre para outra prescrição e a última dose bateria num saldo que alguém
+#         já levou. A conta a pagar do fornecedor conta as mesmas embalagens.
+#      e. **A PRESCRIÇÃO INFORMA** (faixa azul sob a linha de frequência/duração): "o
+#         curso inteiro usa 125 mL — com 100 mL por embalagem, serão necessárias 2
+#         embalagens". ⚠️ É ESPELHO do backend (`embalagensParaQtd` × `embalagensPara`),
+#         não uma segunda regra — divergir faria a tela prometer um número que a fatura
+#         não cobra. Some quando a receita está na própria unidade da embalagem ("2 Un."),
+#         onde o número já É a quantidade de embalagens.
+#      f. ⚠️ **A VACINA NÃO ENTRA e não precisou entrar**: ela conta DOSES por lote
+#         (`tb_lotes_vacina.doses_por_frasco`), e o frasco de dose única nasce com 1 — a
+#         aplicação já consome e cobra o frasco inteiro. 🔴 MAS `dosesDoCatalogo` usa
+#         `doses_por_embalagem` como padrão do lote: sem o filtro `multidose = true` que
+#         ela JÁ tem, um frasco de vacina nasceria com "100 doses" e cada aplicação
+#         custaria um centésimo dele. Gate novo travando o filtro.
+#   **NENHUMA MIGRATION** — a coluna do conteúdo já existia e é nulável; conteúdo em
+#   branco mantém o comportamento de toda base atual (1 embalagem por curso).
+#   Gate ampliado `__tests__/produtoMultidose.test.js` (**65 casos**, +14, com a
+#   sequência do caso relatado EXECUTANDO a função pura).
+#   ✅ **Verificado que REPROVA**: devolvidas a entrega única e a cobrança do curso
+#   inteiro na 1ª dose, **5 casos falharam**; devolvido `quantidade: 1` nas duas pontas
+#   da fatura, **2**. Suíte: **1208**; `tsc --noEmit` (backend), `tsc -b` e `vite build`
+#   limpos.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.)
+# Atualizado em: 2026-09-19 (parte 3) (🔴 **A LEITURA DO DOCUMENTO DE COMPRA MANDAVA
+#   CULPAR A FOTO QUANDO QUEM ESTAVA FORA DO AR ERA O GEMINI.** Relatado como "está
+#   dando erro ao ler esta imagem", com a sugestão de trocar o prompt.
+#   1. 🔴 **O PROMPT NÃO ERA O PROBLEMA — MEDIDO, não suposto.** O log de IA (id 517)
+#      guardava a falha real: `Gemini API error 503: "This model is currently
+#      experiencing high demand"`, com **91,8 s de latência** (duas chamadas de ~45 s
+#      esperando pelo erro). E o id **516, SETE MINUTOS ANTES, teve SUCESSO** com o
+#      MESMO documento (12,4 s, 2232 tokens de entrada / 344 de saída). ✅ Conferido
+#      ainda contra o Gemini REAL com o `ler_nota_fiscal@v2` atual: o cupom
+#      "ORÇAMENTO — SEM VALOR FISCAL" volta com fornecedor, endereço, número, data e
+#      os 2 itens com unitário e total certos, ignorando cliente, total e troco — em
+#      1,7 s. **Trocar o prompt teria reescrito o que funciona e deixado o 503 de pé.**
+#      ⚠️ O formato sugerido (`tipo_documento`/`estabelecimento`/`cabecalho`/
+#      `pagamento`) quebraria o contrato `ehNotaFiscal` inteiro — serviço, controller,
+#      front e gate —, que o CLAUDE.md preserva DE PROPÓSITO desde 2026-09-10.
+#   2. 🔴 **A MENSAGEM ÚNICA MENTIA SOBRE A CAUSA** — `motivoDaFalha` no
+#      `NotaFiscalController`. Toda falha saía como "confira se a foto/PDF está
+#      legível": a pessoa refotografa, recorta e troca o arquivo — tudo sobre o que
+#      estava CERTO — enquanto a ação útil era esperar um minuto. Agora a falha
+#      TRANSITÓRIA (`ehFalhaTransitoria`, já exportada) diz "o serviço está
+#      sobrecarregado, não é problema do seu documento".
+#      ⚠️ **Mensagem que aponta a causa errada é PIOR que mensagem genérica**: ela não
+#      só deixa de ajudar, MANDA trabalhar no lugar errado. Mesmo tratamento no front
+#      para o `timeout of 180000ms exceeded` do axios.
+#   3. **Retentativa: de 1 para 2, com espera CRESCENTE e jitter.** Com 1,5 s FIXOS a
+#      2ª tentativa cai no mesmo pico que derrubou a 1ª — foi o que os 91,8 s mostram.
+#      ⚠️ **ORÇAMENTO DE TEMPO (`ORCAMENTO_INICIO_MS`, 60 s)**: tentativa nova só
+#      COMEÇA enquanto o decorrido couber. Com 503 imediato cabem as três em segundos;
+#      com o provedor lento (o caso medido) ele para na 2ª, como parava antes — é isso
+#      que impede a correção estourar os 180 s de paciência do front.
+#      ⚠️ O JITTER não é enfeite: sem ele todos os clientes que tomaram 503 no mesmo
+#      segundo voltam juntos e reforçam a sobrecarga que estão esperando passar.
+#   4. 🔴 **O `fetch` DO `geminiClient` NÃO TINHA TETO NENHUM** — `TIMEOUT_MS` (60 s,
+#      `GEMINI_TIMEOUT_MS`) via `AbortSignal.timeout`. Sem ele não existe pior caso: o
+#      503 lento prendia a requisição por 45 s sem nada poder interrompê-la. O estouro
+#      vira `TimeoutError` com modelo e teto na mensagem e é FALHA TRANSITÓRIA (é o
+#      mesmo evento do 503, visto do nosso lado do fio), logo entra na retentativa.
+#      ⚠️ Folgado de propósito: a leitura de 4 páginas roda em ~12 s. O teto contém o
+#      provedor travado, não corta trabalho legítimo.
+#   5. `notaFiscalService` ENTROU nos gates de IA (`modelo = MODELO_PADRAO`, retentativa
+#      na chamada multimodal) — ele já seguia as duas regras e estava FORA da lista,
+#      justamente o serviço em que o 503 apareceu para o usuário.
+#   **NENHUMA MIGRATION.** Gate `__tests__/iaFalhaTransitoria.test.js` em **23 casos**;
+#   os de "repete UMA vez" foram INVERTIDOS, com o motivo no cabeçalho do arquivo.
+#   ✅ **Verificado que REPROVA**: devolvidas a mensagem fixa, a espera fixa e as 2
+#   tentativas, **3 casos falharam**.
+#   ⚠️ **O teste nasceu FRÁGIL e a 1ª sabotagem deu falso verde parcial**: com a espera
+#   real (1,5 s + 3 s + jitter) dois casos estouravam os 5 s de teto do jest. O `spy`
+#   de `setTimeout` no `beforeEach` registra QUANTO seria esperado e dorme 0 — sem ele
+#   o teste não fica lento, fica VERMELHO. Suíte: **1193**; `tsc --noEmit`, `tsc -b` e
+#   `vite build` limpos.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.)
+# Atualizado em: 2026-09-19 (parte 2) (🔴 **A COMPRA DO ESTOQUE CHEGAVA A TELA DE
+#   PAGAMENTOS COM O VALOR AO QUADRADO** + a compra de VACINA passou a virar divida.
+#   1. 🔴 **O DEFEITO, MEDIDO NA BASE: `valor` da linha e UNITARIO, e a farmacia
+#      mandava o TOTAL.** `recalcularTotal` faz `SUM(i.valor * i.quantidade)` e a tela
+#      de Pagamentos exibe `it.valor * it.quantidade` — o contrato dos outros TRES
+#      chamadores de `lancarItem` (execucao de prescricao, vacina e prestador), que
+#      sempre passaram o unitario. `lancarCompraDoFornecedor` passava
+#      `valor = valorEmbalagem x embalagens` **e** `quantidade = embalagens`:
+#      ```
+#      gravado na base : qtd 10 x R$ 1.000,00  ->  a tela mostrava R$ 10.000,00
+#      a compra real   : 10 embalagens de R$ 100,00  =  R$ 1.000,00
+#      ```
+#      As duas linhas `ESTOQUE_ENTRADA` da base somavam **R$ 22.000** onde a clinica
+#      devia R$ 2.200. Nada acusa: o numero e plausivel e a conta fecha "certa".
+#      ⚠️ **AS DUAS LINHAS JA GRAVADAS CONTINUAM ERRADAS** — a correcao vale daqui em
+#      diante. Corrigir e pelo "Editar valor" do item, na propria tela de Pagamentos
+#      (o valor de cada uma passa a ser o da EMBALAGEM: 1000->100 e 1200->120).
+#   2. ⚠️ **A QUANTIDADE E DE EMBALAGENS, NUNCA O SALDO — o "independente de doses"
+#      do pedido.** Sem `qtdEmbalagens` (entrada avulsa, cliente antigo), o fallback
+#      caia em `qtdEstoque`; num multidose o saldo esta no CONTEUDO (3 frascos de
+#      20 mL = 60), e ele cobraria **60 frascos de quem entregou 3**. Novo
+#      `embalagensCompradas` divide o saldo pelo conteudo que o produto declara, e so
+#      cai no saldo cru quando nao ha conteudo (nao-multidose, em que a embalagem e a
+#      propria unidade). Exportada para teste — o modo de errar e silencioso.
+#   3. 🔴 **A ENTRADA DE ESTOQUE DE VACINA PASSOU A LANCAR A COMPRA** (nao lancava
+#      nada): `lancarCompraDaVacina`, espelho do da farmacia, com
+#      **`valorUnitario` (POR FRASCO) x `qtdFrascos`**. `qtdTotal`/`dosesPorFrasco`
+#      ficam FORA da conta — sao DOSES, e ha gate reprovando a mencao a eles.
+#      ⚠️ **IDEMPOTENCIA ASSIMETRICA, de proposito.** A farmacia ancora a origem no
+#      `MovimentoEstoque` (um por COMPRA); **a vacina nao tem tabela de movimento**
+#      (decisao registrada em `ajustar`: o motivo vive no AuditLog). Entao: entrada
+#      NOVA -> `origemId` = id do LOTE (idempotente); **CONSOLIDACAO -> `origemId`
+#      NULO**. Com o id do lote repetido, o indice unico parcial casaria no
+#      `ON CONFLICT` e a SEGUNDA compra do mesmo lote seria **descartada em
+#      silencio** — a clinica pagaria uma e deveria zero pela outra. `origemTipo`
+#      (`ESTOQUE_VACINA_ENTRADA`) fica preenchido: perde-se a idempotencia, nunca a
+#      rastreabilidade.
+#      ⚠️ Best-effort e FORA da transaction, como na farmacia: a entrada e ato de
+#      ESTOQUE e nao se desfaz porque a conta a pagar falhou.
+#   4. **FORNECEDOR + NOTA FISCAL na Entrada de Vacina** (a pedido). As colunas
+#      existiam desde a migration `20261006000000` e **so a tela de Produtos as
+#      gravava** — a entrada nao sabia dizer de quem veio o frasco, entao nao havia a
+#      quem dever. Gravadas por SQL cru (`produtoFornecedor.gravarFornecedorNoLote`,
+#      Secao 11) e LIDAS em bloco na listagem (`fornecedoresDeLotes`).
+#      ⚠️ **A LISTAGEM TEM DE DEVOLVER O CAMPO**: sem isso a edicao abriria com o
+#      fornecedor em branco e o salvar o APAGARIA em silencio — a licao do
+#      `temposConsulta` (2026-07-28 parte 4).
+#      ⚠️ O fornecedor e **OPCIONAL**: sem ele a entrada acontece (so nao vira
+#      divida). Exigi-lo travaria o estoque por causa de um cadastro, com o frasco ja
+#      na clinica. ⚠️ Na CONSOLIDACAO so preenche o que esta VAZIO — o lote ja
+#      registrou de quem veio a 1a compra —, mas a DIVIDA e de quem entregou AGORA.
+#      ⚠️ **Editar o lote NAO lanca conta a pagar**: corrigir cadastro nao e comprar
+#      (mesma regra do `atualizar` da farmacia). `undefined` PRESERVA o gravado.
+#   5. **"Ler documento de compra" -> "Carregar Nota Fiscal"** (a pedido), no titulo do
+#      modal e no botao da Farmacia.
+#      ⚠️ **ISSO REVERTE O NOME AMPLIADO DE 2026-09-10, e a razao dele CONTINUA DE
+#      PE**: enquanto o rotulo dizia so "nota fiscal", quem tinha um ORCAMENTO DE
+#      BALCAO na mao nao tentava — e o balcao veterinario entrega o tempo todo papel
+#      com "SEM VALOR FISCAL" impresso. Por isso o texto de apoio do modal e o
+#      `title` do botao seguem dizendo, com todas as letras, que cupom, orcamento e
+#      recibo sao aceitos. **Nao apagar essas frases junto com o titulo.** O backend
+#      (`ai/prompts/lerNotaFiscal.js`) nao mudou: o criterio continua sendo COMPRA,
+#      nao documento fiscal.
+#   6. **O MESMO botao no ESTOQUE DE VACINAS** (a pedido) — rota nova
+#      `POST /vacinas/estoque/documento-compra`, com o **MESMO** controller da
+#      farmacia (`NotaFiscalController.ler`) e o gate `vacina.estoque.criar`. O
+#      componente foi PARAMETRIZADO (`rota`, `tipoItem`), nao copiado: duas leituras
+#      divergiriam na primeira correcao (28-g).
+#      ⚠️ `tipoItem` faz os itens do tipo da tela nascerem MARCADOS; os do outro tipo
+#      aparecem DESMARCADOS, com aviso — **nao sao escondidos**: a nota do balcao
+#      mistura vacina e medicamento, sumir com metade dela faria a pessoa concluir que
+#      a leitura falhou, e a classificacao e da IA e pode errar.
+#      ⚠️ `/documento-compra` LITERAL antes de `/:id` (armadilha 1) e `tenantRls`
+#      REENTRA apos o multer. Extensao E mimetype validados (SVG e HTML executavel).
+#      ⚠️ Usar a nota **LIMPA o filtro de laboratorio**: a lista de vacinas e recortada
+#      por ele e o casamento por nome procura NELA — com um laboratorio escolhido, a
+#      vacina da nota cairia em "nao achei".
+#   7. **`utils/fornecedorProduto.ts`** — o recorte "quem entrega PRODUTO" (Farmacia .
+#      Laboratorio . Loja) saiu de dentro de `Farmacia.tsx` e virou fonte unica das
+#      duas telas. Duas listas divergiriam, e o que divergiria e **para quem a conta a
+#      pagar vai**.
+#   **NENHUMA MIGRATION** — as colunas ja existiam. Gate novo
+#   `__tests__/compraEstoqueContasPagar.test.js` (23 casos).
+#   ✅ **Verificado que REPROVA**: devolvido o total pre-multiplicado a farmacia e
+#   postas as doses na quantidade da vacina + o id do lote na consolidacao,
+#   **2 casos falharam**.
+#   ✅ **CONFERIDO AO VIVO** com o CODIGO REAL contra a base, em transacao REVERTIDA
+#   (0 linhas ao fim): 10 embalagens x R$ 100 gravam **qtd 10 x R$ 100 = R$ 1.000**
+#   (eram R$ 10.000); 3 frascos x R$ 80 = R$ 240; o total do banco fecha em R$ 1.240;
+#   o REENVIO da mesma origem e descartado; e a 2a compra do mesmo lote (origem nula)
+#   entra, levando o total a R$ 1.400.
+#   Suite: **1184**; `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+#   ⚠️ NAO verificado em navegador — sem ferramenta de browser nesta sessao.)
+# Atualizado em: 2026-09-19 (**O LOGIN PASSOU A POUSAR NO MAPA DE ATENDIMENTO** e
+#   **RECIBOS DE PRESTADOR SAIU DO MENU** — os dois a pedido.
+#   1. **Destino pós-login: `/painel-principal` → `/mapa-atendimento`.** Trocado nos
+#      QUATRO pontos que são a MESMA entrada no sistema, para não haver dois pousos
+#      diferentes conforme o caminho: `Login.tsx` (o redirect pós-senha),
+#      `Dashboard.tsx` (quem restaura a sessão e cai em `/`), `CadastroPessoal.tsx`
+#      (primeira entrada depois de confirmar o cadastro — §36-h) e `CadastroEmpresa.tsx`
+#      (gestor completando o primeiro acesso). O **PROPRIETÁRIO não muda**: segue em `/`,
+#      que é o portal do cliente.
+#      🔴 **Isto DESFAZ a troca de 2026-09-05, e a razão dela se INVERTEU.** Naquela data
+#      o destino deixou de ser o Mapa porque ele tinha saído do menu e a pessoa caía numa
+#      tela sem item correspondente no Sidebar. Hoje é o **PAINEL** que está escondido
+#      (`MOSTRAR_PAINEL_PRINCIPAL = false`, 2026-09-18) e o Mapa é que está lá — ou seja,
+#      o argumento passou a valer para o outro lado.
+#      ⚠️ **OS GATES DAS DUAS TELAS SÃO DIFERENTES, e isso muda QUEM é barrado.** O Painel
+#      exige ser **VETERINÁRIO** (`ehVeterinario`); o Mapa exige **`dashboard.geral.ler`**.
+#      Quem não tem o slug cai em "Acesso não autorizado" logo no login — como já caía no
+#      Painel por não ser vet. Não é regressão (o Mapa é o gate mais AMPLO: VET EQUIPE e
+#      ESTAGIÁRIO LEITURA por padrão do seed), mas o conjunto de barrados MUDA: clínica que
+#      tenha NEGADO `dashboard.geral.ler` para enfermeiro/secretaria precisa revisar a
+#      matriz, senão esses perfis entram numa tela de acesso negado.
+#      ⚠️ **`EmpresaContext.trocarContexto` NÃO foi tocado** — ele continua pousando em
+#      `#/painel-principal` ao trocar de empresa. É outro fluxo (não é login) e não foi
+#      pedido; a consequência conhecida é que a troca de contexto pousa numa tela que não
+#      está no menu. Se for para alinhar, é UMA linha ali.
+#      ⚠️ A rota `/painel-principal`, `pages/PainelPrincipal.tsx` e o gate dela seguem
+#      montados e funcionais — nada foi removido; só deixou de ser o destino.
+#   2. **Recibos de Prestador escondido do Sidebar** (`MOSTRAR_RECIBOS_PRESTADOR = false`).
+#      A tela NÃO foi removida: `/recibos-prestador`, `pages/RecibosPrestador.tsx`, a rota
+#      `/api/recibos-prestador` e o gate `financeiro.recibos.ler` seguem montados — chega-se
+#      a ela pela URL. Mesmo padrão (e mesma lição) do `MOSTRAR_MAPA_ATENDIMENTO` de
+#      2026-09-05 e do Painel Principal de 2026-09-18: esconder o ITEM fez a volta custar
+#      UMA LINHA, em vez de uma reconstrução.
+#      ⚠️ **O flag entra na DEFINIÇÃO de `podeVerRecibos`, não no JSX do sub-item** — é ela
+#      que decide o sub-link E o gate do grupo "Financeiro". Escondendo só o sub-item, quem
+#      tivesse APENAS `financeiro.recibos.ler` continuaria vendo o grupo **abrir VAZIO**. E
+#      deixar a variável sem nenhum leitor faria o `tsc -b` reprovar (TS6133).
+#      ⚠️ `detectSection` e a classe de "ativo" do grupo continuam reconhecendo
+#      `/recibos-prestador`: a rota segue alcançável, e quem chegar lá pela URL tem o grupo
+#      Financeiro aceso, em vez de um menu que não corresponde à tela aberta.
+#      ⚠️ Para trazer de volta, troque para `true` e **REMOVA o flag junto** — um `if (true)`
+#      não configura nada.
+#   **NENHUMA MIGRATION** — é 100% de TELA (front). `tsc -b --noEmit` e `vite build` limpos.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.)
+# Atualizado em: 2026-09-18 (parte 4) (🔴 **ANTECIPAR DOSE DEIXOU DE SER BLOQUEIO E
+#   VIROU PERGUNTA** (a pedido). A execução da prescrição não trava mais esperando a
+#   data/hora prevista: a tela INFORMA para quando a dose estava marcada, pergunta se
+#   deseja antecipar, e o "sim" executa pelo caminho de sempre.
+#   1. 🔴 **INVERTE a regra de 2026-08-23 (item 3)**, que exigia JUSTIFICATIVA escrita
+#      (mín. 3 chars) para toda dose FUTURA. O texto obrigatório não impedia nada —
+#      quem decidia antecipar digitava qualquer coisa e seguia — e cobrava um
+#      formulário no meio do plantão. Agora é o MESMO molde da dose ATRASADA:
+#      `ConfirmModal` com "A próxima dose (03/05) estava prevista para **24/08 às
+#      07:44**. Executar agora antecipa a aplicação. Deseja continuar?" + os botões
+#      **Antecipar e executar** / **Cancelar**.
+#      ⚠️ A parte CERTA daquela regra CONTINUA valendo e não pode ser afrouxada: o
+#      gate roda para TODO item de `itensHoje`, venha a chamada do ícone "Executar"
+#      (item a item) ou do "Executar Todos" — os dois caminhos passam pela MESMA
+#      pergunta. Era essa divergência o furo original.
+#   2. 🔴 **FLAG PRÓPRIA `confirmarAntecipacao` — NUNCA reusar `confirmarHorario`.**
+#      Esta é a armadilha da leva: o "Executar Todos" manda `confirmarHorario: true`
+#      FIXO (o clique em lote vale como confirmação de dose ATRASADA, que já era
+#      devida). Liberar a antecipação por aquela mesma flag faria UM clique antecipar
+#      o **curso inteiro** sem ninguém ser perguntado — exatamente o furo de
+#      2026-08-23, de volta por outro caminho. Há gate travando: o ramo `ANTECIPADA`
+#      não pode conter a string `confirmarHorario`.
+#   3. 🔴 **AS DOSES SEGUINTES JÁ ERAM RECALCULADAS — e agora isso está travado por
+#      teste.** `proximaDoseEm: calcularProximaDose(agora, item.frequencia)` parte do
+#      horário REAL da execução, nunca da grade original (rolling schedule, desde
+#      2026-08-23). É isso que dá sentido a antecipar: adiantou a dose das 20:00 para
+#      as 14:00 num 12/12h, a próxima passa a ser **02:00**, não 08:00. Trocar `agora`
+#      por `previsto` ali devolveria a grade fixa — e nada acusaria. A tela diz isso
+#      em uma linha ("As doses seguintes serão recalculadas a partir deste horário"),
+#      e o front aplica o `proximaDoseEm` fresco na MESMA tela (overlay `itensLive`).
+#   4. ⚠️ **A JUSTIFICATIVA continua ACEITA, agora OPCIONAL**: vindo no corpo, vai
+#      para o `motivo` da auditoria como sempre foi. Cliente antigo que ainda a envie
+#      não muda de comportamento. O que NUNCA se faz é preencher `motivo` com frase do
+#      sistema — ali é texto de PESSOA; o fato de ter havido confirmação explícita vai
+#      em `detalhes` ("antecipada 120min, confirmada na execução").
+#   5. ⚠️ **A ARROW do botão "Executar Todos" ficou MAIS perigosa.** O 1º parâmetro do
+#      handler virou `confirmarAntecipacao`: com `onClick={handleExecutarTodos}` o
+#      MouseEvent chega no lugar dele, é TRUTHY, e todo clique passaria a antecipar o
+#      curso inteiro **em silêncio** (a tela não erra — ela executa). `onClick={() =>
+#      handleExecutarTodos()}` é obrigatório, e há gate para a linha.
+#   **NENHUMA MIGRATION** — nada de schema mudou; `confirmarAntecipacao` é campo de
+#   REQUISIÇÃO. `migrate status`: 203, banco em dia.
+#   Gate novo `__tests__/execucaoAntecipada.test.js` (16 casos) — a classificação e o
+#   recálculo EXECUTAM o código real de `lib/agendaDoses`; o resto é gate estrutural
+#   dos elos que somem sem erro (a flag do ramo, o `agora` do rolling schedule, o
+#   reenvio do front e a arrow do botão).
+#   ✅ **Verificado que REPROVA**: devolvido o `confirmarHorario` ao ramo da
+#   antecipada, trocado `agora` por `previsto` e devolvida a justificativa ao front,
+#   **3 casos falharam**; e, à parte, trocada a arrow por referência, **1**.
+#   Suíte: **1156**; `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+#   🔴 **COMPLEMENTO (mesma data) — O BOTÃO NÃO EXISTIA: eram TRÊS gates de TELA.**
+#   Relatado na prescrição **#006 da Empresa de Gestorvet** (Glicol Turbo 4/4h, dose
+#   dada 18/09 21:07, próxima 19/09 01:07): "não está deixando antecipar a do dia
+#   seguinte, está sem o ícone de execução". A pergunta do backend NUNCA chegava a
+#   acontecer — nada chamava o endpoint, porque a tela não oferecia por onde clicar.
+#   Os três escondiam a ação e **nenhum deles dá erro**:
+#     a. `temAtual` exigia `proximaDoseRealHoje` → a dose da vez só ganhava botão no
+#        dia em que vencia. **`proximaDoseRealHoje` saiu da conta** e passou a decidir
+#        só o RÓTULO ("Em Execução" × "Prevista para 19/09 às 01:07"), que era a razão
+#        legítima dele existir (executar a dose 1 de "1x/semana" não pode fazer a
+#        dose 2 anunciar-se "Em Execução").
+#     b. O MODAL inteiro abria em leitura: `soVisualizacao` usava `tipoConcluidoEm`
+#        (o **DIA** cumprido). Passou a usar `tipoTemDosePorVir` (o **CURSO** em
+#        aberto). São perguntas diferentes: o dia cumprido manda o card ao Histórico
+#        — e isso continua certo —, o curso é que diz se ainda há o que executar.
+#     c. A linha no HISTÓRICO vinha com `podeExecutarAcao={false}` e o ícone ainda
+#        dependia de `executada`. Agora, havendo dose por vir, ela mantém o Executar
+#        com o título **"Antecipar a próxima dose"** e abre o modal em modo execução.
+#   ⚠️ `itemTemDosePorVir` EXCLUI o item LEGADO ('agora'/'SOS'/'seNecessario'): ali
+#   não há grade futura, e o backend recusa executar o que já saiu hoje — sem essa
+#   perna a dose única aplicada voltaria a exibir um botão que só falha no clique (28-d).
+#   ✅ **CONFERIDO com o CÓDIGO REAL contra o DADO REAL** (item 247, leitura pura):
+#   elegível, **1 de 30 doses**, previsto 19/09 01:07 → `ANTECIPADA`; a tela pergunta
+#   "A próxima dose (02/30) estava prevista para 19/09 às 01:07…" e, confirmada às
+#   21:50, a próxima passa a **19/09 01:50** (na grade antiga seria 05:07).
+#   Gate ampliado para **21 casos**; ✅ verificado que REPROVA: revertidos os três
+#   gates de tela + o `podeExecutarAcao` do histórico, **4 casos falharam**.
+#   Suíte: **1161**; `tsc --noEmit`, `tsc -b` e `vite build` limpos.
+#   🔴 **ARMADILHA CONFIRMADA NA PRÓPRIA INVESTIGAÇÃO (ver §12, armadilha 42):** a
+#   primeira varredura desta sessão concluiu "a base não tem nenhum item pendente" —
+#   e era FALSO. O script rodava `set_config('app.plataforma','on',true)` FORA de
+#   transação: `true` é LOCAL à transação, e cada query pega outra conexão do pool,
+#   então o FORCE RLS devolvia **0 linhas com sucesso e sem aviso**. Script de
+#   diagnóstico em tabela do tenant plane roda DENTRO de `$transaction`.)
+# Atualizado em: 2026-09-18 (parte 3) (🔴 **A RECEITA VOLTOU A SER ESCRITA NA UNIDADE
+#   DO PRODUTO — e a EMBALAGEM passou a ser entregue UMA VEZ** (a pedido).
+#   1. 🔴 **O CAMPO DOSAGEM DEIXOU DE SAIR EM 'Un.'.** Desde 2026-09-17 o produto SEM
+#      multidose era prescrito em 'Un.' — o veterinário escrevia "0,1 frasco" onde
+#      queria escrever "5 mL". Agora:
+#      **multidose → a Forma de Cálculo; sem multidose → a Unidade do cadastro do
+#      Produto** (`lib/formaCalculo.unidadePrescricao` + espelho
+#      `utils/formaCalculo.unidadePrescricaoProduto`).
+#      ⚠️ **A unidade da RECEITA e a do ESTOQUE passaram a DIVERGIR de propósito** no
+#      não-multidose (receita 'mL' × estoque 'Un.'). A regra de 17/09 exigia que as
+#      três respostas fossem a MESMA, e resolvia no lugar errado um defeito real (o
+#      frasco "1 Un." em que 5 mL debitavam CINCO frascos). Quem responde pela baixa
+#      agora é a PONTE do item 2 — sem ela isto seria o defeito de volta.
+#      ⚠️ A Farmácia continua rotulando o SALDO por `unidadeOperativaProduto` ('Un.'):
+#      é em embalagens que ele é contado, e trocar uma pela outra faz a tela afirmar
+#      um saldo que o sistema não tem.
+#   2. 🔴 **A PONTE: prescrição em CONTEÚDO contra estoque em EMBALAGENS consome UMA
+#      embalagem, no CURSO INTEIRO** (`entregaPorEmbalagem`). Sem multidose o produto
+#      não declara quanto cabe no frasco — é o que "não é multidose" significa —, e não
+#      existe conversão possível. O que existe é o fato: a clínica ENTREGA o frasco,
+#      uma vez.
+#      ```
+#      Xarope 50 mL, R$ 60,00 o frasco · receita 5 mL 1x/dia por 10 dias
+#        estoque : −1 frasco (na 1ª execução)      fatura : 1 × R$ 60,00
+#      ```
+#      ⚠️ **DUAS INVERSÕES em dois dias — não voltar a nenhuma das anteriores:**
+#      até 17/09 valor BRUTO (20 mL tiravam 20 frascos de um saldo de 2); em 17/09
+#      1 por APLICAÇÃO (o exemplo acima cobrava DEZ frascos); agora 1 por CURSO.
+#      ⚠️ Quem garante o "uma vez" é a guarda de `item.executadoEm` em
+#      `debitarEstoqueDia`, que devolve `jaEntregues`/`porEmbalagem`; `executar` PULA
+#      a linha da fatura e a conta a pagar do fornecedor desses itens — mas a dose
+#      continua sendo marcada como executada, e a seringa/agulha continuam sendo
+#      lançadas (cada aplicação usa um insumo novo).
+#      ⚠️ **Receita em 'Un.' NÃO entra na regra**: ali o vet prescreveu EMBALAGENS, e
+#      2 por dia por 5 dias são 10 de verdade. É a diferença entre a ampola prescrita
+#      por unidade e o frasco prescrito pelo conteúdo — e é por isso que o produto
+#      aplicado dose a dose pela clínica deve ser MULTIDOSE (declarando o conteúdo) ou
+#      prescrito em 'Un.'. CONSEQUÊNCIA ACEITA: ampola cadastrada em 'mL' e aplicada
+#      10 dias seguidos cobra UMA ampola.
+#      ⚠️ A dosagem SAIU da assinatura de `qtdDoEstoque` — ela só servia para contar
+#      aplicações, e a regra deixou de contar aplicações.
+#   3. **MULTIDOSE não mudou**: estoque e fatura seguem PROPORCIONAIS ao prescrito, a
+#      cada execução (5 doses de R$ 33,33 = R$ 166,67, conferido ao vivo).
+#   4. 🔴 **A ENTREGA AO PROPRIETÁRIO PASSOU A TER PREÇO — e a debitar estoque.** O
+#      item que a clínica FORNECE e o proprietário APLICA ia à fatura com valor
+#      **ZERO** (a "LACUNA CONHECIDA" registrada aqui desde 2026-08-01): o preço nasce
+#      do LOTE debitado e ele nunca era executado, então não havia lote. Debitar não é
+#      efeito colateral do preço, é o fato — o frasco saiu da prateleira quando o
+#      cliente o levou. `debitarEstoqueDia` ganhou `incluirDoProprietario` (OPT-IN, só
+#      a finalização usa) e a quantidade é a do **CURSO INTEIRO**: 1 embalagem no
+#      não-multidose, o proporcional no multidose.
+#      ⚠️ `criarReservas` CONTINUA pulando esse item: ele é debitado no mesmo instante,
+#      e reservar + debitar o mesmo frasco o contaria duas vezes.
+#      ⚠️ `verificarDisponibilidade` passou a CONSIDERÁ-LO — finalizar sem o frasco na
+#      prateleira agora alerta (409 com "forçar"), em vez de debitar em silêncio.
+#   5. **EXECUÇÃO DE PRESCRIÇÃO MOSTRA O PRESCRITO** (a pedido): "5 mL", e não mais
+#      "20 mL · 1 Un. por aplicação". A quantidade de EMBALAGENS virou assunto da
+#      SEPARAÇÃO — e no checklist de farmácia do Painel Principal o item cuja embalagem
+#      JÁ foi entregue **sai da lista** (`jaEntregue`), senão ela pediria um frasco por
+#      dia durante dez dias.
+#   **NENHUMA MIGRATION** — nada de schema mudou (`migrate status`: 203, banco em dia).
+#   Gate ampliado `__tests__/produtoMultidose.test.js` (51 casos, +5; os da regra
+#   anterior foram INVERTIDOS, como o de `faturaConsolidacao` em 17/09).
+#   ✅ **Verificado que REPROVA**: devolvida a divisão por aplicação, removida a guarda
+#   da fatura e revertida a unidade da receita, **4 casos falharam**; e, numa segunda
+#   sabotagem (front voltando à unidade do estoque + entrega do proprietário em zero),
+#   **2**. Suíte: **1140**; `tsc --noEmit`, `tsc -b` e `vite build` limpos.
+#   ✅ **CONFERIDO AO VIVO** com o CÓDIGO REAL contra a base, em transação REVERTIDA:
+#   os 13 produtos com estoque devolvem receita = unidade do catálogo e estoque = 'Un.'
+#   (multidose: as duas na forma); e `debitarEstoqueDia` no frasco de 250 mL tirou
+#   **1 embalagem e cobrou R$ 10,00** na 1ª execução, **nada** na 2ª — e o mesmo item
+#   como entrega ao proprietário, que antes ia a zero, saiu por R$ 10,00.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.)
+# Atualizado em: 2026-09-18 (parte 2) (🔴 **O JOB DO CRMV SÓ TRAZIA NÚMERO DE 5 DÍGITOS —
+#   e, desde alguma mudança do SISCAD, não trazia mais NADA.** Mais 4 pedidos de tela.
+#   1. 🔴 **CRMV, defeito 1 — A INSCRIÇÃO IA SEM ZERO-PADDING.** A busca do SISCAD é
+#      "Idêntico" e compara contra o número gravado com **5 dígitos**: `1000` NÃO casa
+#      com `01000`. O próprio site faz esse padding antes de consultar
+#      (`searchMethodMask` em /paginas/busca: `("00000"+val).slice(-5)`), e o scraper
+#      mandava o decimal cru. Resultado: 1..9999 devolvia "Sua pesquisa não retornou
+#      nenhum resultado" e o índice só se enchia de 10000 em diante — quando o número
+#      cru já tem 5 dígitos e casa POR ACIDENTE.
+#      **MEDIDO no banco**: 11.750 linhas, **TODAS de 5 dígitos**, menor 10000 e maior
+#      23768, numa varredura que percorre 1..25000. Zero abaixo de 10000 com 85% de
+#      densidade acima é assinatura de problema de FORMATO, não de realidade.
+#      ✅ **PROVADO AO VIVO** contra o SISCAD, com o CÓDIGO REAL corrigido: `00001` →
+#      ALUISIO PEREIRA DE FIGUEIREDO, `01000` → DIANA ASSIS DE OLIVEIRA, `02000` →
+#      LUIZ CARLOS REBELLO GOMES, `07500` → DANYELLE MARCHIORI MOREIRA, `09999` →
+#      FLAVIA BORGES TAVARES — **todos ATIVOS e todos fora do índice**; e os mesmos
+#      números SEM padding voltam "nenhum resultado". Era ~40% da faixa saindo em silêncio.
+#   2. 🔴 **CRMV, defeito 2 — O SISCAD PASSOU A EXIGIR TOKEN DE SESSÃO.** Toda chamada
+#      responde `{"type":"error","message":"Sessão de consulta inválida. Recarregue a
+#      página...","challengeToken":"..."}`. O job, então, trazia **ZERO** — e terminava
+#      "com sucesso e sem trabalho", porque `extrairRegistroAtivo` lê erro como "não
+#      existe esse número". O único freio era a guarda de "voltou vazio" do diff.
+#      A consulta agora leva `?consulta_challenge=<token>&website_url=` — o token nasce
+#      no DOM (`#consulta_challenge`) e é **RENOVADO a cada resposta** (o
+#      `challengeToken` devolvido vale para a chamada SEGUINTE, inclusive quando a
+#      resposta é erro). `website_url` é o HONEYPOT do formulário e vai VAZIO.
+#      ⚠️ Sessão que expira no meio → reabre a página e tenta UMA vez; persistindo, a
+#      consulta é marcada como **FALHA**, não como "número inexistente".
+#   3. ⚠️ **VARREDURA COM FALHA NÃO REMOVE NADA** (`varrerUF` devolve `confiavel`).
+#      O número que não pôde ser consultado é, no resultado, IDÊNTICO ao que não existe
+#      — e a remoção é a única parte do diff que destrói dado. Sem essa guarda, uma
+#      varredura 90% quebrada apagaria 90% do índice, em silêncio. A guarda antiga só
+#      cobria o "voltou TOTALMENTE vazio". E `extrairRegistroAtivo` passou a conferir
+#      que a inscrição DEVOLVIDA é a PEDIDA: sem isso, um dia em que o filtro deixasse
+#      de ser exato gravaria o NOME de um veterinário sob o NÚMERO de outro.
+#      **SEM MIGRATION** — `numero` continua `Int` sem padding no banco (o padding é só
+#      da CONSULTA), e `crmvService.validarCRMV` faz `Number(numeroStr)`, então
+#      "CRMV-RJ 1000" casa com a linha 1000. `migrate status`: **203, banco em dia**.
+#      Gate novo `__tests__/crmvScraperInscricao.test.js` (22 casos) que EXECUTA o
+#      código com um `page` falso e confere a URL — varredura de texto aprovaria um
+#      `padStart` que existe e não é usado. ✅ **Verificado que REPROVA**: removidos o
+#      padding e o challenge, **10 dos 22 falharam**.
+#   4. **RAÇA E PELAGEM PASSARAM A ACEITAR DIGITAÇÃO** (a pedido) — `DropdownSelect`
+#      ganhou `buscavel`, que troca o gatilho por um `<input>` e FILTRA ao digitar (sem
+#      acento/caixa), com setas/Enter/Esc. Sem a prop, o componente é o de sempre —
+#      nenhum dos outros 3 chamadores muda de comportamento.
+#      ⚠️ **Texto livre é DESCARTADO no blur**: o valor sai sempre de uma opção da
+#      lista. Aceitar o digitado gravaria raça fora do catálogo — e, na raça, o
+#      chamador converte nome → id casando pelo nome EXATO, então viraria id nulo em
+#      silêncio. ⚠️ Enquanto o texto for o RÓTULO do já escolhido ele NÃO conta como
+#      busca (senão reabrir depois de escolher diria "nenhum resultado" para o próprio
+#      item — a armadilha do combo de animal da Agenda). ⚠️ `onMouseDown` +
+#      `preventDefault` no painel (o blur fecharia a lista antes do clique) e abertura
+#      por `onClick` ALÉM de `onFocus` (focus não dispara em campo já focado).
+#      ⚠️ `Enter` faz `preventDefault` SEMPRE: o campo vive dentro de um `<form>` e o
+#      Enter solto submeteria o cadastro no meio da escolha.
+#   5. **SAIU a faixa "Proprietário não encontrado, encaminhado e-mail com as
+#      informações de acesso."** (a pedido). Só o AVISO — o comportamento não mudou:
+#      cliente novo segue nascendo com login e recebendo o e-mail de boas-vindas. A
+#      faixa do `proprietarioExistente === null` FICA (ali ainda não se sabe se o
+#      e-mail existe, e é ela que explica as duas saídas).
+#   6. 🔴 **RESET DE SENHA PELO E-MAIL DEIXOU DE CAIR NA TELA DE TROCA OBRIGATÓRIA**
+#      (a pedido). `AuthController.resetPassword` não limpava `mustChangePassword`:
+#      quem tinha senha TEMPORÁRIA (toda conta nasce assim) escolhia a própria senha
+#      pelo link e, no login seguinte, o `ProtectedRoute` ainda o mandava para
+#      /alterar-senha-obrigatoria — pedindo que trocasse a senha que acabara de
+#      definir. E lá `alterarSenha` recusa senha REUTILIZADA: a recém-escolhida era
+#      justamente a barrada, e a pessoa ficava PRESA. A troca obrigatória existe para a
+#      senha deixar de ser a que um TERCEIRO conhece; definir senha por link enviado ao
+#      próprio e-mail já é isso.
+#   7. **"Esqueci minha senha": enviado o pedido, o formulário SAI de cena** e ficam a
+#      mensagem "Se o e-mail existir, será enviado um link de recuperação." + **dois
+#      botões, Cancelar e Voltar à Tela de Login** (a pedido).
+#      ⚠️ O "Enviar e-mail" continuar ali convidava a REENVIAR, e cada reenvio gera um
+#      token novo que INVALIDA o link recém-mandado (`resetPasswordToken` guarda um só).
+#      ⚠️ "Voltar à Tela de Login" **NÃO navega para '/login'**: a URL pode carregar
+#      `returnUrl` (o deep link de aprovação de vínculo), e trocá-la faria a pessoa
+#      perder o destino sem nada explicando. Ele fecha o modal e limpa o formulário.
+#      ⚠️ A mensagem é a MESMA exista ou não o e-mail (o backend responde 200 genérico)
+#      — confirmar "não há conta" faria da tela um verificador de cadastro.
+#      ⚠️ `pages/ForgotPassword.tsx` (a TELA de recuperação) continua **ÓRFÃ**: não está
+#      roteada em `App.tsx` e o único caminho é este modal. Não foi removida aqui.
+#   **NENHUMA MIGRATION NESTA LEVA.** Suíte: **1135**; `tsc --noEmit` (backend),
+#   `tsc -b` e `vite build` limpos.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.)
+# Atualizado em: 2026-09-18 (LEVA DE 12 PEDIDOS. O que mais importa saber ao voltar:
+#   1. 🔴 **A ROTINA DE FINALIZAR EVOLUÇÃO COM +48h NUNCA EXISTIU** — foi relatada como
+#      "existe e não está executando". O que existe é
+#      `cancelarAgendamentosNaoRealizados`, que encerra o AGENDAMENTO e deixava a
+#      EVOLUÇÃO de fora DE PROPÓSITO ("fechá-la sozinha é uma decisão maior do que a
+#      desta rotina" — CLAUDE.md 2026-08-18 parte 2). Essa decisão foi REVERTIDA a
+#      pedido, e a cautela que a motivou virou a janela de 48h. Novo
+#      `services/evolucaoCronService.js` + job `finalizar_evolucoes_abandonadas`
+#      (**23:50**, DEPOIS dos crons de 23:30/23:40 — antes deles a rotina mandaria a
+#      prescrição ao plantão no mesmo minuto em que o outro cron a cancelaria por fim
+#      de janela). Justificativa gravada: **"Finalizada pelo Sistema"**, em
+#      `justificativaExclusao` — a coluna que alimenta a coluna "Justificativa" das
+#      listas do módulo Atendimento.
+#      ⚠️ **`veterinarioId` NÃO é reescrito** — mesma regra da finalização por
+#      inativação do paciente (2026-09-06): ninguém conduziu esta finalização, é
+#      consequência administrativa, e carimbar um nome no prontuário alheio falsearia a
+#      autoria clínica. `porUsuarioId` vai `null` na cascata pelo mesmo motivo.
+#      ⚠️ Usa a `cascataDaFinalizacao` COMPARTILHADA (agendamento → FINALIZADO,
+#      prescrição/vacina SALVAS → plantão) e invalida a `versao` EM LOTE — quem tiver a
+#      evolução aberta leva 409 em vez de gravar sobre um atendimento já fechado.
+#      ⚠️ NÃO lança exame na fatura: `paraCadaEmpresa` abre UMA transação por empresa e
+#      `lancarExameNaFatura` lança `FaturaPagaError` — derrubaria o fechamento de TODAS
+#      as evoluções da clínica por causa de uma fatura paga. O exame continua sendo
+#      lançado quando alguém o conclui (`ExameClinicoController.finalizar`).
+#      Gate `__tests__/evolucaoAbandonada.test.js` (13 casos). ✅ Verificado que REPROVA:
+#      removida a cascata, reescrito o responsável e renomeado o job, **5 falharam**.
+#   2. 🔴 **O MAPA DE ATENDIMENTO NÃO COMPUTAVA PRESCRIÇÃO.** O `where` trazia só
+#      `['FINALIZADO','CANCELADO_PARCIALMENTE']` enquanto a classificação logo abaixo
+#      decide entre **EXECUTADO / CANCELADO / ATRASADA / AGENDADO**: os dois status de
+#      que ela precisa NUNCA chegavam nela, então os cartões "Executadas" e "Não
+#      executadas / Atrasadas" ficavam em ZERO — o grupo some do resultado no instante
+#      em que vira EXECUTADO. O ramo `jaExecutadoHoje` disfarçava no modo Diário e só
+#      nele. Agora é a MESMA lista de `listarParaExecucao` (o Histórico do plantão), que
+#      é a fonte com que este painel precisa concordar.
+#   3. 🔴 **A ENTRADA DE ESTOQUE PASSOU A LANÇAR A COMPRA EM CONTAS A PAGAR.** Ela
+#      gravava `fornecedorId` e parava aí — o campo era etiqueta na linha do estoque.
+#      `tb_contas_pagar` (2026-09-10) nasceu alimentada pela EXECUÇÃO (o produto que a
+#      clínica não estoca); a compra que ENTRA no estoque nunca teve quem a lançasse: a
+#      clínica comprava, o saldo subia e a dívida não existia em lugar nenhum.
+#      ⚠️ **A ORIGEM É O MOVIMENTO, não a linha de estoque.** A entrada CONSOLIDADA
+#      (mesmo lote, validade e valor) reusa a `EstoqueClinica`, e com o id dela no
+#      `ON CONFLICT (origem_tipo, origem_id)` a SEGUNDA compra do mesmo lote seria
+#      descartada em silêncio — a clínica pagaria uma e deveria zero pela outra.
+#      ⚠️ Valor = **valor da EMBALAGEM × qtd de embalagens** (desde 2026-09-17 parte 2
+#      `valor` é por embalagem; usá-lo cru lançaria o preço de UMA caixa por dez).
+#      ⚠️ FORA da transaction do estoque e best-effort: a entrada é ato de estoque e não
+#      se desfaz porque a conta a pagar falhou.
+#   4. 🔴 **"LER DOCUMENTO DE COMPRA" DE VOLTA — agora na FARMÁCIA.** Foi desmontada em
+#      2026-09-15 e o controller/serviço ficaram inteiros com o bilhete "provavelmente
+#      na Farmácia, que é quem trata de compra". É exatamente lá. Rota nova
+#      `POST /farmacia/estoque/documento-compra` (gate `farmacia.estoque.criar`, multer
+#      + `tenantRls` APÓS o multer, LITERAL antes de `/estoque/:id`) e
+#      `components/farmacia/LeitorDocumentoCompra.tsx`.
+#      🔴 **UMA NOTA TRAZ VÁRIOS PRODUTOS** (o pedido): os marcados entram numa FILA e o
+#      formulário de entrada abre preenchido um por vez — salvou, abre o próximo. O
+#      serviço já devolvia `itens[]`; o que faltava era a porta de entrada.
+#      ⚠️ O item traz NOME, não id de catálogo: o casamento é por nome sem acento/caixa
+#      e **"não achei" NÃO é erro** — o campo de busca abre com o nome lido para a
+#      pessoa escolher. Inventar um `medicamentoId` daria entrada no produto errado.
+#      ⚠️ A fila só avança no SUCESSO do salvar: falhou, o item fica na tela para ser
+#      corrigido, nunca é pulado em silêncio.
+#   5. 🔴 **PAGAMENTOS: procedimento SEM VALOR passou a ser LANÇADO, zerado e editável.**
+#      ⚠️ **INVERTE** a regra de 2026-09-10 ("dívida de valor inventado é pior que
+#      dívida ausente") — e o caso de teste que a travava foi INVERTIDO junto, como o de
+#      `faturaConsolidacao` em 17/09. A parte certa dela continua valendo: o valor vai
+#      **ZERO**, nunca um palpite. O que mudou é que o silêncio ESCONDIA a pendência em
+#      vez de evitá-la — o serviço era prestado, a clínica devia, e a tela não mostrava
+#      nada. `lancarItem` só aceita zero com `permitirSemValor: true`: quem lança
+#      DECLARA que aquele zero é pendência, não um item de graça.
+#      Na tela o item zerado sai como **"a definir"** em âmbar, nunca "R$ 0,00" (que se
+#      leria como "é de graça" e sumiria entre os outros números).
+#      Edição por `PATCH /financeiro/contas-pagar/itens/:itemId`, **só em conta ABERTA**
+#      — e quem garante isso é o `WHERE` do UPDATE, não a tela.
+#   6. **A tela de Pagamentos ganhou Imprimir e WhatsApp (na CONTA) e Editar valor (no
+#      ITEM).** Folha nova `utils/ContaPagarPrint.ts`.
+#      ⚠️ **NÃO é um recibo**: o recibo (`ReciboPrestadorPrint`) é o comprovante de
+#      QUITAÇÃO, assinado por quem RECEBE; esta folha lista o que ainda se DEVE, para
+#      conferência antes de pagar. Imprimir uma dívida em papel de recibo entregaria ao
+#      fornecedor um documento dizendo que a clínica pagou o que não pagou.
+#      ⚠️ Sem PIX/dados bancários, pela mesma razão do recibo do prestador: aqueles
+#      campos existem para o CLIENTE pagar a clínica.
+#      ⚠️ Imprimir e WhatsApp valem em QUALQUER status (são saída de conteúdo) — é
+#      justamente a conta encerrada que alguém reimprime para conferir.
+#   7. **PROCEDIMENTOS: o campo de busca virou a porta do cadastro.** Digitar um nome
+#      que não existe oferece **Cadastrar "X"** → `POST /procedimentos/cadastro/proprio`
+#      (`garantirProcedimentoDaEmpresa`, o MESMO helper que a Prescrição e o Orçamento
+#      já usavam).
+#      ⚠️ Gate `cadastro.procedimento.criar`, **NÃO `requireAdmin`**: o que nasce aqui é
+#      a linha DA EMPRESA. O `POST /procedimentos` continua ADMIN-only porque escreve o
+#      catálogo GLOBAL, que vale para todas as clínicas.
+#      ⚠️ O teste de "já existe" é casamento EXATO (sem caixa/acento): com `includes`,
+#      "Ferrageamento corretivo" nunca seria oferecido só porque "Ferrageamento" aparece
+#      no filtro. A criação é idempotente por (nome, empresa).
+#   8. **O PROPRIETÁRIO GANHOU "Terá acesso ao Sistema"**, com a MESMA lógica e o MESMO
+#      caminho do Incluir Membro: `tb_usuario_empresa.acesso_sistema`, que é quem
+#      `podeAcessarSistema` consulta no login, no 2FA, no Google OAuth e no refresh —
+#      não existe uma segunda chave de acesso para cliente. Aplicado nos TRÊS caminhos
+#      (usuário novo, usuário que já existe e ALTERAÇÃO): "independente do momento" era
+#      o pedido. Liberar numa ALTERAÇÃO dispara o e-mail com os dados de acesso.
+#      ⚠️ A senha é DERIVADA (`lib/senhaInicial.js`) e sai SÓ por e-mail — quem preenche
+#      o formulário é um TERCEIRO (regra de 2026-09-08). Determinística de propósito:
+#      reenviar o acesso não redefine a senha de quem já entrou.
+#      ⚠️ `undefined` NÃO MEXE em nada: cliente legado (ou tela que não manda o campo)
+#      mantém o acesso que tem — assumir `false` revogaria o login de todo mundo no
+#      primeiro salvar, em silêncio.
+#      **Valor da Assistência e Dia de Vencimento só são editáveis no MENSALISTA**, e
+#      ficam DESABILITADOS, não escondidos: sumindo, quem marca "Mensalista" não
+#      descobre que precisa preenchê-los. A validação do dia passou a valer só no
+#      mensalista — validar o que não se pode editar trava o salvar sem dar como
+#      corrigir (o cliente legado com valor fora da faixa ficaria impossível de salvar).
+#   9. 🔴 **PROCEDIMENTO NA EXECUÇÃO: o histórico mostra QUEM EXECUTOU, não quem
+#      clicou.** `executadoPorDose`/`g.executadoPor` guardam o USUÁRIO LOGADO — certo
+#      para medicamento (quem aplicou a dose estava no plantão), errado para
+#      procedimento, que tem campo PRÓPRIO para dizer quem o realizou (o prestador
+#      escolhido no modal, que já governa recibo e conta a pagar). O ferrador executava
+#      e ficava registrado o nome da secretária que deu o clique.
+#      ⚠️ Sem prestador informado o procedimento É da própria equipe — aí o executor é
+#      mesmo quem clicou, e a regra de sempre continua valendo.
+#  10. **PRODUTOS: rótulos sem negrito** (`rotuloCls` com `font-normal`); só "Produto
+#      multidose" segue destacado — ele não é um campo a preencher, é a CHAVE que muda o
+#      significado do cadastro (a embalagem passa a ser medida por dentro).
+#      **Unidade: saíram "%" e "Seringa"** — concentração e apresentação, não medida da
+#      embalagem (a Pasta 10% é medida em g; "Seringa" tem campo próprio logo acima).
+#      ⚠️ **"Unidade" por extenso saiu do seletor, mas 'Un.' FICA e é GARANTIDA.**
+#      Produto sem multidose é medido em 'Un.' por regra (`lib/formaCalculo.
+#      unidadeOperativa`), e o backend só ACRESCENTA 'Un.' ao catálogo quando nenhuma
+#      das existentes já significa isso (`garantirUnidadeAvulsa` reconhece un / Un. /
+#      unid / unidade). Numa base cujo catálogo tenha só "unidade" por extenso, remover
+#      a palavra deixaria o não-multidose SEM unidade nenhuma para escolher. As grafias
+#      por extenso são colapsadas em 'Un.', a canônica.
+#  11. **PAINEL PRINCIPAL ESCONDIDO DO MENU** (`MOSTRAR_PAINEL_PRINCIPAL = false`) — a
+#      tela NÃO foi removida: rota `/painel-principal`, `pages/PainelPrincipal.tsx` e o
+#      gate `dashboard.geral.ler` seguem montados e funcionais. Mesmo padrão (e mesma
+#      lição) do `MOSTRAR_MAPA_ATENDIMENTO` de 2026-09-05, que fez a volta dele custar
+#      UMA LINHA em 09/09. ⚠️ Para trazer de volta, troque para `true` e REMOVA o flag
+#      junto — um `if (true)` não configura nada.
+#   **NENHUMA MIGRATION NESTA LEVA** — nada de schema mudou. Suíte: **1113**;
+#   `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.)
+# Atualizado em: 2026-09-17 (parte 3) (🔴 **A LINHA DA FATURA PASSOU A JUNTAR
+#   ATENDIMENTOS, e o número deles virou OBSERVAÇÃO** — a pedido.
+#   1. 🔴 **O DEFEITO RELATADO:** "a cada execução de prescrição está sendo lançado um
+#      item". Doses do MESMO item de prescrição já consolidavam desde 2026-08-25; o que
+#      NÃO consolidava era o resto — porque a chave incluía a **FK DE ORIGEM** e a
+#      descrição começava com o **número do atendimento** (`[AG-0012] Amoxicilina — …`).
+#      O mesmo medicamento, na mesma dose e pelo mesmo preço, aplicado em dois
+#      atendimentos do mês, virava DUAS linhas idênticas fora o número:
+#      ```
+#      antes : [AG-0012] Amoxicilina — 10mL × 12/12h   Quant.: 3   R$  60,00
+#              [AG-0031] Amoxicilina — 10mL × 12/12h   Quant.: 2   R$  40,00
+#      agora : Amoxicilina — 10mL × 12/12h             Quant.: 5   R$ 100,00
+#              ↳ AG-0012 · 15/09 · Quant.: 3
+#              ↳ AG-0031 · 17/09 · Quant.: 2
+#      ```
+#   2. **A CHAVE VIROU (tipo, descrição, animal, valor unitário)** — sem a origem. A
+#      "forma de cobrança" do pedido já estava coberta: ela se manifesta no VALOR
+#      UNITÁRIO, que a chave sempre comparou (com tolerância de centavo).
+#      ⚠️ **A POSOLOGIA FICA na descrição** (decisão desta sessão): duas prescrições do
+#      mesmo remédio com frequências diferentes seguem em linhas separadas — fundi-las
+#      faria a linha AFIRMAR uma posologia que metade das doses não teve.
+#   3. 🔴 **TABELA NOVA `tb_fatura_item_origens` — é ela que mantém o ESTORNO certo.**
+#      Era a FK na chave que impedia "cancelar uma prescrição levar embora a cobrança da
+#      outra"; com a linha compartilhada, apagá-la inteira faria exatamente isso. Uma
+#      linha por CONTRIBUIÇÃO (origem, data, quantidade), e `removerFaturaItensDaOrigem`
+#      passou a **SUBTRAIR**: sai só o que era daquela origem, a linha sobrevive com o
+#      resto, e a FK de origem principal é **REAPONTADA** para quem ficou. Sem nenhuma
+#      contribuição sobrando, aí sim a linha é apagada.
+#      ⚠️ **INVARIANTE: `FaturaItem.quantidade` = soma das contribuições.** Por isso
+#      `adicionarFaturaItem` TAMBÉM grava a 1ª contribuição — sem ela a linha teria
+#      quantidade 3 com 2 contribuições, e o estorno subtrairia menos do que devia.
+#      ⚠️ **As duas coisas andam juntas**: não reintroduza a origem na chave sem desfazer
+#      a subtração, nem remova as contribuições sem devolver a origem à chave.
+#   4. 🔴 **"JÁ FOI FATURADO?" DEIXOU DE PODER SAIR DA FK** (`origemJaFaturada`). A FK da
+#      linha guarda só a origem PRINCIPAL: a SEGUNDA vacina a cair nela foi cobrada e a
+#      FK não a menciona. E é esse "sim" que, no CANCELAMENTO da vacina, prova que o lote
+#      foi debitado e autoriza devolver as doses ao estoque — um falso "não" ali deixaria
+#      o **estoque encolhido em silêncio** (o bug de 2026-08-18 de volta por outro
+#      caminho). Trocado nos 3 pontos da vacina, no `finalizar` da prescrição e no
+#      lançamento de exame.
+#   5. **A DESCRIÇÃO PERDEU O NÚMERO nos dois lados** — `[AG-0012]` da prescrição e do
+#      insumo, `[VC-0004] [AG-0012]` da vacina. Enquanto ele estava lá, a chave nunca
+#      casava entre atendimentos: a consolidação existiria no código e não aconteceria na
+#      prática. ⚠️ Exame e encaminhamento MANTÊM o prefixo (`[EX-0004]`) de propósito: são
+#      lançamento único, nunca consolidam, e mexer neles não tinha o que ganhar.
+#   6. ⚠️ **A REUTILIZAÇÃO DA LINHA ZERADA DA FINALIZAÇÃO GANHOU GUARDA.** `executar`
+#      reaproveita, na 1ª execução, a linha que a finalização criou (`findFirst` pela FK)
+#      e sobrescreve `descricao`+`valor`. Com a linha compartilhada esse `findFirst` pode
+#      devolver uma linha que JÁ tem doses de outra prescrição — e reprecificá-la
+#      reescreveria o que a outra cobrou. `temOutraOrigem` bloqueia; `null` ("não sei",
+#      base sem a tabela) NÃO bloqueia, porque lá nada é compartilhado. Mesma razão em
+#      `atualizarFaturaItensDaOrigem`: linha compartilhada não é renomeada.
+#   7. **A FINALIZAÇÃO TAMBÉM CONSOLIDA** (o item que o proprietário aplica em casa, que
+#      nunca chega ao plantão): deixá-la abrindo linha nova daria à MESMA fatura duas
+#      regras para a mesma pergunta. Não sobrou nenhum `adicionarFaturaItem` na prescrição.
+#   8. **A OBSERVAÇÃO NA TELA** (`Faturamento.tsx`): `↳ AG-0012 · 15/09 · Quant.: 3`, uma
+#      por execução, com o número CLICÁVEL. ⚠️ O destino é o REGISTRO DE ORIGEM e muda por
+#      tipo — **VACINA abre a tela de Vacina** (`/clinica/vacina/:animalId?item=`), o resto
+#      abre o atendimento; quem resolve é o BACKEND, a tela só usa o que veio.
+#      ⚠️ **Só aparece com 2+ contribuições**: com uma só, o badge do número + a data +
+#      "Quant.: 1" já dizem tudo, e uma lista de um item seria ruído em toda fatura. Com
+#      duas ou mais o badge SAI (ele é o número da PRIMEIRA execução, e no cabeçalho
+#      pareceria valer pela linha inteira) e a data da linha some junto.
+#      ⚠️ INSUMO (seringa/agulha) não mostra nem um nem outro — é linha FILHA.
+#      ⚠️ Contribuição sem destino resolvido ainda APARECE, só não vira link: sumir com
+#      ela faria a soma da observação não bater com a quantidade da linha.
+#   9. 🔴 **A OBSERVAÇÃO VAI TAMBÉM PARA A FATURA IMPRESSA** (`FaturaExport.ts`), e não é
+#      enfeite: ANTES da consolidação cada aplicação era uma LINHA no papel, com número e
+#      data. Consolidar sem levar o detalhe junto entregaria ao cliente um "Quant.: 5"
+#      que ele não tem como conferir — **menos** informação do que ele recebia, não mais.
+#      Vale para impressão, PDF, WhatsApp e e-mail (todos saem do MESMO HTML).
+#  10. ✅ **MIGRATION APLICADA** (autorizada) — `20261015000000_fatura_item_origens`, com
+#      o DONO (`nutriadmin`): `CREATE TABLE` e `CREATE POLICY` pedem OWNERSHIP, não GRANT.
+#      `migrate status`: **203 migrations, banco em dia**. ADITIVA e **SEM BACKFILL**:
+#      linha já lançada fica como está — sem contribuição ela cai no comportamento
+#      anterior (o estorno apaga a linha inteira) e a tela não mostra observação.
+#      Conferido DEPOIS, contra o retrato de ANTES: **110 itens de fatura, soma de
+#      quantidade 248, 35 faturas, R$ 12.307,86 — IDÊNTICOS**, e 0 linhas em
+#      `tb_fatura_item_origens`. RLS **TENANT VIA PAI** com DOIS saltos
+#      (`tb_fatura_itens` → `tb_faturas`), ENABLE + FORCE, 1 policy com USING e WITH
+#      CHECK, 6 índices e **1 FK só** (o pai, CASCADE).
+#      ⚠️ Colunas de origem **SEM FK**, como `tb_prescricoes.prestador_id`: a contribuição
+#      é o registro histórico de uma cobrança e não pode sumir porque o registro clínico
+#      foi excluído.
+#      ⚠️ `prisma generate` falhou com **EPERM** (§11, backend rodando) e **NÃO bloqueia**:
+#      tudo aqui é SQL cru, e a verificação ao vivo abaixo rodou com o client NÃO
+#      regenerado. Rodar na próxima parada do backend.
+#      ✅ `tb_fatura_item_origens` JÁ ENTROU em `TENANT_PLANE` (tenant plane: 22/86).
+#   ✅ **RLS CONFERIDO AO VIVO**, com o usuário da APLICAÇÃO, em transação REVERTIDA:
+#   a empresa 58 grava a contribuição no PRÓPRIO item e lê de volta (é este passo que
+#   prova que o teste tem valor — sem ele tudo "passaria" por fail-closed); gravar no
+#   item da empresa 59 é **RECUSADO pelo banco (42501)**; a 59 enxerga **0**; 0 linhas ao fim.
+#   ✅ **CÓDIGO REAL × BANCO REAL**, em transação REVERTIDA (fatura 102, empresa 59):
+#   3 doses de 2 prescrições consolidaram em **1 linha, Quant.: 3**, com 3 contribuições
+#   datadas e a soma batendo com a quantidade; `origemJaFaturada` respondeu **SIM** para a
+#   2ª origem (pela FK responderia NÃO); estornar a 1ª deixou a linha **viva com Quant.: 1**
+#   e a FK **reapontada**; estornar a última apagou a linha. Banco ao fim: os mesmos
+#   110/248/35/R$ 12.307,86.
+#   Gate novo `__tests__/faturaOrigensConsolidadas.test.js` (25 casos), com um `tx` falso
+#   que implementa a tabela de contribuições em memória e ROTEIA o SQL cru da lib.
+#   ✅ **Verificado que REPROVA**: devolvida a origem à chave + o estorno apagando a linha
+#   inteira, **7 casos falharam**; devolvido o "já faturado" pela FK crua e o `[VC-]` na
+#   descrição, **2**; devolvido o `[AG-]` na prescrição, **1**.
+#   ⚠️ `faturaConsolidacao.test.js` teve o caso "origem DIFERENTE abre linha própria"
+#   **INVERTIDO** — ele travava a regra antiga. Suíte: **1098**; `tsc --noEmit`, `tsc -b`
+#   e `vite build` limpos.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão. Ver §12.)
+# Atualizado em: 2026-09-17 (parte 2) (🔴 **VALOR COMPRADO E VALOR REPASSADO PASSARAM A
+#   SER POR EMBALAGEM** — a tela de estoque deixou de multiplicá-los pela quantidade,
+#   a pedido.
+#   1. 🔴 **O DEFEITO ERA MUDO, e é por isso que ele durou:** a Farmácia multiplicava os
+#      dois valores pela Qtd Produto antes de gravar e `calcPrecoUnitarioBase` dividia
+#      pelo SALDO. As duas contas **se cancelavam**, então o preço da dose saía CERTO e
+#      nenhuma tela acusava — mas o BANCO guardava o total da compra em colunas
+#      rotuladas "Valor Unitário". Quem lia a coluna CRUA cobrava a compra inteira numa
+#      linha só:
+#      ```
+#      antes : caixa de 100 seringas por R$ 100  ->  valor_repassado = 100 (o total)
+#              debitarInsumoUnidade lança `valorRepassado` por UMA seringa -> R$ 100
+#      agora : valor_repassado = 1,00 (a embalagem) e o preço vem de precoUnitarioBase
+#      ```
+#   2. **A CONTA MUDOU DE DIVISOR, não de resultado.** `calcPrecoUnitarioBase` recebia
+#      (valor TOTAL, saldo inteiro) e passou a receber **(valor de UMA embalagem, o que
+#      ela CONTÉM)** — o mesmo modelo que a vacina já usa
+#      (`valorUnitarioRepassado ÷ dosesPorFrasco`):
+#      ```
+#      frasco de 20 mL por R$ 100   -> 100 ÷ 20      = R$ 5,00/mL
+#      embalagem avulsa por R$ 30   -> 30  ÷ 1       = R$ 30,00/Un.
+#      embalagem de 1 kg por R$ 100 -> 100 ÷ 1.000 g = R$ 0,10/g
+#      ```
+#      ⚠️ Conteúdo `null`/0 vale **1** (a embalagem é a própria unidade), nunca "sem
+#      dado". ⚠️ **O SALDO SAIU DA CONTA**: dar baixa ou ajustar o estoque não mexe mais
+#      no preço — era esse acoplamento que fazia o caminho legado subir o preço a cada
+#      dose aplicada.
+#   3. 🔴 **TRÊS LEITORES DA COLUNA CRUA FORAM CORRIGIDOS**, porque com o valor unitário
+#      eles mudavam de significado: `debitarInsumoUnidade` (agora usa
+#      `precoUnitarioBase` — é o preço de UMA unidade, não o da caixa),
+#      `precoUnitarioDoEstoque` (o fallback legado divide pelo CONTEÚDO, não pelo saldo)
+#      e `valorItemEstoque` do relatório (multiplica pelo saldo). E a conta do preço que
+#      estava ESCRITA DUAS VEZES em `PrescricaoGrupoController` virou chamada única a
+#      `precoUnitarioDoEstoque` — o que divergiria ali é o valor cobrado do cliente.
+#   4. ⚠️ **A CONSOLIDAÇÃO DEIXOU DE SOMAR OS VALORES.** Entrada idêntica (mesmo lote,
+#      validade e valor por embalagem) só SOMA a quantidade: somar valores dobraria o
+#      preço da embalagem a cada reentrada do mesmo lote.
+#   5. **O RÓTULO FICOU ÚNICO** — "Valor Unitário" / "Valor Unitário Cobrado" na criação
+#      E na edição. Enquanto a edição dizia "Valor Total", ela trazia o total para um
+#      campo unitário e salvar de novo o multiplicava **outra vez**.
+#   6. OK **MIGRATION APLICADA** (autorizada) —
+#      `20261014000000_estoque_valor_por_embalagem`: `valor` e `valor_repassado` ÷
+#      `qtd_embalagens` (só onde há mais de uma). **NÃO toca `preco_unitario_base`** (é
+#      ele que a fatura cobra e ele já está certo), nem o saldo, nem os movimentos.
+#      Conferido DEPOIS: as 8 linhas com mais de uma embalagem reexpressas (id 43:
+#      R$ 500 -> R$ 83,33, com a fração preservada), a de 1 embalagem intocada, e os
+#      **9 preços IDÊNTICOS** ao retrato de antes. `migrate status`: 202, banco em dia.
+#      **Sem mudança de schema, logo sem `prisma generate`.**
+#      ⚠️ As INATIVAS ENTRAM, ao contrário do backfill de `20261013000000`: lá mudava o
+#      SALDO (histórico na unidade em que aconteceu); aqui muda o SIGNIFICADO da coluna.
+#      ⚠️ `set_config('app.plataforma','on',true)` obrigatório (armadilha 42).
+#   OK **CONFERIDO AO VIVO** com o código REAL contra as 9 entradas da base: `valor
+#   repassado ÷ qtd_embalagens` reproduz o `preco_unitario_base` gravado em **9 de 9**,
+#   inclusive na multidose (R$ 100 o frasco ÷ 20 mL = R$ 5,00/mL) e nas inativas — ou
+#   seja, **nenhuma cobrança muda**.
+#   Gate novo `__tests__/estoqueValorPorEmbalagem.test.js` (21 casos).
+#   OK **Verificado que REPROVA**: devolvidas a multiplicação da tela e a divisão pelo
+#   saldo, **2 casos falharam**. Suíte: **1073**; `tsc --noEmit`, `tsc -b` e `vite build`
+#   limpos.
+#   **SIDEBAR:** Estoque subiu para logo abaixo de Execução de Prescrição e acima de
+#   Documentos (a pedido) — quem aplica a dose é quem vê o saldo acabar.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão. Ver §12.)
 # Atualizado em: 2026-09-17 (🔴 **PRODUTO SEM MULTIDOSE E MEDIDO EM 'Un.'** — a
 #   embalagem e a propria unidade, a pedido. + a tela de Produtos passou a listar o
 #   cadastro DA CLINICA antes do global.
@@ -1875,6 +2729,11 @@
 #      seguinte a `dataInicio`) e ao lembrete de WhatsApp (o filtro `horaInicio: {not:
 #      null}` saiu: quem prova que há horário agendado é `proximaDoseEm`).
 #   3. 🔴 EXECUÇÃO FUTURA (ANTECIPADA) É BLOQUEADA — só passa com JUSTIFICATIVA
+#      ⚠️⚠️ **INVERTIDO em 2026-09-18 (parte 4): a justificativa saiu e virou uma
+#      CONFIRMAÇÃO (`confirmarAntecipacao`).** Leia este item como histórico. O que
+#      dele CONTINUA valendo é o gate rodar para TODO item, nos dois caminhos — e a
+#      flag da antecipação ser PRÓPRIA, nunca `confirmarHorario`, pelo motivo que o
+#      próprio parágrafo abaixo explica.
 #      (`ModalJustificativa`, mín. 3 chars), gravada no AuditLog em `motivo` junto do
 #      previsto/executado. `confirmarHorario` NÃO a libera mais: era esse o furo
 #      relatado — "Executar Todos" mandava a flag fixa em `true` e aplicava o curso
@@ -3733,6 +4592,715 @@ New-Item -ItemType Junction `
 ---
 
 ## 12. PRÓXIMAS EVOLUÇÕES PLANEJADAS
+
+### Sessão 2026-09-19 (parte 4) — O curso que não cabe num frasco; a fatura legível
+
+> **NENHUMA MIGRATION.** O conteúdo da embalagem reusa `tb_medicamentos.doses_por_embalagem`,
+> que já existe, é nulável e estava vazia para todo produto sem multidose. Suíte: **1208**;
+> `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos. NÃO verificado em navegador.
+
+- [x] 🔴 **A posologia saiu da descrição do item de fatura** — ver o item 1 no topo. O
+      que ela guardava (frequências diferentes em linhas diferentes) some junto, e é
+      consequência aceita: a linha passou a ser o PRODUTO, e a observação das origens
+      continua dizendo número, data e quantidade de cada aplicação.
+      ⚠️ O caso de teste de 2026-09-17 foi **INVERTIDO** (com o motivo no comentário) e
+      ganhou um gate por STRING LITERAL — regex sobre o corpo da função passaria por
+      causa de um comentário que citasse `item.frequencia`.
+- [x] **O item da fatura nasce contraído**, com chevron — itens 2 do topo.
+- [x] **Pagamentos: Animal → Qtd.**, com o Animal preservado na aba PRESTADOR (item 3).
+- [x] **Estoque: coluna Qtd Produto** (item 4), no desktop e no card mobile.
+- [x] 🔴 **O curso passou a consumir N embalagens** (item 5 do topo, com as seis
+      armadilhas). O desenho, em uma linha: o cadastro declara o conteúdo → a prescrição
+      informa quantas embalagens o curso gasta → a baixa entrega uma de cada vez,
+      conforme o frasco aberto acaba → a fatura e a conta a pagar contam as mesmas.
+- [ ] **O aviso da prescrição não aparece para item DIGITADO À MÃO** (fora do catálogo):
+      ali não há produto, logo não há conteúdo declarado. É o mesmo limite da unidade
+      travada — sem cadastro, não há estoque nem preço a casar.
+- [ ] **Prescrição já FINALIZADA antes desta leva** mantém a reserva de UMA embalagem: a
+      reserva é criada em `finalizar` e não é recalculada por esta mudança. Na execução a
+      baixa já conta certo (ela lê o conteúdo na hora), então o efeito é só a reserva
+      ficar menor que o consumo real até o curso terminar. Reabrir e refinalizar o grupo
+      recria a reserva pelo número novo (`recalcularReservasDoGrupo`).
+- [ ] **A ordem por Qtd Produto** (Farmácia) trata entrada avulsa como ZERO, não como
+      vazio: o comparador manda o vazio para o fim nos dois sentidos, e a linha sem
+      embalagem declarada ficaria separada do resto sem motivo. Se incomodar, o lugar é
+      o `case 'qtdProduto'` do extrator.
+- [ ] **A folha impressa da conta a pagar** (`ContaPagarPrint`) continua com a coluna
+      Animal nas duas abas. É documento que vai ao credor, e removê-la de lá é decisão
+      à parte da tela.
+
+### Sessão 2026-09-19 (parte 3) — A leitura falhava por 503, e a tela mandava culpar a foto
+
+> **NENHUMA MIGRATION** — nada de schema. Suíte: **1193**; `tsc --noEmit` (backend),
+> `tsc -b` e `vite build` limpos. NÃO verificado em navegador.
+
+- [x] 🔴 **O DIAGNÓSTICO VEIO DO LOG DE IA, e ele desmentiu a hipótese do pedido.** O
+      relato foi "está dando erro ao ler esta imagem", com um prompt de outra LLM para
+      substituir o nosso. `tb_ai_usage_logs` (consultado DENTRO de `$transaction` com
+      `set_config('app.plataforma','on',true)` — armadilha 42) tinha as duas pontas:
+      ```
+      id 516  15:16  sucesso  12,4 s   2232 in / 344 out   ← o MESMO documento
+      id 517  15:23  FALHA    91,8 s   Gemini API error 503: "high demand"
+      ```
+      Sete minutos separam uma leitura bem-sucedida de uma falha; o arquivo não mudou
+      nesse intervalo. Os 91,8 s são duas chamadas de ~45 s esperando pelo erro.
+- [x] ✅ **O PROMPT ATUAL LÊ O CUPOM — conferido contra o Gemini REAL**, não por
+      inspeção: `ler_nota_fiscal@v2` com o conteúdo do "ORÇAMENTO — SEM VALOR FISCAL"
+      devolveu, em 1,7 s, fornecedor + endereço + bairro + cidade, número `29477`,
+      data `2026-08-05` e os 2 itens com unitário e total corretos — ignorando o
+      CLIENTE ("PATRICIA"), o total, a forma de pagamento e o troco, exatamente como o
+      prompt manda. **Trocar o prompt teria reescrito o que funciona e deixado o 503
+      de pé.**
+      ⚠️ O formato sugerido (`tipo_documento` / `estabelecimento` / `cabecalho` /
+      `cliente` / `pagamento`) NÃO é uma melhoria latente: ele quebraria o contrato
+      `ehNotaFiscal` no serviço, no controller, na interface do front e no gate — e o
+      CLAUDE.md registra desde 2026-09-10 que a chave é preservada DE PROPÓSITO,
+      porque renomeá-la custa quatro arquivos para não mudar comportamento nenhum.
+      O que ele traz de diferente (dados do cliente, forma de pagamento, troco) é
+      justamente o que o nosso manda IGNORAR — daqui sai cadastro de PRODUTO e conta
+      a pagar ao FORNECEDOR; o comprador e o troco não têm onde entrar.
+- [x] 🔴 **`motivoDaFalha` — a mensagem deixou de mentir sobre a causa.** Toda falha
+      saía como *"confira se a foto/PDF está legível"*, inclusive o 503. A pessoa tinha
+      um cupom nítido, já lido com sucesso minutos antes, e a tela a mandava
+      refotografar, recortar e trocar o arquivo — trabalho sobre o que estava CERTO,
+      enquanto a ação útil era esperar um minuto.
+      ⚠️ **Mensagem que aponta a causa errada é PIOR que mensagem genérica**: ela não
+      só deixa de ajudar, ela manda trabalhar no lugar errado.
+      ⚠️ Quem classifica é `ehFalhaTransitoria`, que JÁ existia e JÁ era exportada —
+      não nasceu uma segunda regra de "o provedor caiu?".
+      ⚠️ O texto cru do provedor continua fora da tela (dump de JSON não diz o que
+      fazer); ele fica no `console.error`, que é onde se investiga.
+      Espelho no front: `timeout of 180000ms exceeded` (texto do axios) virou "a
+      leitura demorou mais que o esperado… o serviço pode estar sobrecarregado".
+- [x] **Retentativa: 1 → 2, com espera CRESCENTE e JITTER** (`ai/retentativa.js`).
+      Com 1,5 s FIXOS a segunda tentativa cai no mesmo pico que derrubou a primeira —
+      é o que os 91,8 s medidos mostram. Agora 1,5 s → 3 s, com jitter de até 30%.
+      ⚠️ **O JITTER não é enfeite**: sem ele, todos os clientes que tomaram 503 no
+      mesmo segundo voltam juntos e reforçam a sobrecarga que estão esperando passar.
+      ⚠️ 🔴 **ORÇAMENTO DE TEMPO (`ORCAMENTO_INICIO_MS`, 60 s)** — é ele que impede a
+      correção virar um problema maior que o defeito. Quem espera é uma PESSOA com o
+      documento na mão, e o front desiste em 180 s. Uma tentativa nova só COMEÇA
+      enquanto o decorrido couber: com 503 imediato (o caso comum) cabem as três em
+      segundos; com o provedor LENTO (45 s por chamada, o caso medido) ele para na 2ª,
+      exatamente como parava antes. Sem o orçamento, três chamadas de 45 s dariam
+      ~140 s de espera para entregar a mesma falha.
+      ⚠️ A lib é FONTE ÚNICA de três serviços (`notaFiscalService`,
+      `documentoConversaoService`, `exameParserService`) — os três ganham a mesma
+      resistência, e é por isso que ela foi extraída em primeiro lugar.
+- [x] 🔴 **O `fetch` do `geminiClient` NÃO TINHA TETO** — `TIMEOUT_MS` (60 s,
+      sobrescrevível por `GEMINI_TIMEOUT_MS`) via `AbortSignal.timeout`. Sem teto não
+      existe pior caso: o 503 lento prendia a requisição por 45 s e nada podia
+      interrompê-la. ✅ Conferido AO VIVO contra o Gemini real — a chamada normal
+      segue passando (2,6 s) e um `timeoutMs: 1` produz `TimeoutError` com o modelo e
+      o teto na mensagem.
+      ⚠️ A mensagem do abort (*"The operation was aborted due to timeout"*) não diz
+      quem demorou nem quanto; quem lê o log precisa dos dois.
+      ⚠️ Estourar o teto é FALHA TRANSITÓRIA — é o mesmo evento do 503, visto do nosso
+      lado do fio —, então entra na retentativa. Sem isso, a chamada que estourou não
+      seria repetida e a pessoa levaria a falha na primeira demora.
+      ⚠️ Folgado de propósito: a leitura de 4 páginas é o caminho mais caro do sistema
+      e roda em ~12 s. Apertar o teto transformaria documento grande em falha.
+- [x] **`notaFiscalService` entrou nos gates de IA** (`let modelo = MODELO_PADRAO`,
+      `comRetentativa(() => gerarConteudo(`). Ele já seguia as duas regras e estava
+      FORA da lista — e era justamente o serviço em que o 503 apareceu para o usuário.
+- [x] Gate `__tests__/iaFalhaTransitoria.test.js` em **23 casos** (+9): a 3ª chance, a
+      espera crescente, o orçamento, o `TimeoutError` como transitório, o teto no
+      cliente e a mensagem que não manda conferir a foto quando o provedor caiu.
+      ⚠️ Os casos de "repete UMA vez" foram **INVERTIDOS**, com o motivo registrado no
+      cabeçalho do arquivo (mesmo precedente de `faturaConsolidacao` em 17/09). A
+      regra que CONTINUA valendo, e que os testes travam, é que erro de CONTEÚDO nunca
+      é repetido.
+      ✅ **Verificado que REPROVA**: devolvidas a mensagem fixa, a espera fixa e as 2
+      tentativas, **3 casos falharam**.
+      ⚠️ 🔴 **O TESTE NASCEU FRÁGIL E A PRIMEIRA SABOTAGEM DEU FALSO VERDE PARCIAL.**
+      Com a espera REAL (1,5 s + 3 s + jitter) dois casos passavam dos 5 s de teto do
+      jest e falhavam — mas na sabotagem, com espera FIXA (1,5 s + 1,5 s), eles
+      passavam. Ou seja: o mesmo teste ficava verde no código errado e vermelho no
+      certo. O `spy` de `setTimeout` no `beforeEach` registra QUANTO seria esperado e
+      dorme 0 (13 s → 0,7 s). **Lição: teste que depende de espera real não mede o
+      que promete — mede o relógio.**
+- [ ] **Não foi implementado FALLBACK DE MODELO** (tentar outro modelo quando o
+      `gemini-3.1-flash-lite` satura). Resolveria o 503 de vez, mas troca custo e
+      qualidade sem ninguém decidir — e o CLAUDE.md (§7) exige registrar o preço do
+      modelo novo em `aiLogger.service#PRECOS`, senão o custo cai no fallback
+      `default`. É decisão de produto; o gancho é `opts.modelo` do `gerarConteudo`.
+- [ ] O `exameParserService` não tem timeout de cliente no front (o axios fica sem
+      teto). Não é problema novo — e agora o BACKEND tem teto por chamada —, mas se
+      aquela tela ficar pendurada, é ali que o `timeout` entra.
+
+### Sessão 2026-09-19 (parte 2) — A compra do estoque na conta a pagar
+
+> **SEM MIGRATION** — `tb_lotes_vacina.fornecedor_id`/`nota_fiscal` são da
+> `20261006000000` e só não eram gravadas por esta tela. Suíte: **1184**;
+> `tsc --noEmit`, `tsc -b` e `vite build` limpos. NÃO verificado em navegador.
+
+- [x] 🔴 **O valor chegava AO QUADRADO na tela de Pagamentos** — ver o item 1 no topo
+      deste arquivo. O contrato de `lancarItem` é `valor` UNITÁRIO; a farmácia mandava
+      o total já multiplicado E a quantidade ao lado. Medido na base: R$ 22.000 onde a
+      clínica devia R$ 2.200.
+- [x] **`embalagensCompradas`** (exportada para teste) — a quantidade é de EMBALAGENS,
+      nunca o saldo em doses.
+- [x] **Vacina: `lancarCompraDaVacina`** (`valorUnitario × qtdFrascos`) + fornecedor e
+      nota fiscal na entrada, com a idempotência assimétrica explicada no topo.
+- [x] **"Carregar Nota Fiscal"** nas duas telas, com o leitor PARAMETRIZADO (`rota`,
+      `tipoItem`) em vez de copiado.
+- [ ] As DUAS linhas `ESTOQUE_ENTRADA` já gravadas seguem com o valor antigo (R$ 1.000
+      e R$ 1.200 por unidade, totalizando R$ 22.000). O "Editar valor" da tela de
+      Pagamentos corrige item a item; um UPDATE em massa seria escrita em dado gravado
+      e precisa de autorização.
+- [ ] O estoque de vacinas continua **sem tabela de movimento**. É ela que daria à
+      consolidação uma origem própria (e idempotência); hoje a 2ª compra do mesmo lote
+      entra sem chave de origem.
+- [ ] A tela de Pagamentos não distingue, na linha, compra de ESTOQUE de item de
+      execução — as duas aparecem como item do fornecedor. O `origem_tipo` está
+      gravado, então é só exibição, se um dia fizer falta.
+
+### Sessão 2026-09-19 — Login pousa no Mapa de Atendimento; Recibos sai do menu
+
+> **SEM MIGRATION.** As duas mudanças são de TELA (front). `tsc -b --noEmit` e
+> `vite build` limpos. NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+
+- [x] **Destino pós-login trocado para `/mapa-atendimento` nos QUATRO pontos de entrada**
+      — `Login.tsx` (redirect pós-senha), `Dashboard.tsx` (sessão restaurada caindo em `/`),
+      `CadastroPessoal.tsx` (primeira entrada após confirmar o cadastro, §36-h) e
+      `CadastroEmpresa.tsx` (gestor completando o primeiro acesso). Trocar só o `Login.tsx`
+      deixaria dois pousos diferentes para a MESMA entrada, conforme o caminho.
+      PROPRIETÁRIO continua em `/` (portal do cliente).
+      ⚠️ Ver no topo deste arquivo a diferença de GATE entre as duas telas (vet × slug
+      `dashboard.geral.ler`) e o `EmpresaContext` que ficou de fora de propósito.
+- [x] **`MOSTRAR_RECIBOS_PRESTADOR = false`** no Sidebar, no molde dos dois flags que já
+      existem ali. O flag governa a DEFINIÇÃO de `podeVerRecibos` — ponto único que cobre o
+      sub-link e o gate do grupo Financeiro (senão o grupo abriria vazio para quem só tem
+      aquele slug). Rota, tela, endpoint e permissão intactos.
+- [ ] `EmpresaContext.trocarContexto` ainda pousa em `#/painel-principal` na troca de
+      empresa — fluxo diferente, não pedido aqui. Alinhar é uma linha, se for o caso.
+
+### Sessão 2026-09-18 (parte 4) — Antecipar dose virou PERGUNTA, não bloqueio
+
+> **SEM MIGRATION.** `confirmarAntecipacao` é campo de REQUISIÇÃO, não coluna.
+> `migrate status` conferido: **203 migrations, "Database schema is up to date!"**.
+
+- [x] 🔴 **O PEDIDO, e o que ele inverte.** "A execução da prescrição não pode ser
+      travada aguardando a data seguinte." Até aqui a dose FUTURA era BLOQUEADA e só
+      saía com JUSTIFICATIVA escrita (regra de 2026-08-23, item 3). O texto
+      obrigatório **não impedia decisão nenhuma** — quem já tinha decidido antecipar
+      digitava qualquer coisa e seguia — e cobrava um formulário no meio do plantão,
+      onde o tempo é o que falta. Virou o MESMO molde da dose ATRASADA: avisa,
+      pergunta, executa.
+      ```
+      antes : [Antecipar dose] "Por que a dose está sendo antecipada? (obrigatório)"
+              → textarea, mín. 3 caracteres, só então executa
+      agora : "A próxima dose (03/05) estava prevista para 24/08 às 07:44.
+               Executar agora antecipa a aplicação. Deseja continuar?"
+              → Antecipar e executar | Cancelar
+      ```
+- [x] 🔴 **FLAG PRÓPRIA `confirmarAntecipacao`, NUNCA `confirmarHorario`** — é a
+      armadilha desta leva, e ela é silenciosa. O "Executar Todos" manda
+      `confirmarHorario: true` **FIXO** (o clique em lote vale como confirmação de
+      dose ATRASADA, que já era devida e não inventa dose nova). Liberar a antecipação
+      por aquela mesma flag faria UM clique aplicar o **curso inteiro** de uma vez,
+      sem ninguém ser perguntado — que é exatamente o furo corrigido em 2026-08-23,
+      voltando por outro caminho. Com flag própria os dois caminhos (ícone e lote)
+      passam pela MESMA pergunta, que era a parte CERTA daquela regra.
+      ⚠️ Gate explícito: o ramo `ANTECIPADA` não pode conter a string
+      `confirmarHorario`.
+- [x] **A recusa continua carregando o CONTEXTO** (`previsto`, `numeroDose`,
+      `totalDoses`, `medicamento`): é com ele que a tela monta a frase. O
+      `numeroDose/totalDoses` vem do BACKEND e não do contador do front porque o
+      "Executar Todos" não sabe QUAL item do lote foi o barrado — a resposta diz.
+      ⚠️ O "(NN/TT)" só entra quando as duas contagens vêm; item legado (sem rastreio
+      por dose) cai na frase sem o número, em vez de um "(undefined/undefined)".
+      ⚠️ A data vai SEMPRE junto da hora (`formatDiaMesHora` → "24/08 às 07:44"),
+      inclusive quando é hoje: a pergunta é justamente sobre QUANDO a dose era devida,
+      e "estava prevista para 07:44" deixa a ambiguidade do dia.
+- [x] 🔴 **"As demais deverão ser recalculadas" JÁ ACONTECIA — e agora está travado.**
+      `proximaDoseEm: calcularProximaDose(agora, item.frequencia)` parte do horário
+      REAL da execução, nunca da grade original (rolling schedule, desde 2026-08-23).
+      É isso que dá sentido a antecipar:
+      ```
+      12/12h, dose prevista 20:00, antecipada para 14:00
+        próxima  → 02:00 do dia seguinte   (a partir do REAL)
+        seria    → 08:00                   (grade fixa, se partisse do previsto)
+      ```
+      ⚠️ Trocar `agora` por `previsto` ali devolve a grade fixa e a dose seguinte
+      nasce fora de hora, **sem nada acusar** — por isso há caso de teste EXECUTANDO
+      `calcularProximaDose` nos dois sentidos, além do gate da linha.
+      ⚠️ Na tela, o `proximaDoseEm` fresco é aplicado na MESMA sessão (overlay
+      `itensLive` em `handleExecutarItem`), então a previsão das doses seguintes se
+      corrige à vista, sem fechar e reabrir o modal. E a frase "As doses seguintes
+      serão recalculadas a partir deste horário" avisa ANTES de confirmar.
+- [x] ⚠️ **A JUSTIFICATIVA continua ACEITA, agora OPCIONAL.** Vindo no corpo, segue
+      para o `motivo` da auditoria como sempre; cliente antigo que ainda a envie não
+      muda de comportamento. O que NUNCA se faz é preencher `motivo` com frase do
+      sistema — ali é texto de PESSOA, e atribuir a alguém um texto que ela não
+      escreveu corrompe a trilha. O fato de ter havido confirmação explícita vai em
+      `detalhes`: "antecipada 120min, **confirmada na execução**" — é o que separa, na
+      auditoria, a dose antecipada com aval de quem executou.
+- [x] ⚠️ **A ARROW do "Executar Todos" ficou MAIS perigosa que antes.** O 1º parâmetro
+      do handler deixou de ser `justificativa?: string` e virou
+      `confirmarAntecipacao = false`: com `onClick={handleExecutarTodos}` o MouseEvent
+      chega no lugar dele, é **truthy**, e todo clique passaria a antecipar o curso
+      inteiro em silêncio — a tela não erra, ela executa. Mesmo tropeço do
+      `handleSalvar` de `ModalNovoFornecedor`. `onClick={() => handleExecutarTodos()}`
+      é obrigatório e tem gate próprio.
+- [x] **Vale nas TRÊS telas de uma vez**: `ModalExecucao` é importado de
+      `ExecucaoPrescricao` pelo **Painel Principal** e pelo **Mapa de Atendimento** —
+      não há segunda implementação a sincronizar.
+- [x] Gate novo `__tests__/execucaoAntecipada.test.js` (16 casos). A classificação
+      (`classificarExecucao`) e o recálculo (`calcularProximaDose`) EXECUTAM o código
+      real de `lib/agendaDoses`; o resto é gate estrutural, com recorte por FUNÇÃO e
+      **ignorando comentários** (sem isso o teste se satisfaria com a própria
+      documentação da regra).
+      ✅ **Verificado que REPROVA**: devolvido o `confirmarHorario` ao ramo da
+      antecipada, trocado `agora` por `previsto` no rolling schedule e devolvida a
+      justificativa ao reenvio do front → **3 casos falharam**; à parte, trocada a
+      arrow por referência → **1**. Suíte: **1156**; `tsc --noEmit` (backend),
+      `tsc -b` e `vite build` limpos.
+#### Complemento (mesma data) — o botão não existia: TRÊS gates de tela
+
+- [x] 🔴 **A correção acima não bastava, e o relato provou: "a #006 não está deixando
+      antecipar a do dia seguinte, está sem o ícone de execução"** (Empresa de
+      Gestorvet, Glicol Turbo 4/4h — dose dada 18/09 21:07, próxima 19/09 01:07). A
+      pergunta do backend nunca chegava a ser feita porque **nada chamava o endpoint**:
+      a tela escondia a ação em três lugares, e nenhum deles dá erro — a prescrição
+      simplesmente fica fora de alcance.
+      ```
+      1. modal, linha da dose  temAtual exigia proximaDoseRealHoje  → sem botão
+      2. modal, documento      soVisualizacao usava tipoConcluidoEm → tudo em leitura
+      3. linha do Histórico    podeExecutarAcao={false} + !executada → sem ícone
+      ```
+- [x] **(1) `proximaDoseRealHoje` SAIU de `temAtual` e passou a decidir só o RÓTULO.**
+      A razão de ele existir continua válida — executar a dose 1 de "1x/semana" hoje
+      não pode fazer a dose 2 anunciar-se "Em Execução", porque ela só vence em 7 dias
+      — mas ela é sobre o TEXTO, não sobre a existência do botão. Agora a dose da vez
+      diz **"Prevista para 19/09 às 01:07"** *com o Executar ao lado*: quem pergunta é
+      o `ConfirmModal` depois do clique (`atualVenceHoje` guarda o "Em Execução").
+- [x] 🔴 **(2) O que trava o modal é o CURSO TERMINADO, não o DIA CUMPRIDO.** São
+      perguntas diferentes e estavam coladas na mesma função:
+      ```
+      tipoConcluidoEm    "o DIA está cumprido?"  → manda o card ao Histórico   ✔ certo
+      tipoTemDosePorVir  "o CURSO tem dose?"     → decide se ainda há o que executar
+      ```
+      Enquanto a primeira governava `soVisualizacao`, executar a dose de hoje punha o
+      documento inteiro em leitura — e a dose seguinte, visível na lista com data e
+      hora, não tinha como ser acionada. Continuam travando, como antes: o olho
+      (`modalVer`), outro dia que não hoje, prescrição cancelada e paciente inativo.
+- [x] **(3) No HISTÓRICO a linha mantém o Executar quando há dose por vir**, com o
+      título **"Antecipar a próxima dose"** (dizer "Executar prescrição" ali faria o
+      botão parecer repetir o que já foi feito hoje) e abrindo o modal em modo
+      execução (`setModalVer(false)`). O card **continua no Histórico** — o dia está
+      cumprido, e essa informação é correta; o que volta é a ação.
+      ⚠️ `executada` saiu da condição de visibilidade do ícone em `LinhaGrupo`: ela diz
+      que o DIA foi cumprido, não que o curso acabou. Quem decide passou a ser o
+      CHAMADOR (`podeExecutarAcao`/`soVisualizacao`), que é quem sabe.
+- [x] ⚠️ **`itemTemDosePorVir` EXCLUI o item LEGADO** ('agora', 'SOS', 'seNecessario'):
+      ali não existe grade futura a antecipar, e o backend recusa executar o que já
+      saiu hoje ("Nenhum item da prescrição para executar agora"). Sem essa perna, a
+      prescrição de dose única já aplicada voltaria a exibir um botão que só falha
+      depois do clique — a armadilha 28-d. Para o legado vale o que falta HOJE
+      (`itemAindaPrecisaAcaoHoje`).
+- [x] **Saíram `foiExecutadoHoje` e `itemPendenteHoje`** — ficaram sem chamador quando
+      o modo do modal deixou de ser decidido pelo dia (o `tsc -b` reprova código
+      morto). `itemPendenteEm` segue exportada: é fonte única com o Painel Principal.
+- [x] ✅ **CONFERIDO com o CÓDIGO REAL da lib contra o DADO REAL** (item 247, leitura
+      pura, sem escrever nada): elegível, **1 de 30 doses**, previsto 19/09 01:07 →
+      `ANTECIPADA`; a tela pergunta *"A próxima dose (02/30) estava prevista para 19/09
+      às 01:07…"* e, confirmada às 21:50, a próxima passa a **19/09 01:50** — contra
+      05:07 da grade antiga. O curso inteiro desliza junto.
+      Gate ampliado para **21 casos**; ✅ **verificado que REPROVA**: revertidos os três
+      gates de tela + o `podeExecutarAcao` do histórico, **4 falharam**.
+      Suíte: **1161**; `tsc --noEmit`, `tsc -b` e `vite build` limpos.
+- [ ] ⚠️ **Escopo do que foi corrigido**: a prescrição precisa estar VISÍVEL no dia
+      para ser antecipada — ou seja, ter dose executada hoje (fica no Histórico do
+      dia) ou dose devida hoje. Curso de cadência longa (1x/semana executado na
+      segunda, próxima na segunda seguinte) **continua fora da fila nos dias do meio**:
+      é a regra de produto de 2026-08-18 ("devido SÓ quando a data exibida é
+      exatamente `proximaDoseEm`"), e mudá-la faria a fila do dia listar o que não é de
+      hoje. Se precisar antecipar nesse caso, é decisão de produto à parte.
+- [ ] ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+- [ ] NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+- [ ] A **VACINA** não entra: ela não tem agenda por dose (SALVA → FINALIZADA →
+      EXECUTADA, aplicação única), logo não existe "antecipar" a apurar ali.
+- [ ] O cron `cancelar_doses_prescricao_perdidas` não foi tocado. Ele cancela a dose
+      cuja janela passou — antecipar não o alcança (a dose vira executada), mas vale
+      lembrar que o curso ANTECIPADO termina mais cedo: a última dose sai antes do fim
+      da janela do calendário, e é o `dosesTotaisEsperadas` (não a data) que fecha o
+      documento.
+
+### Sessão 2026-09-18 (parte 3) — A receita na unidade do produto; a embalagem entregue uma vez
+
+> **SEM MIGRATION.** Nenhuma coluna nova: a mudança é de REGRA, sobre colunas que já
+> existem (`tb_medicamentos.unidade`, `multidose`, `forma_calculo`).
+> `migrate status` conferido: **203 migrations, "Database schema is up to date!"**.
+
+- [x] 🔴 **O PEDIDO, e por que ele contraria a regra de 2026-09-17.** Aquela sessão fez
+      o produto SEM multidose ser medido em `'Un.'` nos TRÊS lugares (receita, estoque,
+      fatura) para matar um defeito real — o frasco cadastrado como "1 Un." em que uma
+      dose de 5 mL debitava CINCO frascos. O preço foi o veterinário passar a escrever a
+      receita em embalagens: "0,1 frasco de xarope", que não é como ninguém prescreve.
+      Agora a receita volta à unidade do PRODUTO e a baixa ganha regra própria.
+- [x] **Duas unidades, com nomes distintos e uma função para cada** — back
+      `lib/formaCalculo.js` (`unidadeOperativa` = ESTOQUE, `unidadePrescricao` = RECEITA)
+      e front `utils/formaCalculo.ts` (`unidadeOperativaProduto` × `unidadePrescricaoProduto`):
+      ```
+                         RECEITA (campo Dosagem)      ESTOQUE (saldo, baixa)
+      multidose          forma de cálculo             forma de cálculo      (coincidem)
+      não-multidose      Unidade do cadastro          'Un.'                 (DIVERGEM)
+      legado sem forma   unidade do catálogo          unidade do catálogo   (coincidem)
+      ```
+      ⚠️ A divergência é o ponto da mudança, não um descuido. Quem trocar uma pela outra
+      não quebra nada visível: a tela só passa a mostrar a unidade errada — e ela vira o
+      SNAPSHOT da receita. Há gate travando cada tela na sua (`SubModuloPrescricao` na da
+      receita, `Farmacia` na do estoque).
+- [x] 🔴 **A PONTE — `entregaPorEmbalagem(unidadePrescrita, unidadeEstoque)`.** Verdadeira
+      quando o estoque é avulso e a receita está em outra unidade (mL, g, %, UI…). Nesse
+      caso `qtdDoEstoque` devolve **1**: a embalagem inteira, uma vez no curso.
+      ⚠️ **Histórico das inversões, para não voltar a nenhuma:**
+      ```
+      até 2026-09-17 : valor BRUTO      20 mL tiravam 20 frascos de um saldo de 2
+      2026-09-17     : 1 por APLICAÇÃO  10 dias de 5 mL cobravam DEZ frascos
+      2026-09-18     : 1 por CURSO      um frasco, entregue na 1ª execução
+      ```
+      ⚠️ **Receita em 'Un.' fica FORA** (e as grafias 'un'/'unidade' também): ali o vet
+      prescreveu EMBALAGENS, e 2 por dia por 5 dias são 10. Unidade VAZIA idem — sem
+      rótulo, "2" já se lê como 2 unidades.
+      ⚠️ **A dosagem SAIU da assinatura** de `qtdDoEstoque`. Ela existia para contar
+      aplicações (`qtdPrescrita / dose`), e a regra deixou de contar aplicações; um 4º
+      argumento reaparecendo ali é sinal de que alguém reintroduziu a divisão. Gate
+      explícito.
+- [x] 🔴 **O "uma vez" é garantido em `debitarEstoqueDia`, não no cálculo.** A quantidade
+      é sempre 1; quem impede a repetição é a guarda de `item.executadoEm` — que reflete
+      o estado ANTES desta execução, porque a marcação acontece depois, em `executar`.
+      A função passou a devolver `{ precos, unidades, jaEntregues, porEmbalagem }`.
+      ⚠️ A guarda roda **ANTES de buscar o estoque**: item sem estoque cadastrado é
+      lançado com valor 0 "para o financeiro saber", e sem isso ele voltaria a somar
+      quantidade na linha a cada dose de um frasco já entregue.
+      ⚠️ Em `executar`, `jaEntregues` pula **a linha da fatura e a conta a pagar do
+      fornecedor** — e só isso. A dose continua sendo marcada como executada (a aplicação
+      aconteceu) e a seringa/agulha continuam sendo lançadas: cada aplicação usa um
+      insumo novo. Receber os conjuntos e ignorá-los é o modo silencioso de a regra
+      deixar de existir, então há gate para o uso deles.
+      ⚠️ A RESERVA acompanha de graça: `qtdNaUnidadeEstoque` passa pelo mesmo
+      `qtdDoEstoque` e reserva 1 embalagem — um frasco basta para o curso.
+- [x] **CONSEQUÊNCIA ACEITA, registrada porque é o custo da escolha:** ampola cadastrada
+      em 'mL' (sem multidose) e aplicada pela clínica dez dias seguidos passa a cobrar
+      UMA ampola. Para esse caso o produto tem de ser MULTIDOSE (declarando o conteúdo)
+      ou a receita tem de ser escrita em 'Un.'. As duas saídas existem no cadastro.
+- [x] 🔴 **A ENTREGA AO PROPRIETÁRIO DEIXOU DE IR A ZERO** — fecha a "LACUNA CONHECIDA"
+      documentada aqui desde 2026-08-01. O item que a clínica FORNECE e o proprietário
+      APLICA nunca chega ao plantão, e a finalização é a única chance de cobrá-lo; até
+      aqui ele ia com `valor: 0` porque o preço nasce do LOTE debitado e não havia lote.
+      `debitarEstoqueDia` ganhou **`incluirDoProprietario`** (OPT-IN — na execução o item
+      continua fora, porque lá nem chega) e é chamada no `finalizar` com
+      `calcularQuantidadeTotal`: o cliente leva o CURSO INTEIRO.
+      ⚠️ `criarReservas` CONTINUA pulando esse item, e tem de continuar: ele é debitado no
+      mesmo instante, e reservar + debitar o mesmo frasco o contaria duas vezes.
+      ⚠️ `verificarDisponibilidade` passou a incluí-lo — finalizar sem o frasco na
+      prateleira alerta (409, com "forçar"), em vez de debitar em silêncio.
+      ⚠️ Continua caindo em 0 quando o medicamento não tem estoque cadastrado: zero ali é
+      "ninguém disse quanto vale", nunca um palpite.
+- [x] **Execução mostra o PRESCRITO** (a pedido) — `dosagemNaTela` devolve "5 mL", e o
+      "· 1 Un. por aplicação" de 17/09 saiu. A contagem de embalagens virou assunto da
+      SEPARAÇÃO: `doseDoEstoque` ganhou `jaEntregue`, e o checklist de farmácia do Painel
+      Principal PULA o item já entregue — senão pediria um frasco por dia durante dez.
+      ⚠️ Item legado SEM unidade na receita ainda cai na do estoque: número solto não diz
+      o que significa.
+- [x] Gate `__tests__/produtoMultidose.test.js` em **51 casos** (+5). Os da regra anterior
+      foram **INVERTIDOS** (mesmo precedente de `faturaConsolidacao` em 17/09) e a seção 7
+      foi reescrita com o histórico das duas inversões no cabeçalho.
+      ⚠️ A varredura das telas usa `semComentarios`: sem isso ela reprova os PRÓPRIOS
+      comentários que documentam a regra citando o texto antigo — foi o que aconteceu na
+      primeira escrita deste gate.
+      ✅ **Verificado que REPROVA**: devolvida a divisão por aplicação, removida a guarda
+      da fatura e revertida a unidade da receita → **4 casos falharam**; front voltando à
+      unidade do estoque + entrega do proprietário em zero → **2**. Suíte: **1140**;
+      `tsc --noEmit`, `tsc -b` e `vite build` limpos.
+- [x] ✅ **CONFERIDO AO VIVO** com o CÓDIGO REAL, em transação REVERTIDA: os 13 produtos
+      com estoque devolvem receita = unidade do catálogo e estoque = 'Un.' (no multidose
+      as duas caem na forma); `debitarEstoqueDia` no frasco de 250 mL tirou **1 embalagem
+      e cobrou R$ 10,00** na 1ª execução e **nada** na 2ª; o multidose tirou **5 doses e
+      cobrou R$ 166,67** a cada execução (proporcional); e o mesmo item como ENTREGA AO
+      PROPRIETÁRIO, que antes ia a zero, saiu por **R$ 10,00** — sem a flag, o item nem é
+      olhado.
+      ⚠️ `debitarEstoqueDia` passou a ser EXPORTADA para poder ser exercitada de verdade:
+      é ela que decide, de uma vez, quanto sai do estoque e quanto vai à fatura.
+- [ ] A descrição da linha da fatura continua sendo a POSOLOGIA (`Xarope — 5 mL × 1xDia`)
+      enquanto a quantidade cobrada é 1 embalagem. Não é erro — a posologia é o que
+      identifica o item —, mas quem lê a fatura vê "5 mL" ao lado de "Quant.: 1". Se
+      incomodar, o lugar é `descricaoItemFatura`.
+- [ ] Item LEGADO cujo produto virou multidose depois (receita em 'mL' contra estoque em
+      'doses') continua caindo no valor BRUTO: 'doses' não é a unidade avulsa, então a
+      ponte não se aplica. Medido na base (item #241: 26 mL × 3 dias → 78 doses). É
+      pré-existente e não foi tocado; item NOVO daquele produto já nasce em 'doses'.
+
+### Sessão 2026-09-17 (parte 3) — A linha da fatura junta atendimentos; o número vira observação
+
+> ✅ **MIGRATION APLICADA** (autorizada nesta sessão) —
+> `20261015000000_fatura_item_origens`, rodada com o DONO (`DATABASE_URL_MIGRATIONS`,
+> `nutriadmin`): `CREATE TABLE` e `CREATE POLICY` exigem OWNERSHIP, não GRANT. Cria
+> `tb_fatura_item_origens` (ADITIVA, **sem backfill**) com ENABLE + FORCE e policy
+> **TENANT VIA PAI** de dois saltos (`tb_fatura_itens` → `tb_faturas`).
+> `migrate status` depois: **203 migrations, "Database schema is up to date!"**.
+>
+> ✅ **CONFERIDO DEPOIS, contra o retrato de ANTES** — 9 colunas, RLS enable+force,
+> 1 policy (USING e WITH CHECK), 6 índices, **1 FK só** (o pai, CASCADE); e o dado
+> INTACTO: **110 itens de fatura / soma de quantidade 248 / 35 faturas / R$ 12.307,86**,
+> idênticos, com 0 linhas na tabela nova (o "sem backfill" conferido, não suposto).
+>
+> ⚠️ `prisma generate` falhou com **EPERM** (§11 — o backend em execução segura o
+> `query_engine-windows.dll`) e **NÃO bloqueia**: tudo aqui é SQL cru, e as duas
+> verificações ao vivo abaixo rodaram com o client NÃO regenerado. Rodar na próxima
+> parada do backend.
+>
+> ✅ `tb_fatura_item_origens` já entrou em `TENANT_PLANE` (`__tests__/tenancyRls.test.js`)
+> — o que só se faz DEPOIS de aplicar: listá-la antes reprova o teste 3 ("as listas não
+> citam tabela inexistente"), a rede contra prometer proteção para tabela que não existe.
+> Tenant plane: **22/86**.
+
+- [x] ✅ **RLS CONFERIDO AO VIVO**, com o usuário da APLICAÇÃO (`zls2vetp1`, que é quem
+      sofre a policy em produção), em transação REVERTIDA:
+      ```
+      empresa 58 grava a contribuição no PRÓPRIO item   → ACEITO   (é este passo que
+      empresa 58 lê de volta                            → 1 linha   prova que o teste
+      empresa 58 grava no item da empresa 59            → RECUSADO  tem valor: sem ele
+      empresa 59 enxerga                                → 0 linhas  tudo "passaria" por
+      linhas ao fim                                     → 0         fail-closed)
+      ```
+      O 42501 do terceiro caso é o banco recusando, não o código — é a policy funcionando.
+- [x] ✅ **CÓDIGO REAL × BANCO REAL**, em transação REVERTIDA (empresa 59, fatura 102,
+      animal 84, prescrições 142 e 143): `adicionarOuSomarFaturaItem` chamado 3× (2 doses
+      de uma prescrição + 1 de outra) consolidou em **1 linha, Quant.: 3**, com **3
+      contribuições datadas** e a soma delas batendo com a quantidade da linha;
+      `origemJaFaturada` respondeu **SIM** para a 2ª origem (pela FK responderia NÃO — é
+      o falso "não" que encolheria o estoque); `removerFaturaItensDaOrigem` da 1ª deixou a
+      linha **viva com Quant.: 1** e a FK **reapontada** para a 2ª; o estorno da última
+      apagou a linha. Banco ao fim: os mesmos 110 / 248 / 35 / R$ 12.307,86.
+      ⚠️ Nesse cenário as duas prescrições eram do MESMO atendimento (EV-0001), então as
+      três contribuições saíram com o mesmo número — a base não tinha o caso de dois
+      atendimentos distintos à mão. O mecanismo é o mesmo; confirmar o visual no uso.
+
+- [x] 🔴 **O DEFEITO: só as doses do MESMO item de prescrição consolidavam.** A chave de
+      `adicionarOuSomarFaturaItem` incluía a FK de origem, e a descrição começava com o
+      número do atendimento — então nada casava entre documentos. Agora a chave é
+      **(tipo, descrição, animal, valor unitário)** e o número virou OBSERVAÇÃO.
+      A "forma de cobrança" do pedido já estava na chave: ela se manifesta no VALOR
+      UNITÁRIO (`lib/formaCobrancaEstoque.js` resolve o preço antes do lançamento), e é
+      ele que a comparação por tolerância de centavo já olhava.
+- [x] **Decisões tomadas com o usuário nesta sessão:**
+      **(a) a POSOLOGIA fica na descrição** — mesmo remédio com frequências diferentes
+      segue em linhas separadas, porque uma linha só teria de escolher uma frequência e
+      mentiria sobre metade das doses; **(b) SEM BACKFILL** — faturas já lançadas ficam
+      como estão; fundir linhas de fatura ABERTA mudaria um documento que o cliente pode
+      já ter visto.
+- [x] 🔴 **`tb_fatura_item_origens` — a contribuição é o que substitui a FK na chave.**
+      Uma linha por execução: origem, `ocorrido_em` e `quantidade`.
+      ⚠️ **INVARIANTE**: `FaturaItem.quantidade` = soma das contribuições. É ele que faz
+      o estorno subtrair o número certo, e é por isso que `adicionarFaturaItem` (que NÃO
+      consolida) também grava a primeira contribuição.
+      ⚠️ `ocorrido_em` é a data da EXECUÇÃO, não `criado_em`: o lançamento pode ser
+      reprocessado, a aplicação não.
+      ⚠️ **Colunas de origem SEM FK**, mesmo precedente de `tb_prescricoes.prestador_id`
+      e de `tb_execucoes_procedimento_prestador.credor_id`: a contribuição é registro
+      histórico de uma cobrança e não pode mudar (nem sumir) porque o registro clínico
+      foi excluído. `SET NULL` a deixaria sem origem nenhuma; `CASCADE` apagaria a
+      explicação da cobrança em silêncio. Só o pai (`fatura_item_id`) tem FK, com CASCADE.
+- [x] 🔴 **`removerFaturaItensDaOrigem` SUBTRAI em vez de apagar.** Era a FK na chave que
+      impedia "cancelar uma prescrição levar embora a cobrança da outra"; com a linha
+      compartilhada, apagá-la inteira faria exatamente isso — e a fatura fecharia "certa"
+      na soma das linhas, sem erro nenhum.
+      ```
+      contribuições da origem  → descontam da quantidade da linha
+      linha ficou sem nenhuma  → aí sim é apagada
+      linha sobreviveu         → a FK de origem principal é REAPONTADA para quem ficou
+      ```
+      ⚠️ A linha é procurada pelas CONTRIBUIÇÕES **e** pela FK: linha LEGADA (anterior à
+      migration) não tem contribuição, e sem o segundo caminho ela deixaria de ser
+      estornada — o cancelamento pararia de devolver dinheiro, em silêncio.
+      ⚠️ `resumoDaLinha` devolve `null` para "não sei" (tabela ausente), e **"não sei"
+      nunca autoriza manter a cobrança**: cai no comportamento antigo e apaga a linha.
+      Colapsar `null` com zero apagaria linha compartilhada em base sem a tabela.
+      ⚠️ A quantidade nova é a **SOMA do que sobrou**, não `quantidade − descontado`: a
+      soma é a verdade da linha e se autocorrige; subtrair propagaria divergência.
+- [x] 🔴 **`origemJaFaturada` — "já foi cobrado?" deixou de poder sair da FK.** A FK
+      guarda só a origem PRINCIPAL, então a segunda vacina a cair na linha responderia
+      "não faturada". Não é detalhe de leitura: é esse "sim" que, no CANCELAMENTO da
+      vacina, prova que o lote foi debitado e autoriza devolver as doses ao estoque — um
+      falso "não" deixa o **estoque encolhido em silêncio**, que é o bug de 2026-08-18 de
+      volta por outro caminho. Aplicado nos 3 `jaFaturada` da vacina (finalizar, executar,
+      cancelar), no `jaLancado` do `finalizar` da prescrição e no `jaFaturado` do exame.
+- [x] ⚠️ **Duas reescritas de linha ganharam guarda contra a linha COMPARTILHADA:**
+      (a) a reutilização da linha zerada da finalização em `executar` — `findFirst` pela
+      FK pode devolver uma linha que já tem doses de outra prescrição, e sobrescrever
+      `valor` ali reprecificaria retroativamente o que a outra cobrou;
+      (b) `atualizarFaturaItensDaOrigem` — descrição e valor da linha são de TODAS as
+      origens dela. `temOutraOrigem` devolve `null` para "não sei" e isso NÃO bloqueia:
+      sem a tabela, nada é compartilhado.
+- [x] **A descrição perdeu o número** em prescrição (`descricaoItemFatura`), no INSUMO da
+      via injetável e na vacina. ⚠️ Exame e encaminhamento mantêm o `[EX-0004]`: são
+      lançamento único, nunca consolidam.
+- [x] **A finalização também consolida** (item que o proprietário aplica em casa, que
+      nunca chega ao plantão) — não sobrou `adicionarFaturaItem` na prescrição. Duas
+      regras na mesma fatura para a mesma pergunta seria o pior dos dois mundos.
+- [x] **Leitura: `origensPorItem` anexa as contribuições a cada item** em
+      `FaturaController.comPerfilDaEmpresa` — o funil único de toda leitura de fatura
+      completa. ⚠️ **UMA consulta para a fatura inteira**, nunca uma por item: a fatura
+      de um mês tem dezenas de linhas. O número e o destino do clique saem do registro de
+      origem (vacina → VC-0004 + tela de Vacina; o resto → nº do atendimento + evolução),
+      montados por `formatAtendimentoNum`, nunca à mão.
+- [x] **Tela e papel**: `ObservacaoOrigens` (`Faturamento.tsx`) e `observacaoOrigens`
+      (`FaturaExport.ts`), as duas só com **2+ contribuições**. No papel a razão é mais
+      forte que estética: antes da consolidação cada aplicação era uma LINHA na fatura do
+      cliente, com número e data — consolidar sem o detalhe entregaria um "Quant.: 5" que
+      ele não tem como conferir.
+- [x] Testes: `__tests__/faturaOrigensConsolidadas.test.js` (25 casos) com `tx` falso que
+      implementa a tabela de contribuições e ROTEIA o SQL cru da lib — um mock que só
+      devolvesse objetos não exercitaria o caminho real dela.
+      ✅ **Verificado que REPROVA** em três sabotagens distintas (7, 2 e 1 casos).
+      Suíte: **1098**; `tsc --noEmit`, `tsc -b` e `vite build` limpos.
+      ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+- [x] ✅ `origensPorItem` (o JOIN que resolve número/evolução de cada contribuição) foi
+      conferido AO VIVO junto do resto — devolveu as 3 contribuições com número, data e
+      quantidade. Ele não tem teste unitário, e não tem como ter: é SQL puro.
+- [ ] A exportação **CSV** da fatura (`FaturaExport.ts`) não leva a observação — só a
+      impressão/PDF. Uma linha por contribuição no CSV mudaria o número de linhas do
+      arquivo, que o financeiro pode usar como base de conferência; decidir antes de mexer.
+- [ ] Linhas já lançadas (sem contribuição) continuam com o `[AG-0012]` no texto e sem
+      observação, convivendo com as novas na MESMA fatura enquanto o mês corrente não
+      fechar. É consequência aceita do "sem backfill"; `descricaoSemNumero` no front já
+      trata o prefixo legado.
+
+### Sessão 2026-09-17 (parte 2) — Valor Comprado e Valor Repassado passam a ser POR EMBALAGEM
+
+> ✅ **MIGRATION APLICADA** (autorizada nesta sessão) —
+> `20261014000000_estoque_valor_por_embalagem`. É backfill de DADOS, não de schema:
+> reexpressa `valor` e `valor_repassado` de TOTAL DA COMPRA para VALOR DE UMA EMBALAGEM
+> (`÷ qtd_embalagens`, só onde há mais de uma). Rodada com o DONO
+> (`DATABASE_URL_MIGRATIONS`). `migrate status` depois: **202 migrations, banco em dia**.
+> **Sem mudança de schema, logo sem `prisma generate`.**
+>
+> ✅ **MEDIDO ANTES E DEPOIS, linha a linha** (as 9 entradas desta base):
+> ```
+>        valor        valor_repassado      preco_unitario_base
+> id 30  200 -> 100    200 ->  100          100  (intacto)
+> id 34  200 -> 100    200 ->  100            2  (intacto, conteúdo 50)
+> id 35  300 ->  30    300 ->   30           30  (intacto)
+> id 36  300 ->  30    480 ->   48           48  (intacto)
+> id 37  600 ->  30   1080 ->   54           54  (intacto)
+> id 38  200 ->  20    540 ->   54           54  (intacto)
+> id 39  100 -> 100    100 ->  100            5  (INTOCADO: 1 embalagem)
+> id 42  350 ->  50    420 ->   60           60  (intacto)
+> id 43  500 -> 83,33  750 ->  125          125  (intacto — a fração é preservada)
+> ```
+> **Os 9 preços ficaram IDÊNTICOS** — nenhuma cobrança mudou, que era a garantia. E o
+> código REAL (`calcPrecoUnitarioBase`) recalculado a partir do que ficou gravado
+> reproduz os 9 preços: reeditar qualquer entrada hoje não altera a fatura de ninguém.
+
+- [x] 🔴 **O DEFEITO ERA MUDO — as duas contas se cancelavam.** A tela de Farmácia
+      multiplicava `valor` e `valorRepassado` pela Qtd Produto antes de gravar
+      (`nPacotes`), e `calcPrecoUnitarioBase` dividia pelo SALDO inteiro. Resultado: o
+      preço da dose saía CERTO, nada acusava na tela, e o BANCO ficava com o total da
+      compra em colunas rotuladas "Valor Unitário". O erro só aparecia em quem lia a
+      coluna CRUA:
+      ```
+      caixa de 100 seringas por R$ 100  ->  valor_repassado = 100 (o total)
+      debitarInsumoUnidade lança `valorRepassado` como preço de UMA seringa -> R$ 100
+      ```
+      A clínica cobrava a caixa inteira do cliente por uma seringa, e a fatura não tinha
+      como denunciar isso — o número era plausível.
+- [x] **A CONTA MUDOU DE DIVISOR, NÃO DE RESULTADO.** `calcPrecoUnitarioBase` recebia
+      `(valor TOTAL, quantidade em estoque, unidade)` e passou a receber
+      **`(valor de UMA embalagem, o CONTEÚDO dela, unidade)`**:
+      ```
+      frasco de 20 mL por R$ 100    -> 100 ÷ 20      = R$ 5,00/mL
+      embalagem avulsa por R$ 30    -> 30  ÷ 1       = R$ 30,00/Un.
+      embalagem de 1 kg por R$ 100  -> 100 ÷ 1.000 g = R$ 0,10/g
+      ```
+      É o MESMO modelo que a vacina já usa desde sempre
+      (`LoteVacina.valorUnitarioRepassado ÷ dosesPorFrasco`) — a Farmácia era a exceção.
+      ⚠️ **Conteúdo `null`/0 vale 1**, e isso não é "campo vazio": é o não-multidose, em
+      que a embalagem É a própria unidade. Devolver `null` ali jogaria a cobrança no
+      caminho legado (`precoUnitarioDoEstoque`), que é justamente o que sobe o preço a
+      cada dose aplicada.
+      ⚠️ 🔴 **O SALDO SAIU DA CONTA E DO GATILHO DE RECÁLCULO.** Dar baixa ou corrigir o
+      estoque não mexe mais no preço — antes, `atualizar` recalculava quando
+      `data.qtdEstoque` mudava, então acertar uma contagem alterava o valor que já tinha
+      sido cobrado do cliente.
+- [x] 🔴 **TRÊS LEITORES DA COLUNA CRUA MUDAVAM DE SIGNIFICADO E FORAM CORRIGIDOS:**
+      - **`debitarInsumoUnidade`** (seringa/agulha na execução) usava `valorRepassado`
+        direto como preço de UMA unidade. Passou a preferir `precoUnitarioBase`, que já
+        nasce dividido pelo conteúdo; `valorRepassado` fica só como reserva para a
+        entrada legada sem preço calculado.
+      - **`precoUnitarioDoEstoque`** (fallback legado) dividia por `paraBase(qtdEstoque)`.
+        Passou a dividir pelo CONTEÚDO da embalagem — com o valor unitário e o divisor
+        antigo, o preço sairia dividido pela quantidade comprada e a clínica cobraria
+        centavos.
+      - **`valorItemEstoque`** (relatório de Farmácia) devolvia `valorRepassado` cru
+        quando não havia `precoUnitarioBase` — isto é, o preço de UMA embalagem como se
+        fosse o valor do estoque inteiro. Passou a multiplicar pelo saldo.
+- [x] **A CONTA DO PREÇO ESTAVA ESCRITA DUAS VEZES em `PrescricaoGrupoController`** — em
+      `precoUnitarioDoEstoque` e, à mão, dentro de `debitarEstoqueDia`. A segunda virou
+      chamada da primeira: duas cópias divergiriam na primeira correção, e **o que
+      divergiria é o valor cobrado do cliente**.
+- [x] ⚠️ **A CONSOLIDAÇÃO DEIXOU DE SOMAR OS VALORES.** Entrada que casa com uma
+      existente (mesmo lote, mesma validade, mesmo valor por embalagem dentro de 1%) só
+      SOMA `qtdEstoque` e `qtdEmbalagens`. Somar `valor`/`valorRepassado` — que agora são
+      POR EMBALAGEM — dobraria o preço da embalagem a cada reentrada do mesmo lote, e com
+      ele a linha da fatura.
+      ⚠️ O match também parou de dividir por `qtdEmbalagens`: aquela divisão existia só
+      para desfazer a multiplicação da tela.
+- [x] **RÓTULO ÚNICO nos dois modos** — "Valor Unitário (R$)" e "Valor Unitário Cobrado
+      (R$)" na criação E na edição. Enquanto a edição dizia "Valor Total Comprado", ela
+      carregava o total num campo unitário e salvar de novo o multiplicava OUTRA VEZ,
+      dobrando o valor a cada passagem. A nota "Total: R$ X" continua, agora como
+      conferência da nota (cinza, "Total da compra") e valendo também na edição — ela não
+      é gravada em lugar nenhum.
+- [x] 🔴 **O BACKFILL NÃO MUDA COBRANÇA NENHUMA, e isso foi MEDIDO.**
+      `preco_unitario_base` — o número que vira linha de fatura — **não é tocado**: ele
+      já é R$/unidade base e continua idêntico. O que se reexpressa é só a unidade em que
+      `valor`/`valor_repassado` estão escritos.
+      ✅ **CONFERIDO AO VIVO** com o código REAL (`calcPrecoUnitarioBase`) contra as 9
+      entradas desta base: `valor_repassado ÷ qtd_embalagens` reproduz o
+      `preco_unitario_base` gravado em **9 de 9**, incluindo a MULTIDOSE (id 39: R$ 100 o
+      frasco ÷ 20 mL = R$ 5,00/mL) e as INATIVAS (id 34: R$ 100 ÷ 50 = R$ 2,00).
+      ⚠️ `qtd_embalagens` NULO ou 1 fica INTOCADO: ali a tela já gravava `nPacotes = 1`,
+      então o valor JÁ é o de uma embalagem. Dividir de novo o deixaria menor que o preço
+      que a fatura cobra.
+      ⚠️ **AS INATIVAS ENTRAM**, ao contrário do backfill de `20261013000000`. Lá o que
+      mudava era o SALDO, e o histórico da entrada encerrada tinha de ficar na unidade em
+      que aconteceu; aqui muda o SIGNIFICADO de uma coluna — deixar a inativa com o total
+      faria a tela exibir o valor errado e, ao reativá-la e salvar, recalcular o preço
+      errado.
+      ⚠️ `tb_movimentos_estoque` não é tocado: ele registra quantidades, não valores.
+- [x] **SIDEBAR: Estoque subiu para logo abaixo de Execução de Prescrição e acima de
+      Documentos** (a pedido). Quem aplica a dose é quem vê o saldo acabar, e lá embaixo —
+      depois de Exames, Agenda e Financeiro — o caminho do plantão até a reposição
+      atravessava o menu inteiro. Só a posição do bloco mudou; permissões, rotas e o
+      `activeSection` continuam os mesmos.
+- [x] Gate novo `__tests__/estoqueValorPorEmbalagem.test.js` (21 casos): a conta nos três
+      formatos de embalagem, o conteúdo nulo que vale 1, e a VARREDURA dos dois lados —
+      a tela que não multiplica, a criação que passa o conteúdo, a consolidação que não
+      soma valores, a edição que não recalcula por quantidade, o insumo cobrado por
+      unidade, o fallback legado, a fonte única do preço na baixa e o que a migration NÃO
+      pode tocar.
+      ⚠️ O gate da migration IGNORA os comentários `--` do SQL: o cabeçalho explica a
+      regra CITANDO as tabelas e colunas que o UPDATE não toca, e sem o filtro ele
+      reprovava a própria documentação dele (a mesma lição do gate de e-mail).
+      ✅ **Verificado que REPROVA**: devolvidas a multiplicação da tela e a divisão pelo
+      saldo, **2 casos falharam**; restaurado, os 21 voltaram.
+      Suíte: **1073**; `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+      ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.
+- [ ] O **Ajuste de Estoque** e a **entrada em lote** não reinformam o valor da
+      embalagem — o que é correto agora (o preço não depende mais do saldo), mas
+      significa que corrigir um valor digitado errado continua sendo pela EDIÇÃO da
+      entrada, e ela é recusada em item já movimentado. Para esse caso o caminho segue
+      sendo inativar a entrada e cadastrar outra.
+- [ ] O **Estoque de Vacinas** não foi tocado: ele já gravava `valorUnitario` /
+      `valorUnitarioRepassado` por FRASCO, sem multiplicar. Esta leva alinhou a Farmácia
+      ao que a vacina já fazia — se um dia a regra mudar, os dois lugares mudam juntos.
+- [ ] Entrada LEGADA sem `precoUnitarioBase` (valor zerado na origem) continua caindo no
+      `precoUnitarioDoEstoque`. Ele agora divide pelo conteúdo, mas se a linha também não
+      tiver `pesoPorEmbalagem` o valor da embalagem é usado como preço unitário — que é o
+      correto para o não-multidose e é o único dado que aquela linha tem.
 
 ### Sessao 2026-09-17 - Produto sem multidose e medido em 'Un.' + ordem da tela de Produtos
 
@@ -12166,6 +13734,15 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     REGRA: `UPDATE`/`INSERT`/`DELETE` de migration em tabela do tenant plane começa com
     `SELECT set_config('app.plataforma', 'on', true);` — `true` = LOCAL à transação da
     migration, para o carimbo não vazar para a conexão seguinte do pool.
+    🔴 **VALE TAMBÉM PARA SCRIPT DE DIAGNÓSTICO, e mordeu de novo em 2026-09-18:** um
+    script que carimbava FORA de `$transaction` concluiu "a base não tem nenhuma
+    prescrição pendente" e **estava errado** — havia 6 grupos. O `true` é local à
+    TRANSAÇÃO; fora dela cada query pega outra conexão do pool, chega sem carimbo e o
+    FORCE RLS devolve **0 linhas, com sucesso e sem aviso**. Pior que erro: a consulta
+    "funciona" e a conclusão é falsa. Toda leitura de tenant plane por script vai
+    DENTRO de `prisma.$transaction(async tx => { await tx.$executeRawUnsafe(...set_config...); ... })`.
+    Sintoma para reconhecer: tabela que você SABE que tem dado voltando vazia, enquanto
+    `tb_empresas`/`users` (control plane, sem RLS) respondem normalmente.
     ⚠️ Migration JÁ APLICADA não se corrige editando o arquivo (o checksum registrado
     passa a divergir e o Prisma acusa "migration alterada depois de aplicada" em todo
     ambiente que já a tem): crie uma migration NOVA só com o backfill — foi o que

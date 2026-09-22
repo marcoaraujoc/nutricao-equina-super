@@ -20,6 +20,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Wallet, Truck, HardHat, Loader2, Plus, Check, Lock, Ban, Trash2, AlertTriangle, X,
+  Printer, MessageCircle, Pencil,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
@@ -35,6 +36,14 @@ import { usePeriodo, periodoParams } from '../contexts/PeriodoContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import { formatDataHora } from '../utils/dateUtils';
+// Imprimir / WhatsApp da conta (a pedido, 2026-09-18). O PDF sai pelo MESMO caminho
+// do resto do sistema (`compartilharPdf` → Puppeteer no backend), então ele já chega
+// anexado de verdade e com a barra de progresso.
+import { gerarHtmlContasPagar, imprimirContasPagar, type ContaPagarPrint } from '../utils/ContaPagarPrint';
+import { enviarPdfWhatsAppComAviso } from '../utils/compartilharPdf';
+// Quantidade sem zeros à toa (20 → "20", 2,5 → "2,5") — a MESMA do estoque e da
+// prescrição. Uma cópia local divergiria no primeiro ajuste de formato.
+import { fmtQtdForma } from '../utils/formaCalculo';
 
 type TipoConta = 'FORNECEDOR' | 'PRESTADOR';
 
@@ -61,7 +70,7 @@ interface Conta {
   itens:         ItemConta[];
 }
 
-interface Credor { id: number; nome: string; tipoServico: string | null }
+interface Credor { id: number; nome: string; tipoServico: string | null; telefone?: string | null }
 
 const brl = (v: number | null | undefined) =>
   v == null ? '—' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -88,7 +97,7 @@ const ORIGEM_LABEL: Record<string, string> = {
 
 export default function Pagamentos() {
   const { podeExecutar, loading: loadingPerms } = usePermissoes();
-  const { loading: empresaLoading } = useEmpresa();
+  const { loading: empresaLoading, marca } = useEmpresa();
   const { granularidade, data: dataRef } = usePeriodo();
 
   const podeVer    = podeExecutar('financeiro.pagamentos.ler');
@@ -108,6 +117,12 @@ export default function Pagamentos() {
   const [mostrarLancar, setMostrarLancar] = useState(false);
   const [novo, setNovo] = useState({ credorId: '', descricao: '', valor: '', quantidade: '1', animalNome: '' });
   const [salvando, setSalvando] = useState(false);
+  // ── Edição do VALOR de um item (a pedido, 2026-09-18) ──────────────────────
+  // É a outra metade do lançamento zerado: o procedimento sem preço cadastrado agora
+  // APARECE na conta valendo 0, e é aqui que o financeiro diz quanto vale.
+  const [editandoItem, setEditandoItem] = useState<number | null>(null);
+  const [valorEdit,    setValorEdit]    = useState('');
+  const [salvandoItem, setSalvandoItem] = useState(false);
 
   const carregar = useCallback(async () => {
     try {
@@ -184,6 +199,61 @@ export default function Pagamentos() {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
       if (!e.isPermissionError) setErroAcao({ mensagem: e.response?.data?.error ?? 'Erro ao lançar.' });
     } finally { setSalvando(false); }
+  };
+
+  const abrirEdicaoValor = (it: ItemConta) => {
+    setEditandoItem(it.id);
+    // Valor zerado abre o campo VAZIO, não com "0,00": ali o zero significa "ninguém
+    // disse quanto vale", e deixá-lo escrito convida a salvar o zero sem pensar.
+    setValorEdit(it.valor > 0 ? String(it.valor).replace('.', ',') : '');
+  };
+
+  const salvarValorItem = async (itemId: number) => {
+    const valor = Number(String(valorEdit).replace(/\./g, '').replace(',', '.'));
+    if (!Number.isFinite(valor) || valor < 0) {
+      setErroInline('Informe um valor válido.');
+      return;
+    }
+    setSalvandoItem(true);
+    try {
+      await api.patch(`/financeiro/contas-pagar/itens/${itemId}`, { valor });
+      toast.success('Valor atualizado');
+      setEditandoItem(null);
+      await carregar();
+    } catch (err) {
+      const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
+      if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao atualizar o valor.');
+    } finally { setSalvandoItem(false); }
+  };
+
+  /** A conta como a folha impressa a espera. */
+  const paraImpressao = (c: Conta): ContaPagarPrint => ({
+    credorNome:    c.credorNome,
+    tipo:          c.tipo,
+    mesReferencia: c.mesReferencia,
+    status:        STATUS[c.status].label,
+    total:         c.total,
+    itens: c.itens.map(i => ({
+      animalNome:      i.animalNome,
+      descricao:       i.descricao,
+      solicitanteNome: i.solicitanteNome,
+      ocorridoEm:      i.ocorridoEm,
+      quantidade:      i.quantidade ?? 1,
+      valor:           i.valor,
+    })),
+  });
+
+  const enviarWhatsApp = async (conta: Conta) => {
+    const credor = credores.find(c => c.id === conta.credorId);
+    await enviarPdfWhatsAppComAviso({
+      gerarHtml:   () => gerarHtmlContasPagar([paraImpressao(conta)], marca.logoUrl),
+      nomeArquivo: `valores-a-pagar-${conta.credorNome.replace(/\s+/g, '-').toLowerCase()}.pdf`,
+      texto:       `Demonstrativo de valores a pagar${conta.mesReferencia ? ` — ${conta.mesReferencia}` : ''}.`,
+      documento:   'Demonstrativo de valores a pagar',
+      // ⚠️ O destino é o telefone do CREDOR. `credores` só traz quem está ATIVO; sem
+      // telefone o `compartilharPdf` cai no fallback manual (baixa o PDF e abre o app),
+      // que é melhor do que não oferecer a ação.
+    }, credor?.telefone ?? null);
   };
 
   const removerItem = async (motivo: string) => {
@@ -344,6 +414,13 @@ export default function Pagamentos() {
                     <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
                       visivel={podePagar && conta.status !== 'CANCELADA' && conta.status !== 'PAGA'}
                       onClick={() => setCancelando(conta)} />
+                    {/* Imprimir e WhatsApp são SAÍDA DE CONTEÚDO — valem em qualquer
+                        status, inclusive na conta paga ou cancelada: é justamente a
+                        conta encerrada que alguém precisa reimprimir para conferir. */}
+                    <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
+                      onClick={() => imprimirContasPagar([paraImpressao(conta)], marca.logoUrl)} />
+                    <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp"
+                      onClick={() => enviarWhatsApp(conta)} />
                   </AcoesRegistro>
                 </div>
               </div>
@@ -352,9 +429,19 @@ export default function Pagamentos() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-[10px] uppercase tracking-wider text-gray-400 border-b border-gray-50">
-                      <th className="px-4 py-2 font-semibold">Animal</th>
+                      {/* 🔴 O ANIMAL SÓ APARECE NA ABA DE PRESTADORES (2026-09-19, a pedido:
+                          "na tela de pagamentos fornecedores retire a coluna animal"). A conta
+                          do FORNECEDOR é uma COMPRA — o que importa é o produto e QUANTAS
+                          embalagens vieram; o paciente não tem papel nenhum ali. Na do
+                          PRESTADOR o animal é o serviço em si ("o ferrageamento do Thor"), e
+                          tirá-lo deixaria a linha sem dizer sobre quem ele trabalhou. */}
+                      {tipo === 'PRESTADOR' && <th className="px-4 py-2 font-semibold">Animal</th>}
                       <th className="px-4 py-2 font-semibold">Item</th>
                       <th className="px-4 py-2 font-semibold">Solicitante</th>
+                      {/* Quantidade — nas DUAS abas. O valor da linha é valor × quantidade;
+                          sem a coluna, o total aparece ao lado de um unitário invisível e não há
+                          como conferir a compra contra a nota. */}
+                      <th className="px-4 py-2 font-semibold text-center whitespace-nowrap">Qtd.</th>
                       <th className="px-4 py-2 font-semibold whitespace-nowrap">Data</th>
                       <th className="px-4 py-2 font-semibold text-right whitespace-nowrap">Valor</th>
                       <th className="px-4 py-2" />
@@ -363,7 +450,9 @@ export default function Pagamentos() {
                   <tbody>
                     {conta.itens.map(it => (
                       <tr key={it.id} className="border-b border-gray-50 last:border-0">
-                        <td className="px-4 py-2 text-gray-700">{it.animalNome || '—'}</td>
+                        {tipo === 'PRESTADOR' && (
+                          <td className="px-4 py-2 text-gray-700">{it.animalNome || '—'}</td>
+                        )}
                         <td className="px-4 py-2">
                           <span className="text-gray-900">{it.descricao}</span>
                           {it.origemTipo && (
@@ -373,18 +462,50 @@ export default function Pagamentos() {
                           )}
                         </td>
                         <td className="px-4 py-2 text-gray-500 text-xs">{it.solicitanteNome || '—'}</td>
+                        <td className="px-4 py-2 text-center text-gray-700 whitespace-nowrap">{fmtQtdForma(it.quantidade ?? 1)}</td>
                         <td className="px-4 py-2 text-gray-500 text-xs whitespace-nowrap">
                           {/* INSTANTE — `formatDataHora`, nunca `formatDate` (§6): a
                               execução das 22h cairia no dia seguinte lida em UTC. */}
                           {formatDataHora(it.ocorridoEm)}
                         </td>
                         <td className="px-4 py-2 text-right font-semibold text-gray-800 whitespace-nowrap">
-                          {brl(it.valor * (it.quantidade ?? 1))}
+                          {editandoItem === it.id ? (
+                            <div className="flex items-center justify-end gap-1">
+                              <input
+                                autoFocus
+                                value={valorEdit}
+                                onChange={e => setValorEdit(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') salvarValorItem(it.id);
+                                  if (e.key === 'Escape') setEditandoItem(null);
+                                }}
+                                placeholder="0,00"
+                                className="w-24 border border-emerald-300 rounded-lg px-2 py-1 text-sm text-right focus:outline-none focus:border-emerald-500"
+                              />
+                              <AcaoRegistro tom="finalizar" icone={Check} rotulo="Salvar"
+                                carregando={salvandoItem} onClick={() => salvarValorItem(it.id)} />
+                              <AcaoRegistro tom="cancelar" icone={X} rotulo="Cancelar"
+                                onClick={() => setEditandoItem(null)} />
+                            </div>
+                          ) : it.valor > 0 ? (
+                            brl(it.valor * (it.quantidade ?? 1))
+                          ) : (
+                            /* 🔴 O ITEM SEM VALOR É UMA PENDÊNCIA, e precisa parecer uma.
+                               "R$ 0,00" se leria como "é de graça" — e some no meio dos
+                               outros números. Ele existe justamente porque ninguém
+                               precificou o procedimento ainda. */
+                            <span className="text-amber-700 text-xs font-semibold">a definir</span>
+                          )}
                         </td>
                         <td className="px-4 py-2 text-right">
                           {/* Conta PAGA é somente leitura: remover item de um pagamento
-                              já quitado mudaria um documento que o credor recebeu. */}
+                              já quitado mudaria um documento que o credor recebeu. O
+                              mesmo vale para EDITAR o valor — e o backend recusa, então
+                              a ação nem é renderizada (28-d). */}
                           <AcoesRegistro>
+                            <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar valor"
+                              visivel={podeLancar && conta.status === 'ABERTA' && editandoItem !== it.id}
+                              onClick={() => abrirEdicaoValor(it)} />
                             <AcaoRegistro tom="cancelar" icone={Trash2} rotulo="Remover"
                               visivel={podeLancar && conta.status !== 'PAGA' && conta.status !== 'CANCELADA'}
                               onClick={() => setRemovendo(it)} />

@@ -20,6 +20,7 @@ const router = express.Router();
 // Literais ANTES de /:id (armadilha 1).
 router.get   ('/credores',        authenticate, checkPermission('financeiro.pagamentos.ler',    'LEITURA'), ContaPagarController.listarCredores);
 router.post  ('/lancar',          authenticate, checkPermission('financeiro.pagamentos.lancar', 'PROPRIO'), ContaPagarController.lancar);
+router.patch ('/itens/:itemId',   authenticate, checkPermission('financeiro.pagamentos.lancar', 'PROPRIO'), ContaPagarController.atualizarItem);
 router.delete('/itens/:itemId',   authenticate, checkPermission('financeiro.pagamentos.lancar', 'PROPRIO'), ContaPagarController.removerItem);
 router.get   ('/',                authenticate, checkPermission('financeiro.pagamentos.ler',    'LEITURA'), ContaPagarController.listar);
 router.patch ('/:id/status',      authenticate, checkPermission('financeiro.pagamentos.pagar',  'PROPRIO'), ContaPagarController.alterarStatus);

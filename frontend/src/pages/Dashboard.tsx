@@ -294,7 +294,10 @@ const Dashboard = () => {
 
   useEffect(() => {
     if (isClinica || role === 'ADMIN') {
-      navigate('/painel-principal', { replace: true });
+      // Mesmo destino do login (`Login.tsx`): quem restaura a sessão e cai em `/`
+      // não pode pousar numa tela diferente da de quem acabou de digitar a senha.
+      // 🔴 Era `/painel-principal` até 2026-09-19 — ver o comentário em `Login.tsx`.
+      navigate('/mapa-atendimento', { replace: true });
       return;
     }
     loadAnimais();

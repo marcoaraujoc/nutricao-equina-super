@@ -80,6 +80,85 @@ export function unidadeOperativaProduto(
 }
 
 /**
+ * A unidade em que a RECEITA daquele produto é escrita — o que aparece ao lado do
+ * campo Dosagem da Prescrição.
+ *
+ * 🔴 DIVERGE de `unidadeOperativaProduto` no produto SEM multidose, de propósito
+ * (2026-09-18, a pedido):
+ *
+ *     multidose     → a forma de cálculo declarada   (mL, g, doses…)    [= estoque]
+ *     não-multidose → a UNIDADE DO CATÁLOGO          (mL, g, Frasco…)   [estoque: 'Un.']
+ *
+ * Sem multidose o produto não declara quanto cabe na embalagem, mas o veterinário
+ * prescreve na unidade REAL do medicamento: "5 mL de xarope", nunca "0,1 frasco". Até
+ * aqui as duas respostas eram 'Un.' e o campo saía em unidades.
+ *
+ * ⚠️ Quem fecha a conta é a regra da ENTREGA no backend: receita em unidade de
+ * CONTEÚDO contra estoque em EMBALAGENS consome UMA embalagem, cobrada uma vez no
+ * curso inteiro. Espelho de `lib/formaCalculo.unidadePrescricao` — mexeu aqui, mexa lá.
+ *
+ * ⚠️ `null` só para produto AUSENTE (item digitado à mão, fora do catálogo): ali não há
+ * estoque nem preço, e a unidade continua sendo escolhida no `<select>`.
+ */
+export function unidadePrescricaoProduto(
+  p: {
+    multidose?: boolean | null;
+    formaCalculo?: string | null;
+    dosesPorEmbalagem?: number | string | null;
+    unidade?: string | null;
+  } | null | undefined,
+): string | null {
+  if (!p) return null;
+  if (temConteudoDeclarado(p)) return p.formaCalculo as string;
+  return p.unidade || UNIDADE_AVULSA;
+}
+
+/**
+ * 🔴 Quanto cabe na embalagem de um produto **SEM** multidose (2026-09-19, a pedido).
+ *
+ * Espelho de `lib/formaCalculo.conteudoDaEmbalagem` — mexeu aqui, mexa lá.
+ *
+ * É o dado que faltava para o caso "frasco de 100 mL, receita de 5 doses de 25 mL":
+ * 125 mL não cabem num frasco e o curso consome DOIS. Sem ele, a regra da entrega
+ * assume uma embalagem para o curso inteiro e a clínica entrega dois e cobra um.
+ *
+ * ⚠️ NÃO é `temConteudoDeclarado`, e as duas nunca respondem juntas: aquela é a chave
+ * do MULTIDOSE e muda a unidade operativa (estoque passa a ser contado em mL, cobrança
+ * proporcional, sobra volta para a prateleira). Esta não muda unidade nenhuma — o
+ * estoque continua em 'Un.' e a receita na unidade do catálogo; o conteúdo responde
+ * UMA pergunta só: quantas embalagens o curso gasta.
+ */
+export function conteudoDaEmbalagemProduto(
+  p: { multidose?: boolean | null; dosesPorEmbalagem?: number | string | null } | null | undefined,
+): number | null {
+  if (!p || p.multidose === true) return null;
+  const n = Number(String(p.dosesPorEmbalagem ?? '').replace(',', '.'));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * Quantas EMBALAGENS INTEIRAS uma quantidade prescrita consome.
+ *
+ * 🔴 ARREDONDA PARA CIMA: 125 mL de um frasco de 100 mL são DOIS frascos, não 1,25 — a
+ * embalagem sem multidose é do paciente e, aberta, não volta para a prateleira.
+ *
+ * ⚠️ Sem conteúdo declarado devolve **1** (a entrega única de 2026-09-18, que é o
+ * comportamento de toda base existente). Nunca 0.
+ * ⚠️ Espelho de `lib/formaCalculo.embalagensPara`, incluindo a tolerância de 1e-9 — sem
+ * ela, 3 doses de 0,1 somam 0.30000000000000004 e pedem 2 embalagens de 0,3.
+ */
+export function embalagensParaQtd(
+  qtdPrescrita: number | null | undefined,
+  conteudoEmbalagem: number | null | undefined,
+): number {
+  const conteudo = Number(conteudoEmbalagem);
+  if (!Number.isFinite(conteudo) || conteudo <= 0) return 1;
+  const qtd = Number(qtdPrescrita);
+  if (!Number.isFinite(qtd) || qtd <= 0) return 1;
+  return Math.max(1, Math.ceil(qtd / conteudo - 1e-9));
+}
+
+/**
  * Texto livre → a forma canônica da lista (ou `null`).
  *
  * ⚠️ Compara SEM caixa e SEM acento porque o valor pode chegar do banco com a grafia

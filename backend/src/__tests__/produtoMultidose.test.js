@@ -24,7 +24,7 @@ jest.mock('../lib/prisma', () => ({ default: {} }), { virtual: true });
 const Prescricao = require('../controllers/PrescricaoGrupoController');
 const forma      = require('../lib/formaCalculo');
 
-const { qtdDoEstoque } = Prescricao;
+const { qtdDoEstoque, entregaPorEmbalagem, embalagensDaExecucao } = Prescricao;
 const leia = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 const leiaFront = (rel) =>
   fs.readFileSync(path.join(__dirname, '..', '..', '..', 'frontend', 'src', rel), 'utf8');
@@ -32,6 +32,131 @@ const leiaFront = (rel) =>
 // com a própria documentação é um gate que se aprende a ignorar.
 const semComentarios = (src) =>
   src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+
+// ─── 0. O CURSO QUE NÃO CABE NUMA EMBALAGEM (2026-09-19) ─────────────────────
+//
+// 🔴 O CASO, como foi relatado: "foi comprado um frasco de 100 mL mas foi receitado
+// 5 doses de 25 mL — é preciso na prescrição informar que serão usados dois frascos e
+// lançar na fatura os dois frascos".
+//
+// O QUE QUEBRAVA: `entregaPorEmbalagem` assumia UMA embalagem para o curso inteiro
+// (2026-09-18), porque o produto SEM multidose não declarava quanto cabia nela. A
+// clínica entregava dois frascos e cobrava um — sem erro em tela nenhuma.
+//
+// ⚠️ VALE SÓ PARA O PRODUTO SEM MULTIDOSE (a pedido). No multidose a sobra do frasco
+// volta para a prateleira e a cobrança é PROPORCIONAL ao prescrito; arredondar ali
+// cobraria um frasco inteiro de cada paciente que recebesse uma dose dele.
+describe('curso que consome mais de uma embalagem', () => {
+  const PRODUTO = { multidose: false, dosesPorEmbalagem: 100, unidade: 'mL' };
+
+  test('o conteúdo só existe no produto SEM multidose', () => {
+    expect(forma.conteudoDaEmbalagem(PRODUTO)).toBe(100);
+    // 🔴 No multidose ele responde `null`: lá quem manda é `qtdPorEmbalagemDe`, que
+    // muda a UNIDADE OPERATIVA (o estoque passa a ser contado em mL). Se os dois
+    // respondessem juntos, todo produto que declarasse o conteúdo viraria multidose
+    // por acidente e a cobrança voltaria a ser proporcional.
+    expect(forma.conteudoDaEmbalagem({ ...PRODUTO, multidose: true })).toBeNull();
+    expect(forma.conteudoDaEmbalagem({ multidose: false, dosesPorEmbalagem: null })).toBeNull();
+  });
+
+  test('declarar o conteúdo NÃO transforma o item em multidose', () => {
+    // A unidade operativa continua 'Un.' — é ela que faz o estoque ser contado em
+    // EMBALAGENS. Virar 'mL' aqui devolveria a cobrança proporcional pela porta dos
+    // fundos, e o cadastro nunca pediu isso.
+    expect(forma.unidadeOperativa(PRODUTO)).toBe('Un.');
+    // E a receita continua escrita na unidade do produto, que é o que o vet digita.
+    expect(forma.unidadePrescricao(PRODUTO)).toBe('mL');
+  });
+
+  test('125 mL de um frasco de 100 mL são DOIS frascos (arredonda para cima)', () => {
+    expect(forma.embalagensPara(125, 100)).toBe(2);
+    expect(forma.embalagensPara(100, 100)).toBe(1);
+    expect(forma.embalagensPara(101, 100)).toBe(2);
+    expect(forma.embalagensPara(250, 100)).toBe(3);
+  });
+
+  test('sem conteúdo declarado continua valendo UMA embalagem — nada muda na base atual', () => {
+    expect(forma.embalagensPara(125, null)).toBe(1);
+    expect(forma.embalagensPara(125, 0)).toBe(1);
+    // ⚠️ Nunca 0: zero faria o curso sair sem baixa de estoque e sem linha de fatura.
+    expect(forma.embalagensPara(0, 100)).toBe(1);
+  });
+
+  test('o ruído de ponto flutuante não inventa uma embalagem a mais', () => {
+    // 3 doses de 0,1 somam 0.30000000000000004 — sem a tolerância, `ceil` daria 2.
+    expect(forma.embalagensPara(0.1 + 0.1 + 0.1, 0.3)).toBe(1);
+  });
+
+  test('a quantidade que sai do estoque é a do CURSO em embalagens', () => {
+    // 4º argumento = conteúdo. Sem ele, a resposta é a de sempre (1 embalagem).
+    expect(qtdDoEstoque(125, 'mL', 'Un.', 100)).toBe(2);
+    expect(qtdDoEstoque(125, 'mL', 'Un.')).toBe(1);
+  });
+
+  test('receita escrita em Un. NÃO entra na regra — ali o número já É de embalagens', () => {
+    // "2 Un. por dia durante 5 dias" são 10 embalagens de verdade, não ceil(10/100).
+    expect(entregaPorEmbalagem('Un.', 'Un.')).toBe(false);
+    expect(qtdDoEstoque(10, 'Un.', 'Un.', 100)).toBe(10);
+  });
+
+  // ─── A SEQUÊNCIA DO CASO RELATADO ──────────────────────────────────────────
+  describe('a baixa é INCREMENTAL — o 2º frasco só abre quando o 1º acaba', () => {
+    /** Roda o curso inteiro e devolve quantas embalagens cada dose entregou. */
+    const curso = ({ dose, doses, conteudo }) =>
+      Array.from({ length: doses }, (_, i) =>
+        embalagensDaExecucao({ jaConsumido: dose * i, qtdAgora: dose, conteudo }));
+
+    test('frasco de 100 mL, 5 doses de 25 mL → 1,0,0,0,1 = 2 frascos no curso', () => {
+      const entregas = curso({ dose: 25, doses: 5, conteudo: 100 });
+      expect(entregas).toEqual([1, 0, 0, 0, 1]);
+      expect(entregas.reduce((a, b) => a + b, 0)).toBe(2);
+    });
+
+    test('🔴 curso interrompido no meio NÃO cobra o frasco que ninguém abriu', () => {
+      // É a razão de a conta ser acumulada em vez de `ceil(curso inteiro)` na 1ª dose:
+      // cancelado na 2ª aplicação, o cliente pagou UM frasco, que é o que foi aberto.
+      const entregas = curso({ dose: 25, doses: 5, conteudo: 100 }).slice(0, 2);
+      expect(entregas.reduce((a, b) => a + b, 0)).toBe(1);
+    });
+
+    test('dose maior que a embalagem abre várias de uma vez', () => {
+      // 250 mL num frasco de 100 mL: a primeira dose já abre três.
+      expect(embalagensDaExecucao({ jaConsumido: 0, qtdAgora: 250, conteudo: 100 })).toBe(3);
+    });
+
+    test('sem conteúdo declarado: 1 na primeira dose e 0 nas seguintes (a regra antiga)', () => {
+      expect(curso({ dose: 25, doses: 4, conteudo: null })).toEqual([1, 0, 0, 0]);
+    });
+
+    test('a dose que cabe no frasco aberto não entrega nada', () => {
+      expect(embalagensDaExecucao({ jaConsumido: 25, qtdAgora: 25, conteudo: 100 })).toBe(0);
+    });
+
+    test('o curso que fecha exatamente na embalagem não abre a seguinte', () => {
+      // 4 doses de 25 = 100 mL: um frasco, nunca dois.
+      const entregas = curso({ dose: 25, doses: 4, conteudo: 100 });
+      expect(entregas.reduce((a, b) => a + b, 0)).toBe(1);
+    });
+  });
+
+  // ─── A VACINA NÃO É ARRASTADA PARA A REGRA NOVA ────────────────────────────
+  test('🔴 o lote de vacina NÃO herda o conteúdo de um produto sem multidose', () => {
+    // A vacina tem contagem PRÓPRIA: `tb_lotes_vacina.doses_por_frasco`, e o saldo do
+    // lote é contado em DOSES. O frasco de dose única nasce com 1, então cada aplicação
+    // já consome (e cobra) o frasco inteiro — a regra das embalagens inteiras não tem o
+    // que corrigir ali.
+    //
+    // 🔴 MAS `dosesDoCatalogo` usa `doses_por_embalagem` como PADRÃO do lote, e desde
+    // 2026-09-19 essa coluna também guarda o conteúdo do produto SEM multidose (100 mL
+    // por frasco). Sem o filtro `multidose = true`, um frasco de vacina nasceria com
+    // "100 doses" e cada aplicação passaria a custar um CENTÉSIMO do frasco — sem erro
+    // nenhum em tela, só a receita da clínica minguando.
+    const fn = semComentarios(leia('controllers/EstoqueVacinaController.js'));
+    const corpo = fn.slice(fn.indexOf('async function dosesDoCatalogo'), fn.indexOf('async function dosesDoCatalogo') + 700);
+    expect(corpo).toMatch(/multidose = true/);
+    expect(corpo).toMatch(/doses_por_embalagem IS NOT NULL/);
+  });
+});
 
 // ─── 1. A CONTA QUE VAI PARA O ESTOQUE E PARA A FATURA ───────────────────────
 describe('quantidade que sai do estoque', () => {
@@ -44,8 +169,11 @@ describe('quantidade que sai do estoque', () => {
     expect(qtdDoEstoque(2, 'L', 'mL')).toBeCloseTo(2000, 6);
   });
 
-  test('unidades incompatíveis subtraem direto — o comportamento legado', () => {
-    expect(qtdDoEstoque(10, 'mL', 'Un.')).toBe(10);
+  test('receita em conteúdo contra estoque em embalagens: UMA embalagem', () => {
+    // ⚠️ INVERTIDO em 2026-09-18: era `10` (o valor bruto, dez frascos) até 2026-09-17,
+    // e depois "1 por aplicação". Agora a prescrição escrita em conteúdo consome a
+    // embalagem UMA vez no curso inteiro — ver a seção 7.
+    expect(qtdDoEstoque(10, 'mL', 'Un.')).toBe(1);
   });
 
   test('fração não é truncada: 2,5 mL é dosagem legítima', () => {
@@ -64,7 +192,8 @@ describe('cobrança por conteúdo da embalagem', () => {
 
   const qtdTotal   = EMBALAGENS * QTD_POR_EMBALAGEM;   // 60 mL
   const valorTotal = EMBALAGENS * PRECO_EMBALAGEM;     // R$ 300
-  // É o que `calcPrecoUnitarioBase` grava na entrada: valor ÷ quantidade.
+  // É o que `calcPrecoUnitarioBase` grava na entrada: o valor de UMA embalagem ÷ o que
+  // ela contém (2026-09-17). O saldo saiu da conta — ver o bloco do valor por embalagem.
   const precoPorMl = valorTotal / qtdTotal;            // R$ 5/mL
 
   test('a baixa de 5 mL deixa 55 mL', () => {
@@ -139,6 +268,56 @@ describe('lib/formaCalculo', () => {
     expect(frontUtil).toMatch(/return UNIDADE_AVULSA;/);
   });
 
+  test('🔴 a unidade da RECEITA diverge da do ESTOQUE no não-multidose (2026-09-18)', () => {
+    // As duas respostas eram a MESMA ('Un.') até 2026-09-17, e a divergência agora é
+    // deliberada: o veterinário prescreve "5 mL de xarope", nunca "0,1 frasco", mas o
+    // saldo continua sendo contado em embalagens.
+    expect(forma.unidadePrescricao({ multidose: false, unidade: 'mL' })).toBe('mL');
+    expect(forma.unidadeOperativa({ multidose: false, unidade: 'mL' })).toBe('Un.');
+    expect(forma.unidadePrescricao({ multidose: false, unidade: 'g' })).toBe('g');
+    // MULTIDOSE: as duas voltam a coincidir na forma de cálculo — ali o estoque é
+    // contado por dentro e a receita é escrita na mesma unidade.
+    const med = { multidose: true, formaCalculo: 'mL', qtdPorEmbalagem: 20, unidade: 'Frasco' };
+    expect(forma.unidadePrescricao(med)).toBe('mL');
+    expect(forma.unidadeOperativa(med)).toBe('mL');
+    // Sem unidade no catálogo o campo não pode sair em branco: o número da dosagem
+    // sozinho não diz o que significa, e ele vira o SNAPSHOT da receita.
+    expect(forma.unidadePrescricao({ multidose: false, unidade: null })).toBe('Un.');
+    expect(forma.unidadePrescricao(null)).toBe('Un.');
+  });
+
+  test('a tela da Prescrição usa a unidade da RECEITA; a Farmácia, a do ESTOQUE', () => {
+    // Trocar uma pela outra não quebra nada visível: a tela só passa a mostrar a
+    // unidade errada, e o snapshot da receita nasce com ela.
+    const frontUtil = leiaFront('utils/formaCalculo.ts');
+    expect(frontUtil).toMatch(/export function unidadePrescricaoProduto\(/);
+    expect(frontUtil).toMatch(/return p\.unidade \|\| UNIDADE_AVULSA;/);
+
+    const presc = semComentarios(leiaFront('pages/SubModuloPrescricao.tsx'));
+    expect(presc).toMatch(/unidadePrescricaoProduto\(m\)/);
+    expect(presc).not.toMatch(/unidadeOperativaProduto\(m\)/);
+
+    // A Farmácia rotula o SALDO, que continua em embalagens.
+    const farmacia = leiaFront('pages/Farmacia.tsx');
+    expect(farmacia).toMatch(/unidadeOperativaProduto\(med\)/);
+  });
+
+  test('a execução mostra o PRESCRITO e a separação omite a embalagem já entregue', () => {
+    // ⚠️ SEM COMENTÁRIOS: os comentários abaixo documentam a regra CITANDO o texto
+    // antigo, e a varredura crua reprovaria a própria documentação dela.
+    const exec = semComentarios(leiaFront('pages/ExecucaoPrescricao.tsx'));
+    // ⚠️ REVERTE o "20 mL · 1 Un. por aplicação" de 2026-09-17 (a pedido): quem aplica
+    // lê o que o veterinário indicou.
+    expect(exec).not.toMatch(/por aplicação/);
+    expect(exec).toMatch(/if \(item\.unidade\) return `\$\{item\.dosagem\} \$\{item\.unidade\}`;/);
+    // A quantidade de embalagens virou assunto da SEPARAÇÃO, e o item já entregue sai
+    // da lista — senão a farmácia separaria um frasco por dia durante dez dias.
+    expect(exec).toMatch(/jaEntregue: boolean/);
+    expect(exec).toMatch(/const jaEntregue = !!item\.executadoEm;/);
+    const painel = semComentarios(leiaFront('pages/PainelPrincipal.tsx'));
+    expect(painel).toMatch(/if \(jaEntregue\) continue;/);
+  });
+
   test('a grafia de Un. é a MESMA nos dois lados — divergir descasa receita e estoque', () => {
     // Backend: nasceu em `lib/unidadeMedicamento.js` (a opção garantida do seletor) e
     // é REEXPORTADA por `formaCalculo`, nunca recopiada.
@@ -158,7 +337,11 @@ describe('elos que somem em silêncio', () => {
 
   test('a baixa da dose resolve a unidade pela FORMA DE CÁLCULO', () => {
     expect(controller).toMatch(/async function debitarEstoqueDia[\s\S]{0,900}mapaFormaCalculo\(/);
-    expect(controller).toMatch(/let restante = qtdDoEstoque\(qtdDia, item\.unidade, unidadeEstoque, item\.dosagem\)/);
+    // ⚠️ ATUALIZADO em 2026-09-19: a baixa passou a ter DOIS ramos — na entrega por
+    // embalagem quem manda é a conta acumulada (`embalagensAgora`), e só fora dela a
+    // quantidade sai de `qtdDoEstoque`. O que o gate trava continua sendo o mesmo: a
+    // quantidade debitada nasce da unidade resolvida, nunca do número cru da receita.
+    expect(controller).toMatch(/let restante = entregaUnica[\s\S]{0,200}qtdDoEstoque\(qtdDia, item\.unidade, unidadeEstoque,/);
   });
 
   test('a RESERVA nasce na MESMA unidade da baixa', () => {
@@ -190,7 +373,11 @@ describe('elos que somem em silêncio', () => {
 
   test('o preço do estoque é calculado na unidade OPERATIVA, não na da embalagem', () => {
     const estoque = semComentarios(leia('controllers/EstoqueController.js'));
-    expect(estoque).toMatch(/calcPrecoUnitarioBase\(Number\(valorRepassado\), Number\(qtdEstoque\), unidadeConta\)/);
+    // 🔴 O 2º ARGUMENTO É O CONTEÚDO DA EMBALAGEM, NUNCA O SALDO (2026-09-17). Voltar a
+    // passar `qtdEstoque` faria o preço mudar quando o estoque é ajustado — e o valor
+    // gravado, que agora é por embalagem, seria dividido uma segunda vez.
+    expect(estoque).toMatch(/calcPrecoUnitarioBase\(Number\(valorRepassado\), conteudoEmb, unidadeConta\)/);
+    expect(estoque).not.toMatch(/calcPrecoUnitarioBase\([^)]*qtdEstoque/);
     expect(estoque).toMatch(/async function unidadeOperativaDoItem\(/);
   });
 
@@ -238,10 +425,19 @@ describe('multi-tenant e migration', () => {
   });
 
   test('a gravação da forma é por SQL cru com catch — base não migrada não quebra', () => {
-    const lib = leia('lib/catalogoEmpresa.js');
+    // ⚠️ `semComentarios`, e não uma janela maior: o corpo é curto, o que cresceu foi a
+    // documentação. Medir código com o comentário dentro faz o gate reprovar por
+    // TAMANHO do texto — que foi o que aconteceu em 2026-09-19.
+    const lib = semComentarios(leia('lib/catalogoEmpresa.js'));
     const fn  = lib.slice(lib.indexOf('async function gravarMultidose'));
     expect(fn.slice(0, 1600)).toMatch(/temColunaFormaCalculo\(client\)/);
     expect(fn.slice(0, 1600)).toMatch(/\.catch\(\(\) => \{\}\)/);
+    // 🔴 O NÚMERO NÃO É MAIS ZERADO ao desmarcar (2026-09-19): ele passou a ser o
+    // CONTEÚDO da embalagem também no não-multidose, e é dele que sai "o curso usa dois
+    // frascos". Voltar a `marcado ? qtd : null` apaga esse cadastro no primeiro salvar.
+    expect(fn.slice(0, 1600)).toMatch(/const qtd\s+= numeroPositivo\(dosesPorEmbalagem\);/);
+    // A FORMA continua exclusiva do multidose — é ela que muda a unidade operativa.
+    expect(fn.slice(0, 1600)).toMatch(/const forma\s+= marcado \? normalizarFormaCalculo\(formaCalculo\) : null;/);
   });
 
   test('o front e o backend oferecem a MESMA lista de formas', () => {
@@ -282,21 +478,34 @@ describe('produto sem multidose é medido em Un.', () => {
     expect(qtdDoEstoque(3, 'Un.', 'Un.')).toBe(3);
   });
 
-  test('a linha da fatura é Valor Total Repassado ÷ Qtd Produto', () => {
-    // 10 embalagens por R$ 300 → R$ 30 a embalagem; 1 Un. na receita custa R$ 30.
-    const preco = calcPrecoUnitarioBase(300, 10, 'Un.');
+  test('a linha da fatura é o Valor Repassado da EMBALAGEM', () => {
+    // 🔴 O VALOR JÁ É O DE UMA EMBALAGEM (2026-09-17): a tela deixou de multiplicar
+    // pela Qtd Produto, então R$ 30 digitados são R$ 30 por embalagem — comprar 10 ou
+    // 100 não muda o preço da dose. O 2º argumento é o CONTEÚDO, e sem multidose ele
+    // não existe (`null` = a embalagem é a própria unidade).
+    const preco = calcPrecoUnitarioBase(30, null, 'Un.');
     expect(preco).toBe(30);
     expect(qtdDoEstoque(1, 'Un.', 'Un.') * preco).toBe(30);
     // E o curso inteiro cobra o que saiu, nunca mais que isso.
     expect(qtdDoEstoque(10, 'Un.', 'Un.') * preco).toBe(300);
   });
 
+  test('🔴 o preço NÃO se move quando a quantidade comprada muda', () => {
+    // A prova de que o saldo saiu da conta: a mesma embalagem de R$ 30 custa R$ 30 na
+    // dose, tenha a clínica comprado 1 ou 500. Enquanto a tela multiplicava e o
+    // controller dividia pelo saldo, as duas contas se cancelavam — mas bastava um
+    // ajuste de estoque para o preço da dose mudar sozinho.
+    expect(calcPrecoUnitarioBase(30, null, 'Un.')).toBe(30);
+    // E o conteúdo declarado é o único divisor: frasco de 20 mL por R$ 100 → R$ 5/mL.
+    expect(calcPrecoUnitarioBase(100, 20, 'mL')).toBeCloseTo(5, 6);
+  });
+
   test('🔴 em kg/L o fator de base NÃO entra mais na conta', () => {
-    // O caso que saía mil vezes errado: 3 embalagens de um produto cadastrado em 'kg'.
-    // Com a unidade do CATÁLOGO o preço virava R$/g sobre um número que conta
-    // embalagens (300 ÷ 3.000), e a receita de 1 unidade cobrava R$ 0,10.
-    expect(calcPrecoUnitarioBase(300, 3, 'kg')).toBeCloseTo(0.1, 6);
-    expect(calcPrecoUnitarioBase(300, 3, 'Un.')).toBe(100);
+    // O caso que saía mil vezes errado: um produto cadastrado em 'kg'. Com a unidade do
+    // CATÁLOGO o preço virava R$/g sobre um número que conta embalagens, e a receita de
+    // 1 unidade cobrava R$ 0,10. Em 'Un.' o fator é 1 e o preço é o da embalagem.
+    expect(calcPrecoUnitarioBase(100, 1, 'kg')).toBeCloseTo(0.1, 6);
+    expect(calcPrecoUnitarioBase(100, null, 'Un.')).toBe(100);
   });
 
   test('a unidade do estoque NÃO volta a cair no catálogo nem no item', () => {
@@ -347,55 +556,133 @@ describe('ordem da lista de produtos', () => {
   });
 });
 
-// ─── 7. A RECEITA JA GRAVADA EM mL/g CONTRA O ESTOQUE EM EMBALAGENS ──────────
-// 🔴 O DEFEITO MEDIDO (2026-09-17): item pendente escrito "20 mL" antes de o produto
-// passar a ser contado em 'Un.'. `mesmoGrupo('mL','Un.')` e falso, entao a baixa caia
-// no valor BRUTO: **20 EMBALAGENS** de um saldo de 2, e **R$ 2.000** numa dose cujo
-// frasco custa R$ 100. A tela do plantao mostrava "20 mL" e nada acusava.
+// ─── 7. RECEITA EM CONTEUDO CONTRA ESTOQUE EM EMBALAGENS ────────────────────
+// 🔴 A REGRA (2026-09-18, a pedido): produto SEM multidose e prescrito na unidade do
+// CATALOGO ("5 mL de xarope"), mas o estoque dele conta EMBALAGENS. Nao ha conversao
+// possivel — o produto nao declara quanto cabe no frasco —, e o que existe e o fato: a
+// clinica ENTREGA a embalagem, uma vez. O curso inteiro consome UM frasco.
+//
+//     Xarope 50 mL, R$ 60,00 o frasco · receita 5 mL 1x/dia por 10 dias
+//       estoque : -1 frasco       fatura : 1 x R$ 60,00
+//
+// ⚠️ HISTORICO das duas inversoes, para nao voltar a nenhuma delas:
+//   ate 2026-09-17 : valor BRUTO      -> 20 mL debitavam 20 frascos de um saldo de 2
+//   2026-09-17     : 1 por APLICACAO  -> 10 dias cobravam DEZ frascos
+//   2026-09-18     : 1 por CURSO      -> um frasco, entregue na 1a execucao
 describe('receita em conteudo contra estoque em embalagens', () => {
-  test('a dose vale UMA embalagem por aplicacao — nunca o numero bruto', () => {
-    // 20 mL/dia, dose de 20 mL → 1 aplicacao → 1 embalagem.
-    expect(qtdDoEstoque(20, 'mL', 'Un.', 20)).toBe(1);
-    // 20 mL 2x/dia (qtd do dia = 40) → 2 aplicacoes → 2 embalagens.
-    expect(qtdDoEstoque(40, 'mL', 'Un.', 20)).toBe(2);
-    // O curso inteiro: 7 dias de 1x → 7 embalagens.
-    expect(qtdDoEstoque(140, 'mL', 'Un.', 20)).toBe(7);
+  test('o curso inteiro consome UMA embalagem — nao o bruto, nem uma por aplicacao', () => {
+    // A dose do dia, a dose dobrada e o curso de 7 dias dao todos a MESMA resposta:
+    // o que sai do estoque e o frasco, e ele sai uma vez.
+    expect(qtdDoEstoque(20, 'mL', 'Un.')).toBe(1);
+    expect(qtdDoEstoque(40, 'mL', 'Un.')).toBe(1);
+    expect(qtdDoEstoque(140, 'mL', 'Un.')).toBe(1);
     // 🔴 o valor bruto seria 20/40/140 — vinte, quarenta e cento e quarenta frascos.
-    expect(qtdDoEstoque(20, 'mL', 'Un.', 20)).not.toBe(20);
-    // ⚠️ NAO so as unidades de conteudo: '%' ("Pasta 10%") nao tem grupo de conversao e
-    // caia no bruto — 10 % debitava DEZ embalagens. Vale para toda unidade que nao seja
-    // a avulsa.
-    expect(qtdDoEstoque(10, '%', 'Un.', 10)).toBe(1);
-    expect(qtdDoEstoque(2, 'UI', 'Un.', 2)).toBe(1);
+    expect(qtdDoEstoque(20, 'mL', 'Un.')).not.toBe(20);
+    // 🔴 e "1 por aplicacao" daria 7 frascos no curso de 7 dias.
+    expect(qtdDoEstoque(140, 'mL', 'Un.')).not.toBe(7);
+    // ⚠️ NAO so as unidades de conteudo: '%' ("Pasta 10%") e 'UI' nao tem grupo de
+    // conversao e caiam no bruto. Vale para toda unidade que nao seja a avulsa.
+    expect(qtdDoEstoque(10, '%', 'Un.')).toBe(1);
+    expect(qtdDoEstoque(2, 'UI', 'Un.')).toBe(1);
     // Unidade VAZIA continua no bruto: sem rotulo, "2" ja se le como 2 unidades.
-    expect(qtdDoEstoque(2, '', 'Un.', 2)).toBe(2);
+    expect(qtdDoEstoque(2, '', 'Un.')).toBe(2);
   });
 
-  test('item NOVO (ja em Un.) nao passa pela regra — 2 Un. sao 2 embalagens', () => {
-    expect(qtdDoEstoque(2, 'Un.', 'Un.', 1)).toBe(2);
-    expect(qtdDoEstoque(1, 'Un.', 'Un.', 1)).toBe(1);
+  test('receita em Un. NAO entra na regra — 2 Un. sao 2 embalagens de verdade', () => {
+    // Aqui o veterinario prescreveu EMBALAGENS (a ampola, o comprimido), e duas por dia
+    // durante cinco dias sao dez. Confundir os dois casos faria a clinica que aplica
+    // dose a dose cobrar uma embalagem pelo tratamento inteiro.
+    expect(qtdDoEstoque(2, 'Un.', 'Un.')).toBe(2);
+    expect(qtdDoEstoque(10, 'Un.', 'Un.')).toBe(10);
     // Grafia diferente da mesma unidade tambem nao converte.
-    expect(qtdDoEstoque(3, 'un', 'Un.', 1)).toBe(3);
+    expect(qtdDoEstoque(3, 'un', 'Un.')).toBe(3);
   });
 
-  test('a conversao entre unidades de CONTEUDO continua intacta', () => {
-    expect(qtdDoEstoque(500, 'g', 'kg', 500)).toBeCloseTo(0.5, 6);
-    expect(qtdDoEstoque(5, 'mL', 'mL', 5)).toBe(5);
+  test('a conversao entre unidades de CONTEUDO continua intacta (multidose)', () => {
+    expect(qtdDoEstoque(500, 'g', 'kg')).toBeCloseTo(0.5, 6);
+    expect(qtdDoEstoque(5, 'mL', 'mL')).toBe(5);
+    // O proporcional do multidose e o que o pedido chama de "proporcional prescrito".
+    expect(qtdDoEstoque(2.5, 'mL', 'mL')).toBeCloseTo(2.5, 6);
   });
 
-  test('sem dosagem utilizavel devolve o bruto — nao inventa divisao', () => {
-    // Dosagem ausente/zero: dividir por ela daria Infinity, e um chute aqui vira
-    // quantidade debitada e valor cobrado.
-    expect(qtdDoEstoque(20, 'mL', 'Un.', null)).toBe(20);
-    expect(qtdDoEstoque(20, 'mL', 'Un.', 0)).toBe(20);
+  test('`entregaPorEmbalagem` e a fonte unica de QUEM entra na regra', () => {
+    expect(entregaPorEmbalagem('mL', 'Un.')).toBe(true);
+    expect(entregaPorEmbalagem('%',  'Un.')).toBe(true);
+    // Estoque medido por dentro (multidose): a receita e a baixa falam a mesma lingua.
+    expect(entregaPorEmbalagem('mL', 'mL')).toBe(false);
+    // Receita ja em embalagens, e as duas grafias da avulsa.
+    expect(entregaPorEmbalagem('Un.', 'Un.')).toBe(false);
+    expect(entregaPorEmbalagem('un',  'Un.')).toBe(false);
+    // Sem unidade na receita nao ha o que deduzir.
+    expect(entregaPorEmbalagem('',   'Un.')).toBe(false);
+    expect(entregaPorEmbalagem(null, 'Un.')).toBe(false);
+    // Unidades do MESMO grupo convertem (L -> mL), nao entregam embalagem.
+    expect(entregaPorEmbalagem('L', 'mL')).toBe(false);
+  });
+
+  test('🔴 a embalagem entregue NAO e cobrada de novo nas doses seguintes', () => {
+    const controller = semComentarios(leia('controllers/PrescricaoGrupoController.js'));
+    // A guarda vive em `debitarEstoqueDia` e sai de la pelos dois conjuntos que o
+    // `executar` consome. Sem ela a linha da fatura somaria quantidade a cada dose —
+    // dez frascos por um — e a conta a pagar do fornecedor repetiria a compra.
+    // ⚠️ ATUALIZADO em 2026-09-19: a guarda deixou de ser "ja executou uma vez" e virou
+    // a conta ACUMULADA (o curso pode consumir varias embalagens). O que ela impede e o
+    // mesmo: a dose que sai de um frasco JA ABERTO nao gera cobranca nova.
+    const fn = controller.slice(controller.indexOf('async function debitarEstoqueDia'));
+    expect(fn.slice(0, 3200)).toMatch(/entregaPorEmbalagem\(item\.unidade, unidadeEstoque\)/);
+    expect(fn.slice(0, 3200)).toMatch(/if \(embalagensAgora <= 0\) \{ jaEntregues\.add\(item\.id\); continue; \}/);
+    // 🔴 O LEGADO NAO TEM CONTADOR: `dosesExecutadas` so e incrementado no fluxo por
+    // dose. Sem esta perna, um item legado ja executado cai na conta com "nada
+    // consumido" e volta a debitar/cobrar uma embalagem A CADA execucao.
+    expect(fn.slice(0, 3200)).toMatch(/if \(item\.executadoEm && doses === 0\) \{ jaEntregues\.add\(item\.id\); continue; \}/);
+    expect(fn).toMatch(/return \{ precos, unidades, jaEntregues, porEmbalagem, entregas \};/);
+    // E o `executar` PRECISA usar os conjuntos: recebe-los e ignora-los e o modo
+    // silencioso de a regra deixar de existir.
+    expect(controller).toMatch(/const \{ precos, jaEntregues, porEmbalagem, entregas \} = await debitarEstoqueDia\(/);
+    expect(controller).toMatch(/const entregaJaFeita = jaEntregues\.has\(item\.id\);/);
+    expect(controller).toMatch(/if \(!item\.medicamentoCliente && !entregaJaFeita\)/);
+    // 🔴 A QUANTIDADE E A DE EMBALAGENS ABERTAS NESTA EXECUCAO, nunca 1 fixo: uma dose
+    // maior que o frasco abre varias de uma vez, e `1` cobraria (e compraria) uma so.
+    expect(controller).toMatch(/const embalagensEntregues = porEmbalagem\.has\(item\.id\) \? \(entregas\.get\(item\.id\) \?\? 1\) : 1;/);
+    expect(controller).toMatch(/quantidade:   embalagensEntregues,/);
+    // ⚠️ E o valor da linha precisa ser o UNITARIO: com a quantidade acima e o TOTAL no
+    // `valor`, a fatura multiplicaria de novo o que ja saiu multiplicado.
+    expect(controller).toMatch(/valor:        valorDaDose \/ embalagensEntregues,/);
+    expect(controller).toMatch(/item\.medicamentoCatId && !entregaJaFeita\)/);
+  });
+
+  test('🔴 a ENTREGA ao proprietario debita estoque e tem preco (era valor ZERO)', () => {
+    const controller = semComentarios(leia('controllers/PrescricaoGrupoController.js'));
+    // O item que a clinica FORNECE e o proprietario APLICA nunca chega ao plantao: a
+    // finalizacao e a unica chance de cobra-lo, e ate 2026-09-18 ele ia com valor 0.
+    expect(controller).toMatch(/incluirDoProprietario = false/);
+    expect(controller).toMatch(/if \(item\.aplicadaPeloProprietario && !incluirDoProprietario\) continue;/);
+    const trecho = controller.slice(controller.indexOf('const itensParaFaturarAgora'));
+    expect(trecho.slice(0, 1200)).toMatch(/calcularQuantidadeTotal,[\s\S]{0,120}incluirDoProprietario: true/);
+    expect(trecho.slice(0, 3000)).toMatch(/precosDaEntrega\.get\(item\.medicamentoCatId\)/);
+    // ⚠️ Quantidade do CURSO INTEIRO: e o que o cliente leva para casa. A dose do dia
+    // cobraria um decimo do que saiu da prateleira.
+    expect(trecho.slice(0, 1200)).not.toMatch(/calcularQuantidadeDiaria/);
+    // 🔴 E A LINHA CONTA AS EMBALAGENS (2026-09-19): o curso que nao cabe num frasco
+    // leva dois, e `quantidade: 1` mostraria o valor de dois ao lado de "Quant.: 1".
+    expect(trecho.slice(0, 4000)).toMatch(/quantidade:   embalagensDaEntrega,/);
+    // ⚠️ OS DOIS ANDAM JUNTOS: `valorDaEntrega` e o TOTAL do que saiu do estoque, e a
+    // linha multiplica de volta por `quantidade`. Quantidade sem o unitario dobra a
+    // cobranca; unitario sem a quantidade a divide. Nenhum dos dois acusa nada.
+    expect(trecho.slice(0, 4000)).toMatch(/valor:        valorDaEntrega \/ embalagensDaEntrega,/);
   });
 
   test('a baixa e as verificacoes comparam na MESMA unidade', () => {
     const controller = semComentarios(leia('controllers/PrescricaoGrupoController.js'));
-    // A dosagem chega a `qtdDoEstoque` nos tres caminhos (baixa, dia e curso).
-    expect(controller).toMatch(/qtdDoEstoque\(qtdDia, item\.unidade, unidadeEstoque, item\.dosagem\)/);
-    expect(controller).toMatch(/qtdDoEstoque\(resolverQtd\(item\), item\.unidade, unidadeEstoque, item\.dosagem\)/);
-    expect(controller).toMatch(/qtdDoEstoque\(calcularQuantidadeTotal\(item\), item\.unidade, unidadeEstoque, item\.dosagem\)/);
+    // ⚠️ A DOSAGEM SAIU da assinatura (2026-09-18): ela servia para CONTAR APLICACOES, e
+    // a regra deixou de contar aplicacoes. `item.dosagem` aqui e sinal de que alguem
+    // reintroduziu a divisao — e e ISSO que o gate trava, nao o numero de argumentos.
+    // ⚠️ O 4o argumento de 2026-09-19 e o CONTEUDO DA EMBALAGEM, que nao divide nada:
+    // ele so diz quantas embalagens o curso gasta (125 mL de um frasco de 100 sao 2).
+    expect(controller).toMatch(/qtdDoEstoque\(qtdDia, item\.unidade, unidadeEstoque, conteudoDoItem\(conteudos, item\)\)/);
+    expect(controller).toMatch(/qtdDoEstoque\(resolverQtd\(item\), item\.unidade, unidadeEstoque, conteudo\)/);
+    expect(controller).toMatch(/qtdDoEstoque\(calcularQuantidadeTotal\(item\), item\.unidade, unidadeEstoque, conteudo\)/);
+    expect(controller).not.toMatch(/qtdDoEstoque\([^)]*item\.dosagem\)/);
     // E o alerta de estoque nao compara mais a quantidade CRUA da receita com o saldo
     // em embalagens — era isso que acusava falta do que cabe.
     expect(controller).not.toMatch(/comparavel \? disponBase < necessarioBase/);

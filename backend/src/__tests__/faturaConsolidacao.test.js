@@ -51,7 +51,7 @@ function txFalso(linhas = []) {
 
 const dose = (extra = {}) => ({
   faturaId: 1, animalId: 7, tipo: 'MEDICAMENTO',
-  descricao: '[AG-0012] Ivermectina — 10mL × 4/4h',
+  descricao: 'Ivermectina — 10mL × 4/4h',
   valor: 20, quantidade: 1, prescricaoId: 55, ...extra,
 });
 
@@ -81,11 +81,18 @@ describe('contador incremental — o curso nunca é lançado de uma vez', () => 
     expect(tx.estado.linhas).toHaveLength(2);
   });
 
-  it('origem DIFERENTE abre linha própria — senão o estorno de uma prescrição levaria a outra', async () => {
+  it('origem DIFERENTE cai na MESMA linha (2026-09-17) — a soma é do medicamento, não do documento', async () => {
+    // 🔴 INVERTE a regra de 2026-08-25, e a inversão tem preço: era a FK na chave que
+    // impedia "cancelar uma prescrição levar embora a cobrança da outra". Quem impede
+    // agora são as CONTRIBUIÇÕES (`lib/faturaItemOrigens.js`) — o estorno subtrai em
+    // vez de apagar. As duas coisas andam juntas: ver `faturaOrigensConsolidadas.test.js`,
+    // que é onde essa garantia está travada. Não reintroduza a origem na chave sem
+    // desfazer aquilo junto.
     const tx = txFalso();
     await adicionarOuSomarFaturaItem(tx, dose({ prescricaoId: 55 }));
     await adicionarOuSomarFaturaItem(tx, dose({ prescricaoId: 56 }));
-    expect(tx.estado.linhas).toHaveLength(2);
+    expect(tx.estado.linhas).toHaveLength(1);
+    expect(tx.estado.linhas[0].quantidade).toBe(2);
   });
 
   it('sem origem rastreável (lançamento manual) nunca consolida', async () => {
@@ -101,7 +108,7 @@ describe('o desconto é do MEDICAMENTO, não da dose', () => {
     // Ivermectina 4/4h por 3 dias (18 doses), 10% negociado depois da 2ª dose.
     const tx = txFalso([{
       id: 1, faturaId: 1, animalId: 7, tipo: 'MEDICAMENTO',
-      descricao: '[AG-0012] Ivermectina — 10mL × 4/4h',
+      descricao: 'Ivermectina — 10mL × 4/4h',
       valor: 20, quantidade: 2, prescricaoId: 55,
       descontoTipo: 'PERCENTUAL', descontoValor: 10,
     }]);
@@ -120,7 +127,7 @@ describe('o desconto é do MEDICAMENTO, não da dose', () => {
   it('desconto em VALOR continua absoluto na linha (R$ 5 na ivermectina, não R$ 5 por dose)', async () => {
     const tx = txFalso([{
       id: 1, faturaId: 1, animalId: 7, tipo: 'MEDICAMENTO',
-      descricao: '[AG-0012] Ivermectina — 10mL × 4/4h',
+      descricao: 'Ivermectina — 10mL × 4/4h',
       valor: 20, quantidade: 2, prescricaoId: 55,
       descontoTipo: 'VALOR', descontoValor: 5,
     }]);
@@ -138,7 +145,7 @@ describe('o desconto é do MEDICAMENTO, não da dose', () => {
     // o total da fatura acima da soma real dos itens, e ninguém notaria.
     const tx = txFalso([{
       id: 1, faturaId: 1, animalId: 7, tipo: 'MEDICAMENTO',
-      descricao: '[AG-0012] Ivermectina — 10mL × 4/4h',
+      descricao: 'Ivermectina — 10mL × 4/4h',
       valor: 20, quantidade: 1, prescricaoId: 55,
       descontoTipo: 'PERCENTUAL', descontoValor: 50,
     }]);

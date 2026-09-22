@@ -154,10 +154,23 @@ const AuthController = {
 
       const hashedPassword = await bcrypt.hash(newPassword, 10);
 
+      // 🔴 `mustChangePassword: false` (2026-09-18, a pedido: "se o login vier da tela
+      // de esqueci a senha, remova a opção de senha expirada para impedir que abra a
+      // tela de troca de senha"). Sem isto, quem tinha senha TEMPORÁRIA (toda conta
+      // nasce com `mustChangePassword: true` e a senha derivada de `lib/senhaInicial.js`)
+      // e usou o "esqueci minha senha" ESCOLHIA a própria senha pelo link do e-mail e,
+      // no login seguinte, o `ProtectedRoute` ainda o jogava em /alterar-senha-obrigatoria
+      // — pedindo que trocasse a senha que ele acabara de definir. Pior: ali
+      // `UserController.alterarSenha` recusa senha REUTILIZADA, então a que ele tinha
+      // acabado de escolher era justamente a única barrada, e a pessoa ficava presa.
+      // A troca obrigatória existe para garantir que a senha deixe de ser a que um
+      // TERCEIRO conhece; definir senha por link enviado ao próprio e-mail é exatamente
+      // isso — logo, a exigência está cumprida e não há o que forçar de novo.
       await prisma.user.update({
         where: { id: user.id },
         data: {
           passwordHash: hashedPassword,
+          mustChangePassword: false,
           resetPasswordToken: null,
           resetPasswordExpires: null,
         },

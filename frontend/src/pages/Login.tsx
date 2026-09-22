@@ -35,18 +35,25 @@ export default function Login() {
   const [forgotError,     setForgotError]     = useState('');
 
   // Destino pós-login. Profissional (vet, gestor, estagiário, fornecedor...) vai
-  // DIRETO ao Painel Principal — antes passava por `/` (Dashboard), que só
-  // redirecionava para lá quando reconhecia o perfil como clínico, deixando os
-  // demais numa tela intermediária. O PROPRIETÁRIO mantém `/` (portal do cliente).
+  // DIRETO ao MAPA DE ATENDIMENTO — antes passava por `/` (Dashboard), que só
+  // redirecionava quando reconhecia o perfil como clínico, deixando os demais numa
+  // tela intermediária. O PROPRIETÁRIO mantém `/` (portal do cliente).
+  // 🔴 Era o Painel Principal (2026-09-05) e voltou a ser o Mapa em 2026-09-19 (a
+  // pedido). A razão daquela troca se INVERTEU: o Mapa tinha saído do menu e a pessoa
+  // caía numa tela sem item no Sidebar — hoje é o PAINEL que está escondido
+  // (`MOSTRAR_PAINEL_PRINCIPAL = false`, 2026-09-18) e o Mapa é que está no menu.
+  // ⚠️ Os gates das duas telas são DIFERENTES: o Painel exige ser VETERINÁRIO, o Mapa
+  // exige `dashboard.geral.ler`. Quem não tem o slug cai em "Acesso não autorizado" —
+  // como já caía no Painel por não ser vet.
   // Cadastro pessoal pendente NAQUELA empresa continua sendo interceptado pelo
-  // ProtectedRoute; já confirmado, não aparece mais e o login cai no painel.
+  // ProtectedRoute; já confirmado, não aparece mais e o login cai no Mapa.
   const redirecionarAposLogin = (u?: { userType?: string } | null) => {
     if (returnUrl) {
       navigate(decodeURIComponent(returnUrl), { replace: true });
       return;
     }
     const ehCliente = (u?.userType ?? '').toUpperCase() === 'PROPRIETARIO';
-    navigate(ehCliente ? '/' : '/painel-principal', { replace: true });
+    navigate(ehCliente ? '/' : '/mapa-atendimento', { replace: true });
   };
 
   const handleEmailLogin = async (e: React.FormEvent) => {
@@ -124,6 +131,32 @@ export default function Login() {
     prompt: 'select_account',
     flow:   'implicit',
   });
+
+  // Abrir SEMPRE zera o resultado anterior: sem isto, reabrir o modal depois de um
+  // envio mostraria a confirmação de novo, sem que nada tivesse sido enviado.
+  const abrirForgot = () => {
+    setForgotSuccess(false);
+    setForgotError('');
+    setShowForgotModal(true);
+  };
+
+  const fecharForgot = () => {
+    setShowForgotModal(false);
+    setForgotSuccess(false);
+    setForgotError('');
+  };
+
+  // "Voltar à Tela de Login": fecha o modal e devolve o formulário LIMPO para
+  // entrar com a senha nova (some a senha antiga digitada e o erro que tenha
+  // sobrado da tentativa anterior).
+  // ⚠️ NÃO navega para '/login'. A URL atual pode carregar `returnUrl` (o deep
+  // link de aprovação de vínculo, por exemplo), e trocá-la aqui faria a pessoa
+  // perder o destino a que ela veio — sem nada na tela explicando por quê.
+  const voltarParaLogin = () => {
+    fecharForgot();
+    setPassword('');
+    setError('');
+  };
 
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -317,7 +350,7 @@ export default function Login() {
 
         <div className="mt-4 text-center">
           <button
-            onClick={() => setShowForgotModal(true)}
+            onClick={abrirForgot}
             className="text-sm text-emerald-600 hover:underline"
           >
             Recupere sua senha
@@ -386,40 +419,77 @@ export default function Login() {
             <h2 className="text-xl sm:text-2xl font-bold text-center mb-2">
               Esqueci minha senha
             </h2>
-            <p className="text-gray-500 text-sm text-center mb-6">
-              Digite seu e-mail e enviaremos um link de recuperação.
-            </p>
-            <form onSubmit={handleForgotPassword}>
-              <input
-                type="email"
-                value={forgotEmail}
-                onChange={e => setForgotEmail(e.target.value)}
-                placeholder="seuemail@email.com"
-                className="w-full px-4 py-3 rounded-3xl border border-gray-300
-                           focus:outline-none focus:border-emerald-500 text-sm"
-                required
-              />
-              <InlineError message={forgotError} className="mt-3" />
-              {forgotSuccess && (
-                <p className="text-emerald-600 text-sm text-center mt-3">
+            {/* A instrução some depois do envio: mandar "digite seu e-mail" junto da
+                confirmação de que ele já foi enviado é pedir de novo o que acabou de
+                ser feito. */}
+            {!forgotSuccess && (
+              <p className="text-gray-500 text-sm text-center mb-6">
+                Digite seu e-mail e enviaremos um link de recuperação.
+              </p>
+            )}
+            {/* 🔴 ENVIADO o pedido, o formulário SAI de cena e ficam só os dois
+                caminhos de saída (a pedido, 2026-09-18). O "Enviar e-mail" continuar
+                ali convidava a reenviar — e cada reenvio gera um token NOVO, o que
+                INVALIDA o link que acabou de ser mandado (`resetPasswordToken` guarda
+                um só). Quem clicasse duas vezes receberia dois e-mails e só o último
+                funcionaria.
+                ⚠️ A mensagem é a MESMA exista ou não o e-mail: o backend responde 200
+                genérico de propósito (`respostaGenerica` em AuthController). Confirmar
+                "não há conta com este e-mail" faria da tela um verificador de cadastro
+                (enumeração de usuário) — a mesma razão pela qual o login diz "Usuário
+                ou Senha Inválidos" nos dois casos. NÃO "melhorar" isso. */}
+            {forgotSuccess ? (
+              <>
+                <p className="text-emerald-600 text-sm text-center">
                   Se o e-mail existir, será enviado um link de recuperação.
                 </p>
-              )}
-              <button
-                type="submit"
-                disabled={forgotLoading}
-                className="w-full mt-5 bg-emerald-600 hover:bg-emerald-700
-                           text-white py-3 rounded-3xl text-base font-semibold"
-              >
-                {forgotLoading ? 'Enviando...' : 'Enviar e-mail'}
-              </button>
-            </form>
-            <button
-              onClick={() => setShowForgotModal(false)}
-              className="mt-4 w-full text-gray-500 hover:text-gray-700 text-sm"
-            >
-              Fechar
-            </button>
+                <button
+                  type="button"
+                  onClick={fecharForgot}
+                  className="w-full mt-6 border border-gray-300 hover:bg-gray-50
+                             text-gray-700 py-3 rounded-3xl text-base font-semibold"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={voltarParaLogin}
+                  className="w-full mt-3 bg-emerald-600 hover:bg-emerald-700
+                             text-white py-3 rounded-3xl text-base font-semibold"
+                >
+                  Voltar à Tela de Login
+                </button>
+              </>
+            ) : (
+              <>
+                <form onSubmit={handleForgotPassword}>
+                  <input
+                    type="email"
+                    value={forgotEmail}
+                    onChange={e => setForgotEmail(e.target.value)}
+                    placeholder="seuemail@email.com"
+                    className="w-full px-4 py-3 rounded-3xl border border-gray-300
+                               focus:outline-none focus:border-emerald-500 text-sm"
+                    required
+                  />
+                  <InlineError message={forgotError} className="mt-3" />
+                  <button
+                    type="submit"
+                    disabled={forgotLoading}
+                    className="w-full mt-5 bg-emerald-600 hover:bg-emerald-700
+                               text-white py-3 rounded-3xl text-base font-semibold"
+                  >
+                    {forgotLoading ? 'Enviando...' : 'Enviar e-mail'}
+                  </button>
+                </form>
+                <button
+                  onClick={fecharForgot}
+                  className="mt-4 w-full text-gray-500 hover:text-gray-700 text-sm"
+                >
+                  Fechar
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

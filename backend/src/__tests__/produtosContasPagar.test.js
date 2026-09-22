@@ -124,10 +124,33 @@ describe('preço e lançamento', () => {
   const contas   = semComentarios(lerFonte('lib/contasPagar.js'));
   const produtos = semComentarios(lerFonte('lib/produtoFornecedor.js'));
 
-  it('valor zero ou nulo NÃO vira linha na conta', () => {
-    // Conta a pagar de R$ 0,00 é ruído no fechamento do mês e afirma uma dívida que
-    // não existe.
-    expect(contas).toMatch(/if \(!v \|\| v <= 0\) return null;/);
+  // 🔴 CASO INVERTIDO em 2026-09-18, a pedido. Ele travava a regra ANTIGA ("valor
+  // zero ou nulo NÃO vira linha na conta"), e o pedido foi o oposto para o
+  // procedimento sem valor atribuído: ele precisa SER LANÇADO e ter o valor editado
+  // na tela de Pagamentos. O que motivava a regra antiga — não afirmar dívida que não
+  // existe — continua valendo contra INVENTAR um número; o que mudou é que o silêncio
+  // escondia a pendência em vez de evitá-la: o serviço era prestado, a clínica devia,
+  // e a tela não mostrava nada.
+  it('valor zero só entra quando o chamador DECLARA a pendência', () => {
+    // Sem a flag o comportamento é o de sempre — quem lança precisa dizer que aquele
+    // zero é "ninguém precificou ainda", não um item de graça.
+    expect(contas).toMatch(/if \(v <= 0 && !permitirSemValor\) return null;/);
+    expect(contas).toMatch(/permitirSemValor = false/);
+  });
+
+  it('o lançamento do PRESTADOR declara a pendência (procedimento sem valor)', () => {
+    // É o caso concreto do pedido: prestador sem forma de pagamento cadastrada, ou
+    // procedimento sem preço no vínculo, devolve 0 — e a linha tem de existir.
+    const presc = semComentarios(lerFonte('controllers/PrescricaoGrupoController.js'));
+    expect(presc).toMatch(/permitirSemValor:\s*true/);
+  });
+
+  it('o item zerado pode ter o valor editado, e só em conta ABERTA', () => {
+    // A outra metade: sem a edição, o lançamento zerado seria uma linha inútil.
+    // ⚠️ `status = 'ABERTA'` no próprio UPDATE — conta FECHADA/PAGA é documento que o
+    // credor já recebeu, e quem garante isso é o banco, não a tela.
+    expect(contas).toMatch(/async function atualizarValorItem/);
+    expect(contas).toMatch(/c\.status = 'ABERTA'/);
   });
 
   it('dinheiro é arredondado ao CENTAVO', () => {

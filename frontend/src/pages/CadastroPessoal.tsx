@@ -791,17 +791,19 @@ export default function CadastroPessoal() {
         // incompleto) segue guiando a pessoa para o próximo passo.
         if (eraOnboarding) {
           // Profissional (qualquer cargo da empresa: gestor, vet, estagiário, enfermeiro,
-          // secretaria, financeiro, fornecedor) vai ao PAINEL PRINCIPAL. Só o CLIENTE
+          // secretaria, financeiro, fornecedor) vai ao MAPA DE ATENDIMENTO. Só o CLIENTE
           // segue o fluxo de animais. Antes, só quem tinha `tipoUsuario` VETERINARIO caía
           // aqui — os demais iam parar em "meus animais", que não é tela deles.
-          // 🔴 Era o Mapa de Atendimento (2026-09-05): como a confirmação do cadastro é
-          // exigida UMA vez por empresa (§36-h), este é o primeiro destino de quem acaba
-          // de entrar — e o Mapa saiu do menu, então a pessoa caía numa tela sem item
-          // correspondente no Sidebar. É o MESMO destino do login (`Login.tsx`).
+          // 🔴 VOLTOU a ser o Mapa em 2026-09-19 (a pedido). Ele já tinha sido o destino
+          // até 2026-09-05, quando virou Painel Principal porque o Mapa havia saído do
+          // menu — hoje é o PAINEL que está escondido e o Mapa é que está lá, então a
+          // razão daquela troca se inverteu. Como a confirmação do cadastro é exigida UMA
+          // vez por empresa (§36-h), este é o primeiro destino de quem acaba de entrar —
+          // e tem de ser o MESMO destino do login (`Login.tsx`).
           const ehClienteAqui = !cargoEquipe && form.tipoUsuario === 'PROPRIETARIO';
           if (!ehClienteAqui) {
             localStorage.setItem('s2vet_ob', 'd');
-            navigate('/painel-principal');
+            navigate('/mapa-atendimento');
           } else {
             const ob = localStorage.getItem('s2vet_ob');
             if (ob === 'p') {

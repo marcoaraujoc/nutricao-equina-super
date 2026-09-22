@@ -132,6 +132,9 @@ const CATALOGO_GLOBAL = new Set([
 const CAMINHO_EXPLICITO = {
   // ── financeiro ──
   tb_fatura_itens:                  'faturaId',
+  // Contribuições da linha (a observação: de qual atendimento veio cada dose). Dois
+  // saltos até a empresa — tb_fatura_itens → tb_faturas — como tb_resenha_traco_regiao.
+  tb_fatura_item_origens:           'fatura_item_id',
   tb_orcamento_itens:               'orcamento_id',
   // ── clínico: o dono é o ANIMAL (evolução/lote/orçamento são opcionais) ──
   tb_prescricoes:                   'grupoId',

@@ -13,7 +13,7 @@ import {
   AlertTriangle, Plus, Pencil,
   Search, RefreshCw, X, Syringe, Calendar,
   ChevronDown, FlaskConical, Eye, ArrowUpDown,
-  ToggleLeft, ToggleRight,
+  ToggleLeft, ToggleRight, FileText,
 } from 'lucide-react';
 import { formatDate } from '../utils/dateUtils';
 import InlineError from '../components/InlineError';
@@ -25,6 +25,13 @@ import CadastroCatalogoModal, { type ItemCatalogoCriado } from '../components/Ca
 // O campo de texto do "cadastrar novo" e o POST do catálogo vêm do MESMO lugar que os
 // tipos de fornecedor/prestador/localização usam — ver TipoServicoSelect.
 import { NovoTipoInput, criarTipoCatalogo } from '../components/TipoServicoSelect';
+// 🔴 CARREGAR NOTA FISCAL (2026-09-19) — o MESMO componente da Farmácia, só com a
+// rota do módulo de vacinas e o tipo de item que esta tela dá entrada.
+import LeitorDocumentoCompra, { type ItemNota, type NotaLida }
+  from '../components/farmacia/LeitorDocumentoCompra';
+import ModalNovoFornecedor, { type NovoFornecedorResult } from '../components/ModalNovoFornecedor';
+// Recorte de quem entrega PRODUTO — o mesmo da Farmácia (fonte única).
+import { fornecedorDeProduto, NOVO_FORNECEDOR } from '../utils/fornecedorProduto';
 
 // Sentinela da opção "Outros" do seletor de laboratório. Precisa ser IDÊNTICA à do
 // backend (`EstoqueVacinaController.SEM_FABRICANTE`): é ela que pede as vacinas cujo
@@ -71,6 +78,10 @@ interface LoteVacina {
   valorUnitario:          number | null;
   valorUnitarioRepassado: number | null;
   dataRecebimento:        string | null;
+  /** De quem veio o frasco e em que nota (migration 20261006000000). */
+  fornecedorId:    number | null;
+  fornecedorNome:  string | null;
+  notaFiscal:      string | null;
   ativo:           boolean;
   createdAt:       string;
   vacina:          { id: number; nome: string; fabricante: string | null; via: string } | null;
@@ -111,7 +122,17 @@ const FORM_VAZIO = {
   valorUnitarioRepassado: '' as number | '',
   dataRecebimento:        '',
   ativo:                  true,
+  // 🔴 De quem veio o frasco: é ele que transforma a entrada em CONTA A PAGAR.
+  fornecedorId:           0,
+  notaFiscal:             '',
 };
+
+/** Fornecedor do seletor da entrada — mesmo formato da Farmácia. */
+interface FornecedorItem {
+  id: number;
+  nome: string;
+  tipoServico: string | null;
+}
 
 // ─── Componente principal ──────────────────────────────────────────────────────
 
@@ -128,6 +149,18 @@ export default function EstoqueVacina() {
 
   const [lotes,        setLotes]        = useState<LoteVacina[]>([]);
   const [fabricantes,  setFabricantes]  = useState<string[]>([]);
+  const [fornecedores, setFornecedores] = useState<FornecedorItem[]>([]);
+  const [showNovoForn, setShowNovoForn] = useState(false);
+
+  // ── Fila da nota fiscal ────────────────────────────────────────────────────
+  // ⚠️ A FILA É O PONTO DA FUNÇÃO (mesma razão da Farmácia): a nota do fornecedor
+  // veterinário quase nunca traz um item só, e cada vacina vira um LOTE próprio
+  // (lote, validade e valor são de cada uma). O formulário abre preenchido, salva e
+  // já abre o seguinte — em vez de obrigar a reabrir "Entrada de Vacina" e redigitar
+  // o cabeçalho da nota a cada produto.
+  const [leitorAberto, setLeitorAberto] = useState(false);
+  const [filaNota,     setFilaNota]     = useState<ItemNota[]>([]);
+  const [notaLida,     setNotaLida]     = useState<NotaLida | null>(null);
   // Existe vacina SEM laboratório informado? É o que decide se a opção "Outros" aparece —
   // opção que não filtra nada é botão morto (a mesma regra da aba vazia). Quem responde é
   // o BACKEND: a tela só conhece as vacinas do laboratório filtrado no momento.
@@ -303,6 +336,33 @@ export default function EstoqueVacina() {
     if (!loadingPerm) carregarLotes();
   }, [carregarLotes, loadingPerm]);
 
+  // Fornecedores do seletor da entrada — o MESMO recorte da Farmácia
+  // (`fornecedorDeProduto`): quem entrega produto, não o prestador de serviço clínico.
+  const carregarFornecedores = useCallback(async (): Promise<FornecedorItem[]> => {
+    try {
+      const res = await api.get('/cadastro/fornecedores', { params: { ativo: 'true' } });
+      const lista = ((res.data?.dados ?? []) as FornecedorItem[]).filter(f => fornecedorDeProduto(f.tipoServico));
+      setFornecedores(lista);
+      return lista;
+    } catch { return []; /* sem fornecedor a entrada continua possível — só não vira dívida */ }
+  }, []);
+
+  useEffect(() => {
+    if (!loadingPerm) carregarFornecedores();
+  }, [carregarFornecedores, loadingPerm]);
+
+  /** Fornecedor recém-cadastrado pelo seletor: entra na lista e já fica escolhido. */
+  const handleFornecedorCriado = async (novo: NovoFornecedorResult) => {
+    setShowNovoForn(false);
+    const lista = await carregarFornecedores();
+    // ⚠️ Entra mesmo sem passar no recorte de tipos: quem acabou de cadastrá-lo aqui
+    // quer usá-lo AGORA, e escondê-lo faria o cadastro parecer que não funcionou.
+    if (!lista.some(f => f.id === novo.id)) {
+      setFornecedores(prev => [{ id: novo.id, nome: novo.nome, tipoServico: '' }, ...prev]);
+    }
+    setForm(f => ({ ...f, fornecedorId: novo.id }));
+  };
+
   useEffect(() => {
     carregarVacinasPorFabricante(fabricanteSel);
   }, [fabricanteSel, carregarVacinasPorFabricante]);
@@ -443,6 +503,11 @@ export default function EstoqueVacina() {
       validadeDias:           l.validadeDias,
       valorUnitario:          l.valorUnitario ?? '',
       valorUnitarioRepassado: l.valorUnitarioRepassado ?? '',
+      // ⚠️ Sem trazer o gravado, salvar o lote APAGARIA o fornecedor em silêncio —
+      // a lição do `temposConsulta` (2026-07-28 parte 4): campo que existe no salvar
+      // e não é lido no abrir vira campo apagado.
+      fornecedorId:           l.fornecedorId ?? 0,
+      notaFiscal:             l.notaFiscal ?? '',
       dataRecebimento:        isoReceb,
       ativo:                  l.ativo,
     });
@@ -463,6 +528,74 @@ export default function EstoqueVacina() {
     setRepassadoEditado(false);
     setDisplayValidade('');
     setDisplayRecebimento('');
+  };
+
+  /**
+   * Abre a Entrada de Vacina já preenchida com um item lido da nota.
+   *
+   * ⚠️ O ITEM DA NOTA TRAZ NOME, NÃO ID DE CATÁLOGO. O casamento é por nome, sem
+   * acento nem caixa, contra o catálogo que a tela já carregou. NÃO ACHOU não é erro:
+   * o campo de busca abre com o nome lido para a pessoa escolher a vacina certa (ou
+   * cadastrá-la) — inventar um `medicamentoCatId` aqui daria entrada no produto
+   * errado, que é bem pior do que um campo a preencher.
+   *
+   * ⚠️ `dosesPorFrasco` NÃO vem da nota: quem declara o conteúdo do frasco é o
+   * CADASTRO do produto (Forma de Cálculo), e a quantidade da nota é de FRASCOS.
+   */
+  const aplicarItemDaNota = (item: ItemNota, nota: NotaLida | null) => {
+    const norm = (t: string) => t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+    const achado = vacinas.find(v => norm(v.nome) === norm(item.nome))
+                ?? vacinas.find(v => norm(v.nome).includes(norm(item.nome)));
+
+    // O fornecedor só é pré-selecionado quando JÁ está cadastrado nesta clínica —
+    // `fornecedorExistente` é o BACKEND quem resolve (por CNPJ/CPF/nome).
+    const fornId = nota?.fornecedorExistente?.id ?? 0;
+    // ⚠️ `valorUnitario` é o valor de UM FRASCO. O `valorTotal` da nota é da LINHA
+    // inteira e entraria multiplicado; por isso ele só serve de reserva quando a nota
+    // não trouxe o unitário e a quantidade é 1.
+    const unit = item.valorUnitario ?? (item.quantidade === 1 ? (item.valorTotal ?? null) : null);
+
+    setForm({
+      ...FORM_VAZIO,
+      medicamentoCatId: achado?.id ?? 0,
+      lote:             item.lote ?? '',
+      validade:         item.validade ?? '',
+      qtdFrascos:       item.quantidade ?? 1,
+      valorUnitario:          unit ?? '',
+      valorUnitarioRepassado: unit ?? '',
+      fornecedorId:     fornId,
+      notaFiscal:       nota?.numero ?? '',
+    });
+    setDisplayValidade(item.validade ? item.validade.split('-').reverse().join('/') : '');
+    setDisplayRecebimento('');
+    setRepassadoEditado(false);
+    setEditandoId(null);
+    // Sem item no catálogo, o campo de busca abre com o nome lido — é o que transforma
+    // "não achei" em "confirme qual é" em vez de um formulário mudo.
+    setBuscaVac(achado ? '' : item.nome);
+    setDropdownVacAberto(!achado);
+    setModalFormAberto(true);
+  };
+
+  /** Recebe o que o leitor devolveu: aplica a 1ª vacina e enfileira o resto. */
+  const usarNotaLida = (nota: NotaLida, itens: ItemNota[]) => {
+    setLeitorAberto(false);
+    // ⚠️ LIMPA O FILTRO DE LABORATÓRIO: a lista `vacinas` é recortada por ele, e o
+    // casamento por nome procura NELA. Com um laboratório escolhido, a vacina da nota
+    // ficaria fora da lista e cairia em "não achei" — a pessoa concluiria que o
+    // catálogo não a tem. Sem filtro, o dropdown reabre com o catálogo inteiro.
+    setFabricanteSel('');
+    setNotaLida(nota);
+    const [primeiro, ...resto] = itens;
+    setFilaNota(resto);
+    aplicarItemDaNota(primeiro, nota);
+    if (resto.length > 0) {
+      toast.success(`${itens.length} produtos lidos — um formulário por vez. Faltam ${resto.length} depois deste.`);
+    }
+    if (!nota.fornecedorExistente && nota.fornecedor?.nome) {
+      toast(`Fornecedor "${nota.fornecedor.nome}" não está cadastrado — a compra não entrará na conta a pagar dele.`,
+        { icon: '⚠️' });
+    }
   };
 
   const salvar = async () => {
@@ -495,6 +628,10 @@ export default function EstoqueVacina() {
         validadeDias:           Number(form.validadeDias) || 0,
         valorUnitario:          form.valorUnitario !== '' ? Number(form.valorUnitario) : null,
         valorUnitarioRepassado: form.valorUnitarioRepassado !== '' ? Number(form.valorUnitarioRepassado) : null,
+        // 🔴 De quem veio o frasco. Na ENTRADA é isto que faz a compra virar CONTA A
+        // PAGAR (Valor Unit./Frasco × Qtd de Frascos); na edição, só corrige o cadastro.
+        fornecedorId:           form.fornecedorId || null,
+        notaFiscal:             form.notaFiscal.trim() || null,
         dataRecebimento:        form.dataRecebimento || null,
         ativo:                  form.ativo,
       };
@@ -506,7 +643,18 @@ export default function EstoqueVacina() {
         const res = await api.post('/vacinas/estoque', payload);
         toast.success(res.data?.consolidado ? 'Frascos somados ao lote existente.' : 'Lote de vacina registrado.');
       }
+      // 🔴 PRÓXIMO PRODUTO DA NOTA, quando há fila. `limparForm` fecha o modal, então
+      // a fila é consumida DEPOIS dele — e só no caminho de SUCESSO: falhou o salvar,
+      // o item continua na tela para ser corrigido, nunca é pulado em silêncio.
       limparForm();
+      if (filaNota.length > 0) {
+        const [proximo, ...resto] = filaNota;
+        setFilaNota(resto);
+        aplicarItemDaNota(proximo, notaLida);
+      } else if (notaLida) {
+        setNotaLida(null);
+        toast.success('Todas as vacinas da nota foram lançadas.');
+      }
       carregarLotes();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
@@ -665,6 +813,18 @@ export default function EstoqueVacina() {
                   onClick={() => { limparForm(); setModalFormAberto(true); }}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-xl transition-colors">
                   Entrada de Vacina
+                </button>
+              )}
+              {/* 🔴 Gate de CRIAR, o mesmo da entrada manual: o resultado vira entrada
+                  de estoque e gasta a quota de IA da clínica. Quem só consulta não vê
+                  o botão — ação sem permissão não nasce como botão que falha depois do
+                  clique (armadilha 28-d). */}
+              {podeCriar && (
+                <button onClick={() => setLeitorAberto(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-teal-600 text-teal-700 hover:bg-teal-50 text-xs font-semibold rounded-xl transition-colors"
+                  title="Nota fiscal, cupom, orçamento de balcão ou recibo — inclusive sem valor fiscal">
+                  <FileText size={13} />
+                  Carregar Nota Fiscal
                 </button>
               )}
               {podeAjustar && (
@@ -1162,6 +1322,43 @@ export default function EstoqueVacina() {
                 </div>
               </div>
 
+              {/* 🔴 FORNECEDOR + NOTA FISCAL (2026-09-19) — as colunas existiam desde a
+                  migration `20261006000000` e só a tela de Produtos as gravava: a
+                  Entrada de Vacina não sabia dizer de quem veio o frasco, então a
+                  compra não virava CONTA A PAGAR.
+                  ⚠️ O fornecedor é OPCIONAL: sem ele a entrada acontece normalmente
+                  (só não gera dívida). Exigi-lo travaria o estoque por causa de um
+                  cadastro — e o frasco já está na clínica. */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2">
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Fornecedor</label>
+                  <select
+                    value={form.fornecedorId}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      if (val === NOVO_FORNECEDOR) { setShowNovoForn(true); return; }
+                      setForm(f => ({ ...f, fornecedorId: val }));
+                    }}
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white text-gray-900">
+                    <option value={0}>Selecione o fornecedor...</option>
+                    {fornecedores.map(f => (
+                      <option key={f.id} value={f.id}>{f.nome}</option>
+                    ))}
+                    <option value={NOVO_FORNECEDOR}>+ Cadastrar novo fornecedor...</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Nota Fiscal</label>
+                  <input
+                    type="text"
+                    value={form.notaFiscal}
+                    onChange={e => setForm(f => ({ ...f, notaFiscal: e.target.value }))}
+                    placeholder="Nº da NF"
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+              </div>
+
               {/* Valor unitário comprado + repassado */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -1272,6 +1469,20 @@ export default function EstoqueVacina() {
                   <div>
                     <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Valor Repassado/Frasco</p>
                     <p className="text-gray-700">R$ {loteView.valorUnitarioRepassado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                  </div>
+                )}
+                {/* De quem veio o frasco — campo em branco não vira linha ("—" aqui
+                    seria ruído; a regra do campo vazio vale também nesta ficha). */}
+                {(loteView.fornecedorNome || loteView.fornecedorId) && (
+                  <div>
+                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Fornecedor</p>
+                    <p className="text-gray-700">{loteView.fornecedorNome ?? `#${loteView.fornecedorId}`}</p>
+                  </div>
+                )}
+                {loteView.notaFiscal && (
+                  <div>
+                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Nota Fiscal</p>
+                    <p className="text-gray-700">{loteView.notaFiscal}</p>
                   </div>
                 )}
                 {loteView.dataRecebimento && (
@@ -1460,6 +1671,26 @@ export default function EstoqueVacina() {
             </div>
           </div>
         </>
+      )}
+
+      {/* ── Modal: leitura da nota fiscal ──────────────────────────────────
+          Mesmo componente da Farmácia. A ROTA é a do módulo de vacinas (gate
+          `vacina.estoque.criar`) e `tipoItem` faz os itens de vacina nascerem
+          MARCADOS — os demais ficam à vista, desmarcados. */}
+      <LeitorDocumentoCompra
+        tipoItem="vacina"
+        rota="/vacinas/estoque/documento-compra"
+        aberto={leitorAberto}
+        onFechar={() => setLeitorAberto(false)}
+        onUsar={usarNotaLida}
+      />
+
+      {/* ── Modal: cadastrar novo fornecedor pelo seletor da entrada ───────── */}
+      {showNovoForn && (
+        <ModalNovoFornecedor
+          onSalvo={handleFornecedorCriado}
+          onClose={() => setShowNovoForn(false)}
+        />
       )}
 
       <ModalJustificativa

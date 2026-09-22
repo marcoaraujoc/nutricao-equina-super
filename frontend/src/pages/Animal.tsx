@@ -1556,6 +1556,7 @@ const Animal = () => {
                     }}
                     options={racasFiltradas.map(r => r.nome)}
                     placeholder="Selecione"
+                    buscavel
                     className={erros.racaId ? inputClassErro : inputClass}
                   />
                 </div>
@@ -1649,6 +1650,7 @@ const Animal = () => {
                     onChange={v => { setFormData(p => ({ ...p, pelagem: v })); setErros(p => { const { pelagem: _p, ...r } = p; return r; }); }}
                     options={PELAGENS}
                     placeholder="— selecione —"
+                    buscavel
                     className={erros.pelagem ? inputClassErro : inputClass}
                   />
                 </div>
@@ -1970,19 +1972,15 @@ const Animal = () => {
                       />
                     </div>
                   </div>
-                  {!isEditMode && proprietarioExistente === false && statusBuscaAnimal === 'nao_encontrado' && (
-                    <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-xs text-blue-700">
-                      <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
-                      {/* 🔴 A SENHA NÃO É MAIS EXIBIDA (2026-09-15). Ela é DERIVADA do
-                          cadastro (`lib/senhaInicial.js`) e sai SÓ pelo e-mail de
-                          boas-vindas — mostrá-la aqui a entregava a um TERCEIRO (quem
-                          cadastra), e o literal escrito na tela era, ainda por cima,
-                          uma senha que nunca existiu. */}
-                      <span>
-                        Proprietário não encontrado, encaminhado e-mail com as informações de acesso.
-                      </span>
-                    </div>
-                  )}
+                  {/* 🔴 A faixa "Proprietário não encontrado, encaminhado e-mail com as
+                      informações de acesso." foi REMOVIDA a pedido (2026-09-18). O
+                      COMPORTAMENTO não mudou: cliente novo continua nascendo com login
+                      e recebendo o e-mail de boas-vindas (a senha é DERIVADA em
+                      `lib/senhaInicial.js` e sai SÓ por e-mail — nunca na tela de quem
+                      cadastra, que é um TERCEIRO). O que saiu foi o AVISO.
+                      A faixa de `proprietarioExistente === null` abaixo FICA: ali o
+                      sistema ainda não sabe se o e-mail existe, e ela é o que explica
+                      as duas saídas possíveis antes de a busca responder. */}
                   {!isEditMode && proprietarioExistente === null && statusBuscaAnimal === 'nao_encontrado' && (
                     <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-xs text-blue-700">
                       <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />

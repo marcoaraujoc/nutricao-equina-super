@@ -209,9 +209,13 @@ export default function Produtos() {
         controlado:        form.controlado,
         fabricante:        form.fabricante.trim() || undefined,
         multidose:         form.multidose,
-        // Vazio NÃO é zero: `null` diz "não declara conteúdo" e o item segue cobrado
-        // pela embalagem inteira, que é o comportamento de quem não é multidose.
-        dosesPorEmbalagem: form.multidose ? numeroDoCampo(form.dosesPorEmbalagem) : null,
+        // Vazio NÃO é zero: `null` diz "não declara conteúdo" e o curso segue
+        // consumindo UMA embalagem, que é o comportamento de toda base existente.
+        // 🔴 ENVIADO NOS DOIS ESTADOS desde 2026-09-19 — o número passou a significar
+        // coisas diferentes em cada um (conteúdo na Forma de Cálculo × conteúdo na
+        // Unidade do produto), mas existe nos dois. Zerá-lo aqui no não-multidose
+        // apagaria o cadastro do conteúdo no primeiro salvar, em silêncio.
+        dosesPorEmbalagem: numeroDoCampo(form.dosesPorEmbalagem),
         formaCalculo:      form.multidose ? (form.formaCalculo || null) : null,
       });
       toast.success(
@@ -411,6 +415,15 @@ export default function Produtos() {
                               : 'multidose'}
                           </span>
                         )}
+                        {/* Conteúdo declarado SEM multidose: outra cor de propósito — o
+                            item NÃO é cobrado por dose, ele é cobrado por embalagem; o
+                            número só diz quantas o curso gasta (2026-09-19). */}
+                        {!p.multidose && p.dosesPorEmbalagem != null && (
+                          <span className="ml-2 inline-flex items-center gap-1 text-[10px] text-sky-700 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded-full align-middle">
+                            <Layers size={10} />
+                            {`${String(p.dosesPorEmbalagem).replace('.', ',')} ${p.unidade ?? ''}/emb.`.replace('  ', ' ')}
+                          </span>
+                        )}
                         {p.controlado && (
                           <span className="ml-2 inline-flex items-center text-[10px] text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-full align-middle">
                             controlado
@@ -465,6 +478,13 @@ export default function Produtos() {
                         {p.dosesPorEmbalagem
                           ? `${String(p.dosesPorEmbalagem).replace('.', ',')} ${p.formaCalculo ?? ''}/emb.`.replace('  ', ' ')
                           : 'multidose'}
+                      </span>
+                    )}
+                    {/* Conteúdo declarado SEM multidose — ver o selo do desktop. */}
+                    {!p.multidose && p.dosesPorEmbalagem != null && (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-sky-700 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded-full">
+                        <Layers size={10} />
+                        {`${String(p.dosesPorEmbalagem).replace('.', ',')} ${p.unidade ?? ''}/emb.`.replace('  ', ' ')}
                       </span>
                     )}
                     {p.controlado && (

@@ -4,7 +4,8 @@ const prisma = require('../lib/prisma').default;
 const catalogoEmpresa = require('../lib/catalogoEmpresa');
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { ANIMAL_VISIVEL } = require('../lib/visibilidade');
-const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, removerFaturaItensDaOrigem } = require('../lib/faturaUtils');
+const { getOrCreateFatura, adicionarOuSomarFaturaItem, removerFaturaItensDaOrigem } = require('../lib/faturaUtils');
+const itemOrigens = require('../lib/faturaItemOrigens');
 // CONTA A PAGAR do fornecedor da vacina (2026-09-10) — o outro lado do balcão da
 // fatura. Lido/gravado por SQL cru: as tabelas são da migration 20261006000000.
 const contasPagar       = require('../lib/contasPagar');
@@ -679,9 +680,12 @@ async function finalizar(req, res) {
     const aplicaDono   = info.aplicadaPeloProprietario === true;
     // Cobra na finalização SÓ o quadrante "clínica fornece × proprietário aplica".
     const cobrarAgora  = aplicaDono && !isCliente;
+    // ⚠️ `origemJaFaturada`, não `findFirst` pela FK: a linha da fatura passou a ser
+    // COMPARTILHADA (2026-09-17) e a FK guarda só a PRIMEIRA vacina que caiu nela —
+    // pela FK, a segunda pareceria nunca cobrada e seria cobrada de novo.
     const jaFaturada   = cobrarAgora
-      ? await prisma.faturaItem.findFirst({ where: { vacinaClinicaId: vacina.id }, select: { id: true } })
-      : null;
+      ? await itemOrigens.origemJaFaturada(prisma, 'vacinaClinicaId', vacina.id)
+      : false;
 
     const empresaIdEfetivo = req.empresaId ?? null;
     const agora = new Date();
@@ -1062,9 +1066,7 @@ async function executar(req, res) {
 
     const qtd       = dosagemDaVacina(info.quantidade);
     const isCliente = info.cliente === true;
-    const jaFaturada = await prisma.faturaItem.findFirst({
-      where: { vacinaClinicaId: vacina.id }, select: { id: true },
-    });
+    const jaFaturada = await itemOrigens.origemJaFaturada(prisma, 'vacinaClinicaId', vacina.id);
 
     const empresaIdEfetivo = req.empresaId ?? null;
     const agora = new Date();
@@ -1161,7 +1163,7 @@ async function entradasCobrancaVacina(tx, medicamentoCatId, empresaId) {
   }
 }
 
-async function darBaixaEFaturar(tx, { vacina, info, qtd, veterinarioId, empresaIdEfetivo, agora, evolucao, animal }) {
+async function darBaixaEFaturar(tx, { vacina, info, qtd, veterinarioId, empresaIdEfetivo, agora, animal }) {
   let loteIdFinal = vacina.loteId ?? null;
   let loteValor   = 0;
 
@@ -1228,13 +1230,20 @@ async function darBaixaEFaturar(tx, { vacina, info, qtd, veterinarioId, empresaI
   if (loteIdFinal) loteValor = formaCobranca.precoDeVenda(cfgCobranca, loteValor, entradas);
 
   if (animal?.userId) {
-    const vcNum     = `VC-${String(info.numero ?? vacina.id).padStart(4, '0')}`;
-    const evNum     = evolucao ? `[${formatAtendimentoNum(evolucao.tipoAtendimento, evolucao.numero)}] ` : '';
-    const descricao = `[${vcNum}] ${evNum}${vacina.nome}${vacina.dose ? ` — ${vacina.dose}` : ''}`;
+    // 🔴 A DESCRIÇÃO NÃO CARREGA MAIS `[VC-0004] [AG-0012]` (2026-09-17, a pedido).
+    // Enquanto carregava, a MESMA vacina, na MESMA dose e pelo MESMO preço, aplicada
+    // duas vezes no mês, virava duas linhas idênticas fora os números. Eles passaram a
+    // ser OBSERVAÇÃO da linha (`lib/faturaItemOrigens.js`), com data e quantidade de
+    // cada aplicação e clicáveis para o registro de origem — que é o que eles serviam
+    // para dizer. A DOSE fica no texto: dose diferente é cobrança diferente.
+    const descricao = `${vacina.nome}${vacina.dose ? ` — ${vacina.dose}` : ''}`;
     // Sem lote debitado (sem estoque) → valor 0, financeiro ajusta depois.
     const valorItem = info.valor != null ? info.valor : (loteIdFinal ? Number(loteValor) : 0);
     const fatura = await getOrCreateFatura(tx, animal.userId, empresaIdEfetivo);
-    await adicionarFaturaItem(tx, {
+    // Consolida com a aplicação anterior da mesma vacina em vez de abrir linha nova —
+    // o mesmo helper da dose de prescrição. Cada aplicação continua sendo uma cobrança;
+    // o que muda é que elas somam na quantidade de uma linha só.
+    await adicionarOuSomarFaturaItem(tx, {
       faturaId:        fatura.id,
       animalId:        vacina.animalId,
       tipo:            'VACINA',
@@ -1243,6 +1252,7 @@ async function darBaixaEFaturar(tx, { vacina, info, qtd, veterinarioId, empresaI
       quantidade:      qtd,
       veterinarioId,
       vacinaClinicaId: vacina.id,
+      ocorridoEm:      agora,
     });
   }
 
@@ -1333,9 +1343,7 @@ async function excluir(req, res) {
       // `registrar`). Sem este cheque, cancelar uma vacina ainda SALVA/FINALIZADA
       // (nunca debitada) DEVOLVIA ao lote doses que nunca saíram dele — inflava o
       // estoque a cada registro seguido de cancelamento antes da execução.
-      const jaFaturada = await tx.faturaItem.findFirst({
-        where: { vacinaClinicaId: vacina.id }, select: { id: true },
-      });
+      const jaFaturada = await itemOrigens.origemJaFaturada(tx, 'vacinaClinicaId', vacina.id);
 
       // Remove o FaturaItem vinculado, se houver (vacina do cliente nunca gerou um).
       // Bloqueia (lança FaturaPagaError) se a fatura de destino já estiver PAGA.

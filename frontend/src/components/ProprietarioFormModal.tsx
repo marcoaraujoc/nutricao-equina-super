@@ -129,6 +129,8 @@ export interface Proprietario {
   frequenciaVisitas: number | null;
   localidades:      LocalidadeProp[];
   diaVencimentoFatura: number | null;
+  /** Pode entrar no sistema? Mora em `tb_usuario_empresa` — é POR EMPRESA. */
+  acessoSistema?:   boolean;
   cep:              string | null;
   endereco:         string | null;
   complemento:      string | null;
@@ -158,6 +160,7 @@ export interface FormProp {
   // derivado (o maior valor) no backend, só para as leituras legadas.
   localidades:       LocalidadeProp[];
   diaVencimentoFatura: string;
+  acessoSistema:     boolean;
   cep:               string;
   endereco:          string;
   complemento:       string;
@@ -170,6 +173,10 @@ export const FORM_INICIAL: FormProp = {
   fullName: '', email: '', phone: '',
   tipoDoc: 'cpf', cpf: '', cnpj: '',
   mensalista: false, valorAssistencia: '', localidades: [], diaVencimentoFatura: '5',
+  // ⚠️ LIGADO por padrão: o cliente novo precisa entrar para ver a fatura e os
+  // pacientes dele — foi assim que o cadastro sempre funcionou (o login nascia com
+  // a conta). Nascer desligado mudaria o comportamento de todo cadastro existente.
+  acessoSistema: true,
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
 
@@ -201,6 +208,9 @@ export function formDeProprietario(p: Proprietario, localidades = p.localidades 
       : '',
     localidades,
     diaVencimentoFatura: p.diaVencimentoFatura ? String(p.diaVencimentoFatura) : '5',
+    // `undefined` (cliente legado, sem a coluna lida) = TEM acesso: é o estado em que
+    // ele está hoje, e assumir `false` revogaria o login de todo mundo no 1º salvar.
+    acessoSistema:     p.acessoSistema !== false,
     cep:               p.cep         ? mascaraCEP(p.cep.replace(/\D/g, ''))  : '',
     endereco:          p.endereco    ?? '',
     complemento:       p.complemento ?? '',
@@ -257,6 +267,7 @@ function montarNovoProprietario(form: FormProp) {
       frequenciaVisitas: l.frequenciaVisitas,
     })),
     diaVencimentoFatura: Number(form.diaVencimentoFatura),
+    acessoSistema:    form.acessoSistema,
     cep: form.cep || null, endereco: form.endereco || null, complemento: form.complemento || null,
     bairro: form.bairro || null, cidade: form.cidade || null, estado: form.estado || null,
   };
@@ -272,7 +283,12 @@ function validarFormProprietario(form: FormProp): ErroAcaoDados | null {
   if (form.localidades.length === 0) {
     return { mensagem: 'Informe ao menos uma localidade com a frequência de visitas', campos: ['localidades'] };
   }
-  if (validarDiaVencimento(form.diaVencimentoFatura)) return { mensagem: validarDiaVencimento(form.diaVencimentoFatura) };
+  // ⚠️ Só no MENSALISTA: fora dele o campo está DESABILITADO, e validar o que não se
+  // pode editar trava o salvar sem dar como corrigir (o cliente legado com um valor
+  // fora da faixa ficaria impossível de salvar).
+  if (form.mensalista && validarDiaVencimento(form.diaVencimentoFatura)) {
+    return { mensagem: validarDiaVencimento(form.diaVencimentoFatura) };
+  }
   if (form.tipoDoc === 'cpf'  && form.cpf.trim()  && !validarCPF(form.cpf))   return { mensagem: 'CPF inválido', campos: ['cpf'] };
   if (form.tipoDoc === 'cnpj' && form.cnpj.trim() && !validarCNPJ(form.cnpj)) return { mensagem: 'CNPJ inválido', campos: ['cnpj'] };
   if (form.mensalista && !form.valorAssistencia) {
@@ -745,38 +761,50 @@ export default function ProprietarioFormModal({
               </button>
             </div>
 
-            {/* Valor da assinatura e dia de vencimento da fatura na mesma linha —
-                logo abaixo de Mensalista e acima de Localidades. O campo de valor
-                fica sempre visível (não só quando Mensalista está marcado), mas só
-                é obrigatório e só é salvo quando Mensalista está ativo. */}
+            {/* 🔴 OS DOIS CAMPOS SÓ SÃO EDITÁVEIS NO MENSALISTA (a pedido, 2026-09-18).
+                Eles descrevem o CONTRATO de assistência mensal: quanto custa e em que
+                dia vence. Sem plano mensal não há o que cobrar nem quando vencer, e
+                deixá-los abertos convidava a preencher um acordo que não existe — o
+                valor era descartado no salvar (o payload já o zerava fora do
+                mensalista) e o dia de vencimento ficava governando uma fatura que
+                ninguém contratou.
+                ⚠️ DESABILITADOS, não escondidos: sumindo, quem marca "Mensalista" não
+                descobre que precisa preenchê-los; cinza e visíveis, a dependência
+                entre o interruptor e os dois campos fica à vista. */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">
+                <label className={`block text-xs mb-1 ${form.mensalista ? 'text-gray-500' : 'text-gray-300'}`}>
                   Valor da Assistência Veterinária {form.mensalista && '*'}
                 </label>
                 <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">R$</span>
+                  <span className={`absolute left-3 top-1/2 -translate-y-1/2 text-sm ${form.mensalista ? 'text-gray-500' : 'text-gray-300'}`}>R$</span>
                   <input
                     type="text"
                     inputMode="numeric"
+                    disabled={!form.mensalista}
                     value={form.valorAssistencia}
                     onChange={e => handleValorChange(e.target.value)}
                     placeholder="0,00"
-                    className={`${inputCls} pl-9`}
+                    className={`${inputCls} pl-9 ${!form.mensalista ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
                   />
                 </div>
                 {!form.mensalista && (
-                  <p className="text-[10px] text-gray-400 mt-1">Só é cobrado quando Mensalista está ativo.</p>
+                  <p className="text-[10px] text-gray-400 mt-1">Disponível apenas para cliente Mensalista.</p>
                 )}
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Dia de vencimento da fatura *</label>
+                <label className={`block text-xs mb-1 ${form.mensalista ? 'text-gray-500' : 'text-gray-300'}`}>
+                  Dia de vencimento da fatura {form.mensalista && '*'}
+                </label>
                 <input type="number" min={1} max={25}
+                  disabled={!form.mensalista}
                   value={form.diaVencimentoFatura}
                   onChange={e => onFormChange({ diaVencimentoFatura: e.target.value })}
                   placeholder="Ex.: 5"
-                  className={`${inputCls} ${diaVencimentoErro ? 'border-red-300 focus:border-red-400' : ''}`} />
-                {diaVencimentoErro ? (
+                  className={`${inputCls} ${!form.mensalista ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''} ${form.mensalista && diaVencimentoErro ? 'border-red-300 focus:border-red-400' : ''}`} />
+                {!form.mensalista ? (
+                  <p className="text-[10px] text-gray-400 mt-1">Disponível apenas para cliente Mensalista.</p>
+                ) : diaVencimentoErro ? (
                   <p className="text-[11px] text-red-500 mt-1 flex items-center gap-1">
                     <AlertCircle size={11} /> {diaVencimentoErro}
                   </p>
@@ -786,6 +814,31 @@ export default function ProprietarioFormModal({
                   </p>
                 )}
               </div>
+            </div>
+
+            {/* ── Acesso ao sistema (a pedido, 2026-09-18) ────────────────────
+                MESMA lógica do "Terá acesso ao sistema" do Incluir Membro: marcado, o
+                acesso é liberado e a senha inicial sai por e-mail — NÃO IMPORTA o
+                momento (cadastro novo ou alteração de um cliente que já existe).
+                Desmarcado, o login é bloqueado.
+                ⚠️ A senha NUNCA aparece na tela: ela é DERIVADA (`lib/senhaInicial.js`)
+                e sai só pelo e-mail do próprio cliente — mostrá-la aqui a entregaria a
+                um TERCEIRO, que é quem está preenchendo este formulário. */}
+            <div className="flex items-center justify-between p-3 border border-gray-200 rounded-xl mb-3">
+              <div className="min-w-0 pr-3">
+                <p className="text-sm font-semibold text-gray-900">Terá acesso ao sistema</p>
+                <p className="text-xs text-gray-500">
+                  {form.acessoSistema
+                    ? 'O cliente recebe por e-mail os dados de acesso e pode entrar no sistema.'
+                    : 'O cliente fica cadastrado, mas não consegue entrar no sistema.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onFormChange({ acessoSistema: !form.acessoSistema })}
+                className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${form.acessoSistema ? 'bg-emerald-600' : 'bg-gray-200'}`}>
+                <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transform transition-transform ${form.acessoSistema ? 'translate-x-6' : 'translate-x-1'}`} />
+              </button>
             </div>
 
             {/* ── Localidades atendidas + frequência de CADA uma ──────────────

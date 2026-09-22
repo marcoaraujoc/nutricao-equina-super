@@ -6,7 +6,8 @@ const { escopoPrescricaoGrupoWhere } = require('../lib/clinicalScope');
 const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 const { buildAnimalScopeWhere } = require('../lib/animalScope');
 const { ANIMAL_VISIVEL } = require('../lib/visibilidade');
-const { formatAtendimentoNum, getOrCreateFatura, adicionarFaturaItem, adicionarOuSomarFaturaItem, removerFaturaItensDaOrigem, recalcularTotal } = require('../lib/faturaUtils');
+const { getOrCreateFatura, adicionarOuSomarFaturaItem, removerFaturaItensDaOrigem, recalcularTotal } = require('../lib/faturaUtils');
+const itemOrigens = require('../lib/faturaItemOrigens');
 // CONTA A PAGAR — o outro lado do balcão da fatura (2026-09-10). O que a clínica
 // DEVE ao fornecedor do medicamento e ao prestador do procedimento.
 const contasPagar      = require('../lib/contasPagar');
@@ -15,7 +16,9 @@ const produtoFornecedor = require('../lib/produtoFornecedor');
 const catalogoEmpresa = require('../lib/catalogoEmpresa');
 // 'Un.' — a unidade do produto que NÃO é multidose (a embalagem é a própria
 // unidade). Ver `unidadeDoEstoque` e `lib/formaCalculo.js`.
-const { UNIDADE_AVULSA, unidadeOperativa } = require('../lib/formaCalculo');
+const {
+  UNIDADE_AVULSA, unidadeOperativa, conteudoDaEmbalagem, embalagensPara,
+} = require('../lib/formaCalculo');
 const { mesmaUnidade } = require('../lib/unidadeMedicamento');
 const formaCobranca     = require('../lib/formaCobrancaEstoque');
 const { garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
@@ -124,8 +127,13 @@ function precoUnitarioDoEstoque(estoque, unidadeEstoque) {
     return estoque.precoUnitarioBase;
   }
   const precoVenda = estoque.valorRepassado > 0 ? estoque.valorRepassado : (estoque.valor ?? 0);
-  const qtdBase    = paraBase(estoque.qtdEstoque, unidadeEstoque);
-  return qtdBase > 0 ? precoVenda / qtdBase : 0;
+  // ⚠️ Divide pelo CONTEÚDO DA EMBALAGEM, nunca pelo saldo (2026-09-17): o valor gravado
+  // é o de uma embalagem, e usar `qtdEstoque` fazia o preço SUBIR a cada dose aplicada —
+  // o defeito conhecido deste caminho legado. Sem conteúdo declarado a embalagem é a
+  // própria unidade, e o valor dela já é o preço unitário.
+  const conteudo = Number(estoque.pesoPorEmbalagem) > 0 ? Number(estoque.pesoPorEmbalagem) : 1;
+  const base     = paraBase(conteudo, unidadeEstoque);
+  return base > 0 ? precoVenda / base : 0;
 }
 
 // Retrato do estoque ANTES da baixa, no formato que `precoDeVenda` consome —
@@ -176,47 +184,113 @@ function calcularQuantidadeDiaria(item) {
 // cadência (é dela que `calcularQuantidadeDiaria` sai).
 
 /**
+ * 🔴 A PRESCRIÇÃO ESCRITA EM CONTEÚDO CONSOME **UMA EMBALAGEM**, no curso inteiro.
+ *
+ * Vale quando o estoque é contado em EMBALAGENS ('Un.' — produto sem multidose) e a
+ * receita foi escrita em outra unidade (mL, g, %, UI…), que é o caso normal desde
+ * 2026-09-18: o campo Dosagem passou a mostrar a Unidade cadastrada no produto, porque
+ * ninguém prescreve "0,1 frasco de xarope".
+ *
+ * Sem multidose o produto NÃO declara quanto cabe na embalagem — é isso que "não é
+ * multidose" significa —, então não existe conversão possível entre os dois lados. O
+ * que existe é o fato: a clínica ENTREGA o frasco, uma vez. O curso inteiro consome
+ * essa embalagem, e é ela que sai do estoque e entra na fatura:
+ *
+ *     Xarope 50 mL, R$ 60,00 o frasco · receita 5 mL 1x/dia por 10 dias
+ *       estoque : −1 frasco   (na 1ª execução)
+ *       fatura  : 1 × R$ 60,00
+ *
+ * 🔴 E "UMA" EMBALAGEM VIROU "AS QUE COUBEREM" (2026-09-19, a pedido). O curso que não
+ * cabe num frasco consome mais de um, e é isso que sai do estoque e entra na fatura:
+ *
+ *     Frasco de 100 mL · receita 25 mL × 5 doses = 125 mL
+ *       estoque : −2 frascos   (o 1º na 1ª dose, o 2º na 5ª)
+ *       fatura  : 2 × R$ 200,00
+ *
+ * Quem sabe os 100 mL é o CADASTRO DO PRODUTO (`lib/formaCalculo.conteudoDaEmbalagem`).
+ * Sem o conteúdo declarado — que é o estado de toda base existente — continua sendo UMA
+ * embalagem para o curso, exatamente como antes.
+ *
+ * ⚠️ NÃO é "1 embalagem por APLICAÇÃO", que foi a regra entre 2026-09-17 e 2026-09-18:
+ * aquela cobrava DEZ frascos pelo exemplo acima. Quem garante que o segundo frasco só
+ * sai quando o primeiro acaba é a conta INCREMENTAL de `debitarEstoqueDia` (o acumulado
+ * do curso, não a dose de hoje) — a quantidade daqui é a do curso INTEIRO, e é ela que
+ * dimensiona a RESERVA e as três verificações de estoque.
+ *
+ * ⚠️ Receita na MESMA unidade do estoque ("2 Un.") NÃO entra aqui: ali o veterinário
+ * está prescrevendo EMBALAGENS, e 2 por dia durante 5 dias são 10 embalagens de
+ * verdade. É a distinção entre a ampola prescrita por unidade e o frasco prescrito
+ * pelo conteúdo — e é por isso que o produto aplicado dose a dose pela clínica deve
+ * ser cadastrado como multidose (declarando o conteúdo) ou prescrito em 'Un.'.
+ */
+function entregaPorEmbalagem(unidadePrescrita, unidadeEstoque) {
+  if (!ehAvulsa(unidadeEstoque)) return false;
+  const u = String(unidadePrescrita ?? '').trim();
+  // Unidade VAZIA continua no valor bruto: sem rótulo, "2" já se lê como 2 unidades.
+  if (u === '' || ehAvulsa(u)) return false;
+  return !mesmoGrupo(u, unidadeEstoque);
+}
+
+/**
  * Quanto SAI DO ESTOQUE, na unidade do estoque.
  *
  * 🔴 A DIVISÃO POR DOSES SAIU DAQUI EM 2026-09-16, e é uma SIMPLIFICAÇÃO, não uma
  * perda. Enquanto o frasco de 20 mL era cadastrado como "1 Un.", prescrição e estoque
  * falavam línguas diferentes: `mesmoGrupo('mL','Un.')` é falso, e a saída era dividir
- * a CONTAGEM de aplicações pelas N doses do frasco. Agora o produto declara a FORMA DE
- * CÁLCULO, o estoque é contado nela e a receita é escrita nela — então não há o que
- * converter nem o que dividir: 5 mL saem de 60 mL e sobram 55.
+ * a CONTAGEM de aplicações pelas N doses do frasco. Agora o produto MULTIDOSE declara a
+ * FORMA DE CÁLCULO, o estoque é contado nela e a receita é escrita nela — então não há
+ * o que converter nem o que dividir: 5 mL saem de 60 mL e sobram 55.
  *
  * A fatura sai certa sozinha, porque o valor da linha sempre foi
  * `qtd debitada × preço unitário`, e o preço unitário é o da embalagem ÷ conteúdo:
  *     3 × R$ 100 = R$ 300 por 60 mL  →  R$ 5/mL  →  5 mL = R$ 25,00
  * que é exatamente `qtd × valorUnitárioCobrado ÷ qtdPorEmbalagem`.
+ *
+ * 🔴 E o produto SEM multidose devolve **1**: a embalagem inteira, uma vez no curso —
+ * ver `entregaPorEmbalagem`.
  */
-function qtdDoEstoque(qtdPrescrita, unidadePrescrita, unidadeEstoque, dosagemPorAplicacao = null) {
+function qtdDoEstoque(qtdPrescrita, unidadePrescrita, unidadeEstoque, conteudoEmbalagem = null) {
   if (mesmoGrupo(unidadePrescrita, unidadeEstoque)) {
     return deBase(paraBase(qtdPrescrita, unidadePrescrita), unidadeEstoque);
   }
-  // 🔴 RECEITA EM CONTEÚDO CONTRA ESTOQUE EM EMBALAGENS (2026-09-17).
-  //
-  // O item foi escrito em mL/g ANTES de o produto passar a ser medido em 'Un.' — e o
-  // valor BRUTO ali é catastrófico, não só impreciso: "20 mL" debitava 20 EMBALAGENS
-  // de um saldo de 2 e cobrava 20 × o preço do frasco (R$ 2.000 numa dose de R$ 100).
-  //
-  // Não existe conversão possível: o produto não declara quanto cabe na embalagem (é
-  // justamente o que "não é multidose" significa). O que existe é a REGRA do produto —
-  // a embalagem sai inteira a cada aplicação —, e o número de aplicações é dedutível
-  // sem palpite: `qtdPrescrita` já é dosagem × aplicações, então a divisão pela dosagem
-  // devolve as aplicações. 20 mL 2x/dia → 40/20 = 2 embalagens no dia.
-  //
-  // ⚠️ Item NOVO não passa por aqui: ele nasce em 'Un.', que não tem grupo, e cai no
-  // retorno bruto abaixo — "2 Un." são 2 embalagens, sem conversão nenhuma.
-  // ⚠️ Vale para QUALQUER unidade que não seja a avulsa — não só mL/g. O item 179 desta
-  // base está em '%' ("Pasta 10%"), que não tem grupo de conversão: restringir às
-  // unidades de conteúdo deixava 10 % debitando DEZ embalagens.
-  const dose = Number(dosagemPorAplicacao);
-  const receitaEmOutraUnidade = String(unidadePrescrita ?? '').trim() !== '' && !ehAvulsa(unidadePrescrita);
-  if (ehAvulsa(unidadeEstoque) && receitaEmOutraUnidade && Number.isFinite(dose) && dose > 0) {
-    return qtdPrescrita / dose;
+  // ⚠️ `embalagensPara` devolve 1 quando o conteúdo não foi declarado — o argumento é
+  // opcional para que TODO chamador que ainda não o passa mantenha o comportamento
+  // anterior em vez de cair em zero.
+  if (entregaPorEmbalagem(unidadePrescrita, unidadeEstoque)) {
+    return embalagensPara(qtdPrescrita, conteudoEmbalagem);
   }
   return qtdPrescrita;
+}
+
+/**
+ * 🔴 QUANTAS EMBALAGENS **ESTA** EXECUÇÃO ABRE (2026-09-19).
+ *
+ * A conta é ACUMULADA, não por dose: compara quantas embalagens o curso já tinha
+ * abertas com quantas passa a ter depois desta aplicação, e entrega a diferença. Frasco
+ * de 100 mL, 5 doses de 25 mL:
+ *
+ *     dose 1   acum  25  ->  1 aberta   (antes 0)   entrega 1
+ *     dose 2   acum  50  ->  1 aberta   (antes 1)   entrega 0
+ *     dose 3   acum  75  ->  1 aberta   (antes 1)   entrega 0
+ *     dose 4   acum 100  ->  1 aberta   (antes 1)   entrega 0
+ *     dose 5   acum 125  ->  2 abertas  (antes 1)   entrega 1
+ *                                         CURSO: 2 frascos
+ *
+ * ⚠️ É isto que faz o curso INTERROMPIDO não cobrar frasco que ninguém abriu. A
+ * alternativa — cobrar `ceil(curso inteiro)` já na 1ª dose — deixaria dois frascos
+ * cobrados numa prescrição cancelada na segunda aplicação.
+ *
+ * ⚠️ O "antes" da PRIMEIRA dose é 0 EXPLÍCITO: `embalagensPara` tem piso 1 (é a entrega
+ * única de quem não declara conteúdo), e passar zero por ela devolveria 1 — a primeira
+ * entrega sairia 1 − 1 = 0 e o item nunca seria debitado nem cobrado.
+ *
+ * ⚠️ Sem conteúdo declarado a conta degenera exatamente no comportamento anterior: 1 na
+ * primeira execução e 0 nas seguintes. Nenhuma base existente muda.
+ */
+function embalagensDaExecucao({ jaConsumido, qtdAgora, conteudo }) {
+  const antes  = Number(jaConsumido) > 0 ? embalagensPara(jaConsumido, conteudo) : 0;
+  const depois = embalagensPara(Number(jaConsumido) + Number(qtdAgora), conteudo);
+  return Math.max(0, depois - antes);
 }
 
 /**
@@ -243,6 +317,41 @@ async function mapaFormaCalculo(client, itens) {
     forma.set(id, unidadeOperativa(info));
   }
   return forma;
+}
+
+/**
+ * `Map<medicamentoCatId, conteudoDaEmbalagem>` dos itens do documento.
+ *
+ * 🔴 SÓ do produto SEM multidose, e é o que permite o curso consumir mais de uma
+ * embalagem (2026-09-19). Ver `lib/formaCalculo.conteudoDaEmbalagem` para a razão de
+ * ele ser separado de `qtdPorEmbalagemDe`: este NÃO muda a unidade operativa.
+ *
+ * ⚠️ É uma segunda leitura das MESMAS linhas que `mapaFormaCalculo` lê, e isso é
+ * deliberado: aquela função aparece por nome nos gates estruturais de `unidadeDoEstoque`
+ * (a unidade tem de valer nos cinco pontos), e fundir as duas num retorno só faria o
+ * gate deixar de enxergar o elo que ele existe para travar. A consulta é um
+ * `WHERE id IN (...)` sobre um punhado de ids, dentro da mesma transação — ao lado das
+ * buscas FEFO, que são UMA POR ITEM, o custo é ruído.
+ *
+ * ⚠️ Com o `client` da transação, nunca o `prisma` global: sem o carimbo de tenant o
+ * RLS devolve zero linha em silêncio e todo produto volta a valer uma embalagem.
+ */
+async function mapaConteudoEmbalagem(client, itens) {
+  const ids = itens
+    .filter(i => i.tipo === 'MEDICAMENTO' && i.medicamentoCatId)
+    .map(i => i.medicamentoCatId);
+  const mapa = await catalogoEmpresa.multidosePorItem(client, ids);
+  const conteudos = new Map();
+  for (const [id, info] of mapa) {
+    const c = conteudoDaEmbalagem(info);
+    if (c != null) conteudos.set(id, c);
+  }
+  return conteudos;
+}
+
+/** Quanto cabe na embalagem DESTE item, ou `null` (= uma embalagem por curso). */
+function conteudoDoItem(conteudos, item) {
+  return conteudos?.get(item.medicamentoCatId) ?? null;
 }
 
 /**
@@ -289,15 +398,15 @@ function janelaDoItem(item, hojeStr) {
   };
 }
 
-function qtdDiariaEstoque(item, unidadeEstoque, resolverQtd = calcularQuantidadeDiaria) {
-  return qtdDoEstoque(resolverQtd(item), item.unidade, unidadeEstoque, item.dosagem);
+function qtdDiariaEstoque(item, unidadeEstoque, resolverQtd = calcularQuantidadeDiaria, conteudo = null) {
+  return qtdDoEstoque(resolverQtd(item), item.unidade, unidadeEstoque, conteudo);
 }
 
 // Converte a quantidade prescrita (item.unidade) para a unidade do estoque via base.
 // Ex: 500g → kg: paraBase(500,'g')=500g → deBase(500,'kg')=0.5 kg
 // Com a FORMA DE CÁLCULO as duas unidades coincidem e a conversão é a identidade.
-function qtdNaUnidadeEstoque(item, unidadeEstoque) {
-  return qtdDoEstoque(calcularQuantidadeTotal(item), item.unidade, unidadeEstoque, item.dosagem);
+function qtdNaUnidadeEstoque(item, unidadeEstoque, conteudo = null) {
+  return qtdDoEstoque(calcularQuantidadeTotal(item), item.unidade, unidadeEstoque, conteudo);
 }
 
 // ─── Multi-lote (FEFO) ───────────────────────────────────────────────────────
@@ -333,6 +442,10 @@ async function criarReservas(tx, grupoId, animalId, itens, empresaId) {
   // reserva precisa nascer NA MESMA unidade da baixa, senão ela segura um número que
   // o débito nunca consome e o saldo trava para toda a clínica.
   const formas = await mapaFormaCalculo(tx, itens);
+  // ⚠️ A reserva precisa cobrir o CURSO INTEIRO: com um frasco de 100 mL e 125 mL
+  // receitados, reservar 1 deixaria o segundo frasco livre para outra prescrição e a
+  // última dose bateria num saldo que alguém já levou.
+  const conteudos = await mapaConteudoEmbalagem(tx, itens);
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
     // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
@@ -346,7 +459,7 @@ async function criarReservas(tx, grupoId, animalId, itens, empresaId) {
     });
 
     const unidadeEstoque = unidadeDoEstoque(formas, item);
-    let restante = qtdNaUnidadeEstoque(item, unidadeEstoque);
+    let restante = qtdNaUnidadeEstoque(item, unidadeEstoque, conteudoDoItem(conteudos, item));
 
     for (let i = 0; i < estoques.length && restante > 0.0001; i++) {
       const e = estoques[i];
@@ -403,16 +516,10 @@ async function consumirReservas(tx, grupoId, itens, empresaId) {
     });
     await tx.reservaEstoque.deleteMany({ where: { prescricaoGrupoId: grupoId, estoqueId: estoque.id } });
     // Preço proporcional ao cliente por unidade base (R$/g ou R$/mL).
-    // Usa precoUnitarioBase (campo fixo gravado na entrada do estoque) quando disponível;
-    // cai no cálculo dinâmico apenas para itens legados sem o campo.
-    const precoVenda = estoque.valorRepassado > 0 ? estoque.valorRepassado : (estoque.valor ?? 0);
-    let precoPorUnidade;
-    if (estoque.precoUnitarioBase != null && estoque.precoUnitarioBase > 0) {
-      precoPorUnidade = estoque.precoUnitarioBase; // R$/g ou R$/mL
-    } else {
-      const qtdEstoqueBase = paraBase(estoque.qtdEstoque, unidadeEstoque);
-      precoPorUnidade = qtdEstoqueBase > 0 ? precoVenda / qtdEstoqueBase : 0;
-    }
+    // ⚠️ FONTE ÚNICA `precoUnitarioDoEstoque`: a regra (campo fixo da entrada, com o
+    // cálculo legado como reserva) estava escrita aqui e lá, e divergiria na primeira
+    // correção — o que divergiria é o VALOR COBRADO DO CLIENTE.
+    const precoPorUnidade = precoUnitarioDoEstoque(estoque, unidadeEstoque);
     precos.set(item.medicamentoCatId, precoPorUnidade);
     unidades.set(item.medicamentoCatId, unidadeEstoque);
   }
@@ -464,31 +571,102 @@ async function recalcularReservasDoGrupo(tx, grupo) {
 // proporção (evita contagem dupla: estoque já baixado + reserva ainda ativa).
 // Retorna { precos, unidades } por medicamentoCatId (para lançar na fatura) —
 // precos contém o VALOR TOTAL da quantidade debitada (soma dos lotes).
-async function debitarEstoqueDia(tx, itens, empresaId, grupoId = null, resolverQtd = calcularQuantidadeDiaria) {
+async function debitarEstoqueDia(
+  tx, itens, empresaId, grupoId = null, resolverQtd = calcularQuantidadeDiaria,
+  { incluirDoProprietario = false } = {},
+) {
   const precos   = new Map();
   const unidades = new Map();
+  // 🔴 Itens que NÃO tiveram entrega nesta execução (ver `entregaPorEmbalagem`). Quem
+  // chama precisa deles para NÃO lançar a linha de fatura nem a conta a pagar: a dose
+  // de hoje sai do frasco que o cliente já pagou.
+  // ⚠️ Desde 2026-09-19 isto não é mais "já foi entregue UMA vez": o curso pode
+  // consumir várias embalagens, e o item volta a entregar (e a ser cobrado) na dose em
+  // que o frasco aberto acaba.
+  const jaEntregues  = new Set();
+  // Itens entregues por embalagem — a conta a pagar do fornecedor conta EMBALAGENS, não
+  // a dosagem da receita (que está em mL).
+  const porEmbalagem = new Set();
+  // Quantas embalagens saíram NESTA execução, por item. É ela que vira a quantidade da
+  // linha da fatura e da conta a pagar — `1` fixo cobraria um frasco onde saíram dois.
+  const entregas     = new Map();
   // 🔴 A unidade em que cada item é contado. Com a FORMA DE CÁLCULO declarada, a
   // dosagem da receita já está na unidade do estoque — não há conversão nem divisão,
   // e a fatura sai por `qtd × preço da embalagem ÷ conteúdo` sozinha.
   const formas = await mapaFormaCalculo(tx, itens);
+  // Quanto cabe na embalagem de cada produto SEM multidose — é o que diz se o curso
+  // consome um frasco ou três. Sem ele declarado, tudo continua valendo uma embalagem.
+  const conteudos = await mapaConteudoEmbalagem(tx, itens);
   // Forma de cobrança da clínica — resolvida UMA vez por execução (é a mesma para
   // todos os itens). Ver lib/formaCobrancaEstoque.js.
   const cfgCobranca = await formaCobranca.lerForma(tx, empresaId);
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
-    // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
-    if (item.aplicadaPeloProprietario) continue;
+    // Aplicado pelo proprietário em casa: não passa pelo plantão. A clínica não reserva
+    // nem debita na EXECUÇÃO — mas, quando é ela quem FORNECE, o frasco sai da
+    // prateleira na FINALIZAÇÃO, que é a única oportunidade de cobrá-lo
+    // (`incluirDoProprietario`, 2026-09-18). Ver a matriz em `finalizar`.
+    if (item.aplicadaPeloProprietario && !incluirDoProprietario) continue;
+
+    // 🔴 A unidade é resolvida ANTES de olhar o estoque, e a guarda de entrega vem
+    // antes de tudo: item sem estoque cadastrado é lançado com valor 0 "para o
+    // financeiro saber", e sem a guarda aqui ele voltaria a somar quantidade na linha
+    // a cada dose de um frasco que já foi entregue.
+    const unidadeEstoque = unidadeDoEstoque(formas, item);
+    unidades.set(item.medicamentoCatId, unidadeEstoque);
+    const entregaUnica = entregaPorEmbalagem(item.unidade, unidadeEstoque);
+    let embalagensAgora = 0;
+    if (entregaUnica) {
+      porEmbalagem.add(item.id);
+      const conteudo   = conteudoDoItem(conteudos, item);
+      const porExecucao = Number(resolverQtd(item)) || 0;
+      // ⚠️ `dosesExecutadas` só é incrementado no FLUXO POR DOSE
+      // (`elegivelParaFluxoNovo`). No legado ele fica em 0 para sempre, e um item já
+      // executado cairia aqui com "nada consumido ainda" — voltando a debitar e a
+      // cobrar uma embalagem A CADA execução, que é o defeito de 2026-09-17. Item já
+      // executado SEM contador é o legado, e ali vale a regra anterior: entrega única
+      // no curso inteiro.
+      const doses = Number(item.dosesExecutadas) || 0;
+      if (item.executadoEm && doses === 0) { jaEntregues.add(item.id); continue; }
+
+      // 🔴 A CONTA É ACUMULADA, NÃO POR DOSE (2026-09-19). Compara quantas embalagens o
+      // curso já tinha aberto com quantas ele passa a ter abertas depois desta dose, e
+      // entrega a diferença. Frasco de 100 mL, 5 doses de 25 mL:
+      //
+      //     dose 1  acum   25  ->  1 aberta   (antes 0)   entrega 1
+      //     dose 2  acum   50  ->  1 aberta   (antes 1)   entrega 0
+      //     dose 3  acum   75  ->  1 aberta   (antes 1)   entrega 0
+      //     dose 4  acum  100  ->  1 aberta   (antes 1)   entrega 0
+      //     dose 5  acum  125  ->  2 abertas  (antes 1)   entrega 1
+      //                                        TOTAL DO CURSO: 2 frascos
+      //
+      // ⚠️ É isto que faz o curso cancelado no meio NUNCA cobrar frasco que ninguém
+      // abriu — a alternativa (cobrar ceil(curso inteiro) na 1ª dose) deixaria dois
+      // frascos cobrados numa prescrição interrompida na segunda aplicação.
+      // ⚠️ `embalagensPara` devolve 1 para quantidade zero (é o piso da entrega única),
+      // então o "antes" precisa ser 0 EXPLÍCITO na primeira dose — senão a 1ª entrega
+      // sairia 1 − 1 = 0 e o item nunca seria debitado nem cobrado.
+      embalagensAgora = embalagensDaExecucao({
+        jaConsumido: porExecucao * doses, qtdAgora: porExecucao, conteudo,
+      });
+      if (embalagensAgora <= 0) { jaEntregues.add(item.id); continue; }
+      entregas.set(item.id, embalagensAgora);
+    }
+
     const estoques = await buscarEstoquesFEFO(tx, item.medicamentoCatId, empresaId);
     if (estoques.length === 0) continue;
-    const unidadeEstoque = unidadeDoEstoque(formas, item);
     const qtdDia         = resolverQtd(item);
     // 🔴 O retrato do estoque é tirado ANTES do laço de baixa: MAIOR_VALOR e
     // CUSTO_MEDIO olham o que a clínica TEM no momento da cobrança. Calculado
     // depois, cada lote debitado mudaria o preço dos seguintes na mesma execução.
     const entradas = entradasParaCobranca(estoques, unidadeEstoque);
 
-    // Quantidade do dia na unidade do estoque.
-    let restante = qtdDoEstoque(qtdDia, item.unidade, unidadeEstoque, item.dosagem);
+    // Quantidade do dia na unidade do estoque. Na entrega por embalagem quem manda é a
+    // conta acumulada acima (as embalagens que ESTA execução abre), nunca a dosagem —
+    // `qtdDoEstoque` sozinha responderia pelo curso inteiro a cada dose.
+    let restante = entregaUnica
+      ? embalagensAgora
+      : qtdDoEstoque(qtdDia, item.unidade, unidadeEstoque, conteudoDoItem(conteudos, item));
 
     const desc = item.dosagem
       ? `${item.dosagem}${item.unidade ? ' ' + item.unidade : ''} × ${item.frequencia} (1 dose)`
@@ -535,9 +713,8 @@ async function debitarEstoqueDia(tx, itens, empresaId, grupoId = null, resolverQ
     }
 
     precos.set(item.medicamentoCatId, valorDaDose);
-    unidades.set(item.medicamentoCatId, unidadeEstoque);
   }
-  return { precos, unidades };
+  return { precos, unidades, jaEntregues, porEmbalagem, entregas };
 }
 
 // ─── Insumos de aplicação injetável (seringa + agulha) ───────────────────────
@@ -582,7 +759,13 @@ async function debitarInsumoUnidade(tx, prefixoNome, empresaId, motivo) {
     data: { estoqueId: estoque.id, tipo: 'SAIDA', quantidade: 1, motivo },
   });
 
-  const valor = estoque.valorRepassado > 0 ? estoque.valorRepassado : (estoque.valor ?? 0);
+  // 🔴 O PREÇO DE **UMA** UNIDADE, nunca o da embalagem inteira. `precoUnitarioBase` é
+  // gravado na entrada já dividido pelo conteúdo declarado (caixa de 100 seringas por
+  // R$ 100 -> R$ 1,00 cada); `valorRepassado` é o valor da EMBALAGEM e só serve de
+  // fallback para a entrada legada que não tem o preço calculado.
+  const valor = estoque.precoUnitarioBase != null && estoque.precoUnitarioBase > 0
+    ? estoque.precoUnitarioBase
+    : (estoque.valorRepassado > 0 ? estoque.valorRepassado : (estoque.valor ?? 0));
   return { valor, nome: estoque.medicamento.nome };
 }
 
@@ -596,6 +779,7 @@ async function verificarEstoqueParaDia(itens, empresaId, resolverQtd = calcularQ
   // declarada, o estoque está em mL e a receita também. Comparar contra a unidade da
   // embalagem barraria a execução de uma prescrição que cabe.
   const formas = await mapaFormaCalculo(prisma, itens);
+  const conteudos = await mapaConteudoEmbalagem(prisma, itens);
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
     // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
@@ -610,7 +794,7 @@ async function verificarEstoqueParaDia(itens, empresaId, resolverQtd = calcularQ
     // avulso). O par `paraBase` + `comparavel` que existia aqui repetia essa regra pela
     // metade: no ramo incomparável comparava a quantidade CRUA da receita ("20 mL")
     // com o saldo em embalagens (2) e acusava falta do que cabe.
-    const necessarioEstoque = qtdDiariaEstoque(item, unidadeEstoque, resolverQtd);
+    const necessarioEstoque = qtdDiariaEstoque(item, unidadeEstoque, resolverQtd, conteudoDoItem(conteudos, item));
     const insuficiente   = totalEstoque < necessarioEstoque;
     if (insuficiente) {
       alertas.push({
@@ -630,6 +814,7 @@ async function verificarEstoqueParaDia(itens, empresaId, resolverQtd = calcularQ
 async function verificarEstoqueParaExecucao(itens, empresaId) {
   const alertas = [];
   const formas = await mapaFormaCalculo(prisma, itens);
+  const conteudos = await mapaConteudoEmbalagem(prisma, itens);
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
     // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
@@ -646,7 +831,7 @@ async function verificarEstoqueParaExecucao(itens, empresaId) {
     // avulso). O par `paraBase` + `comparavel` que existia aqui repetia essa regra pela
     // metade: no ramo incomparável comparava a quantidade CRUA da receita ("20 mL")
     // com o saldo em embalagens (2) e acusava falta do que cabe.
-    const necessarioEstoque = qtdNaUnidadeEstoque(item, unidadeEstoque);
+    const necessarioEstoque = qtdNaUnidadeEstoque(item, unidadeEstoque, conteudoDoItem(conteudos, item));
     const insuficiente    = (estoque.qtdEstoque ?? 0) < necessarioEstoque;
     if (insuficiente) {
       alertas.push({
@@ -670,10 +855,13 @@ async function verificarEstoqueParaExecucao(itens, empresaId) {
 async function verificarDisponibilidade(itens, grupoId, empresaId) {
   const alertas = [];
   const formas = await mapaFormaCalculo(prisma, itens);
+  const conteudos = await mapaConteudoEmbalagem(prisma, itens);
   for (const item of itens) {
     if (item.tipo !== 'MEDICAMENTO' || !item.medicamentoCatId || item.medicamentoCliente) continue;
-    // Aplicado pelo proprietário em casa: a clínica não reserva nem debita estoque
-    if (item.aplicadaPeloProprietario) continue;
+    // ⚠️ O item aplicado pelo proprietário ENTRA aqui desde 2026-09-18: ele não reserva
+    // (não há execução futura a garantir), mas a clínica ENTREGA o medicamento na
+    // finalização, e a embalagem sai do estoque naquele instante. Pulá-lo faria a
+    // finalização debitar sem nunca avisar que o frasco não existe na prateleira.
     const estoques = await buscarEstoquesFEFO(prisma, item.medicamentoCatId, empresaId, grupoId);
     if (estoques.length === 0) continue;
     const unidadeEstoque = unidadeDoEstoque(formas, item);
@@ -688,7 +876,7 @@ async function verificarDisponibilidade(itens, grupoId, empresaId) {
     // avulso). O par `paraBase` + `comparavel` que existia aqui repetia essa regra pela
     // metade: no ramo incomparável comparava a quantidade CRUA da receita ("20 mL")
     // com o saldo em embalagens (2) e acusava falta do que cabe.
-    const necessario = qtdNaUnidadeEstoque(item, unidadeEstoque); // na unidade do estoque
+    const necessario = qtdNaUnidadeEstoque(item, unidadeEstoque, conteudoDoItem(conteudos, item)); // na unidade do estoque
 
     const reservasInfo = todasReservas.map(r => ({
       animalNome:       r.animal.nome,
@@ -1712,10 +1900,6 @@ const finalizar = async (req, res) => {
       where: { id: grupo.animalId }, select: { userId: true },
     });
     const proprietarioId = animal?.userId ?? null;
-    const atendNum = grupo.evolucao
-      ? formatAtendimentoNum(grupo.evolucao.tipoAtendimento, grupo.evolucao.numero)
-      : null;
-
     await prisma.$transaction(async (tx) => {
       await tx.prescricao.updateMany({
         where: { grupoId, ativo: true },
@@ -1737,6 +1921,9 @@ const finalizar = async (req, res) => {
 
       // Reserva o curso completo no estoque (multi-lote FEFO) — liberado ao
       // cancelar e abatido conforme a execução diária debita o estoque.
+      // ⚠️ `criarReservas` PULA o item aplicado pelo proprietário, e tem de continuar
+      // pulando: ele é debitado agora mesmo, logo abaixo — reservar e debitar o mesmo
+      // frasco o contaria duas vezes contra o saldo.
       await criarReservas(tx, grupoId, grupo.animalId, grupo.itens, empresaIdEfetivo);
 
       // ── MATRIZ "quem FORNECE × quem APLICA" (2026-08-01) ────────────────────
@@ -1764,6 +1951,27 @@ const finalizar = async (req, res) => {
       const itensParaFaturarAgora = grupo.itens.filter(
         i => i.tipo === 'MEDICAMENTO' && !i.medicamentoCliente && i.aplicadaPeloProprietario,
       );
+      // 🔴 A ENTREGA AO PROPRIETÁRIO DEBITA O ESTOQUE E TEM PREÇO (2026-09-18, a
+      // pedido). Até aqui este item era lançado com valor **ZERO** — o preço nasce do
+      // LOTE debitado, e ele nunca era executado, então não havia lote: a clínica
+      // entregava o frasco, a linha ia para a fatura em branco e alguém tinha de
+      // corrigir o valor à mão (a "LACUNA CONHECIDA" registrada no CLAUDE.md).
+      //
+      // Debitar aqui não é efeito colateral do preço, é o fato: o frasco SAIU da
+      // prateleira quando o cliente o levou. A quantidade é a do CURSO INTEIRO
+      // (`calcularQuantidadeTotal`), que é o que ele leva — e ela cai nas duas regras
+      // já existentes: 1 embalagem no produto sem multidose (`entregaPorEmbalagem`) e o
+      // proporcional prescrito no multidose (20 mL de um frasco de 20 mL).
+      //
+      // ⚠️ `incluirDoProprietario` é OPT-IN e existe só para este caminho: na EXECUÇÃO
+      // o item continua fora, porque lá ele nem chega (`itensHoje` já o exclui).
+      const { precos: precosDaEntrega, entregas: entregasDaEntrega } = itensParaFaturarAgora.length > 0
+        ? await debitarEstoqueDia(
+            tx, itensParaFaturarAgora, empresaIdEfetivo, grupoId, calcularQuantidadeTotal,
+            { incluirDoProprietario: true },
+          )
+        : { precos: new Map(), entregas: new Map() };
+
       // Sem nada a cobrar agora, nem abre fatura: senão a finalização criaria uma
       // fatura vazia para o cliente todo mês.
       if (proprietarioId && itensParaFaturarAgora.length > 0) {
@@ -1771,27 +1979,41 @@ const finalizar = async (req, res) => {
         // de quem executa — cada empresa tem a sua fatura para o mesmo cliente.
         const fatura = await getOrCreateFatura(tx, proprietarioId, empresaIdEfetivo);
         for (const item of itensParaFaturarAgora) {
-          const jaLancado = await tx.faturaItem.findFirst({ where: { prescricaoId: item.id } });
-          if (jaLancado) continue;
-          await adicionarFaturaItem(tx, {
+          // Pela FK só, a linha COMPARTILHADA (2026-09-17) esconderia o lançamento
+          // deste item quando ela foi criada por outro — e ele seria cobrado duas vezes.
+          if (await itemOrigens.origemJaFaturada(tx, 'prescricaoId', item.id)) continue;
+          // Consolida como a dose executada (2026-09-17): dois itens iguais que o
+          // proprietário aplica em casa são UMA linha com a quantidade somada, e cada
+          // um entra na observação. Abrir linha nova aqui deixaria a MESMA fatura com
+          // duas regras — a do plantão somando e a da finalização repetindo.
+          // Valor aceito no orçamento manda; sem orçamento, o MEDICAMENTO sai pelo
+          // preço do lote que acabou de ser debitado logo acima.
+          // ⚠️ Continua caindo em 0 quando o medicamento não tem estoque cadastrado na
+          // clínica — a linha nasce zerada "para o financeiro saber", exatamente como
+          // na execução. Zero aqui é "ninguém disse quanto vale", nunca um palpite.
+          const valorDaEntrega = item.valorOrcado != null
+            ? item.valorOrcado
+            : (item.tipo === 'PROCEDIMENTO'
+                ? await resolverValorProcedimento(tx, empresaIdEfetivo, item.medicamento, item.prestadorId)
+                : (item.medicamentoCatId ? (precosDaEntrega.get(item.medicamentoCatId) ?? 0) : 0));
+          // 🔴 A QUANTIDADE É A DE EMBALAGENS ENTREGUES (2026-09-19), nunca 1 fixo: o
+          // cliente leva o CURSO INTEIRO para casa, e o curso que não cabe num frasco
+          // leva dois. Com `1`, a fatura mostraria o valor de dois frascos ao lado de
+          // "Quant.: 1" e ele não teria como conferir o que recebeu.
+          // ⚠️ E o `valor` tem de virar UNITÁRIO junto — `valorDaEntrega` é o TOTAL do
+          // que saiu do estoque, e a linha multiplica de volta por `quantidade`. Mexer
+          // num sem o outro dobra (ou divide) a cobrança, sem nada acusar.
+          const embalagensDaEntrega = entregasDaEntrega.get(item.id) ?? 1;
+          await adicionarOuSomarFaturaItem(tx, {
             faturaId:     fatura.id,
             animalId:     grupo.animalId,
             tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
-            descricao:    descricaoItemFatura(item, atendNum),
-            // Valor aceito no orçamento manda; sem orçamento, procedimento sai pelo
-            // catálogo/combo.
-            // ⚠️ MEDICAMENTO cai em 0 aqui: o preço nasce do LOTE debitado, e este item
-            // nunca é executado (quem aplica é o proprietário) — logo não há lote. Se a
-            // clínica entrega o medicamento, hoje é preciso ajustar o valor na fatura à
-            // mão, ou orçar o item antes (o `valorOrcado` tem precedência).
-            valor:        item.valorOrcado != null
-              ? item.valorOrcado
-              : (item.tipo === 'PROCEDIMENTO'
-                  ? await resolverValorProcedimento(tx, empresaIdEfetivo, item.medicamento, item.prestadorId)
-                  : 0),
-            quantidade:   1,
+            descricao:    descricaoItemFatura(item),
+            valor:        valorDaEntrega / embalagensDaEntrega,
+            quantidade:   embalagensDaEntrega,
             veterinarioId,
             prescricaoId: item.id,
+            ocorridoEm:   new Date(),
           });
         }
       }
@@ -2049,12 +2271,36 @@ function dataLocalStr(d, fuso = null) {
 }
 
 // Descrição do item na fatura — mesma forma no lançamento da finalização e na execução
-function descricaoItemFatura(item, atendNum) {
-  const dose = item.dosagem
-    ? `${item.dosagem}${item.unidade ?? ''} × ${item.frequencia}`
-    : item.frequencia;
-  const base = item.tipo === 'MEDICAMENTO' ? `${item.medicamento} — ${dose}` : item.medicamento;
-  return atendNum ? `[${atendNum}] ${base}` : base;
+// 🔴 A DESCRIÇÃO NÃO CARREGA MAIS O Nº DO ATENDIMENTO (2026-09-17, a pedido).
+//
+// Enquanto ela começava com `[AG-0012]`, a chave de consolidação da fatura nunca
+// casava entre atendimentos: o MESMO medicamento, na MESMA dose e pelo MESMO preço,
+// aplicado em dois atendimentos do mês, virava duas linhas idênticas fora o número. O
+// número passou a ser OBSERVAÇÃO da linha (`lib/faturaItemOrigens.js`), junto da data
+// e da quantidade de cada contribuição — e clicável para o registro de origem, que é
+// justamente o que ele servia para dizer.
+//
+// 🔴 A POSOLOGIA SAIU DA DESCRIÇÃO (2026-09-19, a pedido) — a linha é o PRODUTO.
+//
+// ⚠️ ISTO INVERTE a decisão de 2026-09-17, que a mantinha de propósito. O efeito não é
+// cosmético: a posologia fazia parte da CHAVE de consolidação (tipo, descrição, animal,
+// valor unitário), então o mesmo remédio prescrito 12/12h num atendimento e 8/8h em
+// outro virava DUAS linhas. Sem ela, os dois viram UMA:
+//
+//     antes : Amoxicilina — 10mL × 12/12h   Quant.: 3
+//             Amoxicilina — 10mL × 8/8h     Quant.: 2
+//     agora : Amoxicilina                   Quant.: 5
+//
+// A razão da regra antiga ("a linha afirmaria uma posologia que metade das doses não
+// teve") deixa de valer justamente porque a linha não afirma mais posologia nenhuma —
+// ela diz o produto, a quantidade e o preço, que é o que a fatura cobra. O detalhe de
+// cada aplicação continua inteiro na OBSERVAÇÃO da linha (`lib/faturaItemOrigens.js`):
+// número do registro, data e quantidade, uma linha por execução.
+//
+// ⚠️ O VALOR UNITÁRIO continua na chave, e é ele que separa o que precisa ser separado:
+// doses de tamanhos diferentes têm preços diferentes e seguem em linhas próprias.
+function descricaoItemFatura(item) {
+  return item.medicamento;
 }
 
 // Valor de um item PROCEDIMENTO na fatura, resolvido pelo NOME (o item guarda só o
@@ -2107,9 +2353,10 @@ async function resolverValorProcedimento(tx, empresaId, nome, prestadorId = null
 
 const CLASSIFICACAO_LABEL = { NO_HORARIO: 'no horário', ANTECIPADA: 'antecipada', ATRASADA: 'atrasada' };
 
-// Tamanho mínimo da justificativa de execução ANTECIPADA — mesmo piso que o
-// `ModalJustificativa` do front já exige em toda ação destrutiva/justificada.
-const MIN_JUSTIFICATIVA = 3;
+// A execução ANTECIPADA deixou de exigir JUSTIFICATIVA (2026-09-18): ela é
+// CONFIRMADA (`confirmarAntecipacao`), no mesmo molde da atrasada. A justificativa
+// continua ACEITA e, quando vier, vai para o `motivo` da auditoria — cliente antigo
+// (que ainda a envia) segue funcionando sem nenhuma mudança de comportamento.
 
 // Texto de data/hora para a mensagem de erro e para a auditoria — NO FUSO DA
 // CLÍNICA. Lia o relógio do servidor, então a auditoria de uma clínica de Manaus
@@ -2130,11 +2377,19 @@ const executar = async (req, res) => {
     // Execução ATRASADA exige confirmação explícita do front (tela de aviso,
     // não-bloqueante) — sem ela, nada é debitado/faturado.
     const confirmarHorario = req.body?.confirmarHorario === true;
-    // Execução ANTECIPADA (dose FUTURA) é BLOQUEADA e só passa com JUSTIFICATIVA.
-    // 🔴 `confirmarHorario` NÃO a libera — era exatamente esse o furo: "Executar
-    // Todos" mandava a flag sempre true e aplicava o curso inteiro de uma vez,
-    // enquanto o ícone "Executar" (item a item) checava o horário. Agora o gate é
-    // o MESMO nos dois caminhos; o que muda é só quem responde ao 400.
+    // Execução ANTECIPADA (dose FUTURA) é CONFIRMADA, não justificada (2026-09-18):
+    // a tela informa o horário previsto, pergunta, e `confirmarAntecipacao` é o "sim".
+    //
+    // 🔴 FLAG PRÓPRIA, NUNCA `confirmarHorario` — e isto não é preciosismo: o
+    // "Executar Todos" manda `confirmarHorario: true` FIXO (o clique em lote vale
+    // como confirmação de dose ATRASADA, que já era devida). Liberar a antecipação
+    // por aquela mesma flag reabriria o furo de 2026-08-23: um clique aplicaria o
+    // curso INTEIRO de uma vez, sem ninguém ser perguntado. Com flag própria, o
+    // gate é o mesmo nos dois caminhos (ícone e lote) e os dois passam pela
+    // pergunta.
+    const confirmarAntecipacao = req.body?.confirmarAntecipacao === true;
+    // OPCIONAL desde 2026-09-18 (era obrigatória). Quando vier, vai para o `motivo`
+    // da auditoria — quem quiser registrar o porquê continua podendo.
     const justificativa = String(req.body?.justificativa ?? '').trim();
 
     /**
@@ -2220,9 +2475,12 @@ const executar = async (req, res) => {
     // (um itemId) ou do "Executar Todos" (vários) — os dois caminhos passam por
     // aqui, que é o que corrige a divergência de comportamento entre eles.
     //
-    //   ANTECIPADA (dose futura) → 400 EXECUCAO_FUTURA. Só executa com
-    //     `justificativa` — antecipar dose é decisão clínica e fica registrada
-    //     na auditoria com o horário previsto, o real e o motivo.
+    //   ANTECIPADA (dose futura) → 400 EXECUCAO_FUTURA, liberada por
+    //     `confirmarAntecipacao`. 🔴 NÃO é bloqueio: a resposta CARREGA o horário
+    //     previsto para a tela poder dizer "estava prevista para 24/08 às 07:44" e
+    //     PERGUNTAR. Confirmado, segue o caminho normal — inclusive o rolling
+    //     schedule, que recalcula as doses seguintes a partir do horário REAL
+    //     desta (`calcularProximaDose(agora, …)`, mais abaixo).
     //   ATRASADA                 → 400 CONFIRMACAO_NECESSARIA, liberada por
     //     `confirmarHorario` (aviso simples): a dose já era devida, atrasar não
     //     inventa dose nova.
@@ -2237,10 +2495,10 @@ const executar = async (req, res) => {
       if (classificacao === 'NO_HORARIO') continue;
 
       if (classificacao === 'ANTECIPADA') {
-        if (justificativa.length < MIN_JUSTIFICATIVA) {
+        if (!confirmarAntecipacao) {
           return res.status(400).json({
             erro:        'EXECUCAO_FUTURA',
-            error:       `A próxima dose de "${item.medicamento}" está prevista para ${fmtDataHora(previsto, fuso)}. Antecipar exige justificativa.`,
+            error:       `A próxima dose de "${item.medicamento}" está prevista para ${fmtDataHora(previsto, fuso)}. Confirme a antecipação para executar agora.`,
             itemId:      item.id,
             medicamento: item.medicamento,
             // Qual dose do curso está sendo antecipada — a tela mostra "(03/05)".
@@ -2283,10 +2541,6 @@ const executar = async (req, res) => {
     const animal = await prisma.animal.findUnique({ where: { id: grupo.animalId }, select: { userId: true } });
     const proprietarioId = animal?.userId ?? null;
 
-    const atendNum = grupo.evolucao
-      ? formatAtendimentoNum(grupo.evolucao.tipoAtendimento, grupo.evolucao.numero)
-      : null;
-
     // Quem SOLICITOU — é o que a conta a pagar precisa dizer ("quem fez a
     // solicitação", no pedido de 2026-09-10). É QUEM PRESCREVEU, não quem executou:
     // a compra foi provocada pela prescrição, e o plantonista que aplica a dose não
@@ -2302,7 +2556,7 @@ const executar = async (req, res) => {
       // Debita a quantidade resolvida por item (multi-lote FEFO) e retorna
       // preços/unidades por medicamento. Passa o grupoId para abater as reservas
       // deste grupo junto com a baixa.
-      const { precos, unidades } = await debitarEstoqueDia(tx, itensHoje, empresaIdEfetivo, grupoId, resolverQtdExecucao);
+      const { precos, jaEntregues, porEmbalagem, entregas } = await debitarEstoqueDia(tx, itensHoje, empresaIdEfetivo, grupoId, resolverQtdExecucao);
 
       // Lança na fatura ABERTA do proprietário NESTA empresa
       const fatura = await getOrCreateFatura(tx, proprietarioId, empresaIdEfetivo);
@@ -2338,7 +2592,7 @@ const executar = async (req, res) => {
           : (item.tipo === 'PROCEDIMENTO'
               ? await resolverValorProcedimento(tx, empresaIdEfetivo, item.medicamento, item.prestadorId)
               : (item.medicamentoCatId ? (precos.get(item.medicamentoCatId) ?? 0) : 0));
-        const descricao = descricaoItemFatura(item, atendNum);
+        const descricao = descricaoItemFatura(item);
 
         // Fornecido pelo cliente NÃO é cobrado — não gera item na fatura, mesmo após
         // executado. (A seringa/agulha da aplicação, insumos da clínica, continuam
@@ -2346,16 +2600,43 @@ const executar = async (req, res) => {
         // É AQUI que nasce a cobrança do item sem flag nenhuma — a finalização deixou
         // de lançá-lo em 2026-08-01 (ver a matriz em `finalizar`). O item aplicado pelo
         // proprietário nem chega neste laço: `itensHoje` já o excluiu.
-        if (!item.medicamentoCliente) {
+        // 🔴 SEM ENTREGA NESTA DOSE — nada de nova cobrança (2026-09-18). O produto sem
+        // multidose prescrito em conteúdo ("5 mL de xarope") sai do estoque quando um
+        // frasco é ABERTO: nas doses que saem de um frasco já aberto o cliente está
+        // usando o que já pagou. Sem esta guarda a linha somaria quantidade a cada
+        // aplicação e a fatura cobraria dez frascos por um. Ver `entregaPorEmbalagem`.
+        // ⚠️ Só a COBRANÇA é pulada; a dose continua sendo marcada como executada mais
+        // abaixo, e a seringa/agulha da aplicação continuam sendo lançadas — cada
+        // aplicação usa um insumo novo.
+        const entregaJaFeita = jaEntregues.has(item.id);
+        // 🔴 QUANTAS EMBALAGENS ESTA EXECUÇÃO ENTREGOU (2026-09-19). Quase sempre 1, mas
+        // uma dose maior que o frasco abre várias de uma vez (dose de 250 mL num frasco
+        // de 100 mL abre três). `valorDaDose` é o TOTAL do que foi debitado, então a
+        // linha precisa do UNITÁRIO — com `quantidade: 3` e o total no `valor`, a
+        // fatura cobraria nove frascos.
+        // ⚠️ Fora da entrega por embalagem nada muda: quantidade 1 e o valor da dose,
+        // que é o que a consolidação vem somando desde sempre.
+        const embalagensEntregues = porEmbalagem.has(item.id) ? (entregas.get(item.id) ?? 1) : 1;
+
+        if (!item.medicamentoCliente && !entregaJaFeita) {
           // Prescrição finalizada ANTES da mudança já tem uma linha zerada criada na
           // finalização: na PRIMEIRA execução ela é aproveitada (só confirma o valor)
           // em vez de duplicar.
           // `item.executadoEm` ainda reflete o estado ANTES desta execução (a marcação
           // acontece adiante no laço) e `itensHoje` já excluiu quem executou hoje.
           const primeiraExecucao = !item.executadoEm;
-          const lancamentoDaFinalizacao = primeiraExecucao
+          const candidatoDaFinalizacao = primeiraExecucao
             ? await tx.faturaItem.findFirst({ where: { prescricaoId: item.id }, orderBy: { id: 'asc' } })
             : null;
+          // ⚠️ Só reaproveita a linha se ela for EXCLUSIVAMENTE deste item. Desde que a
+          // consolidação passou a juntar origens diferentes (2026-09-17), a linha
+          // achada pela FK pode já ter doses de OUTRA prescrição — e reescrever `valor`
+          // ali reprecificaria retroativamente o que a outra já cobrou. `null` da lib
+          // ("não sei", base sem a tabela) não bloqueia: ali nada é compartilhado.
+          const compartilhada = candidatoDaFinalizacao
+            ? await itemOrigens.temOutraOrigem(tx, candidatoDaFinalizacao.id, 'prescricaoId', item.id)
+            : false;
+          const lancamentoDaFinalizacao = compartilhada === true ? null : candidatoDaFinalizacao;
           if (lancamentoDaFinalizacao) {
             await tx.faturaItem.update({
               where: { id: lancamentoDaFinalizacao.id },
@@ -2363,18 +2644,24 @@ const executar = async (req, res) => {
             });
           } else {
             // Doses SEGUINTES do mesmo item somam na QUANTIDADE da linha que já existe
-            // (mesma origem, mesma descrição, mesmo valor unitário) em vez de repetir a
-            // linha na fatura — a cobrança por execução não muda, só deixa de virar 14
-            // linhas idênticas num curso de 7 dias. Ver `adicionarOuSomarFaturaItem`.
+            // (mesma descrição, mesmo valor unitário) em vez de repetir a linha na
+            // fatura. Desde 2026-09-17 a chave NÃO inclui mais a ORIGEM: a dose do
+            // atendimento seguinte cai na MESMA linha e o número dele entra como
+            // observação, com data e quantidade. Ver `adicionarOuSomarFaturaItem`.
             await adicionarOuSomarFaturaItem(tx, {
               faturaId:     fatura.id,
               animalId:     grupo.animalId,
               tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
               descricao,
-              valor:        valorDaDose,  // valor total da dose (regra de 3)
-              quantidade:   1,
+              // UNITÁRIO: o valor da dose (regra de 3) ou, na entrega por embalagem, o
+              // preço de UMA embalagem — `valorDaDose` traz o total das que saíram.
+              valor:        valorDaDose / embalagensEntregues,
+              quantidade:   embalagensEntregues,
               veterinarioId,
               prescricaoId: item.id,
+              // Data da CONTRIBUIÇÃO, que é o que a observação da linha mostra — a
+              // linha consolidada não tem "a" data, tem uma por execução.
+              ocorridoEm:   agora,
             });
           }
         }
@@ -2464,6 +2751,14 @@ const executar = async (req, res) => {
             // mesma execução não cria a segunda (índice único parcial no banco).
             origemTipo:  contasPagar.ORIGENS.EXECUCAO_PRESTADOR,
             origemId:    item.id,
+            // 🔴 LANÇA MESMO SEM VALOR (a pedido, 2026-09-18). Prestador sem forma de
+            // pagamento cadastrada, ou procedimento sem preço no vínculo, devolve
+            // `valorAPagar = 0` — e até aqui isso fazia a linha NÃO EXISTIR: o serviço
+            // era prestado, a clínica devia, e a tela de Pagamentos não mostrava nada.
+            // Zerado, a dívida aparece como PENDÊNCIA e o financeiro informa o valor
+            // na própria tela. O zero é honesto ("ninguém disse quanto vale"); o que
+            // continua proibido é ADIVINHAR um número.
+            permitirSemValor: true,
           });
         }
 
@@ -2482,12 +2777,20 @@ const executar = async (req, res) => {
         // e zeraria a margem dela no relatório. Sem preço de compra cadastrado, NÃO
         // lança — dívida de valor inventado é pior que dívida ausente, e a tela de
         // Produtos é onde isso se resolve.
-        if (item.tipo === 'MEDICAMENTO' && !item.medicamentoCliente && item.medicamentoCatId) {
+        //
+        // ⚠️ Entrega por EMBALAGEM segue a mesma regra da fatura: a compra é do frasco
+        // pedido ao fornecedor, e a quantidade é a de EMBALAGENS abertas nesta execução
+        // — não a dosagem da receita, que está em mL.
+        if (item.tipo === 'MEDICAMENTO' && !item.medicamentoCliente && item.medicamentoCatId && !entregaJaFeita) {
           const produto = await produtoFornecedor.fornecedorDoItem(
             tx, empresaIdEfetivo, item.medicamentoCatId,
           );
           if (produto?.valorUnitario != null) {
-            const qtd = Number(resolverQtdExecucao(item)) || 1;
+            // Entrega por embalagem: a compra é do FRASCO, e são tantos quantos esta
+            // execução abriu — não a dosagem da receita, que está em mL.
+            const qtd = porEmbalagem.has(item.id)
+              ? embalagensEntregues
+              : (Number(resolverQtdExecucao(item)) || 1);
             await contasPagar.lancarItem(tx, {
               empresaId:   empresaIdEfetivo,
               tipo:        'FORNECEDOR',
@@ -2516,9 +2819,9 @@ const executar = async (req, res) => {
               `Aplicação injetável (${item.via}): ${item.medicamento}`,
             );
             if (!insumo) continue;
-            const descInsumo = atendNum
-              ? `[${atendNum}] ${insumo.nome} — aplicação ${item.via} (${item.medicamento})`
-              : `${insumo.nome} — aplicação ${item.via} (${item.medicamento})`;
+            // Sem o `[AG-0012]` pelo mesmo motivo da dose: a seringa de dois
+            // atendimentos é a MESMA seringa, e o número vive na observação da linha.
+            const descInsumo = `${insumo.nome} — aplicação ${item.via} (${item.medicamento})`;
             // Mesma consolidação da dose: 7 aplicações injetáveis = "Seringa … Quant.: 7",
             // não 7 linhas de seringa na fatura.
             await adicionarOuSomarFaturaItem(tx, {
@@ -2530,6 +2833,7 @@ const executar = async (req, res) => {
               quantidade:   1,
               veterinarioId,
               prescricaoId: item.id,
+              ocorridoEm:   agora,
             });
           }
         }
@@ -2548,6 +2852,12 @@ const executar = async (req, res) => {
           const classificacao = classificarExecucao(agora, previsto);
           const diffMin       = diferencaEmMinutos(agora, previsto);
 
+          // 🔴 AS DOSES SEGUINTES SÃO RECALCULADAS A PARTIR DE `agora` — o horário
+          // REAL desta execução, nunca da grade original. É isto (rolling schedule)
+          // que faz a dose ANTECIPADA deslocar o curso inteiro junto: antecipou a
+          // dose das 20:00 para as 14:00, a próxima de 12/12h passa a ser 02:00, não
+          // 08:00. Vale igual para a atrasada. Usar `previsto` aqui em vez de `agora`
+          // devolveria a grade fixa e faria a dose seguinte nascer fora de hora.
           await tx.prescricao.update({
             where: { id: item.id },
             data:  {
@@ -2574,13 +2884,20 @@ const executar = async (req, res) => {
             entidade:   'PRESCRICAO_DOSE',
             entidadeId: item.id,
             animalId:   grupo.animalId,
-            // A justificativa da dose ANTECIPADA vai para `motivo` — é o campo que
-            // a tela de Auditoria já exibe como texto do usuário (e o único que o
-            // saneador de referências não reescreve).
+            // A justificativa (hoje OPCIONAL) vai para `motivo` — é o campo que a
+            // tela de Auditoria exibe como texto do usuário (e o único que o
+            // saneador de referências não reescreve). Sem ela, `motivo` fica
+            // vazio: NUNCA preencher com frase do sistema, senão a auditoria
+            // passaria a atribuir à pessoa um texto que ela não escreveu.
             motivo:     classificacao === 'ANTECIPADA' && justificativa ? justificativa : undefined,
+            // "antecipada 120min, confirmada na execução" — o fato de ter havido
+            // confirmação explícita é do SISTEMA e mora aqui, não no `motivo`. É o
+            // que separa, na trilha, a dose antecipada com aval de quem executou de
+            // uma eventual antecipação por outro caminho.
             detalhes:   `${grupo.animal?.nome ?? 'paciente'} — ${item.medicamento}: `
               + `previsto ${fmtDataHora(previsto, fuso)}, executado ${fmtDataHora(agora, fuso)} `
-              + `(${CLASSIFICACAO_LABEL[classificacao]}${classificacao !== 'NO_HORARIO' ? ` ${Math.abs(diffMin)}min` : ''})`,
+              + `(${CLASSIFICACAO_LABEL[classificacao]}${classificacao !== 'NO_HORARIO' ? ` ${Math.abs(diffMin)}min` : ''}`
+              + `${classificacao === 'ANTECIPADA' && confirmarAntecipacao ? ', confirmada na execução' : ''})`,
           });
         } else {
           await tx.prescricao.update({ where: { id: item.id }, data: { executadoEm: agora } });
@@ -2618,7 +2935,7 @@ const executar = async (req, res) => {
       }
 
       // O preenchimento do valor do item já lançado na finalização é um UPDATE —
-      // não passa pelo incremento de `adicionarFaturaItem`. Recalcula para fechar.
+      // não passa pelo incremento do lançamento de item. Recalcula para fechar.
       await recalcularTotal(tx, fatura.id);
     });
 
@@ -3000,6 +3317,11 @@ module.exports = {
   // Exportadas para TESTE: a regra da dose multidose quebra em silêncio (o valor da
   // fatura sai errado sem erro nenhum), então precisa de gate sobre a conta PURA.
   qtdDoEstoque,
+  entregaPorEmbalagem,
+  embalagensDaExecucao,
+  // Exportada para poder ser exercitada de verdade (gate e verificacao ao vivo):
+  // e ela que decide, de uma so vez, QUANTO sai do estoque e QUANTO vai a fatura.
+  debitarEstoqueDia,
   // Idem: "em que unidade este item é contado" decide a baixa E o preço da linha, e
   // errá-la não produz erro nenhum — só um saldo e uma fatura errados.
   unidadeDoEstoque,

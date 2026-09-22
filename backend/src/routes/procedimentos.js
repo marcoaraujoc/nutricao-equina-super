@@ -26,6 +26,11 @@ const requireAdmin = (req, res, next) => {
 router.get('/especialidades-minhas',        authenticate, cadastro.especialidadesMinhas);
 router.get('/cadastro/lista',               authenticate, cadastro.listarComValores);
 router.put('/cadastro/valor/:procedimentoId', authenticate, checkPermission('cadastro.procedimento.editar', 'PROPRIO'), cadastro.definirValor);
+// Cadastro do procedimento DA CLÍNICA (2026-09-18) — LITERAL, antes de `/:id`.
+// ⚠️ Gate de `cadastro.procedimento.criar`, NÃO `requireAdmin`: o que nasce aqui é a
+// linha da EMPRESA. O `POST /` lá embaixo continua ADMIN-only porque escreve no
+// catálogo GLOBAL, que vale para todas as clínicas.
+router.post('/cadastro/proprio', authenticate, checkPermission('cadastro.procedimento.criar', 'PROPRIO'), cadastro.criarProprio);
 
 // ── Prestador × procedimento (2026-09-08) ───────────────────────────────────
 // Vários prestadores podem executar o MESMO procedimento com valores diferentes.

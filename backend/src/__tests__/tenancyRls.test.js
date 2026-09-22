@@ -31,6 +31,14 @@ const SCHEMA = 'schs2vet';
 // ─── TENANT PLANE — protegidas por RLS ────────────────────────────────────────
 // Vazia na fase 1: nenhuma tabela tem RLS ainda (medido — 0 de 90).
 const TENANT_PLANE = [
+  // ✅ 2026-09-17 — AS ORIGENS DA LINHA DE FATURA (migration
+  // `20261015000000_fatura_item_origens`, APLICADA). TENANT VIA PAI com DOIS saltos
+  // (`tb_fatura_itens` → `tb_faturas`), ENABLE + FORCE + policy com USING e WITH CHECK.
+  // Guarda de qual atendimento veio cada cobrança: vazamento aqui entrega à clínica
+  // vizinha o que a outra aplicou, em qual paciente e quando.
+  // ⚠️ Conferido AO VIVO em transação revertida: a empresa 58 grava no próprio item e
+  // lê de volta; gravar no item da 59 é RECUSADO pelo banco (42501); a 59 enxerga 0.
+  'tb_fatura_item_origens',
   // ✅ 2026-09-10 — PRODUTOS DE FORNECEDOR + CONTAS A PAGAR (migration
   // `20261006000000_produtos_contas_pagar`, APLICADA). As duas primeiras com TENANT
   // DIRETO (`empresa_id` próprio) e a terceira com TENANT VIA PAI (`tb_contas_pagar`,

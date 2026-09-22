@@ -1424,6 +1424,7 @@ model FaturaItem {
   descontoValor           Float    @default(0) @map("desconto_valor")
 
   fatura                Fatura                 @relation(fields: [faturaId], references: [id])
+  origens               FaturaItemOrigem[]     @relation("FaturaItemOrigens")
   animal                Animal?                @relation("FaturaItemAnimal", fields: [animalId], references: [id])
   veterinario           User?                  @relation("FaturaItemVet", fields: [veterinarioId], references: [id], onDelete: SetNull)
   exameClinico          ExameClinico?          @relation("FaturaItemExameClinico", fields: [exameClinicoId], references: [id], onDelete: SetNull)
@@ -1440,6 +1441,46 @@ model FaturaItem {
   @@index([faturaId])
   @@index([animalId])
   @@map("tb_fatura_itens")
+  @@schema("schs2vet")
+}
+
+// 🔴 AS ORIGENS DE UMA LINHA DE FATURA (2026-09-17) — a observação por baixo da cobrança.
+//
+// Uma linha por CONTRIBUIÇÃO: de qual registro clínico veio, quando e quantas unidades.
+// A linha da fatura passou a consolidar origens DIFERENTES (o mesmo medicamento, na
+// mesma dose e pelo mesmo preço, aplicado em dois atendimentos, é UMA linha), e a FK de
+// origem em `FaturaItem` só comporta a PRIMEIRA delas. É esta tabela que responde
+// "Quant.: 5 veio de onde?" e, mais importante, que mantém o ESTORNO certo: cancelar
+// uma das prescrições SUBTRAI o que era dela em vez de apagar a linha inteira.
+//
+// ⚠️ INVARIANTE: `FaturaItem.quantidade` = soma das `quantidade` daqui. Quem lança item
+// com origem passa por `lib/faturaUtils.js`; lançamento manual do financeiro e
+// assistência mensal não têm origem e simplesmente não têm contribuição.
+//
+// ⚠️ Lida e gravada por SQL CRU (`lib/faturaItemOrigens.js`) — o client Prisma pode não
+// conhecer a tabela (no Windows o `prisma generate` falha com o backend rodando, §11), e
+// a fatura não pode parar por causa da OBSERVAÇÃO dela.
+model FaturaItemOrigem {
+  id                      Int      @id @default(autoincrement())
+  faturaItemId            Int      @map("fatura_item_id")
+  quantidade              Float    @default(1)
+  // Quando a execução aconteceu — é a data que aparece na observação. NÃO é `criadoEm`:
+  // o lançamento pode ser reprocessado, a aplicação não.
+  ocorridoEm              DateTime @default(now()) @map("ocorrido_em")
+  criadoEm                DateTime @default(now()) @map("criado_em")
+  exameClinicoId          Int?     @map("exame_clinico_id")
+  prescricaoId            Int?     @map("prescricao_id")
+  vacinaClinicaId         Int?     @map("vacina_clinica_id")
+  encaminhamentoClinicoId Int?     @map("encaminhamento_clinico_id")
+
+  faturaItem FaturaItem @relation("FaturaItemOrigens", fields: [faturaItemId], references: [id], onDelete: Cascade)
+
+  @@index([faturaItemId])
+  @@index([prescricaoId])
+  @@index([vacinaClinicaId])
+  @@index([exameClinicoId])
+  @@index([encaminhamentoClinicoId])
+  @@map("tb_fatura_item_origens")
   @@schema("schs2vet")
 }
 

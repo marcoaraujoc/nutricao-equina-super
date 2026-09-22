@@ -33,14 +33,17 @@ const listarCredores = async (req, res) => {
     const dados = tipo === 'PRESTADOR'
       ? await prisma.prestador.findMany({
           where:  { empresaId: req.empresaId, ativo: true },
-          select: { id: true, nome: true, tipoServico: true },
+          // `telefone` entrou em 2026-09-18: é o DESTINO do WhatsApp da tela de
+          // Pagamentos. Sem ele o envio cai no fallback manual (baixa o PDF e abre o
+          // app), que funciona — mas obriga a procurar o contato à mão.
+          select: { id: true, nome: true, tipoServico: true, telefone: true },
           orderBy: { nome: 'asc' },
         })
       : await prisma.fornecedor.findMany({
           // Fornecedor GLOBAL (empresa_id null, semeado pelo ADMIN) também atende a
           // clínica — escondê-lo obrigaria a recadastrar quem já existe.
           where:  { ativo: true, OR: [{ empresaId: null }, { empresaId: req.empresaId }] },
-          select: { id: true, nome: true, tipoServico: true },
+          select: { id: true, nome: true, tipoServico: true, telefone: true },
           orderBy: { nome: 'asc' },
         });
     return res.json({ dados });
@@ -136,6 +139,35 @@ const alterarStatus = async (req, res) => {
   }
 };
 
+// PATCH /api/financeiro/contas-pagar/itens/:itemId  { valor }
+// 🔴 A outra metade do lançamento zerado (2026-09-18): o procedimento sem valor
+// cadastrado passa a APARECER na conta, e é aqui que o financeiro informa quanto vale.
+// Sem esta rota o item zerado seria só uma linha inútil.
+const atualizarItem = async (req, res) => {
+  try {
+    if (!req.empresaId) return res.status(400).json({ error: 'Selecione a empresa.' });
+
+    const resultado = await prisma.$transaction(async (tx) => {
+      const r = await contasPagar.atualizarValorItem(tx, req.empresaId, req.params.itemId, req.body?.valor);
+      if (r.erro) return r;
+      // Dinheiro que muda de valor deixa rastro: quem alterou, de quanto para quanto.
+      await registrarAuditoria(tx, req, {
+        categoria:  'ALTERACAO',
+        entidade:   'CONTA_PAGAR_ITEM',
+        entidadeId: Number(req.params.itemId),
+        detalhes:   `Valor do item definido em R$ ${Number(r.valor).toFixed(2)}`,
+      });
+      return r;
+    });
+
+    if (resultado.erro) return res.status(400).json({ error: resultado.erro });
+    return res.json({ dados: resultado });
+  } catch (err) {
+    console.error('ContaPagarController.atualizarItem:', err);
+    return res.status(500).json({ error: 'Erro ao atualizar o item.' });
+  }
+};
+
 // DELETE /api/financeiro/contas-pagar/itens/:itemId  { motivo }
 const removerItem = async (req, res) => {
   try {
@@ -162,4 +194,4 @@ const removerItem = async (req, res) => {
   }
 };
 
-module.exports = { listar, listarCredores, lancar, alterarStatus, removerItem };
+module.exports = { listar, listarCredores, lancar, alterarStatus, removerItem, atualizarItem };

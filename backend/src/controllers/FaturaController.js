@@ -11,6 +11,7 @@ const {
   statusAoReabrir,
   proximoMesReferencia,
 } = require('../lib/faturaUtils');
+const { origensPorItem } = require('../lib/faturaItemOrigens');
 const { resolverLogoPorProprietario } = require('../lib/logoEmpresaUtils');
 const { ehClienteDaEmpresa } = require('../lib/clienteEmpresa');
 const { lerDadosRecebimento } = require('../lib/dadosRecebimento');
@@ -36,10 +37,43 @@ const emailService = require('../services/emailService');
 // tela cobria o caso de pagamento parcial que isso exigiria).
 async function comPerfilDaEmpresa(fatura, empresaId) {
   if (!fatura) return fatura;
-  const comOrigem = comOrigemDosItens(fatura);
+  const comOrigem = await comOrigensDetalhadas(comOrigemDosItens(fatura));
   return comOrigem.proprietario && empresaId
     ? { ...comOrigem, proprietario: await aplicarPerfilProprietario(comOrigem.proprietario, empresaId) }
     : comOrigem;
+}
+
+/**
+ * Anexa a cada item a lista de CONTRIBUIÇÕES que formaram a quantidade dele — a
+ * observação da linha: nº do atendimento/vacina, data e quantidade de cada execução.
+ *
+ * POR QUÊ existe, e por que é uma consulta à parte: desde 2026-09-17 a linha da fatura
+ * consolida origens DIFERENTES (o mesmo medicamento aplicado em dois atendimentos é
+ * uma linha só, com "Quant.: 5"). A FK de origem do item responde por UMA delas — a
+ * principal —, então sem esta lista o financeiro veria a quantidade somada e não teria
+ * como saber de onde ela veio.
+ *
+ * ⚠️ UMA consulta para a fatura inteira (`origensPorItem` recebe a lista de ids), nunca
+ * uma por item: a fatura de um mês tem dezenas de linhas, e uma ida ao banco por linha
+ * derrubaria a tela — o mesmo motivo que fez o lookup de multidose nascer em bloco.
+ * ⚠️ Item sem contribuição (assistência mensal, lançamento manual do financeiro, linha
+ * LEGADA anterior à migration) sai com lista vazia, e a tela cai no formato de sempre.
+ */
+// Um item só, com as contribuições dele — usado pelas respostas de lançar/editar item.
+// ⚠️ A resposta do PUT SUBSTITUI a linha no estado da tela (`itens.map(... ? r.data.dados : i)`),
+// então devolver o item SEM `origens` faria a observação sumir da linha consolidada até
+// alguém recarregar a fatura. A API devolve o item inteiro, nunca a metade dele.
+async function comOrigensDoItem(item) {
+  if (!item) return item;
+  const mapa = await origensPorItem(prisma, [item.id]);
+  return { ...item, origens: mapa.get(item.id) ?? [] };
+}
+
+async function comOrigensDetalhadas(fatura) {
+  if (!fatura?.itens?.length) return fatura;
+  const mapa = await origensPorItem(prisma, fatura.itens.map(i => i.id));
+  if (mapa.size === 0) return fatura;
+  return { ...fatura, itens: fatura.itens.map(i => ({ ...i, origens: mapa.get(i.id) ?? [] })) };
 }
 
 // A evolução é o ATENDIMENTO ao qual a cobrança pertence — é dela que sai o número
@@ -745,7 +779,7 @@ const FaturaController = {
       });
 
       const total = await recalcularTotal(Number(faturaId));
-      res.status(201).json({ dados: comOrigemDoItem(item), totalFatura: total });
+      res.status(201).json({ dados: await comOrigensDoItem(comOrigemDoItem(item)), totalFatura: total });
     } catch (err) {
       console.error('Erro ao adicionar item:', err);
       res.status(500).json({ error: 'Erro interno' });
@@ -794,7 +828,7 @@ const FaturaController = {
 
       const total = await recalcularTotal(item.faturaId);
       await registrarCorrecaoFatura(prisma, item.faturaId);
-      res.json({ dados: comOrigemDoItem(updated), totalFatura: total });
+      res.json({ dados: await comOrigensDoItem(comOrigemDoItem(updated)), totalFatura: total });
     } catch (err) {
       console.error('Erro ao atualizar item:', err);
       res.status(500).json({ error: 'Erro interno' });

@@ -2,6 +2,8 @@
 // Utilitários de fatura compartilhados entre controllers clínicos
 'use strict';
 
+const itemOrigens = require('./faturaItemOrigens');
+
 /**
  * Formata o número do atendimento: 'AG', 3 → 'AG-0003'
  */
@@ -65,8 +67,9 @@ async function getOrCreateFatura(tx, proprietarioId, empresaId = null) {
 async function adicionarFaturaItem(tx, {
   faturaId, animalId, tipo, descricao, valor, quantidade, veterinarioId,
   exameClinicoId, prescricaoId, vacinaClinicaId, encaminhamentoClinicoId,
+  ocorridoEm,
 }) {
-  await tx.faturaItem.create({
+  const criado = await tx.faturaItem.create({
     data: {
       faturaId, animalId, tipo, descricao,
       valor: valor ?? 0, quantidade: quantidade ?? 1, veterinarioId: veterinarioId ?? null,
@@ -76,12 +79,23 @@ async function adicionarFaturaItem(tx, {
       encaminhamentoClinicoId: encaminhamentoClinicoId ?? null,
     },
   });
+  // A 1ª contribuição da linha. É ela que faz `quantidade` continuar sendo a SOMA das
+  // origens mesmo quando a linha nasce por aqui — sem isso, um item lançado por
+  // `adicionarFaturaItem` e depois somado por `adicionarOuSomarFaturaItem` teria
+  // quantidade 3 com só 2 contribuições, e o estorno subtrairia menos do que devia.
+  await itemOrigens.registrarOrigem(tx, {
+    faturaItemId: criado.id,
+    quantidade:   quantidade ?? 1,
+    ocorridoEm:   ocorridoEm ?? null,
+    exameClinicoId, prescricaoId, vacinaClinicaId, encaminhamentoClinicoId,
+  });
   if ((valor ?? 0) > 0) {
     await tx.fatura.update({
       where: { id: faturaId },
       data:  { total: { increment: (valor ?? 0) * (quantidade ?? 1) } },
     });
   }
+  return criado;
 }
 
 /**
@@ -93,13 +107,25 @@ async function adicionarFaturaItem(tx, {
  * idênticas do mesmo medicamento na fatura do mês, e o financeiro tinha de somar a olho
  * para saber quantas doses foram cobradas. Consolidado, é 1 linha com "Quant.: 14".
  *
- * ⚠️ A chave de consolidação inclui a ORIGEM (`prescricaoId`/`vacinaClinicaId`/…), e isso
- * NÃO é opcional: `removerFaturaItensDaOrigem`/`atualizarFaturaItensDaOrigem` sincronizam
- * a fatura pela FK de origem, então fundir doses de origens diferentes numa linha só
- * quebraria o estorno (cancelar uma prescrição levaria embora a cobrança da outra).
- * Na prática isso nunca aparece como duplicata para o usuário: a descrição carrega o
- * número do atendimento (`[AG-0012]`), então itens de documentos distintos já são
- * linhas distintas de qualquer forma.
+ * 🔴 A CHAVE DEIXOU DE INCLUIR A ORIGEM (2026-09-17, a pedido). Até aqui ela incluía
+ * `prescricaoId`/`vacinaClinicaId`/…, e a descrição carregava o número do atendimento
+ * (`[AG-0012] Amoxicilina — …`) — então o MESMO medicamento, na MESMA dose e pelo
+ * MESMO preço, aplicado em dois atendimentos do mês, virava DUAS linhas idênticas
+ * fora o número. Agora a chave é **(tipo, descrição, animal, valor unitário)** e o
+ * número do atendimento saiu da descrição: ele vira OBSERVAÇÃO da linha, com data e
+ * quantidade de cada contribuição (`lib/faturaItemOrigens.js`).
+ *
+ * ⚠️ **O ESTORNO SÓ CONTINUA CERTO POR CAUSA DAS CONTRIBUIÇÕES.** Era a FK de origem
+ * na chave que impedia "cancelar uma prescrição levar embora a cobrança da outra";
+ * quem garante isso agora é `tb_fatura_item_origens` — `removerFaturaItensDaOrigem`
+ * SUBTRAI o que era daquela origem e só apaga a linha quando não sobra nenhuma. NÃO
+ * reintroduzir a origem na chave sem desfazer aquilo junto, e não remover as
+ * contribuições sem devolver a origem à chave: uma coisa depende da outra.
+ *
+ * ⚠️ Base ainda NÃO migrada (sem a tabela de contribuições) continua consolidando —
+ * o que ela perde é a observação e a subtração fina no estorno, caindo no
+ * comportamento antigo de apagar a linha inteira. É o mesmo grau de estorno que já
+ * existia; o que não pode acontecer é a cobrança ficar errada.
  *
  * 🔴 CONSOLIDA TAMBÉM EM LINHA COM DESCONTO, de propósito: **o desconto é do
  * MEDICAMENTO, não da dose**. Dado 10% na ivermectina de 4/4h por 3 dias, o desconto
@@ -128,26 +154,19 @@ async function adicionarFaturaItem(tx, {
  */
 async function adicionarOuSomarFaturaItem(tx, opts) {
   const {
-    faturaId, animalId, tipo, descricao, valor, quantidade,
+    faturaId, animalId, tipo, descricao, valor, quantidade, ocorridoEm,
     exameClinicoId, prescricaoId, vacinaClinicaId, encaminhamentoClinicoId,
   } = opts;
 
-  const origem = {
-    exameClinicoId:          exameClinicoId ?? null,
-    prescricaoId:            prescricaoId ?? null,
-    vacinaClinicaId:         vacinaClinicaId ?? null,
-    encaminhamentoClinicoId: encaminhamentoClinicoId ?? null,
-  };
-  const temOrigem = Object.values(origem).some(v => v != null);
   // Sem origem rastreável não há como garantir que a linha antiga é "a mesma coisa"
   // (lançamento manual do financeiro, assistência mensal…). Cria linha nova.
-  if (!temOrigem) return adicionarFaturaItem(tx, opts);
+  if (!itemOrigens.origemDoPayload(opts)) return adicionarFaturaItem(tx, opts);
 
   const valorNovo = valor ?? 0;
   const qtdNova   = quantidade ?? 1;
 
   const candidatos = await tx.faturaItem.findMany({
-    where: { faturaId, tipo, descricao, animalId: animalId ?? null, ...origem },
+    where: { faturaId, tipo, descricao, animalId: animalId ?? null },
     orderBy: { id: 'asc' },
   });
   // `valor` é Float: compara por tolerância de centavo, nunca por igualdade exata
@@ -163,6 +182,14 @@ async function adicionarOuSomarFaturaItem(tx, opts) {
   await tx.faturaItem.update({
     where: { id: alvo.id },
     data:  { quantidade: { increment: qtdNova } },
+  });
+  // A observação da linha: de qual registro veio ESTA dose, quando e quanto. É o que
+  // o financeiro lê para saber que "Quant.: 5" são 3 de um atendimento e 2 de outro.
+  await itemOrigens.registrarOrigem(tx, {
+    faturaItemId: alvo.id,
+    quantidade:   qtdNova,
+    ocorridoEm:   ocorridoEm ?? null,
+    exameClinicoId, prescricaoId, vacinaClinicaId, encaminhamentoClinicoId,
   });
   await recalcularTotal(tx, faturaId);
 }
@@ -189,8 +216,11 @@ async function adicionarOuSomarFaturaItem(tx, opts) {
  */
 async function lancarExameNaFatura(tx, exame, proprietarioUserId, empresaId = null) {
   if (!proprietarioUserId) return false;
-  const jaFaturado = await tx.faturaItem.findFirst({ where: { exameClinicoId: exame.id } });
-  if (jaFaturado) return false;
+  // Idempotência do lançamento: pela FK só, a linha compartilhada (2026-09-17)
+  // esconderia um exame cuja cobrança caiu numa linha criada por outro registro.
+  // Exame não consolida hoje (a descrição carrega o `[EX-0004]`), mas a pergunta é a
+  // mesma e a resposta certa tem de vir do mesmo lugar em todos os caminhos.
+  if (await itemOrigens.origemJaFaturada(tx, 'exameClinicoId', exame.id)) return false;
 
   // Quem chama a partir de um exame LIDO do banco (finalização da evolução, conclusão
   // do exame) não tem `valorCobrado` no objeto: a coluna é nova e o client pode não
@@ -314,16 +344,56 @@ async function buscarFaturaItensDaOrigem(tx, campo, origemId) {
 }
 
 /**
- * Remove os FaturaItem vinculados a um registro de origem e recalcula os totais das faturas
- * afetadas. Lança FaturaPagaError (sem alterar nada) se algum item pertencer a fatura PAGA.
- * Deve ser chamado dentro de uma transaction (tx), antes de excluir o registro de origem.
+ * Estorna da fatura o que um registro de origem cobrou, e recalcula os totais das
+ * faturas afetadas. Lança FaturaPagaError (sem alterar nada) se algum item pertencer a
+ * fatura PAGA. Deve ser chamado dentro de uma transaction (tx), antes de excluir o
+ * registro de origem.
+ *
+ * 🔴 SUBTRAI, não apaga — desde que a linha passou a ser COMPARTILHADA (2026-09-17).
+ * A mesma linha pode juntar doses de duas prescrições; apagá-la inteira ao cancelar
+ * uma delas levaria embora a cobrança da outra, sem nada acusar. Então:
+ *
+ *   contribuições da origem  →  desconta da quantidade da linha
+ *   linha ficou sem nenhuma  →  aí sim a linha é apagada
+ *   linha sobreviveu         →  a FK de origem principal é reapontada para quem ficou
+ *
+ * ⚠️ A linha é procurada pelas CONTRIBUIÇÕES e também pela FK (`buscarFaturaItensDaOrigem`):
+ * linha LEGADA (lançada antes da migration) não tem contribuição nenhuma, e sem o
+ * segundo caminho ela deixaria de ser estornada — o cancelamento passaria a não
+ * devolver dinheiro, em silêncio. Legado cai no comportamento antigo: apaga a linha.
  */
 async function removerFaturaItensDaOrigem(tx, campo, origemId) {
-  const itens = await buscarFaturaItensDaOrigem(tx, campo, origemId);
+  const porFk          = await buscarFaturaItensDaOrigem(tx, campo, origemId);
+  const contribuicoes  = await itemOrigens.contribuicoesDaOrigem(tx, campo, origemId);
+  const idsEnvolvidos  = [...new Set([...porFk.map(i => i.id), ...contribuicoes.map(c => c.faturaItemId)])];
+  if (idsEnvolvidos.length === 0) return;
+
+  const itens = await tx.faturaItem.findMany({
+    where:   { id: { in: idsEnvolvidos } },
+    include: { fatura: { select: { id: true, status: true } } },
+  });
   if (itens.length === 0) return;
   if (itens.some(i => i.fatura.status === 'PAGA')) throw new FaturaPagaError();
 
-  await tx.faturaItem.deleteMany({ where: { id: { in: itens.map(i => i.id) } } });
+  await itemOrigens.apagarContribuicoes(tx, campo, origemId);
+
+  const apagar = [];
+  for (const item of itens) {
+    const restante = await itemOrigens.resumoDaLinha(tx, item.id);
+    // `restante === null` = base sem a tabela ("não sei"), e "não sei" NUNCA autoriza
+    // manter a cobrança: cai no comportamento antigo e apaga a linha inteira.
+    if (restante == null || restante.total === 0) { apagar.push(item.id); continue; }
+
+    // A quantidade passa a ser a SOMA do que sobrou, não `quantidade − descontado`:
+    // a soma é a verdade da linha (invariante de `faturaItemOrigens`) e se autocorrige;
+    // subtrair propagaria qualquer divergência que já existisse.
+    const qtdRestante = restante.quantidade;
+    if (qtdRestante <= 0) { apagar.push(item.id); continue; }
+    await tx.faturaItem.update({ where: { id: item.id }, data: { quantidade: qtdRestante } });
+    await itemOrigens.reapontarOrigemPrincipal(tx, item.id);
+  }
+  if (apagar.length > 0) await tx.faturaItem.deleteMany({ where: { id: { in: apagar } } });
+
   const faturaIds = [...new Set(itens.map(i => i.faturaId))];
   for (const faturaId of faturaIds) await recalcularTotal(tx, faturaId);
   await registrarCorrecaoFatura(tx, faturaIds);
@@ -334,11 +404,27 @@ async function removerFaturaItensDaOrigem(tx, campo, origemId) {
  * registro de origem e recalcula os totais das faturas afetadas. Lança FaturaPagaError
  * (sem alterar nada) se algum item pertencer a fatura PAGA.
  * Deve ser chamado dentro de uma transaction (tx).
+ *
+ * ⚠️ LINHA COMPARTILHADA NÃO É REESCRITA (2026-09-17). Desde que a consolidação passou
+ * a juntar origens diferentes na mesma linha, renomear ou reprecificar por conta de UMA
+ * delas mudaria o que as OUTRAS já cobraram — a descrição e o valor da linha são de
+ * todas. Quem chama hoje (exame e encaminhamento) tem descrição própria e nunca
+ * compartilha, então na prática nada muda; a guarda existe para o caso novo que um dia
+ * compartilhe, e o efeito dela é não fazer nada, nunca corromper a linha alheia.
  */
 async function atualizarFaturaItensDaOrigem(tx, campo, origemId, { descricao, valor, quantidade }) {
-  const itens = await buscarFaturaItensDaOrigem(tx, campo, origemId);
+  const todos = await buscarFaturaItensDaOrigem(tx, campo, origemId);
+  if (todos.length === 0) return;
+  if (todos.some(i => i.fatura.status === 'PAGA')) throw new FaturaPagaError();
+
+  const itens = [];
+  for (const item of todos) {
+    // `null` (base sem a tabela) conta como "pode ser compartilhada"? Não: ali NENHUMA
+    // linha é compartilhada, porque a consolidação por origem só existe com a tabela.
+    if ((await itemOrigens.temOutraOrigem(tx, item.id, campo, origemId)) === true) continue;
+    itens.push(item);
+  }
   if (itens.length === 0) return;
-  if (itens.some(i => i.fatura.status === 'PAGA')) throw new FaturaPagaError();
 
   const data = {};
   if (descricao  !== undefined) data.descricao  = descricao;

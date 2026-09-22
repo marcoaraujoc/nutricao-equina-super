@@ -5,6 +5,13 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
 import { usePermissoes } from '../hooks/usePermissoes';
 import toast from 'react-hot-toast';
+// 🔴 LEITURA DO DOCUMENTO DE COMPRA (a pedido, 2026-09-18) — nota fiscal, cupom,
+// orçamento de balcão ou recibo viram ENTRADAS DE ESTOQUE já preenchidas. Uma nota
+// traz VÁRIOS produtos: eles entram numa FILA e o formulário abre um por vez.
+import LeitorDocumentoCompra, { type ItemNota, type NotaLida }
+  from '../components/farmacia/LeitorDocumentoCompra';
+// Recorte de quem entrega PRODUTO — o mesmo do Estoque de Vacinas (fonte única).
+import { fornecedorDeProduto, NOVO_FORNECEDOR } from '../utils/fornecedorProduto';
 import { useSearchParams } from 'react-router-dom';
 import PageContainer from '../components/PageContainer';
 import { useOrdenacao, ThOrdenavel, ordenarLista, valorData } from '../components/OrdenacaoLista';
@@ -13,7 +20,7 @@ import {
   AlertTriangle, Lock, Plus, Pencil,
   Search, RefreshCw, X, BarChart2, Package,
   ChevronDown, Eye, ArrowUpDown,
-  ToggleLeft, ToggleRight,
+  ToggleLeft, ToggleRight, FileText,
 } from 'lucide-react';
 import { formatDateShort, formatDate } from '../utils/dateUtils';
 import { unidadeOperativaProduto } from '../utils/formaCalculo';
@@ -85,17 +92,10 @@ interface MovimentoEstoque { id: number; tipo: string; quantidade: number; motiv
 type FiltroTab = 'todos' | 'ativos' | 'inativos' | 'critico' | 'alarmante' | 'controlados';
 
 /** Colunas ordenáveis da lista de estoque (as três últimas variam com a aba). */
-type ColunaFarmacia = 'medicamento' | 'estoque' | 'status' | 'criadoEm' | 'ativadoEm'
+type ColunaFarmacia = 'medicamento' | 'qtdProduto' | 'estoque' | 'status' | 'criadoEm' | 'ativadoEm'
                     | 'ativadoPor' | 'inativadoEm' | 'inativadoPor' | 'justificativa';
 
 
-// Tipos de fornecedor relevantes para farmácia (excluem prestadores de serviço clínico)
-const TIPOS_FORNECEDOR_FARMACIA = new Set(['Farmácia', 'Laboratório', 'Loja']);
-// Fornecedor pode ter vários tipos (CSV) — basta um relevante para aparecer na farmácia.
-const fornecedorDeFarmacia = (tipoServico: string | null | undefined) =>
-  (tipoServico ?? '').split(',').some(t => TIPOS_FORNECEDOR_FARMACIA.has(t.trim()));
-// Valor sentinela do seletor: abrir o cadastro de novo fornecedor.
-const NOVO_FORNECEDOR = -1;
 
 const FORM_VAZIO = {
   medicamentoId: 0,
@@ -244,6 +244,16 @@ export default function Farmacia() {
   const [salvando,     setSalvando]     = useState(false);
   const [modalFormAberto, setModalFormAberto] = useState(false);
 
+  // ── Fila do documento de compra ────────────────────────────────────────────
+  // ⚠️ A FILA É O PONTO DA FUNÇÃO: a nota do fornecedor veterinário quase nunca tem
+  // um item só. Cada produto marcado vira uma entrada PRÓPRIA (lote, validade e valor
+  // são de cada um), então o formulário abre preenchido, salva, e já abre o seguinte —
+  // em vez de obrigar a reabrir "Entrada de Estoque" e redigitar o cabeçalho da nota
+  // a cada produto.
+  const [leitorAberto,  setLeitorAberto]  = useState(false);
+  const [filaNota,      setFilaNota]      = useState<ItemNota[]>([]);
+  const [notaLida,      setNotaLida]      = useState<NotaLida | null>(null);
+
   const [modalHistorico, setModalHistorico] = useState<EstoqueItem | null>(null);
   const [movimentos,     setMovimentos]     = useState<MovimentoEstoque[]>([]);
   const [loadingMov,     setLoadingMov]     = useState(false);
@@ -353,7 +363,7 @@ export default function Farmacia() {
       setMeta(estoqueRes.data.meta ?? { total:0, totalControlados:0, totalAbaixoMinimo:0, totalAbaixoAlarmante:0 });
       setMedicamentos(medRes.data.dados ?? []);
       setFornecedores(
-        (fornRes.data?.dados ?? []).filter((f: FornecedorItem) => fornecedorDeFarmacia(f.tipoServico))
+        (fornRes.data?.dados ?? []).filter((f: FornecedorItem) => fornecedorDeProduto(f.tipoServico))
       );
     } catch { setErroInline('Erro ao carregar estoque.'); }
     finally { setLoading(false); }
@@ -365,7 +375,7 @@ export default function Farmacia() {
   const recarregarFornecedores = useCallback(async (): Promise<FornecedorItem[]> => {
     try {
       const res = await api.get('/cadastro/fornecedores', { params: { ativo: 'true' } });
-      const lista = ((res.data?.dados ?? []) as FornecedorItem[]).filter(f => fornecedorDeFarmacia(f.tipoServico));
+      const lista = ((res.data?.dados ?? []) as FornecedorItem[]).filter(f => fornecedorDeProduto(f.tipoServico));
       setFornecedores(lista);
       return lista;
     } catch { return []; }
@@ -453,6 +463,10 @@ export default function Farmacia() {
   const itensFiltrados = ordenarLista(itensDaAba, ordenacao, (item, campo) => {
     switch (campo) {
       case 'medicamento':   return item.medicamento?.nome ?? null;
+      // Entrada avulsa (sem Qtd Produto informada) ordena como ZERO, nunca como null:
+      // o comparador manda o vazio para o fim nos DOIS sentidos, e a linha sem
+      // embalagem declarada ficaria separada do resto sem motivo.
+      case 'qtdProduto':    return item.qtdEmbalagens ?? 0;
       case 'estoque':       return item.qtdEstoque ?? 0;
       case 'status':        return item.ativo ? 'ATIVO' : 'INATIVO';
       case 'criadoEm':      return valorData(item.createdAt);
@@ -556,6 +570,68 @@ export default function Farmacia() {
     setDropdownMedAberto(false);
   };
 
+  /**
+   * Abre o formulário de entrada já preenchido com um item lido do documento.
+   *
+   * ⚠️ O ITEM DA NOTA TRAZ NOME, NÃO ID DE CATÁLOGO. O casamento é por nome, sem
+   * acento nem caixa, contra o catálogo que a tela já carregou. NÃO ACHOU não é erro:
+   * o campo de busca abre com o nome lido para a pessoa escolher o item certo (ou
+   * cadastrá-lo) — inventar um `medicamentoId` aqui daria entrada de estoque no
+   * produto errado, que é bem pior do que um campo a preencher.
+   */
+  const aplicarItemDaNota = (item: ItemNota, nota: NotaLida | null) => {
+    const norm = (t: string) => t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+    const achado = medicamentos.find(m => norm(m.nome) === norm(item.nome))
+                ?? medicamentos.find(m => norm(m.nome).includes(norm(item.nome)));
+
+    // O fornecedor só é pré-selecionado quando JÁ está cadastrado nesta clínica —
+    // `fornecedorExistente` é o backend quem resolve (por CNPJ/CPF/nome).
+    const fornId = nota?.fornecedorExistente?.id ?? 0;
+
+    setForm({
+      ...FORM_VAZIO,
+      medicamentoId: achado?.id ?? 0,
+      // ⚠️ `valorUnitario` é o valor de UMA embalagem — a mesma unidade em que o campo
+      // "Valor Unitário" da tela grava desde 2026-09-17 (parte 2). O `valorTotal` da
+      // nota é da LINHA inteira e entraria multiplicado; por isso ele só serve de
+      // reserva quando a nota não trouxe o unitário e a quantidade é 1.
+      valor:          item.valorUnitario ?? (item.quantidade === 1 ? (item.valorTotal ?? 0) : 0),
+      valorRepassado: item.valorUnitario ?? (item.quantidade === 1 ? (item.valorTotal ?? 0) : 0),
+      lote:           item.lote ?? '',
+      validade:       item.validade ?? '',
+      qtdEstoque:     item.quantidade ?? 0,
+      fornecedorId:   fornId,
+      notaFiscal:     nota?.numero ?? '',
+    });
+    setValorStr(item.valorUnitario != null ? String(item.valorUnitario).replace('.', ',') : '');
+    setValorRepassadoStr(item.valorUnitario != null ? String(item.valorUnitario).replace('.', ',') : '');
+    setFrascos(item.quantidade ?? '');
+    setUnidadeSel(achado ? '' : '');
+    setEditandoId(null);
+    setEditandoEmUso(false);
+    // Sem item no catálogo, o campo de busca abre com o nome lido — é o que transforma
+    // "não achei" em "confirme qual é" em vez de um formulário mudo.
+    setBuscaMed(achado ? '' : item.nome);
+    setDropdownMedAberto(!achado);
+    setModalFormAberto(true);
+  };
+
+  /** Recebe o que o leitor devolveu: aplica o 1º item e enfileira o resto. */
+  const usarDocumentoLido = (nota: NotaLida, itens: ItemNota[]) => {
+    setLeitorAberto(false);
+    setNotaLida(nota);
+    const [primeiro, ...resto] = itens;
+    setFilaNota(resto);
+    aplicarItemDaNota(primeiro, nota);
+    if (resto.length > 0) {
+      toast.success(`${itens.length} produtos lidos — um formulário por vez. Faltam ${resto.length} depois deste.`);
+    }
+    if (!nota.fornecedorExistente && nota.fornecedor?.nome) {
+      toast(`Fornecedor "${nota.fornecedor.nome}" não está cadastrado — a compra não entrará na conta a pagar dele.`,
+        { icon: '⚠️' });
+    }
+  };
+
   const salvar = async () => {
     setErroAcao(null);
     if (editandoId && !podeEditar) { semPermissao('editar estoque'); return; }
@@ -576,16 +652,19 @@ export default function Farmacia() {
     if (!editandoId && form.qtdEstoque < 0) return setErroAcao({ mensagem: 'Estoque não pode ser negativo.', campos: ['qtdEstoque'] });
     if (!form.valor || form.valor <= 0) return setErroInline('Valor é obrigatório.');
 
-    // Na criação, valor e valorRepassado são por embalagem — multiplicar pelo nº de embalagens
-    // para que o banco armazene o valor TOTAL da entrada (base do cálculo de custo por unidade).
-    const nPacotes = !editandoId && frascos !== '' && Number(frascos) > 0 ? Number(frascos) : 1;
-
     setSalvando(true);
     try {
       const payload = {
         medicamentoId:    form.medicamentoId,
-        valor:            form.valor * nPacotes,
-        valorRepassado:   form.valorRepassado * nPacotes,
+        // 🔴 VALOR POR EMBALAGEM, GRAVADO COMO FOI DIGITADO (2026-09-17, a pedido).
+        // A tela multiplicava os dois pela Qtd Produto para o banco guardar o TOTAL da
+        // compra, e o backend dividia pelo saldo — as duas contas se cancelavam e o
+        // preço da dose saía certo, mas os campos ficavam com o total sob o rótulo
+        // "Valor Unitário". Quem lia o campo cru cobrava a compra inteira numa linha:
+        // uma seringa saía pelo preço da CAIXA. Agora quem divide o preço é o conteúdo
+        // da embalagem, que o cadastro do produto declara.
+        valor:            form.valor,
+        valorRepassado:   form.valorRepassado,
         lote:             form.lote || null,
         validade:         form.validade || null,
         // Formulário trabalha na subunidade — converte para a unidade maior ao salvar
@@ -617,7 +696,18 @@ export default function Farmacia() {
           ? (res.data?.mensagem ?? 'Quantidade somada ao estoque existente.')
           : 'Entrada de estoque registrada.');
       }
+      // 🔴 PRÓXIMO PRODUTO DA NOTA, quando há fila. `limparForm` fecha o modal, então
+      // a fila é consumida DEPOIS dele — e só no caminho de sucesso: falhou o salvar,
+      // o item continua na tela para ser corrigido, nunca é pulado em silêncio.
       limparForm();
+      if (filaNota.length > 0) {
+        const [proximo, ...resto] = filaNota;
+        setFilaNota(resto);
+        aplicarItemDaNota(proximo, notaLida);
+      } else if (notaLida) {
+        setNotaLida(null);
+        toast.success('Todos os produtos do documento foram lançados.');
+      }
       carregarEstoque();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
@@ -790,6 +880,18 @@ export default function Farmacia() {
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl transition-colors">
                 Entrada de Estoque
               </button>
+              {/* 🔴 Gate de CRIAR, o mesmo da entrada manual: o resultado vira entrada
+                  de estoque e gasta a quota de IA da clínica. Quem só consulta não vê
+                  o botão — ação sem permissão não nasce como botão que falha depois
+                  do clique (armadilha 28-d). */}
+              {podeCriar && (
+                <button onClick={() => setLeitorAberto(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-emerald-600 text-emerald-700 hover:bg-emerald-50 text-xs font-semibold rounded-xl transition-colors"
+                  title="Nota fiscal, cupom, orçamento de balcão ou recibo — inclusive sem valor fiscal">
+                  <FileText size={13} />
+                  Carregar Nota Fiscal
+                </button>
+              )}
               {podeAjustar && (
                 <button onClick={() => abrirAjuste()}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-emerald-600 text-emerald-700 hover:bg-emerald-50 text-xs font-semibold rounded-xl transition-colors">
@@ -842,6 +944,16 @@ export default function Farmacia() {
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-100">
                       <ThOrdenavel campo="medicamento" ordenacao={ordenacao} onOrdenar={alternar} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Medicamento</ThOrdenavel>
+                      {/* 🔴 QTD PRODUTO é O QUE FOI COMPRADO, não o saldo (2026-09-19, a
+                          pedido). É o MESMO campo que o formulário de entrada chama "Qtd
+                          Produto" (`qtdEmbalagens`): quantas embalagens entraram nesta
+                          linha de estoque — e é ele que vira a quantidade da conta a pagar
+                          do fornecedor. Não desce com o consumo: quem responde "quanto
+                          ainda tenho" é a coluna Estoque ao lado, na unidade OPERATIVA.
+                          ⚠️ Num produto MULTIDOSE as duas dizem coisas diferentes de
+                          propósito (3 frascos comprados × 55 mL restantes); no não-multidose
+                          o saldo também é contado em embalagens e elas começam iguais. */}
+                      <ThOrdenavel campo="qtdProduto" ordenacao={ordenacao} onOrdenar={alternar} alinhar="centro" className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Qtd Produto</ThOrdenavel>
                       <ThOrdenavel campo="estoque" ordenacao={ordenacao} onOrdenar={alternar} alinhar="centro" className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Estoque</ThOrdenavel>
                       <ThOrdenavel campo="status" ordenacao={ordenacao} onOrdenar={alternar} alinhar="centro" className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</ThOrdenavel>
                       {filtroTab !== 'inativos' ? (
@@ -881,6 +993,9 @@ export default function Farmacia() {
                               {item.fornecedor && ` · ${item.fornecedor.nome}`}
                               {item.validade && <span className="ml-1">· {formatValidade(item.validade)}</span>}
                             </p>
+                          </td>
+                          <td className="px-4 py-3 text-center whitespace-nowrap text-gray-700">
+                            {item.qtdEmbalagens != null ? fmtQtd(item.qtdEmbalagens) : '—'}
                           </td>
                           <td className="px-4 py-3 text-center whitespace-nowrap">
                             <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${qtdCls}`}>
@@ -941,6 +1056,10 @@ export default function Farmacia() {
                       <p className="text-[11px] text-gray-400">
                         {item.medicamento.formaFarmaceutica} · {item.medicamento.apresentacao}
                         {item.lote && ` · Lote ${item.lote}`}
+                        {/* Qtd Produto — o mesmo dado da coluna do desktop (§6: o card
+                            mobile mostra o que a tabela mostra). Some quando a entrada
+                            não a declarou, em vez de exibir um traço no meio da linha. */}
+                        {item.qtdEmbalagens != null && ` · Qtd Produto ${fmtQtd(item.qtdEmbalagens)}`}
                         {' · '}{item.ativo ? 'Ativo' : 'Inativo'}
                       </p>
                       {!item.ativo && item.inativoEm && (
@@ -1134,30 +1253,38 @@ export default function Farmacia() {
               {/* Valor Comprado + Valor Repassado + Lote + Validade */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
+                  {/* 🔴 O RÓTULO É O MESMO NA CRIAÇÃO E NA EDIÇÃO porque o campo passou a
+                      ser o mesmo dado nas duas: o valor de UMA embalagem. Enquanto a tela
+                      multiplicava antes de gravar, reabrir a entrada trazia o total da
+                      compra para um campo que dizia "Unitário" — e salvar de novo o
+                      multiplicava outra vez. */}
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    {editandoId ? 'Valor Total Comprado (R$)' : 'Valor Unitário (R$)'} <span className="text-red-500">*</span>
+                    Valor Unitário (R$) <span className="text-red-500">*</span>
                   </label>
                   <input type="text" inputMode="decimal" value={valorStr}
                     onChange={(e) => handleValorChange(e.target.value)}
                     placeholder="0,00"
                     className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                  {!editandoId && frascos !== '' && Number(frascos) > 1 && form.valor > 0 && (
-                    <p className="text-[10px] text-emerald-700 mt-0.5 font-semibold">
-                      Total: R$ {formatarValor(form.valor * Number(frascos))}
+                  {/* Conferência da nota — o total NÃO é gravado em lugar nenhum. */}
+                  {frascos !== '' && Number(frascos) > 1 && form.valor > 0 && (
+                    <p className="text-[10px] text-gray-500 mt-0.5">
+                      Total da compra: R$ {formatarValor(form.valor * Number(frascos))}
                     </p>
                   )}
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    {editandoId ? 'Valor Total Repassado (R$)' : 'Valor Unitário Cobrado (R$)'}
+                    Valor Unitário Cobrado (R$)
                   </label>
                   <input type="text" inputMode="decimal" value={valorRepassadoStr}
                     onChange={(e) => handleValorRepassadoChange(e.target.value)}
                     placeholder="0,00"
                     className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                  {!editandoId && frascos !== '' && Number(frascos) > 1 && form.valorRepassado > 0 && (
-                    <p className="text-[10px] text-emerald-700 mt-0.5 font-semibold">
-                      Total: R$ {formatarValor(form.valorRepassado * Number(frascos))}
+                  {/* É deste valor que sai a linha da fatura: ele é dividido pelo conteúdo
+                      que o produto declara (frasco de 20 mL por R$ 100 -> R$ 5,00/mL). */}
+                  {frascos !== '' && Number(frascos) > 1 && form.valorRepassado > 0 && (
+                    <p className="text-[10px] text-gray-500 mt-0.5">
+                      Total da compra: R$ {formatarValor(form.valorRepassado * Number(frascos))}
                     </p>
                   )}
                 </div>
@@ -1469,6 +1596,14 @@ export default function Farmacia() {
           </div>
         </div>
       )}
+
+      {/* ── Modal: leitura do documento de compra ────────────────────────── */}
+      <LeitorDocumentoCompra
+        tipoItem="medicamento"
+        aberto={leitorAberto}
+        onFechar={() => setLeitorAberto(false)}
+        onUsar={usarDocumentoLido}
+      />
 
       {/* ── Modal: Ajuste de Estoque ─────────────────────────────────────── */}
       {modalAjusteAberto && (

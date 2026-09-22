@@ -25,6 +25,29 @@ const CLS_MODULE_INACTIVE= 'text-gray-500 hover:bg-gray-50';
 
 const ROLES_CLINICAS = ['ADMIN', 'VETERINARIO', 'ESTAGIARIO', 'FORNECEDOR'];
 
+// 🔴 PAINEL PRINCIPAL ESCONDIDO DO MENU (a pedido, 2026-09-18) — a tela NÃO foi
+// removida: a rota `/painel-principal`, `pages/PainelPrincipal.tsx` e o gate
+// `dashboard.geral.ler` seguem montados e funcionais; chega-se a ela pela URL.
+// Mesmo padrão (e mesma lição) do `MOSTRAR_MAPA_ATENDIMENTO` de 2026-09-05: esconder
+// o ITEM fez a volta dele custar UMA LINHA em 09/09, em vez de uma reconstrução.
+// ⚠️ Para trazer de volta, troque para `true` e REMOVA o flag junto — um `if (true)`
+// não configura nada. Não apague a rota nem a tela.
+const MOSTRAR_PAINEL_PRINCIPAL = false;
+
+// 🔴 RECIBOS DE PRESTADOR ESCONDIDO DO MENU (a pedido, 2026-09-19) — a tela NÃO foi
+// removida: a rota `/recibos-prestador`, `pages/RecibosPrestador.tsx`, o backend
+// (`/api/recibos-prestador`) e o gate `financeiro.recibos.ler` seguem montados e
+// funcionais; chega-se a ela pela URL. Mesmo padrão (e mesma lição) do
+// `MOSTRAR_MAPA_ATENDIMENTO` de 2026-09-05 e do PAINEL PRINCIPAL acima: esconder o
+// ITEM fez a volta dele custar UMA LINHA, em vez de uma reconstrução.
+// ⚠️ Para trazer de volta, troque para `true` e REMOVA o flag junto — um `if (true)`
+// não configura nada. Não apague a rota nem a tela.
+// ⚠️ O flag entra na DEFINIÇÃO de `podeVerRecibos` (ponto ÚNICO): é ela que decide o
+// sub-item E o gate do grupo Financeiro. Escondendo só o sub-item, quem tivesse
+// APENAS `financeiro.recibos.ler` continuaria vendo o grupo "Financeiro" abrir VAZIO.
+const MOSTRAR_RECIBOS_PRESTADOR = false;
+
+
 // Rotas que pertencem à seção ADMINISTRAÇÃO. Fonte ÚNICA: a mesma lista decide a seção
 // ativa (`detectSection`) e se o accordion nasce aberto. Eram duas cópias idênticas —
 // item novo entrava numa e não na outra, e o accordion fechava sozinho na rota nova.
@@ -113,7 +136,7 @@ export default function Sidebar() {
   const podeVerDieta           = podeExecutar('nutricao.dietas.ler');
   const podeVerRelatorio       = podeExecutar('nutricao.relatorios.ler');
   const podeVerFaturas         = podeExecutar('financeiro.faturas.ler');
-  const podeVerRecibos         = podeExecutar('financeiro.recibos.ler');
+  const podeVerRecibos         = MOSTRAR_RECIBOS_PRESTADOR && podeExecutar('financeiro.recibos.ler');
   const podeVerFarmacia        = podeExecutar('farmacia.estoque.ler');
   // Financeiro > Pagamentos (2026-09-10)
   const podeVerPagamentos      = podeExecutar('financeiro.pagamentos.ler');
@@ -324,7 +347,7 @@ export default function Sidebar() {
               veterinária nesta clínica vê o item, e quem é estagiária aqui não —
               mesmo sendo vet na outra. Sem `isVetOuSuperior`: o item foi pedido para
               o veterinário, e o gestor tem o Mapa de Atendimento logo abaixo. */}
-          {isVet && (
+          {MOSTRAR_PAINEL_PRINCIPAL && isVet && (
             <div className="space-y-0.5">
               {navLink('/painel-principal', <Stethoscope size={20} />, 'Painel Principal', p.startsWith('/painel-principal'))}
             </div>
@@ -476,7 +499,24 @@ export default function Sidebar() {
                     </button>
                   )}
 
-                  {/* ── 4d. Central de Documentos ─────────────────────────
+                  {/* ── 4d. Estoque ───────────────────────────────────────
+                      Entre a Execução de Prescrição e os Documentos a pedido
+                      (2026-09-17): quem aplica a dose é quem vê o saldo acabar, e
+                      lá embaixo — depois de Exames, Agenda e Financeiro — o caminho
+                      do plantão até a reposição atravessava o menu inteiro. */}
+                  {(podeVerEstoqueVacina || podeVerFarmacia) && (
+                    <div>
+                      {moduleButton('Estoque', <Package size={20} />, 'estoque', openGroup === 'estoque', () => toggleGroup('estoque'))}
+                      {openGroup === 'estoque' && (
+                        <div className="mt-1 pl-6 space-y-0.5">
+                          {podeVerEstoqueVacina && subLink('/estoque-vacina', <Syringe size={14} />, 'Vacina', isEstoqueSubActive('/estoque-vacina'))}
+                          {podeVerFarmacia && subLink('/farmacia', <FlaskConical size={14} />, 'Farmácia', isEstoqueSubActive('/farmacia'))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── 4e. Central de Documentos ─────────────────────────
                       Módulo folha: a tela já tem a própria biblioteca de modelos
                       (categorias, favoritos, recentes), então repetir isso aqui como
                       accordion seria o mesmo menu duas vezes. */}
@@ -564,19 +604,6 @@ export default function Sidebar() {
                               no molde da fatura (abrir → fechar → pagar). Fica por último
                               porque é dela e do recibo que os lançamentos nascem. */}
                           {podeVerPagamentos && subLink('/financeiro/pagamentos', <Wallet size={14} />, 'Pagamentos', p.startsWith('/financeiro/pagamentos'))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* ── 8. Estoque ────────────────────────────────────────── */}
-                  {(podeVerEstoqueVacina || podeVerFarmacia) && (
-                    <div>
-                      {moduleButton('Estoque', <Package size={20} />, 'estoque', openGroup === 'estoque', () => toggleGroup('estoque'))}
-                      {openGroup === 'estoque' && (
-                        <div className="mt-1 pl-6 space-y-0.5">
-                          {podeVerEstoqueVacina && subLink('/estoque-vacina', <Syringe size={14} />, 'Vacina', isEstoqueSubActive('/estoque-vacina'))}
-                          {podeVerFarmacia && subLink('/farmacia', <FlaskConical size={14} />, 'Farmácia', isEstoqueSubActive('/farmacia'))}
                         </div>
                       )}
                     </div>

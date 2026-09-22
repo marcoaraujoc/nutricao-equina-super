@@ -186,10 +186,21 @@ async function lancarItem(client, {
   empresaId, tipo, credorId, credorNome,
   animalId, animalNome, descricao, quantidade = 1, valor,
   solicitanteId, solicitanteNome, ocorridoEm, origemTipo, origemId,
+  permitirSemValor = false,
 }) {
   if (!(await temTabelas())) return null;
-  const v = cent(num(valor));
-  if (!v || v <= 0) return null;
+  const v = cent(num(valor)) ?? 0;
+  // 🔴 SEM VALOR: LANÇA ZERADO EM VEZ DE NÃO LANÇAR (a pedido, 2026-09-18), e SÓ com
+  // `permitirSemValor`. A regra anterior era "dívida de valor inventado é pior que
+  // dívida ausente" — ela continua certa quanto a INVENTAR, e é por isso que o valor
+  // vai ZERO e não um palpite. O que mudou foi a outra metade: o procedimento sem
+  // preço cadastrado simplesmente DESAPARECIA da tela de Pagamentos, e o financeiro
+  // não tinha como saber que devia algo a alguém — o silêncio escondia a pendência
+  // em vez de evitá-la. Zerado, ele aparece, fica visível como pendência e o valor é
+  // editado ali mesmo (`atualizarValorItem`).
+  // ⚠️ Sem a flag o comportamento é o de sempre (não lança): quem chama precisa
+  // DECLARAR que aquele zero é uma pendência a resolver, não um item de graça.
+  if (v <= 0 && !permitirSemValor) return null;
 
   const quando = ocorridoEm instanceof Date ? ocorridoEm : new Date(ocorridoEm ?? Date.now());
   const conta = await contaAbertaDoCredor(client, {
@@ -342,7 +353,42 @@ async function removerItem(client, empresaId, itemId) {
   } catch { return false; }
 }
 
+/**
+ * Edita o VALOR de um item já lançado — é o que torna útil o lançamento zerado.
+ *
+ * ⚠️ Só em conta ABERTA. Conta FECHADA/PAGA é documento que o credor já recebeu;
+ * mudar o valor dela por aqui reescreveria o que foi combinado (mesma regra do item
+ * de fatura paga). O `JOIN` com o status é quem garante isso — não o front.
+ * ⚠️ Recalcula o total: sem isso o cabeçalho da conta continuaria com a soma antiga
+ * e a tela mostraria dois números diferentes para a mesma dívida.
+ */
+async function atualizarValorItem(client, empresaId, itemId, valor) {
+  if (!(await temTabelas())) return { erro: 'Recurso indisponível nesta base.' };
+  const v = cent(num(valor));
+  if (v == null || v < 0) return { erro: 'Informe um valor válido.' };
+  try {
+    const rows = await client.$queryRawUnsafe(
+      `UPDATE schs2vet.tb_conta_pagar_itens i
+          SET valor = $3
+         FROM schs2vet.tb_contas_pagar c
+        WHERE i.id = $1 AND i.conta_id = c.id
+          AND c.empresa_id = $2 AND c.status = 'ABERTA'
+    RETURNING c.id AS conta_id`,
+      Number(itemId), Number(empresaId), v,
+    );
+    if (rows.length === 0) {
+      return { erro: 'Item não encontrado ou a conta não está aberta.' };
+    }
+    await recalcularTotal(client, rows[0].conta_id);
+    return { contaId: rows[0].conta_id, valor: v };
+  } catch (err) {
+    console.error('contasPagar.atualizarValorItem:', err.message);
+    return { erro: 'Erro ao atualizar o valor do item.' };
+  }
+}
+
 module.exports = {
+  atualizarValorItem,
   TIPOS,
   ORIGENS,
   STATUS_ABERTOS,

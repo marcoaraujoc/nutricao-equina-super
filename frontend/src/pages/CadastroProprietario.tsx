@@ -179,7 +179,9 @@ export default function CadastroProprietario() {
     if (form.localidades.length === 0) {
       setErroAcao({ mensagem: 'Informe ao menos uma localidade com a frequência de visitas', campos: ['localidades'] }); return;
     }
-    if (validarDiaVencimento(form.diaVencimentoFatura)) return; // erro já exibido inline no campo
+    // Só no MENSALISTA — fora dele o campo está desabilitado (2026-09-18) e validar o
+    // que não se pode editar trava o salvar sem dar como corrigir.
+    if (form.mensalista && validarDiaVencimento(form.diaVencimentoFatura)) return; // erro inline no campo
 
     // Documento é opcional, mas se preenchido precisa ser válido
     if (form.tipoDoc === 'cpf'  && form.cpf.trim()  && !validarCPF(form.cpf))   { setErroAcao({ mensagem: 'CPF inválido', campos: ['cpf'] }); return; }
@@ -204,6 +206,8 @@ export default function CadastroProprietario() {
         frequenciaVisitas: l.frequenciaVisitas,
       })),
       diaVencimentoFatura: Number(form.diaVencimentoFatura),
+      // Acesso ao sistema — mesma lógica do Incluir Membro (2026-09-18).
+      acessoSistema:     form.acessoSistema,
       cep:               form.cep         || null,
       endereco:          form.endereco    || null,
       complemento:       form.complemento || null,

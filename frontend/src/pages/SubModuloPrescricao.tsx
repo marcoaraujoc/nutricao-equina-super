@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Pencil, Ban, CheckCircle2, X, Loader2,
   ChevronLeft, ChevronRight, ChevronDown, Pill, Activity,
-  Clock, Search, FileText, Eye, Printer, Lock, MessageCircle, Mail, Receipt, Plus,
+  Clock, Search, FileText, Eye, Printer, Lock, MessageCircle, Mail, Receipt, Plus, Package,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
@@ -30,7 +30,13 @@ import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import JanelaLista from '../components/JanelaLista';
 import CadastroCatalogoModal, { type ItemCatalogoCriado } from '../components/CadastroCatalogoModal';
 import { useOrdenacao, ThOrdenavel } from '../components/OrdenacaoLista';
-import { unidadeOperativaProduto } from '../utils/formaCalculo';
+import {
+  unidadePrescricaoProduto, conteudoDaEmbalagemProduto, embalagensParaQtd, fmtQtdForma,
+} from '../utils/formaCalculo';
+// DOSES_POR_DIA e o espelho do backend para a cadencia — a mesma fonte que o resumo
+// de doses ja usa. Recopiar a tabela aqui faria a tela contar aplicacoes de um jeito
+// e o backend de outro.
+import { DOSES_POR_DIA } from '../utils/posologia';
 
 
 
@@ -249,27 +255,29 @@ const VIAS     = ['Oral', 'Endovenosa', 'Intramuscular', 'Subcutânea', 'Tópica
 const UNIDADES = ['cápsula', 'comprimido', 'g', 'gota', 'L', 'mcg', 'mg', 'mL', 'UI'];
 
 /**
- * 🔴 A UNIDADE DA DOSAGEM É A DO PRODUTO — nunca a da embalagem (2026-09-16, ampliada
- * em 2026-09-17 a pedido).
+ * 🔴 A UNIDADE DA DOSAGEM É A DO PRODUTO (2026-09-16; reescrita em 2026-09-18 a pedido).
  *
- * O campo era "valor + Unidade", e a Unidade era a da EMBALAGEM: num frasco cadastrado
- * como "1 Un." a receita saía em unidades, e uma dose de 5 mL debitava cinco FRASCOS do
- * estoque e cobrava cinco frascos. Agora:
+ *   • produto MULTIDOSE     → a **Forma de Cálculo** declarada no cadastro (mL, g, doses…);
+ *   • produto SEM multidose → a **Unidade** cadastrada no produto (mL, g, Frasco…).
  *
- *   • produto MULTIDOSE   → a Forma de Cálculo declarada (mL, g, doses…);
- *   • produto SEM multidose → **'Un.'** — a embalagem é a própria unidade, entra
- *     inteira no estoque e é cobrada por `valorRepassado ÷ Qtd Produto`.
+ * ⚠️ REVERTE o 'Un.' fixo do não-multidose (2026-09-17). Aquela regra vinha de um
+ * defeito real — o frasco cadastrado como "1 Un." fazia uma dose de 5 mL debitar cinco
+ * FRASCOS —, mas resolvia-o no lugar errado: obrigava o veterinário a escrever a receita
+ * em embalagens ("0,1 Un." de xarope), que não é como ninguém prescreve. Quem passou a
+ * responder pela baixa é a regra da ENTREGA no backend: receita em unidade de conteúdo
+ * contra estoque em embalagens consome UMA embalagem, cobrada uma vez no curso inteiro.
+ * Ver `entregaPorEmbalagem` em `PrescricaoGrupoController`.
  *
- * ⚠️ O ramo do não-multidose caía na unidade do CATÁLOGO com a subunidade (L → mL,
- * kg → g). Era a mesma divergência por outro caminho: o estoque conta EMBALAGENS e a
- * receita saía no CONTEÚDO, então "20 g" debitava 20 de um saldo de 10 bisnagas.
+ * ⚠️ A unidade daqui NÃO é a do ESTOQUE, e as duas não devem ser confundidas: a Farmácia
+ * rotula o saldo por `unidadeOperativaProduto` ('Un.' no não-multidose), porque é em
+ * embalagens que ele é contado. Trocar uma pela outra faz a tela afirmar um saldo que o
+ * sistema não tem.
  *
  * ⚠️ `null` só para item FORA do catálogo (digitado à mão): ali não há estoque nem
  * preço, e a unidade continua sendo escolhida no `<select>`.
- * Regra ÚNICA em `utils/formaCalculo.ts` — a Farmácia lê a mesma.
  */
 const unidadeDoProduto = (m: MedicamentoCat | null | undefined): string | null =>
-  unidadeOperativaProduto(m);
+  unidadePrescricaoProduto(m);
 
 const STATUS_GRUPO: Record<StatusGrupo, { label: string; cls: string }> = {
   SALVO:                { label: 'Salvo',               cls: 'bg-amber-100 text-amber-700'    },
@@ -1534,6 +1542,44 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   // reintroduziria exatamente a divergência que a unidade do produto veio eliminar.
   // Item do catálogo tem a unidade TRAVADA; só o digitado à mão mantém o `<select>`.
   const unidadeCatalogo  = unidadeDoProduto(medCatalogo);
+
+  /**
+   * 🔴 QUANTAS EMBALAGENS O CURSO VAI CONSUMIR (2026-09-19, a pedido: "é preciso na
+   * prescrição informar que serão usados dois frascos").
+   *
+   * O caso: frasco de 100 mL, receita de 25 mL × 5 doses = 125 mL. Não cabe num frasco,
+   * e quem prescreve precisa saber disso ANTES de finalizar — é o que sai do estoque e
+   * o que entra na fatura.
+   *
+   * ⚠️ É ESPELHO do backend, não uma segunda regra: a conta é `calcularQuantidadeTotal`
+   * (dosagem × doses por dia × dias) dividida pelo conteúdo, com `embalagensParaQtd`
+   * arredondando para cima — as mesmas funções, com os mesmos nomes, dos dois lados.
+   * Divergir aqui faria a tela prometer um número que a fatura não cobra.
+   *
+   * ⚠️ Só vale para o produto SEM multidose: no multidose a cobrança é PROPORCIONAL ao
+   * prescrito (a sobra do frasco volta para a prateleira), e não há embalagem inteira a
+   * anunciar. Quem separa os dois é `conteudoDaEmbalagemProduto`.
+   *
+   * ⚠️ `null` quando não há o que dizer — sem conteúdo declarado, sem dosagem, ou com a
+   * receita escrita na PRÓPRIA unidade da embalagem ("2 Un."), em que o número já É a
+   * quantidade de embalagens e repetir isso seria ruído.
+   */
+  const embalagensDoCurso = (() => {
+    if (!isMed || !medCatalogo) return null;
+    const conteudo = conteudoDaEmbalagemProduto(medCatalogo);
+    if (conteudo == null) return null;
+    // Receita na unidade da EMBALAGEM: ali o vet já prescreveu embalagens.
+    const un = (unidadeCatalogo ?? '').trim().toLowerCase();
+    if (un === '' || un === 'un.' || un === 'un' || un === 'unidade') return null;
+    const dose = Number(String(form.dosagem).replace(',', '.'));
+    if (!Number.isFinite(dose) || dose <= 0) return null;
+    const dias        = Math.max(Number(form.duracaoDias) || 1, 1);
+    const dosesPorDia = DOSES_POR_DIA[form.frequencia] ?? 1;
+    // 'agora' é dose única — o curso é a própria dose (mesma regra do backend).
+    const total = form.frequencia === 'agora' ? dose : dose * dosesPorDia * dias;
+    return { total, conteudo, qtd: embalagensParaQtd(total, conteudo) };
+  })();
+
   const itensExibidos = isCreate ? localItens : serverItens;
   const editandoItem  = editingLocalIdx !== null || editingServerId !== null;
 
@@ -1931,6 +1977,29 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                     />
                   </div>
                 </div>
+
+                {/* 🔴 QUANTAS EMBALAGENS O CURSO CONSOME — informativo, nunca bloqueio.
+                    O vet escreve a receita em mL; esta linha traduz para o que sai da
+                    prateleira e entra na fatura, que é onde o número dele vira frasco.
+                    ⚠️ Fica DEPOIS da linha de dosagem/frequência/duração de propósito:
+                    ele muda a cada tecla desses três campos, e acima deles empurraria o
+                    formulário para baixo enquanto a pessoa digita. */}
+                {embalagensDoCurso && (
+                  <div className="flex items-start gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
+                    <Package size={14} className="text-sky-600 flex-shrink-0 mt-0.5" />
+                    <p className="text-[11px] leading-snug text-sky-800">
+                      O curso inteiro usa{' '}
+                      <b>{fmtQtdForma(embalagensDoCurso.total)} {unidadeCatalogo}</b>
+                      {' '}— com {fmtQtdForma(embalagensDoCurso.conteudo)} {unidadeCatalogo} por embalagem,
+                      serão necessárias <b>{embalagensDoCurso.qtd}</b>
+                      {' '}{embalagensDoCurso.qtd === 1 ? 'embalagem' : 'embalagens'}.
+                      <span className="block text-sky-700/80">
+                        É essa quantidade que sai do estoque e vai para a fatura — a embalagem
+                        aberta não volta para a prateleira.
+                      </span>
+                    </p>
+                  </div>
+                )}
 
                 {/* Observação */}
                 <div>

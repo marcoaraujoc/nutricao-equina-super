@@ -80,6 +80,63 @@ function qtdPorEmbalagemDe(produto) {
 }
 
 /**
+ * 🔴 QUANTO CABE NA EMBALAGEM DE UM PRODUTO **SEM** MULTIDOSE (2026-09-19, a pedido).
+ *
+ * O caso: "foi comprado um frasco de 100 mL mas foram receitadas 5 doses de 25 mL" —
+ * 125 mL não cabem num frasco, o curso consome DOIS, e é isso que tem de sair do
+ * estoque e entrar na fatura. Até aqui o sistema não tinha como saber os 100 mL: a
+ * `qtdPorEmbalagem` só existe com o checkbox de multidose marcado, e sem ela a regra da
+ * entrega assumia **uma** embalagem para o curso inteiro (`entregaPorEmbalagem`) — a
+ * clínica entregava dois frascos e cobrava um.
+ *
+ * ⚠️ É DELIBERADAMENTE SEPARADA de `qtdPorEmbalagemDe`, e as duas nunca respondem
+ * juntas. Aquela é a chave do MULTIDOSE e governa a UNIDADE OPERATIVA: com ela
+ * preenchida, o estoque passa a ser contado no CONTEÚDO (mL) e a cobrança é
+ * PROPORCIONAL ao prescrito — que é o modelo do frasco compartilhado entre pacientes,
+ * onde a sobra volta para a prateleira. Esta aqui NÃO muda unidade nenhuma: o estoque
+ * continua contado em 'Un.' (embalagens), a receita continua escrita na unidade do
+ * catálogo, e o conteúdo serve para UMA pergunta só — quantas embalagens o curso gasta.
+ * Se ela entrasse em `unidadeOperativa`, todo produto que declarasse o conteúdo viraria
+ * multidose por acidente e a cobrança voltaria a ser proporcional.
+ *
+ * ⚠️ Lida em `produto.unidade`, a MESMA unidade em que a receita é escrita
+ * (`unidadePrescricao` devolve exatamente ela no não-multidose). `formaCalculo` fica
+ * FORA daqui de propósito: ela é a unidade do multidose, e misturar as duas faria o
+ * conteúdo ser comparado com uma dosagem escrita noutra unidade.
+ *
+ * ⚠️ `null` = não declarado, e aí NADA muda: o curso volta a consumir 1 embalagem, que
+ * é o comportamento de todo cadastro existente. Nenhum produto já cadastrado muda de
+ * cobrança por causa desta função.
+ */
+function conteudoDaEmbalagem(produto) {
+  if (!produto) return null;
+  if (produto.multidose === true) return null;
+  return numeroPositivo(produto.qtdPorEmbalagem ?? produto.dosesPorEmbalagem);
+}
+
+/**
+ * Quantas EMBALAGENS INTEIRAS uma quantidade prescrita consome.
+ *
+ * 🔴 ARREDONDA PARA CIMA, e é esse o ponto: 125 mL de um frasco de 100 mL são DOIS
+ * frascos, não 1,25. A embalagem sem multidose é do paciente — aberta, ela não volta
+ * para a prateleira —, então a fração cobra a embalagem inteira.
+ *
+ * ⚠️ Sem conteúdo declarado devolve **1**: é a regra da entrega única que vale desde
+ * 2026-09-18 e o comportamento de toda base existente. Nunca 0 — zero faria o curso
+ * sair sem baixa de estoque e sem linha de fatura, em silêncio.
+ */
+function embalagensPara(qtdPrescrita, conteudoEmbalagem) {
+  const conteudo = numeroPositivo(conteudoEmbalagem);
+  if (conteudo == null) return 1;
+  const qtd = Number(qtdPrescrita);
+  if (!Number.isFinite(qtd) || qtd <= 0) return 1;
+  // ⚠️ A tolerância existe para o ruído de ponto flutuante: 3 doses de 0,1 somam
+  // 0.30000000000000004, e `Math.ceil(0.30000000000000004 / 0.3)` daria 2 embalagens
+  // onde uma basta. 1e-9 é pequeno demais para mascarar uma sobra de verdade.
+  return Math.max(1, Math.ceil(qtd / conteudo - 1e-9));
+}
+
+/**
  * A unidade OPERATIVA do item: a forma de cálculo quando ele a declara, senão a
  * unidade da embalagem.
  *
@@ -108,6 +165,41 @@ function unidadeOperativa(produto) {
   return UNIDADE_AVULSA;
 }
 
+/**
+ * A unidade em que a RECEITA daquele produto é escrita.
+ *
+ * 🔴 NÃO é a mesma de `unidadeOperativa` quando o produto NÃO é multidose, e a
+ * divergência é DELIBERADA (2026-09-18, a pedido):
+ *
+ *     multidose     → a forma de cálculo declarada   (mL, g, doses…)    [= estoque]
+ *     não-multidose → a UNIDADE DO CATÁLOGO          (mL, g, Frasco…)   [estoque: 'Un.']
+ *
+ * POR QUE as duas passaram a divergir: sem multidose o produto não declara quanto cabe
+ * na embalagem, mas o veterinário prescreve na unidade REAL do medicamento — "5 mL de
+ * xarope", nunca "0,1 frasco". Até aqui as duas respostas eram 'Un.' (2026-09-17), e o
+ * campo da receita saía em unidades, que não é como ninguém prescreve.
+ *
+ * ⚠️ A PONTE entre as duas é a regra da ENTREGA, e sem ela isto seria um retrocesso:
+ * escrita em unidade de CONTEÚDO contra um estoque contado em EMBALAGENS, a prescrição
+ * consome UMA embalagem — entregue, debitada e cobrada UMA vez no curso inteiro (ver
+ * `PrescricaoGrupoController.entregaPorEmbalagem`). Sem a ponte a receita voltaria a
+ * debitar o número BRUTO, que é o defeito que `unidadeOperativa` veio matar: "20 mL"
+ * tirando 20 frascos de um saldo de 2.
+ *
+ * ⚠️ Sem unidade no catálogo devolve a AVULSA, nunca vazio: um campo de dosagem sem
+ * unidade nenhuma não diz o que o número significa, e é ele que vira o SNAPSHOT da
+ * receita.
+ */
+function unidadePrescricao(produto) {
+  const conteudo = qtdPorEmbalagemDe(produto);
+  const forma    = normalizarFormaCalculo(produto?.formaCalculo);
+  if (forma && conteudo != null) return forma;
+  // LEGADO (multidose com quantidade e sem forma) e NÃO-MULTIDOSE caem no MESMO lugar,
+  // por razões diferentes: no legado o estoque está contado no conteúdo e a unidade do
+  // catálogo é o que o descreve; aqui ela é simplesmente a unidade do medicamento.
+  return produto?.unidade || UNIDADE_AVULSA;
+}
+
 module.exports = {
   FORMAS_CALCULO,
   FORMA_DOSES,
@@ -116,5 +208,8 @@ module.exports = {
   ehFormaContavel,
   numeroPositivo,
   qtdPorEmbalagemDe,
+  conteudoDaEmbalagem,
+  embalagensPara,
   unidadeOperativa,
+  unidadePrescricao,
 };

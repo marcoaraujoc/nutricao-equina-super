@@ -14,7 +14,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import {
   DollarSign, Search, Loader2, Trash2,
   Pencil, Check, X, RefreshCw, Receipt,
-  CheckCircle2, Download, Printer, ChevronDown, MessageCircle, Mail,
+  CheckCircle2, Download, Printer, ChevronDown, ChevronRight, MessageCircle, Mail,
 } from 'lucide-react';
 import { imprimirFatura, exportarFaturaCSV, gerarHtmlFatura } from '../utils/FaturaExport';
 import type { DadosRecebimento } from '../utils/FaturaExport';
@@ -55,6 +55,25 @@ interface OrigemAtendimento {
   atendimentoNumero: string | null;
 }
 
+/** Uma CONTRIBUIÇÃO da linha — a observação por baixo da cobrança (2026-09-17).
+ *
+ *  A linha da fatura consolida execuções de atendimentos DIFERENTES ("Quant.: 5" pode
+ *  ser 3 de um e 2 de outro), então a quantidade sozinha não diz de onde veio. Cada
+ *  contribuição traz o número do registro de origem, a data e quanto ele somou.
+ *
+ *  O destino do clique vem do backend e é o REGISTRO DE ORIGEM, não sempre a evolução:
+ *  vacina abre a tela de Vacina (`vacinaId`), o resto abre o atendimento. */
+interface OrigemContribuicao {
+  id: number;
+  quantidade: number;
+  data: string | null;
+  numero: string | null;
+  vacinaId: number | null;
+  evolucaoId: number | null;
+  agendamentoId: number | null;
+  animalId: number | null;
+}
+
 interface FaturaItem {
   id: number; faturaId: number; animalId?: number; tipo: string;
   descricao: string; valor: number; quantidade: number;
@@ -63,6 +82,10 @@ interface FaturaItem {
   veterinario?: { id: number; fullName: string };
   animal?: AnimalResumo;
   origem?: OrigemAtendimento | null;
+  /** As execuções que formaram a `quantidade` desta linha. Vazio/ausente em item sem
+   *  origem clínica e em linha LEGADA (lançada antes da migration das contribuições) —
+   *  nesses casos a linha continua sendo exibida como sempre foi. */
+  origens?: OrigemContribuicao[];
   /** Item de prescrição que originou a linha — dose, seringa e agulha da MESMA
    *  aplicação compartilham este id. É por ele que os insumos são agrupados. */
   prescricaoItemId?: number | null;
@@ -313,6 +336,70 @@ function descricaoSemNumero(descricao: string, numero?: string | null): string {
   return descricao.startsWith(prefixo) ? descricao.slice(prefixo.length).trimStart() : descricao;
 }
 
+// ─── Observação da linha: de onde veio cada unidade ───────────────────────────
+//
+// Desde 2026-09-17 a linha da fatura CONSOLIDA execuções de atendimentos diferentes: o
+// mesmo medicamento, na mesma dose e pelo mesmo preço, aplicado duas vezes no mês, é
+// uma linha só com "Quant.: 5". A quantidade sozinha não diz de onde ela veio — esta
+// lista diz, uma execução por linha: número do registro (clicável), data e quantidade.
+//
+// ⚠️ O DESTINO do clique é o REGISTRO DE ORIGEM, e ele muda por tipo: VACINA abre a
+// tela de Vacina (é ela o registro, e é lá que o número VC-0004 existe); prescrição e
+// exame abrem o ATENDIMENTO com a evolução já aberta. Quem resolve isso é o backend —
+// a tela só usa o que veio (`vacinaId` × `evolucaoId`).
+// ⚠️ Contribuição sem destino resolvido (registro excluído, evolução avulsa antiga)
+// ainda APARECE, só não vira link: sumir com ela faria a soma da observação não bater
+// com a quantidade da linha, que é pior que um número sem clique.
+function ObservacaoOrigens({ origens }: { origens: OrigemContribuicao[] }) {
+  const navigate = useNavigate();
+  if (origens.length === 0) return null;
+
+  const abrir = (o: OrigemContribuicao) => {
+    if (o.vacinaId && o.animalId) {
+      // Mesmo parâmetro que o Histórico do Paciente usa: a tela de Vacina é apartada e
+      // `openItemId` é estado, então o item precisa viajar na URL.
+      navigate(`/clinica/vacina/${o.animalId}?item=${o.vacinaId}`);
+      return;
+    }
+    if (!o.evolucaoId || !o.animalId) return;
+    const params = new URLSearchParams({ evolucao: String(o.evolucaoId) });
+    if (o.agendamentoId) params.set('agendamentoId', String(o.agendamentoId));
+    navigate(`/clinica/evolucao/${o.animalId}?${params.toString()}`);
+  };
+
+  const fmtData = (iso: string | null) =>
+    iso ? new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '—';
+
+  return (
+    <ul className="mt-1 space-y-0.5">
+      {origens.map(o => {
+        const clicavel = Boolean((o.vacinaId && o.animalId) || (o.evolucaoId && o.animalId));
+        return (
+          <li key={o.id} className="text-[10px] text-gray-500 flex items-center gap-1.5 flex-wrap">
+            <span className="text-gray-300" aria-hidden="true">↳</span>
+            {o.numero && clicavel ? (
+              <button
+                type="button"
+                onClick={() => abrir(o)}
+                title={`Abrir ${o.numero}`}
+                aria-label={`Abrir ${o.numero}`}
+                className="font-mono font-bold text-emerald-700 hover:text-emerald-900 hover:underline">
+                {o.numero}
+              </button>
+            ) : (
+              <span className="font-mono font-bold text-gray-400">{o.numero ?? 'Sem número'}</span>
+            )}
+            <span className="text-gray-300">·</span>
+            <span>{fmtData(o.data)}</span>
+            <span className="text-gray-300">·</span>
+            <span>Quant.: {o.quantidade}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 // ─── Linha de item editável ───────────────────────────────────────────────────
 
 function ItemRow({
@@ -332,7 +419,16 @@ function ItemRow({
   // ele já está na linha do medicamento logo acima, e repetir a cada filho tiraria
   // justamente a leitura de "estes três são a mesma aplicação".
   const ehInsumo = item.insumoDe != null;
-  const numeroAtendimento = !ehInsumo && origem?.evolucaoId && origem?.animalId
+  // 🔴 A OBSERVAÇÃO SÓ APARECE QUANDO A LINHA REALMENTE JUNTA MAIS DE UMA EXECUÇÃO
+  // (2026-09-17). Com uma contribuição só, o badge do número + a data + "Quant.: 1" da
+  // linha já dizem tudo, e repetir isso numa lista de um item seria ruído em toda
+  // fatura. Com duas ou mais, o badge SAI: ele seria o número da PRIMEIRA execução, e
+  // exibi-lo no cabeçalho daria a entender que vale pela linha inteira.
+  // ⚠️ INSUMO (seringa/agulha) não mostra nem um nem outro: é linha FILHA, e a história
+  // já está na linha do medicamento logo acima.
+  const origens = ehInsumo ? [] : (item.origens ?? []);
+  const consolidada = origens.length > 1;
+  const numeroAtendimento = !ehInsumo && !consolidada && origem?.evolucaoId && origem?.animalId
     ? origem.atendimentoNumero
     : null;
 
@@ -375,6 +471,13 @@ function ItemRow({
   const [descValor,     setDescValor]     = useState(item.descontoValor ?? 0);
   const [descValorStr,  setDescValorStr]  = useState(fmtDesc(item.descontoTipo, item.descontoValor ?? 0));
   const [saving,        setSaving]        = useState(false);
+  // 🔴 A LINHA NASCE CONTRAÍDA (2026-09-19, a pedido). Data, quantidade, unitário,
+  // desconto e o número do atendimento são CONFERÊNCIA, não leitura corrida: a fatura do
+  // mês tem dezenas de linhas, e com tudo aberto o que se quer ver primeiro — o que foi
+  // cobrado e por quanto — fica espremido entre três linhas de metadado por item.
+  // ⚠️ O estado vive na LINHA, não na fatura: abrir um item não pode abrir os outros, e
+  // um controle único no cabeçalho jogaria fora o que a pessoa expandiu para conferir.
+  const [aberto,        setAberto]        = useState(false);
 
   const descontoAtual = descontoDoItem(item);
   // Prévia do abatimento com o que está sendo editado (antes de salvar)
@@ -541,6 +644,18 @@ function ItemRow({
     <div className={`flex items-start gap-3 py-2.5 group hover:bg-gray-50/60 rounded-xl transition-colors ${
       ehInsumo ? 'pl-10 pr-4 border-l-2 border-gray-100 ml-4' : 'px-4'
     }`}>
+      {/* Gatilho da expansão. É CROMO, não ação do registro (§6): cinza e fora do
+          `AcaoRegistro` — ele não altera nada, só mostra o que já está na linha.
+          ⚠️ `aria-expanded` + `title` são obrigatórios: o botão não tem rótulo visível. */}
+      <button
+        type="button"
+        onClick={() => setAberto(v => !v)}
+        aria-expanded={aberto}
+        title={aberto ? 'Ocultar detalhes do item' : 'Ver detalhes do item'}
+        aria-label={aberto ? 'Ocultar detalhes do item' : 'Ver detalhes do item'}
+        className="mt-0.5 p-0.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors flex-shrink-0">
+        {aberto ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+      </button>
       <div className="flex-1 min-w-0">
         {/* MOBILE: tipo + Nº do atendimento numa linha, DESCRIÇÃO na linha de baixo.
             Lado a lado, o que sobrava de largura para o nome do medicamento era um
@@ -551,7 +666,10 @@ function ItemRow({
             <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0 ${TIPO_COR[item.tipo] ?? 'bg-gray-100 text-gray-600'}`}>
               {item.tipo}
             </span>
-            {numeroAtendimento && (
+            {/* O Nº do atendimento é DETALHE e sai junto com o resto — foi ele um dos
+                citados no pedido ("número de evolução"). Contraída, a linha diz o que
+                foi cobrado e por quanto; expandida, de onde aquilo veio. */}
+            {aberto && numeroAtendimento && (
               <button
                 type="button"
                 onClick={abrirAtendimento}
@@ -567,20 +685,28 @@ function ItemRow({
             {descricaoSemNumero(item.descricao, item.origem?.atendimentoNumero ?? null)}
           </p>
         </div>
-        <p className="text-[10px] text-gray-400 mt-1">
-          {item.criadoEm && (
-            <span className="mr-2 font-medium text-gray-500">
-              {new Date(item.criadoEm).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
-            </span>
-          )}
-          Quant.: {item.quantidade} · Unitário: {formatBRL(item.valor)}
-          {descontoAtual > 0 && (
-            <span className="ml-2 text-red-500 font-medium">
-              Desconto: {item.descontoTipo === 'PERCENTUAL' ? `${item.descontoValor}%` : formatBRL(item.descontoValor ?? 0)}
-              {' '}(−{formatBRL(descontoAtual)})
-            </span>
-          )}
-        </p>
+        {aberto && (
+          <>
+            <p className="text-[10px] text-gray-400 mt-1">
+              {/* A data da LINHA é a do lançamento — na linha consolidada ela seria só a da
+                  PRIMEIRA execução, e ficaria ao lado de uma observação que lista todas.
+                  Some ali para não competir com elas. */}
+              {item.criadoEm && !consolidada && (
+                <span className="mr-2 font-medium text-gray-500">
+                  {new Date(item.criadoEm).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+                </span>
+              )}
+              Quant.: {item.quantidade} · Unitário: {formatBRL(item.valor)}
+              {descontoAtual > 0 && (
+                <span className="ml-2 text-red-500 font-medium">
+                  Desconto: {item.descontoTipo === 'PERCENTUAL' ? `${item.descontoValor}%` : formatBRL(item.descontoValor ?? 0)}
+                  {' '}(−{formatBRL(descontoAtual)})
+                </span>
+              )}
+            </p>
+            {consolidada && <ObservacaoOrigens origens={origens} />}
+          </>
+        )}
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
         <span className="text-sm font-semibold text-gray-700 whitespace-nowrap text-right">

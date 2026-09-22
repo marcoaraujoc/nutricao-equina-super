@@ -146,7 +146,16 @@ const MapaAtendimentoController = {
       const gruposCandidate = await prisma.prescricaoGrupo.findMany({
         where: {
           animalId: { in: animalIds },
-          status:   { in: ['FINALIZADO', 'CANCELADO_PARCIALMENTE'] },
+          // 🔴 OS QUATRO STATUS, não dois (corrigido 2026-09-18). O `where` trazia só
+          // FINALIZADO/CANCELADO_PARCIALMENTE enquanto a classificação abaixo
+          // (`statusPresc`) decide entre EXECUTADO / CANCELADO / ATRASADA / AGENDADO:
+          // os dois status que ela precisa NUNCA chegavam nela, então os cartões
+          // "Executadas" e "Não executadas / Atrasadas" ficavam em ZERO — o grupo
+          // totalmente executado some do resultado no instante em que vira EXECUTADO.
+          // (O ramo `jaExecutadoHoje` disfarçava no modo Diário e só nele.)
+          // Mesma lista de `PrescricaoGrupoController.listarParaExecucao` (o Histórico
+          // do plantão), que é a fonte com que este painel precisa concordar.
+          status:   { in: ['FINALIZADO', 'CANCELADO_PARCIALMENTE', 'EXECUTADO', 'CANCELADO'] },
           // Mesma regra do listarParaExecucao: só executa com a evolução FINALIZADA
           OR: [
             { evolucaoId: null },

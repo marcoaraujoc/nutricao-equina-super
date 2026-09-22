@@ -314,24 +314,43 @@ describe('preferirCopiaDaEmpresa — o global homônimo sai da lista', () => {
 
 // ─── Preço na unidade contável ───────────────────────────────────────────────
 
+// 🔴 OS ARGUMENTOS SÃO (valor de UMA embalagem, o que ela contém, unidade) — 2026-09-17.
+// Até aqui eram (valor TOTAL da compra, saldo inteiro): a tela multiplicava antes de
+// gravar e esta função dividia de volta. O preço saía certo, mas o banco ficava com o
+// total num campo chamado "Valor Unitário", e quem o lia cru cobrava a compra inteira
+// numa linha (uma seringa pelo preço da caixa).
 describe('calcPrecoUnitarioBase — a conta que vai para a fatura', () => {
   const calc = EstoqueController.calcPrecoUnitarioBase;
 
-  test('🔴 unidade CONTÁVEL passou a ter preço FIXO por unidade (antes devolvia null)', () => {
-    // 10 frascos por R$ 300 → R$ 30 por frasco, congelado na entrada.
-    expect(calc(300, 10, 'Un.')).toBeCloseTo(30, 6);
-    expect(calc(300, 10, 'un')).toBeCloseTo(30, 6);
-    expect(calc(300, 10, 'Comprimido')).toBeCloseTo(30, 6);
+  test('🔴 unidade CONTÁVEL tem preço FIXO por unidade (antes devolvia null)', () => {
+    // Embalagem avulsa por R$ 30 → R$ 30 na dose, congelado na entrada.
+    expect(calc(30, null, 'Un.')).toBeCloseTo(30, 6);
+    expect(calc(30, null, 'un')).toBeCloseTo(30, 6);
+    expect(calc(30, null, 'Comprimido')).toBeCloseTo(30, 6);
   });
 
   test('peso e volume não mudaram de conta — R$/g e R$/mL', () => {
-    expect(calc(300, 1, 'kg')).toBeCloseTo(0.3, 6);   // 1 kg = 1000 g
+    expect(calc(300, 1, 'kg')).toBeCloseTo(0.3, 6);   // embalagem de 1 kg = 1000 g
     expect(calc(300, 1000, 'g')).toBeCloseTo(0.3, 6);
     expect(calc(100, 1, 'l')).toBeCloseTo(0.1, 6);
+    expect(calc(100, 20, 'mL')).toBeCloseTo(5, 6);    // frasco de 20 mL por R$ 100
   });
 
-  test('sem quantidade ou sem preço não inventa valor', () => {
-    expect(calc(300, 0, 'Un.')).toBeNull();
+  test('conteúdo ausente é "a embalagem é a unidade", nunca divisão por zero', () => {
+    // `null`/0 valem 1: o não-multidose não declara conteúdo, e o valor da embalagem
+    // JÁ é o preço unitário. Devolver null aqui jogaria a cobrança no caminho legado.
+    expect(calc(80, null, 'Un.')).toBeCloseTo(80, 6);
+    expect(calc(80, 0, 'Un.')).toBeCloseTo(80, 6);
+  });
+
+  test('🔴 a quantidade comprada NÃO entra na conta', () => {
+    // O preço é o mesmo para 1 ou 500 embalagens — é isso que impede o ajuste de
+    // estoque de mexer no valor que já foi cobrado do cliente.
+    expect(calc(30, null, 'Un.')).toBe(calc(30, null, 'Un.'));
+    expect(calc(100, 20, 'mL')).toBeCloseTo(5, 6);
+  });
+
+  test('sem preço não inventa valor', () => {
     expect(calc(0, 10, 'Un.')).toBeNull();
     expect(calc(null, 10, 'Un.')).toBeNull();
   });

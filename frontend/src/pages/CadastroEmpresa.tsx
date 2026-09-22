@@ -391,7 +391,10 @@ export default function CadastroEmpresa() {
       // continua redirecionando para cá até um F5 manual.
       await refreshSelectedAnimal();
       if (completandoPrimeiroAcesso) {
-        navigate('/painel-principal');
+        // MESMO destino do login (`Login.tsx`): o gestor que acaba de completar o
+        // cadastro está entrando no sistema pela primeira vez.
+        // 🔴 Era `/painel-principal` até 2026-09-19.
+        navigate('/mapa-atendimento');
       }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
