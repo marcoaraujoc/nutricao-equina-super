@@ -3092,7 +3092,17 @@ const listarParaExecucao = async (req, res) => {
     // Escopo base × convidado por ANIMAL (mesma regra da listagem/agendamento): o vet
     // vinculado (convidado) só vê os grupos dos SEUS animais + os liberados por outros
     // vets (designação) na empresa ativa; dono/gestor vê os pacientes que trata.
-    const { where: animalScopeWhere } = await buildAnimalScopeWhere(req);
+    //
+    // 🔴 O PLANTÃO NÃO SEGUE O EXPEDIENTE DA EMPRESA (2026-09-22).
+    // `ignorarDiaDeTrabalho` mantém a restrição "Atender somente no local de
+    // trabalho" pelo LOCAL e desliga o recorte por DIA DA SEMANA. Numa clínica
+    // seg–sex, os dias do local do profissional são validados contra o expediente
+    // da empresa (`validarLocaisContraExpedienteEmpresa`) — ninguém consegue nem
+    // ser cadastrado para sábado —, então a fila do fim de semana nascia VAZIA
+    // para quem tem a opção ligada, e as doses daqueles dias eram depois
+    // canceladas pelo cron de dose perdida, sem ninguém ver. Tratamento corre
+    // 24/7: um "8 em 8h por 5 dias" atravessa o fim de semana.
+    const { where: animalScopeWhere } = await buildAnimalScopeWhere(req, { ignorarDiaDeTrabalho: true });
     // `ANIMAL_VISIVEL` = `{ ativo: true, user: { ativo: true } }` — EXCLUSÃO LÓGICA
     // (lib/visibilidade.js). O `ativo: true` do animal já estava aqui; o que faltava
     // era o do CLIENTE: inativar o proprietário não tirava do plantão as prescrições

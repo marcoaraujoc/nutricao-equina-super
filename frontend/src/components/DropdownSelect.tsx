@@ -10,10 +10,16 @@
 // 🔴 `buscavel` (2026-09-18, a pedido) — o gatilho vira um <input> e a lista
 // FILTRA ao digitar. Existe porque catálogo longo (raça, pelagem) rolado à mão é
 // atrito puro: quem cadastra sabe o nome e quer digitar as três primeiras letras.
-// ⚠️ O valor final continua saindo SEMPRE de um clique/Enter numa opção da lista:
-// texto livre é DESCARTADO no blur. Aceitar o que foi digitado gravaria uma raça
-// fora do catálogo — e, no caso da raça, o chamador converte nome → id casando
-// pelo nome EXATO, então o "valor" viraria um id nulo em silêncio.
+// 🔴 O QUE FOI DIGITADO SE COMPLETA SOZINHO AO SAIR DO CAMPO (2026-09-22, a
+// pedido). Antes o blur DESCARTAVA o texto: quem digitava "manga", via a lista
+// filtrar até uma única raça e saía com Tab ficava com o campo VAZIO — e nada
+// explicava por quê. Agora `resolverDigitado` aceita o texto quando ele designa uma
+// opção SEM AMBIGUIDADE: igualdade exata (sem acento/caixa), ou um único candidato
+// restante no filtro (por prefixo primeiro, depois por conteúdo).
+// ⚠️ O valor final continua saindo SEMPRE do CATÁLOGO — nunca do que foi digitado.
+// Texto que casa com duas opções, ou com nenhuma, segue sendo descartado: o chamador
+// converte nome → id casando pelo nome EXATO, e aceitar o resto gravaria um id nulo
+// em silêncio.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
@@ -114,6 +120,24 @@ export default function DropdownSelect({ value, onChange, options, grupos, place
     if (e.key === 'Escape') { setAberto(false); setBusca(null); }
   };
 
+  /**
+   * O texto digitado designa UMA opção sem ambiguidade? Devolve-a, ou `null`.
+   * Ordem deliberada: igualdade exata vence tudo (quem digitou o nome inteiro não
+   * pode ser levado para outro), depois o único que COMEÇA com o termo, e só então
+   * o único que o CONTÉM. Dois candidatos = ninguém escolhe pela pessoa.
+   */
+  const resolverDigitado = (texto: string): string | null => {
+    const t = semAcento(texto);
+    if (!t) return null;
+    const todas = blocos.flatMap(b => b.options);
+    const exata = todas.find(o => semAcento(o) === t);
+    if (exata) return exata;
+    const prefixo = todas.filter(o => semAcento(o).startsWith(t));
+    if (prefixo.length === 1) return prefixo[0];
+    const contem = todas.filter(o => semAcento(o).includes(t));
+    return contem.length === 1 ? contem[0] : null;
+  };
+
   const painel = aberto && (
     // `onMouseDown` com preventDefault: sem isso o blur do input fecharia a lista
     // ANTES de o clique na opção registrar, e escolher com o mouse não funcionaria.
@@ -170,9 +194,17 @@ export default function DropdownSelect({ value, onChange, options, grupos, place
           onClick={() => setAberto(true)}
           onChange={e => { setBusca(e.target.value); setAberto(true); }}
           onKeyDown={aoTeclar}
-          // Texto livre é DESCARTADO: o campo volta ao valor escolhido. Gravar o
-          // que foi digitado deixaria no cadastro uma opção fora do catálogo.
-          onBlur={() => { setAberto(false); setBusca(null); }}
+          // Sair do campo COMPLETA o que foi digitado, quando o texto designa uma
+          // opção só; sendo ambíguo ou desconhecido, o campo volta ao valor
+          // escolhido (nunca grava opção fora do catálogo).
+          onBlur={() => {
+            if (busca !== null) {
+              const achada = resolverDigitado(busca);
+              if (achada && achada !== value) onChange(achada);
+            }
+            setAberto(false);
+            setBusca(null);
+          }}
           placeholder={placeholder ?? '— Selecionar —'}
           autoComplete="off"
           className={`${className} pr-9 disabled:bg-gray-50 disabled:cursor-not-allowed`}

@@ -16,6 +16,9 @@ interface Localizacao { id: number; nome: string }
 interface Veterinario { id: number; fullName: string }
 interface AnimalInfo  { id: number; nome: string; especie?: string }
 
+// Doses da prescrição no período (só em item de procedimento PRESCRICAO).
+interface DosesItem { executadas: number; atrasadas: number; previstas: number; total: number }
+
 interface CronogramaItem {
   id:            number | string;
   grupoId?:      number | null;
@@ -24,8 +27,9 @@ interface CronogramaItem {
   localizacao:   Localizacao | null;
   procedimento:  string;
   descricao:     string;
-  status:        'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'EXECUTADO' | 'CANCELADO' | 'CANCELADO_AUTOMATICAMENTE' | 'SEM_ATENDIMENTO';
+  status:        'AGENDADO' | 'EM_ANDAMENTO' | 'CONCLUIDO' | 'FINALIZADO' | 'EXECUTADO' | 'CANCELADO' | 'CANCELADO_AUTOMATICAMENTE' | 'ATRASADA' | 'SEM_ATENDIMENTO';
   dataHora:      string | null;
+  doses?:        DosesItem;
   responsavel:   string | null;
   responsavelId: number | null;
 }
@@ -34,9 +38,13 @@ interface ResumoData {
   isGestor:          boolean;
   distribuicaoHaras: Array<{ id: number; nome: string; total: number }>;
   consultasClinicas: { agendado: number; concluido: number; cancelado: number; total: number; progresso: number };
-  // executadas/pendentesOuAtrasadas ficam de fora só quando o filtro não tem
-  // nenhum animal no escopo (MapaAtendimentoController, ramo de lista vazia).
-  prescricoes:       { total: number; ativas: number; executadas?: number; pendentesOuAtrasadas?: number };
+  // 🔴 `total`/`executadas`/`pendentesOuAtrasadas` contam DOSES desde 2026-09-22
+  // (antes eram documentos de prescrição — um curso de 15 aplicações valia 1).
+  // `documentos` é a contagem antiga, preservada para quem precisar dela.
+  prescricoes:       {
+    total: number; ativas: number;
+    executadas?: number; pendentesOuAtrasadas?: number; previstas?: number; documentos?: number;
+  };
   animaisSemAtendimento: { semAtendimento: number; comAtendimento: number; total: number };
   cronograma:        CronogramaItem[];
   filtros:           { localizacoes: Localizacao[]; veterinarios: Veterinario[] };
@@ -219,6 +227,26 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+// ── Chip de doses da prescrição ───────────────────────────────────────────────
+// "2/5 doses" é o que torna visível que o documento tem mais de uma aplicação no
+// período — sem isso a linha do curso de 5 dias é indistinguível da dose única, que
+// foi exatamente o que fez este painel parecer "não refletir as dosagens".
+function ChipDoses({ doses }: { doses?: DosesItem }) {
+  if (!doses || doses.total === 0) return null;
+  return (
+    <span className="inline-flex items-center gap-1 mt-1 text-[11px] text-gray-500">
+      <span className="font-semibold text-gray-700">{doses.executadas}/{doses.total}</span>
+      <span>doses</span>
+      {doses.atrasadas > 0 && (
+        <span className="text-red-600 font-medium">· {doses.atrasadas} atrasada{doses.atrasadas > 1 ? 's' : ''}</span>
+      )}
+      {doses.previstas > 0 && (
+        <span className="text-amber-600 font-medium">· {doses.previstas} a fazer</span>
+      )}
+    </span>
+  );
+}
+
 // ── Tipo badge ────────────────────────────────────────────────────────────────
 const TIPO_LABELS: Record<string, string> = {
   CONSULTA:     'Consulta',
@@ -364,9 +392,14 @@ export default function MapaAtendimento() {
 
   const semAtend    = resumo?.animaisSemAtendimento.semAtendimento ?? 0;
   const comAtend    = resumo?.animaisSemAtendimento.comAtendimento ?? 0;
+  // 🔴 CONTAM DOSES, não documentos (2026-09-22). A terceira fatia existe para o
+  // donut FECHAR: sem ela, "12 doses no período, 2 executadas e 1 atrasada" pintava
+  // um gráfico de 3 doses com o número 12 no centro. "Previstas" é o que ainda vai
+  // acontecer dentro do período — trabalho aberto, não pendência.
   const prescSegs: DonutSegment[] = [
     { value: resumo?.prescricoes.executadas ?? 0, label: 'Executadas', color: '#10b981', id: 'EXECUTADO' },
     { value: resumo?.prescricoes.pendentesOuAtrasadas ?? 0, label: 'Não executadas / Atrasadas', color: '#f43f5e', id: 'PENDENTE' },
+    { value: resumo?.prescricoes.previstas ?? 0, label: 'Previstas', color: '#f59e0b', id: 'PREVISTA' },
   ];
   const verPrescricoesDoDia = () => {
     setTipoFiltro('PRESCRICAO'); setActiveStatus(null); setActiveHaras(null); scrollToCronograma();
@@ -476,10 +509,9 @@ export default function MapaAtendimento() {
     FINALIZADO: 'Finalizado', EXECUTADO: 'Executado', CANCELADO: 'Cancelado',
     SEM_ATENDIMENTO: 'Sem atendimento', ATRASADA: 'Atrasada', COM: 'Com atendimento',
   };
-  const statusUnicos = [...new Set((resumo?.cronograma ?? []).map(c => c.status))];
-  const statusOpcoes: SelectOption[] = statusUnicos
-    .map(s => ({ value: s, label: STATUS_LABELS[s] ?? s }))
-    .sort((a, b) => a.label.localeCompare(b.label));
+  // ⚠️ `statusUnicos`/`statusOpcoes` foram REMOVIDOS junto com o seletor: sem
+  // leitor, `tsc -b` reprova por variável não usada (TS6133). `STATUS_LABELS`
+  // permanece — é ele que nomeia o recorte na faixa "Filtrado por …".
 
   return (
     <PageContainer maxWidth="7xl">
@@ -572,7 +604,7 @@ export default function MapaAtendimento() {
           As colunas dividem a largura do card (min-w-0 nas células), então os
           campos encolhem juntos e a linha nunca ultrapassa o card. */}
       <div className={`grid grid-cols-2 gap-3 mb-6 p-4 bg-white rounded-2xl border border-gray-100 shadow-sm ${
-        resumo?.isGestor ? 'lg:grid-cols-4' : 'lg:grid-cols-3'
+        resumo?.isGestor ? 'lg:grid-cols-3' : 'lg:grid-cols-2'
       }`}>
         <div className="min-w-0">
           <label className="flex items-center gap-1.5 text-xs font-medium text-gray-500 mb-1">
@@ -612,18 +644,13 @@ export default function MapaAtendimento() {
             placeholder="Todos"
           />
         </div>
-        <div className="min-w-0">
-          <label className="flex items-center gap-1.5 text-xs font-medium text-gray-500 mb-1">
-            <CheckCircle2 size={13} className="text-indigo-500 flex-shrink-0" />
-            <span className="truncate">Status</span>
-          </label>
-          <SimpleSelect
-            options={statusOpcoes}
-            value={activeStatus ?? ''}
-            onChange={v => setActiveStatus(v || null)}
-            placeholder="Todos"
-          />
-        </div>
+        {/* 🔴 O SELETOR DE STATUS FOI RETIRADO DA TELA (2026-09-22, a pedido).
+            O filtro em si CONTINUA existindo e funcionando: `activeStatus` é o
+            mesmo estado que as fatias dos donuts (Consultas Clínicas e Animais sem
+            Atendimento) ligam e desligam, e a faixa "Filtrado por … — limpar" logo
+            acima do cronograma segue mostrando e limpando o recorte ativo.
+            ⚠️ Removendo o ESTADO junto, os dois donuts deixariam de filtrar a lista
+            — que é a forma como esta tela foi desenhada para se navegar. */}
       </div>
 
       {/* ── Cards de KPI ────────────────────────────────────────────── */}
@@ -696,7 +723,10 @@ export default function MapaAtendimento() {
 
         {/* Card 3 — Prescrições/Dosagens */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-          <h2 className="text-sm font-semibold text-gray-700 mb-3">Prescrições / Dosagens</h2>
+          <h2 className="text-sm font-semibold text-gray-700">Prescrições / Dosagens</h2>
+          <p className="text-xs text-gray-400 mb-3">
+            {resumo?.prescricoes.documentos ?? 0} prescriç{(resumo?.prescricoes.documentos ?? 0) === 1 ? 'ão' : 'ões'} no período
+          </p>
           <div className="flex items-center justify-center mb-3">
             <DonutChart
               segments={prescSegs}
@@ -704,7 +734,7 @@ export default function MapaAtendimento() {
               onHover={() => {}}
               onClick={() => verPrescricoesDoDia()}
               centerLabel={String(resumo?.prescricoes.total ?? 0)}
-              centerSub="prescrições"
+              centerSub="doses"
             />
           </div>
           <div className="space-y-1.5">
@@ -814,7 +844,11 @@ export default function MapaAtendimento() {
               )}
               {cronogramaFiltrado.map(item => {
                 const isPrescricao = item.procedimento === 'PRESCRICAO' && item.grupoId;
-                const podeExecutarItem = isPrescricao && isHoje && item.status !== 'EXECUTADO';
+                // Cancelada fica de fora junto com a executada: `executar` recusa
+                // as duas no backend, e botão que só falha depois do clique é a
+                // armadilha 28-d do CLAUDE.md.
+                const podeExecutarItem = isPrescricao && isHoje
+                  && item.status !== 'EXECUTADO' && item.status !== 'CANCELADO';
                 const isAgendamentoClick = TIPOS_AGENDAMENTO.has(item.procedimento);
                 const isClickable = podeExecutarItem || isAgendamentoClick;
                 const handleRowClick = isAgendamentoClick
@@ -841,6 +875,7 @@ export default function MapaAtendimento() {
                     </td>
                     <td className="px-4 py-3 text-gray-600 max-w-xs">
                       <span className="line-clamp-2">{item.descricao}</span>
+                      <ChipDoses doses={item.doses} />
                     </td>
                     <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
                       {item.dataHora
@@ -886,7 +921,8 @@ export default function MapaAtendimento() {
           )}
           {cronogramaFiltrado.map(item => {
             const isPrescricao = item.procedimento === 'PRESCRICAO' && item.grupoId;
-            const podeExecutarItem = isPrescricao && isHoje && item.status !== 'EXECUTADO';
+            const podeExecutarItem = isPrescricao && isHoje
+              && item.status !== 'EXECUTADO' && item.status !== 'CANCELADO';
             const isAgendamentoClick = TIPOS_AGENDAMENTO.has(item.procedimento);
             return (
               <div
@@ -923,6 +959,7 @@ export default function MapaAtendimento() {
                   )}
                 </div>
                 <p className="text-sm text-gray-600">{item.descricao}</p>
+                <ChipDoses doses={item.doses} />
                 {item.responsavel && (
                   <p className="text-xs text-gray-400">Responsável: {item.responsavel}</p>
                 )}

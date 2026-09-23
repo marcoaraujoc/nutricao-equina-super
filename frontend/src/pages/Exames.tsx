@@ -1,7 +1,6 @@
 ﻿import { useState, useEffect, useMemo, useRef } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import InlineError from '../components/InlineError';
@@ -14,6 +13,7 @@ import {
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
+import PainelSemPaciente from '../components/PainelSemPaciente';
 import PageContainer from '../components/PageContainer';
 import { formatDate } from '../utils/dateUtils';
 import DateInputBR from '../components/DateInputBR';
@@ -367,8 +367,6 @@ function ExameBuscaCombo({ value, onChange, opcoes }: {
 
 const Exames = () => {
   const { user } = useAuth();
-  const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
-  const navigate = useNavigate();
   const { animalId } = useParams<{ animalId: string }>();
   const [searchParams] = useSearchParams();
   // Submenu do Sidebar (Resultado de Exame > Laboratorial | Imagem) — o título acompanha
@@ -449,7 +447,10 @@ const Exames = () => {
     setVisualizando({ arquivos, indice: indiceInicial });
   };
 
-  const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
+  // 🔴 ABRE EM MODO BUSCA, SEM PACIENTE HERDADO (a pedido, 2026-09-22) — ver §6.
+  // Só a URL escolhe o paciente; o `selectedAnimal` deixou de decidir o que esta tela
+  // carrega (ele continua sendo ESCRITO ao escolher, para as outras telas).
+  const effectiveAnimalId = animalId ?? '';
 
   useEffect(() => {
     const loadNutrientes = async () => {
@@ -469,20 +470,10 @@ const Exames = () => {
       const res = await api.get('/animais');
       const lista = res.data?.dados ?? res.data ?? [];
       setAnimaisDoProprietario(lista);
-      // Auto-seleciona um animal quando não há seleção (evita o falso "sem animais"
-      // para gestor/vet com vários pacientes)
-      if (lista.length > 0 && !selectedAnimal) {
-        const alvo = (animalId && lista.find((a: { id: number }) => String(a.id) === animalId)) || lista[0];
-        setSelectedAnimal({
-          ...alvo,
-          photoUrl:       alvo.photoUrl       ?? undefined,
-          dataNascimento: alvo.dataNascimento ?? undefined,
-        });
-        if (!animalId) {
-          const qs = searchParams.toString();
-          navigate(`/exames/${alvo.id}${qs ? `?${qs}` : ''}`, { replace: true });
-        }
-      }
+      // 🔴 SEM AUTO-SELEÇÃO (2026-09-22). Este bloco escolhia o primeiro paciente da
+      // lista e NAVEGAVA para ele — a tela de resultado abria no prontuário de alguém
+      // que ninguém pediu, e o `replace: true` ainda apagava a rota de origem. O
+      // padrão agora é o seletor em modo busca + `PainelSemPaciente`.
     } catch (error) {
       console.error('Erro ao carregar animais:', error);
     }
@@ -573,7 +564,7 @@ const Exames = () => {
     setEditandoClinico(ex);
   };
 
-  const salvarResultadoClinico = async ({ laudo, laboratorio, itens, arquivos }: { laudo: string; laboratorio: string; itens: ItemManual[]; arquivos: File[] }) => {
+  const salvarResultadoClinico = async ({ laudo, laboratorio, itens, arquivos, prestadorId }: { laudo: string; laboratorio: string; itens: ItemManual[]; arquivos: File[]; prestadorId: number | '' }) => {
     if (!editandoClinico) return;
     setSalvandoClinico(true);
     setErroClinico(null);
@@ -582,6 +573,10 @@ const Exames = () => {
       if (laudo) fd.append('resultado', laudo);
       fd.append('laboratorio', laboratorio);
       if (itens.length > 0) fd.append('itens', JSON.stringify(itens));
+      // Mesmo campo do modal de conclusão — editar o resultado é a segunda chance de
+      // informar quem executou, para o exame já concluído sem prestador ainda poder
+      // entrar em Pagamentos.
+      fd.append('prestadorId', prestadorId === '' ? '' : String(prestadorId));
       arquivos.forEach(a => fd.append('arquivos', a));
       await api.patch(`/clinica/exames/${editandoClinico.id}/resultado`, fd);
       setEditandoClinico(null);
@@ -753,12 +748,49 @@ const Exames = () => {
     </PageContainer>
   );
 
+  // Cabeçalho da página — declarado UMA vez porque as duas saídas (com e sem paciente
+  // escolhido) usam o MESMO. Copiá-lo para o estado vazio faria a tela trocar de
+  // título ao escolher o paciente na primeira divergência.
+  const cabecalho = (
+    <div className="mt-2 flex items-center gap-3">
+      <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
+        {tipoExame === 'laboratorial' ? <ClipboardList size={20} className="text-emerald-700" />
+          : tipoExame === 'imagem'    ? <Scan          size={20} className="text-emerald-700" />
+          :                             <Microscope    size={20} className="text-emerald-700" />}
+      </div>
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">
+          {tipoExame === 'laboratorial' ? 'Resultado de Exame · Laboratorial'
+            : tipoExame === 'imagem'    ? 'Resultado de Exame · Imagem'
+            :                             'Resultado de Exame'}
+        </h1>
+        <p className="text-sm text-gray-500 mt-0.5">
+          {tipoExame === 'imagem'
+            ? 'Resultados de exames do paciente'
+            : 'Resultados de exames do paciente e comparação com os valores de referência.'}
+        </p>
+      </div>
+    </div>
+  );
+
+  // ⚠️ O `return` antigo saía ANTES do seletor dizendo "Você ainda não possui animais
+  // sob sua responsabilidade" — falso desde que a tela deixou de auto-selecionar, e
+  // sem saída (não havia como escolher). Agora o seletor VEM JUNTO.
   if (!effectiveAnimalId) return (
     <PageContainer>
-      <BotaoVoltar className="mb-4" />
-      <div className="text-center py-20">
-        <p className="text-gray-500 text-sm">Você ainda não possui animais sob sua responsabilidade.</p>
-        <p className="text-gray-400 text-xs mt-1">Solicite o vínculo com um animal para começar.</p>
+      <div className="space-y-5">
+        <BotaoVoltar />
+        {cabecalho}
+        <SeletorAnimal
+          animais={animaisDoProprietario}
+          animalIdAtual={effectiveAnimalId}
+          rotaBase="/exames"
+        />
+        <PainelSemPaciente
+          icone={tipoExame === 'imagem' ? Scan : Microscope}
+          vazio={animaisDoProprietario.length === 0}
+          acao="ver os resultados"
+        />
       </div>
     </PageContainer>
   );
@@ -772,25 +804,7 @@ const Exames = () => {
         <InlineError message={erroInline} />
 
         {/* Cabeçalho de página (mesmo padrão de Agendamentos): ícone em box + título por submenu */}
-        <div className="mt-2 flex items-center gap-3">
-          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
-            {tipoExame === 'laboratorial' ? <ClipboardList size={20} className="text-emerald-700" />
-              : tipoExame === 'imagem'    ? <Scan          size={20} className="text-emerald-700" />
-              :                             <Microscope    size={20} className="text-emerald-700" />}
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">
-              {tipoExame === 'laboratorial' ? 'Resultado de Exame · Laboratorial'
-                : tipoExame === 'imagem'    ? 'Resultado de Exame · Imagem'
-                :                             'Resultado de Exame'}
-            </h1>
-            <p className="text-sm text-gray-500 mt-0.5">
-              {tipoExame === 'imagem'
-                ? 'Resultados de exames do paciente'
-                : 'Resultados de exames do paciente e comparação com os valores de referência.'}
-            </p>
-          </div>
-        </div>
+        {cabecalho}
 
         <SeletorAnimal
           animais={animaisDoProprietario}

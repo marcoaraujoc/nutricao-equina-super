@@ -58,6 +58,8 @@ interface FormData {
   baia:               string;
   pelagem:            string;
   altura:             string;
+  /** Inscrito na FEI (Fédération Équestre Internationale) — SIM/NÃO. */
+  registradoFei:      boolean;
   registroPassaporte: string;
   numeroChip:         string;
   finalidades:        string[];
@@ -114,6 +116,7 @@ interface AnimalEncontrado {
   tratadorId?:         number | null;
   tratador?:           { id: number; nome: string } | null;
   pelagem?:            string | null;
+  registradoFei?:      boolean | null;
   altura?:             string | null;
   registroPassaporte?: string | null;
   numeroChip?:         string | null;
@@ -383,6 +386,7 @@ const Animal = () => {
     categoriaAnimal: '', tipoExercicio: '',
     localizacaoId: null, tratadorId: null, baia: '',
     pelagem: '', altura: '', registroPassaporte: '', numeroChip: '', finalidades: [],
+    registradoFei: false,
     seguradora: '',
   });
 
@@ -627,6 +631,7 @@ const Animal = () => {
             baia:              a.baia               ?? '',
             pelagem:           a.pelagem            ?? '',
             altura:            a.altura             ?? '',
+            registradoFei:     a.registradoFei      ?? false,
             registroPassaporte: a.registroPassaporte ?? '',
             numeroChip:        a.numeroChip          ?? '',
             finalidades:       a.finalidade ? a.finalidade.split('|') : [],
@@ -1083,6 +1088,7 @@ const Animal = () => {
         numeroChip:         formData.numeroChip.trim()         || null,
         finalidade:         formData.finalidades.length > 0 ? formData.finalidades.join('|') : null,
         seguradora:         formData.seguradora.trim() || null,
+        registradoFei:      formData.registradoFei,
         // Animal já existente (sem vet ou com vet de outra equipe) → NOVO registro
         // duplicado para este veterinário; a origem é enviada apenas para o backend
         // reaproveitar a foto do animal original
@@ -1686,6 +1692,31 @@ const Animal = () => {
                   className={inputClass}
                 />
               </div>
+              {/* 🔴 REGISTRO NA FEI (2026-09-22, a pedido) — SIM/NÃO, ao lado do
+                  Registro/Passaporte porque é a MESMA pergunta ("onde este animal
+                  está inscrito?"), só que fechada.
+                  ⚠️ NÃO é texto dentro de `registroPassaporte`: aquele campo guarda o
+                  NÚMERO, é livre, e procurar "está na FEI" lá dentro viraria
+                  `LIKE '%fei%'` — que não é resposta. Coluna própria (`registrado_fei`)
+                  para poder ser filtrada.
+                  ⚠️ O rótulo inteiro é `<label>` clicável: caixa de 16px isolada é
+                  alvo pequeno demais no celular. */}
+              {/* Ocupa UMA célula da grade (não a linha inteira): a seção alterna dois
+                  campos por linha, e esticar este deixaria a Seguradora sozinha na
+                  seguinte. O `sm:pt-6` compensa a altura do rótulo que os vizinhos têm
+                  e este não — sem ele a caixa flutua colada ao topo da célula. */}
+              <div className="sm:pt-6">
+                <label className="flex items-center gap-2.5 cursor-pointer select-none w-fit">
+                  <input
+                    type="checkbox"
+                    checked={formData.registradoFei}
+                    onChange={e => setFormData(p => ({ ...p, registradoFei: e.target.checked }))}
+                    className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                  />
+                  <span className="text-sm font-semibold text-gray-700">Cadastrado na FEI</span>
+                </label>
+                <p className="text-xs text-gray-400 mt-1">Fédération Équestre Internationale</p>
+              </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Nome da Seguradora</label>
                 <input
@@ -1972,24 +2003,19 @@ const Animal = () => {
                       />
                     </div>
                   </div>
-                  {/* 🔴 A faixa "Proprietário não encontrado, encaminhado e-mail com as
-                      informações de acesso." foi REMOVIDA a pedido (2026-09-18). O
-                      COMPORTAMENTO não mudou: cliente novo continua nascendo com login
-                      e recebendo o e-mail de boas-vindas (a senha é DERIVADA em
+                  {/* 🔴 TODO AVISO SOBRE O E-MAIL DE ACESSO SAIU DAQUI (2026-09-22, a
+                      pedido) — tanto a faixa "Proprietário não encontrado, encaminhado
+                      e-mail com as informações de acesso." (retirada em 2026-09-18)
+                      quanto a que explicava as duas saídas possíveis antes de a busca
+                      responder.
+                      O COMPORTAMENTO não mudou: cliente novo continua nascendo com
+                      login e recebendo o e-mail de boas-vindas (a senha é DERIVADA em
                       `lib/senhaInicial.js` e sai SÓ por e-mail — nunca na tela de quem
-                      cadastra, que é um TERCEIRO). O que saiu foi o AVISO.
-                      A faixa de `proprietarioExistente === null` abaixo FICA: ali o
-                      sistema ainda não sabe se o e-mail existe, e ela é o que explica
-                      as duas saídas possíveis antes de a busca responder. */}
-                  {!isEditMode && proprietarioExistente === null && statusBuscaAnimal === 'nao_encontrado' && (
-                    <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-xs text-blue-700">
-                      <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
-                      <span>
-                        Se o e-mail ainda não estiver cadastrado, será encaminhado e-mail com as
-                        informações de acesso. Se já estiver, o animal é vinculado ao usuário existente.
-                      </span>
-                    </div>
-                  )}
+                      cadastra, que é um TERCEIRO), e e-mail já conhecido continua
+                      vinculando o animal ao cadastro existente. O que saiu foi o AVISO:
+                      quem cadastra o paciente não decide nada com essa informação.
+                      ⚠️ A faixa de cadastro ENCONTRADO (`AvisoCadastroEncontrado`) é
+                      outra coisa e FICA — ali há uma decisão a tomar. */}
                 </div>
               </div>
             )}

@@ -31,6 +31,8 @@ export interface ContaPagarPrint {
   tipo:          'FORNECEDOR' | 'PRESTADOR';
   mesReferencia: string | null;
   status:        string;
+  /** Vencimento acordado no cadastro do credor. `null` = ele não declarou nenhum. */
+  vencimentoEm?: string | null;
   total:         number;
   itens:         ContaPagarItemPrint[];
 }
@@ -44,6 +46,12 @@ const brl = (v: number | null | undefined) =>
 const dataHora = (iso: string) => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+};
+
+const soData = (iso: string | null | undefined) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pt-BR');
 };
 
 const CSS = `
@@ -84,13 +92,14 @@ export function gerarHtmlContasPagar(contas: ContaPagarPrint[], logoUrl?: string
           ${c.tipo === 'PRESTADOR' ? 'Prestador' : 'Fornecedor'}:
           <strong>${esc(c.credorNome)}</strong>
           ${c.mesReferencia ? ` &middot; Referência ${esc(c.mesReferencia)}` : ''}
+          ${c.vencimentoEm ? ` &middot; Vence em ${esc(soData(c.vencimentoEm))}` : ''}
           &middot; ${esc(c.status)}
         </div>
         <table class="cp-tab">
           <thead>
             <tr>
               <th>Paciente</th><th>Item</th><th>Solicitante</th>
-              <th class="cp-num">Data</th><th class="cp-num">Qtd.</th><th class="cp-num">Valor</th>
+              <th class="cp-num">Data do pedido</th><th class="cp-num">Qtd.</th><th class="cp-num">Valor</th>
             </tr>
           </thead>
           <tbody>${linhas || '<tr><td colspan="6">Nenhum lançamento.</td></tr>'}</tbody>
@@ -110,4 +119,55 @@ export function gerarHtmlContasPagar(contas: ContaPagarPrint[], logoUrl?: string
 
 export function imprimirContasPagar(contas: ContaPagarPrint[], logoUrl?: string | null): void {
   imprimirHtml(gerarHtmlContasPagar(contas, logoUrl));
+}
+
+
+/**
+ * CSV da conta a pagar — o mesmo papel do `exportarFaturaCSV` do outro lado do balcão.
+ *
+ * ⚠️ Exportar NÃO é forma de envio: baixa arquivo para a clínica conferir, não entrega
+ * nada ao credor. Por isso não tem gate de canal e vale em qualquer status — inclusive
+ * na conta paga ou cancelada, que é justamente a que alguém reexporta para conferir.
+ * ⚠️ `;` como separador e BOM no início: é o que o Excel em pt-BR abre sem pedir
+ * importação — a mesma escolha do CSV da fatura.
+ */
+export function exportarContaPagarCSV(c: ContaPagarPrint): void {
+  const linhas: string[][] = [
+    [c.tipo === 'PRESTADOR' ? 'Prestador' : 'Fornecedor', c.credorNome],
+    ['Mês de Referência', c.mesReferencia ?? ''],
+    ['Data de Vencimento', soData(c.vencimentoEm)],
+    ['Status', c.status],
+    [''],
+    ['Paciente', 'Item', 'Solicitante', 'Data do Pedido', 'Quantidade', 'Valor Unitário (R$)', 'Subtotal (R$)'],
+  ];
+
+  for (const i of c.itens) {
+    const qtd = i.quantidade ?? 1;
+    linhas.push([
+      i.animalNome || '',
+      i.descricao,
+      i.solicitanteNome || '',
+      dataHora(i.ocorridoEm),
+      String(qtd),
+      // ⚠️ O item sem valor sai como "a definir", nunca "0,00": no arquivo, como na
+      // tela, o zero se leria como "é de graça" e a pendência sumiria na conferência.
+      i.valor > 0 ? i.valor.toFixed(2).replace('.', ',') : 'a definir',
+      i.valor > 0 ? (i.valor * qtd).toFixed(2).replace('.', ',') : 'a definir',
+    ]);
+  }
+
+  linhas.push([''], ['', '', '', '', '', 'TOTAL', (c.total ?? 0).toFixed(2).replace('.', ',')]);
+
+  const csv = linhas
+    .map(row => row.map(x => `"${String(x).replace(/"/g, '""')}"`).join(';'))
+    .join('\r\n');
+
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `pagamento-${c.credorNome.replace(/\s+/g, '-').toLowerCase()}`
+             + `${c.mesReferencia ? `-${c.mesReferencia}` : ''}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }

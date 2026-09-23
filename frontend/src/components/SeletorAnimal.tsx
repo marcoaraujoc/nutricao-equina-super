@@ -47,7 +47,11 @@ export default function SeletorAnimal({
 
   const currentId = animalIdAtual ? String(animalIdAtual) : '';
 
-  if (animais.length <= 1) return null;
+  // 🔴 NÃO esconder o seletor por "só tem um paciente" (2026-09-22). A tela agora
+  // abre SEM paciente escolhido — em modo BUSCA —, e com o antigo `animais.length <= 1`
+  // a clínica de um paciente só ficava sem NENHUMA forma de escolher. Quem decide
+  // quando não há o que escolher é o próprio combobox (`semEscolha`), que já pesa o
+  // par lista-vazia × já-escolhido.
 
   const atual = animais.find(a => String(a.id) === currentId) ?? null;
 
@@ -59,7 +63,10 @@ export default function SeletorAnimal({
 
   return (
     <div className={className}>
-      <label className="block text-xs font-medium text-gray-500 mb-1">Paciente</label>
+      {/* ⚠️ SEM `<label>Paciente</label>` AQUI. O `SeletorAnimalInteligente` já escreve
+          o seu, e os dois juntos faziam a palavra "Paciente" aparecer DUAS VEZES, uma
+          sobre a outra, em Dieta, Resultado de Exame e Relatório Nutricional — as três
+          telas que passam por este invólucro. O rótulo é do CAMPO, e o campo é o de lá. */}
       {/* 🔴 DIGITAR O NOME, em vez de rolar a lista (a pedido, 2026-09-08).
           Este componente era um `<select>` puro, e por isso as telas que o usam
           (Dieta, Resultado de Exame, Relatório Nutricional) obrigavam a percorrer

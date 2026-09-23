@@ -13,7 +13,7 @@ import {
   X, Loader2,
   FileText, Pill, Syringe, FlaskConical, Share2,
   History, Search, CalendarDays, CircleDot, ChevronDown, Printer, Pencil, Eye,
-  CheckCircle2,
+  CheckCircle2, Stethoscope,
 } from 'lucide-react';
 import AnimalCard  from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -30,8 +30,8 @@ import InlineError from '../components/InlineError';
 import FaixaPacienteInativo from '../components/FaixaPacienteInativo';
 import { formatDataHora } from '../utils/dateUtils';
 import { escolherEvolucaoAtiva, descricaoAtendimento, lerEvolucaoSelecionada, salvarEvolucaoSelecionada } from '../utils/evolucaoAtiva';
-import { animalParaAutoSelecao } from '../utils/animalInfo';
 import JanelaLista from '../components/JanelaLista';
+import PainelSemPaciente from '../components/PainelSemPaciente';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -509,7 +509,7 @@ function tabFromPath(pathname: string): SubModulo {
 // ─── Atendimento ──────────────────────────────────────────────────────────────
 
 const Atendimento = () => {
-  const { setSelectedAnimal, selectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
+  const { setSelectedAnimal, refreshSelectedAnimal } = useSelectedAnimal();
   const { user }                              = useAuth();
   const { podeExecutar, isGestor, permissoes } = usePermissoes();
   const { contextoAtivo, loading: empresaLoading } = useEmpresa();
@@ -545,7 +545,13 @@ const Atendimento = () => {
     return (ev.status === 'EM_ANDAMENTO' && podeEditarEsta) || (isGestor && ev.status === 'FINALIZADA');
   };
 
-  const effectiveAnimalId = animalIdParam || selectedAnimal?.id?.toString();
+  // 🔴 A TELA ABRE EM MODO BUSCA, SEM PACIENTE HERDADO (a pedido, 2026-09-22).
+  // Antes isto caía em `selectedAnimal` — o último paciente escolhido em QUALQUER
+  // outra tela —, então abrir o Atendimento já trazia um prontuário na tela sem
+  // ninguém ter pedido aquele. Só a URL escolhe o paciente agora; quem chega pelo
+  // menu busca no seletor, que é o que o "Iniciar" da agenda e os links do paciente
+  // continuam pulando (eles trazem o id na rota).
+  const effectiveAnimalId = animalIdParam ?? '';
 
   // Persiste o agendamentoId entre navegações e re-logins (localStorage por animal).
   // Recalculado a cada mudança de location.search/animalId — não pode ser um useState
@@ -788,13 +794,13 @@ const Atendimento = () => {
       const res = await api.get(`/animais/${effectiveAnimalId}`);
       // GET 403 → data null: o id da URL é de OUTRA empresa (link antigo, sessão
       // restaurada ou troca de contexto). Em vez de seguir com animal nulo — e deixar
-      // todos os submódulos batendo 403 nesse id —, larga o id da URL e cai no
-      // paciente do contexto ativo (a rota sem id usa o selectedAnimal).
+      // todos os submódulos batendo 403 nesse id —, larga o id da URL e devolve a tela
+      // ao modo BUSCA, que é o estado padrão desde 2026-09-22.
       if (!res.data) {
         if (animalIdParam) navigate(location.pathname.replace(/\/\d+$/, ''), { replace: true });
-        // Sem id na URL, o inacessível é o PACIENTE SELECIONADO (ex.: seleção herdada
-        // de outra empresa): refaz a seleção com a lista do contexto ativo, senão o
-        // card do animal fica vazio sem explicação.
+        // Sem id na URL este efeito nem roda (ele retorna cedo), mas a seleção do
+        // contexto pode ter ficado apontando para paciente de outra empresa e ainda
+        // alimenta outras telas — refazê-la aqui é barato e evita o card vazio lá.
         else await refreshSelectedAnimal();
         return;
       }
@@ -886,20 +892,14 @@ const Atendimento = () => {
     navigate(`/clinica/evolucao/${a.id}`);
   };
 
-  // Auto-seleciona um paciente quando a lista termina de carregar e nenhum está
-  // selecionado — assim a tela fica utilizável logo após o login, sem precisar
-  // trocar o seletor. Apenas define o animal ativo (não navega/troca de aba); o
-  // SeletorAnimal continua disponível para trocar. Ignora a aba "Minha Agenda".
-  useEffect(() => {
-    if (effectiveAnimalId || activeTab === 'agenda') return;
-    if (empresaLoading || carregandoLista) return;
-    // Prefere um paciente ATIVO; o INATIVO continua elegível, só como último recurso
-    // (a pedido) — ver `animalParaAutoSelecao`. Sem isso a tela podia abrir sozinha
-    // num prontuário congelado, sem nenhum botão de escrita, só porque aquele foi o
-    // último paciente cadastrado (a lista vem por `dataCadastro desc`).
-    const autoSelecionado = animalParaAutoSelecao(todosAnimais);
-    if (autoSelecionado) setSelectedAnimal(autoSelecionado);
-  }, [effectiveAnimalId, activeTab, empresaLoading, carregandoLista, todosAnimais, setSelectedAnimal]);
+  // 🔴 NÃO HÁ MAIS AUTO-SELEÇÃO DE PACIENTE (a pedido, 2026-09-22).
+  // Este efeito escolhia um paciente sozinho assim que a lista chegava, para a tela
+  // "ficar utilizável logo após o login". O preço era abrir o prontuário de alguém
+  // que ninguém pediu — e, numa tela de escrita clínica, o paciente errado na tela é
+  // o começo do registro no paciente errado. O padrão agora é o seletor em modo
+  // BUSCA, com `PainelSemPaciente` abaixo dele.
+  // ⚠️ Com ele saiu o único uso de `animalParaAutoSelecao` nesta tela; o helper
+  // continua exportado em `utils/animalInfo`.
 
   const handleSelecionarAnimalFromAgenda = useCallback(async (animalId: number) => {
     try {
@@ -912,27 +912,44 @@ const Atendimento = () => {
     } catch { /* silencioso */ }
   }, []);
 
-  // ── Guard ─────────────────────────────────────────────────────────────────
-  // A aba "Minha Agenda" funciona sem animal selecionado
+  // ── Sem paciente escolhido ────────────────────────────────────────────────
+  // A aba "Minha Agenda" funciona sem paciente; as demais mostram o CABEÇALHO e o
+  // SELETOR e param aí.
+  //
+  // ⚠️ O `return` antigo saía ANTES do seletor com "Você ainda não possui animais
+  // sob sua responsabilidade" — frase que passou a ser FALSA quando a tela deixou de
+  // auto-selecionar: a base está cheia, a pessoa só não escolheu ninguém. E sem o
+  // seletor na tela não havia como escolher, o que fazia do estado padrão um beco
+  // sem saída. Quem separa "não há paciente" de "falta escolher" é `PainelSemPaciente`.
+  const semPaciente = !effectiveAnimalId && activeTab !== 'agenda';
 
-  if (!effectiveAnimalId && activeTab !== 'agenda') {
-    // Ainda resolvendo o contexto ativo ou carregando a lista → não mostra "sem
-    // animais" prematuramente (o auto-seleciona escolhe um assim que a lista chega).
-    if (empresaLoading || carregandoLista) {
-      return (
-        <PageContainer>
-          <BotaoVoltar className="mb-4" />
-          <div className="text-center py-20 text-gray-400 text-sm">Carregando pacientes…</div>
-        </PageContainer>
-      );
-    }
+  if (semPaciente) {
     return (
       <PageContainer>
         <BotaoVoltar className="mb-4" />
-        <div className="text-center py-20">
-          <p className="text-gray-500 text-sm">Você ainda não possui animais sob sua responsabilidade.</p>
-          <p className="text-gray-400 text-xs mt-1">Solicite o vínculo com um animal para começar.</p>
+
+        <div className="mt-2 mb-4 flex items-center gap-3">
+          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
+            {HEADER_SUBMODULO[activeTab].icon}
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">{HEADER_SUBMODULO[activeTab].titulo}</h1>
+            <p className="text-sm text-gray-500 mt-0.5">{HEADER_SUBMODULO[activeTab].descricao}</p>
+          </div>
         </div>
+
+        <SeletorAnimalInteligente
+          animais={todosAnimais}
+          animalAtual={null}
+          onSelecionar={handleSelecionarAnimal}
+        />
+
+        <PainelSemPaciente
+          icone={Stethoscope}
+          carregando={empresaLoading || carregandoLista}
+          vazio={todosAnimais.length === 0}
+          acao="abrir o prontuário"
+        />
       </PageContainer>
     );
   }

@@ -30,20 +30,26 @@ const listarCredores = async (req, res) => {
     const tipo = req.query.tipo === 'PRESTADOR' ? 'PRESTADOR' : 'FORNECEDOR';
     // ⚠️ As duas tabelas são INDEPENDENTES desde 2026-08-21 e não compartilham id —
     // por isso o `tipo` escolhe a tabela, e não um filtro dentro de uma só.
+    // ⚠️ `telefone`/`email` são o DESTINO do WhatsApp e do e-mail da tela de Pagamentos;
+    // `cpf`/`cnpj` identificam quem RECEBE no recibo do prestador. Sem eles o envio cai
+    // no fallback manual e o recibo sai sem o documento de quem dá quitação.
+    // ⚠️ `select` EXPLÍCITO e sem `tipoVencimento`/`diaVencimento`: aquelas colunas são
+    // da migration `20261020000000` e, com o client Prisma defasado (§11), pedi-las aqui
+    // derrubaria o seletor de credores inteiro. O vencimento chega pela listagem das
+    // contas, que o lê por SQL cru.
+    const select = { id: true, nome: true, tipoServico: true, telefone: true,
+                     email: true, cpf: true, cnpj: true };
     const dados = tipo === 'PRESTADOR'
       ? await prisma.prestador.findMany({
           where:  { empresaId: req.empresaId, ativo: true },
-          // `telefone` entrou em 2026-09-18: é o DESTINO do WhatsApp da tela de
-          // Pagamentos. Sem ele o envio cai no fallback manual (baixa o PDF e abre o
-          // app), que funciona — mas obriga a procurar o contato à mão.
-          select: { id: true, nome: true, tipoServico: true, telefone: true },
+          select,
           orderBy: { nome: 'asc' },
         })
       : await prisma.fornecedor.findMany({
           // Fornecedor GLOBAL (empresa_id null, semeado pelo ADMIN) também atende a
           // clínica — escondê-lo obrigaria a recadastrar quem já existe.
           where:  { ativo: true, OR: [{ empresaId: null }, { empresaId: req.empresaId }] },
-          select: { id: true, nome: true, tipoServico: true, telefone: true },
+          select,
           orderBy: { nome: 'asc' },
         });
     return res.json({ dados });
@@ -110,7 +116,7 @@ const lancar = async (req, res) => {
 const alterarStatus = async (req, res) => {
   try {
     if (!req.empresaId) return res.status(400).json({ error: 'Selecione a empresa.' });
-    const { status } = req.body ?? {};
+    const { status, pagoEm } = req.body ?? {};
     const motivo = String(req.body?.motivo ?? '').trim();
     // CANCELAR uma conta a pagar é ato destrutivo sobre registro financeiro — mesma
     // regra do §33: justificativa obrigatória e trilha na auditoria.
@@ -119,14 +125,18 @@ const alterarStatus = async (req, res) => {
     }
 
     const resultado = await prisma.$transaction(async (tx) => {
-      const r = await contasPagar.alterarStatus(tx, req.empresaId, req.params.id, status, req.user?.id);
+      const r = await contasPagar.alterarStatus(
+        tx, req.empresaId, req.params.id, status, req.user?.id, pagoEm ?? null);
       if (r.erro) return r;
       await registrarAuditoria(tx, req, {
         categoria:  status === 'CANCELADA' ? 'CANCELAMENTO' : 'ALTERACAO',
         entidade:   'CONTA_PAGAR',
         entidadeId: Number(req.params.id),
         motivo:     motivo || null,
-        detalhes:   `Conta de ${r.dados.tipo.toLowerCase()} "${r.dados.credorNome}" → ${status}`,
+        // A DATA do pagamento entra no rastro: ela é informada por quem registra e pode
+        // ser anterior a hoje — sem isso a auditoria só saberia quando alguém digitou.
+        detalhes:   `Conta de ${r.dados.tipo.toLowerCase()} "${r.dados.credorNome}" → ${status}`
+                    + (r.dados.pagoEm ? ` (pago em ${new Date(r.dados.pagoEm).toLocaleDateString('pt-BR')})` : ''),
       });
       return r;
     });

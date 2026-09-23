@@ -29,6 +29,9 @@ interface ItemMin   {
   prescricaoItemId?: number | null; insumoDe?: number | null;
   // Contribuições da linha — de qual atendimento/vacina veio cada unidade (2026-09-17).
   origens?: { id: number; quantidade: number; data: string | null; numero: string | null }[];
+  /** Bloco do paciente FECHADO À PARTE (2026-09-22): a linha continua no documento e
+   *  fica FORA do total da fatura — é cobrada separadamente. `null` = aberta. */
+  fechadoEm?: string | null;
 }
 
 /**
@@ -160,23 +163,39 @@ export function gerarHtmlFatura(
     grupos.get(key)!.itens.push(item);
   }
 
-  const linhasGrupos = [...grupos.values()].map(g => {
-    const subtotal = g.itens.reduce((s, i) => s + totalItem(i), 0);
-    const linhasItens = ordenarComInsumos(g.itens).map(i => `
+  // 🔴 O bloco de paciente FECHADO À PARTE continua na folha, separado e FORA do total
+  // (2026-09-22). Omiti-lo entregaria ao cliente uma fatura cujo detalhe não explica o
+  // que ele já foi cobrado; somá-lo ao total desfaria o fechamento no papel.
+  const linhaItem = (i: ItemMin) => `
       <tr>
         <td><span class="badge ${i.tipo.toLowerCase()}">${i.tipo}</span></td>
         <td${i.insumoDe != null ? ' style="padding-left:22px;color:#4b5563;font-size:11px"' : ''}>${i.descricao}${observacaoOrigens(i)}${labelDesconto(i) ? `<br/><small style="color:#dc2626">Desconto ${labelDesconto(i)} (−${brl(descontoItem(i))})</small>` : ''}</td>
         <td class="center">${i.quantidade}</td>
         <td class="right">${brl(i.valor)}</td>
         <td class="right">${brl(totalItem(i))}</td>
-      </tr>`).join('');
+      </tr>`;
+
+  const linhasGrupos = [...grupos.values()].map(g => {
+    const abertos  = g.itens.filter(i => !i.fechadoEm);
+    const fechados = g.itens.filter(i => !!i.fechadoEm);
+    const subtotal        = abertos.reduce((s, i) => s + totalItem(i), 0);
+    const subtotalFechado = fechados.reduce((s, i) => s + totalItem(i), 0);
+    const blocoFechado = fechados.length === 0 ? '' : `
+      <tr class="group-header" style="background:#fffbeb;color:#92400e">
+        <td colspan="4">Fechado à parte — cobrado separadamente, fora do total</td>
+        <td class="right">${brl(subtotalFechado)}</td>
+      </tr>
+      ${ordenarComInsumos(fechados).map(linhaItem).join('')}`;
     return `
       <tr class="group-header">
         <td colspan="4">Prontuário de <strong>${g.nome}</strong></td>
         <td class="right">Subtotal: ${brl(subtotal)}</td>
       </tr>
-      ${linhasItens}`;
+      ${ordenarComInsumos(abertos).map(linhaItem).join('')}
+      ${blocoFechado}`;
   }).join('');
+
+  const totalFechado = fatura.itens.filter(i => !!i.fechadoEm).reduce((s, i) => s + totalItem(i), 0);
 
   const html = `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -264,6 +283,10 @@ export function gerarHtmlFatura(
     <span class="label">Valor Total da Fatura Única</span>
     <span class="value">${brl(fatura.total)}</span>
   </div>
+  ${totalFechado > 0 ? `<div style="margin-top:8px;padding:8px 20px;border:1px solid #fde68a;background:#fffbeb;border-radius:8px;display:flex;justify-content:space-between;align-items:center">
+    <span style="font-size:11px;color:#92400e">Fechado à parte (cobrado separadamente, fora do total acima)</span>
+    <span style="font-size:14px;font-weight:700;color:#b45309">${brl(totalFechado)}</span>
+  </div>` : ''}
 
   ${blocoPagamentoHtml(recebimento)}
 
@@ -296,7 +319,7 @@ export function exportarFaturaCSV(fatura: FaturaMin, animais: AnimalMin[]) {
     ['Mês de Referência', formatMes(fatura.mesReferencia)],
     ['Status', fatura.status],
     [''],
-    ['Animal', 'Tipo', 'Descrição', 'Quantidade', 'Valor Unitário (R$)', 'Desconto (R$)', 'Subtotal (R$)'],
+    ['Animal', 'Tipo', 'Descrição', 'Quantidade', 'Valor Unitário (R$)', 'Desconto (R$)', 'Subtotal (R$)', 'Situação'],
   ];
 
   // Mesma ordem da tela e da impressão — o insumo sai logo abaixo do medicamento.
@@ -312,11 +335,19 @@ export function exportarFaturaCSV(fatura: FaturaMin, animais: AnimalMin[]) {
       item.valor.toFixed(2).replace('.', ','),
       descontoItem(item).toFixed(2).replace('.', ','),
       totalItem(item).toFixed(2).replace('.', ','),
+      // ⚠️ Coluna nova em vez de LINHA a menos: tirar o item fechado do arquivo mudaria
+      // o número de linhas que o financeiro usa como base de conferência, e o valor
+      // "sumiria" do CSV sem nada explicando.
+      item.fechadoEm ? 'Fechado à parte' : 'Em aberto',
     ]);
   }
 
+  const totalFechadoCsv = fatura.itens.filter(i => !!i.fechadoEm).reduce((s, i) => s + totalItem(i), 0);
   linhas.push(['']);
   linhas.push(['', '', '', '', '', 'TOTAL', fatura.total.toFixed(2).replace('.', ',')]);
+  if (totalFechadoCsv > 0) {
+    linhas.push(['', '', '', '', '', 'FECHADO À PARTE', totalFechadoCsv.toFixed(2).replace('.', ',')]);
+  }
 
   const csv = linhas
     .map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';'))

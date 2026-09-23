@@ -10,6 +10,11 @@ const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 const { definirAtivoNaEmpresa } = require('../lib/usuarioEmpresa');
 const { normalizeEmail, whereEmailInsensitive } = require('../lib/email');
 const { cadastroDaPessoaNaEmpresa, montarResposta } = require('../lib/cadastroPorEmail');
+// Vencimento da conta a pagar deste fornecedor — a MESMA forma do fechamento da fatura
+// no cadastro da empresa. Lido/gravado por SQL cru (ver o cabeçalho da lib).
+const {
+  resolverVencimento, gravarVencimento, anexarVencimento, anexarVencimentoEmLista,
+} = require('../lib/vencimentoCredor');
 
 // Whitelist fixa SAIU (2026-08-25) — o tipo de fornecedor agora vem do catálogo
 // tenant-scoped (tb_catalogo_tipo_servico, CatalogoTipoServicoController), que
@@ -143,7 +148,10 @@ const FornecedorController = {
       // É o que habilita "Gerenciar Acesso" (designação de pacientes) nesta tela —
       // desde 2026-09-09 ela deixou de existir no Controle de Acesso, porque
       // fornecedor não é equipe.
-      res.json({ sucesso: true, dados: await anexarEquipeDoAcesso(prisma, await anexarTrilha(fornecedores, 'fornecedor')) });
+      // ⚠️ A listagem TEM de devolver o vencimento: a tela edita a partir do que ela
+      // trouxe, e sem o campo o salvar o apagaria em silêncio.
+      const comAcesso = await anexarEquipeDoAcesso(prisma, await anexarTrilha(fornecedores, 'fornecedor'));
+      res.json({ sucesso: true, dados: await anexarVencimentoEmLista(prisma, 'FORNECEDOR', comAcesso) });
     } catch (err) {
       console.error('Erro ao listar fornecedores:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar fornecedores' });
@@ -206,7 +214,8 @@ const FornecedorController = {
       });
       if (!fornecedor) return res.status(404).json({ sucesso: false, mensagem: 'Fornecedor não encontrado' });
       const { especialidades, ...dados } = fornecedor;
-      res.json({ sucesso: true, dados: { ...dados, especialidadeIds: especialidades.map(e => e.especialidadeId) } });
+      const comVencimento = await anexarVencimento(prisma, 'FORNECEDOR', dados);
+      res.json({ sucesso: true, dados: { ...comVencimento, especialidadeIds: especialidades.map(e => e.especialidadeId) } });
     } catch {
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar fornecedor' });
     }
@@ -224,6 +233,11 @@ const FornecedorController = {
       return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
     if (!telefone?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
+
+    // ⚠️ Validado ANTES de criar: forma de vencimento inválida precisa recusar o
+    // cadastro inteiro, não gravá-lo e falhar calada no UPDATE seguinte.
+    const { erro: erroVenc, dados: vencimento } = resolverVencimento(req.body);
+    if (erroVenc) return res.status(400).json({ sucesso: false, mensagem: erroVenc });
 
     // Especialidades do catálogo (legado, só quem ainda envia especialidadeIds) têm
     // precedência; tipoServico (do catálogo tenant-scoped de tipos, ou digitado como
@@ -283,6 +297,10 @@ const FornecedorController = {
         });
       }
 
+      // ⚠️ É um UPDATE (SQL cru), então vai SEMPRE depois do `create` — antes dele
+      // acertaria zero linhas, em silêncio.
+      await gravarVencimento(prisma, 'FORNECEDOR', fornecedor.id, vencimento);
+
       // Fornecedor nasce ativo=true (default do schema): grava a trilha de ativação
       // também na CRIAÇÃO, senão "Ativado em/por" fica vazio até alguém desativar
       // e reativar o registro.
@@ -295,7 +313,7 @@ const FornecedorController = {
         detalhes:   `${fornecedor.nome} — ${fornecedor.tipoServico}`,
       });
 
-      res.status(201).json({ sucesso: true, dados: fornecedor });
+      res.status(201).json({ sucesso: true, dados: await anexarVencimento(prisma, 'FORNECEDOR', fornecedor) });
     } catch (err) {
       console.error('Erro ao criar fornecedor:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao criar fornecedor' });
@@ -314,6 +332,9 @@ const FornecedorController = {
       return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
     if (!telefone?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
+
+    const { erro: erroVenc, dados: vencimento } = resolverVencimento(req.body);
+    if (erroVenc) return res.status(400).json({ sucesso: false, mensagem: erroVenc });
 
     // Especialidades do catálogo (legado) têm precedência; tipoServico é o caminho padrão.
     const espec = await resolverEspecialidades(especialidadeIds);
@@ -364,6 +385,8 @@ const FornecedorController = {
         },
       });
 
+      await gravarVencimento(prisma, 'FORNECEDOR', fornecedor.id, vencimento);
+
       // Recria os vínculos de especialidade quando enviados (delete + insert).
       if (espec) {
         await prisma.fornecedorEspecialidade.deleteMany({ where: { fornecedorId: fornecedor.id } });
@@ -398,7 +421,7 @@ const FornecedorController = {
         },
       });
 
-      res.json({ sucesso: true, dados: fornecedor });
+      res.json({ sucesso: true, dados: await anexarVencimento(prisma, 'FORNECEDOR', fornecedor) });
     } catch (err) {
       if (err.code === 'P2025')
         return res.status(404).json({ sucesso: false, mensagem: 'Fornecedor não encontrado' });

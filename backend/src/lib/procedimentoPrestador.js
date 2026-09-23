@@ -61,6 +61,25 @@ async function temColunaPrestadorItem() {
   return _temColunaItem;
 }
 
+/**
+ * A coluna `exame_clinico_id` do LEDGER existe nesta base (migration 20261019000000)?
+ * Sem ela o exame ainda registra a execução, só sem dizer de qual exame veio — e sem
+ * o `ON CONFLICT` que impede a dívida duplicada. É o mesmo contrato dos demais
+ * guardas deste arquivo: base não migrada não quebra, degrada.
+ */
+let _temColunaExameExec = null;
+async function temColunaExameExecucao() {
+  if (_temColunaExameExec !== null) return _temColunaExameExec;
+  try {
+    const rows = await prisma.$queryRaw`
+      SELECT 1 FROM information_schema.columns
+       WHERE table_schema = 'schs2vet' AND table_name = 'tb_execucoes_procedimento_prestador'
+         AND column_name = 'exame_clinico_id' LIMIT 1`;
+    _temColunaExameExec = rows.length > 0;
+  } catch { _temColunaExameExec = false; }
+  return _temColunaExameExec;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Formas de pagamento do PRESTADOR
 // ─────────────────────────────────────────────────────────────────────────────
@@ -542,17 +561,32 @@ async function gravarPrestadorDoCombo(client, comboId, { prestadorId, valorPrest
  *
  * ⚠️ Snapshot COMPLETO da base do cálculo (valores + forma de pagamento do
  * prestador). É o que permite reimprimir o recibo de março com os números de março.
+ *
+ * 🔴 DUAS ORIGENS, campos SEPARADOS: `prescricaoId` (procedimento executado no
+ * plantão) e `exameClinicoId` (exame concluído — 2026-09-22). Guardar as duas no
+ * mesmo campo tornaria impossível dizer se o id 47 é a prescrição 47 ou o exame 47.
+ *
+ * 🔴 A origem EXAME é IDEMPOTENTE, e a de prescrição não precisa ser: `executar` só
+ * roda uma vez por dose, mas `salvarResultado` é REENVIÁVEL (recarregar o laudo
+ * porque a IA falhou, corrigir a tabela digitada). Sem o `ON CONFLICT`, cada reenvio
+ * somaria outra dívida ao prestador, em silêncio. Quem garante é o índice único
+ * parcial `tb_execucoes_proc_prestador_exame_unico` (migration 20261019000000).
  */
 async function registrarExecucao(client, dados) {
   if (!(await temTabelas())) return null;
   const {
-    empresaId, prestadorId, prescricaoId = null, animalId,
+    empresaId, prestadorId, prescricaoId = null, exameClinicoId = null, animalId,
     animalNome = '', procedimentoNome = '',
     quantidade = 1, valorCliente = 0, valorPrestador = null,
     tipoPagamento = null, formaPagamento = null, valorPagamento = null,
     executadoEm, executadoPorId = null, faturaItemId = null,
   } = dados ?? {};
   if (!empresaId || !prestadorId || !animalId) return null;
+
+  // Base ainda sem a migration 20261019000000: registra como sempre registrou (sem a
+  // coluna de exame). O pior caso é o ledger não saber de qual exame a linha veio —
+  // nunca derrubar a conclusão do exame.
+  const comExame = exameClinicoId != null && (await temColunaExameExecucao());
 
   const { valorAPagar, baseCalculo } = calcularValorAPagar({
     valorCliente, valorPrestador, tipoPagamento, formaPagamento, valorPagamento, quantidade,
@@ -564,8 +598,10 @@ async function registrarExecucao(client, dados) {
          (empresa_id, prestador_id, prescricao_id, animal_id, animal_nome, procedimento_nome,
           quantidade, valor_cliente, valor_prestador,
           tipo_pagamento, forma_pagamento, valor_pagamento,
-          valor_a_pagar, base_calculo, executado_em, executado_por_id, fatura_item_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+          valor_a_pagar, base_calculo, executado_em, executado_por_id, fatura_item_id
+          ${comExame ? ', exame_clinico_id' : ''})
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17${comExame ? ',$18' : ''})
+       ${comExame ? 'ON CONFLICT ("exame_clinico_id") WHERE "exame_clinico_id" IS NOT NULL DO NOTHING' : ''}
        RETURNING id`,
       Number(empresaId), Number(prestadorId),
       prescricaoId ? Number(prescricaoId) : null, Number(animalId),
@@ -576,7 +612,10 @@ async function registrarExecucao(client, dados) {
       executadoEm instanceof Date ? executadoEm : new Date(executadoEm ?? Date.now()),
       executadoPorId ? Number(executadoPorId) : null,
       faturaItemId ? Number(faturaItemId) : null,
+      ...(comExame ? [Number(exameClinicoId)] : []),
     );
+    // `DO NOTHING` não devolve linha: null aqui significa "já estava registrado",
+    // que é sucesso, não falha. Quem chama não distingue os dois — e não precisa.
     return rows?.[0]?.id ?? null;
   } catch (err) {
     // Log e segue: a operação clínica não pode cair porque o recibo não registrou.
@@ -674,6 +713,7 @@ module.exports = {
   calcularValorAPagar,
   temTabelas,
   temColunaPrestadorItem,
+  temColunaExameExecucao,
   vinculosPorProcedimento,
   salvarVinculo,
   removerVinculo,

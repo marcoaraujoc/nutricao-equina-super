@@ -7,9 +7,10 @@ import toast from 'react-hot-toast';
 import {
   Pencil, Search, Loader2, X, Truck,
   ToggleLeft, ToggleRight, Building2, User as UserIcon,
-  Phone, MapPin, BadgeCheck, AlertCircle, Wrench,
+  Phone, MapPin, BadgeCheck, AlertCircle, Wrench, CalendarClock,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import JanelaLista from '../components/JanelaLista';
 import GerenciarAcessoPrestadorModal from '../components/GerenciarAcessoPrestadorModal';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -32,6 +33,7 @@ import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import { formatDate } from '../utils/dateUtils';
+import SeletorVencimentoCredor, { type TipoVencimento } from '../components/SeletorVencimentoCredor';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -89,6 +91,9 @@ interface Fornecedor {
   estado:      string | null;
   ativo:       boolean;
   createdAt:   string;
+  // Vencimento da CONTA A PAGAR deste fornecedor (Financeiro > Pagamentos).
+  tipoVencimento?: TipoVencimento | null;
+  diaVencimento?:  number | null;
   /** Login vinculado ao cadastro (Fornecedor.userId) — sem ele não há acesso a gerenciar. */
   userId?:         number | null;
   /** Equipe onde o cartão de acesso foi emitido (backend: anexarEquipeDoAcesso). */
@@ -103,6 +108,8 @@ interface Fornecedor {
 
 interface FormForn {
   nome:        string;
+  tipoVencimento: TipoVencimento | null;
+  diaVencimento:  number | null;
   tipoDoc:     TipoDoc;
   cpf:         string;
   cnpj:        string;
@@ -118,7 +125,10 @@ interface FormForn {
 }
 
 const FORM_INICIAL: FormForn = {
-  nome: '', tipoDoc: 'cnpj', cpf: '', cnpj: '', telefone: '', email: '',
+  // ⚠️ Sem vencimento por padrão: nascer com um faria a conta deste fornecedor vencer
+  // — e atrasar — numa data que ninguém acordou com ele.
+  nome: '', tipoVencimento: null, diaVencimento: null,
+  tipoDoc: 'cnpj', cpf: '', cnpj: '', telefone: '', email: '',
   tipoServico: '',
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
@@ -400,6 +410,21 @@ function ModalFornecedor({
             </div>
           </section>
 
+          {/* ── Pagamento ── quando a conta deste fornecedor vence. Mesma forma do
+              "Fechamento da Fatura" do cadastro da empresa; é daqui que a tela de
+              Financeiro > Pagamentos tira a coluna Data de Vencimento e decide se a
+              conta está ATRASADA. */}
+          <section>
+            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+              <CalendarClock size={12} /> Pagamento
+            </h4>
+            <SeletorVencimentoCredor
+              inputCls={inputCls}
+              valor={{ tipoVencimento: form.tipoVencimento, diaVencimento: form.diaVencimento }}
+              onChange={v => onFormChange(v)}
+            />
+          </section>
+
         </div>
 
         {/* Rodapé no padrão da aplicação: ações à DIREITA e no tamanho padrão
@@ -564,6 +589,8 @@ export default function CadastroFornecedor() {
       bairro:      f.bairro      ?? '',
       cidade:      f.cidade      ?? '',
       estado:      f.estado      ?? '',
+      tipoVencimento: f.tipoVencimento ?? null,
+      diaVencimento:  f.diaVencimento  ?? null,
     });
     setShowModal(true);
   };
@@ -650,6 +677,10 @@ export default function CadastroFornecedor() {
       bairro:      form.bairro      || null,
       cidade:      form.cidade      || null,
       estado:      form.estado      || null,
+      // ⚠️ Enviados SEMPRE: `undefined` no corpo significa "não mexer" no backend, e
+      // omiti-los tornaria impossível VOLTAR o credor a "sem vencimento".
+      tipoVencimento: form.tipoVencimento,
+      diaVencimento:  form.diaVencimento,
       ...(force ? { force: true } : {}),
     };
 
@@ -762,7 +793,11 @@ export default function CadastroFornecedor() {
         {podeCriar && (
           <button onClick={abrirNovo}
             className="flex items-center gap-2 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors">
-            Novo Cadastro
+            {/* "Novo Fornecedor" com o ícone da entidade (2026-09-22, a pedido), no
+                padrão do "Incluir Membro" da tela de Equipe. "Novo Cadastro" não dizia
+                de que cadastro se tratava — e as telas de Prestador e Produto tinham o
+                MESMO rótulo, com botões idênticos em lugares diferentes. */}
+            <Truck size={16} /> Novo Fornecedor
           </button>
         )}
       </div>
@@ -857,14 +892,15 @@ export default function CadastroFornecedor() {
 
           {/* Desktop */}
           <div className="hidden md:block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="overflow-x-auto rounded-2xl">
+            {/* Cabeçalho FIXO no topo, dados rolando por baixo — ver JanelaLista. */}
+            <JanelaLista maxItens={8} className="rounded-2xl">
             <table className="w-full min-w-[1020px] text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nome</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Documento</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Telefone</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipo de Serviço</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipo de serviço</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                   {filtroAtivo === 'ativo' && (
                     <>
@@ -940,7 +976,7 @@ export default function CadastroFornecedor() {
                 ))}
               </tbody>
             </table>
-            </div>
+            </JanelaLista>
           </div>
         </>
       )}

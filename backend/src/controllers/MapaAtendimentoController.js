@@ -3,6 +3,12 @@
 
 const prisma = require('../lib/prisma').default;
 const { animalVisivelNaEmpresa } = require('../lib/visibilidade');
+const { dosesDoGrupoNoPeriodo, statusDasDoses } = require('../lib/dosesDoPeriodo');
+const { dataLocalDe } = require('../lib/agendaDoses');
+// Fonte ÚNICA da flag `aplicadaPeloProprietario` (SQL cru — o client Prisma pode
+// não conhecer a coluna). Sem ela, a dose que o dono aplica em casa voltaria a
+// contar como pendência do plantão neste painel.
+const { anexarAplicadaProprietario } = require('./PrescricaoGrupoController');
 
 const ANIMAL_SELECT = {
   id:            true,
@@ -30,7 +36,6 @@ const MapaAtendimentoController = {
       const gran = ['SEMANAL', 'MENSAL'].includes(String(granularidade).toUpperCase())
         ? String(granularidade).toUpperCase()
         : 'DIARIO';
-      const isDiario = gran === 'DIARIO';
       const dataRef  = data ? new Date(data + 'T00:00:00') : new Date();
 
       // inicio/fim locais (mesma base do inicioDia/fimDia original).
@@ -53,15 +58,23 @@ const MapaAtendimentoController = {
         inicio = new Date(dataRef.getFullYear(), dataRef.getMonth(), 1, 0, 0, 0, 0);
         fim    = new Date(dataRef.getFullYear(), dataRef.getMonth() + 1, 0, 23, 59, 59, 999);
       } else {
-        const dStr = dataRef.toISOString().slice(0, 10);
+        // `dataLocalDe`, nunca `toISOString()`: sem o param `data`, `dataRef` é
+        // agora — e depois das 21:00 em Brasília o UTC já é o dia SEGUINTE, então o
+        // mapa abriria no amanhã sozinho (armadilha de fuso do CLAUDE.md §6).
+        const dStr = dataLocalDe(dataRef);
         inicio = new Date(dStr + 'T00:00:00');
         fim    = new Date(dStr + 'T23:59:59.999');
       }
       const inicioDia = inicio;
       const fimDia    = fim;
-      const dataStr   = dataRef.toISOString().slice(0, 10);
       const inicioStr = new Date(inicio.getTime() - inicio.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
       const fimStr    = new Date(fim.getTime()    - fim.getTimezoneOffset()    * 60000).toISOString().slice(0, 10);
+      // Contexto das DOSES: o dia de hoje e o instante de agora decidem atrasada x
+      // prevista. `dataLocalDe` (agendaDoses) é a mesma conversão do plantão — nunca
+      // `toISOString()`, que à noite já devolve o dia seguinte.
+      const agora    = new Date();
+      const hojeStr  = dataLocalDe(agora);
+      const ctxDoses = { inicioStr, fimStr, hojeStr, agora };
 
       // ── Escopo base de animais ────────────────────────────────────────
       // FAIL-CLOSED: `if (empresaId)` deixava o mapa SEM filtro quando o contexto não
@@ -109,7 +122,7 @@ const MapaAtendimentoController = {
         return res.json({ data: {
           isGestor, distribuicaoHaras,
           consultasClinicas: { agendado: 0, concluido: 0, cancelado: 0, total: 0, progresso: 0 },
-          prescricoes: { total: 0, ativas: 0 },
+          prescricoes: { total: 0, ativas: 0, executadas: 0, pendentesOuAtrasadas: 0, previstas: 0, documentos: 0 },
           animaisSemAtendimento: { semAtendimento: 0, comAtendimento: 0, total: 0 },
           cronograma: [],
           filtros: { localizacoes: Object.values(distribuicaoMap).filter(l => l.id !== 0).sort((a,b) => a.nome.localeCompare(b.nome)), veterinarios: [] },
@@ -156,11 +169,13 @@ const MapaAtendimentoController = {
           // Mesma lista de `PrescricaoGrupoController.listarParaExecucao` (o Histórico
           // do plantão), que é a fonte com que este painel precisa concordar.
           status:   { in: ['FINALIZADO', 'CANCELADO_PARCIALMENTE', 'EXECUTADO', 'CANCELADO'] },
-          // Mesma regra do listarParaExecucao: só executa com a evolução FINALIZADA
-          OR: [
-            { evolucaoId: null },
-            { evolucao: { status: 'FINALIZADA' } },
-          ],
+          // 🔴 A EVOLUÇÃO FINALIZADA DEIXOU DE SER EXIGIDA (2026-09-22). A premissa
+          // mudou em 2026-07-16: a prescrição vai para o plantão assim que o GRUPO é
+          // FINALIZADO, não quando a evolução fecha — e `listarParaExecucao` já era
+          // assim. O `OR` daqui era o resto da regra antiga e escondia do painel toda
+          // prescrição de atendimento ainda EM_ANDAMENTO, que é o estado normal de
+          // quem está atendendo agora. Medido nesta base: uma clínica inteira ficava
+          // com o card zerado por isso. O painel e o plantão precisam concordar.
           ...vetParamFilter,
         },
         include: {
@@ -168,24 +183,45 @@ const MapaAtendimentoController = {
           veterinario: { select: { id: true, fullName: true } },
           itens: {
             where:  { ativo: true },
-            select: { id: true, medicamento: true, tipo: true, dataInicio: true, duracaoDias: true, horaInicio: true, executadoEm: true },
+            select: {
+              id: true, medicamento: true, tipo: true, dataInicio: true,
+              duracaoDias: true, horaInicio: true, executadoEm: true,
+              // Fluxo por DOSE (migration 20260820): sem estes três não há como
+              // saber quantas doses o item já deu nem quando a próxima vence.
+              frequencia: true, dosesExecutadas: true, proximaDoseEm: true, ativo: true,
+              // Log append-only — a ÚNICA fonte de "esta dose aconteceu". Recortado
+              // pelo período aqui para não trazer o curso inteiro.
+              execucoesDose: {
+                where:  { horarioExecutado: { gte: inicioDia, lte: fimDia } },
+                select: { horarioExecutado: true },
+              },
+            },
           },
         },
         orderBy: { numero: 'asc' },
       });
 
-      // Janela de um item sobrepõe o período [inicioStr, fimStr]?
-      // (mesmo algoritmo de janela do listarParaExecucao/executar, estendido p/ período)
-      const itemNoPeriodo = (item) => {
-        const itemInicioStr = new Date(item.dataInicio).toISOString().split('T')[0];
-        const fimItem = new Date(itemInicioStr + 'T00:00:00Z');
-        fimItem.setUTCDate(fimItem.getUTCDate() + Math.max(Number(item.duracaoDias) || 1, 1));
-        const itemFimStr = fimItem.toISOString().split('T')[0]; // exclusivo
-        return itemInicioStr <= fimStr && itemFimStr > inicioStr;
-      };
+      // `aplicadaPeloProprietario` NUNCA sai do `select` do Prisma (o client pode
+      // não conhecer a coluna) — vem do helper de SQL cru do plantão.
+      const itensComFlag = await anexarAplicadaProprietario(
+        prisma,
+        gruposCandidate.flatMap(g => g.itens ?? []),
+      );
+      const flagPorItem = new Map(itensComFlag.map(i => [i.id, !!i.aplicadaPeloProprietario]));
+      for (const g of gruposCandidate) {
+        g.itens = (g.itens ?? []).map(i => ({ ...i, aplicadaPeloProprietario: flagPorItem.get(i.id) ?? false }));
+      }
 
-      // Mantém apenas grupos cuja janela sobrepõe o período
-      const prescricoesDoDia = gruposCandidate.filter(g => g.itens.some(itemNoPeriodo));
+      // 🔴 O RECORTE DO PERÍODO PASSOU A SER A DOSE, NÃO A JANELA DO CURSO
+      // (2026-09-22). Antes bastava a janela [dataInicio, dataInicio+duracaoDias)
+      // tocar o período — o que trazia "1x por semana durante 28 dias" TODO santo
+      // dia, e ao mesmo tempo não dizia quantas doses havia ali. Agora o grupo
+      // entra se, e só se, tiver alguma dose (executada, atrasada ou prevista) no
+      // período — mesma leitura que o plantão faz em `itemPendenteNoDia`.
+      const dosesPorGrupo = new Map(
+        gruposCandidate.map(g => [g.id, dosesDoGrupoNoPeriodo(g, ctxDoses)]),
+      );
+      const prescricoesDoDia = gruposCandidate.filter(g => (dosesPorGrupo.get(g.id)?.total ?? 0) > 0);
 
       // ── 4. Vacinas do dia (aplicação ou reforço) ──────────────────────
       const vacinasDoDia = await prisma.vacinaClinica.findMany({
@@ -254,34 +290,22 @@ const MapaAtendimentoController = {
       // prescricoesDoDia agora são PrescricaoGrupo — um item por grupo (não por Prescricao individual)
       const cronogramaPresc = prescricoesDoDia.map(g => {
         const nomes = g.itens.map(i => i.medicamento).filter(Boolean).join(' · ');
-        const primeiroHorario = g.itens.find(i => i.horaInicio)?.horaInicio ?? null;
+        const doses = dosesPorGrupo.get(g.id);
 
-        let dataHora = null;
-        if (primeiroHorario) {
-          const [hh, mm] = primeiroHorario.split(':').map(Number);
-          dataHora = new Date(dataStr + 'T00:00:00');
-          dataHora.setHours(hh, mm, 0, 0);
-        }
+        // 🔴 O HORÁRIO DA LINHA VEM DA DOSE, não mais de `horaInicio` (2026-09-22).
+        // `horaInicio` deixou de ser obrigatório em 2026-08-23 e nesta base está
+        // vazio em TODO item — a coluna "Horário" saía "—" para toda prescrição e,
+        // pior, a classificação de atraso dependia dela e nunca disparava. Agora é
+        // a próxima dose prevista; não havendo nenhuma, a última já executada.
+        // Continua `null` para o item sem âncora de horário (sem hora e sem dose
+        // dada): ali só se sabe o DIA, e exibir 00:00 seria inventar um horário.
+        const dataHora = doses.proximoHorario ?? doses.ultimaExecucao ?? null;
 
-        // No modo Diário, marca EXECUTADO quando a dose do dia já foi dada em todos
-        // os itens da janela. Em período (semana/mês) usa o status do grupo.
-        const itensDoDia = g.itens.filter(itemNoPeriodo);
-        const jaExecutadoHoje = isDiario && itensDoDia.length > 0 && itensDoDia.every(i =>
-          i.executadoEm && new Date(i.executadoEm).toISOString().split('T')[0] === dataStr
-        );
-        // Classificação para o relatório Prescrições/Dosagens: executada > cancelada
-        // (deixou de ser executada) > atrasada (dose prevista há mais de 30min e ainda
-        // não dada — mesma tolerância do status ATRASADA de AgendamentoClinico) > agendada.
-        let statusPresc;
-        if (jaExecutadoHoje || g.status === 'EXECUTADO') {
-          statusPresc = 'EXECUTADO';
-        } else if (g.status === 'CANCELADO' || g.status === 'CANCELADO_PARCIALMENTE') {
-          statusPresc = 'CANCELADO';
-        } else if (dataHora && (Date.now() - dataHora.getTime()) > 30 * 60 * 1000) {
-          statusPresc = 'ATRASADA';
-        } else {
-          statusPresc = 'AGENDADO';
-        }
+        // Status derivado das DOSES do período: atrasada > ainda há dose a fazer >
+        // o que havia foi executado > cancelado. Substitui o `jaExecutadoHoje`, que
+        // exigia TODOS os itens executados no dia e por isso dava o documento por
+        // encerrado com metade das doses de "12 em 12h" ainda por aplicar.
+        const statusPresc = statusDasDoses(doses, g.status);
 
         return {
           id:            `grupo-${g.id}`,
@@ -293,10 +317,26 @@ const MapaAtendimentoController = {
           descricao:     nomes || 'Prescrição',
           status:        statusPresc,
           dataHora,
+          // Alimenta o "N/M doses" da linha — é o que deixa visível que o documento
+          // tem mais de uma aplicação no período.
+          doses: {
+            executadas: doses.executadas,
+            atrasadas:  doses.atrasadas,
+            previstas:  doses.previstas,
+            total:      doses.total,
+          },
           responsavel:   g.veterinario?.fullName ?? null,
           responsavelId: g.veterinario?.id ?? null,
         };
       });
+
+      // Doses do período inteiro — a soma dos grupos que sobraram no recorte.
+      const totalDoses = cronogramaPresc.reduce((acc, p) => ({
+        executadas: acc.executadas + p.doses.executadas,
+        atrasadas:  acc.atrasadas  + p.doses.atrasadas,
+        previstas:  acc.previstas  + p.doses.previstas,
+        total:      acc.total      + p.doses.total,
+      }), { executadas: 0, atrasadas: 0, previstas: 0, total: 0 });
 
       const cronogramaVacina = [];
       for (const v of vacinasDoDia) {
@@ -356,7 +396,9 @@ const MapaAtendimentoController = {
       // realmente aplicada — não o lembrete de reforço, exame CONCLUIDO).
       const animalIdsComAtiv = new Set([
         ...cronogramaAgend.filter(a => a.status === 'CONCLUIDO' || a.status === 'FINALIZADO').map(a => a.animal.id),
-        ...cronogramaPresc.filter(p => p.status === 'EXECUTADO').map(p => p.animal.id),
+        // Basta UMA dose aplicada no período — o paciente foi atendido, mesmo que o
+        // curso siga em aberto. Antes exigia o documento inteiro EXECUTADO.
+        ...cronogramaPresc.filter(p => p.doses.executadas > 0).map(p => p.animal.id),
         ...cronogramaVacina.filter(v => v.status === 'CONCLUIDO').map(v => v.animal.id),
         ...cronogramaExame.filter(e => e.status === 'CONCLUIDO').map(e => e.animal.id),
       ]);
@@ -426,12 +468,19 @@ const MapaAtendimentoController = {
             total:     totalAgend,
             progresso: progressoConsultas,
           },
+          // 🔴 O CARD "Prescrições / Dosagens" CONTA DOSES, NÃO DOCUMENTOS
+          // (2026-09-22). `executadas`/`pendentesOuAtrasadas` mudaram de unidade:
+          // eram GRUPOS (um curso de 15 doses valia 1, igual a uma dose única) e
+          // passaram a ser DOSES. `documentos` guarda a contagem antiga, para quem
+          // precisar de "quantas prescrições" em vez de "quantas aplicações".
           prescricoes: {
-            total:      cronogramaPresc.length,
+            total:      totalDoses.total,       // doses do período (centro do donut)
             ativas:     prescricoesDoDia.length,
-            executadas: cronogramaPresc.filter(p => p.status === 'EXECUTADO').length,
-            // "deixaram de ser executadas" (canceladas) + atrasadas — agrupado conforme pedido
-            pendentesOuAtrasadas: cronogramaPresc.filter(p => p.status === 'CANCELADO' || p.status === 'ATRASADA').length,
+            executadas: totalDoses.executadas,
+            // "deixaram de ser executadas" + atrasadas — agrupado conforme pedido
+            pendentesOuAtrasadas: totalDoses.atrasadas,
+            previstas:  totalDoses.previstas,
+            documentos: cronogramaPresc.length,
           },
           animaisSemAtendimento: { semAtendimento, comAtendimento, total: animalIds.length },
           cronograma,

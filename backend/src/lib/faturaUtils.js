@@ -3,6 +3,9 @@
 'use strict';
 
 const itemOrigens = require('./faturaItemOrigens');
+// Fechamento POR ANIMAL — quais itens da fatura já foram encerrados à parte.
+// É ele que separa `total` (o que esta fatura cobra) de `totalFechado`.
+const fechamentoAnimal = require('./faturaFechamentoAnimal');
 
 /**
  * Formata o número do atendimento: 'AG', 3 → 'AG-0003'
@@ -293,17 +296,42 @@ function normalizarDesconto(descontoTipo, descontoValor) {
 }
 
 /**
- * Recalcula o total da fatura a partir da soma dos valores LÍQUIDOS dos itens
+ * Recalcula os totais da fatura a partir da soma dos valores LÍQUIDOS dos itens
  * (valor × quantidade − desconto). Aceita tanto o client `prisma` quanto um `tx`.
+ *
+ * 🔴 SÃO DOIS TOTAIS desde o FECHAMENTO POR ANIMAL (2026-09-22):
+ *
+ *   total         → o que ESTA fatura cobra: só os itens ABERTOS.
+ *   totalFechado  → o que saiu dela por fechamento de bloco de paciente.
+ *
+ * Esta função é a FONTE ÚNICA dos dois — é por isso que o fechamento por animal não
+ * precisou tocar em nenhum dos ~10 pontos que lançam cobrança: todos passam por aqui.
+ *
+ * ⚠️ O bloco fechado NÃO deixou de ser devido — ele é acertado à parte. Indicador de
+ * "contas a receber"/"devedores" soma `total + totalFechado`; somar só `total` faria o
+ * fechamento por animal apagar dinheiro do relatório em silêncio.
+ *
+ * ⚠️ O retorno continua sendo só o `total` (o que a fatura cobra): é o que os callers
+ * devolvem à tela como `totalFatura`, e mudar isso reescreveria o contrato de 4 rotas.
  *
  * @param {object} client
  * @param {number} faturaId
- * @returns {number} total recalculado
+ * @returns {number} total recalculado (itens ABERTOS)
  */
 async function recalcularTotal(client, faturaId) {
-  const itens = await client.faturaItem.findMany({ where: { faturaId } });
-  const total = itens.reduce((acc, i) => acc + valorLiquidoItem(i), 0);
-  await client.fatura.update({ where: { id: faturaId }, data: { total } });
+  const itens    = await client.faturaItem.findMany({ where: { faturaId } });
+  // Leitura à parte, em SQL cru: o `findMany` tipado não traz `fechadoEm` enquanto o
+  // client Prisma não for regenerado, e sem ela TODO item pareceria aberto — o bloco
+  // fechado voltaria calado para o total. Ver lib/faturaFechamentoAnimal.js.
+  const fechados = await fechamentoAnimal.fechadosDaFatura(client, faturaId);
+
+  let total = 0, totalFechado = 0;
+  for (const i of itens) {
+    const liquido = valorLiquidoItem(i);
+    if (fechados.has(Number(i.id))) totalFechado += liquido;
+    else                            total        += liquido;
+  }
+  await fechamentoAnimal.gravarTotais(client, faturaId, { total, totalFechado });
   return total;
 }
 
@@ -618,6 +646,9 @@ function proximoMesReferencia(mesRef) {
 
 module.exports = {
   formatAtendimentoNum,
+  // Fechamento por animal — reexportado para quem já importa `faturaUtils` não ter
+  // de conhecer duas libs para a mesma coisa (o controller usa as duas formas).
+  fechamentoAnimal,
   getOrCreateFatura,
   STATUS_FATURA_ABERTOS,
   STATUS_FATURA_FECHADOS,
@@ -639,4 +670,9 @@ module.exports = {
   TIPOS_FECHAMENTO_VALIDOS,
   deveFecharHoje,
   ehDiaUtil,
+  // Exportados para `lib/vencimentoCredor.js` (2026-09-22): o vencimento da CONTA A
+  // PAGAR usa a MESMA forma do fechamento da fatura, e uma segunda conta de dia útil
+  // daria datas diferentes para a mesma regra em duas telas.
+  nEsimoDiaUtil,
+  ehUltimoDiaDoMes,
 };

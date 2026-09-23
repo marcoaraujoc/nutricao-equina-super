@@ -84,17 +84,6 @@ function normalizar(bruto) {
   if (!bruto || typeof bruto !== 'object') {
     return { ehNotaFiscal: false, motivo: 'A resposta não veio no formato esperado.' };
   }
-  if (bruto.ehNotaFiscal === false) {
-    // ⚠️ A recusa precisa dizer o que É aceito. A v1 respondia só "não parece ser uma
-    // nota fiscal", e quem estava com um ORÇAMENTO DE BALCÃO na mão — que agora é
-    // aceito — não tinha como saber se o problema era o papel, a foto ou o sistema.
-    return {
-      ehNotaFiscal: false,
-      motivo: 'Não foi possível identificar uma compra neste arquivo. Vale nota fiscal, '
-            + 'cupom, orçamento de balcão ou recibo — desde que mostre o fornecedor e os '
-            + 'itens comprados, com quantidade e valor.',
-    };
-  }
 
   const f = bruto.fornecedor ?? {};
   const positivo = (v) => { const n = num(v); return n != null && n > 0 ? n : null; };
@@ -113,6 +102,33 @@ function normalizar(bruto) {
       validade:      data(i?.validade),
     }))
     .filter(i => i.nome);
+
+  // 🔴 REDE DE SEGURANÇA CONTRA O PRÓPRIO `ehNotaFiscal` (2026-09-22). Medido ao vivo,
+  // repetindo a MESMA chamada real ao Gemini com o MESMO cupom: em 2 de 3 tentativas o
+  // modelo devolveu `ehNotaFiscal: false` MAS ainda assim extraiu certinho o fornecedor
+  // (nome, endereço, bairro, cidade) e os dois itens com quantidade e valor — ou seja,
+  // ele LEU o documento, só errou o próprio sinalizador. `ehNotaFiscal` é comentário do
+  // modelo sobre o que ele acabou de fazer, não parte do que ele extraiu, e comentário
+  // é o tipo de coisa que um modelo erra sem que o conteúdo ao lado esteja errado.
+  // Confiar cegamente nele fazia a tela dizer "não identifiquei" sobre um documento que,
+  // na prática, TINHA sido lido corretamente — a pessoa refotografava um cupom perfeito.
+  // ⚠️ A promoção exige fornecedor.nome E ao menos um item com nome+valor: é a MESMA
+  // extração que o prompt já produz para o caso aceito, nunca um dado novo — não fere
+  // "nada é inventado" (o valor já estava ali, só o booleano mentia sobre ele).
+  const extraiuCompra = Boolean(texto(f.nome, 255))
+    && itens.some(i => i.valorUnitario != null || i.valorTotal != null);
+
+  if (bruto.ehNotaFiscal === false && !extraiuCompra) {
+    // ⚠️ A recusa precisa dizer o que É aceito. A v1 respondia só "não parece ser uma
+    // nota fiscal", e quem estava com um ORÇAMENTO DE BALCÃO na mão — que agora é
+    // aceito — não tinha como saber se o problema era o papel, a foto ou o sistema.
+    return {
+      ehNotaFiscal: false,
+      motivo: 'Não foi possível identificar uma compra neste arquivo. Vale nota fiscal, '
+            + 'cupom, orçamento de balcão ou recibo — desde que mostre o fornecedor e os '
+            + 'itens comprados, com quantidade e valor.',
+    };
+  }
 
   return {
     ehNotaFiscal: true,

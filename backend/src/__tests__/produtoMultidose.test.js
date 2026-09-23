@@ -551,8 +551,13 @@ describe('ordem da lista de produtos', () => {
     // global (empresa_id IS NULL) por último. 'desc' inverteria tudo.
     expect(prod).toMatch(/orderBy: \[\{ empresaId: 'asc' \}, \{ nome: 'asc' \}\]/);
     // Ordenar só a página recebida deixaria o item da clínica FORA dela: a consulta
-    // corta em 60/100 sobre um catálogo global de milhares de linhas.
-    expect(prod).toMatch(/take: busca \? 100 : 60/);
+    // CORTA sobre um catálogo global de milhares de linhas.
+    // ⚠️ O que se trava aqui é a EXISTÊNCIA do corte, não o número: ele subiu de
+    // 60/100 para 300 em 2026-09-22 (a lista precisava ser rolável até o fim do
+    // catálogo da clínica) e vai subir de novo. Fixar o literal transformava um
+    // ajuste de teto num teste vermelho sem defeito nenhum por trás.
+    expect(prod).toMatch(/take: LIMITE/);
+    expect(prod).toMatch(/const LIMITE = \d+/);
   });
 });
 
@@ -731,5 +736,105 @@ describe('rotulo do saldo na Farmacia', () => {
     expect(farmacia).toMatch(/\{fmtQtd\(itemView\.qtdEstoque\)\} \{unidadeOperativaMed\(itemView\.medicamento\)\}/);
     expect(farmacia).toMatch(/\{fmtQtd\(item\.qtdEstoque\)\} \{unidadeOperativaMed\(item\.medicamento\)\}/);
     expect(farmacia).toMatch(/function unidadeOperativaMed[\s\S]{0,120}unidadeOperativaProduto\(med\)/);
+  });
+});
+
+// ─── 8. O NÚMERO DE EMBALAGENS FICA NO DOCUMENTO, NÃO SÓ NO FORMULÁRIO ────────
+//
+// 🔴 O pedido é "é preciso NA PRESCRIÇÃO informar que serão usados dois frascos", e até
+// 2026-09-22 a resposta vivia só na faixa azul do formulário: inserido o item, o número
+// sumia. O documento salvo, o finalizado e a visualização em somente-leitura — que é
+// onde o vet confere antes de finalizar e onde alguém pergunta "por que a fatura cobrou
+// dois frascos?" — não o diziam em lugar nenhum.
+//
+// ⚠️ O que se trava aqui é a FONTE ÚNICA. Duas contas (uma no formulário, outra no item)
+// divergem na primeira correção, e a divergência aparece como a tela prometendo um
+// número que a fatura não cobra — sem erro nenhum.
+describe('a prescrição informa as embalagens no item, não só no formulário', () => {
+  const presc = semComentarios(leiaFront('pages/SubModuloPrescricao.tsx'));
+
+  test('existe UMA função de módulo, e o formulário a CHAMA em vez de ter a conta', () => {
+    expect(presc).toMatch(/function embalagensDoCurso\(args: \{/);
+    expect(presc).toMatch(/const embalagensForm = embalagensDoCurso\(\{/);
+    // A conta não pode voltar a ser inline no componente: se `embalagensParaQtd` for
+    // chamada em mais de um lugar, há uma segunda regra.
+    expect(presc.match(/embalagensParaQtd\(/g) ?? []).toHaveLength(1);
+  });
+
+  test('cada item da lista recebe o número — local (em criação) e salvo', () => {
+    expect(presc.match(/embalagens=\{embalagensDoCurso\(\{/g) ?? []).toHaveLength(2);
+    // O produto do item vem do catálogo COMPLETO: `medicamentos` é a lista filtrada
+    // pela busca digitada, e o selo piscaria a cada tecla.
+    expect(presc).toMatch(/const produtoDoItem = useCallback\(/);
+    expect(presc).toMatch(/allMeds\.find\(m => m\.id === catId\) \?\? medicamentos\.find\(m => m\.id === catId\)/);
+  });
+
+  test('o ItemRow desenha o selo a partir da prop, sem recalcular nada', () => {
+    expect(presc).toMatch(/embalagens\?: EmbalagensDoCurso \| null;/);
+    expect(presc).toMatch(/\{embalagens\.qtd\} \{embalagens\.qtd === 1 \? 'embalagem' : 'embalagens'\}/);
+  });
+
+  test('a unidade do item vem do SNAPSHOT dele, nunca do catálogo de hoje', () => {
+    // Ler `unidadeCatalogo` para um item antigo faria a conta usar a unidade atual do
+    // produto — e o número exibido deixaria de bater com o que foi debitado.
+    expect(presc).toMatch(/unidade: item\.unidade, dosagem: item\.dosagem,/);
+  });
+});
+
+// ─── 9. O HISTÓRICO DIZ O QUE FOI PRESCRITO (2026-09-22, a pedido) ────────────
+//
+// A lista mostrava "#001 · 2 itens · 1M 1P" e nada mais: para saber O QUÊ era preciso
+// abrir o documento. ⚠️ Vale nas DUAS apresentações, e o TABLET é a razão de a tabela
+// entrar junto: o card só existe abaixo de `md` (768px) e daí para cima — iPad
+// inclusive — quem responde é a tabela.
+describe('nome do medicamento/procedimento no histórico de prescrições', () => {
+  const presc = semComentarios(leiaFront('pages/SubModuloPrescricao.tsx'));
+
+  test('a lista de nomes é uma função só, usada pelas duas apresentações', () => {
+    expect(presc).toMatch(/const nomesDosItens = \(g: PrescricaoGrupo\) =>/);
+    // card (< md) + tabela (>= md, o tablet) — duas chamadas de render mais o `title`
+    // da tabela. Menos que isso significa que uma das duas ficou sem o nome.
+    expect((presc.match(/nomesDosItens\(g\)/g) ?? []).length).toBeGreaterThanOrEqual(3);
+  });
+
+  test('o nome sai do item, e o backend já o manda na listagem do grupo', () => {
+    expect(presc).toMatch(/g\.itens\.map\(i => i\.medicamento\)/);
+    // `GRUPO_INCLUDE` traz os itens do documento; sem eles a lista não teria o que exibir.
+    expect(leia('controllers/PrescricaoGrupoController.js')).toMatch(/const GRUPO_INCLUDE = \{[\s\S]{0,400}itens: \{/);
+  });
+});
+
+// ─── 10. O CADASTRO SEM CONTEÚDO DEIXOU DE FALHAR EM SILÊNCIO (2026-09-22) ────
+//
+// 🔴 Medido na base nesta data: **8.277 itens de catálogo, ZERO** sem multidose com
+// `doses_por_embalagem` preenchido. A regra das N embalagens estava inteira, testada e
+// DORMENTE — todo curso era debitado e faturado como uma embalagem, que é exatamente o
+// defeito relatado. O código estava certo; o dado é que não existia, e nada na tela
+// pedia por ele.
+//
+// ⚠️ O aviso é o NEGATIVO de `embalagensDoCurso` e usa as MESMAS guardas: os dois nunca
+// aparecem juntos. Relaxar uma delas faria o aviso surgir no multidose (cobrança
+// proporcional, sem embalagem inteira a contar) ou na receita já escrita em "2 Un.".
+describe('produto sem conteúdo declarado avisa em vez de cobrar 1 em silêncio', () => {
+  const presc = semComentarios(leiaFront('pages/SubModuloPrescricao.tsx'));
+
+  test('o predicado existe e recusa multidose, unidade avulsa e dose vazia', () => {
+    const fn = presc.slice(presc.indexOf('function faltaConteudoDaEmbalagem('));
+    expect(fn).toBeTruthy();
+    const corpo = fn.slice(0, fn.indexOf('\n}\n') + 3);
+    expect(corpo).toMatch(/if \(args\.produto\.multidose === true\) return false;/);
+    expect(corpo).toMatch(/if \(conteudoDaEmbalagemProduto\(args\.produto\) != null\) return false;/);
+    expect(corpo).toMatch(/un === 'un\.' \|\| un === 'un' \|\| un === 'unidade'/);
+  });
+
+  test('a tela avisa, e o aviso aponta o campo que resolve', () => {
+    expect(presc).toMatch(/\{semConteudoDeclarado && \(/);
+    expect(presc).toMatch(/Conteúdo da embalagem/);
+    // ⚠️ AVISO, nunca bloqueio: prescrever não pode depender de arrumar o cadastro.
+    expect(presc).not.toMatch(/semConteudoDeclarado[\s\S]{0,80}disabled/);
+  });
+
+  test('o campo que o aviso manda preencher existe no cadastro do produto', () => {
+    expect(leiaFront('components/produtos/FormProduto.tsx')).toMatch(/Conteúdo da embalagem/);
   });
 });

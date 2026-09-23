@@ -20,6 +20,10 @@ const { normalizeEmail, findUserByEmail } = require('./email');
 const { garantirPerfil: garantirPerfilProprietario, salvarPerfil: salvarPerfilProprietario } = require('./proprietarioPerfil');
 const { salvarVinculo } = require('./usuarioEmpresa');
 const { salvarLocalidades, normalizarLocalidades } = require('./proprietarioLocalidades');
+const {
+  normalizarFormas: normalizarFormasRecebimento,
+  salvarFormas:     salvarFormasRecebimento,
+} = require('./formasRecebimentoFatura');
 const { registrarTransferenciaPropriedade } = require('./auditoria');
 const { gerarSenhaInicial } = require('./senhaInicial');
 
@@ -85,6 +89,15 @@ async function resolverOuCriarProprietario(tx, req, { empresaId, equipeId, dados
   await garantirPerfilProprietario(tx, user.id, empresaId, dadosDaEmpresa);
   await salvarPerfilProprietario(tx, user.id, empresaId, dadosDaEmpresa);
   await salvarVinculo(tx, user.id, empresaId, { perfil: 'PROPRIETARIO', ...dadosDaEmpresa });
+  // Formas de recebimento da fatura — o formulário da transferência é o MESMO do
+  // cadastro de proprietário, então o que foi marcado ali precisa chegar aqui.
+  // ⚠️ DEPOIS do salvarPerfil (é um UPDATE na linha do perfil, que precisa existir).
+  // `undefined` (payload sem o campo) não grava nada, e o cliente fica com TODAS —
+  // que é o default de quem nunca declarou preferência.
+  await salvarFormasRecebimento(
+    tx, user.id, empresaId,
+    normalizarFormasRecebimento(dados.formasRecebimentoFatura).formas,
+  );
 
   const { localidades } = normalizarLocalidades(dados.localidades);
   await salvarLocalidades(tx, user.id, empresaId, localidades);

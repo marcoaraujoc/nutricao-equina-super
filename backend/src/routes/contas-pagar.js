@@ -12,6 +12,13 @@
 
 const express = require('express');
 const ContaPagarController = require('../controllers/ContaPagarController');
+// O TIMBRE da folha (identificação da clínica) é o MESMO do recibo de prestador, e é
+// reaproveitado daquele controller em vez de copiado — duas versões divergiriam, e o
+// que divergiria é o emitente impresso num comprovante de pagamento.
+// ⚠️ Montado aqui sob `financeiro.pagamentos.ler`, e NÃO consumido de
+// `/recibos-prestador/emitente`: aquela rota exige `financeiro.recibos.ler`, um slug
+// que quem opera pagamentos pode não ter — a folha sairia sem timbre, em silêncio.
+const ReciboPrestadorController = require('../controllers/ReciboPrestadorController');
 const { authenticate }     = require('../middlewares/auth');
 const { checkPermission }  = require('../middlewares/permissao.middleware');
 
@@ -19,6 +26,7 @@ const router = express.Router();
 
 // Literais ANTES de /:id (armadilha 1).
 router.get   ('/credores',        authenticate, checkPermission('financeiro.pagamentos.ler',    'LEITURA'), ContaPagarController.listarCredores);
+router.get   ('/emitente',        authenticate, checkPermission('financeiro.pagamentos.ler',    'LEITURA'), ReciboPrestadorController.emitente);
 router.post  ('/lancar',          authenticate, checkPermission('financeiro.pagamentos.lancar', 'PROPRIO'), ContaPagarController.lancar);
 router.patch ('/itens/:itemId',   authenticate, checkPermission('financeiro.pagamentos.lancar', 'PROPRIO'), ContaPagarController.atualizarItem);
 router.delete('/itens/:itemId',   authenticate, checkPermission('financeiro.pagamentos.lancar', 'PROPRIO'), ContaPagarController.removerItem);

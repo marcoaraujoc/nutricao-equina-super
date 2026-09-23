@@ -8,6 +8,7 @@ const emailService = require('../services/emailService');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
 const { normalizeEmail, findUserByEmail, whereEmailInsensitive } = require('../lib/email');
 const { gerarSenhaInicial } = require('../lib/senhaInicial');
+const { registrarAuditoria } = require('../lib/auditoria');
 
 // Campos seguros para retornar — nunca expor passwordHash, tokens
 const SELECT_SEGURO = {
@@ -222,18 +223,37 @@ const UserAdminController = {
   },
 
   // PATCH /api/users/:id/toggle
+  // Justificativa obrigatória para INATIVAR + auditoria. Aqui o alvo é a CONTA
+  // GLOBAL (`users.ativo`): inativar fecha o login da pessoa em TODAS as empresas e
+  // derruba a sessão aberta (refreshToken zerado). É a inativação mais forte do
+  // sistema e era a única sem motivo e sem rastro. Ativar segue direto.
+  // ⚠️ Não confundir com `EquipeController.toggleMembro`, que é POR EMPRESA.
   toggleAtivo: async (req, res) => {
     const { id } = req.params;
+    const { motivo } = req.body ?? {};
     try {
       const existe = await prisma.user.findUnique({ where: { id: Number(id) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Usuário não encontrado' });
 
       const novoAtivo = !existe.ativo;
+      if (!novoAtivo && !motivo?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da inativação' });
+      }
+
       const usuario = await prisma.user.update({
         where:  { id: Number(id) },
         data:   { ativo: novoAtivo, ...(novoAtivo ? {} : { refreshToken: null }) },
         select: { id: true, fullName: true, ativo: true },
       });
+
+      await registrarAuditoria(prisma, req, {
+        categoria:  novoAtivo ? 'ATIVACAO' : 'INATIVACAO',
+        entidade:   'USUARIO',
+        entidadeId: usuario.id,
+        motivo:     novoAtivo ? null : motivo.trim(),
+        detalhes:   `${req.user.fullName ?? req.user.email} ${novoAtivo ? 'ativou' : 'inativou'} a conta de ${usuario.fullName} (acesso global)`,
+      });
+
       res.json({
         sucesso: true,
         dados: usuario,

@@ -29,12 +29,25 @@ export interface CompartilharPdfBotoesProps extends CompartilharPdfOpcoes {
   aoPreparar?: () => Promise<void>;
   /** Desabilita os dois botões (ex.: enquanto o documento ainda não existe). */
   disabled?:   boolean;
+  /**
+   * MOTIVO pelo qual aquele canal está indisponível para ESTE destinatário — texto
+   * não vazio desabilita o botão e vira o tooltip. Nasceu das formas de recebimento
+   * da fatura (o cliente escolhe no cadastro por quais canais quer receber).
+   *
+   * ⚠️ Desabilitar com o motivo à mostra, e não esconder: botão que some é lido como
+   * perda de permissão, e ninguém descobre que a decisão está no cadastro do cliente.
+   * Não confundir com `visivel={false}` do AcaoRegistro, que é para ação SEM PERMISSÃO
+   * (armadilha 28-d) — aqui a pessoa tem a permissão, o destinatário é que não quer.
+   */
+  whatsappIndisponivel?: string | null;
+  emailIndisponivel?:    string | null;
   size?:       number;
   className?:  string;
 }
 
 export default function CompartilharPdfBotoes({
-  telefone, emailPara, disabled, aoPreparar, size = 14, className = '', ...opts
+  telefone, emailPara, disabled, aoPreparar, size = 14, className = '',
+  whatsappIndisponivel = null, emailIndisponivel = null, ...opts
 }: CompartilharPdfBotoesProps) {
   const [enviando, setEnviando] = useState<'whatsapp' | 'email' | null>(null);
 
@@ -63,12 +76,14 @@ export default function CompartilharPdfBotoes({
   return (
     <>
       <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp"
-        titulo="Enviar por WhatsApp" className={className}
-        desabilitado={disabled || enviando !== null} carregando={enviando === 'whatsapp'}
+        titulo={whatsappIndisponivel || 'Enviar por WhatsApp'} className={className}
+        desabilitado={disabled || enviando !== null || !!whatsappIndisponivel}
+        carregando={enviando === 'whatsapp'}
         onClick={handleWhatsApp} />
       <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail"
-        titulo="Enviar por e-mail" className={className}
-        desabilitado={disabled || enviando !== null} carregando={enviando === 'email'}
+        titulo={emailIndisponivel || 'Enviar por e-mail'} className={className}
+        desabilitado={disabled || enviando !== null || !!emailIndisponivel}
+        carregando={enviando === 'email'}
         onClick={handleEmail} />
     </>
   );

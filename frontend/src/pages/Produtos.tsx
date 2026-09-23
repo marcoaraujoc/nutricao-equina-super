@@ -23,7 +23,7 @@
 // das demais clínicas nunca é tocado, e o RLS de `tb_medicamentos` é a rede por baixo
 // disso.
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Package, Pill, Syringe, Search, Loader2, Trash2, Layers, Pencil, Globe } from 'lucide-react';
+import { Package, Pill, Syringe, Search, Loader2, Layers, Pencil, Globe, ToggleLeft, ToggleRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import PageContainer from '../components/PageContainer';
@@ -66,6 +66,12 @@ export default function Produtos() {
   const [carregandoOpcoes, setCarregandoOpcoes] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busca,   setBusca]   = useState('');
+  // Ativos / Inativos / Todos — mesmo trio das demais telas de cadastro. Sem ele o
+  // produto inativado sumiria e não haveria de onde reativá-lo.
+  const [filtroAtivo, setFiltroAtivo] = useState<'all' | 'ativo' | 'inativo'>('ativo');
+  // Quantos existem de fato × quantos vieram. A lista tem TETO no backend e, sem
+  // este número, o corte seria indistinguível do fim do catálogo.
+  const [total, setTotal] = useState(0);
 
   const [erroInline, setErroInline] = useState<string | null>(null);
   const [erroForm,   setErroForm]   = useState<ErroAcaoDados | null>(null);
@@ -73,7 +79,8 @@ export default function Produtos() {
   // talvez não exista. Mostrar e depois esconder seria pior.
   const [multidoseDisponivel, setMultidoseDisponivel] = useState(false);
 
-  const [excluindo, setExcluindo] = useState<ItemCatalogo | null>(null);
+  // Item aguardando confirmação de INATIVAÇÃO (ativar não pede justificativa).
+  const [inativando, setInativando] = useState<ItemCatalogo | null>(null);
 
   // ── O nome digitado traz o cadastro que já existe ──────────────────────────
   // 🔴 A pessoa digitava o nome de um produto que o sistema JÁ TEM e redigitava forma,
@@ -91,15 +98,22 @@ export default function Produtos() {
   const carregarItens = useCallback(async () => {
     try {
       const res = await api.get('/cadastro/produtos', {
-        params: { tipo, busca: busca.trim() || undefined },
+        params: {
+          tipo,
+          busca: busca.trim() || undefined,
+          // 'all' traz ativos e inativos; 'false' só os inativos. O backend já lia
+          // este parâmetro — a tela é que nunca o enviava.
+          ativo: filtroAtivo === 'all' ? 'all' : filtroAtivo === 'inativo' ? 'false' : undefined,
+        },
       });
       if (!res.data) return;                       // GET 403 resolve com data null
       setItens(res.data.dados ?? []);
+      setTotal(res.data.total ?? (res.data.dados?.length ?? 0));
       // A bandeira do multidose vem já na carga — o campo não pode aparecer antes de
       // se saber se a base o grava (senão a marcação some no salvar, calada).
       setMultidoseDisponivel(res.data.recursos?.multidose !== false);
     } catch { /* silencioso */ }
-  }, [tipo, busca]);
+  }, [tipo, busca, filtroAtivo]);
 
   /**
    * As opções de Forma / Unidade / Apresentação / Via saem do BANCO, recortadas por
@@ -255,16 +269,22 @@ export default function Produtos() {
     setMostrarForm(true);
   };
 
-  const confirmarExclusao = async (motivo: string) => {
-    if (!excluindo) return;
+  /**
+   * 🔴 ATIVAR/INATIVAR no lugar do "Excluir" (2026-09-22, a pedido). O botão antigo
+   * já fazia soft delete — o rótulo prometia uma remoção que não acontecia, e não
+   * havia caminho de volta: inativado, o produto sumia da tela para sempre.
+   * ⚠️ INATIVAR passa pelo `ModalJustificativa` (o backend exige o motivo e ele vai
+   * para a Auditoria); ATIVAR vai direto, sem justificativa — §13, armadilha 33.
+   */
+  const alternarAtivo = async (item: ItemCatalogo, motivo?: string) => {
     try {
-      await api.delete(`/cadastro/produtos/${excluindo.id}`, { data: { motivo } });
-      toast.success('Produto inativado');
-      setExcluindo(null);
+      const res = await api.patch(`/cadastro/produtos/${item.id}/toggle`, motivo ? { motivo } : {});
+      toast.success(res.data?.mensagem ?? 'Situação do produto alterada');
+      setInativando(null);
       await carregarItens();
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
-      if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao remover o produto.');
+      if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao alterar a situação do produto.');
     }
   };
 
@@ -291,16 +311,18 @@ export default function Produtos() {
           <h1 className="text-xl md:text-2xl font-bold text-gray-900 flex items-center gap-2">
             <Package size={22} className="text-emerald-600" /> Produtos
           </h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            Medicamentos e vacinas da clínica — forma, apresentação, unidade, via e doses da embalagem.
-          </p>
+          {/* A linha "Medicamentos e vacinas da clínica — forma, apresentação,
+              unidade, via e doses da embalagem." saiu a pedido (2026-09-22): as abas
+              logo abaixo já dizem Medicamentos × Vacinas, e a lista mostra as colunas
+              que ela enumerava. */}
         </div>
         {podeCriar && !mostrarForm && (
-          /* ⚠️ SEM o "+" (a pedido, 2026-09-15) — nem no rótulo nem como ícone. O botão
-             diz o que faz; o sinal era ruído. */
+          /* ⚠️ SEM o "+" (a pedido, 2026-09-15) — o sinal era ruído. O ícone que
+             entrou em 2026-09-22 é OUTRA coisa: é o símbolo da ENTIDADE (pacote), no
+             padrão do "Incluir Membro" da tela de Equipe, não um "+" de ação. */
           <button onClick={novoProduto}
-            className="bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-semibold">
-            Novo produto
+            className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-semibold">
+            <Package size={16} /> Novo Produto
           </button>
         )}
       </div>
@@ -354,13 +376,27 @@ export default function Produtos() {
         </div>
       )}
 
-      {/* ── Busca ─────────────────────────────────────────────────────────── */}
+      {/* ── Busca + situação ──────────────────────────────────────────────── */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-3">
-        <div className="relative max-w-sm">
-          <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
-          <input value={busca} onChange={e => setBusca(e.target.value)}
-            placeholder={`Buscar ${tipo === 'vacina' ? 'vacina' : 'medicamento'} cadastrado...`}
-            className="w-full border border-gray-200 rounded-xl pl-8 pr-3 py-2 text-sm focus:outline-none focus:border-emerald-400" />
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1 max-w-sm">
+            <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
+            <input value={busca} onChange={e => setBusca(e.target.value)}
+              placeholder={`Buscar ${tipo === 'vacina' ? 'vacina' : 'medicamento'} cadastrado...`}
+              className="w-full border border-gray-200 rounded-xl pl-8 pr-3 py-2 text-sm focus:outline-none focus:border-emerald-400" />
+          </div>
+          {/* Trio Todos/Ativos/Inativos das demais telas de cadastro — é por ele que
+              se alcança o produto inativado para reativá-lo. */}
+          <div className="flex border border-gray-200 rounded-xl overflow-hidden text-sm flex-shrink-0">
+            {(['all', 'ativo', 'inativo'] as const).map(v => (
+              <button key={v} onClick={() => setFiltroAtivo(v)}
+                className={`px-4 py-2 font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
+                  filtroAtivo === v ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
+                }`}>
+                {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -385,9 +421,12 @@ export default function Produtos() {
       ) : (
         <>
           <div className="hidden md:block bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-            {/* 5 itens visíveis (a pedido) — acima disso a lista rola dentro da
-                janela, em vez de esticar a página. */}
-            <JanelaLista maxItens={5}>
+            {/* 🔴 12 itens visíveis (2026-09-22): com 5 a janela era uma fresta, e a
+                queixa de "só traz um pouco" era metade disso e metade do teto de 60
+                itens do backend (hoje 300). O resto continua alcançável ROLANDO
+                dentro da janela — que é o que impede a lista de esticar a página e
+                empurrar tudo para fora da dobra. */}
+            <JanelaLista maxItens={12}>
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-[11px] uppercase tracking-wider text-gray-400 border-b border-gray-100">
@@ -429,6 +468,13 @@ export default function Produtos() {
                             controlado
                           </span>
                         )}
+                        {/* Sem o selo, o produto inativado fica IDÊNTICO ao ativo na
+                            aba "Todos" — e a chave ao lado seria a única pista. */}
+                        {!p.ativo && (
+                          <span className="ml-2 inline-flex items-center text-[10px] text-gray-600 bg-gray-100 border border-gray-300 px-1.5 py-0.5 rounded-full align-middle">
+                            inativo
+                          </span>
+                        )}
                         {/* Item do catálogo do sistema: alterá-lo cria a cópia desta
                             clínica. O selo evita a leitura de que a edição vale para
                             todo mundo. */}
@@ -446,14 +492,19 @@ export default function Produtos() {
                       </td>
                       <td className="px-5 py-3 text-right">
                         <AcoesRegistro>
-                          {/* Ordem e cor da §6: Alterar (laranja) primeiro, Cancelar
-                              (vermelho) por último. Excluir só no item DA CLÍNICA —
-                              o do sistema é de todas, e o botão que só falha depois
-                              do clique é a armadilha 28-d. */}
+                          {/* Ordem e cor da §6: Alterar (laranja) primeiro. A CHAVE
+                              (tom `ativar`, azul) fica por último — é o ícone que diz
+                              a posição, não a cor. Só no item DA CLÍNICA: o do sistema
+                              é de todas, e o botão que só falha depois do clique é a
+                              armadilha 28-d. */}
                           <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Alterar"
                             visivel={podeEditar} onClick={() => editarItem(p)} />
-                          <AcaoRegistro tom="cancelar" icone={Trash2} rotulo="Excluir"
-                            visivel={podeExcluir && p.daEmpresa} onClick={() => setExcluindo(p)} />
+                          <AcaoRegistro
+                            tom="ativar"
+                            icone={p.ativo ? ToggleRight : ToggleLeft}
+                            rotulo={p.ativo ? 'Inativar' : 'Ativar'}
+                            visivel={podeExcluir && p.daEmpresa}
+                            onClick={() => (p.ativo ? setInativando(p) : alternarAtivo(p))} />
                         </AcoesRegistro>
                       </td>
                     </tr>
@@ -464,7 +515,7 @@ export default function Produtos() {
           </div>
 
           <div className="md:hidden space-y-2">
-            <JanelaLista maxItens={5}>
+            <JanelaLista maxItens={12}>
               {itens.map(p => (
                 <div key={p.id} data-item-lista className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
                   <p className="font-semibold text-gray-900 text-sm">{p.nome}</p>
@@ -492,6 +543,11 @@ export default function Produtos() {
                         controlado
                       </span>
                     )}
+                    {!p.ativo && (
+                      <span className="inline-flex items-center text-[10px] text-gray-600 bg-gray-100 border border-gray-300 px-1.5 py-0.5 rounded-full">
+                        inativo
+                      </span>
+                    )}
                     {!p.daEmpresa && (
                       <span className="inline-flex items-center gap-1 text-[10px] text-gray-500 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded-full">
                         <Globe size={10} /> do sistema
@@ -508,8 +564,12 @@ export default function Produtos() {
                       <AcoesRegistro>
                         <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Alterar"
                           visivel={podeEditar} onClick={() => editarItem(p)} />
-                        <AcaoRegistro tom="cancelar" icone={Trash2} rotulo="Excluir"
-                          visivel={podeExcluir && p.daEmpresa} onClick={() => setExcluindo(p)} />
+                        <AcaoRegistro
+                          tom="ativar"
+                          icone={p.ativo ? ToggleRight : ToggleLeft}
+                          rotulo={p.ativo ? 'Inativar' : 'Ativar'}
+                          visivel={podeExcluir && p.daEmpresa}
+                          onClick={() => (p.ativo ? setInativando(p) : alternarAtivo(p))} />
                       </AcoesRegistro>
                     </div>
                   )}
@@ -517,16 +577,25 @@ export default function Produtos() {
               ))}
             </JanelaLista>
           </div>
+
+          {/* ⚠️ A lista tem TETO no backend. Sem esta linha, o corte é indistinguível
+              do fim do catálogo — que era exatamente a queixa de "só traz um pouco". */}
+          {total > itens.length && (
+            <p className="mt-2 text-xs text-gray-400 text-center">
+              Mostrando {itens.length} de {total} — refine a busca para alcançar o restante.
+            </p>
+          )}
         </>
       )}
 
+      {/* Só a INATIVAÇÃO pede justificativa — ativar é correção e vai direto. */}
       <ModalJustificativa
-        aberto={!!excluindo}
+        aberto={!!inativando}
         titulo="Inativar produto"
-        descricao={excluindo ? `Inativar "${excluindo.nome}" no catálogo desta clínica?` : ''}
+        descricao={inativando ? `Inativar "${inativando.nome}" no catálogo desta clínica?` : ''}
         acaoLabel="Inativar"
-        onConfirmar={confirmarExclusao}
-        onFechar={() => setExcluindo(null)}
+        onConfirmar={async motivo => { if (inativando) await alternarAtivo(inativando, motivo); }}
+        onFechar={() => setInativando(null)}
       />
     </PageContainer>
   );

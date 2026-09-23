@@ -14,6 +14,7 @@ import { useAuth } from '../contexts/AuthContext';
 import UsuarioFormModal, { type UsuarioFormValues } from '../components/UsuarioFormModal';
 import { formatDate as formatarDataBR } from '../utils/dateUtils';
 import InlineError from '../components/InlineError';
+import ModalJustificativa from '../components/ModalJustificativa';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -255,15 +256,32 @@ const Usuarios = () => {
 
   // ── Toggle ativo ──────────────────────────────────────────────────────────
 
-  const handleToggle = async (u: Usuario) => {
+  // INATIVAR pede justificativa (o backend recusa 400 sem `motivo`) e vai para a
+  // Auditoria; ATIVAR segue direto. Aqui o alvo é a CONTA GLOBAL: inativar fecha o
+  // login da pessoa em TODAS as empresas e derruba a sessão aberta — é a inativação
+  // mais forte do sistema, e era a única que não pedia nada nem deixava rastro.
+  const [inativandoUsuario, setInativandoUsuario] = useState<Usuario | null>(null);
+  const [alterandoAtivo,    setAlterandoAtivo]    = useState(false);
+
+  const handleToggle = (u: Usuario) => {
     setErroLinha(null);
+    if (u.ativo) { setInativandoUsuario(u); return; }
+    confirmarToggle(u);
+  };
+
+  const confirmarToggle = async (u: Usuario, motivo?: string) => {
+    setAlterandoAtivo(true);
     try {
-      await api.patch(`/users/${u.id}/toggle`);
+      await api.patch(`/users/${u.id}/toggle`, motivo ? { motivo } : undefined);
       toast.success(u.ativo ? 'Usuário inativado' : 'Usuário ativado');
+      setInativandoUsuario(null);
       carregarUsuarios();
     } catch (err: unknown) {
       // Erro NA LINHA do usuário — o topo da página fica longe do botão clicado.
       setErroLinha({ userId: u.id, mensagem: msgErro(err, 'Erro ao alterar status') });
+      setInativandoUsuario(null);
+    } finally {
+      setAlterandoAtivo(false);
     }
   };
 
@@ -521,6 +539,18 @@ const Usuarios = () => {
           </div>
         </div>
       )}
+
+      <ModalJustificativa
+        aberto={!!inativandoUsuario}
+        titulo="Inativar usuário?"
+        descricao={inativandoUsuario
+          ? `${inativandoUsuario.fullName} perde o acesso ao sistema em todas as empresas e a sessão aberta é encerrada.`
+          : undefined}
+        acaoLabel="Inativar"
+        processando={alterandoAtivo}
+        onConfirmar={(motivo) => { if (inativandoUsuario) confirmarToggle(inativandoUsuario, motivo); }}
+        onFechar={() => setInativandoUsuario(null)}
+      />
     </div>
   );
 };

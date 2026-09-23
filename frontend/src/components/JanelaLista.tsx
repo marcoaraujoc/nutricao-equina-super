@@ -91,8 +91,24 @@ export default function JanelaLista({
       // para a tabela larga, que antes forçava a página inteira a rolar de lado.
       // O `[&_thead_th]:sticky` prende o cabeçalho no topo da janela sem exigir
       // alteração em nenhuma das tabelas que passam por aqui.
+      //
+      // 🔴 O CABEÇALHO PRECISA DE FUNDO OPACO (2026-09-22). `sticky` sem
+      // `background` é TRANSPARENTE: as linhas rolavam POR TRÁS dos rótulos e o
+      // cabeçalho aparecia embaralhado com os dados — parecia que ele rolava
+      // junto. O fundo é o que o separa visualmente do card que rola, e a sombra
+      // de 1px (`shadow-[inset_0_-1px_0]`) faz a borda inferior acompanhar,
+      // porque `border` em célula `sticky` não gruda com o resto.
+      //
+      // TIPOGRAFIA PADRÃO DO RÓTULO: negrito e "Primeira maiúscula" — as telas
+      // tinham três estilos diferentes (uppercase cinza-400, uppercase cinza-500
+      // e semibold cinza-600). `normal-case` declarado no próprio `th` vence o
+      // `uppercase` herdado do `<tr>`, então nenhuma tela precisou perder a
+      // classe antiga para o novo padrão valer.
       className={`overflow-auto overscroll-contain
                   [&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-10
+                  [&_thead_th]:bg-gray-50 [&_thead_th]:shadow-[inset_0_-1px_0_rgb(229_231_235)]
+                  [&_thead_th]:font-bold [&_thead_th]:normal-case [&_thead_th]:tracking-normal
+                  [&_thead_th]:text-gray-700 [&_thead_th]:text-xs
                   ${className}`}
       style={altura ? { maxHeight: altura } : undefined}
     >

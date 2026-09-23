@@ -6,9 +6,10 @@ import toast from 'react-hot-toast';
 import {
   Search, Loader2, X, User2, Pencil,
   Phone, ToggleLeft, ToggleRight,
-  Info, CheckCircle2, Plus, MapPin,
+  CheckCircle2, Plus, MapPin,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import JanelaLista from '../components/JanelaLista';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -87,7 +88,6 @@ export default function CadastroTratador() {
   const [editando,    setEditando]    = useState<Tratador | null>(null);
   const [form,        setForm]        = useState<FormTratador>(FORM_INICIAL);
   const [salvando,    setSalvando]    = useState(false);
-  const [showInfo,    setShowInfo]    = useState(false);
   // Erros inline: da página (lista/ações) e do modal de cadastro/edição
   const [erroInline,  setErroInline]  = useState<string | null>(null);
   const [erroModal,   setErroModal]   = useState<string | null>(null);
@@ -277,11 +277,6 @@ export default function CadastroTratador() {
           <User2 size={22} className="text-emerald-600" /> Tratadores
         </h1>
         <div className="flex items-center gap-2">
-          <button onClick={() => setShowInfo(v => !v)}
-            className="p-2 text-gray-400 hover:text-gray-600 rounded-xl"
-            title="Informações sobre este cadastro">
-            <Info size={18} />
-          </button>
           {(podeCriar || isAdmin) && (
             <button onClick={abrirNovo}
               className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-2xl text-sm font-semibold hover:bg-emerald-700 transition-colors">
@@ -291,18 +286,6 @@ export default function CadastroTratador() {
         </div>
       </div>
 
-      {/* ── Info banner ──────────────────────────────────────────────────────── */}
-      {showInfo && (
-        <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-2xl text-sm text-blue-800">
-          <strong>Regras deste cadastro:</strong>
-          <ul className="mt-1 list-disc pl-5 space-y-0.5">
-            <li>Entradas <strong>SYSTEM</strong> são criadas pelo ADMIN (catálogo global) e só o ADMIN pode editá-las.</li>
-            <li>Entradas <strong>CLIENTE</strong> pertencem à empresa/equipe de quem criou — membros com permissão podem editar e inativar os registros da própria equipe; gestores veem e alteram os de toda a empresa.</li>
-            <li>Tratadores nunca são excluídos, apenas inativados.</li>
-            <li>Não podem existir dois tratadores com o mesmo nome no mesmo local, dentro da mesma empresa.</li>
-          </ul>
-        </div>
-      )}
 
       {/* ── Filtros ──────────────────────────────────────────────────────────── */}
       <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center">
@@ -344,12 +327,13 @@ export default function CadastroTratador() {
           </div>
         ) : (
           <div className="bg-white rounded-3xl border border-gray-200 overflow-hidden">
-            <div className="overflow-x-auto rounded-3xl">
+            {/* Cabeçalho FIXO no topo, dados rolando por baixo — ver JanelaLista. */}
+            <JanelaLista maxItens={8} className="rounded-3xl">
             <table className="w-full min-w-[820px] text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Nome</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Local de Trabalho</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Local de trabalho</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Telefone</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
                   {filtroAtivo === 'ativo' && (
@@ -409,7 +393,7 @@ export default function CadastroTratador() {
                 ))}
               </tbody>
             </table>
-            </div>
+            </JanelaLista>
           </div>
         )}
       </div>

@@ -30,6 +30,7 @@ import InlineError from '../components/InlineError';
 import FotoAnimal from '../components/FotoAnimal';
 import { formatNumeroClinico } from '../utils/numeroClinico';
 import { linhaInfoAnimal } from '../utils/animalInfo';
+import SeletorPrestadorExecutante, { type PrestadorExecutante } from '../components/SeletorPrestadorExecutante';
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
 
@@ -84,15 +85,13 @@ export interface ItemExecucao {
   doses?: DoseExecutada[] | null;
 }
 
-/** Prestador oferecido no modal de execução (GET /procedimentos/cadastro/prestadores). */
-export interface PrestadorOpcaoExec {
-  id:             number;
-  nome:           string;
-  tipoServico:    string | null;
-  tipoPagamento:  string | null;
-  formaPagamento: string | null;
-  valorPagamento: number | null;
-}
+/**
+ * Prestador oferecido no modal de execução.
+ * ⚠️ É o MESMO tipo do seletor compartilhado (`PrestadorExecutante`) — reexportado
+ * como alias para não duplicar a forma do registro em dois lugares, que é como as
+ * duas telas começariam a discordar sobre o que a rota devolve.
+ */
+export type PrestadorOpcaoExec = PrestadorExecutante;
 
 export interface DoseExecutada {
   numeroDose:       number;
@@ -1537,33 +1536,17 @@ export function ModalExecucao({
                       executar. OPCIONAL: em branco, a execução acontece do mesmo
                       jeito e nada vai para o recibo. */}
                   {item.tipo === 'PROCEDIMENTO' && !soLeituraGrupo && !cancelado && !activeDone && (
-                    <div className="mt-2">
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
-                        Prestador que executou
-                      </label>
-                      <select
-                        value={prestadorPorItem[item.id] ?? ''}
-                        onChange={e => setPrestadorPorItem(prev => ({
-                          ...prev, [item.id]: e.target.value ? Number(e.target.value) : '',
-                        }))}
-                        className="w-full max-w-xs border border-gray-200 rounded-lg px-2 py-1.5 text-xs bg-white text-gray-700 focus:outline-none focus:border-emerald-400">
-                        <option value="">Não informar</option>
-                        {prestadores.map(pr => (
-                          <option key={pr.id} value={pr.id}>
-                            {pr.nome}{pr.tipoServico ? ` · ${pr.tipoServico}` : ''}
-                          </option>
-                        ))}
-                      </select>
-                      {/* Sem forma de pagamento cadastrada não há comissão a apurar:
-                          dizer isso AQUI evita o recibo sair zerado sem explicação. */}
-                      {!!prestadorPorItem[item.id] &&
-                        !prestadores.find(pr => pr.id === Number(prestadorPorItem[item.id]))?.tipoPagamento && (
-                        <p className="text-[10px] text-amber-600 mt-1">
-                          Este prestador não tem forma de pagamento cadastrada — a execução é
-                          registrada, mas sem valor no recibo.
-                        </p>
-                      )}
-                    </div>
+                    // O campo e o aviso vivem em `SeletorPrestadorExecutante` desde
+                    // 2026-09-22, quando o EXAME passou a gerar pagamento do mesmo
+                    // jeito e precisou do mesmo controle. A lista vem PRONTA daqui:
+                    // o componente a buscaria sozinho, e seriam N requisições iguais,
+                    // uma por item do plantão.
+                    <SeletorPrestadorExecutante
+                      className="mt-2 max-w-xs"
+                      valor={prestadorPorItem[item.id] ?? ''}
+                      prestadores={prestadores}
+                      onChange={v => setPrestadorPorItem(prev => ({ ...prev, [item.id]: v }))}
+                    />
                   )}
 
                   {temHistorico && (

@@ -12,15 +12,28 @@
 // divergiriam na primeira correção — e o que divergiria seria como a clínica apura o
 // que paga.
 //
-// ⚠️ Cada linha traz o que o pedido exige: o ANIMAL, o valor, a DATA e QUEM SOLICITOU.
+// 🔴 **O CICLO E A BARRA DE AÇÕES SÃO OS DA FATURA** (2026-09-22, a pedido): os mesmos
+// status (Todas · Aberta · Reaberta · Fechada · Atrasada · Paga · Cancelada) e as
+// mesmas ações com rótulo (Fechar Pagamento · Marcar como Pago · E-mail · WhatsApp ·
+// Imprimir · Exportar). Os tokens de cor vêm de `utils/tomAcao.ts`, fonte única das
+// duas telas — duas cópias dariam ao mesmo ato uma cor de cada lado do balcão.
 //
-// ⚠️ Os lançamentos nascem SOZINHOS, na execução (prescrição, vacina, procedimento).
-// O "Lançar" desta tela é para o que o automático não pegou — o item sem preço de
-// compra cadastrado, por exemplo.
-import { useState, useEffect, useCallback, useMemo } from 'react';
+// ⚠️ **ATRASADA é DERIVADA, nunca gravada** (`lib/vencimentoCredor.js#statusExibicao`):
+// conta FECHADA cujo vencimento já passou. O vencimento vem do CADASTRO do credor, e é
+// por isso que ele é editável lá e somente leitura aqui. Por isso o filtro incide sobre
+// `statusExibicao`, nunca sobre `status`.
+//
+// ⚠️ Cada linha traz o que o pedido exige: o ANIMAL, o valor, a DATA DO PEDIDO (a data
+// da entrada no estoque / da execução) e QUEM SOLICITOU.
+//
+// ⚠️ Os lançamentos nascem SOZINHOS, na execução (prescrição, vacina, procedimento) e
+// na entrada de estoque. O "Lançar" desta tela é para o que o automático não pegou — o
+// item sem preço de compra cadastrado, por exemplo.
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  Wallet, Truck, HardHat, Loader2, Plus, Check, Lock, Ban, Trash2, AlertTriangle, X,
-  Printer, MessageCircle, Pencil,
+  Wallet, Truck, HardHat, Loader2, Plus, Check, CheckCircle2, Lock, Ban, Trash2,
+  AlertTriangle, X, Printer, MessageCircle, Mail, Download, ChevronDown, RefreshCw,
+  Pencil,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
@@ -31,21 +44,36 @@ import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JanelaLista from '../components/JanelaLista';
+import DateInput from '../components/DateInput';
 import PeriodoSelector from '../components/relatorios/PeriodoSelector';
 import { usePeriodo, periodoParams } from '../contexts/PeriodoContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useEmpresa } from '../contexts/EmpresaContext';
-import { formatDataHora } from '../utils/dateUtils';
-// Imprimir / WhatsApp da conta (a pedido, 2026-09-18). O PDF sai pelo MESMO caminho
-// do resto do sistema (`compartilharPdf` → Puppeteer no backend), então ele já chega
-// anexado de verdade e com a barra de progresso.
-import { gerarHtmlContasPagar, imprimirContasPagar, type ContaPagarPrint } from '../utils/ContaPagarPrint';
-import { enviarPdfWhatsAppComAviso } from '../utils/compartilharPdf';
+import { formatDataHora, formatDate, hojeISO } from '../utils/dateUtils';
+import { BTN_ACAO, TOM_ACAO } from '../utils/tomAcao';
+// Imprimir / WhatsApp / e-mail da conta. O PDF sai pelo MESMO caminho do resto do
+// sistema (`compartilharPdf` → Puppeteer no backend), então ele já chega anexado de
+// verdade e com a barra de progresso.
+import {
+  gerarHtmlContasPagar, imprimirContasPagar, exportarContaPagarCSV, type ContaPagarPrint,
+} from '../utils/ContaPagarPrint';
+// 🔴 NA ABA DE PRESTADORES A FOLHA É O RECIBO (a pedido, 2026-09-22) — o mesmo
+// documento de `/recibos-prestador`, com a frase de quitação, o valor por extenso e a
+// assinatura de QUEM RECEBE. O demonstrativo (`ContaPagarPrint`) continua valendo para
+// o FORNECEDOR: ali o papel é conferência de compra, não comprovante de quitação.
+import {
+  gerarHtmlRecibos, imprimirRecibos,
+  type ReciboPrestador, type ReciboPeriodo, type ReciboEmitente,
+} from '../utils/ReciboPrestadorPrint';
+import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
 // Quantidade sem zeros à toa (20 → "20", 2,5 → "2,5") — a MESMA do estoque e da
 // prescrição. Uma cópia local divergiria no primeiro ajuste de formato.
 import { fmtQtdForma } from '../utils/formaCalculo';
 
 type TipoConta = 'FORNECEDOR' | 'PRESTADOR';
+
+/** O que a TELA mostra. ATRASADA não é gravada — ver o cabeçalho. */
+type StatusConta = 'ABERTA' | 'REABERTA' | 'FECHADA' | 'ATRASADA' | 'PAGA' | 'CANCELADA';
 
 interface ItemConta {
   id:              number;
@@ -66,34 +94,59 @@ interface Conta {
   credorNome:    string;
   mesReferencia: string | null;
   total:         number;
-  status:        'ABERTA' | 'FECHADA' | 'PAGA' | 'CANCELADA';
+  /** O status GRAVADO. Nunca vale ATRASADA. */
+  status:        Exclude<StatusConta, 'ATRASADA'>;
+  /** O status EXIBIDO — o gravado, ou ATRASADA quando o vencimento já passou. */
+  statusExibicao: StatusConta;
+  /** Vencimento resolvido do cadastro do credor. `null` = ele não declarou nenhum. */
+  vencimentoEm:  string | null;
+  pagoEm:        string | null;
   itens:         ItemConta[];
 }
 
-interface Credor { id: number; nome: string; tipoServico: string | null; telefone?: string | null }
+interface Credor {
+  id: number; nome: string; tipoServico: string | null;
+  telefone?: string | null; email?: string | null;
+  cpf?: string | null; cnpj?: string | null;
+}
 
 const brl = (v: number | null | undefined) =>
   v == null ? '—' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 /**
- * Cores por SIGNIFICADO, na paleta da §6: aberta é o que ainda corre (âmbar),
- * fechada é o que foi conferido (azul), paga é o que terminou bem (emerald), e
- * cancelada é o vermelho de sempre.
+ * Cores por SIGNIFICADO, na MESMA paleta da lista de faturas (`STATUS_LISTA` em
+ * `Faturamento.tsx`): o mesmo estado não pode ter uma cor de um lado do balcão e outra
+ * do outro. Aberta é o que ainda corre, reaberta é o que voltou a correr depois de um
+ * fechamento, fechada foi conferida, atrasada venceu, paga terminou bem e cancelada
+ * deixou de valer.
  */
-const STATUS: Record<Conta['status'], { label: string; cls: string }> = {
-  ABERTA:    { label: 'Aberta',    cls: 'text-amber-700 bg-amber-50 border-amber-200' },
-  FECHADA:   { label: 'Fechada',   cls: 'text-blue-700 bg-blue-50 border-blue-200' },
-  PAGA:      { label: 'Paga',      cls: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
-  CANCELADA: { label: 'Cancelada', cls: 'text-red-700 bg-red-50 border-red-200' },
+const STATUS: Record<StatusConta, { label: string; cls: string; pilula: string }> = {
+  ABERTA:    { label: 'Aberta',    cls: 'text-amber-700 bg-amber-50 border-amber-200',       pilula: 'bg-amber-500'   },
+  REABERTA:  { label: 'Reaberta',  cls: 'text-orange-700 bg-orange-50 border-orange-200',    pilula: 'bg-orange-600'  },
+  FECHADA:   { label: 'Fechada',   cls: 'text-indigo-700 bg-indigo-50 border-indigo-200',    pilula: 'bg-indigo-600'  },
+  ATRASADA:  { label: 'Atrasada',  cls: 'text-red-700 bg-red-50 border-red-200',             pilula: 'bg-red-600'     },
+  PAGA:      { label: 'Paga',      cls: 'text-emerald-700 bg-emerald-50 border-emerald-200', pilula: 'bg-emerald-600' },
+  CANCELADA: { label: 'Cancelada', cls: 'text-gray-600 bg-gray-100 border-gray-200',         pilula: 'bg-gray-500'    },
 };
+
+type FiltroStatus = 'TODAS' | StatusConta;
+
+const FILTROS: FiltroStatus[] = ['TODAS', 'ABERTA', 'REABERTA', 'FECHADA', 'ATRASADA', 'PAGA', 'CANCELADA'];
 
 /** Rótulo da origem — é o que distingue o lançamento automático do manual. */
 const ORIGEM_LABEL: Record<string, string> = {
-  PRESCRICAO_ITEM:    'Prescrição',
-  VACINA:             'Vacina',
-  EXECUCAO_PRESTADOR: 'Procedimento',
-  MANUAL:             'Lançado à mão',
+  PRESCRICAO_ITEM:        'Prescrição',
+  VACINA:                 'Vacina',
+  EXECUCAO_PRESTADOR:     'Procedimento',
+  EXAME_PRESTADOR:        'Exame',
+  ESTOQUE_ENTRADA:        'Compra (estoque)',
+  ESTOQUE_VACINA_ENTRADA: 'Compra (vacina)',
+  MANUAL:                 'Lançado à mão',
 };
+
+/** DATA PURA (dia do calendário) — vencimento e pagamento são dias acordados, não
+ *  instantes, e `formatDate` não converte fuso (§6). */
+const dataDia = (iso: string | null) => (iso ? formatDate(iso.slice(0, 10)) : '—');
 
 export default function Pagamentos() {
   const { podeExecutar, loading: loadingPerms } = usePermissoes();
@@ -107,8 +160,10 @@ export default function Pagamentos() {
   const [tipo,     setTipo]     = useState<TipoConta>('FORNECEDOR');
   const [contas,   setContas]   = useState<Conta[]>([]);
   const [credores, setCredores] = useState<Credor[]>([]);
+  const [emitente, setEmitente] = useState<ReciboEmitente | null>(null);
   const [loading,  setLoading]  = useState(true);
   const [disponivel, setDisponivel] = useState(true);
+  const [filtro,   setFiltro]   = useState<FiltroStatus>('TODAS');
 
   const [erroInline, setErroInline] = useState<string | null>(null);
   const [erroAcao,   setErroAcao]   = useState<ErroAcaoDados | null>(null);
@@ -117,12 +172,23 @@ export default function Pagamentos() {
   const [mostrarLancar, setMostrarLancar] = useState(false);
   const [novo, setNovo] = useState({ credorId: '', descricao: '', valor: '', quantidade: '1', animalNome: '' });
   const [salvando, setSalvando] = useState(false);
+  /** Conta cuja ação está em curso — trava SÓ a barra dela, não a tela inteira. */
+  const [ocupada, setOcupada] = useState<number | null>(null);
+  /** Conta cujo menu "Exportar" está aberto. */
+  const [menuExport, setMenuExport] = useState<number | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   // ── Edição do VALOR de um item (a pedido, 2026-09-18) ──────────────────────
   // É a outra metade do lançamento zerado: o procedimento sem preço cadastrado agora
   // APARECE na conta valendo 0, e é aqui que o financeiro diz quanto vale.
   const [editandoItem, setEditandoItem] = useState<number | null>(null);
   const [valorEdit,    setValorEdit]    = useState('');
   const [salvandoItem, setSalvandoItem] = useState(false);
+  // ── "Marcar como Pago" pergunta a DATA DE PAGAMENTO (a pedido, 2026-09-22) ──
+  // 🔴 A data é INFORMADA, não deduzida do relógio: o pagamento costuma ser registrado
+  // no sistema depois de acontecer no banco, e carimbar "hoje" faria todo comprovante
+  // dizer uma data que não foi a do pagamento.
+  const [pagando,   setPagando]   = useState<Conta | null>(null);
+  const [dataPagto, setDataPagto] = useState(hojeISO());
 
   const carregar = useCallback(async () => {
     try {
@@ -150,29 +216,64 @@ export default function Pagamentos() {
     Promise.all([carregar(), carregarCredores()]).finally(() => setLoading(false));
   }, [loadingPerms, empresaLoading, podeVer, carregar, carregarCredores]);
 
+  // O TIMBRE do recibo (identificação da clínica). Best-effort: sem ele a folha sai sem
+  // emitente, nunca quebrada.
+  useEffect(() => {
+    if (loadingPerms || empresaLoading || !podeVer) return;
+    api.get('/financeiro/contas-pagar/emitente')
+      .then(r => { if (r.data) setEmitente(r.data.dados ?? null); })
+      .catch(() => { /* silencioso */ });
+  }, [loadingPerms, empresaLoading, podeVer]);
+
+  // Fecha o menu de exportar ao clicar fora.
+  useEffect(() => {
+    if (menuExport == null) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuExport(null);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [menuExport]);
+
+  /** Contagem por status — sempre sobre o que a tela CARREGOU no período, senão um
+   *  chip marcaria "3" e devolveria lista vazia. */
+  const contar = (f: FiltroStatus) =>
+    f === 'TODAS' ? contas.length : contas.filter(c => c.statusExibicao === f).length;
+
+  const visiveis = useMemo(
+    () => (filtro === 'TODAS' ? contas : contas.filter(c => c.statusExibicao === filtro)),
+    [contas, filtro],
+  );
+
   const total = useMemo(
     // ⚠️ CANCELADA fica FORA do total: ela é registro do que deixou de valer, e
     // somá-la afirmaria uma dívida que a clínica já desfez.
-    () => contas.filter(c => c.status !== 'CANCELADA').reduce((s, c) => s + (c.total ?? 0), 0),
+    () => contas.filter(c => c.statusExibicao !== 'CANCELADA').reduce((s, c) => s + (c.total ?? 0), 0),
     [contas],
   );
   const totalAberto = useMemo(
-    () => contas.filter(c => c.status === 'ABERTA' || c.status === 'FECHADA')
+    () => contas.filter(c => ['ABERTA', 'REABERTA', 'FECHADA', 'ATRASADA'].includes(c.statusExibicao))
                 .reduce((s, c) => s + (c.total ?? 0), 0),
     [contas],
   );
 
-  const mudarStatus = async (conta: Conta, status: Conta['status'], motivo?: string) => {
+  const mudarStatus = async (
+    conta: Conta,
+    status: Exclude<StatusConta, 'ATRASADA'>,
+    extra: { motivo?: string; pagoEm?: string } = {},
+  ) => {
     setErroAcao(null);
+    setOcupada(conta.id);
     try {
-      await api.patch(`/financeiro/contas-pagar/${conta.id}/status`, { status, motivo });
-      toast.success(status === 'PAGA' ? 'Conta marcada como paga' : `Conta ${STATUS[status].label.toLowerCase()}`);
+      await api.patch(`/financeiro/contas-pagar/${conta.id}/status`, { status, ...extra });
+      toast.success(status === 'PAGA' ? 'Pagamento registrado' : `Conta ${STATUS[status].label.toLowerCase()}`);
       setCancelando(null);
+      setPagando(null);
       await carregar();
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
       if (!e.isPermissionError) setErroAcao({ mensagem: e.response?.data?.error ?? 'Erro ao alterar a conta.' });
-    }
+    } finally { setOcupada(null); }
   };
 
   const lancar = async () => {
@@ -226,12 +327,15 @@ export default function Pagamentos() {
     } finally { setSalvandoItem(false); }
   };
 
-  /** A conta como a folha impressa a espera. */
+  // ── As duas folhas ────────────────────────────────────────────────────────
+
+  /** A conta como o DEMONSTRATIVO (fornecedor) a espera. */
   const paraImpressao = (c: Conta): ContaPagarPrint => ({
     credorNome:    c.credorNome,
     tipo:          c.tipo,
     mesReferencia: c.mesReferencia,
-    status:        STATUS[c.status].label,
+    vencimentoEm:  c.vencimentoEm,
+    status:        STATUS[c.statusExibicao].label,
     total:         c.total,
     itens: c.itens.map(i => ({
       animalNome:      i.animalNome,
@@ -243,17 +347,97 @@ export default function Pagamentos() {
     })),
   });
 
+  /**
+   * A conta como o RECIBO (prestador) o espera.
+   *
+   * ⚠️ `valorCliente`/`totalCliente` vão `null` de propósito: a conta a pagar registra
+   * só o que se DEVE, e "R$ 0,00" ali afirmaria ao prestador que o cliente não pagou
+   * nada pelo serviço dele. Com `null` a coluna inteira some da folha.
+   * ⚠️ `valor` do item é UNITÁRIO na conta a pagar e TOTAL no recibo (a folha não
+   * multiplica) — daí o `× quantidade` aqui.
+   */
+  const paraRecibo = (c: Conta): ReciboPrestador => {
+    const credor = credores.find(x => x.id === c.credorId);
+    return {
+      prestadorId:    c.credorId,
+      prestadorNome:  c.credorNome,
+      documento:      credor?.cnpj || credor?.cpf || null,
+      tipoServico:    credor?.tipoServico ?? null,
+      telefone:       credor?.telefone ?? null,
+      email:          credor?.email ?? null,
+      // A forma de pagamento NÃO é reapurada aqui: o que o prestador recebe já está
+      // congelado na conta, e recalculá-lo daria dois números para a mesma dívida.
+      tipoPagamento:  null,
+      formaPagamento: null,
+      valorPagamento: null,
+      itens: c.itens.map(i => ({
+        id:           i.id,
+        animal:       i.animalNome,
+        procedimento: i.descricao,
+        quantidade:   i.quantidade ?? 1,
+        valorCliente: null,
+        valor:        i.valor * (i.quantidade ?? 1),
+        explicacao:   null,
+        executadoEm:  i.ocorridoEm,
+      })),
+      totalCliente: null,
+      totalAPagar:  c.total,
+      pendentes:    c.itens.filter(i => !i.valor || i.valor <= 0).length,
+    };
+  };
+
+  /** A janela que o recibo declara — a dos LANÇAMENTOS da conta, e não a do filtro de
+   *  período: o recibo dá quitação pelo que está escrito nele. */
+  const periodoDaConta = (c: Conta): ReciboPeriodo | null => {
+    const datas = c.itens.map(i => new Date(i.ocorridoEm).getTime()).filter(n => !Number.isNaN(n));
+    if (datas.length === 0) return null;
+    return {
+      granularidade: 'mes',
+      inicio: new Date(Math.min(...datas)).toISOString(),
+      fim:    new Date(Math.max(...datas)).toISOString(),
+    };
+  };
+
+  const htmlDaConta = (c: Conta) =>
+    c.tipo === 'PRESTADOR'
+      ? gerarHtmlRecibos([paraRecibo(c)], periodoDaConta(c), emitente, marca.logoUrl)
+      : gerarHtmlContasPagar([paraImpressao(c)], marca.logoUrl);
+
+  const imprimir = (c: Conta) => {
+    if (c.tipo === 'PRESTADOR') imprimirRecibos([paraRecibo(c)], periodoDaConta(c), emitente, marca.logoUrl);
+    else                        imprimirContasPagar([paraImpressao(c)], marca.logoUrl);
+  };
+
+  /** Nome do arquivo e rótulo do documento — o recibo e o demonstrativo NÃO são a
+   *  mesma coisa, e o anexo que chega ao credor precisa dizer qual dos dois é. */
+  const rotuloDoc = (c: Conta) =>
+    c.tipo === 'PRESTADOR'
+      ? { documento: 'Recibo de pagamento', arquivo: 'recibo' }
+      : { documento: 'Demonstrativo de valores a pagar', arquivo: 'valores-a-pagar' };
+
+  const opcoesEnvio = (c: Conta) => {
+    const { documento, arquivo } = rotuloDoc(c);
+    const slug = c.credorNome.replace(/\s+/g, '-').toLowerCase();
+    return {
+      gerarHtml:   () => htmlDaConta(c),
+      nomeArquivo: `${arquivo}-${slug}.pdf`,
+      titulo:      `${documento} — ${c.credorNome}`,
+      texto:       `${documento}${c.mesReferencia ? ` — ${c.mesReferencia}` : ''}.`,
+      documento,
+    };
+  };
+
   const enviarWhatsApp = async (conta: Conta) => {
     const credor = credores.find(c => c.id === conta.credorId);
-    await enviarPdfWhatsAppComAviso({
-      gerarHtml:   () => gerarHtmlContasPagar([paraImpressao(conta)], marca.logoUrl),
-      nomeArquivo: `valores-a-pagar-${conta.credorNome.replace(/\s+/g, '-').toLowerCase()}.pdf`,
-      texto:       `Demonstrativo de valores a pagar${conta.mesReferencia ? ` — ${conta.mesReferencia}` : ''}.`,
-      documento:   'Demonstrativo de valores a pagar',
-      // ⚠️ O destino é o telefone do CREDOR. `credores` só traz quem está ATIVO; sem
-      // telefone o `compartilharPdf` cai no fallback manual (baixa o PDF e abre o app),
-      // que é melhor do que não oferecer a ação.
-    }, credor?.telefone ?? null);
+    // ⚠️ O destino é o telefone do CREDOR. `credores` só traz quem está ATIVO; sem
+    // telefone o `compartilharPdf` cai no fallback manual (baixa o PDF e abre o app),
+    // que é melhor do que não oferecer a ação.
+    await enviarPdfWhatsAppComAviso(opcoesEnvio(conta), credor?.telefone ?? null);
+  };
+
+  const enviarEmail = async (conta: Conta) => {
+    const credor = credores.find(c => c.id === conta.credorId);
+    await enviarPdfEmailComAviso(opcoesEnvio(conta), credor?.email ?? null);
   };
 
   const removerItem = async (motivo: string) => {
@@ -330,6 +514,23 @@ export default function Pagamentos() {
         })}
       </div>
 
+      {/* ── Filtro por STATUS — os MESMOS da fatura (ver o cabeçalho) ──────── */}
+      <div className="flex flex-wrap items-center gap-1.5 mb-4">
+        {FILTROS.map(f => {
+          const qtd   = contar(f);
+          const cor   = f === 'TODAS' ? 'bg-gray-700' : STATUS[f].pilula;
+          const label = f === 'TODAS' ? 'Todas' : STATUS[f].label;
+          return (
+            <button key={f} type="button" onClick={() => setFiltro(f)}
+              className={`flex-shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
+                filtro === f ? `${cor} text-white` : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              }`}>
+              {label} ({qtd})
+            </button>
+          );
+        })}
+      </div>
+
       {/* Totais do período — o "quanto vou pagar" é a primeira pergunta da tela. */}
       <div className="grid grid-cols-2 gap-3 mb-4">
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
@@ -382,14 +583,24 @@ export default function Pagamentos() {
 
       {loading ? (
         <div className="flex justify-center py-14"><Loader2 size={22} className="animate-spin text-emerald-600" /></div>
-      ) : contas.length === 0 ? (
+      ) : visiveis.length === 0 ? (
         <div className="text-center py-14 text-gray-400 text-sm">
-          Nenhuma conta de {tipo === 'PRESTADOR' ? 'prestador' : 'fornecedor'} no período.
+          {contas.length === 0
+            ? `Nenhuma conta de ${tipo === 'PRESTADOR' ? 'prestador' : 'fornecedor'} no período.`
+            : `Nenhuma conta ${STATUS[filtro as StatusConta].label.toLowerCase()} no período.`}
         </div>
       ) : (
         <div className="space-y-3">
-          {contas.map(conta => (
+          {visiveis.map(conta => {
+            const st       = conta.statusExibicao;
+            const editavel = st === 'ABERTA' || st === 'REABERTA';
+            const emCurso  = ocupada === conta.id;
+            return (
             <div key={conta.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+              {/* Cabeçalho: quem, referência, VENCIMENTO e total.
+                  🔴 O vencimento fica AQUI, e não como coluna da tabela de itens: ele é
+                  da CONTA (vem do cadastro do credor), e repeti-lo em cada linha diria o
+                  mesmo número dezenas de vezes sem nunca variar. */}
               <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-gray-50">
                 <div className="min-w-0">
                   <p className="font-semibold text-gray-900 text-sm truncate">{conta.credorNome}</p>
@@ -397,32 +608,84 @@ export default function Pagamentos() {
                     {conta.mesReferencia ?? '—'} · {conta.itens.length} lançamento(s)
                   </p>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${STATUS[conta.status].cls}`}>
-                    {STATUS[conta.status].label}
+                <div className="flex items-center gap-4 flex-wrap">
+                  <div className="text-right">
+                    <p className="text-[9px] text-gray-400 uppercase tracking-wide">Data de Vencimento</p>
+                    <p className={`text-sm font-semibold ${st === 'ATRASADA' ? 'text-red-600' : 'text-gray-800'}`}>
+                      {dataDia(conta.vencimentoEm)}
+                    </p>
+                  </div>
+                  {conta.pagoEm && (
+                    <div className="text-right">
+                      <p className="text-[9px] text-gray-400 uppercase tracking-wide">Data de Pagamento</p>
+                      <p className="text-sm font-semibold text-emerald-700">{dataDia(conta.pagoEm)}</p>
+                    </div>
+                  )}
+                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${STATUS[st].cls}`}>
+                    {STATUS[st].label}
                   </span>
                   <span className="font-bold text-gray-900">{brl(conta.total)}</span>
-                  <AcoesRegistro>
-                    {/* Fechar → conferida. Pagar → quitada. Só quem tem `pagar` decide
-                        isso: lançar a dívida e dar por paga são atos diferentes. */}
-                    <AcaoRegistro tom="imprimir" icone={Lock} rotulo="Fechar"
-                      visivel={podePagar && conta.status === 'ABERTA'}
-                      onClick={() => mudarStatus(conta, 'FECHADA')} />
-                    <AcaoRegistro tom="finalizar" icone={Check} rotulo="Marcar como paga"
-                      visivel={podePagar && (conta.status === 'ABERTA' || conta.status === 'FECHADA')}
-                      onClick={() => mudarStatus(conta, 'PAGA')} />
-                    <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"
-                      visivel={podePagar && conta.status !== 'CANCELADA' && conta.status !== 'PAGA'}
-                      onClick={() => setCancelando(conta)} />
-                    {/* Imprimir e WhatsApp são SAÍDA DE CONTEÚDO — valem em qualquer
-                        status, inclusive na conta paga ou cancelada: é justamente a
-                        conta encerrada que alguém precisa reimprimir para conferir. */}
-                    <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
-                      onClick={() => imprimirContasPagar([paraImpressao(conta)], marca.logoUrl)} />
-                    <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp"
-                      onClick={() => enviarWhatsApp(conta)} />
-                  </AcoesRegistro>
                 </div>
+              </div>
+
+              {/* ── Barra de ações — a MESMA da fatura (rótulo visível, tom por
+                  significado). Ação sem permissão NÃO é renderizada (28-d). */}
+              <div className="flex flex-wrap items-center justify-end gap-2 px-4 py-2.5 border-b border-gray-50 bg-gray-50/40">
+                {/* 🔴 Reabrir existe para que um clique errado em "Marcar como Pago" não
+                    congele a dívida para sempre — e é o que torna REABERTA alcançável. */}
+                {podePagar && (st === 'FECHADA' || st === 'ATRASADA' || st === 'PAGA') && (
+                  <button onClick={() => mudarStatus(conta, 'REABERTA')} disabled={emCurso}
+                    className={`${BTN_ACAO} ${TOM_ACAO.alterar}`}>
+                    {emCurso ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />} Reabrir
+                  </button>
+                )}
+                {podePagar && editavel && (
+                  <button onClick={() => mudarStatus(conta, 'FECHADA')} disabled={emCurso}
+                    className={`${BTN_ACAO} ${TOM_ACAO.finalizar}`}>
+                    {emCurso ? <Loader2 size={11} className="animate-spin" /> : <Lock size={13} />} Fechar Pagamento
+                  </button>
+                )}
+                {podePagar && st !== 'PAGA' && st !== 'CANCELADA' && (
+                  <button
+                    onClick={() => { setDataPagto(hojeISO()); setPagando(conta); }}
+                    disabled={emCurso}
+                    className={`${BTN_ACAO} ${TOM_ACAO.finalizar}`}>
+                    {emCurso ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={13} />} Marcar como Pago
+                  </button>
+                )}
+                {/* E-mail, WhatsApp, Imprimir e Exportar são SAÍDA DE CONTEÚDO — valem em
+                    qualquer status, inclusive na conta paga ou cancelada: é justamente a
+                    conta encerrada que alguém precisa reenviar para conferir. */}
+                <button onClick={() => enviarEmail(conta)} className={`${BTN_ACAO} ${TOM_ACAO.email}`}>
+                  <Mail size={13} /> E-mail
+                </button>
+                <button onClick={() => enviarWhatsApp(conta)} className={`${BTN_ACAO} ${TOM_ACAO.whatsapp}`}>
+                  <MessageCircle size={13} /> WhatsApp
+                </button>
+                <button onClick={() => imprimir(conta)} className={`${BTN_ACAO} ${TOM_ACAO.imprimir}`}>
+                  <Printer size={13} /> Imprimir
+                </button>
+                <div className="relative" ref={menuExport === conta.id ? menuRef : undefined}>
+                  <button onClick={() => setMenuExport(v => (v === conta.id ? null : conta.id))}
+                    className={`${BTN_ACAO} ${TOM_ACAO.exportar}`}>
+                    <Download size={13} /> Exportar <ChevronDown size={11} />
+                  </button>
+                  {menuExport === conta.id && (
+                    <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-1 min-w-[150px]">
+                      <button
+                        onClick={() => { exportarContaPagarCSV(paraImpressao(conta)); setMenuExport(null); toast.success('CSV gerado'); }}
+                        className="w-full text-left px-4 py-2 text-xs text-amber-800 hover:bg-amber-50 flex items-center gap-2">
+                        <Download size={13} /> CSV (.csv)
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {podePagar && st !== 'CANCELADA' && st !== 'PAGA' && (
+                  <button onClick={() => setCancelando(conta)} disabled={emCurso}
+                    className={`${BTN_ACAO} ${TOM_ACAO.cancelar}`}>
+                    <Ban size={13} /> Cancelar
+                  </button>
+                )}
               </div>
 
               <JanelaLista maxItens={3}>
@@ -442,7 +705,10 @@ export default function Pagamentos() {
                           sem a coluna, o total aparece ao lado de um unitário invisível e não há
                           como conferir a compra contra a nota. */}
                       <th className="px-4 py-2 font-semibold text-center whitespace-nowrap">Qtd.</th>
-                      <th className="px-4 py-2 font-semibold whitespace-nowrap">Data</th>
+                      {/* "Data do Pedido" (2026-09-22): é a data do FATO GERADOR — a entrada
+                          no estoque, na compra, e a execução, no serviço —, nunca a do
+                          lançamento. */}
+                      <th className="px-4 py-2 font-semibold whitespace-nowrap">Data do Pedido</th>
                       <th className="px-4 py-2 font-semibold text-right whitespace-nowrap">Valor</th>
                       <th className="px-4 py-2" />
                     </tr>
@@ -504,10 +770,10 @@ export default function Pagamentos() {
                               a ação nem é renderizada (28-d). */}
                           <AcoesRegistro>
                             <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar valor"
-                              visivel={podeLancar && conta.status === 'ABERTA' && editandoItem !== it.id}
+                              visivel={podeLancar && editavel && editandoItem !== it.id}
                               onClick={() => abrirEdicaoValor(it)} />
                             <AcaoRegistro tom="cancelar" icone={Trash2} rotulo="Remover"
-                              visivel={podeLancar && conta.status !== 'PAGA' && conta.status !== 'CANCELADA'}
+                              visivel={podeLancar && st !== 'PAGA' && st !== 'CANCELADA'}
                               onClick={() => setRemovendo(it)} />
                           </AcoesRegistro>
                         </td>
@@ -517,18 +783,64 @@ export default function Pagamentos() {
                 </table>
               </JanelaLista>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
       <ErroAcao erro={erroAcao} />
+
+      {/* ── Marcar como Pago: a DATA DE PAGAMENTO ────────────────────────────
+          ⚠️ `DateInput`, nunca `<input type="date">` cru (§6): o nativo exibe
+          MM/DD/AAAA quando o locale do navegador é en-US. */}
+      {pagando && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 rounded-t-2xl">
+              <h3 className="text-sm font-bold text-gray-900">Registrar pagamento</h3>
+              <button onClick={() => setPagando(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <p className="text-sm text-gray-600">
+                Conta de <strong>{pagando.credorNome}</strong> — {brl(pagando.total)}.
+              </p>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1.5">Data de Pagamento</label>
+                <DateInput
+                  value={dataPagto}
+                  onChange={setDataPagto}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus-within:border-emerald-400"
+                />
+                <p className="text-[11px] text-gray-400 mt-1">
+                  Informe o dia em que o pagamento aconteceu — pode ser anterior a hoje.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100">
+              <button onClick={() => setPagando(null)}
+                className="px-4 py-2 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-100">Cancelar</button>
+              <button
+                // ⚠️ Data vazia (o `DateInput` zera o valor inválido) NÃO envia: sem ela
+                // o backend cairia no relógio e gravaria a data da digitação.
+                disabled={!dataPagto || ocupada === pagando.id}
+                onClick={() => mudarStatus(pagando, 'PAGA', { pagoEm: dataPagto })}
+                className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white px-4 py-2 rounded-xl text-sm font-semibold">
+                {ocupada === pagando.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                Confirmar pagamento
+              </button>
+            </div>
+            {/* Erro da AÇÃO abaixo do botão que a disparou, nunca no topo (§6). */}
+            <div className="px-5 pb-4"><ErroAcao erro={erroAcao} /></div>
+          </div>
+        </div>
+      )}
 
       <ModalJustificativa
         aberto={!!cancelando}
         titulo="Cancelar conta a pagar"
         descricao={cancelando ? `Cancelar a conta de ${cancelando.credorNome} (${brl(cancelando.total)})?` : ''}
         acaoLabel="Cancelar conta"
-        onConfirmar={async motivo => { if (cancelando) await mudarStatus(cancelando, 'CANCELADA', motivo); }}
+        onConfirmar={async motivo => { if (cancelando) await mudarStatus(cancelando, 'CANCELADA', { motivo }); }}
         onFechar={() => setCancelando(null)}
       />
 
@@ -540,11 +852,6 @@ export default function Pagamentos() {
         onConfirmar={removerItem}
         onFechar={() => setRemovendo(null)}
       />
-
-      {/* Fecha o formulário de lançamento com Esc — o X do cabeçalho não existe aqui. */}
-      {mostrarLancar && (
-        <button className="hidden" onClick={() => setMostrarLancar(false)} aria-hidden><X size={1} /></button>
-      )}
     </PageContainer>
   );
 }

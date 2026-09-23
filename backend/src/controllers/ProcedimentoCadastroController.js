@@ -138,8 +138,20 @@ const especialidadesMinhas = async (req, res) => {
 // Procedimentos ativos da especialidade + valor da empresa ativa (quando houver).
 const listarComValores = async (req, res) => {
   try {
-    const { especialidade, busca, especie, imagemCategoria, codigos } = req.query;
-    const where = { ativo: true };
+    const { especialidade, busca, especie, imagemCategoria, codigos, ativo } = req.query;
+    const where = {};
+
+    /**
+     * 🔴 SITUAÇÃO — o DEFAULT É `ativo: true` e não deve mudar.
+     *
+     * Este MESMO endpoint alimenta os seletores de procedimento do ORÇAMENTO e da
+     * PRESCRIÇÃO (ver o comentário das rotas), que jamais podem oferecer algo que a
+     * clínica inativou. Quem manda 'all'/'false' é só a tela de Cadastro, que precisa
+     * alcançar o inativo para poder reativá-lo — sem isso, inativar vira caminho sem volta.
+     */
+    if (ativo === 'all')        { /* sem recorte por situação */ }
+    else if (ativo === 'false') { where.ativo = false; }
+    else                        { where.ativo = true; }
 
     /**
      * 🔴 RECORTE POR CÓDIGO (2026-09-11) — a tela de exames manda para cá os exames
@@ -182,7 +194,7 @@ const listarComValores = async (req, res) => {
       select: {
         id: true, nome: true, nomeAbreviado: true, categoria: true, subcategoria: true,
         especialidade: true, especie: true, tipoProcedimento: true, duracao: true, valorVenda: true, descricao: true,
-        empresaId: true,
+        empresaId: true, ativo: true,
       },
     });
 
@@ -235,6 +247,14 @@ const listarComValores = async (req, res) => {
     return res.json({
       dados: procedimentos.map(p => ({
         ...p,
+        /**
+         * `daEmpresa: false` = linha GLOBAL do catálogo, que vale para TODAS as
+         * clínicas. A tela usa isto para NÃO oferecer inativar nem renomear o item do
+         * sistema — mesma regra (e mesma razão) de `ProdutoController`: a policy de
+         * `tb_procedimentos_vet` LÊ global + próprio mas só ESCREVE o próprio, então
+         * o botão só falharia depois do clique (armadilha 28-d).
+         */
+        daEmpresa:    p.empresaId != null,
         valorEmpresa: valores.get(p.id) ?? null,
         prestadores:  vinculos.get(p.id) ?? [],
       })),
@@ -507,7 +527,8 @@ const toggleCombo = async (req, res) => {
         include: COMBO_INCLUDE,
       });
       await registrarAuditoria(tx, req, {
-        categoria:  'ALTERACAO',
+        // (In)ativar não é editar um campo — ver EstoqueController.toggle.
+        categoria:  vaiInativar ? 'INATIVACAO' : 'ATIVACAO',
         entidade:   'PROCEDIMENTO_COMBO',
         entidadeId: id,
         motivo,
@@ -654,11 +675,77 @@ const prestadoresDoProcedimento = async (req, res) => {
 };
 
 /**
- * POST /api/procedimentos/cadastro/proprio  { nome, especialidade?, valor? }
+ * "Categoria" DA TELA × as duas colunas do banco.
  *
- * 🔴 CRIA O PROCEDIMENTO DA CLÍNICA (a pedido, 2026-09-18) — a outra metade do
- * auto-preenchimento por nome da tela de Procedimentos: digitou um nome que não
- * existe, cadastra na hora, sem sair da tela.
+ * 🔴 A tela de Cadastro > Procedimentos chama de CATEGORIA o que o banco guarda em
+ * DUAS colunas diferentes, conforme a natureza do item (o rótulo mudou em 2026-09-22;
+ * antes era "Especialidade / Exame de imagem"):
+ *   • procedimento clínico  → `especialidade` ('Clínica Médica', 'Ortopedia'…)
+ *   • exame de imagem       → `tipoProcedimento = 'IMAGEM'` + `categoria`
+ *     ('Radiografia', 'Ultrassonografia'…), que é como `listarComValores` recorta
+ *     essa família desde 2026-09-09.
+ *
+ * ⚠️ Sem este desvio, cadastrar "Radiografia de carpo" escolhendo Radiografia gravaria
+ * `especialidade = 'Radiografia'` — e o item NASCERIA INVISÍVEL na própria lista em
+ * que acabou de ser criado, porque aquela lista filtra imagem por categoria, nunca por
+ * especialidade.
+ *
+ * @param {string} categoriaDaTela
+ * @returns {{especialidade: string|null, categoria: string|null, tipoProcedimento: string|null}}
+ */
+function camposDaCategoria(categoriaDaTela) {
+  const c = String(categoriaDaTela ?? '').trim();
+  if (!c) return { especialidade: null, categoria: null, tipoProcedimento: null };
+
+  const daImagem = CATEGORIAS_IMAGEM.find(x => x.toLowerCase() === c.toLowerCase());
+  if (daImagem) {
+    return { especialidade: ESPECIALIDADE_IMAGEM, categoria: daImagem, tipoProcedimento: TIPO_IMAGEM };
+  }
+  return { especialidade: c, categoria: null, tipoProcedimento: null };
+}
+
+/**
+ * Grava/remove o VALOR da empresa para o procedimento (o "Valor" da tela).
+ *
+ * ⚠️ `tb_procedimento_valores_empresa` é TENANT DIRETO: a linha nasce com o
+ * `empresa_id` do contexto e o RLS recusa qualquer outro. É por ISSO que o valor não
+ * mora em `tb_procedimentos_vet` — ali a linha pode ser GLOBAL, e o preço de uma
+ * clínica viraria o preço de todas.
+ * ⚠️ Vazio/zero REMOVE a linha em vez de gravar 0: "sem valor definido" e "de graça"
+ * são coisas diferentes, e é a ausência que faz a tela cair no valor de referência.
+ */
+async function gravarValorDaEmpresa(tx, empresaId, procedimentoId, valor) {
+  if (valor === null || valor === undefined || valor === '' || Number(valor) === 0) {
+    await tx.procedimentoValorEmpresa.deleteMany({ where: { empresaId, procedimentoId } });
+    return null;
+  }
+  const v = Number(valor);
+  if (!Number.isFinite(v) || v < 0) throw Object.assign(new Error('Valor inválido.'), { status: 400 });
+
+  const row = await tx.procedimentoValorEmpresa.upsert({
+    where:  { empresaId_procedimentoId: { empresaId, procedimentoId } },
+    create: { empresaId, procedimentoId, valor: v },
+    update: { valor: v },
+  });
+  return row.valor;
+}
+
+/** O procedimento no escopo VISÍVEL da empresa: o global + o próprio dela. */
+function procedimentoVisivel(empresaId, id) {
+  return { id, OR: [{ empresaId: null }, ...(empresaId ? [{ empresaId: Number(empresaId) }] : [])] };
+}
+
+/**
+ * POST /api/procedimentos/cadastro/proprio  { nome, categoria?, valor? }
+ *
+ * 🔴 CRIA O PROCEDIMENTO DA CLÍNICA. Desde 2026-09-22 quem o chama é o botão
+ * **Novo Procedimento** da tela, com os três campos que o usuário pediu — Categoria,
+ * Procedimento e Valor.
+ *
+ * ⚠️ SUBSTITUI o cadastro-ao-digitar-na-busca de 2026-09-18 ("Cadastrar «X»"), retirado
+ * a pedido: criar o registro como efeito colateral de uma BUSCA fazia erro de digitação
+ * virar cadastro, e não havia onde informar categoria nem valor — o item nascia com o
+ * carimbo genérico e preço zerado, para alguém corrigir depois.
  *
  * ⚠️ NÃO é o `POST /procedimentos` do catálogo, que é ADMIN-ONLY e escreve a linha
  * GLOBAL, válida para TODAS as clínicas. Aqui nasce a linha DA EMPRESA
@@ -668,7 +755,8 @@ const prestadoresDoProcedimento = async (req, res) => {
  *
  * ⚠️ IDEMPOTENTE por (nome, empresa), sem diferenciar maiúsculas: o helper devolve o
  * id do que já existe em vez de criar a segunda linha. É isso que impede "Ferrageamento"
- * e "ferrageamento" virarem dois procedimentos com preços diferentes.
+ * e "ferrageamento" virarem dois procedimentos com preços diferentes. O VALOR informado
+ * é aplicado de todo jeito — ele é da EMPRESA e não pertence à linha reaproveitada.
  */
 const criarProprio = async (req, res) => {
   try {
@@ -676,41 +764,199 @@ const criarProprio = async (req, res) => {
     const nome = String(req.body?.nome ?? '').trim();
     if (nome.length < 2) return res.status(400).json({ error: 'Informe o nome do procedimento.' });
 
-    const { id, criado } = await prisma.$transaction(async (tx) => {
+    // `especialidade` continua aceito pelo nome antigo: o campo só foi RENOMEADO na
+    // tela, e um cliente que ainda mande o nome velho não pode parar de funcionar.
+    const campos = camposDaCategoria(req.body?.categoria ?? req.body?.especialidade);
+    if (!campos.especialidade) return res.status(400).json({ error: 'Selecione a categoria do procedimento.' });
+
+    const { id, criado, valorEmpresa } = await prisma.$transaction(async (tx) => {
       const antes = await tx.procedimentoVeterinario.findFirst({
         where:  { ativo: true, nome: { equals: nome, mode: 'insensitive' },
                   OR: [{ empresaId: null }, { empresaId: req.empresaId }] },
         select: { id: true },
       });
-      const novoId = await garantirProcedimentoDaEmpresa(tx, {
-        nome,
-        especialidade: req.body?.especialidade ?? null,
-        valor:         Number(req.body?.valor) || 0,
-      }, req.empresaId);
-      if (!antes && novoId) {
-        await registrarAuditoria(tx, req, {
-          categoria: 'CRIACAO', entidade: 'PROCEDIMENTO', entidadeId: novoId,
-          detalhes:  `Procedimento "${nome}" cadastrado pela clínica`,
-        });
-      }
-      return { id: novoId, criado: !antes };
+      const novoId = await garantirProcedimentoDaEmpresa(tx, { nome, ...campos }, req.empresaId);
+      if (!novoId) return { id: null, criado: false, valorEmpresa: null };
+
+      const valor = await gravarValorDaEmpresa(tx, req.empresaId, novoId, req.body?.valor);
+
+      await registrarAuditoria(tx, req, {
+        categoria: antes ? 'ALTERACAO' : 'CRIACAO', entidade: 'PROCEDIMENTO', entidadeId: novoId,
+        detalhes:  antes
+          ? `Procedimento "${nome}" já existia — valor da clínica atualizado`
+          : `Procedimento "${nome}" cadastrado pela clínica`,
+      });
+      return { id: novoId, criado: !antes, valorEmpresa: valor };
     });
 
     if (!id) return res.status(400).json({ error: 'Não foi possível cadastrar o procedimento.' });
 
     const dados = await prisma.procedimentoVeterinario.findUnique({
       where:  { id },
-      select: { id: true, nome: true, categoria: true, especialidade: true, valorVenda: true },
+      select: { id: true, nome: true, categoria: true, especialidade: true, tipoProcedimento: true,
+                valorVenda: true, empresaId: true, ativo: true },
     });
-    return res.status(criado ? 201 : 200).json({ dados, criado });
+    return res.status(criado ? 201 : 200).json({
+      dados: { ...dados, daEmpresa: dados?.empresaId != null, valorEmpresa }, criado,
+    });
   } catch (err) {
+    if (err?.status === 400) return res.status(400).json({ error: err.message });
     console.error('ProcedimentoCadastroController.criarProprio:', err);
     return res.status(500).json({ error: 'Erro ao cadastrar o procedimento.' });
   }
 };
 
+/**
+ * PUT /api/procedimentos/cadastro/proprio/:id  { nome?, categoria?, valor? }
+ *
+ * ALTERAR no mesmo formato de Produtos (2026-09-22): o lápis abre o formulário com os
+ * três campos e grava.
+ *
+ * 🔴 O QUE A CLÍNICA PODE ALTERAR DEPENDE DE QUEM É A LINHA:
+ *   • procedimento DELA (`empresa_id` setado) → nome, categoria e valor;
+ *   • linha GLOBAL (`empresa_id IS NULL`)     → SÓ O VALOR.
+ * O valor é da empresa por construção (tabela à parte), então alterá-lo num item do
+ * sistema não toca em clínica nenhuma. Renomeá-lo, sim — e o RLS recusaria a escrita
+ * de qualquer forma (o `WITH CHECK` da policy só aceita `empresa_id = app_empresa_id()`),
+ * o que viraria um 500 sem explicação no lugar de uma recusa legível.
+ *
+ * ⚠️ A tela desabilita nome/categoria no item do sistema (selo "do sistema"), então
+ * este 400 é a rede de segurança, não o caminho normal — mas ele PRECISA existir:
+ * campo desabilitado não é autorização.
+ */
+const atualizarProprio = async (req, res) => {
+  try {
+    if (!req.empresaId) return res.status(400).json({ error: 'Selecione a empresa.' });
+    const id = Number(req.params.id);
+
+    const atual = await prisma.procedimentoVeterinario.findFirst({
+      where:  procedimentoVisivel(req.empresaId, id),
+      select: { id: true, nome: true, empresaId: true, especialidade: true, categoria: true },
+    });
+    // Procedimento privado de outra clínica responde 404 — não confirma que existe.
+    if (!atual) return res.status(404).json({ error: 'Procedimento não encontrado.' });
+
+    const daEmpresa = atual.empresaId != null;
+    const nome   = req.body?.nome !== undefined ? String(req.body.nome).trim() : null;
+    const campos = (req.body?.categoria !== undefined || req.body?.especialidade !== undefined)
+      ? camposDaCategoria(req.body?.categoria ?? req.body?.especialidade)
+      : null;
+
+    if (!daEmpresa) {
+      const mudouNome = nome !== null && nome.toLowerCase() !== atual.nome.toLowerCase();
+      const mudouCat  = campos !== null && campos.especialidade !== atual.especialidade;
+      if (mudouNome || mudouCat) {
+        return res.status(400).json({
+          error: 'Este procedimento é do catálogo do sistema e vale para todas as clínicas — aqui só o valor pode ser alterado.',
+          code:  'ITEM_DO_SISTEMA',
+        });
+      }
+    }
+    if (daEmpresa && nome !== null && nome.length < 2) {
+      return res.status(400).json({ error: 'Informe o nome do procedimento.' });
+    }
+
+    const valorEmpresa = await prisma.$transaction(async (tx) => {
+      if (daEmpresa) {
+        const data = {};
+        if (nome !== null) data.nome = nome.slice(0, 255);
+        if (campos !== null) {
+          if (!campos.especialidade) throw Object.assign(new Error('Selecione a categoria do procedimento.'), { status: 400 });
+          data.especialidade    = campos.especialidade;
+          data.tipoProcedimento = campos.tipoProcedimento;
+          // Exame de imagem é recortado pela CATEGORIA; o clínico mantém a que tem.
+          if (campos.categoria) data.categoria = campos.categoria;
+        }
+        if (Object.keys(data).length > 0) await tx.procedimentoVeterinario.update({ where: { id }, data });
+      }
+
+      const v = req.body?.valor !== undefined
+        ? await gravarValorDaEmpresa(tx, req.empresaId, id, req.body.valor)
+        : undefined;
+
+      await registrarAuditoria(tx, req, {
+        categoria: 'ALTERACAO', entidade: 'PROCEDIMENTO', entidadeId: id,
+        detalhes:  `Procedimento "${nome ?? atual.nome}" alterado${daEmpresa ? '' : ' (valor da clínica)'}`,
+      });
+      return v;
+    });
+
+    const dados = await prisma.procedimentoVeterinario.findUnique({
+      where:  { id },
+      select: { id: true, nome: true, categoria: true, especialidade: true, tipoProcedimento: true,
+                valorVenda: true, empresaId: true, ativo: true },
+    });
+    return res.json({ dados: { ...dados, daEmpresa, valorEmpresa } });
+  } catch (err) {
+    if (err?.status === 400) return res.status(400).json({ error: err.message });
+    console.error('ProcedimentoCadastroController.atualizarProprio:', err);
+    return res.status(500).json({ error: 'Erro ao alterar o procedimento.' });
+  }
+};
+
+/**
+ * PATCH /api/procedimentos/cadastro/proprio/:id/toggle  { motivo? }
+ *
+ * ATIVAR/INATIVAR o procedimento DA CLÍNICA — o par que a tela passou a oferecer em
+ * 2026-09-22, no mesmo formato de Produtos. O que faltava não era o soft delete e sim
+ * o CAMINHO DE VOLTA: inativado, não havia como reativá-lo por tela nenhuma.
+ *
+ * ⚠️ INATIVAR exige `motivo` e grava `INATIVACAO` na Auditoria; ATIVAR não pede
+ * motivo (§13, armadilha 33: reativar é correção, e pedir justificativa ali é só
+ * atrito). Gate estrutural em `__tests__/inativacaoJustificada.test.js`.
+ *
+ * ⚠️ Linha GLOBAL responde 400: ela vale para TODAS as clínicas do SaaS, e o RLS de
+ * `tb_procedimentos_vet` recusa a escrita de qualquer forma. Para tirá-la da frente
+ * desta clínica, o caminho é cadastrar o próprio procedimento.
+ */
+const toggleAtivoProprio = async (req, res) => {
+  try {
+    if (!req.empresaId) return res.status(400).json({ error: 'Selecione a empresa.' });
+    const id = Number(req.params.id);
+
+    const item = await prisma.procedimentoVeterinario.findFirst({
+      where:  procedimentoVisivel(req.empresaId, id),
+      select: { id: true, nome: true, ativo: true, empresaId: true },
+    });
+    if (!item) return res.status(404).json({ error: 'Procedimento não encontrado.' });
+    if (item.empresaId == null) {
+      return res.status(400).json({
+        error: 'Este procedimento é do catálogo do sistema e vale para todas as clínicas — não pode ser inativado aqui.',
+        code:  'ITEM_DO_SISTEMA',
+      });
+    }
+
+    const vaiInativar = item.ativo;
+    const motivo = String(req.body?.motivo ?? '').trim();
+    if (vaiInativar && motivo.length < 3) {
+      return res.status(400).json({ error: 'É obrigatório informar o motivo da inativação.' });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.procedimentoVeterinario.update({ where: { id }, data: { ativo: !vaiInativar } });
+      await registrarAuditoria(tx, req, {
+        categoria:  vaiInativar ? 'INATIVACAO' : 'ATIVACAO',
+        entidade:   'PROCEDIMENTO',
+        entidadeId: id,
+        motivo:     vaiInativar ? motivo : null,
+        detalhes:   `Procedimento "${item.nome}" ${vaiInativar ? 'inativado' : 'ativado'} no catálogo da clínica`,
+      });
+    });
+
+    return res.json({
+      mensagem: vaiInativar ? 'Procedimento inativado.' : 'Procedimento ativado.',
+      ativo:    !vaiInativar,
+    });
+  } catch (err) {
+    console.error('ProcedimentoCadastroController.toggleAtivoProprio:', err);
+    return res.status(500).json({ error: 'Erro ao alterar a situação do procedimento.' });
+  }
+};
+
 module.exports = {
   criarProprio,
+  atualizarProprio,
+  toggleAtivoProprio,
   especialidadesMinhas,
   listarComValores,
   definirValor,

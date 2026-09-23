@@ -14,6 +14,11 @@ const emailService = require('../services/emailService');
 const { gerarSenhaInicial } = require('../lib/senhaInicial');
 const { normalizeEmail, whereEmailInsensitive } = require('../lib/email');
 const { cadastroDaPessoaNaEmpresa, montarResposta } = require('../lib/cadastroPorEmail');
+// Vencimento da conta a pagar deste prestador — a MESMA forma do fechamento da fatura
+// no cadastro da empresa. Lido/gravado por SQL cru (ver o cabeçalho da lib).
+const {
+  resolverVencimento, gravarVencimento, anexarVencimento, anexarVencimentoEmLista,
+} = require('../lib/vencimentoCredor');
 
 // Whitelist fixa SAIU (2026-08-25) — o tipo de serviço agora vem do catálogo
 // tenant-scoped (tb_catalogo_tipo_servico, CatalogoTipoServicoController), que
@@ -308,7 +313,11 @@ const PrestadorController = {
 
       // `acessoEquipeId`: onde o cartão de acesso foi emitido — é o que habilita o
       // botão "Gerenciar Acesso" (designação de pacientes) nesta tela.
-      res.json({ sucesso: true, dados: await anexarEquipeDoAcesso(prisma, await anexarRestricaoPorLocal(await anexarTrilha(prestadores, 'prestador'))) });
+      // ⚠️ A listagem TEM de devolver o vencimento: a tela edita a partir do que ela
+      // trouxe, e sem o campo o salvar o apagaria em silêncio.
+      const comAcesso = await anexarEquipeDoAcesso(prisma,
+        await anexarRestricaoPorLocal(await anexarTrilha(prestadores, 'prestador')));
+      res.json({ sucesso: true, dados: await anexarVencimentoEmLista(prisma, 'PRESTADOR', comAcesso) });
     } catch (err) {
       console.error('Erro ao listar prestadores:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar prestadores' });
@@ -380,7 +389,7 @@ const PrestadorController = {
         include: PRESTADOR_INCLUDE,
       });
       if (!prestador) return res.status(404).json({ sucesso: false, mensagem: 'Prestador não encontrado' });
-      res.json({ sucesso: true, dados: prestador });
+      res.json({ sucesso: true, dados: await anexarVencimento(prisma, 'PRESTADOR', prestador) });
     } catch {
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar prestador' });
     }
@@ -409,6 +418,11 @@ const PrestadorController = {
 
     const { erro: erroPagamento, dados: pagamento } = resolverPagamento(req.body);
     if (erroPagamento) return res.status(400).json({ sucesso: false, mensagem: erroPagamento });
+
+    // ⚠️ Validado ANTES de criar: forma de vencimento inválida recusa o cadastro
+    // inteiro, em vez de gravá-lo e falhar calada no UPDATE seguinte.
+    const { erro: erroVenc, dados: vencimento } = resolverVencimento(req.body);
+    if (erroVenc) return res.status(400).json({ sucesso: false, mensagem: erroVenc });
 
     const tipoEntrada = req.user?.role === 'ADMIN' ? 'SYSTEM' : 'CLIENTE';
     const empresaAlvo = tipoEntrada === 'CLIENTE' ? (req.empresaId ?? null) : null;
@@ -453,6 +467,9 @@ const PrestadorController = {
 
         await gravarLocaisTrabalho(tx, criado.id, locaisTrabalho, empresaAlvo, equipeAlvo);
         await gravarRestricaoPorLocal(tx, criado.id, restringirPorLocal);
+        // ⚠️ É um UPDATE (SQL cru): SEMPRE depois do `create`, senão acerta zero linhas
+        // em silêncio.
+        await gravarVencimento(tx, 'PRESTADOR', criado.id, vencimento);
 
         if (acessoSistema === true) {
           const login = await provisionarLogin(tx, {
@@ -501,7 +518,8 @@ const PrestadorController = {
       // e reativar o registro.
       await registrarAtivacao(prisma, 'prestador', prestadorId, req.user.id);
 
-      const prestador = await prisma.prestador.findUnique({ where: { id: prestadorId }, include: PRESTADOR_INCLUDE });
+      const prestador = await anexarVencimento(prisma, 'PRESTADOR',
+        await prisma.prestador.findUnique({ where: { id: prestadorId }, include: PRESTADOR_INCLUDE }));
       await registrarAuditoria(prisma, req, {
         categoria:  'CRIACAO',
         entidade:   'PRESTADOR',
@@ -544,6 +562,9 @@ const PrestadorController = {
 
     const { erro: erroPagamento, dados: pagamento } = resolverPagamento(req.body);
     if (erroPagamento) return res.status(400).json({ sucesso: false, mensagem: erroPagamento });
+
+    const { erro: erroVenc, dados: vencimento } = resolverVencimento(req.body);
+    if (erroVenc) return res.status(400).json({ sucesso: false, mensagem: erroVenc });
 
     try {
       const existe = await prisma.prestador.findUnique({ where: { id: Number(id) } });
@@ -598,6 +619,7 @@ const PrestadorController = {
 
         await gravarLocaisTrabalho(tx, Number(id), locaisTrabalho, existe.empresaId, existe.equipeId);
         await gravarRestricaoPorLocal(tx, Number(id), restringirPorLocal);
+        await gravarVencimento(tx, 'PRESTADOR', Number(id), vencimento);
 
         // Provisiona o login só na transição false/nulo → true (userId ainda vazio).
         let userIdAcesso = existe.userId;
@@ -650,7 +672,8 @@ const PrestadorController = {
         }).catch(err => console.error('[emailService] Falha ao enviar boas-vindas do prestador:', err));
       }
 
-      const prestador = await prisma.prestador.findUnique({ where: { id: Number(id) }, include: PRESTADOR_INCLUDE });
+      const prestador = await anexarVencimento(prisma, 'PRESTADOR',
+        await prisma.prestador.findUnique({ where: { id: Number(id) }, include: PRESTADOR_INCLUDE }));
 
       await registrarAlteracao(prisma, req, {
         entidade:   'PRESTADOR',

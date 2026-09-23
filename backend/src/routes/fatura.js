@@ -39,6 +39,22 @@ router.post('/fechar-lote', authenticate, checkPermission('financeiro.faturas.fe
 // Fechamento de fatura (adiciona assistência mensal + status FECHADA)
 router.patch('/:faturaId/fechar', authenticate, checkPermission('financeiro.faturas.fechar', 'PROPRIO'), Ctrl.fecharFatura);
 
+// 🔴 FECHAMENTO POR ANIMAL — o bloco de UM paciente dentro da fatura (2026-09-22).
+//
+// MESMO slug e MESMO nível de `PATCH /:faturaId/fechar`: fechar a parte de um paciente
+// é a MESMA decisão de fechar a fatura, só mais estreita. Slug novo faria o gestor
+// configurar duas permissões para um par que é um (mesma razão do `toggle` de Produtos).
+// Reabrir usa o slug de FECHAR pelo motivo de sempre: quem pode encerrar é quem pode
+// desfazer — com slugs diferentes, o bloco ficaria encerrado sem ninguém poder voltar.
+//
+// ⚠️ SEM `exigirAcessoAnimal`: o `:animalId` aqui é a CHAVE DE AGRUPAMENTO das linhas
+// dentro de uma fatura que o escopo da empresa já autorizou (`faturaForaDoEscopo`), não
+// um prontuário sendo aberto. Exigir acesso clínico deixaria o financeiro sem fechar o
+// bloco do paciente de outra equipe — que é justamente o que aparece na fatura do
+// cliente atendido por mais de uma (ver `animaisForaDoEscopo` em Faturamento.tsx).
+router.patch('/:faturaId/animais/:animalId/fechar',  authenticate, checkPermission('financeiro.faturas.fechar', 'PROPRIO'), Ctrl.fecharAnimal);
+router.patch('/:faturaId/animais/:animalId/reabrir', authenticate, checkPermission('financeiro.faturas.fechar', 'PROPRIO'), Ctrl.reabrirAnimal);
+
 // Status da fatura (uso geral: PAGA, ABERTA, CANCELADA)
 //
 // 🔴 NIVEL 'PROPRIO', NAO 'EQUIPE' (2026-09-04). Exigir EQUIPE aqui devolvia 403

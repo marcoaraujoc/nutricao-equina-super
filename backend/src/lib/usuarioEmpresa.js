@@ -171,8 +171,17 @@ async function vincularMembro(client, userId, equipeId, perfil) {
 // `usuarioEmpresa.upsert` derrubaria a INCLUSÃO DE MEMBRO inteira, então o extra
 // vai num UPDATE à parte.
 
-const TIPOS_PAGAMENTO  = ['SALARIO', 'COMISSAO'];
+// 🔴 `DIARIA` entrou em 2026-09-22 (a pedido): o que se paga é o valor de UM DIA de
+// trabalho, e o total do período sai da multiplicação pelos DIAS DE TRABALHO
+// cadastrados nos locais do membro (`MembroLocalTrabalho.diasTrabalho`).
+// ⚠️ DIÁRIA é SEMPRE em R$ — ver `FORMAS_POR_TIPO` abaixo. "50% de diária" não
+// designa quantia nenhuma, e aceitar o percentual aqui gravaria um acordo que
+// ninguém consegue apurar.
+const TIPOS_PAGAMENTO  = ['SALARIO', 'COMISSAO', 'DIARIA'];
 const FORMAS_PAGAMENTO = ['VALOR', 'PERCENTUAL'];
+
+/** Formas aceitas por tipo. Tipo ausente aqui aceita as duas (comportamento antigo). */
+const FORMAS_POR_TIPO = { DIARIA: ['VALOR'] };
 
 /**
  * As colunas novas já existem no banco?
@@ -209,10 +218,14 @@ function normalizarPagamento({ tipoPagamento, formaPagamento, valorPagamento } =
   const tipo  = String(tipoPagamento  ?? '').trim().toUpperCase();
   const forma = String(formaPagamento ?? '').trim().toUpperCase();
 
-  if (!tipo)  return { erro: 'Informe o tipo de pagamento (salário ou comissão).', dados: null };
+  if (!tipo)  return { erro: 'Informe o tipo de pagamento (salário, comissão ou diária).', dados: null };
   if (!TIPOS_PAGAMENTO.includes(tipo)) return { erro: 'Tipo de pagamento inválido.', dados: null };
   if (!forma) return { erro: 'Informe se o valor do pagamento é em R$ ou em percentual.', dados: null };
   if (!FORMAS_PAGAMENTO.includes(forma)) return { erro: 'Forma do valor de pagamento inválida.', dados: null };
+  const formasDoTipo = FORMAS_POR_TIPO[tipo];
+  if (formasDoTipo && !formasDoTipo.includes(forma)) {
+    return { erro: 'A diária é sempre um valor em R$ por dia trabalhado.', dados: null };
+  }
 
   // String vazia vira NaN aqui de propósito: campo em branco é ausência, não zero.
   const valor = valorPagamento === '' || valorPagamento === null || valorPagamento === undefined
@@ -567,6 +580,7 @@ module.exports = {
   PERFIS_PROFISSIONAIS,
   TIPOS_PAGAMENTO,
   FORMAS_PAGAMENTO,
+  FORMAS_POR_TIPO,
   normalizarPagamento,
   salvarPagamentoEAcesso,
   lerPagamentoEAcesso,

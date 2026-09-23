@@ -1,13 +1,13 @@
 // frontend/src/pages/RelatorioNutricional.tsx
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
+import PainelSemPaciente from '../components/PainelSemPaciente';
 import { RefreshCw, ChevronDown, ChevronRight, Download, Printer, FileBarChart } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import InlineError from '../components/InlineError';
@@ -184,8 +184,6 @@ const formatarValor = (valor: number | string | null): string => {
 
 const RelatorioNutricional = () => {
   const { user }                              = useAuth();
-  const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
-  const navigate                              = useNavigate();
   const { animalId: paramAnimalId }           = useParams<{ animalId: string }>();
   const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const podeImprimir = isGestor || podeExecutar('nutricao.relatorios.imprimir');
@@ -216,7 +214,8 @@ const RelatorioNutricional = () => {
     return () => document.removeEventListener('mousedown', handler);
   }, [showExportMenu]);
 
-  const effectiveAnimalId = paramAnimalId || selectedAnimal?.id?.toString();
+  // 🔴 ABRE EM MODO BUSCA, SEM PACIENTE HERDADO (a pedido, 2026-09-22) — ver §6.
+  const effectiveAnimalId = paramAnimalId ?? '';
 
   const relatorio = snapshot?.linhas ?? [];
 
@@ -260,23 +259,13 @@ const RelatorioNutricional = () => {
       const res   = await api.get('/animais');
       const lista = (res.data?.dados ?? res.data ?? []) as Animal[];
       setAnimaisDoProprietario(lista);
-      // Auto-seleciona um animal quando não há seleção (gestor/vet com N animais
-      // entrava no estado "sem animais" mesmo com pacientes sob responsabilidade)
-      if (lista.length > 0 && !selectedAnimal) {
-        const alvo = (paramAnimalId && lista.find(a => String(a.id) === paramAnimalId)) || lista[0];
-        setSelectedAnimal({
-          ...alvo,
-          photoUrl:      alvo.photoUrl      ?? undefined,
-          idadeAnos:     alvo.idadeAnos     ?? undefined,
-          peso:          alvo.peso          ?? undefined,
-          tipoExercicio: alvo.tipoExercicio ?? undefined,
-        });
-        if (!paramAnimalId) navigate(`/relatorio-nutricional/${alvo.id}`, { replace: true });
-      }
+      // 🔴 SEM AUTO-SELEÇÃO (2026-09-22). Este bloco escolhia o primeiro paciente e
+      // NAVEGAVA para ele, então a tela gerava relatório de quem ninguém pediu. O
+      // padrão agora é o seletor em modo busca + `PainelSemPaciente`.
     } catch (error) {
       console.error('Erro ao carregar animais:', error);
     }
-  }, [user?.id, selectedAnimal, paramAnimalId, navigate, setSelectedAnimal]);
+  }, [user?.id]);
 
   const loadCurrentAnimal = useCallback(async () => {
     if (!effectiveAnimalId) return;
@@ -423,13 +412,38 @@ const RelatorioNutricional = () => {
     </PageContainer>
   );
 
+  // Cabeçalho da página — UMA declaração para as duas saídas (com e sem paciente).
+  const cabecalho = (
+    <div className="mt-2 mb-4 flex items-center gap-3">
+      <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
+        <FileBarChart size={20} className="text-emerald-700" />
+      </div>
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">Relatório Nutricional</h1>
+        <p className="text-sm text-gray-500 mt-0.5">
+          Análise da dieta ativa frente às exigências nutricionais do animal.
+        </p>
+      </div>
+    </div>
+  );
+
+  // ⚠️ O seletor VEM JUNTO do estado vazio — sem ele a tela ficava sem nenhuma forma
+  // de escolher paciente, afirmando que não havia nenhum.
   if (!effectiveAnimalId) return (
     <PageContainer maxWidth="7xl">
       <BotaoVoltar className="mb-4" />
-      <div className="text-center py-20">
-        <p className="text-gray-500 text-sm">Você ainda não possui animais sob sua responsabilidade.</p>
-        <p className="text-gray-400 text-xs mt-1">Solicite o vínculo com um animal para começar.</p>
-      </div>
+      {cabecalho}
+      <SeletorAnimal
+        animais={animaisDoProprietario}
+        animalIdAtual={effectiveAnimalId}
+        rotaBase="/relatorio-nutricional"
+        className="mb-4"
+      />
+      <PainelSemPaciente
+        icone={FileBarChart}
+        vazio={animaisDoProprietario.length === 0}
+        acao="gerar o relatório"
+      />
     </PageContainer>
   );
 
@@ -446,17 +460,7 @@ const RelatorioNutricional = () => {
         <InlineError message={erroInline} />
 
         {/* Cabeçalho de página (mesmo padrão de Agendamentos): ícone em box + título + descritivo */}
-        <div className="mt-2 mb-4 flex items-center gap-3">
-          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
-            <FileBarChart size={20} className="text-emerald-700" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Relatório Nutricional</h1>
-            <p className="text-sm text-gray-500 mt-0.5">
-              Análise da dieta ativa frente às exigências nutricionais do animal.
-            </p>
-          </div>
-        </div>
+        {cabecalho}
 
         <SeletorAnimal
           animais={animaisDoProprietario}

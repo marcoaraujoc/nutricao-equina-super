@@ -309,20 +309,35 @@ const LocalizacaoAnimalController = {
       return res.status(403).json({ sucesso: false, mensagem: 'Apenas o ADMIN pode ativar/inativar localizações.' });
 
     const { id } = req.params;
+    const { motivo } = req.body ?? {};
     try {
       const existe = await prisma.localizacaoAnimal.findUnique({ where: { id: Number(id) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Localização não encontrada' });
       if (!podeAlterarRegistroEscopado(existe, req))
         return res.status(403).json({ sucesso: false, mensagem: 'Você não tem acesso para alterar esta localização.' });
 
+      const vaiInativar = existe.ativo;
+
+      // Justificativa obrigatória só para INATIVAR — ativar segue direto, como em
+      // Fornecedor/Prestador/Tratador. Inativar um local tira-o de TODA seleção de
+      // paciente e de profissional; sem o motivo a auditoria diz o que aconteceu,
+      // mas não por quê, que é o que se pergunta meses depois.
+      if (vaiInativar && !motivo?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da inativação' });
+      }
+
       const loc = await prisma.localizacaoAnimal.update({
         where: { id: Number(id) },
         data: { ativo: !existe.ativo },
       });
       await registrarAuditoria(prisma, req, {
-        categoria:  'ALTERACAO',
+        // A categoria diz O QUE ACONTECEU: (in)ativar um cadastro não é a mesma
+        // coisa que editar um campo dele, e ALTERACAO misturava os dois — é a
+        // categoria que os Relatórios de Cadastro recortam.
+        categoria:  vaiInativar ? 'INATIVACAO' : 'ATIVACAO',
         entidade:   'LOCALIZACAO',
         entidadeId: loc.id,
+        motivo:     vaiInativar ? motivo.trim() : null,
         detalhes:   `${req.user.fullName ?? req.user.email} ${loc.ativo ? 'ativou' : 'inativou'} a localização ${loc.nome}`,
       });
       res.json({

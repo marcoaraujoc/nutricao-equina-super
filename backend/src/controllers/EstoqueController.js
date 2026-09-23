@@ -185,7 +185,7 @@ function embalagensCompradas({ qtdEmbalagens, qtdEstoque, conteudoEmbalagem }) {
 }
 
 async function lancarCompraDoFornecedor(client, {
-  empresaId, fornecedorId, movimentoId, medicamentoNome,
+  empresaId, fornecedorId, movimentoId, movimentoEm, medicamentoNome,
   valorEmbalagem, qtdEmbalagens, qtdEstoque, conteudoEmbalagem,
   notaFiscal, solicitanteId, solicitanteNome,
 }) {
@@ -212,6 +212,13 @@ async function lancarCompraDoFornecedor(client, {
       valor:       Number(valorEmbalagem),
       solicitanteId,
       solicitanteNome,
+      // 🔴 A "DATA DO PEDIDO" da tela de Pagamentos é a DATA DA ENTRADA NO ESTOQUE, e
+      // ela é PASSADA em vez de deixada no default (`NOW()` do `lancarItem`). Hoje as
+      // duas coincidem, mas o lançamento é best-effort e roda FORA da transaction: se um
+      // dia ele for reprocessado ou enfileirado, o default carimbaria o instante do
+      // reprocessamento e a compra apareceria no período errado — que é justamente a
+      // conta pela qual o financeiro fecha o mês.
+      ocorridoEm:  movimentoEm ?? undefined,
       origemTipo:  'ESTOQUE_ENTRADA',
       origemId:    Number(movimentoId),
     });
@@ -482,6 +489,7 @@ const criar = async (req, res) => {
         empresaId: eId,
         fornecedorId,
         movimentoId:     movimentoConsolidado?.id,
+        movimentoEm:     movimentoConsolidado?.createdAt,
         medicamentoNome: updated.medicamento?.nome,
         valorEmbalagem:  valorEmbNovo,
         qtdEmbalagens:   qtdEmbNova,
@@ -537,6 +545,7 @@ const criar = async (req, res) => {
       empresaId: eId,
       fornecedorId,
       movimentoId:     movimentoNovo?.id,
+      movimentoEm:     movimentoNovo?.createdAt,
       medicamentoNome: item.medicamento?.nome,
       valorEmbalagem:  Number(valor),
       qtdEmbalagens:   qtdEmbNova,
@@ -696,7 +705,9 @@ const toggle = async (req, res) => {
     }
 
     await registrarAuditoria(null, req, {
-      categoria:  'ALTERACAO',
+      // (In)ativar não é editar um campo: a categoria é o rótulo exibido na
+      // Auditoria e o recorte dos Relatórios de Cadastro.
+      categoria:  vaiInativar ? 'INATIVACAO' : 'ATIVACAO',
       entidade:   'ESTOQUE_FARMACIA',
       entidadeId: id,
       motivo:     vaiInativar ? motivo.trim() : null,

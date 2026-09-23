@@ -14,6 +14,7 @@ import {
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
 import SeletorAnimal from '../components/SeletorAnimal';
+import PainelSemPaciente from '../components/PainelSemPaciente';
 import PageContainer from '../components/PageContainer';
 import ModalJustificativa from '../components/ModalJustificativa';
 import DietaAcoesBar from '../components/DietaAcoesBar';
@@ -517,7 +518,7 @@ function BottomAddBar({
 
 const Dieta = () => {
   const { user } = useAuth();
-  const { selectedAnimal, setSelectedAnimal } = useSelectedAnimal();
+  const { setSelectedAnimal } = useSelectedAnimal();
   const { podeExecutar, loading: loadingPerms } = usePermissoes();
 
   const podeCriar      = podeExecutar('nutricao.dietas.criar');
@@ -532,7 +533,8 @@ const Dieta = () => {
   const location  = useLocation();
   const { animalId } = useParams<{ animalId?: string }>();
 
-  const effectiveAnimalId = animalId || selectedAnimal?.id?.toString();
+  // 🔴 ABRE EM MODO BUSCA, SEM PACIENTE HERDADO (a pedido, 2026-09-22) — ver §6.
+  const effectiveAnimalId = animalId ?? '';
 
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline,            setErroInline]            = useState<string | null>(null);
@@ -585,12 +587,10 @@ const Dieta = () => {
       if (!res.data) return;
       const lista = (res.data?.dados ?? res.data ?? []) as AnimalExtended[];
       setAnimaisDoProprietario(lista);
-      // Auto-seleciona um animal quando não há seleção (evita o falso "sem animais"
-      // para gestor/vet com vários pacientes ao entrar sem :animalId na URL)
-      if (lista.length > 0 && !animalId && !selectedAnimal) setSelectedAnimal(lista[0]);
+      // 🔴 SEM AUTO-SELEÇÃO (2026-09-22): a tela abre em modo busca, com
+      // `PainelSemPaciente` abaixo do seletor.
     } catch { /* silencioso */ }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [animalId, selectedAnimal]);
+  }, []);
 
   const carregarAlimentos = useCallback(async () => {
     try {
@@ -904,14 +904,40 @@ const Dieta = () => {
     );
   }
 
+  // Cabeçalho da página — UMA declaração para as duas saídas (com e sem paciente).
+  const cabecalho = (
+    <div className="mt-2 mb-4 flex items-center gap-3">
+      <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
+        <Utensils size={20} className="text-emerald-700" />
+      </div>
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">Plano de Dieta</h1>
+        <p className="text-sm text-gray-500 mt-0.5">
+          Gerencie rações e suplementos. Somente planos ativos representam a ingestão diária atual.
+        </p>
+      </div>
+    </div>
+  );
+
+  // ⚠️ O seletor VEM JUNTO do estado vazio. O `return` antigo saía antes dele com
+  // "Você ainda não possui animais sob sua responsabilidade" — falso desde que a tela
+  // deixou de auto-selecionar, e sem nenhuma forma de escolher um paciente.
   if (!effectiveAnimalId) {
     return (
       <PageContainer>
         <BotaoVoltar className="mb-4" />
-        <div className="text-center py-20">
-          <p className="text-gray-500 text-sm">Você ainda não possui animais sob sua responsabilidade.</p>
-          <p className="text-gray-400 text-xs mt-1">Solicite o vínculo com um animal para começar.</p>
-        </div>
+        {cabecalho}
+        <SeletorAnimal
+          animais={animaisDoProprietario}
+          animalIdAtual={effectiveAnimalId}
+          rotaBase="/dieta"
+          className="mb-4"
+        />
+        <PainelSemPaciente
+          icone={Utensils}
+          vazio={animaisDoProprietario.length === 0}
+          acao="montar ou consultar a dieta"
+        />
       </PageContainer>
     );
   }
@@ -925,19 +951,8 @@ const Dieta = () => {
 
         <InlineError message={erroInline} className="mt-3" />
 
-        {/* Cabeçalho de página (mesmo conceito da tela de Fornecedores): título + descritivo */}
         {/* Cabeçalho fixo da página — não depende do plano carregado (persiste ao trocar de animal) */}
-        <div className="mt-2 mb-4 flex items-center gap-3">
-          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
-            <Utensils size={20} className="text-emerald-700" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Plano de Dieta</h1>
-            <p className="text-sm text-gray-500 mt-0.5">
-              Gerencie rações e suplementos. Somente planos ativos representam a ingestão diária atual.
-            </p>
-          </div>
-        </div>
+        {cabecalho}
 
         <SeletorAnimal
           animais={animaisDoProprietario}

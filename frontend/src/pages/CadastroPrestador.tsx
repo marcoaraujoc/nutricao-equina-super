@@ -13,9 +13,10 @@ import toast from 'react-hot-toast';
 import {
   Pencil, Search, Loader2, X, HardHat,
   ToggleLeft, ToggleRight, Building2, User as UserIcon,
-  Phone, MapPin, BadgeCheck, AlertCircle, Wallet, Clock3, Plus, Trash2, Wrench,
+  Phone, MapPin, BadgeCheck, AlertCircle, Wallet, Clock3, Plus, Trash2, Wrench, CalendarClock,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import JanelaLista from '../components/JanelaLista';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
@@ -42,6 +43,7 @@ import {
   LocalizacaoCombobox, HoraInput,
   mascaraValorPagamento, valorPagamentoNumero, formatarValorSalvo,
 } from '../components/UsuarioFormModal';
+import SeletorVencimentoCredor, { type TipoVencimento } from '../components/SeletorVencimentoCredor';
 
 // Dias da semana (0=Dom … 6=Sáb) — mesma convenção de UsuarioFormModal.
 const DIAS_SEMANA_PREST = [
@@ -184,6 +186,9 @@ interface Prestador {
   formaPagamento: 'VALOR' | 'PERCENTUAL' | null;
   valorPagamento: number | null;
   acessoSistema:  boolean;
+  /** Vencimento da CONTA A PAGAR deste prestador (Financeiro > Pagamentos). */
+  tipoVencimento?: TipoVencimento | null;
+  diaVencimento?:  number | null;
   /** Opcional: cadastro anterior à coluna não devolve o campo. */
   restringirPorLocal?: boolean;
   locaisTrabalho: LocalTrabalhoPrestador[];
@@ -216,6 +221,8 @@ interface FormPrest {
   formaPagamento: 'VALOR' | 'PERCENTUAL';
   valorPagamento: string;
   acessoSistema:  boolean;
+  tipoVencimento: TipoVencimento | null;
+  diaVencimento:  number | null;
   /** "Atender somente no local de trabalho" — mesmo campo do Incluir Membro
    *  (`MembroEquipe.restringirPorLocal`). false = atende em qualquer local. */
   restringirPorLocal: boolean;
@@ -230,6 +237,9 @@ const FORM_INICIAL: FormPrest = {
   // Acesso nasce DESMARCADO — diferente do Incluir Membro: aqui a maioria é externa
   // e não deve ganhar login sem decisão explícita do gestor.
   tipoPagamento: '', formaPagamento: 'VALOR', valorPagamento: '', acessoSistema: false,
+  // ⚠️ Sem vencimento por padrão: nascer com um faria a conta deste prestador vencer —
+  // e atrasar — numa data que ninguém acordou com ele.
+  tipoVencimento: null, diaVencimento: null,
   // Nasce DESMARCADO, como no Incluir Membro: restringir é a exceção, e ligá-la por
   // padrão esconderia pacientes de quem nunca pediu isso.
   restringirPorLocal: false,
@@ -695,6 +705,22 @@ function ModalPrestador({
             </div>
           </section>
 
+          {/* ── Data de Vencimento ── quando a conta deste prestador vence. Mesma
+              forma do "Fechamento da Fatura" do cadastro da empresa; é daqui que a tela
+              de Financeiro > Pagamentos tira a coluna Data de Vencimento e decide se a
+              conta está ATRASADA. Fica ao lado da Forma de Pagamento porque as duas
+              respondem à mesma pergunta: QUANTO e QUANDO a clínica paga. */}
+          <section>
+            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+              <CalendarClock size={12} /> Vencimento do Pagamento
+            </h4>
+            <SeletorVencimentoCredor
+              inputCls={inputCls}
+              valor={{ tipoVencimento: form.tipoVencimento, diaVencimento: form.diaVencimento }}
+              onChange={v => onFormChange(v)}
+            />
+          </section>
+
           {/* ── Acesso ao sistema ── login SEM Membro de Equipe: entra, mas sem RBAC
               não vê nenhuma tela até ser incluído na equipe. */}
           <section>
@@ -877,6 +903,8 @@ export default function CadastroPrestador() {
       formaPagamento: p.formaPagamento ?? 'VALOR',
       valorPagamento: mascaraValorPagamento(formatarValorSalvo(p.valorPagamento), p.formaPagamento ?? 'VALOR'),
       acessoSistema:  p.acessoSistema === true,
+      tipoVencimento: p.tipoVencimento ?? null,
+      diaVencimento:  p.diaVencimento  ?? null,
       // `=== true` pelo mesmo motivo do acesso: o backend pode não devolver o campo
       // (cadastro anterior à coluna), e `undefined` marcaria a caixa sozinho.
       restringirPorLocal: p.restringirPorLocal === true,
@@ -984,6 +1012,10 @@ export default function CadastroPrestador() {
         ? String(valorPagamentoNumero(form.valorPagamento))
         : undefined,
       acessoSistema:  form.acessoSistema,
+      // ⚠️ Enviados SEMPRE: `undefined` no corpo significa "não mexer" no backend, e
+      // omiti-los tornaria impossível VOLTAR o credor a "sem vencimento".
+      tipoVencimento: form.tipoVencimento,
+      diaVencimento:  form.diaVencimento,
       restringirPorLocal: form.restringirPorLocal,
       locaisTrabalho: form.locaisTrabalho.map(l => ({
         localizacaoId:      l.localizacaoId,
@@ -1119,7 +1151,8 @@ export default function CadastroPrestador() {
         {podeCriar && (
           <button onClick={abrirNovo}
             className="flex items-center gap-2 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold rounded-2xl shadow-sm transition-colors">
-            Novo Cadastro
+            {/* Ver a nota do mesmo botão em CadastroFornecedor.tsx. */}
+            <HardHat size={16} /> Novo Prestador
           </button>
         )}
       </div>
@@ -1212,14 +1245,15 @@ export default function CadastroPrestador() {
 
           {/* Desktop */}
           <div className="hidden md:block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="overflow-x-auto rounded-2xl">
+            {/* Cabeçalho FIXO no topo, dados rolando por baixo — ver JanelaLista. */}
+            <JanelaLista maxItens={8} className="rounded-2xl">
             <table className="w-full min-w-[1020px] text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Nome</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Documento</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Telefone</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipos de Serviço</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipos de serviço</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                   {filtroAtivo === 'ativo' && (
                     <>
@@ -1297,7 +1331,7 @@ export default function CadastroPrestador() {
                 ))}
               </tbody>
             </table>
-            </div>
+            </JanelaLista>
           </div>
         </>
       )}

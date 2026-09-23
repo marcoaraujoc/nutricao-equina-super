@@ -31,6 +31,10 @@ const { validarMotivoTipo, exigeDescricao } = require('../lib/motivosInativacao'
 const { transferirPropriedadeAnimal } = require('../lib/transferenciaPropriedadeAnimal');
 const { verificarDuplicidadeAnimal } = require('../lib/duplicidadeAnimal');
 const { garantirDonoAtivo } = require('../lib/donoAtivoDoPaciente');
+// Registro na FEI — coluna nova, lida/gravada por SQL cru com guarda de existência
+// (§11: no Windows o `generate` falha com o backend rodando, e um campo desconhecido
+// no `animal.create` derrubaria o cadastro inteiro do paciente).
+const { salvarFei, anexarFei } = require('../lib/animalFei');
 
 const prisma = require('../lib/prisma').default;
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
@@ -470,11 +474,15 @@ class AnimalController {
       }
 
       await anexarInativo(animal);
+      // `registradoFei` vem por fora do `include` (coluna lida por SQL cru) — sem
+      // isto o formulário de edição abriria com a marcação SEMPRE desmarcada e a
+      // primeira gravação apagaria o que estava lá.
+      const comFei = await anexarFei(animal);
       res.json({
         sucesso: true,
-        dados:   animal?.user
-          ? { ...animal, user: await aplicarPerfilProprietario(animal.user, req.empresaId) }
-          : animal,
+        dados:   comFei?.user
+          ? { ...comFei, user: await aplicarPerfilProprietario(comFei.user, req.empresaId) }
+          : comFei,
       });
     } catch (error) {
       console.error('[AnimalController.obterPorId]', error);
@@ -519,6 +527,7 @@ class AnimalController {
       categoriaAnimal, tipoExercicio, veterinarioNome, veterinarioClinica,
       proprietarioId, veterinarioUserId, local, baia, localizacaoId, tratadorId,
       pelagem, altura, registroPassaporte, numeroChip, finalidade, seguradora,
+      registradoFei,
     } = req.body;
 
     if (!nome?.trim())                    return res.status(400).json({ sucesso: false, mensagem: 'Nome do animal é obrigatório' });
@@ -863,6 +872,11 @@ class AnimalController {
         },
       });
 
+      // ⚠️ FORA do `create`: a coluna pode não existir no client Prisma em execução
+      // (§11), e um campo desconhecido ali derrubaria o cadastro inteiro do paciente
+      // — não só o registro na FEI. `salvarFei` é silenciosa nesse caso.
+      await salvarFei(prisma, animal.id, registradoFei);
+
       // A reativação do CLIENTE é auditada à parte, com o motivo que a tela pediu:
       // quem abrir a trilha do cadastro dele precisa achar lá por que ele voltou.
       // ⚠️ Depois do `create`: se o animal não nascer, o cliente não pode constar como
@@ -986,7 +1000,7 @@ class AnimalController {
       categoriaAnimal, tipoExercicio, veterinarioNome, veterinarioClinica,
       veterinarioUserId, local, baia, localizacaoId, tratadorId,
       pelagem, altura, registroPassaporte, numeroChip, finalidade, seguradora,
-      removerFoto,
+      registradoFei, removerFoto,
     } = req.body;
 
     if (!nome?.trim())                    return res.status(400).json({ sucesso: false, mensagem: 'Nome do animal é obrigatório' });
@@ -1144,11 +1158,15 @@ class AnimalController {
         criadoPorId: req.user?.id ?? null,
       });
 
+      // Mesma razão do `criar`: fora do `update` tipado. `undefined` (campo não
+      // enviado) não apaga o que já está gravado.
+      await salvarFei(prisma, animalId, registradoFei);
+
       const animalAtualizado = await prisma.animal.findUnique({
         where:   { id: animalId },
         include: ANIMAL_INCLUDE,
       });
-      res.json({ sucesso: true, dados: animalAtualizado });
+      res.json({ sucesso: true, dados: await anexarFei(animalAtualizado) });
     } catch (error) {
       console.error('[AnimalController.atualizar]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno ao atualizar animal' });

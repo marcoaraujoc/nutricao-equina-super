@@ -11,6 +11,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { registrarAuditoria } = require('../lib/auditoria');
 
 // slug estável a partir do nome (o schema exige slug único). Só para a chave interna —
 // a tela mostra o `nome`.
@@ -104,12 +105,31 @@ const PlanoController = {
   },
 
   // PATCH /api/planos/:id/toggle  — ativa/inativa o plano no catálogo
+  // Justificativa obrigatória para INATIVAR + auditoria: o plano inativado sai da
+  // oferta para toda a plataforma, e a assinatura que aponta para ele continua
+  // existindo — meses depois, "por que este plano saiu do ar?" precisa ter resposta.
   toggle: async (req, res) => {
     try {
       const id = Number(req.params.id);
-      const p = await prisma.plano.findUnique({ where: { id }, select: { ativo: true } });
+      const { motivo } = req.body ?? {};
+      const p = await prisma.plano.findUnique({ where: { id }, select: { ativo: true, nome: true } });
       if (!p) return res.status(404).json({ sucesso: false, mensagem: 'Plano não encontrado' });
+
+      const vaiInativar = p.ativo;
+      if (vaiInativar && !motivo?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da inativação' });
+      }
+
       const plano = await prisma.plano.update({ where: { id }, data: { ativo: !p.ativo }, select: SELECT });
+
+      await registrarAuditoria(prisma, req, {
+        categoria:  vaiInativar ? 'INATIVACAO' : 'ATIVACAO',
+        entidade:   'PLANO',
+        entidadeId: id,
+        motivo:     vaiInativar ? motivo.trim() : null,
+        detalhes:   `${req.user?.fullName ?? req.user?.email} ${vaiInativar ? 'inativou' : 'ativou'} o plano ${p.nome}`,
+      });
+
       res.json({ sucesso: true, dados: plano });
     } catch (err) {
       console.error('[PlanoController.toggle]', err);

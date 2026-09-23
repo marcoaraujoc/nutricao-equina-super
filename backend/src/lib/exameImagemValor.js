@@ -149,6 +149,31 @@ async function gravarPrestadorEValor(client, exameId, { prestadorId, valorCobrad
 }
 
 /**
+ * Grava SÓ o prestador, preservando o valor já congelado.
+ *
+ * 🔴 Existe separado de `gravarPrestadorEValor` porque quem escolhe o prestador na
+ * CONCLUSÃO do exame (2026-09-22) não pode reabrir o preço: `valor_cobrado` é o
+ * snapshot do dia do PEDIDO e já foi para a fatura do cliente. Passar por aquela
+ * função com `valorCobrado` indefinido gravaria NULL por cima e a linha da fatura
+ * passaria a divergir do que o cliente viu.
+ *
+ * ⚠️ NUNCA lança, pela mesma razão da irmã: base não migrada devolve `false` e a
+ * conclusão do exame segue — sem prestador, como seguia antes.
+ */
+async function gravarPrestador(client, exameId, prestadorId) {
+  if (!exameId) return false;
+  if (!(await temColunas())) return false;
+  try {
+    await client.$executeRawUnsafe(
+      `UPDATE schs2vet.tb_exames_clinicos SET prestador_id = $2 WHERE id = $1`,
+      Number(exameId),
+      prestadorId ? Number(prestadorId) : null,
+    );
+    return true;
+  } catch { return false; }
+}
+
+/**
  * Lê prestador e valor de um exame (ou de vários). Devolve um Map por id.
  * ⚠️ Base não migrada devolve Map vazio — quem chama trata como "sem valor".
  */
@@ -173,5 +198,6 @@ module.exports = {
   precoDoExame,
   precoDoPedido,
   gravarPrestadorEValor,
+  gravarPrestador,
   lerPrestadorEValor,
 };

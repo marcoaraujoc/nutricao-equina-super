@@ -46,7 +46,7 @@ function diaDaSemanaLocal() {
  * em várias equipes/empresas, cada um com sua própria configuração; misturar os locais
  * de uma equipe com a restrição de outra não faz sentido nenhum.
  */
-async function localizacoesRestritasDeHoje(userId, equipeId) {
+async function localizacoesRestritasDeHoje(userId, equipeId, ignorarDiaDeTrabalho = false) {
   if (!equipeId) return null;
   const membro = await prisma.membroEquipe.findUnique({
     where:  { equipeId_userId: { equipeId: Number(equipeId), userId: Number(userId) } },
@@ -57,13 +57,39 @@ async function localizacoesRestritasDeHoje(userId, equipeId) {
   });
   if (!membro?.restringirPorLocal) return null;
 
-  return doDiaDeHoje(membro.locaisTrabalho);
+  return locaisPermitidos(membro.locaisTrabalho, ignorarDiaDeTrabalho);
 }
 
-/** Locais cujo `diasTrabalho` inclui o dia da semana de hoje. */
-function doDiaDeHoje(locais) {
+/**
+ * Locais que a restrição libera.
+ *
+ * Padrão: os locais cujo `diasTrabalho` inclui o dia da semana de HOJE — é a
+ * regra da tela de Pacientes ("hoje eu atendo aqui").
+ *
+ * 🔴 `ignorarDiaDeTrabalho` devolve TODOS os locais do profissional, em qualquer
+ * dia (2026-09-22). Existe para a EXECUÇÃO DE PRESCRIÇÃO: o tratamento corre 24/7
+ * e não pergunta se a clínica abre no sábado — o curso de "8 em 8h por 5 dias"
+ * atravessa o fim de semana e a dose tem de ser aplicada do mesmo jeito. Como os
+ * dias do local são VALIDADOS contra o expediente da empresa
+ * (`validarLocaisContraExpedienteEmpresa`), ninguém pode sequer ser cadastrado
+ * para sábado numa clínica seg–sex: com o filtro por dia, o plantão do fim de
+ * semana nascia VAZIO para todo profissional com a restrição ligada, e as doses
+ * daqueles dias acabavam canceladas pelo cron de dose perdida, em silêncio.
+ *
+ * ⚠️ O que NÃO muda é o LOCAL: quem atende só no Haras A continua sem enxergar o
+ * paciente do Haras B. A restrição é de ONDE, e é isso que ela segue sendo; o DIA
+ * é que não pode decidir se uma dose já prescrita pode ou não ser aplicada.
+ * ⚠️ Lista vazia continua significando "restrição ligada e nenhum local
+ * cadastrado" → nenhum paciente. É o comportamento anterior, e é o correto: quem
+ * ligou a opção decidiu que aquele profissional só alcança o que lhe foi dado.
+ */
+function locaisPermitidos(locais, ignorarDiaDeTrabalho = false) {
+  const lista = locais ?? [];
+  if (ignorarDiaDeTrabalho) {
+    return [...new Set(lista.map(l => l.localizacaoId))];
+  }
   const hoje = String(diaDaSemanaLocal());
-  return (locais ?? [])
+  return lista
     .filter(l => (l.diasTrabalho ?? '').split(',').map(d => d.trim()).includes(hoje))
     .map(l => l.localizacaoId);
 }
@@ -83,7 +109,7 @@ function doDiaDeHoje(locais) {
  * inteira numa base ainda não migrada. Sem a coluna, devolve `null` = sem restrição,
  * que é o comportamento anterior.
  */
-async function localizacoesRestritasDoPrestador(userId) {
+async function localizacoesRestritasDoPrestador(userId, ignorarDiaDeTrabalho = false) {
   if (!userId) return null;
   const linhas = await prisma.$queryRaw`
     SELECT p."restringir_por_local" AS restringir,
@@ -95,7 +121,7 @@ async function localizacoesRestritasDoPrestador(userId) {
   `.catch(() => []);
 
   if (!linhas.length || !linhas[0].restringir) return null;
-  return doDiaDeHoje(linhas.filter(l => l.localizacaoId != null));
+  return locaisPermitidos(linhas.filter(l => l.localizacaoId != null), ignorarDiaDeTrabalho);
 }
 
 /**
@@ -103,10 +129,18 @@ async function localizacoesRestritasDoPrestador(userId) {
  * Requer que o middleware checkPermission já tenha rodado (define req.membroCargo/equipeId)
  * e o auth (req.empresaId/req.user).
  *
+ * @param {object} req
+ * @param {{ ignorarDiaDeTrabalho?: boolean }} [opcoes]
+ *   `ignorarDiaDeTrabalho` — a restrição "Atender somente no local de trabalho"
+ *   continua valendo pelo LOCAL, mas deixa de olhar o DIA DA SEMANA. É a
+ *   EXECUÇÃO DE PRESCRIÇÃO (plantão) que a usa: dose prescrita não espera a
+ *   clínica abrir — ver `locaisPermitidos`. NENHUMA outra tela deve passá-la:
+ *   na lista de Pacientes o recorte por dia é o próprio sentido da opção.
  * @returns {Promise<{ where: object, isAdmin: boolean, userType: string, role: string }>}
  *   `where` NÃO inclui `ativo` — o caller adiciona conforme o uso.
  */
-async function buildAnimalScopeWhere(req) {
+async function buildAnimalScopeWhere(req, opcoes = {}) {
+  const ignorarDiaDeTrabalho = opcoes?.ignorarDiaDeTrabalho === true;
   const userId = req.user?.id;
   // TIPO POR EMPRESA (armadilha 36-e): quem manda é o tipo do CONTEXTO ATIVO, que o
   // `authenticate` já resolveu em `req.user.userType` (lib/tipoContexto). O `userType`
@@ -161,11 +195,11 @@ async function buildAnimalScopeWhere(req) {
   // em vez de arriscar aplicar a configuração errada. Desligada → `null`, `scopeOR`
   // segue igual (nada muda, é o padrão).
   const restricaoLocalIds = isMembroEquipe
-    ? await localizacoesRestritasDeHoje(userId, req.equipeId)
+    ? await localizacoesRestritasDeHoje(userId, req.equipeId, ignorarDiaDeTrabalho)
     : null;
   // O PRESTADOR tem o flag no cadastro dele, não em MembroEquipe — ver a função.
   const restricaoPrestador = userType === 'FORNECEDOR' && !isFornecedorGestorContexto
-    ? await localizacoesRestritasDoPrestador(userId)
+    ? await localizacoesRestritasDoPrestador(userId, ignorarDiaDeTrabalho)
     : null;
   const scopeOREfetivo = restricaoLocalIds
     ? scopeOR.map(clausula => ({ ...clausula, localizacaoId: { in: restricaoLocalIds } }))
@@ -220,4 +254,7 @@ async function buildAnimalScopeWhere(req) {
   return { where, isAdmin, userType, role };
 }
 
-module.exports = { buildAnimalScopeWhere };
+// `locaisPermitidos` é exportada para o GATE (__tests__/plantaoSemExpediente.test.js):
+// a regra "o plantão não segue o expediente" quebra em silêncio (a fila fica vazia,
+// ninguém vê erro), então ela precisa ser executável em teste, não só varrida.
+module.exports = { buildAnimalScopeWhere, locaisPermitidos };

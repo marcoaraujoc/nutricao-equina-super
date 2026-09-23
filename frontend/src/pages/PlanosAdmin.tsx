@@ -9,6 +9,7 @@ import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
+import ModalJustificativa from '../components/ModalJustificativa';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -95,11 +96,25 @@ export default function PlanosAdmin() {
     } finally { setSalvando(false); }
   };
 
-  const toggle = async (p: Plano) => {
+  // INATIVAR pede justificativa (o backend recusa 400 sem `motivo`) e vai para a
+  // Auditoria; ATIVAR segue direto. O plano inativado sai da oferta para toda a
+  // plataforma e as assinaturas que apontam para ele continuam existindo.
+  const [inativandoPlano, setInativandoPlano] = useState<Plano | null>(null);
+  const [alterandoAtivo,  setAlterandoAtivo]  = useState(false);
+
+  const toggle = (p: Plano) => {
+    if (p.ativo) { setInativandoPlano(p); return; }
+    confirmarToggle(p);
+  };
+
+  const confirmarToggle = async (p: Plano, motivo?: string) => {
+    setAlterandoAtivo(true);
     try {
-      await api.patch(`/planos/${p.id}/toggle`);
+      await api.patch(`/planos/${p.id}/toggle`, motivo ? { motivo } : undefined);
+      setInativandoPlano(null);
       carregar();
     } catch { toast.error('Não foi possível alterar o plano.'); }
+    finally { setAlterandoAtivo(false); }
   };
 
   if (!isAdmin) {
@@ -245,6 +260,16 @@ export default function PlanosAdmin() {
           </div>
         </div>
       )}
+
+      <ModalJustificativa
+        aberto={!!inativandoPlano}
+        titulo="Inativar plano?"
+        descricao={inativandoPlano ? `${inativandoPlano.nome} deixa de ser oferecido a novas assinaturas.` : undefined}
+        acaoLabel="Inativar"
+        processando={alterandoAtivo}
+        onConfirmar={(motivo) => { if (inativandoPlano) confirmarToggle(inativandoPlano, motivo); }}
+        onFechar={() => setInativandoPlano(null)}
+      />
     </PageContainer>
   );
 }

@@ -31,6 +31,16 @@ router.put('/cadastro/valor/:procedimentoId', authenticate, checkPermission('cad
 // linha da EMPRESA. O `POST /` lá embaixo continua ADMIN-only porque escreve no
 // catálogo GLOBAL, que vale para todas as clínicas.
 router.post('/cadastro/proprio', authenticate, checkPermission('cadastro.procedimento.criar', 'PROPRIO'), cadastro.criarProprio);
+// ALTERAR e ATIVAR/INATIVAR o procedimento da clínica (2026-09-22) — o par que a tela
+// passou a oferecer no mesmo formato de Cadastro > Produtos.
+// ⚠️ LITERAIS, e por isso ANTES do `router.put('/:id')` lá embaixo (armadilha 1): com
+//    a ordem invertida o Express casaria `/cadastro` como valor de `:id`.
+// ⚠️ O toggle reusa o slug de `deletar`: inativar É a exclusão lógica deste cadastro,
+//    e quem pode tirá-lo da frente é quem pode reativá-lo — slug novo faria o gestor
+//    configurar duas permissões para um par de ações que é um só. Mesma decisão de
+//    `routes/produtos.js`.
+router.put('/cadastro/proprio/:id', authenticate, checkPermission('cadastro.procedimento.editar', 'PROPRIO'), cadastro.atualizarProprio);
+router.patch('/cadastro/proprio/:id/toggle', authenticate, checkPermission('cadastro.procedimento.deletar', 'PROPRIO'), cadastro.toggleAtivoProprio);
 
 // ── Prestador × procedimento (2026-09-08) ───────────────────────────────────
 // Vários prestadores podem executar o MESMO procedimento com valores diferentes.

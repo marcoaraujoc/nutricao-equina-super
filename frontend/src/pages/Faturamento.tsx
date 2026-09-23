@@ -17,12 +17,19 @@ import {
   CheckCircle2, Download, Printer, ChevronDown, ChevronRight, MessageCircle, Mail,
 } from 'lucide-react';
 import { imprimirFatura, exportarFaturaCSV, gerarHtmlFatura } from '../utils/FaturaExport';
+import { BTN_ACAO, TOM_ACAO } from '../utils/tomAcao';
 import type { DadosRecebimento } from '../utils/FaturaExport';
 import { carregarComoDataUri } from '../utils/printUrl';
 import CompartilharPdfBotoes from '../components/CompartilharPdfBotoes';
 // O MESMO par que a Prescrição usa: PDF anexado pelo backend, barra de progresso no
 // centro da tela, botão Cancelar e veredito no mesmo lugar (ver `handleShare`).
 import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
+// Como o CLIENTE escolheu receber a fatura (cadastro do proprietário) — é o que decide
+// quais destes botões ficam habilitados para ele. Ver utils/formasRecebimentoFatura.ts.
+import {
+  formaLiberada, motivoFormaBloqueada, resumoFormas,
+  type FormaRecebimentoFatura,
+} from '../utils/formasRecebimentoFatura';
 import { ordenarComInsumos } from '../utils/faturaInsumos';
 import InlineError from '../components/InlineError';
 import JanelaLista from '../components/JanelaLista';
@@ -95,10 +102,16 @@ interface FaturaItem {
   insumoDe?: number | null;
   /** Nome do medicamento pai — só no insumo, para o tooltip da linha recuada. */
   medicamentoPai?: string | null;
+  /** 🔴 FECHAMENTO POR ANIMAL (2026-09-22): preenchido = esta linha foi encerrada junto
+   *  com o bloco do paciente dela e NÃO entra mais no total da fatura. `null` = aberta,
+   *  o estado de sempre. Quem marca é `PATCH /clinica/faturas/:id/animais/:animalId/fechar`. */
+  fechadoEm?: string | null;
 }
 
 interface Fatura {
   id: number; proprietarioId: number; mesReferencia?: string;
+  /** O que ESTA fatura cobra — só os itens ABERTOS. O bloco de paciente fechado à parte
+   *  sai daqui (ver `FaturaItem.fechadoEm`). */
   total: number; status: FaturaStatus; criadoEm: string;
   itens: FaturaItem[];
   proprietario?: { id: number; fullName: string; email: string; phone?: string; valorAssistencia?: number; mensalista?: boolean };
@@ -118,6 +131,12 @@ interface ProprietarioItem {
   // ver o filtro em FaturaController.listarProprietarios.
   ativo?: boolean;
   animais: AnimalResumo[];
+  /**
+   * Como o cliente quer receber a fatura NESTA empresa (cadastro do proprietário).
+   * ⚠️ Ausente ou vazio = TODAS as formas — é o que o backend devolve para o cliente
+   * que nunca declarou preferência, e o comportamento que esta tela sempre teve.
+   */
+  formasRecebimentoFatura?: FormaRecebimentoFatura[];
   /** SÓ a ABERTA — a reaberta tem campo próprio, senão uma esconderia a outra. */
   faturaAtiva?:    FaturaResumo | null;
   faturaReaberta?: FaturaResumo | null;
@@ -169,12 +188,16 @@ const TIPO_COR: Record<string, string> = {
   OUTROS:       'bg-amber-100 text-amber-700',
 };
 
-// ─── Dropdown flutuante — abre para CIMA do campo ─────────────────────────────
+// ─── Dropdown flutuante — abre SEMPRE para baixo do campo ─────────────────────
 // Um <select> nativo deixa o navegador/SO decidir a direção — não dá pra forçar
 // isso em HTML puro. Este combo substitui os selects de Tipo/Item Fatura por um
-// botão + lista própria, ancorada pela BORDA DE BAIXO (`bottom`, não `top`): com
-// `position: fixed` isso faz o conteúdo crescer para cima sozinho, sem precisar
-// medir a altura da lista antes de posicionar.
+// botão + lista própria, ancorada pela BORDA DE CIMA (`top`), logo abaixo do campo.
+//
+// 🔴 REVERTE a ancoragem por `bottom` (2026-09-22, a pedido: "todos os seletores
+// devem abrir para baixo, nunca para cima"). Ela existia para o combo não nascer
+// fora da janela na última linha da fatura; o preço era a lista cobrir o campo que
+// se estava preenchendo e a direção mudar conforme a rolagem. Agora o que se ajusta
+// é a ALTURA (`maxHeight` pelo espaço disponível, com piso), nunca a direção.
 // ⚠️ A lista vai num PORTAL para `document.body`, não `position: absolute` dentro
 // do card: o painel da fatura rola dentro de um container com `overflow-y-auto`
 // (PainelFatura), e QUALQUER `absolute` que tentasse ultrapassar a borda dele
@@ -191,7 +214,7 @@ function DropdownAbaixo({ value, options, placeholder, actionLabel, onChange, on
   onAction: () => void;
 }) {
   const [aberto, setAberto] = useState(false);
-  const [pos, setPos] = useState<{ bottom: number; left: number; width: number } | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
   const btnRef  = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -199,9 +222,16 @@ function DropdownAbaixo({ value, options, placeholder, actionLabel, onChange, on
     const el = btnRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    // `bottom` é a distância do RODAPÉ da viewport até o TOPO do campo — ancora
-    // a lista ali e ela cresce para cima.
-    setPos({ bottom: window.innerHeight - r.top + 4, left: r.left, width: r.width });
+    // `top` é a borda de BAIXO do campo: a lista nasce ali e cresce para baixo.
+    // Com pouco espaço embaixo ela encolhe e rola por dentro (piso de 120px, para
+    // não virar uma fresta ilegível junto ao rodapé).
+    const abaixo = window.innerHeight - r.bottom - 12;
+    setPos({
+      top: r.bottom + 4,
+      left: r.left,
+      width: r.width,
+      maxHeight: Math.max(120, Math.min(224, abaixo)),
+    });
   };
 
   // Recalcula ao abrir e a cada scroll/resize (a lista é `fixed`, não acompanha
@@ -243,9 +273,9 @@ function DropdownAbaixo({ value, options, placeholder, actionLabel, onChange, on
       </button>
       {aberto && pos && createPortal(
         <div ref={listRef}
-          style={{ position: 'fixed', bottom: pos.bottom, left: pos.left, width: pos.width }}
+          style={{ position: 'fixed', top: pos.top, left: pos.left, width: pos.width }}
           className="z-50 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
-          <ul className="max-h-56 overflow-y-auto">
+          <ul className="overflow-y-auto" style={{ maxHeight: pos.maxHeight }}>
             <li>
               <button type="button" onClick={() => { onChange(''); setAberto(false); }}
                 className={`w-full text-left px-3 py-2 text-sm hover:bg-indigo-50 transition-colors ${!value ? 'bg-indigo-50 text-indigo-700 font-semibold' : 'text-gray-400'}`}>
@@ -1064,24 +1094,64 @@ type MesFatura = { id: number; mesReferencia?: string; status: string };
 // eles passam a usar a mesma paleta dos ícones do módulo de Atendimento, que é a
 // que os ícones de editar (laranja) e excluir (vermelho) do ITEM já seguiam nesta
 // mesma tela.
-// ⚠️ Ao acrescentar ação nova, escolha o TOM pelo significado — nunca uma cor nova.
-const BTN_ACAO = 'flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs font-semibold transition-colors disabled:opacity-60';
+// 🔴 Os tokens saíram daqui para `utils/tomAcao.ts` (2026-09-22): a tela de Pagamentos
+// — o outro lado do mesmo balcão — passou a usar a MESMA barra, e duas cópias
+// divergiriam na primeira correção.
 
-const TOM_ACAO = {
-  /** alterar / reabrir — muda o estado do que já está fechado */
-  alterar:   'border-orange-200  text-orange-600  hover:bg-orange-50',
-  /** ver / finalizar / executar */
-  ver:       'border-emerald-200 text-emerald-700 hover:bg-emerald-50',
-  finalizar: 'border-emerald-200 text-emerald-700 hover:bg-emerald-50',
-  /** saída de conteúdo: imprimir, exportar e e-mail dividem o azul */
-  imprimir:  'border-blue-200    text-blue-600    hover:bg-blue-50',
-  email:     'border-blue-200    text-blue-600    hover:bg-blue-50',
-  /** WhatsApp usa a cor da própria marca */
-  whatsapp:  'border-green-200   text-green-600   hover:bg-green-50',
-  /** exportar tem tom PRÓPRIO (marrom): baixa arquivo, não põe o documento em
-   *  circulação como o imprimir/e-mail azuis ao lado */
-  exportar:  'border-amber-300   text-amber-800   hover:bg-amber-50',
-} as const;
+/**
+ * Subtotal do bloco de UM paciente dentro da fatura + a ação de FECHAR/REABRIR esse
+ * bloco (2026-09-22).
+ *
+ * 🔴 DECLARADO UMA VEZ e usado nos DOIS lugares que desenham bloco de paciente: os
+ * pacientes desta clínica e os "de outro atendimento deste cliente". Duas cópias
+ * divergiriam na primeira correção — e o que divergiria é quanto a fatura cobra.
+ *
+ * ⚠️ `visivel={false}` não existe aqui: a ação simplesmente NÃO é renderizada sem
+ * permissão ou sem nada a fechar (28-d — ação sem permissão não vira botão cinza).
+ * ⚠️ Fica FORA de `PainelFatura` de propósito: declarado lá dentro, seria um tipo de
+ * componente NOVO a cada render e o React remontaria o botão a cada tecla digitada.
+ */
+function ResumoDoBloco({
+  animalId, nome, subtotal, subtotalFechado, abertos, fechados,
+  podeFechar, faturaEditavel, ocupado, onAlterar,
+}: {
+  animalId: number; nome: string;
+  subtotal: number; subtotalFechado: number;
+  abertos: number; fechados: number;
+  podeFechar: boolean; faturaEditavel: boolean; ocupado: boolean;
+  onAlterar: (animalId: number, fechar: boolean, nome: string) => void;
+}) {
+  const podeAgir = podeFechar && faturaEditavel;
+  return (
+    <div className="text-right flex-shrink-0">
+      <p className="text-[9px] text-gray-400 uppercase tracking-wide">Subtotal</p>
+      <p className="text-sm font-bold text-gray-800">{formatBRL(subtotal)}</p>
+      {subtotalFechado > 0 && (
+        <p className="text-[10px] font-semibold text-amber-700 mt-0.5 whitespace-nowrap">
+          + {formatBRL(subtotalFechado)} fechado à parte
+        </p>
+      )}
+      {podeAgir && (abertos > 0 || fechados > 0) && (
+        <div className="mt-1.5 flex flex-col items-end gap-1">
+          {abertos > 0 && (
+            <button onClick={() => onAlterar(animalId, true, nome)} disabled={ocupado}
+              title="Fecha a cobrança deste paciente e tira o valor dele do total da fatura"
+              className={`${BTN_ACAO} ${TOM_ACAO.finalizar} !px-2 !py-1 !text-[11px]`}>
+              {ocupado ? <Loader2 size={11} className="animate-spin"/> : <Check size={12}/>} Fechar paciente
+            </button>
+          )}
+          {fechados > 0 && (
+            <button onClick={() => onAlterar(animalId, false, nome)} disabled={ocupado}
+              title="Devolve os lançamentos fechados deste paciente ao total da fatura"
+              className={`${BTN_ACAO} ${TOM_ACAO.alterar} !px-2 !py-1 !text-[11px]`}>
+              {ocupado ? <Loader2 size={11} className="animate-spin"/> : <RefreshCw size={11}/>} Reabrir paciente
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function PainelFatura({
   prop, onStatusChange, faturaId, mes = null, onMeta,
@@ -1103,6 +1173,9 @@ function PainelFatura({
   const [loading,        setLoading]        = useState(true);
   const [salvando,       setSalvando]       = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  /** Bloco de paciente cujo fechar/reabrir está em curso — trava SÓ aquele botão, e não
+   *  a barra inteira: `salvando` é da fatura toda e desabilitaria ações sem relação. */
+  const [fechandoAnimalId, setFechandoAnimalId] = useState<number | null>(null);
   const [logoUrl,        setLogoUrl]        = useState<string | null>(null);
   // Chave PIX / banco da clínica — impressos no rodapé da fatura (2026-09-08).
   // `null` = a clínica não cadastrou, e o bloco não é impresso.
@@ -1143,8 +1216,23 @@ function PainelFatura({
     return () => document.removeEventListener('mousedown', handler);
   }, [showExportMenu]);
 
+  // 🔴 SÓ AS FORMAS QUE O CLIENTE ESCOLHEU (a pedido, 2026-09-22). A preferência é do
+  // cadastro do proprietário e é POR EMPRESA (`tb_proprietario_perfis`).
+  //
+  // ⚠️ DESABILITADOS, não escondidos: sumindo, o financeiro lê como perda de permissão
+  // e ninguém descobre que a decisão está no cadastro — por isso o tooltip diz o que
+  // fazer. Não é a armadilha 28-d (botão que só falha DEPOIS do clique): aqui ele nem
+  // aceita o clique, e a pessoa TEM a permissão — quem não quer o canal é o cliente.
+  // ⚠️ Exportar CSV fica de fora de propósito: baixa arquivo para a clínica, não
+  // entrega nada ao cliente.
+  const formas = prop.formasRecebimentoFatura;
+  const bloqueioEmail    = formaLiberada(formas, 'EMAIL')    ? null : motivoFormaBloqueada('EMAIL');
+  const bloqueioWhatsApp = formaLiberada(formas, 'WHATSAPP') ? null : motivoFormaBloqueada('WHATSAPP');
+  const bloqueioImpresso = formaLiberada(formas, 'IMPRESSO') ? null : motivoFormaBloqueada('IMPRESSO');
+
   const handlePDF = () => {
     if (!fatura) return;
+    if (bloqueioImpresso) { setErroInline(bloqueioImpresso); return; }
     imprimirFatura(fatura, prop.animais, logoUrl, recebimento);
     setShowExportMenu(false);
   };
@@ -1158,6 +1246,7 @@ function PainelFatura({
 
   const [compartilhando, setCompartilhando] = useState(false);
   const [enviandoEmail,  setEnviandoEmail]  = useState(false);
+
 
   // Opções comuns ao envio por WhatsApp/e-mail (PDF real, via
   // utils/compartilharPdf.ts) — mesmo HTML do botão Imprimir (gerarHtmlFatura).
@@ -1195,6 +1284,9 @@ function PainelFatura({
   const handleShare = async () => {
     const opcoes = opcoesCompartilhar();
     if (!fatura || !opcoes) return;
+    // Guarda de teclado/leitor de tela: o botão já está desabilitado, mas a regra não
+    // pode morar só no atributo `disabled`.
+    if (bloqueioWhatsApp) { setErroInline(bloqueioWhatsApp); return; }
     setCompartilhando(true);
     try {
       await enviarPdfWhatsAppComAviso(opcoes, prop.phone);
@@ -1206,6 +1298,7 @@ function PainelFatura({
   const handleEmail = async () => {
     const opcoes = opcoesCompartilhar();
     if (!fatura || !opcoes) return;
+    if (bloqueioEmail) { setErroInline(bloqueioEmail); return; }
     setEnviandoEmail(true);
     try {
       await enviarPdfEmailComAviso(opcoes, prop.email);
@@ -1469,6 +1562,38 @@ function PainelFatura({
     finally { setSalvando(false); }
   };
 
+  // 🔴 FECHAR / REABRIR O BLOCO DE UM PACIENTE dentro da fatura (2026-09-22).
+  //
+  // A fatura é do PROPRIETÁRIO e junta todos os pacientes dele. Fechar por animal
+  // encerra a parte de UM deles: os lançamentos ficam no documento, marcados, e SAEM do
+  // total — é o que permite acertar o cavalo vendido/transferido no meio do ciclo sem
+  // cobrar junto o que ainda está aberto dos outros. Remover item apagaria a cobrança;
+  // fechar a preserva e só a tira desta conta.
+  //
+  // ⚠️ A resposta traz a fatura INTEIRA (total novo + estado de cada bloco): recarregar
+  // a tela aqui perderia o mês/aba em que a pessoa está, e atualizar só o contador
+  // deixaria o valor do topo desatualizado até alguém recarregar.
+  const alterarFechamentoAnimal = async (animalId: number, fechar: boolean, nomeAnimal: string) => {
+    if (!podeFechar) { semPermissao(fechar ? 'fechar a fatura do paciente' : 'reabrir a fatura do paciente'); return; }
+    if (!fatura) return;
+    setFechandoAnimalId(animalId);
+    try {
+      const acao = fechar ? 'fechar' : 'reabrir';
+      const r = await api.patch(`/clinica/faturas/${fatura.id}/animais/${animalId}/${acao}`);
+      setFatura(r.data.dados);
+      toast.success(fechar
+        ? `Fatura de ${nomeAnimal} fechada — o valor saiu do total`
+        : `Fatura de ${nomeAnimal} reaberta — o valor voltou ao total`);
+      // O total da fatura mudou: a lista de clientes ao lado mostra esse número.
+      onStatusChange();
+    } catch (err) {
+      const e = err as { response?: { data?: { error?: string } } };
+      setErroInline(e.response?.data?.error
+        ?? (fechar ? 'Erro ao fechar a fatura do paciente' : 'Erro ao reabrir a fatura do paciente'));
+    }
+    finally { setFechandoAnimalId(null); }
+  };
+
   const handleFechar = async () => {
     if (!podeFechar) { semPermissao('fechar fatura'); return; }
     if (!fatura) return;
@@ -1517,6 +1642,21 @@ function PainelFatura({
   // REABERTA também edita — é justamente para isso que se reabre uma fatura.
   const canEdit = fatura?.status === 'ABERTA' || fatura?.status === 'REABERTA';
 
+  // 🔴 Fechar/reabrir o bloco de um PACIENTE é mais amplo que `canEdit`: vale também na
+  // fatura FECHADA ou ATRASADA, que continua aceitando correção de item nesta aplicação
+  // (CLAUDE.md, "Fatura fechada vs paga"). Só PAGA e CANCELADA ficam de fora — mover
+  // valor para dentro ou para fora do total de uma cobrança já quitada (ou já desfeita)
+  // mudaria um documento que o cliente recebeu. O backend confere o mesmo.
+  const podeMexerNoFechamento = !!fatura && fatura.status !== 'PAGA' && fatura.status !== 'CANCELADA';
+
+  // O que saiu do total por fechamento de bloco de paciente. Calculado dos ITENS (e não
+  // lido de `fatura.totalFechado`) porque é a MESMA fonte que desenha cada bloco — dois
+  // caminhos para o mesmo número divergiriam, e a soma do rodapé deixaria de bater com
+  // o que está na tela.
+  const totalFechadoAParte = (fatura?.itens ?? [])
+    .filter(i => !!i.fechadoEm)
+    .reduce((s, i) => s + totalItem(i), 0);
+
   const invoiceRef = fatura ? `INV-${String(fatura.id).padStart(3, '0')}` : '—';
 
   if (loading) {
@@ -1542,6 +1682,9 @@ function PainelFatura({
         <div className="text-xs text-emerald-50 space-y-0.5">
           {prop.phone && <p>Telefone: <span className="text-white font-medium">{prop.phone}</span></p>}
           <p className="break-all">E-mail: <span className="text-white font-medium">{prop.email}</span></p>
+          {/* Deixa à vista POR QUE um dos botões abaixo pode estar cinza — sem isto a
+              única pista seria o tooltip, que ninguém procura sem motivo. */}
+          <p>Recebe a fatura por: <span className="text-white font-medium">{resumoFormas(formas)}</span></p>
         </div>
         <div className="mt-2.5 pt-2.5 border-t border-white/15 text-xs text-emerald-100 text-right">
           Fatura Mês:{' '}
@@ -1594,16 +1737,22 @@ function PainelFatura({
             {salvando ? <Loader2 size={11} className="animate-spin"/> : <CheckCircle2 size={11}/>} Marcar como Pago
           </button>
         )}
-        <button onClick={handleEmail} disabled={enviandoEmail}
-          className={`${BTN_ACAO} ${TOM_ACAO.email}`}>
+        {/* 🔴 Habilitados conforme as FORMAS DE RECEBIMENTO escolhidas pelo cliente
+            no cadastro do proprietário. Cinza = indisponível (§6), com o motivo e o
+            caminho da correção no tooltip. */}
+        <button onClick={handleEmail} disabled={enviandoEmail || !!bloqueioEmail}
+          title={bloqueioEmail || 'Enviar a fatura por e-mail'}
+          className={`${BTN_ACAO} ${TOM_ACAO.email} disabled:opacity-50 disabled:cursor-not-allowed`}>
           {enviandoEmail ? <Loader2 size={13} className="animate-spin"/> : <Mail size={13}/>} E-mail
         </button>
-        <button onClick={handleShare} disabled={compartilhando}
-          className={`${BTN_ACAO} ${TOM_ACAO.whatsapp}`}>
+        <button onClick={handleShare} disabled={compartilhando || !!bloqueioWhatsApp}
+          title={bloqueioWhatsApp || 'Enviar a fatura por WhatsApp'}
+          className={`${BTN_ACAO} ${TOM_ACAO.whatsapp} disabled:opacity-50 disabled:cursor-not-allowed`}>
           {compartilhando ? <Loader2 size={13} className="animate-spin"/> : <MessageCircle size={13}/>} WhatsApp
         </button>
-        <button onClick={handlePDF}
-          className={`${BTN_ACAO} ${TOM_ACAO.imprimir}`}>
+        <button onClick={handlePDF} disabled={!!bloqueioImpresso}
+          title={bloqueioImpresso || 'Imprimir a fatura'}
+          className={`${BTN_ACAO} ${TOM_ACAO.imprimir} disabled:opacity-50 disabled:cursor-not-allowed`}>
           <Printer size={13}/> Imprimir
         </button>
         <div className="relative" ref={exportMenuRef}>
@@ -1679,9 +1828,14 @@ function PainelFatura({
         {/* Seções por animal */}
         {prop.animais.map(animal => {
           const todosItens: FaturaItem[] = itensPorAnimal[animal.id] ?? [];
-          const itensAssistencia = todosItens.filter(i => i.tipo === 'ASSISTENCIA');
-          const itensOutros      = todosItens.filter(i => i.tipo !== 'ASSISTENCIA');
-          const subtotal = todosItens.reduce((s: number, i: FaturaItem) => s + totalItem(i), 0);
+          // 🔴 O bloco fechado à parte sai do subtotal e do total da fatura, mas
+          // CONTINUA no documento: ele foi cobrado, só é acertado separadamente.
+          const itensAbertos     = todosItens.filter(i => !i.fechadoEm);
+          const itensFechados    = todosItens.filter(i => !!i.fechadoEm);
+          const itensAssistencia = itensAbertos.filter(i => i.tipo === 'ASSISTENCIA');
+          const itensOutros      = itensAbertos.filter(i => i.tipo !== 'ASSISTENCIA');
+          const subtotal        = itensAbertos.reduce((s: number, i: FaturaItem) => s + totalItem(i), 0);
+          const subtotalFechado = itensFechados.reduce((s: number, i: FaturaItem) => s + totalItem(i), 0);
 
           return (
             <div key={animal.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -1703,10 +1857,14 @@ function PainelFatura({
                       </p>
                     </div>
                   </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-[9px] text-gray-400 uppercase tracking-wide">Subtotal</p>
-                    <p className="text-sm font-bold text-gray-800">{formatBRL(subtotal)}</p>
-                  </div>
+                  <ResumoDoBloco
+                    animalId={animal.id} nome={animal.nome}
+                    subtotal={subtotal} subtotalFechado={subtotalFechado}
+                    abertos={itensAbertos.length} fechados={itensFechados.length}
+                    podeFechar={podeFechar} faturaEditavel={podeMexerNoFechamento}
+                    ocupado={fechandoAnimalId === animal.id}
+                    onAlterar={alterarFechamentoAnimal}
+                  />
                 </div>
               </div>
 
@@ -1744,6 +1902,23 @@ function PainelFatura({
                 </>
               )}
 
+              {/* ── Fechado à parte ── continua NO documento, fora do total ── */}
+              {itensFechados.length > 0 && (
+                <>
+                  <div className="px-4 py-2 bg-amber-50/70 border-y border-amber-100">
+                    <p className="text-[10px] font-bold text-amber-700 uppercase tracking-widest">
+                      Fechado à parte — não entra no total da fatura
+                    </p>
+                  </div>
+                  <JanelaLista className="divide-y divide-gray-50 opacity-80">
+                    {ordenarComInsumos(itensFechados).map(item => (
+                      <ItemRow key={item.id} item={item} canEdit={canEdit}
+                        onDelete={handleDeleteItem} onSave={handleSaveItem}/>
+                    ))}
+                  </JanelaLista>
+                </>
+              )}
+
               {todosItens.length === 0 && (
                 <p className="text-xs text-gray-400 text-center py-5">
                   Nenhum lançamento para este animal.
@@ -1755,7 +1930,10 @@ function PainelFatura({
 
         {/* Animais atendidos por OUTRA clínica do mesmo cliente — a fatura é única do
             proprietário, então os lançamentos aparecem aqui em vez de sumirem. */}
-        {animaisForaDoEscopo.map(grupo => (
+        {animaisForaDoEscopo.map(grupo => {
+          const abertos  = grupo.itens.filter(i => !i.fechadoEm);
+          const fechados = grupo.itens.filter(i => !!i.fechadoEm);
+          return (
           <div key={`fora-${grupo.id}`} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
             <div className="px-4 pt-3 pb-2.5 border-b border-gray-100 bg-gray-50">
               <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">
@@ -1766,22 +1944,41 @@ function PainelFatura({
                   <p className="text-sm font-bold text-gray-900">{grupo.nome}</p>
                   <p className="text-[10px] text-gray-400">Lançamentos de outro atendimento deste cliente</p>
                 </div>
-                <div className="text-right flex-shrink-0">
-                  <p className="text-[9px] text-gray-400 uppercase tracking-wide">Subtotal</p>
-                  <p className="text-sm font-bold text-gray-800">
-                    {formatBRL(grupo.itens.reduce((s, i) => s + totalItem(i), 0))}
-                  </p>
-                </div>
+                <ResumoDoBloco
+                  animalId={grupo.id} nome={grupo.nome}
+                  subtotal={abertos.reduce((s, i) => s + totalItem(i), 0)}
+                  subtotalFechado={fechados.reduce((s, i) => s + totalItem(i), 0)}
+                  abertos={abertos.length} fechados={fechados.length}
+                  podeFechar={podeFechar} faturaEditavel={podeMexerNoFechamento}
+                  ocupado={fechandoAnimalId === grupo.id}
+                  onAlterar={alterarFechamentoAnimal}
+                />
               </div>
             </div>
             <JanelaLista className="divide-y divide-gray-50">
-              {ordenarComInsumos(grupo.itens).map(item => (
+              {ordenarComInsumos(abertos).map(item => (
                 <ItemRow key={item.id} item={item} canEdit={canEdit}
                   onDelete={handleDeleteItem} onSave={handleSaveItem}/>
               ))}
             </JanelaLista>
+            {fechados.length > 0 && (
+              <>
+                <div className="px-4 py-2 bg-amber-50/70 border-y border-amber-100">
+                  <p className="text-[10px] font-bold text-amber-700 uppercase tracking-widest">
+                    Fechado à parte — não entra no total da fatura
+                  </p>
+                </div>
+                <JanelaLista className="divide-y divide-gray-50 opacity-80">
+                  {ordenarComInsumos(fechados).map(item => (
+                    <ItemRow key={item.id} item={item} canEdit={canEdit}
+                      onDelete={handleDeleteItem} onSave={handleSaveItem}/>
+                  ))}
+                </JanelaLista>
+              </>
+            )}
           </div>
-        ))}
+          );
+        })}
 
         {/* Resumo */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-4">
@@ -1792,6 +1989,18 @@ function PainelFatura({
             </div>
             <p className="text-2xl font-bold text-red-600">{formatBRL(fatura.total)}</p>
           </div>
+          {/* 🔴 O que saiu do total por fechamento de bloco de paciente. Sem esta linha,
+              o total simplesmente DIMINUI quando alguém fecha um paciente e não há nada
+              na tela explicando por quê — nem dizendo que aquele valor continua devido,
+              só acertado à parte. */}
+          {totalFechadoAParte > 0 && (
+            <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between gap-3">
+              <p className="text-xs text-amber-800">
+                Fechado à parte (cobrado separadamente, fora do total acima):
+              </p>
+              <p className="text-sm font-bold text-amber-700 whitespace-nowrap">{formatBRL(totalFechadoAParte)}</p>
+            </div>
+          )}
         </div>
 
         {/* Formulário novo item */}
@@ -2219,8 +2428,13 @@ function ModalFechamentoLote({ proprietarios, onClose, onDone }: {
                     const inv         = `INV-${String(f.faturaId).padStart(3, '0')}`;
                     // Os animais vêm da LISTA que a tela já tem — a resposta do lote não
                     // os traz, e são eles que agrupam os itens na folha.
-                    const animais = proprietarios.find(p => p.id === f.proprietario.id)?.animais ?? [];
+                    const cliente = proprietarios.find(p => p.id === f.proprietario.id);
+                    const animais = cliente?.animais ?? [];
                     const fat     = faturas.get(f.faturaId);
+                    // As mesmas formas de recebimento do painel de uma fatura — o lote
+                    // não pode ser a porta dos fundos para um canal que o cliente
+                    // recusou. A preferência vem da lista que esta tela já carregou.
+                    const formasDoCliente = cliente?.formasRecebimentoFatura;
                     return (
                       <div key={f.faturaId} className="flex items-center gap-2 border border-gray-100 rounded-xl px-3 py-2">
                         <div className="flex-1 min-w-0">
@@ -2238,6 +2452,8 @@ function ModalFechamentoLote({ proprietarios, onClose, onDone }: {
                             documento="Fatura"
                             texto={montarTextoFaturaLote(nomeDestino, f.mesReferencia, f.faturaId, f.total)}
                             titulo={`Fatura — ${nomeDestino}`}
+                            whatsappIndisponivel={formaLiberada(formasDoCliente, 'WHATSAPP') ? null : motivoFormaBloqueada('WHATSAPP')}
+                            emailIndisponivel={formaLiberada(formasDoCliente, 'EMAIL') ? null : motivoFormaBloqueada('EMAIL')}
                           />
                         ) : (
                           /* Sem a fatura carregada não há folha a mandar — e um botão

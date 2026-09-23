@@ -1,8 +1,19 @@
 // frontend/src/pages/CadastroProcedimento.tsx
-// Cadastro > Procedimentos — catálogo por especialidade + preços/combos da empresa.
-//   - Seletor de especialidades: vet vê SÓ as suas; GESTOR/ADMIN veem todas.
-//   - Incluir procedimento no catálogo: exclusivo do ADMIN.
-//   - Empresa (GESTOR): define valor por procedimento e monta combos com valor.
+// Cadastro > Procedimentos — catálogo da clínica por CATEGORIA + combos da empresa.
+//
+// 🔴 REFORMULADA EM 2026-09-22, no formato de Cadastro > Produtos:
+//   - "Especialidade / Exame de imagem" virou CATEGORIA (rótulo único na tela);
+//   - "Valor cliente" virou VALOR, e a coluna Categoria saiu da grade — repetia o
+//     que o próprio seletor já diz, já que é por ele que a lista é recortada;
+//   - cadastrar deixou de ser efeito colateral da BUSCA ("Cadastrar «X»") e passou a
+//     ser o botão NOVO PROCEDIMENTO, com Categoria, Procedimento e Valor;
+//   - alterar, inativar e ativar seguem a mesma lógica de Produtos (lápis + chave,
+//     trio Todos/Ativos/Inativos, justificativa só na inativação).
+//
+// ⚠️ MULTI-TENANT: a lista mistura o catálogo GLOBAL (empresa_id nulo) com o da
+//    clínica. Só o DELA pode ser renomeado ou inativado — a policy de
+//    tb_procedimentos_vet lê global + próprio mas só ESCREVE o próprio. O VALOR é
+//    sempre da empresa (tabela à parte), então vale para os dois casos.
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -10,13 +21,14 @@ import { useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
+import JanelaLista from '../components/JanelaLista';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import ModalJustificativa from '../components/ModalJustificativa';
 import DropdownSelect from '../components/DropdownSelect';
 import {
-  ListChecks, Search, Pencil, X, Loader2, Check, Layers, PackagePlus, ToggleRight, ToggleLeft, Plus,
+  ListChecks, Search, Pencil, X, Loader2, Check, Layers, PackagePlus, ToggleRight, ToggleLeft, Globe,
 } from 'lucide-react';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -33,6 +45,9 @@ interface Procedimento {
   valorVenda:    number | null;
   descricao:     string | null;
   valorEmpresa:  number | null;
+  /** false = linha GLOBAL do catálogo (de todas as clínicas) — ver o cabeçalho. */
+  daEmpresa:     boolean;
+  ativo:         boolean;
 }
 
 interface ComboItem {
@@ -58,12 +73,6 @@ interface Combo {
   prestadorId?:    number | null;
   valorPrestador?: number | null;
 }
-
-interface FormNovoProc {
-  nome: string; categoria: string; especialidade: string; valorVenda: string; descricao: string;
-}
-
-const FORM_PROC_INICIAL: FormNovoProc = { nome: '', categoria: '', especialidade: '', valorVenda: '', descricao: '' };
 
 const brl = (v: number | null | undefined): string =>
   v === null || v === undefined
@@ -100,209 +109,261 @@ const especialidadesDoCombo = (c: Combo): string[] => {
   return c.especialidade ? [c.especialidade] : [];
 };
 
-// ─── Campo de dinheiro SEMPRE editável ───────────────────────────────────────
+// ─── Selos da linha ──────────────────────────────────────────────────────────
 /**
- * Valor que se digita direto na grade, sem passar por um lápis (pedido de 2026-09-10).
+ * Os dois avisos que a linha precisa dar, no mesmo formato de Cadastro > Produtos.
  *
- * 🔴 NÃO SALVA SOZINHO (pedido de 2026-09-11). Ele é um campo CONTROLADO: quem guarda
- * o texto, compara com o gravado e decide quando gravar é a LINHA (`LinhaProcedimento`
- * / `CardProcedimento`), que mostra Salvar/Cancelar assim que algo difere.
- *
- * ⚠️ REVERTE o auto-save no blur de 10/09. O motivo daquela decisão continua válido —
- * não se dispara um PUT por célula visitada com Tab —, e é justamente por isso que a
- * confirmação virou EXPLÍCITA em vez de voltar a ser automática em outro evento.
+ * ⚠️ "inativo": sem ele, o procedimento inativado fica IDÊNTICO ao ativo na aba
+ * "Todos" — e a chave ao lado seria a única pista.
+ * ⚠️ "do sistema": a linha GLOBAL vale para todas as clínicas. O selo evita a leitura
+ * de que alterar o nome ali valeria para todo mundo (não vale, e o backend recusa).
  */
-function ValorInline({
-  texto, onTexto, onEnter, onEsc, placeholder, titulo, className = '', desabilitado,
-}: {
-  texto: string;
-  onTexto: (v: string) => void;
-  /** Enter salva a linha — o atalho de quem digita sem tirar a mão do teclado. */
-  onEnter?: () => void;
-  /** Esc desfaz: sem a volta, quem começou a digitar por engano não tem como cancelar. */
-  onEsc?: () => void;
-  placeholder?: string;
-  titulo?: string;
-  className?: string;
-  desabilitado?: boolean;
-}) {
+function SelosProcedimento({ p }: { p: Procedimento }) {
   return (
-    <input
-      type="text" inputMode="numeric" title={titulo}
-      value={texto} placeholder={placeholder} disabled={desabilitado}
-      onChange={e => onTexto(maskBRL(e.target.value))}
-      onKeyDown={e => {
-        if (e.key === 'Enter') { e.preventDefault(); onEnter?.(); }
-        if (e.key === 'Escape') { e.preventDefault(); onEsc?.(); }
-      }}
-      className={`w-28 border border-gray-200 rounded-lg px-2 py-1 text-sm text-right bg-white
-        focus:outline-none focus:border-emerald-500 hover:border-gray-300
-        disabled:bg-gray-50 disabled:text-gray-400 ${className}`}
-    />
+    <>
+      {!p.ativo && (
+        <span className="ml-2 inline-flex items-center text-[10px] text-gray-600 bg-gray-100 border border-gray-300 px-1.5 py-0.5 rounded-full align-middle">
+          inativo
+        </span>
+      )}
+      {!p.daEmpresa && (
+        <span className="ml-2 inline-flex items-center gap-1 text-[10px] text-gray-500 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded-full align-middle">
+          <Globe size={10} /> do sistema
+        </span>
+      )}
+    </>
   );
 }
 
-// ─── Salvar / Cancelar da linha ──────────────────────────────────────────────
+// ─── Ações da linha ──────────────────────────────────────────────────────────
 /**
- * Os dois controles que confirmam ou desfazem a edição de uma linha (2026-09-11).
+ * UMA declaração para a tabela E para o card (armadilha 28-g): duas listas separadas
+ * divergiriam na primeira correção — foi assim que o card da Prescrição ficou sem o
+ * Finalizar.
  *
- * 🔴 SAI PELO `AcaoRegistro`, a fonte única da §6: **ícone pintado no desktop, pílula
- * com rótulo no mobile**. Uma versão própria daria dois botões que divergiriam do
- * resto da aplicação na primeira correção — e no celular, sem rótulo, ✓ e ✕ pequenos
- * ao lado de um campo de dinheiro são alvo difícil e ambíguo.
- *
- * ⚠️ Só são RENDERIZADOS quando há alteração pendente (quem decide é a linha). Botão
- * que na maior parte do tempo não faz nada é ruído — e, desabilitado, cairia no cinza
- * que a §6 reserva ao indisponível.
- *
- * ⚠️ NÃO existe "Alterar": os campos já são sempre editáveis, então ele não teria o
- * que destravar (decidido com o usuário em 2026-09-11).
+ * ⚠️ Ordem e cor da §6: Alterar (laranja) primeiro; a CHAVE (tom `ativar`, azul) por
+ * último — é o ÍCONE que diz a posição, não a cor.
+ * ⚠️ A chave só aparece no procedimento DA CLÍNICA. O do sistema é de todas, o backend
+ * recusa com 400 e o RLS recusaria de qualquer forma: botão que só falha depois do
+ * clique é a armadilha 28-d.
  */
-function AcoesEdicao({ onSalvar, onCancelar, salvando }: {
-  onSalvar: () => void;
-  onCancelar: () => void;
-  salvando: boolean;
+function AcoesProcedimento({
+  p, podeEditar, podeExcluir, onEditar, onAlternar,
+}: {
+  p: Procedimento;
+  podeEditar: boolean;
+  podeExcluir: boolean;
+  onEditar: (p: Procedimento) => void;
+  onAlternar: (p: Procedimento) => void;
 }) {
   return (
     <AcoesRegistro>
+      <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Alterar"
+        visivel={podeEditar} onClick={() => onEditar(p)} />
       <AcaoRegistro
-        rotulo="Salvar" icone={Check} tom="finalizar"
-        titulo="Salvar alterações desta linha"
-        onClick={onSalvar} carregando={salvando}
-      />
-      <AcaoRegistro
-        rotulo="Cancelar" icone={X} tom="cancelar"
-        titulo="Cancelar — volta ao valor gravado"
-        onClick={onCancelar} desabilitado={salvando}
-      />
+        tom="ativar"
+        icone={p.ativo ? ToggleRight : ToggleLeft}
+        rotulo={p.ativo ? 'Inativar' : 'Ativar'}
+        visivel={podeExcluir && p.daEmpresa}
+        onClick={() => onAlternar(p)} />
     </AcoesRegistro>
   );
 }
 
-// ─── Página ───────────────────────────────────────────────────────────────────
-
 // ─── Linha da grade (desktop) ────────────────────────────────────────────────
 /**
- * A LINHA é quem guarda o texto em edição, compara com o gravado e decide quando
- * gravar (pedido de 2026-09-11). Por isso ela é um componente: dentro de um `.map`
- * não há como ter estado por linha.
+ * 🔴 A LINHA VOLTOU A SER SÓ LEITURA (2026-09-22, a pedido). O valor era um campo
+ * digitável direto na grade (`ValorInline`, de 2026-09-10) com um par Salvar/Cancelar
+ * próprio; agora quem altera é o LÁPIS, que abre o formulário com os três campos —
+ * Categoria, Procedimento e Valor —, exatamente como em Cadastro > Produtos.
  *
- * ⚠️ Ressincroniza quando o valor vem DE FORA (recarga da lista, salvamento de outra
- * linha) — mas só enquanto NÃO há edição pendente: sobrescrever o que a pessoa está
- * digitando porque a lista recarregou é perder trabalho em silêncio.
+ * ⚠️ NÃO reintroduzir a edição na célula junto com o lápis: dois caminhos para gravar
+ * o MESMO valor, um deles sem confirmação visível, é como a pessoa perde a alteração
+ * sem saber qual dos dois valia.
  */
 function LinhaProcedimento({
-  p, podeEditar, onSalvarValor,
+  p, podeEditar, podeExcluir, onEditar, onAlternar,
 }: {
   p: Procedimento;
   podeEditar: boolean;
-  onSalvarValor: (p: Procedimento, texto: string) => Promise<boolean>;
+  podeExcluir: boolean;
+  onEditar: (p: Procedimento) => void;
+  onAlternar: (p: Procedimento) => void;
 }) {
-  const gravado = numToMask(p.valorEmpresa);
-  const [texto, setTexto] = useState(gravado);
-  const [salvando, setSalvando] = useState(false);
-  const mudou = texto !== gravado;
-
-  useEffect(() => { if (!salvando) setTexto(numToMask(p.valorEmpresa)); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [p.valorEmpresa]);
-
-  const salvar = async () => {
-    if (!mudou) return;
-    setSalvando(true);
-    const ok = await onSalvarValor(p, texto);
-    setSalvando(false);
-    // Falhou: a tela volta a dizer a verdade — nunca fica exibindo número que não gravou.
-    if (!ok) setTexto(gravado);
-  };
-
   return (
-    <tr className="border-b border-gray-50 hover:bg-gray-50/60">
+    <tr className={`border-b border-gray-50 hover:bg-gray-50/60 ${p.ativo ? '' : 'opacity-60'}`}>
       <td className="px-5 py-3">
-        <p className="font-medium text-gray-900">{p.nome}</p>
+        <p className="font-medium text-gray-900">
+          {p.nome}
+          <SelosProcedimento p={p} />
+        </p>
         {p.descricao && <p className="text-[11px] text-gray-400 truncate max-w-md">{p.descricao}</p>}
       </td>
-      <td className="px-5 py-3 text-gray-500">{p.categoria}{p.subcategoria ? ` · ${p.subcategoria}` : ''}</td>
       <td className="px-5 py-3 text-right">
-        {podeEditar ? (
-          <ValorInline
-            texto={texto}
-            onTexto={setTexto}
-            onEnter={salvar}
-            onEsc={() => setTexto(gravado)}
-            placeholder="R$ 0,00"
-            titulo="Valor cobrado do cliente por este procedimento"
-            desabilitado={salvando}
-          />
-        ) : (
-          <span className={p.valorEmpresa !== null ? 'font-semibold text-emerald-700' : 'text-gray-400'}>
-            {brl(p.valorEmpresa)}
-          </span>
-        )}
+        <span className={p.valorEmpresa !== null ? 'font-semibold text-emerald-700' : 'text-gray-400'}>
+          {brl(p.valorEmpresa)}
+        </span>
       </td>
       <td className="px-5 py-3 text-right whitespace-nowrap">
-        {mudou && (
-          <AcoesEdicao onSalvar={salvar} onCancelar={() => setTexto(gravado)} salvando={salvando} />
-        )}
+        <AcoesProcedimento p={p} podeEditar={podeEditar} podeExcluir={podeExcluir}
+          onEditar={onEditar} onAlternar={onAlternar} />
       </td>
     </tr>
   );
 }
 
 // ─── Card do procedimento (mobile) ───────────────────────────────────────────
-/**
- * Espelho do desktop: os mesmos campos, o mesmo par Salvar/Cancelar e a mesma regra de
- * "só aparece quando há alteração pendente".
- *
- * ⚠️ Aqui os ícones ficam JUNTO do bloco de valores, e não numa coluna de ações que o
- * card não tem — mas continuam sendo os mesmos `AcoesEdicao`, para as duas telas não
- * divergirem na primeira correção (armadilha 28-g).
- */
+/** Espelho do desktop — mesmos dados, mesmas ações, mesma regra de visibilidade. */
 function CardProcedimento({
-  p, podeEditar, onSalvarValor,
+  p, podeEditar, podeExcluir, onEditar, onAlternar,
 }: {
   p: Procedimento;
   podeEditar: boolean;
-  onSalvarValor: (p: Procedimento, texto: string) => Promise<boolean>;
+  podeExcluir: boolean;
+  onEditar: (p: Procedimento) => void;
+  onAlternar: (p: Procedimento) => void;
 }) {
-  const gravado = numToMask(p.valorEmpresa);
-  const [texto, setTexto] = useState(gravado);
-  const [salvando, setSalvando] = useState(false);
-  const mudou = texto !== gravado;
-
-  useEffect(() => { if (!salvando) setTexto(numToMask(p.valorEmpresa)); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [p.valorEmpresa]);
-
-  const salvar = async () => {
-    if (!mudou) return;
-    setSalvando(true);
-    const ok = await onSalvarValor(p, texto);
-    setSalvando(false);
-    if (!ok) setTexto(gravado);
-  };
-
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-      <p className="font-semibold text-gray-900 text-sm">{p.nome}</p>
-      <p className="text-[11px] text-gray-400 mt-0.5">{p.categoria}{p.subcategoria ? ` · ${p.subcategoria}` : ''}</p>
+    <div data-item-lista className={`bg-white rounded-2xl border border-gray-100 shadow-sm p-4 ${p.ativo ? '' : 'opacity-60'}`}>
+      <p className="font-semibold text-gray-900 text-sm">
+        {p.nome}
+        <SelosProcedimento p={p} />
+      </p>
+      {p.descricao && <p className="text-[11px] text-gray-400 mt-0.5">{p.descricao}</p>}
 
       <div className="flex items-center justify-between gap-2 mt-2 text-xs">
-        <span className="text-gray-500">Valor Cliente</span>
-        {podeEditar ? (
-          <ValorInline
-            texto={texto} onTexto={setTexto} onEnter={salvar} onEsc={() => setTexto(gravado)}
-            placeholder="R$ 0,00" className="w-24 text-xs" desabilitado={salvando}
-          />
-        ) : (
-          <span className={p.valorEmpresa !== null ? 'font-semibold text-emerald-700' : 'text-gray-400'}>
-            {brl(p.valorEmpresa)}
-          </span>
-        )}
+        <span className="text-gray-500">Valor</span>
+        <span className={p.valorEmpresa !== null ? 'font-semibold text-emerald-700' : 'text-gray-400'}>
+          {brl(p.valorEmpresa)}
+        </span>
       </div>
-      {/* ⚠️ As ações do card vão no RODAPÉ, nunca ao lado do campo (§6): com rótulo
-          elas espremeriam o valor até ele quebrar de linha. */}
-      {mudou && (
+
+      {/* ⚠️ As ações do card vão no RODAPÉ (§6): com rótulo, ao lado do nome elas
+          espremeriam o procedimento até ele quebrar de linha. */}
+      {(podeEditar || (podeExcluir && p.daEmpresa)) && (
         <div className="mt-3 pt-3 border-t border-gray-50">
-          <AcoesEdicao onSalvar={salvar} onCancelar={() => setTexto(gravado)} salvando={salvando} />
+          <AcoesProcedimento p={p} podeEditar={podeEditar} podeExcluir={podeExcluir}
+            onEditar={onEditar} onAlternar={onAlternar} />
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Formulário do procedimento ──────────────────────────────────────────────
+/**
+ * 🔴 OS TRÊS CAMPOS PEDIDOS (2026-09-22): **Categoria, Procedimento e Valor**.
+ *
+ * ⚠️ SUBSTITUI o cadastro-ao-digitar-na-busca ("Cadastrar «X»", de 2026-09-18), que
+ * saiu a pedido. Criar registro como efeito colateral de uma BUSCA fazia erro de
+ * digitação virar cadastro, e não havia onde informar categoria nem valor — o item
+ * nascia genérico e zerado para alguém corrigir depois.
+ *
+ * ⚠️ "Categoria" aqui é a MESMA lista do seletor da tela: especialidades clínicas +
+ * categorias de exame de imagem, em dois blocos. É o backend que traduz cada uma para
+ * a coluna certa (`especialidade` × `categoria` + `tipoProcedimento`) — ver
+ * `camposDaCategoria` no controller.
+ *
+ * ⚠️ No item DO SISTEMA, Categoria e Procedimento ficam desabilitados e SÓ o valor é
+ * editável: a linha global vale para todas as clínicas e o RLS recusa a escrita. O
+ * desabilitado é a explicação; a autorização é a do backend.
+ */
+function ProcedimentoModal({
+  item, especialidades, imagemCategorias, categoriaInicial, salvando, erro, onSalvar, onFechar,
+}: {
+  item: Procedimento | null;
+  especialidades: string[];
+  imagemCategorias: string[];
+  categoriaInicial: string;
+  salvando: boolean;
+  erro: string | null;
+  onSalvar: (dados: { nome: string; categoria: string; valor: number | null }) => void;
+  onFechar: () => void;
+}) {
+  const ehEdicao = !!item;
+  const doSistema = ehEdicao && !item!.daEmpresa;
+
+  const [nome, setNome] = useState(item?.nome ?? '');
+  // ⚠️ Qual das duas colunas é a "Categoria" depende da NATUREZA do item: exame de
+  // imagem se organiza por `categoria` (Radiografia…), procedimento clínico por
+  // `especialidade`. Quem responde isso é a lista que veio do backend — nunca uma
+  // cópia da constante `TIPO_IMAGEM` aqui, que divergiria na primeira mudança lá.
+  const [categoria, setCategoria] = useState(
+    item
+      ? (imagemCategorias.includes(item.categoria) ? item.categoria : (item.especialidade ?? ''))
+      : categoriaInicial,
+  );
+  const [valor, setValor] = useState(numToMask(item?.valorEmpresa));
+
+  const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500 disabled:bg-gray-50 disabled:text-gray-400';
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md border border-gray-100 max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 rounded-t-2xl">
+          <h3 className="font-bold text-gray-900">{ehEdicao ? 'Alterar Procedimento' : 'Novo Procedimento'}</h3>
+          <button onClick={onFechar} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        </div>
+
+        <div className="p-5 space-y-3 overflow-y-auto">
+          {doSistema && (
+            <p className="text-[11px] text-gray-500 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 flex items-start gap-1.5">
+              <Globe size={12} className="mt-0.5 flex-shrink-0" />
+              Procedimento do catálogo do sistema — vale para todas as clínicas. Aqui só o
+              valor cobrado por esta clínica pode ser alterado.
+            </p>
+          )}
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Categoria *</label>
+            {/* DOIS blocos com cabeçalho: sem eles "Radiografia" apareceria no meio das
+                especialidades clínicas e leria como se fosse uma delas. */}
+            <DropdownSelect
+              value={categoria}
+              onChange={setCategoria}
+              grupos={[
+                { label: 'Especialidades',   options: especialidades },
+                { label: 'Exames de imagem', options: imagemCategorias },
+              ]}
+              placeholder="— Selecionar —"
+              className={inputCls}
+              disabled={doSistema}
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Procedimento *</label>
+            <input value={nome} onChange={e => setNome(e.target.value)} disabled={doSistema}
+              placeholder="Nome do procedimento" className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Valor</label>
+            <input type="text" inputMode="numeric" placeholder="R$ 0,00" value={valor}
+              onChange={e => setValor(maskBRL(e.target.value))} className={inputCls} />
+            <p className="text-[10px] text-gray-400 mt-1">
+              Valor cobrado do cliente por esta clínica. Em branco = sem valor definido.
+            </p>
+          </div>
+        </div>
+
+        {/* Erro da AÇÃO fica ABAIXO do botão que a disparou (§6). */}
+        <div className="flex items-center justify-end gap-3 px-5 pb-5 pt-3 border-t border-gray-100">
+          <button onClick={onFechar} disabled={salvando}
+            className="px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-semibold hover:bg-gray-50 disabled:opacity-50 transition-colors">
+            Cancelar
+          </button>
+          <button
+            onClick={() => onSalvar({
+              nome: nome.trim(),
+              categoria: categoria.trim(),
+              valor: valor.trim() === '' ? null : parseBRL(valor),
+            })}
+            disabled={salvando}
+            className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-2">
+            {salvando && <Loader2 size={13} className="animate-spin" />}
+            {salvando ? 'Salvando…' : 'Salvar'}
+          </button>
+        </div>
+        {erro && <div className="px-5 pb-5"><InlineError message={erro} /></div>}
+      </div>
     </div>
   );
 }
@@ -332,9 +393,19 @@ export default function CadastroProcedimento() {
   const [aba,            setAba]            = useState<'procedimentos' | 'combos'>('procedimentos');
   const [loading,        setLoading]        = useState(true);
   const [loadingProcs,   setLoadingProcs]   = useState(false);
+  /**
+   * Trio Todos/Ativos/Inativos das demais telas de cadastro. É por ele que se alcança
+   * o procedimento inativado para reativá-lo — sem ele, inativar é caminho sem volta.
+   */
+  const [filtroAtivoProcs, setFiltroAtivoProcs] = useState<'all' | 'ativo' | 'inativo'>('ativo');
 
-  // 🔴 O LÁPIS SAIU (pedido de 2026-09-10): o valor é campo SEMPRE editável na grade
-  // (`ValorInline`); quem confirma é o par Salvar/Cancelar da linha (2026-09-11).
+  // 🔴 O LÁPIS VOLTOU (2026-09-22): alterar abre o formulário com Categoria,
+  // Procedimento e Valor, como em Cadastro > Produtos. O campo de valor digitável na
+  // própria grade (2026-09-10/11) saiu junto — ver `LinhaProcedimento`.
+  const [showProcModal, setShowProcModal] = useState(false);
+  const [procEditando,  setProcEditando]  = useState<Procedimento | null>(null);
+  const [salvandoProc,  setSalvandoProc]  = useState(false);
+  const [inativandoProc, setInativandoProc] = useState<Procedimento | null>(null);
 
   /**
    * CHEGADA GUIADA — `?especialidade=&busca=<procedimento>` posiciona a tela na
@@ -344,11 +415,6 @@ export default function CadastroProcedimento() {
   const [params] = useSearchParams();
   const espDaUrl      = params.get('especialidade') ?? '';
   const buscaDaUrl    = params.get('busca') ?? '';
-
-  // Modal novo procedimento (ADMIN)
-  const [showNovoProc, setShowNovoProc] = useState(false);
-  const [formProc,     setFormProc]     = useState<FormNovoProc>(FORM_PROC_INICIAL);
-  const [salvandoProc, setSalvandoProc] = useState(false);
 
   // Modal combo (gestor)
   const [showCombo,     setShowCombo]     = useState(false);
@@ -368,7 +434,7 @@ export default function CadastroProcedimento() {
   const [comboBusca,    setComboBusca]    = useState('');
   const [todosProcs,    setTodosProcs]    = useState<Procedimento[]>([]);
   const [salvandoCombo, setSalvandoCombo] = useState(false);
-  // Erros inline: página (lista/valor), modal de novo procedimento e modal de combo
+  // Erros inline: página (lista), formulário do procedimento e modal de combo
   const [erroInline,    setErroInline]    = useState<string | null>(null);
   const [erroProc,      setErroProc]      = useState<string | null>(null);
   const [erroCombo,     setErroCombo]     = useState<string | null>(null);
@@ -401,21 +467,25 @@ export default function CadastroProcedimento() {
    * ⚠️ `ehImagem` entra nas dependências: sem isso, escolher uma categoria antes de a
    * lista de categorias chegar mandaria `especialidade=Radiografia` e voltaria vazio.
    */
-  // ── Cadastro rápido pelo campo de busca (a pedido, 2026-09-18) ────────────
-  // 🔴 O CAMPO DE BUSCA VIROU A PORTA DE ENTRADA DO CADASTRO. Antes, digitar um nome
-  // que não existe devolvia "Nenhum procedimento encontrado" e acabava ali: só o
-  // ADMIN tinha o botão "Novo Procedimento" (que escreve o catálogo GLOBAL), então a
-  // clínica não tinha como cadastrar o procedimento DELA por esta tela — e ia fazê-lo
-  // digitando na prescrição, que é onde o `garantirProcedimentoDaEmpresa` já agia.
-  // Agora a lista filtra enquanto se digita (auto-preenchimento) e, quando nada casa
-  // EXATAMENTE, aparece "Cadastrar «X»".
-  const [cadastrandoProc, setCadastrandoProc] = useState(false);
+  // ⚠️ O CADASTRO DEIXOU DE SAIR DAQUI (2026-09-22). O "Cadastrar «X»" pelo campo de
+  // busca (2026-09-18) saiu a pedido: criar registro como efeito colateral de uma
+  // BUSCA fazia erro de digitação virar cadastro, e não havia onde informar categoria
+  // nem valor. Quem cadastra agora é o botão "Novo Procedimento" — e ele abre um
+  // formulário com os três campos. A busca voltou a ser só busca.
 
-  const carregarProcedimentos = useCallback(async (sel: string, ehImagem: boolean) => {
+  const carregarProcedimentos = useCallback(async (
+    sel: string, ehImagem: boolean, situacao: 'all' | 'ativo' | 'inativo',
+  ) => {
     if (!sel) { setProcedimentos([]); return; }
     setLoadingProcs(true);
     try {
-      const params = ehImagem ? { imagemCategoria: sel } : { especialidade: sel };
+      // ⚠️ O `ativo` é MANDADO por esta tela, e só por ela: o mesmo endpoint alimenta
+      // os seletores do Orçamento e da Prescrição, onde o default (só ativos) é o que
+      // impede oferecer um procedimento que a clínica tirou de circulação.
+      const params = {
+        ...(ehImagem ? { imagemCategoria: sel } : { especialidade: sel }),
+        ativo: situacao === 'all' ? 'all' : situacao === 'inativo' ? 'false' : 'true',
+      };
       const res = await api.get('/procedimentos/cadastro/lista', { params });
       if (!res.data) { setProcedimentos([]); return; }
       setProcedimentos(res.data?.dados ?? []);
@@ -445,8 +515,8 @@ export default function CadastroProcedimento() {
 
   useEffect(() => {
     if (loadingPerms) return;
-    carregarProcedimentos(espSel, selEhImagem);
-  }, [espSel, selEhImagem, loadingPerms, carregarProcedimentos]);
+    carregarProcedimentos(espSel, selEhImagem, filtroAtivoProcs);
+  }, [espSel, selEhImagem, filtroAtivoProcs, loadingPerms, carregarProcedimentos]);
 
   // Auto-seleciona quando há UMA opção só no seletor inteiro — contando as categorias
   // de imagem junto. Com uma especialidade e seis categorias não há o que adivinhar.
@@ -477,43 +547,70 @@ export default function CadastroProcedimento() {
       p.nome.toLowerCase().includes(q) || p.categoria.toLowerCase().includes(q));
   }, [procedimentos, busca]);
 
-  /**
-   * O nome digitado JÁ EXISTE no que está carregado?
-   *
-   * ⚠️ Casamento EXATO (sem caixa/acento), nunca `includes`: "Ferrageamento" e
-   * "Ferrageamento corretivo" são procedimentos diferentes, e usar `includes` esconderia
-   * a oferta de cadastrar o segundo só porque o primeiro aparece no filtro.
-   */
-  const normNome = (t: string) =>
-    t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
-  const jaExiste = useMemo(
-    () => procedimentos.some(p => normNome(p.nome) === normNome(busca)),
-    [procedimentos, busca],
-  );
-  /** Oferece cadastrar só com especialidade escolhida e nome digitado que não existe. */
-  const podeCadastrarDigitado =
-    podeCriar && !!espSel && busca.trim().length >= 2 && !jaExiste;
+  // ── Novo / Alterar / Ativar-Inativar (2026-09-22) ─────────────────────────
 
-  const cadastrarProcedimentoDigitado = async () => {
-    const nome = busca.trim();
-    setCadastrandoProc(true);
+  const abrirNovoProc = () => {
+    setErroProc(null);
+    setProcEditando(null);
+    setShowProcModal(true);
+  };
+
+  const abrirEdicaoProc = (p: Procedimento) => {
+    setErroProc(null);
+    setProcEditando(p);
+    setShowProcModal(true);
+  };
+
+  /**
+   * Um só handler para criar e alterar — muda só o verbo HTTP.
+   *
+   * ⚠️ O `valor` vai SEMPRE, inclusive `null`: é assim que se APAGA um valor definido
+   * antes. Omiti-lo faria o backend manter o que estava, e limpar o campo não teria
+   * efeito nenhum — a pessoa salvaria e veria o número antigo de volta.
+   */
+  const salvarProcedimento = async (
+    dados: { nome: string; categoria: string; valor: number | null },
+  ) => {
+    setErroProc(null);
+    if (!dados.categoria) { setErroProc('Selecione a categoria.'); return; }
+    if (dados.nome.length < 2) { setErroProc('Informe o nome do procedimento.'); return; }
+
+    setSalvandoProc(true);
     try {
-      const res = await api.post('/procedimentos/cadastro/proprio', {
-        nome,
-        // ⚠️ A especialidade é a do SELETOR — é ela que define em que lista o
-        // procedimento vai aparecer depois. Sem ela o item nasceria "solto" e a
-        // pessoa não o encontraria na tela em que acabou de criá-lo.
-        especialidade: espSel,
-      });
-      toast.success(res.data?.criado
-        ? `"${nome}" cadastrado.`
-        : `"${nome}" já existia no catálogo e foi reaproveitado.`);
-      // Recarrega para o item aparecer na lista com o valor a definir.
-      await carregarProcedimentos(espSel, selEhImagem);
+      if (procEditando) {
+        await api.put(`/procedimentos/cadastro/proprio/${procEditando.id}`, dados);
+        toast.success('Procedimento alterado.');
+      } else {
+        const res = await api.post('/procedimentos/cadastro/proprio', dados);
+        toast.success(res.data?.criado
+          ? `"${dados.nome}" cadastrado.`
+          : `"${dados.nome}" já existia no catálogo — o valor desta clínica foi atualizado.`);
+      }
+      setShowProcModal(false);
+      setProcEditando(null);
+      // A categoria salva pode não ser a que está no seletor: recarregar a lista atual
+      // deixaria o item recém-criado fora da tela sem nenhuma explicação. Então o
+      // seletor ACOMPANHA o que foi cadastrado.
+      if (dados.categoria !== espSel) setEspSel(dados.categoria);
+      else await carregarProcedimentos(espSel, selEhImagem, filtroAtivoProcs);
     } catch (err) {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
-      if (!e.isPermissionError) toast.error(e.response?.data?.error ?? 'Erro ao cadastrar o procedimento.');
-    } finally { setCadastrandoProc(false); }
+      if (!e.isPermissionError) setErroProc(e.response?.data?.error ?? 'Erro ao salvar o procedimento.');
+    } finally { setSalvandoProc(false); }
+  };
+
+  /** Inativar pede justificativa; ativar é correção e vai direto (§13, armadilha 33). */
+  const alternarAtivoProc = async (p: Procedimento, motivo?: string) => {
+    setErroInline(null);
+    try {
+      await api.patch(`/procedimentos/cadastro/proprio/${p.id}/toggle`, motivo ? { motivo } : {});
+      toast.success(p.ativo ? 'Procedimento inativado.' : 'Procedimento ativado.');
+      setInativandoProc(null);
+      await carregarProcedimentos(espSel, selEhImagem, filtroAtivoProcs);
+    } catch (err) {
+      const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
+      if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao alterar a situação do procedimento.');
+    }
   };
 
   // Busca pelo NOME do combo OU pelo seu CONTEÚDO (nome de qualquer procedimento
@@ -525,54 +622,6 @@ export default function CadastroProcedimento() {
       !q || c.nome.toLowerCase().includes(q)
          || c.itens.some(i => i.procedimento.nome.toLowerCase().includes(q)));
   }, [combos, buscaCombos]);
-
-  // ── Valor da empresa (gestor) ─────────────────────────────────────────────
-
-  /**
-   * Valor CLIENTE padrão da empresa. Devolve `true`/`false` para o `ValorInline` saber
-   * se pode dar o valor por salvo — falhando, a célula volta ao que o banco tem, em vez
-   * de deixar na tela um número que não foi gravado.
-   */
-  const salvarValorEmpresa = async (p: Procedimento, texto: string): Promise<boolean> => {
-    setErroInline(null);
-    try {
-      const res = await api.put(`/procedimentos/cadastro/valor/${p.id}`, {
-        valor: texto.trim() === '' ? null : parseBRL(texto),
-      });
-      const novo = res.data?.dados?.valorEmpresa ?? null;
-      setProcedimentos(prev => prev.map(x => x.id === p.id ? { ...x, valorEmpresa: novo } : x));
-      return true;
-    } catch (err) {
-      const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
-      if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao salvar o Valor Cliente');
-      return false;
-    }
-  };
-
-  // ── Novo procedimento (ADMIN) ─────────────────────────────────────────────
-
-  const salvarNovoProc = async () => {
-    setErroProc(null);
-    if (!formProc.nome.trim())      { setErroProc('Nome é obrigatório'); return; }
-    if (!formProc.categoria.trim()) { setErroProc('Categoria é obrigatória'); return; }
-    setSalvandoProc(true);
-    try {
-      await api.post('/procedimentos', {
-        nome:          formProc.nome.trim(),
-        categoria:     formProc.categoria.trim(),
-        especialidade: formProc.especialidade.trim() || null,
-        valorVenda:    formProc.valorVenda ? parseBRL(formProc.valorVenda) : null,
-        descricao:     formProc.descricao.trim() || null,
-      });
-      toast.success('Procedimento incluído no catálogo');
-      setShowNovoProc(false);
-      setFormProc(FORM_PROC_INICIAL);
-      if (espSel) carregarProcedimentos(espSel, selEhImagem);
-    } catch (err) {
-      const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
-      if (!e.isPermissionError) setErroProc(e.response?.data?.error ?? 'Erro ao incluir procedimento');
-    } finally { setSalvandoProc(false); }
-  };
 
   // ── Combos (gestor) ───────────────────────────────────────────────────────
 
@@ -615,7 +664,7 @@ export default function CadastroProcedimento() {
     if (!comboNome.trim())            { setErroCombo('Nome do combo é obrigatório'); return; }
     if (!comboEsp.trim())             { setErroCombo('Selecione a especialidade do combo'); return; }
     const valorNum = parseBRL(comboValor);
-    if (!valorNum || valorNum <= 0)   { setErroCombo('Informe o Valor Cliente do combo'); return; }
+    if (!valorNum || valorNum <= 0)   { setErroCombo('Informe o valor do combo'); return; }
     if (comboIds.length < 2)          { setErroCombo('Selecione pelo menos 2 procedimentos'); return; }
     setSalvandoCombo(true);
     try {
@@ -716,17 +765,29 @@ export default function CadastroProcedimento() {
 
       <InlineError message={erroInline} className="mb-4" />
 
-      {/* Cabeçalho (mesmo padrão de Agendamentos): ícone em box + título + descritivo */}
-      <div className="mt-2 mb-4 flex items-center gap-3">
-        <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
-          <ListChecks size={20} className="text-emerald-700" />
-        </div>
-        <div>
+      {/* Cabeçalho no formato de Cadastro > Produtos: título à esquerda, botão de
+          incluir à direita.
+          ⚠️ A linha "Catálogo por especialidade, valores da empresa e combos" SAIU a
+          pedido (2026-09-22): as abas logo abaixo já dizem Procedimentos × Combos, e
+          o seletor de Categoria diz o resto. */}
+      <div className="mt-2 mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
+            <ListChecks size={20} className="text-emerald-700" />
+          </div>
           <h1 className="text-2xl font-bold text-gray-900">Procedimentos</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            Catálogo por especialidade{podeGerirEmpresa ? ', valores da empresa e combos' : ' e combos da empresa'}.
-          </p>
         </div>
+        {/* 🔴 NOVO PROCEDIMENTO (2026-09-22) — substitui o "Cadastrar «X»" que saía do
+            campo de busca. O botão antigo daqui era ADMIN-only e escrevia o catálogo
+            GLOBAL; este cadastra o procedimento DESTA clínica, que é o que a tela faz.
+            ⚠️ Sem "+": o sinal é ruído, e o ícone da ENTIDADE já identifica a ação
+                (mesma decisão do "Novo Produto"). */}
+        {podeCriar && aba === 'procedimentos' && (
+          <button onClick={abrirNovoProc}
+            className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors flex-shrink-0">
+            <ListChecks size={16} /> Novo Procedimento
+          </button>
+        )}
       </div>
 
       {/* Abas */}
@@ -746,11 +807,14 @@ export default function CadastroProcedimento() {
 
       {aba === 'procedimentos' && (
         <div className="space-y-4">
-          {/* Seletor de especialidade + busca + novo (ADMIN) */}
+          {/* Categoria + busca + situação */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-end">
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1.5">Especialidade / Exame de imagem</label>
+                {/* 🔴 "CATEGORIA" (2026-09-22) — era "Especialidade / Exame de imagem".
+                    O rótulo é único na tela; quem sabe que por baixo são duas colunas
+                    diferentes do banco é o backend (`camposDaCategoria`). */}
+                <label className="block text-xs font-medium text-gray-500 mb-1.5">Categoria</label>
                 {/* DOIS blocos com cabeçalho: sem eles "Radiografia" apareceria no meio
                     das especialidades clínicas e leria como se fosse uma delas. */}
                 <DropdownSelect
@@ -767,34 +831,29 @@ export default function CadastroProcedimento() {
                 <label className="block text-xs font-medium text-gray-500 mb-1.5">Buscar</label>
                 <div className="relative">
                   <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
+                  {/* ⚠️ A busca voltou a ser SÓ BUSCA: o "Cadastrar «X»" que ficava aqui
+                      (2026-09-18) saiu a pedido — quem cadastra é o botão do cabeçalho. */}
                   <input type="text" value={busca} onChange={e => setBusca(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' && podeCadastrarDigitado) cadastrarProcedimentoDigitado(); }}
                     placeholder="Digite o nome do procedimento..." className={`${inputCls} pl-8`} />
                 </div>
-                {/* A oferta fica SOB o campo, não no lugar da lista: enquanto se digita,
-                    o filtro segue mostrando o que já existe (o auto-preenchimento), e a
-                    criação é o passo seguinte — nunca o primeiro. */}
-                {podeCadastrarDigitado && (
-                  <button
-                    type="button"
-                    onClick={cadastrarProcedimentoDigitado}
-                    disabled={cadastrandoProc}
-                    className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-800 disabled:opacity-60">
-                    {cadastrandoProc
-                      ? <Loader2 size={12} className="animate-spin" />
-                      : <Plus size={12} />}
-                    Cadastrar &ldquo;{busca.trim()}&rdquo; em {espSel}
-                  </button>
-                )}
               </div>
-              {isAdmin && (
-                <button
-                  onClick={() => { setFormProc({ ...FORM_PROC_INICIAL, especialidade: espSel }); setShowNovoProc(true); }}
-                  className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors">
-                  Novo Procedimento
-                </button>
-              )}
             </div>
+
+            {/* Trio Todos/Ativos/Inativos das demais telas de cadastro — é por ele que
+                se alcança o procedimento inativado para reativá-lo. */}
+            {podeGerirEmpresa && (
+              <div className="mt-3 flex border border-gray-200 rounded-xl overflow-hidden text-sm w-fit">
+                {(['all', 'ativo', 'inativo'] as const).map(v => (
+                  <button key={v} onClick={() => setFiltroAtivoProcs(v)}
+                    className={`px-4 py-2 font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
+                      filtroAtivoProcs === v ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
+                    }`}>
+                    {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {especialidades.length === 0 && imagemCategorias.length === 0 && (
               <p className="text-xs text-amber-600 mt-3">
                 Nenhuma especialidade vinculada ao seu cadastro. Atualize suas especialidades no Cadastro Pessoal.
@@ -804,38 +863,35 @@ export default function CadastroProcedimento() {
 
           {/* Lista */}
           {!espSel ? (
-            <div className="text-center py-14 text-gray-400 text-sm">Selecione uma especialidade para ver os procedimentos.</div>
+            <div className="text-center py-14 text-gray-400 text-sm">Selecione uma categoria para ver os procedimentos.</div>
           ) : loadingProcs ? (
             <div className="flex justify-center py-14"><Loader2 size={22} className="animate-spin text-emerald-600" /></div>
           ) : procsFiltrados.length === 0 ? (
             <div className="text-center py-14 text-gray-400 text-sm">
-              Nenhum procedimento encontrado para {espSel}.
-              {podeCadastrarDigitado && (
-                <div className="mt-3">
-                  <button
-                    type="button"
-                    onClick={cadastrarProcedimentoDigitado}
-                    disabled={cadastrandoProc}
-                    className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-60">
-                    {cadastrandoProc
-                      ? <Loader2 size={14} className="animate-spin" />
-                      : <Plus size={14} />}
-                    Cadastrar &ldquo;{busca.trim()}&rdquo;
-                  </button>
-                </div>
+              <p>Nenhum procedimento encontrado para {espSel}.</p>
+              {/* Não achou? O caminho é cadastrar — e o formulário abre na categoria em
+                  que a pessoa já está, para ela não reescolher o que acabou de escolher. */}
+              {podeCriar && (
+                <button type="button" onClick={abrirNovoProc}
+                  className="mt-3 inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-semibold">
+                  <ListChecks size={15} /> Novo Procedimento
+                </button>
               )}
             </div>
           ) : (
             <>
               {/* Desktop */}
               <div className="hidden md:block bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                <div className="overflow-x-auto rounded-2xl">
+                {/* Cabeçalho FIXO no topo, dados rolando por baixo — ver JanelaLista. */}
+                <JanelaLista maxItens={12} className="rounded-2xl">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-[11px] uppercase tracking-wider text-gray-400 border-b border-gray-100">
                       <th className="px-5 py-3 font-semibold">Procedimento</th>
-                      <th className="px-5 py-3 font-semibold">Categoria</th>
-                      <th className="px-5 py-3 font-semibold text-right whitespace-nowrap">Valor Cliente</th>
+                      {/* ⚠️ A coluna CATEGORIA saiu (2026-09-22): a lista JÁ é recortada
+                          pelo seletor de Categoria logo acima, então a célula repetia o
+                          mesmo valor em todas as linhas. */}
+                      <th className="px-5 py-3 font-semibold text-right whitespace-nowrap">Valor</th>
                       <th className="px-5 py-3" />
                     </tr>
                   </thead>
@@ -845,24 +901,30 @@ export default function CadastroProcedimento() {
                         key={p.id}
                         p={p}
                         podeEditar={podeEditar}
-                        onSalvarValor={salvarValorEmpresa}
+                        podeExcluir={podeExcluir}
+                        onEditar={abrirEdicaoProc}
+                        onAlternar={x => (x.ativo ? setInativandoProc(x) : alternarAtivoProc(x))}
                       />
                     ))}
                   </tbody>
                 </table>
-                </div>
+                </JanelaLista>
               </div>
 
               {/* Mobile */}
               <div className="md:hidden space-y-2">
-                {procsFiltrados.map(p => (
-                  <CardProcedimento
-                    key={p.id}
-                    p={p}
-                    podeEditar={podeEditar}
-                    onSalvarValor={salvarValorEmpresa}
-                  />
-                ))}
+                <JanelaLista maxItens={12}>
+                  {procsFiltrados.map(p => (
+                    <CardProcedimento
+                      key={p.id}
+                      p={p}
+                      podeEditar={podeEditar}
+                      podeExcluir={podeExcluir}
+                      onEditar={abrirEdicaoProc}
+                      onAlternar={x => (x.ativo ? setInativandoProc(x) : alternarAtivoProc(x))}
+                    />
+                  ))}
+                </JanelaLista>
               </div>
             </>
           )}
@@ -931,7 +993,7 @@ export default function CadastroProcedimento() {
                     </div>
                     <div className="flex-shrink-0 text-right">
                       <span className="block text-sm font-bold text-emerald-700">{brl(c.valor)}</span>
-                      <span className="block text-[10px] text-gray-400">Valor Cliente</span>
+                      <span className="block text-[10px] text-gray-400">Valor</span>
                     </div>
                   </div>
                   <ul className="mt-2 space-y-1 flex-1">
@@ -959,58 +1021,18 @@ export default function CadastroProcedimento() {
         </div>
       )}
 
-      {/* ── Modal: novo procedimento (ADMIN) ── */}
-      {showNovoProc && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md border border-gray-100 max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 rounded-t-2xl">
-              <h3 className="font-bold text-gray-900">Novo Procedimento (catálogo)</h3>
-              <button onClick={() => setShowNovoProc(false)} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
-            </div>
-            <div className="p-5 space-y-3 overflow-y-auto">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Nome *</label>
-                <input value={formProc.nome} onChange={e => setFormProc(f => ({ ...f, nome: e.target.value }))} className={inputCls} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Categoria *</label>
-                  <input value={formProc.categoria} onChange={e => setFormProc(f => ({ ...f, categoria: e.target.value }))} className={inputCls} />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Valor padrão</label>
-                  <input type="text" inputMode="numeric" placeholder="R$ 0,00" value={formProc.valorVenda}
-                    onChange={e => setFormProc(f => ({ ...f, valorVenda: maskBRL(e.target.value) }))} className={inputCls} />
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Especialidade</label>
-                <DropdownSelect
-                  value={formProc.especialidade}
-                  onChange={especialidade => setFormProc(f => ({ ...f, especialidade }))}
-                  options={especialidades}
-                  placeholder="— Sem especialidade —"
-                  className={inputCls}
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Descrição</label>
-                <textarea value={formProc.descricao} onChange={e => setFormProc(f => ({ ...f, descricao: e.target.value }))}
-                  rows={3} className={inputCls} />
-              </div>
-            </div>
-            <InlineError message={erroProc} className="mx-5 mt-3" />
-
-            <div className="flex gap-3 px-5 pb-5 pt-3 border-t border-gray-100">
-              <button onClick={() => setShowNovoProc(false)} disabled={salvandoProc}
-                className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium hover:bg-gray-50">Cancelar</button>
-              <button onClick={salvarNovoProc} disabled={salvandoProc}
-                className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2">
-                {salvandoProc && <Loader2 size={13} className="animate-spin" />} Salvar
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* ── Formulário do procedimento: Categoria · Procedimento · Valor ── */}
+      {showProcModal && (
+        <ProcedimentoModal
+          item={procEditando}
+          especialidades={especialidades}
+          imagemCategorias={imagemCategorias}
+          categoriaInicial={espSel}
+          salvando={salvandoProc}
+          erro={erroProc}
+          onSalvar={salvarProcedimento}
+          onFechar={() => { setShowProcModal(false); setProcEditando(null); setErroProc(null); }}
+        />
       )}
 
       {/* ── Modal: combo (gestor) ── */}
@@ -1042,7 +1064,7 @@ export default function CadastroProcedimento() {
                 </div>
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Valor Cliente *</label>
+                <label className="block text-xs text-gray-500 mb-1">Valor *</label>
                 <input type="text" inputMode="numeric" placeholder="R$ 0,00" value={comboValor}
                   onChange={e => setComboValor(maskBRL(e.target.value))} className={inputCls} />
                 {comboIds.length > 0 && somaItensCombo > 0 && (
@@ -1140,6 +1162,18 @@ export default function CadastroProcedimento() {
           </div>
         </div>
       )}
+
+      {/* Só a INATIVAÇÃO pede justificativa — ativar é correção e vai direto. */}
+      <ModalJustificativa
+        aberto={inativandoProc !== null}
+        titulo="Inativar procedimento"
+        descricao={inativandoProc
+          ? `O procedimento "${inativandoProc.nome}" deixa de aparecer no Orçamento e na Prescrição desta clínica. Orçamentos e faturas que já o usaram não são alterados. Esta ação será registrada na auditoria.`
+          : undefined}
+        acaoLabel="Inativar"
+        onConfirmar={async motivo => { if (inativandoProc) await alternarAtivoProc(inativandoProc, motivo); }}
+        onFechar={() => setInativandoProc(null)}
+      />
 
       <ModalJustificativa
         aberto={comboToggle !== null}

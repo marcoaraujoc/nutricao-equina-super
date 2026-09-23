@@ -12,6 +12,9 @@ const {
   proximoMesReferencia,
 } = require('../lib/faturaUtils');
 const { origensPorItem } = require('../lib/faturaItemOrigens');
+// Fechamento POR ANIMAL: quais itens da fatura já foram encerrados à parte.
+// Colunas novas lidas/gravadas por SQL cru (o client Prisma pode não conhecê-las).
+const fechamentoAnimal = require('../lib/faturaFechamentoAnimal');
 const { resolverLogoPorProprietario } = require('../lib/logoEmpresaUtils');
 const { ehClienteDaEmpresa } = require('../lib/clienteEmpresa');
 const { lerDadosRecebimento } = require('../lib/dadosRecebimento');
@@ -22,6 +25,9 @@ const {
   aplicarPerfil: aplicarPerfilProprietario,
   aplicarPerfilEmLista: aplicarPerfilProprietarioEmLista,
 } = require('../lib/proprietarioPerfil');
+// COMO o cliente quer receber a fatura (e-mail / WhatsApp / impresso) — é o que
+// decide quais botões de envio a tela habilita para CADA cliente.
+const formasFatura = require('../lib/formasRecebimentoFatura');
 const { htmlParaPdf } = require('../services/documentoWhatsappService');
 const { storage, chaveDaUrl } = require('../storage');
 const { criarLink: criarLinkFaturaPublico, revogar: revogarLinkFaturaPublico } = require('../lib/faturaLinkPublico');
@@ -37,7 +43,11 @@ const emailService = require('../services/emailService');
 // tela cobria o caso de pagamento parcial que isso exigiria).
 async function comPerfilDaEmpresa(fatura, empresaId) {
   if (!fatura) return fatura;
-  const comOrigem = await comOrigensDetalhadas(comOrigemDosItens(fatura));
+  // `fechadoEm` vem à parte porque o `include` tipado não traz coluna que o client
+  // Prisma ainda não conhece — e sem ela a tela mostraria como ABERTO um bloco de
+  // paciente já encerrado (com o botão "Fechar" de volta e o valor contando duas vezes).
+  const comFechamento = await fechamentoAnimal.anexarFechamento(fatura);
+  const comOrigem = await comOrigensDetalhadas(comOrigemDosItens(comFechamento));
   return comOrigem.proprietario && empresaId
     ? { ...comOrigem, proprietario: await aplicarPerfilProprietario(comOrigem.proprietario, empresaId) }
     : comOrigem;
@@ -66,7 +76,17 @@ async function comPerfilDaEmpresa(fatura, empresaId) {
 async function comOrigensDoItem(item) {
   if (!item) return item;
   const mapa = await origensPorItem(prisma, [item.id]);
-  return { ...item, origens: mapa.get(item.id) ?? [] };
+  // Mesmo motivo de `comPerfilDaEmpresa`: a resposta do POST/PUT SUBSTITUI a linha no
+  // estado da tela. Devolvê-la sem `fechadoEm` faria uma linha de bloco fechado voltar
+  // a parecer aberta logo depois de ser editada.
+  const fechados = await fechamentoAnimal.fechadosDaFatura(prisma, item.faturaId);
+  const f = fechados.get(Number(item.id));
+  return {
+    ...item,
+    origens:      mapa.get(item.id) ?? [],
+    fechadoEm:    f?.fechadoEm ?? null,
+    fechadoPorId: f?.fechadoPorId ?? null,
+  };
 }
 
 async function comOrigensDetalhadas(fatura) {
@@ -450,6 +470,94 @@ async function gerarLinkPublicoDaFatura({ fatura, req, html, nomeArquivo, canal,
   });
 }
 
+/**
+ * Fecha ou reabre o bloco de UM animal dentro da fatura. Os dois sentidos compartilham
+ * TODA a validação (escopo da empresa, status da fatura, existência do bloco) — separá-los
+ * em duas funções faria a guarda divergir na primeira correção que tocasse só uma delas.
+ *
+ * Responde com a fatura inteira: a tela precisa do total novo E do estado de cada bloco,
+ * e devolver só o contador obrigaria a um segundo GET para não exibir valor desatualizado.
+ */
+async function alterarFechamentoDoAnimal(req, res, { fechando }) {
+  const faturaId = Number(req.params.faturaId);
+  const animalId = Number(req.params.animalId);
+  const { motivo } = req.body ?? {};
+
+  if (!Number.isInteger(faturaId) || !Number.isInteger(animalId)) {
+    return res.status(400).json({ error: 'Fatura ou paciente inválido' });
+  }
+
+  try {
+    const alvo = await prisma.fatura.findUnique({
+      where:  { id: faturaId },
+      select: { id: true, empresaId: true, status: true, mesReferencia: true },
+    });
+    // Fatura de outra clínica responde 404 (e não 403): não se confirma que ela existe.
+    if (!alvo || faturaForaDoEscopo(alvo, req)) {
+      return res.status(404).json({ error: 'Fatura não encontrada' });
+    }
+    // 🔴 FATURA PAGA É SOMENTE LEITURA — a mesma regra de `adicionarItem`/`atualizarItem`.
+    // Mover valor para dentro ou para fora do total de uma cobrança já quitada mudaria
+    // o que o cliente pagou.
+    if (alvo.status === 'PAGA') {
+      return res.status(400).json({ error: 'Fatura já paga não pode ser alterada.', code: 'FATURA_PAGA' });
+    }
+    if (alvo.status === 'CANCELADA') {
+      return res.status(400).json({ error: 'Fatura cancelada não pode ser alterada.', code: 'FATURA_CANCELADA' });
+    }
+
+    // Sem a migration aplicada o fechamento por animal simplesmente não existe — e é
+    // melhor dizer isso do que gravar nada e responder "fechado" com o total intacto.
+    if (!(await fechamentoAnimal.temColunas())) {
+      return res.status(503).json({
+        error: 'Fechamento por paciente indisponível: migração do banco pendente.',
+        code:  'FECHAMENTO_ANIMAL_INDISPONIVEL',
+      });
+    }
+
+    const afetaveis = fechando
+      ? await fechamentoAnimal.contarAbertosDoAnimal(prisma, faturaId, animalId)
+      : await fechamentoAnimal.contarFechadosDoAnimal(prisma, faturaId, animalId);
+    if (afetaveis === 0) {
+      return res.status(400).json({
+        error: fechando
+          ? 'Não há lançamentos em aberto deste paciente nesta fatura.'
+          : 'Não há lançamentos fechados deste paciente nesta fatura.',
+        code: fechando ? 'NADA_A_FECHAR' : 'NADA_A_REABRIR',
+      });
+    }
+
+    // Marcar os itens, recalcular os dois totais e registrar o rastro na MESMA
+    // transaction: ou a fatura muda de valor com a auditoria junto, ou nada acontece.
+    const afetados = await prisma.$transaction(async (tx) => {
+      const n = fechando
+        ? await fechamentoAnimal.fecharAnimal(tx, { faturaId, animalId, userId: req.user.id })
+        : await fechamentoAnimal.reabrirAnimal(tx, { faturaId, animalId });
+      await recalcularTotalCompartilhado(tx, faturaId);
+      await registrarAuditoria(tx, req, {
+        categoria:  'ALTERACAO',
+        entidade:   'FATURA',
+        entidadeId: faturaId,
+        animalId,
+        motivo:     motivo?.trim() || null,
+        detalhes:   `${fechando ? 'Fechamento' : 'Reabertura'} do bloco do paciente na fatura`
+                    + `${alvo.mesReferencia ? ` · ${alvo.mesReferencia}` : ''}`
+                    + ` (${n} ${n === 1 ? 'lançamento' : 'lançamentos'})`,
+      });
+      return n;
+    });
+
+    const fatura = await prisma.fatura.findUnique({ where: { id: faturaId }, include: FATURA_INCLUDE });
+    return res.json({
+      dados: await comPerfilDaEmpresa(fatura, req.empresaId),
+      afetados,
+    });
+  } catch (err) {
+    console.error('Erro ao alterar fechamento do paciente na fatura:', err);
+    return res.status(500).json({ error: 'Erro interno' });
+  }
+}
+
 const FaturaController = {
 
   // GET /proprietarios
@@ -497,7 +605,10 @@ const FaturaController = {
         const faturaFechada  = prop.faturas.find(f => f.status === 'FECHADA')  ?? null;
         const faturaAtrasada = prop.faturas.find(f => f.status === 'ATRASADA') ?? null;
         const faturaPaga     = prop.faturas.find(f => f.status === 'PAGA')     ?? null;
-        const dados = [{ ...prop, faturaAtiva: faturaAberta ?? null, faturaReaberta, faturaFechada, faturaAtrasada, faturaPaga, faturas: undefined }];
+        const dados = await formasFatura.anexarFormas(
+          [{ ...prop, faturaAtiva: faturaAberta ?? null, faturaReaberta, faturaFechada, faturaAtrasada, faturaPaga, faturas: undefined }],
+          empresaId,
+        );
         return res.json({ dados });
       }
 
@@ -598,8 +709,11 @@ const FaturaController = {
 
       // Nome/telefone/condição comercial conforme o cadastro DESTA empresa
       const comPerfil = await aplicarPerfilProprietarioEmLista(proprietarios, req.empresaId);
+      // Preferência de recebimento do cadastro DESTA empresa. Cliente sem escolha
+      // declarada volta com TODAS — é o comportamento que a tela sempre teve.
+      const comFormas = await formasFatura.anexarFormas(comPerfil, req.empresaId);
 
-      const dados = comPerfil
+      const dados = comFormas
         // 🔴 CLIENTE SEM PACIENTE NÃO ENTRA NA LISTA (a pedido, 2026-09-02). A tela de
         // Faturamento é por PACIENTE — o lançamento, o rateio e a seção "Informação do
         // Cavalo" da fatura partem dele —, então um cliente sem nenhum animal no escopo
@@ -1183,6 +1297,31 @@ const FaturaController = {
     }
   },
 
+  // PATCH /:faturaId/animais/:animalId/fechar     { motivo? }
+  // PATCH /:faturaId/animais/:animalId/reabrir
+  //
+  // 🔴 FECHAR A FATURA POR ANIMAL (2026-09-22). A fatura é do PROPRIETÁRIO e junta
+  // todos os pacientes dele; isto encerra o bloco de UM deles dentro dela. Os itens
+  // daquele animal ficam marcados (`fechado_em`) e SAEM do total da fatura — que é o
+  // que permite acertar o cavalo vendido/transferido no meio do ciclo sem cobrar junto
+  // o que ainda está aberto dos outros pacientes, e sem remover item (remover APAGA a
+  // cobrança; fechar a preserva e só a tira desta conta).
+  //
+  // ⚠️ NÃO é "pago" nem "cancelado": o bloco continua DEVIDO, só é acertado à parte —
+  // por isso o valor vai para `Fatura.totalFechado` em vez de sumir.
+  // ⚠️ NÃO congela os itens. Fatura FECHADA no S2Vet segue aceitando correção de item
+  // (CLAUDE.md §12, "Fatura fechada vs paga"); bloquear só aqui criaria uma regra que
+  // o resto do financeiro não tem. Quem congela é o status PAGA, e ele é conferido.
+  // ⚠️ Fechar de novo depois de novas cobranças é ESPERADO: só o que está aberto é
+  // marcado, e a data do fechamento anterior fica de pé.
+  fecharAnimal: async (req, res) => {
+    return alterarFechamentoDoAnimal(req, res, { fechando: true });
+  },
+
+  reabrirAnimal: async (req, res) => {
+    return alterarFechamentoDoAnimal(req, res, { fechando: false });
+  },
+
   // POST /fechar-lote  { faturaIds: number[] }
   // Fecha em lote as faturas ABERTAS informadas (IDs vêm da lista já escopada por
   // listarProprietarios). Aplica a mesma regra de fecharFatura (assistência mensal
@@ -1340,3 +1479,4 @@ module.exports.adicionarAssistenciaMensal      = adicionarAssistenciaMensal;
 module.exports.abrirProximaFatura              = abrirProximaFatura;
 module.exports.diaVencimentoDoProprietario     = diaVencimentoDoProprietario;
 module.exports.recalcularTotal            = recalcularTotal;
+module.exports.alterarFechamentoDoAnimal  = alterarFechamentoDoAnimal;

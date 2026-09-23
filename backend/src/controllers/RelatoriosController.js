@@ -21,6 +21,7 @@ const {
 } = require('./RelatorioGerencialController');
 
 const { valorLiquidoItem } = require('../lib/faturaUtils');
+const { totalFechadoPorFatura } = require('../lib/faturaFechamentoAnimal');
 const { motivosDeOrcamentos, motivosDeItens } = require('../lib/orcamentoRecusa');
 
 // Receita = valor líquido do item (bruto − desconto). Toda query que alimenta este
@@ -115,7 +116,7 @@ const computarFinanceiro = async (req) => {
       prisma.fatura.findMany({
         // REABERTA conta como fatura em aberto — ver DashboardController.
         where:  { status: { in: ['ABERTA', 'REABERTA', 'FECHADA'] }, ...propWhere },
-        select: { total: true, mesReferencia: true },
+        select: { id: true, total: true, mesReferencia: true },
       }),
     ]);
 
@@ -145,10 +146,20 @@ const computarFinanceiro = async (req) => {
     }
 
     // Contas a receber / vencidas — vencidas relativas ao mês de referência do período
+    //
+    // 🔴 SOMA `total + totalFechado` (2026-09-22). Desde o fechamento por animal,
+    // `Fatura.total` é só o que a fatura AINDA cobra; o bloco de paciente fechado à
+    // parte saiu de lá mas continua DEVIDO — é acertado separadamente, não perdoado.
+    // Somar só `total` faria este indicador encolher a cada fechamento, em silêncio.
+    // ⚠️ `faturamentoPeriodo` acima NÃO muda: ele soma os ITENS, e o item fechado à
+    // parte continua sendo receita reconhecida. As duas contas olham coisas
+    // diferentes e é correto que não mudem juntas.
+    const fechadoPorFatura = await totalFechadoPorFatura(prisma, faturasReceber.map(f => f.id));
     let contasReceber = 0, contasVencidas = 0;
     for (const f of faturasReceber) {
-      contasReceber += f.total ?? 0;
-      if (f.mesReferencia && f.mesReferencia < mesRef) contasVencidas += f.total ?? 0;
+      const devido = (f.total ?? 0) + (fechadoPorFatura.get(f.id) ?? 0);
+      contasReceber += devido;
+      if (f.mesReferencia && f.mesReferencia < mesRef) contasVencidas += devido;
     }
     const inadimplencia = contasReceber > 0 ? (contasVencidas / contasReceber) * 100 : 0;
 

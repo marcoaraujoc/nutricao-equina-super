@@ -32,5 +32,10 @@ router.get   ('/',    authenticate, checkPermission('cadastro.produto.ler',    '
 router.post  ('/',    authenticate, checkPermission('cadastro.produto.criar',   'PROPRIO'), ProdutoController.criar);
 router.put   ('/:id', authenticate, checkPermission('cadastro.produto.editar',  'PROPRIO'), ProdutoController.atualizar);
 router.delete('/:id', authenticate, checkPermission('cadastro.produto.deletar', 'PROPRIO'), ProdutoController.excluir);
+// ATIVAR/INATIVAR — o que a tela oferece desde 2026-09-22, no lugar do "Excluir".
+// ⚠️ Mesmo slug do `deletar`: inativar É a exclusão lógica deste cadastro, e quem
+// pode tirá-lo da frente é quem pode reativá-lo — criar um slug novo faria o gestor
+// configurar duas permissões para um par de ações que é um só.
+router.patch('/:id/toggle', authenticate, checkPermission('cadastro.produto.deletar', 'PROPRIO'), ProdutoController.toggleAtivo);
 
 module.exports = router;

@@ -2,6 +2,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { totalFechadoPorFatura } = require('../lib/faturaFechamentoAnimal');
 const { fusoDaEmpresa } = require('../lib/fusoEmpresa');
 const { animalVisivelNaEmpresa } = require('../lib/visibilidade');
 const {
@@ -106,12 +107,19 @@ const stats = async (req, res) => {
         // REABERTA entra junto: é fatura NÃO PAGA, e sair do indicador só porque
         // alguém a destravou para corrigir uma linha esconderia dinheiro a receber.
         where:  { status: { in: ['ABERTA', 'REABERTA', 'FECHADA'] }, mesReferencia: { lt: hoje.toISOString().slice(0, 7) }, ...(empresaId ? { empresaId } : {}), ...propWhere },
-        select: { total: true },
+        select: { id: true, total: true },
       }),
       carregarAnimaisComUltimoAtendimento(animalWhere),
     ]);
 
-    const contasReceberVencidas = faturasVencidas.reduce((s, f) => s + (f.total ?? 0), 0);
+    // 🔴 O BLOCO DE PACIENTE FECHADO À PARTE CONTINUA DEVIDO (2026-09-22).
+    // Desde o fechamento por animal, `Fatura.total` é só o que a fatura AINDA cobra —
+    // o que saiu foi para `total_fechado`. Somar só `total` faria o indicador de contas
+    // a receber ENCOLHER a cada bloco fechado, sem erro e sem log, e ninguém ligaria a
+    // queda a um fechamento feito semanas antes. Ver lib/faturaFechamentoAnimal.js.
+    const fechadoPorFatura = await totalFechadoPorFatura(prisma, faturasVencidas.map(f => f.id));
+    const contasReceberVencidas = faturasVencidas.reduce(
+      (s, f) => s + (f.total ?? 0) + (fechadoPorFatura.get(f.id) ?? 0), 0);
     const semAtendimento = blocoSemAtendimento(animaisUltimo);
 
     // Atendimentos por dia (últimos 30 dias) — raw SQL para DATE_TRUNC.

@@ -214,6 +214,15 @@ model Animal {
   numeroChip         String?   @map("numero_chip") @db.VarChar(50)
   finalidade         String?   @db.VarChar(100)
   seguradora         String?   @db.VarChar(150)
+  /// Inscrito na FEI (Fédération Équestre Internationale) — migration
+  /// 20261016000000. SIM/NÃO em coluna própria (e não mais texto dentro de
+  /// `registro_passaporte`, que guarda o NÚMERO do registro): é o que decide
+  /// elegibilidade para prova internacional e precisa ser filtrável.
+  /// ⚠️ Leitura/escrita SEMPRE por `lib/animalFei.js` (SQL cru com guarda de
+  /// existência da coluna) — no Windows o `prisma generate` falha com o backend
+  /// rodando, e um campo desconhecido no `animal.create` derrubaria o CADASTRO
+  /// INTEIRO do paciente, não só o campo novo.
+  registradoFei      Boolean   @default(false) @map("registrado_fei")
 
   // TRANSFERÊNCIA DE PROPRIEDADE — `propriedadeDesde` é uma CÓPIA RÁPIDA da
   // `dataInicio` da janela ABERTA (dataFim=null) em `AnimalProprietarioHistorico`,
@@ -1312,7 +1321,14 @@ model Fatura {
   animalId         Int? // legado — manter para compatibilidade com prescricoes antigas
   proprietarioId   Int?
   mesReferencia    String?      @db.VarChar(7) // "2026-06"
+  // 🔴 O QUE ESTA FATURA COBRA — só os itens ABERTOS. O bloco de um animal fechado à
+  // parte (`FaturaItem.fechadoEm`) sai daqui e vai para `totalFechado`.
   total            Float        @default(0)
+  // O que SAIU do total por fechamento POR ANIMAL. Existe para que nenhum indicador
+  // perca dinheiro calado: o bloco fechado continua DEVIDO (só é acertado à parte),
+  // então "contas a receber" e "devedores" somam `total + totalFechado`.
+  // Mantido por `recalcularTotal` (lib/faturaUtils.js), junto com `total`.
+  totalFechado     Float        @default(0) @map("total_fechado")
   status           String       @default("ABERTA") // ABERTA | PAGA | CANCELADA
   criadoEm         DateTime     @default(now())
   qtdCorrecoes     Int          @default(0) @map("qtd_correcoes") // nº de edições/remoções de itens existentes
@@ -1422,6 +1438,16 @@ model FaturaItem {
   // Desconto do item: PERCENTUAL (0-100) ou VALOR (R$ sobre o bruto). null/0 = sem desconto.
   descontoTipo            String?  @map("desconto_tipo") @db.VarChar(12)
   descontoValor           Float    @default(0) @map("desconto_valor")
+  // 🔴 FECHAMENTO POR ANIMAL (2026-09-22): preenchido = esta linha já foi encerrada
+  // junto com o bloco do paciente dela e NÃO entra mais em `Fatura.total` (vai para
+  // `Fatura.totalFechado`). null = linha aberta, o estado de sempre.
+  // ⚠️ A marca é do ITEM, não do par (fatura, animal): é isso que faz a cobrança que
+  // chega DEPOIS do fechamento nascer aberta e voltar a contar — com a marca no par,
+  // toda dose aplicada depois cairia dentro de um bloco encerrado, sem ser cobrada.
+  fechadoEm               DateTime? @map("fechado_em")
+  // Quem fechou. SEM FK de propósito (registro histórico — ver a migration):
+  // conta excluída depois não pode apagar nem alterar quem encerrou a cobrança.
+  fechadoPorId            Int?      @map("fechado_por_id")
 
   fatura                Fatura                 @relation(fields: [faturaId], references: [id])
   origens               FaturaItemOrigem[]     @relation("FaturaItemOrigens")
@@ -1440,6 +1466,9 @@ model FaturaItem {
   @@index([orcamentoItemId])
   @@index([faturaId])
   @@index([animalId])
+  // O recorte do fechamento por animal: os itens de UM paciente dentro de UMA fatura,
+  // separando abertos de fechados.
+  @@index([faturaId, animalId, fechadoEm])
   @@map("tb_fatura_itens")
   @@schema("schs2vet")
 }
@@ -2321,6 +2350,15 @@ model ProprietarioPerfil {
   valorAssistencia    Float?    @map("valor_assistencia")
   frequenciaVisitas   Int?      @map("frequencia_visitas")
   diaVencimentoFatura Int?      @map("dia_vencimento_fatura")
+  // COMO o cliente quer receber a fatura NESTA empresa (migration 20261017000000):
+  // CSV de EMAIL|WHATSAPP|IMPRESSO — pode ser mais de uma. NULL/vazio = TODAS, que é
+  // o comportamento de toda a base anterior à coluna (por isso a migration não tem
+  // backfill: escolher por alguém TIRARIA um botão de envio que a clínica usa hoje).
+  // 🔴 LEITURA/ESCRITA SEMPRE por lib/formasRecebimentoFatura.js (SQL cru) — a coluna
+  // NÃO entra em CAMPOS_PERFIL de lib/proprietarioPerfil.js de propósito: aquele
+  // monta o `select` TIPADO, e no Windows o `prisma generate` falha com o backend no
+  // ar, então um client defasado derrubaria o cadastro de cliente inteiro (§11).
+  formasRecebimentoFatura String? @map("formas_recebimento_fatura") @db.VarChar(60)
   // Ativo DENTRO desta empresa (User.ativo continua global, só o ADMIN mexe)
   ativo               Boolean   @default(true)
   // Trilha de ATIVAÇÃO/INATIVAÇÃO (quem fez, quando) — mesma lógica de Fornecedor/
@@ -2978,6 +3016,13 @@ model Fornecedor {
   email         String?   @db.VarChar(255) // obrigatório na app (nullable p/ legado) — usado p/ vincular ao User
   tipoServico   String    @map("tipo_servico") @db.VarChar(50)
   tipoEntrada   String    @default("CLIENTE") @map("tipo_entrada") @db.VarChar(10)
+  // Vencimento da CONTA A PAGAR deste credor (migration 20261020000000) — a mesma
+  // forma do fechamento da fatura no cadastro da empresa: uma FORMA (DIA_FIXO |
+  // DIA_UTIL | ULTIMO_DIA_MES) e o número que só faz sentido dentro dela. NULL = o
+  // credor não declarou vencimento, e a conta dele nunca atrasa.
+  // LEITURA/ESCRITA: sempre por `lib/vencimentoCredor.js`.
+  tipoVencimento String?  @map("tipo_vencimento") @db.VarChar(20)
+  diaVencimento  Int?     @map("dia_vencimento")
   cep           String?   @db.VarChar(10)
   endereco      String?   @db.VarChar(500)
   complemento   String?   @db.VarChar(255)
@@ -3038,6 +3083,9 @@ model Prestador {
   // especialidade (`FornecedorEspecialidade`), nunca uma lista digitada.
   tipoServico    String    @map("tipo_servico") @db.VarChar(255)
   tipoEntrada    String    @default("CLIENTE") @map("tipo_entrada") @db.VarChar(10)
+  // Vencimento da CONTA A PAGAR deste prestador — ver a nota gêmea em `Fornecedor`.
+  tipoVencimento String?   @map("tipo_vencimento") @db.VarChar(20)
+  diaVencimento  Int?      @map("dia_vencimento")
   cep            String?   @db.VarChar(10)
   endereco       String?   @db.VarChar(500)
   complemento    String?   @db.VarChar(255)

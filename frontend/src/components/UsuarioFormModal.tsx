@@ -23,6 +23,9 @@ import {
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
+/** Espelho de `TIPOS_PAGAMENTO` em `backend/src/lib/usuarioEmpresa.js`. */
+export type TipoPagamento = 'SALARIO' | 'COMISSAO' | 'DIARIA';
+
 export interface UsuarioFormValues {
   fullName: string;
   email: string;
@@ -39,7 +42,7 @@ export interface UsuarioFormValues {
   estado: string;
   /** Remuneração do profissional NESTA empresa — obrigatória no cadastro do membro.
    *  O acordo é com cada clínica: salário aqui, comissão ali (ver tb_usuario_empresa). */
-  tipoPagamento?:  'SALARIO' | 'COMISSAO' | '';
+  tipoPagamento?:  TipoPagamento | '';
   formaPagamento?: 'VALOR' | 'PERCENTUAL';
   valorPagamento?: string;
   /** Sem acesso, a pessoa fica só como cadastro da clínica e NÃO loga na aplicação. */
@@ -205,10 +208,36 @@ const FORM_VAZIO: UsuarioFormValues = {
   tipoPagamento: '', formaPagamento: 'VALOR', valorPagamento: '', acessoSistema: true,
 };
 
-export const TIPOS_PAGAMENTO: Array<{ value: 'SALARIO' | 'COMISSAO'; label: string }> = [
+/**
+ * 🔴 `DIARIA` entrou em 2026-09-22 (a pedido): paga-se o valor de UM DIA, e o total
+ * do período é ele MULTIPLICADO pelos dias de trabalho cadastrados nos locais do
+ * membro. Espelho de `TIPOS_PAGAMENTO` em `lib/usuarioEmpresa.js`, que é a
+ * autoridade — acrescentar um tipo aqui sem acrescentá-lo lá faz o salvar recusar
+ * com "Tipo de pagamento inválido", depois do formulário inteiro preenchido.
+ */
+export const TIPOS_PAGAMENTO: Array<{ value: TipoPagamento; label: string }> = [
   { value: 'SALARIO',  label: 'Salário'  },
   { value: 'COMISSAO', label: 'Comissão' },
+  { value: 'DIARIA',   label: 'Diária'   },
 ];
+
+/** Diária é SEMPRE em R$: "50% de diária" não designa quantia nenhuma. */
+export const FORMA_FIXA_POR_TIPO: Partial<Record<TipoPagamento, 'VALOR' | 'PERCENTUAL'>> = {
+  DIARIA: 'VALOR',
+};
+
+/**
+ * Dias de trabalho por SEMANA que o cadastro do membro declara — a base da
+ * multiplicação da diária.
+ * ⚠️ Conta dia DISTINTO, não uma entrada por local: quem atende segunda no Haras A
+ * e segunda no Haras B trabalhou UM dia, e somar dois pagaria a diária em dobro por
+ * um dia só. A pessoa não se divide entre dois lugares no mesmo dia.
+ */
+export function diasDeTrabalhoNaSemana(locais?: LocalTrabalhoForm[]): number {
+  const dias = new Set<number>();
+  for (const l of locais ?? []) for (const d of l.diasTrabalho ?? []) dias.add(d);
+  return dias.size;
+}
 
 /** Rótulo pronto da remuneração — usado no Cadastro Pessoal (somente leitura). */
 export function rotuloPagamento(
@@ -219,7 +248,9 @@ export function rotuloPagamento(
   const numero = forma === 'PERCENTUAL'
     ? `${String(valor).replace('.', ',')}%`
     : valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-  return `${nomeTipo} · ${numero}`;
+  // A diária precisa dizer A QUE o valor corresponde: "Diária · R$ 150,00" sozinho
+  // se lê como o total do mês.
+  return tipo === 'DIARIA' ? `${nomeTipo} · ${numero} por dia` : `${nomeTipo} · ${numero}`;
 }
 
 // Dias da semana (0=Dom … 6=Sáb) — mesma convenção de Date.getDay()
@@ -858,7 +889,7 @@ export default function UsuarioFormModal({
     const pagamentoIniciado  = !!form.tipoPagamento || valorPagamentoNumero(form.valorPagamento) > 0;
     const pagamentoAplicavel = comVinculoEmpresa && !ocultarPagamento && (!cargoEhGestor || pagamentoIniciado);
     if (pagamentoAplicavel) {
-      if (!form.tipoPagamento) { setErroInline('Informe o tipo de pagamento (salário ou comissão)'); return; }
+      if (!form.tipoPagamento) { setErroInline('Informe o tipo de pagamento (salário, comissão ou diária)'); return; }
       const valorNum = valorPagamentoNumero(form.valorPagamento);
       if (!Number.isFinite(valorNum) || valorNum <= 0) {
         setErroInline('Informe o valor do pagamento'); return;
@@ -1370,14 +1401,17 @@ export default function UsuarioFormModal({
                   <label className={labelCls}>Tipo de pagamento{!cargoEhGestor && ' *'}</label>
                   <select value={form.tipoPagamento ?? ''}
                     onChange={e => {
-                      const tipo = e.target.value as 'SALARIO' | 'COMISSAO' | '';
+                      const tipo = e.target.value as TipoPagamento | '';
                       // Comissão quase sempre é percentual, e salário é valor fixo —
                       // a forma acompanha o tipo escolhido. Continua editável: quem
                       // acertou comissão em R$ fixo só troca o seletor ao lado.
+                      // ⚠️ DIÁRIA é a exceção: a forma é FIXA em R$ (o seletor ao lado
+                      // fica travado), porque "50% de diária" não designa quantia.
                       setForm(prev => {
-                        const forma = tipo === 'COMISSAO' ? 'PERCENTUAL'
-                                    : tipo === 'SALARIO'  ? 'VALOR'
-                                    : prev.formaPagamento;
+                        const forma = FORMA_FIXA_POR_TIPO[tipo as TipoPagamento]
+                                    ?? (tipo === 'COMISSAO' ? 'PERCENTUAL'
+                                    :   tipo === 'SALARIO'  ? 'VALOR'
+                                    :   prev.formaPagamento);
                         return {
                           ...prev,
                           tipoPagamento:  tipo,
@@ -1393,7 +1427,9 @@ export default function UsuarioFormModal({
                   </select>
                 </div>
                 <div>
-                  <label className={labelCls}>Valor{!cargoEhGestor && ' *'}</label>
+                  <label className={labelCls}>
+                    {form.tipoPagamento === 'DIARIA' ? 'Valor da diária' : 'Valor'}{!cargoEhGestor && ' *'}
+                  </label>
                   <div className="flex items-stretch border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
                     <span className="px-3 flex items-center text-sm text-gray-400 bg-gray-50 border-r border-gray-200">
                       {form.formaPagamento === 'PERCENTUAL' ? '%' : 'R$'}
@@ -1405,7 +1441,11 @@ export default function UsuarioFormModal({
                       className="flex-1 min-w-0 px-3 py-2.5 text-sm text-gray-900 focus:outline-none" />
                     {/* Trocar R$ ↔ % REAPLICA a máscara sobre o que já está digitado:
                         sem isso, "3.500,00" sobrevivia como percentual (e vice-versa). */}
+                    {/* Tipo com forma FIXA (hoje só a diária) trava o seletor: o
+                        backend recusaria o percentual, e um campo que aceita a escolha
+                        para depois reprovar no salvar é a armadilha 28-d. */}
                     <select value={form.formaPagamento ?? 'VALOR'}
+                      disabled={!!FORMA_FIXA_POR_TIPO[form.tipoPagamento as TipoPagamento]}
                       onChange={e => {
                         const forma = e.target.value as 'VALOR' | 'PERCENTUAL';
                         setForm(prev => ({
@@ -1414,13 +1454,42 @@ export default function UsuarioFormModal({
                           valorPagamento: mascaraValorPagamento(prev.valorPagamento ?? '', forma),
                         }));
                       }}
-                      className="px-2 text-sm text-gray-600 bg-gray-50 border-l border-gray-200 focus:outline-none cursor-pointer">
+                      className="px-2 text-sm text-gray-600 bg-gray-50 border-l border-gray-200 focus:outline-none cursor-pointer disabled:cursor-not-allowed disabled:text-gray-400">
                       <option value="VALOR">R$</option>
                       <option value="PERCENTUAL">%</option>
                     </select>
                   </div>
                 </div>
               </div>
+
+              {/* 🔴 A CONTA DA DIÁRIA FICA VISÍVEL NA HORA DE ACERTÁ-LA (2026-09-22).
+                  A diária só significa alguma coisa multiplicada pelos DIAS DE
+                  TRABALHO, e esses dias estão logo acima, na seção de locais — mostrar
+                  o produto aqui é o que deixa o gestor conferir o acordo antes de
+                  salvar, em vez de descobrir o total no fim do mês.
+                  ⚠️ É CÁLCULO EXIBIDO, não campo gravado: o que vai ao banco continua
+                  sendo o valor do DIA. Gravar o total congelaria a conta e faria o
+                  acordo mentir assim que os dias de trabalho mudassem.
+                  ⚠️ Sem local cadastrado o aviso diz o que falta — um "× 0 = R$ 0,00"
+                  pareceria defeito do sistema. */}
+              {form.tipoPagamento === 'DIARIA' && (() => {
+                const dias  = diasDeTrabalhoNaSemana(form.locaisTrabalho);
+                const valor = valorPagamentoNumero(form.valorPagamento);
+                const emReais = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+                return (
+                  <p className="mt-2 text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
+                    {dias === 0
+                      ? 'A diária é multiplicada pelos dias de trabalho dos locais cadastrados — nenhum local com dias informados até aqui.'
+                      : !Number.isFinite(valor) || valor <= 0
+                        ? `${dias} dia${dias > 1 ? 's' : ''} de trabalho por semana no cadastro. Informe o valor da diária para ver o total.`
+                        : <>
+                            <strong className="font-semibold text-gray-700">{emReais(valor)}</strong>
+                            {' × '}{dias} dia{dias > 1 ? 's' : ''} por semana ={' '}
+                            <strong className="font-semibold text-gray-700">{emReais(valor * dias)}</strong> por semana
+                          </>}
+                  </p>
+                );
+              })()}
             </section>
           )}
 

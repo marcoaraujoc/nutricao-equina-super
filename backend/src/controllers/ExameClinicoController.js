@@ -9,6 +9,7 @@ const { lancarExameNaFatura, removerFaturaItensDaOrigem, atualizarFaturaItensDaO
 // Preço/prestador do exame de imagem — colunas novas, lidas e gravadas por SQL cru.
 const exameValor = require('../lib/exameImagemValor');
 const vinculoPrestador = require('../lib/procedimentoPrestador');
+const contasPagar      = require('../lib/contasPagar');
 // `.doc` legado vira `.docx` no INGEST (convert-on-ingest) — ver lib/documentoConversao.js.
 // Sem isto o laudo `.doc` fica sem pre-visualizacao E sem leitura por IA.
 const { normalizarDocsLegados } = require('../lib/documentoConversao');
@@ -161,53 +162,127 @@ async function exameDuplicado(animalId, tipo, descricao, dataISO, ignorarId = nu
 }
 
 /**
- * 🔴 RECIBO DO PRESTADOR do exame de imagem (2026-09-09).
+ * 🔴 PAGAMENTO AO PRESTADOR DO EXAME (recibo + conta a pagar) — 2026-09-22.
  *
- * A CONCLUSÃO do exame é o equivalente, aqui, à EXECUÇÃO do procedimento: é quando o
- * serviço se completa e a clínica passa a dever a quem o executou. Sem esta linha, o
- * prestador que faz a radiografia é cobrado do cliente e não aparece em recibo nenhum.
+ * O exame CONCLUÍDO é, para o prestador externo, o equivalente ao procedimento
+ * EXECUTADO: é quando o serviço se completa e a clínica passa a dever a quem o fez.
+ * Este helper escreve as DUAS metades, exatamente como `PrescricaoGrupoController.
+ * executar` faz para o procedimento desde 2026-09-10:
  *
- * ⚠️ Só com PRESTADOR: exame executado pela própria equipe não gera recibo.
- * ⚠️ Best-effort e NUNCA lança — a conclusão do exame é ato clínico e não pode cair
- * porque o recibo não registrou. `registrarExecucao` já engole o próprio erro.
- * ⚠️ Idempotente por construção: `finalizar` recusa exame que já está CONCLUIDO, então
- * não há como gerar duas linhas para a mesma conclusão.
+ *   1. LEDGER do recibo (`tb_execucoes_procedimento_prestador`) — o documento do
+ *      outro lado do balcão, com o SNAPSHOT dos valores e da forma de pagamento.
+ *   2. CONTA A PAGAR (`lib/contasPagar.js`) — a dívida do mês daquele prestador, que
+ *      é o que aparece na tela de Pagamentos.
+ *
+ * ⚠️ O VALOR das duas sai do MESMO `calcularValorAPagar`: apurar cada uma por sua
+ * conta daria dois números para a mesma dívida, com o recibo e a conta discordando.
+ *
+ * ⚠️ LANÇA MESMO SEM VALOR (`permitirSemValor`), pela decisão de 2026-09-18: exame
+ * sem preço no vínculo, ou prestador sem forma de pagamento, devolve `valorAPagar`
+ * 0 — e antes disso a linha simplesmente NÃO existia, escondendo a pendência do
+ * financeiro em vez de evitá-la. Zero é honesto ("ninguém disse quanto vale"); o
+ * que continua proibido é adivinhar um número.
+ *
+ * ⚠️ VALE PARA TODO TIPO DE EXAME (a pedido), não só Imagem. Laboratorial e
+ * Bioquímico não têm preço no catálogo de procedimentos, então caem no caso acima —
+ * a dívida aparece zerada e o financeiro informa o valor na própria tela. Continuar
+ * recortando por Imagem deixaria de fora justamente o laboratório externo, que é o
+ * prestador mais comum desses dois.
+ *
+ * ⚠️ Só com PRESTADOR informado: exame feito pela própria equipe não deve nada a
+ * ninguém e não gera linha nenhuma.
+ *
+ * ⚠️ Best-effort e NUNCA lança — concluir exame é ato clínico e não pode cair
+ * porque o financeiro não registrou. `registrarExecucao` e `lancarItem` já engolem
+ * o próprio erro; o `try/catch` aqui cobre o resto (leitura do prestador, do preço).
+ *
+ * ⚠️ IDEMPOTENTE nas duas metades, e isso não é luxo: `salvarResultado` é
+ * REENVIÁVEL (recarregar o laudo, corrigir a tabela digitada). O ledger se protege
+ * pelo índice único de `exame_clinico_id`; a conta a pagar, pelo par
+ * (`EXAME_PRESTADOR`, id do exame).
  */
-async function registrarReciboDoExame(tx, req, exame, animalNome) {
+async function registrarPagamentoPrestadorDoExame(tx, req, exame, animalNome) {
   try {
     if (!req.empresaId) return;
     const dados = (await exameValor.lerPrestadorEValor(tx, exame.id)).get(exame.id);
     if (!dados?.prestadorId) return;
 
+    // Prestador DESTA empresa — sem o recorte, um id de outra clínica entraria no
+    // ledger e na conta a pagar desta (RLS não cobre o `findFirst` por id só).
     const prestador = await tx.prestador.findFirst({
       where:  { id: dados.prestadorId, empresaId: req.empresaId },
-      select: { tipoPagamento: true, formaPagamento: true, valorPagamento: true },
+      select: { nome: true, tipoPagamento: true, formaPagamento: true, valorPagamento: true },
     });
+    if (!prestador) return;
 
-    // `valorPrestador` do vínculo — o que ELE cobra da clínica. Resolvido pelo nome
-    // do exame, como no pedido.
+    // `valorPrestador` do vínculo — o que ELE cobra da clínica —, resolvido pelo nome
+    // do exame, como no pedido. Sem vínculo (laboratorial), vem null.
     const preco = await exameValor.precoDoPedido(
       tx, req.empresaId,
       String(exame.descricao ?? '').split(',').map(x => x.trim()).filter(Boolean),
       dados.prestadorId,
     );
 
+    // Base do PERCENTUAL: o que foi COBRADO DO CLIENTE por este exame — o mesmo
+    // número que foi para a fatura. Sem valor resolvido, a base é 0.
+    const valorCliente = dados.valorCobrado ?? 0;
+    const agora = new Date();
+
     await vinculoPrestador.registrarExecucao(tx, {
       empresaId:        req.empresaId,
       prestadorId:      dados.prestadorId,
+      exameClinicoId:   exame.id,
       animalId:         exame.animalId,
       animalNome,
       procedimentoNome: String(exame.descricao ?? '').slice(0, 255),
       quantidade:       1,
-      valorCliente:     dados.valorCobrado ?? 0,
+      valorCliente,
       valorPrestador:   preco.valorPrestador,
-      tipoPagamento:    prestador?.tipoPagamento  ?? null,
-      formaPagamento:   prestador?.formaPagamento ?? null,
-      valorPagamento:   prestador?.valorPagamento ?? null,
-      executadoEm:      new Date(),
+      tipoPagamento:    prestador.tipoPagamento  ?? null,
+      formaPagamento:   prestador.formaPagamento ?? null,
+      valorPagamento:   prestador.valorPagamento ?? null,
+      executadoEm:      agora,
       executadoPorId:   req.user?.id ?? null,
+      // Como no procedimento: a linha da fatura do exame é consolidada e não há um
+      // FaturaItem por conclusão para apontar. O recibo se sustenta sozinho.
+      faturaItemId:     null,
     });
-  } catch { /* recibo não derruba a conclusão do exame */ }
+
+    const { valorAPagar } = vinculoPrestador.calcularValorAPagar({
+      valorCliente,
+      valorPrestador: preco.valorPrestador,
+      tipoPagamento:  prestador.tipoPagamento  ?? null,
+      formaPagamento: prestador.formaPagamento ?? null,
+      valorPagamento: prestador.valorPagamento ?? null,
+      quantidade:     1,
+    });
+
+    // Quem PEDIU o exame é o solicitante da dívida — é o que a tela de Pagamentos
+    // mostra para o financeiro saber a quem perguntar sobre a linha.
+    const solicitante = exame.veterinarioId
+      ? await tx.user.findUnique({ where: { id: exame.veterinarioId }, select: { id: true, fullName: true } })
+      : null;
+
+    await contasPagar.lancarItem(tx, {
+      empresaId:       req.empresaId,
+      tipo:            'PRESTADOR',
+      credorId:        dados.prestadorId,
+      // Nome do credor como SNAPSHOT: a conta diz a quem se deve mesmo que o
+      // cadastro seja renomeado ou inativado depois.
+      credorNome:      prestador.nome ?? '',
+      animalId:        exame.animalId,
+      animalNome,
+      descricao:       String(exame.descricao ?? '').slice(0, 255),
+      quantidade:      1,
+      valor:           valorAPagar,
+      solicitanteId:   solicitante?.id ?? null,
+      solicitanteNome: solicitante?.fullName ?? '',
+      ocorridoEm:      agora,
+      origemTipo:      contasPagar.ORIGENS.EXAME_PRESTADOR,
+      origemId:        exame.id,
+      permitirSemValor: true,
+    });
+  } catch { /* o financeiro não derruba a conclusão do exame */ }
 }
 
 const ExameClinicoController = {
@@ -256,6 +331,18 @@ const ExameClinicoController = {
 
       // `versao` acompanha toda leitura — é ela que a tela devolve ao salvar.
       await anexarControle(prisma, 'EXAME_CLINICO', dados);
+
+      // QUEM EXECUTOU, para a tela de resultado já abrir com o prestador escolhido
+      // (2026-09-22). Lido por SQL cru — ver `lib/exameImagemValor.js`: as colunas
+      // são da migration 20261005000000 e um `select` tipado derrubaria a LISTAGEM
+      // INTEIRA numa base ainda não migrada. Base sem elas devolve Map vazio e os
+      // exames saem com `prestadorId: null`, como saíam antes.
+      const prestPorExame = await exameValor.lerPrestadorEValor(prisma, dados.map(d => d.id));
+      for (const d of dados) {
+        const p = prestPorExame.get(d.id);
+        d.prestadorId  = p?.prestadorId  ?? null;
+        d.valorCobrado = p?.valorCobrado ?? null;
+      }
 
       res.json({ dados, meta: { total: dados.length } });
     } catch (err) {
@@ -551,6 +638,11 @@ const ExameClinicoController = {
   criarNaoPedido: async (req, res) => {
     try {
       const { animalId, descricao, laboratorio, dataExame, resultado } = req.body;
+      // Exame avulso já nasce CONCLUÍDO (status REALIZADO), então o prestador é
+      // escolhido no MESMO formulário — é a única chance de informá-lo (ver a nota
+      // em `salvarResultado`). Ausente/vazio = executado pela própria equipe.
+      const prestadorEscolhido = /^\d+$/.test(String(req.body?.prestadorId ?? '').trim())
+        ? Number(req.body.prestadorId) : null;
       const tipoFinal = req.body.tipo === 'Bioquímico' ? 'Bioquímico'
         : req.body.tipo === 'Imagem' ? 'Imagem' : 'Laboratorial';
 
@@ -623,7 +715,7 @@ const ExameClinicoController = {
         }
       }
 
-      const animalDoExame = await prisma.animal.findUnique({ where: { id: Number(animalId) }, select: { userId: true } });
+      const animalDoExame = await prisma.animal.findUnique({ where: { id: Number(animalId) }, select: { userId: true, nome: true } });
       const agora = new Date();
       const observacaoFinal = tipoFinal === 'Imagem' ? null : JSON.stringify({
         laboratorio: laboratorio?.trim() || null, dataHoraColeta: null, tipoAmostra: null,
@@ -654,7 +746,26 @@ const ExameClinicoController = {
           },
         });
 
-        await lancarExameNaFatura(tx, criado, animalDoExame?.userId ?? null, req.empresaId ?? null);
+        // PREÇO E PRESTADOR, como em `criar`: o valor é resolvido AQUI e congelado.
+        // ⚠️ Antes de 2026-09-22 este caminho não gravava nem um nem outro, então o
+        // exame avulso ia SEMPRE zerado para a fatura — mesmo tendo preço no catálogo.
+        let valorCobrado = null;
+        if (req.empresaId) {
+          const nomes = String(descricao).split(',').map(x => x.trim()).filter(Boolean);
+          const preco = await exameValor.precoDoPedido(tx, req.empresaId, nomes, prestadorEscolhido);
+          valorCobrado = preco.valorCliente;
+          await exameValor.gravarPrestadorEValor(tx, criado.id, {
+            prestadorId: prestadorEscolhido, valorCobrado,
+          });
+        }
+
+        await lancarExameNaFatura(
+          tx, { ...criado, valorCobrado }, animalDoExame?.userId ?? null, req.empresaId ?? null,
+        );
+
+        // O exame já nasce concluído: o pagamento ao prestador nasce com ele, na
+        // MESMA transaction da cobrança do cliente.
+        await registrarPagamentoPrestadorDoExame(tx, req, criado, animalDoExame?.nome ?? '');
 
         for (const img of imagensNovas) {
           await tx.exameImagemAnexo.create({
@@ -822,6 +933,27 @@ const ExameClinicoController = {
         }
       }
 
+      // 🔴 QUEM EXECUTOU — escolhido na CONCLUSÃO, não no pedido (a pedido,
+      // 2026-09-22). O passo de prestador tinha saído da tela de pedido em
+      // 2026-09-11 ("o exame é do catálogo da clínica e sai pelo valor padrão dela"),
+      // e é aqui que ele volta: no pedido ninguém sabe ainda quem vai executar, e a
+      // dívida com o prestador nasce quando o serviço termina — o mesmo instante em
+      // que o procedimento escolhe o seu, na tela de Execução de Prescrição.
+      //
+      // ⚠️ CAMPO AUSENTE não mexe no que está gravado (reenvio de formulário parcial
+      // não pode apagar o prestador); string vazia é a opção "Não informar" e LIMPA.
+      // ⚠️ Trocar o prestador depois de o pagamento já ter sido registrado NÃO
+      // reescreve o registro: ledger e conta a pagar são append-only e idempotentes
+      // por exame. O que estiver errado se corrige na tela de Pagamentos, que é onde
+      // o financeiro decide — não em silêncio, por um reenvio de laudo.
+      const prestadorInformado = req.body?.prestadorId !== undefined;
+      const prestadorEscolhido = /^\d+$/.test(String(req.body?.prestadorId ?? '').trim())
+        ? Number(req.body.prestadorId) : null;
+
+      const animalDoExame = await prisma.animal.findUnique({
+        where: { id: exame.animalId }, select: { nome: true },
+      });
+
       const laudoTexto = (req.body?.resultado ?? '').toString().trim();
       // CONVERT-ON-INGEST — mesma razao de `criarNaoPedido`: o que fica guardado e o
       // `.docx`, entao pre-visualizacao e leitura por IA funcionam a jusante.
@@ -892,6 +1024,11 @@ const ExameClinicoController = {
             where: { id: exame.id },
             data:  { resultado: laudoFinal || exame.resultado, status: 'REALIZADO', dataResultado: dataResultadoFinal },
           });
+          if (prestadorInformado) await exameValor.gravarPrestador(tx, exame.id, prestadorEscolhido);
+          // NA MESMA TRANSACTION do status: ou o exame conclui e o prestador entra
+          // no pagamento, ou nada acontece — fora dela existiria a janela em que o
+          // serviço está concluído e a clínica não deve a ninguém.
+          await registrarPagamentoPrestadorDoExame(tx, req, exame, animalDoExame?.nome ?? '');
         });
         return res.json({ dados: { id: exame.id, status: 'REALIZADO', imagens } });
       }
@@ -988,6 +1125,9 @@ const ExameClinicoController = {
           where: { id: exame.id },
           data:  { resultado: laudoTexto || exame.resultado, arquivoUrl, observacao: observacaoAtualizada, status: 'REALIZADO', dataResultado: dataResultadoFinal },
         });
+        if (prestadorInformado) await exameValor.gravarPrestador(tx, exame.id, prestadorEscolhido);
+        // Mesma transaction do status — ver a nota do ramo de Imagem acima.
+        await registrarPagamentoPrestadorDoExame(tx, req, exame, animalDoExame?.nome ?? '');
       });
 
       return res.json({ dados: { id: exame.id, status: 'REALIZADO', itens } });
@@ -1038,8 +1178,12 @@ const ExameClinicoController = {
       res.json({ dados: atualizado });
 
       // Lança na fatura (idempotente — não duplica se o exame já foi lançado na
-      // solicitação ou ao finalizar a evolução) e, havendo prestador, registra a
-      // execução no ledger do RECIBO.
+      // solicitação ou ao finalizar a evolução) e, havendo prestador, registra o
+      // PAGAMENTO AO PRESTADOR (recibo + conta a pagar).
+      // ⚠️ Esta rota não é chamada por tela nenhuma hoje — a conclusão de verdade é
+      // `salvarResultado` (status REALIZADO), que também registra o pagamento. As
+      // duas chamam o MESMO helper, e ele é idempotente: exame que passe pelos dois
+      // caminhos gera UMA linha de recibo e UMA de conta a pagar, não duas.
       setImmediate(async () => {
         try {
           const animal = await prisma.animal.findUnique({
@@ -1048,7 +1192,7 @@ const ExameClinicoController = {
           });
           await prisma.$transaction(async (tx) => {
             await lancarExameNaFatura(tx, item, animal?.userId, req.empresaId ?? null);
-            await registrarReciboDoExame(tx, req, item, animal?.nome ?? '');
+            await registrarPagamentoPrestadorDoExame(tx, req, item, animal?.nome ?? '');
           });
         } catch { /* silencioso — fatura não bloqueia a finalização */ }
       });

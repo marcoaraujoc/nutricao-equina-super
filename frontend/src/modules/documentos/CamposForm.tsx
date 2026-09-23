@@ -275,14 +275,13 @@ export function ListaCamposInput({
     const el = inputsRef.current[i];
     if (!el) return;
     const r = el.getBoundingClientRect();
-    // Abre para CIMA quando não sobra espaço embaixo — na última linha da tabela a
-    // lista nasceria fora da janela e a pessoa não veria opção nenhuma.
+    // 🔴 SEMPRE PARA BAIXO (2026-09-22, a pedido) — ver SeletoresCatalogo. O flip
+    // para cima saiu; com pouco espaço embaixo o que encolhe é a ALTURA da lista
+    // (que rola por dentro), nunca a direção em que ela abre.
     const abaixo = window.innerHeight - r.bottom - 8;
-    const acima  = r.top - 8;
-    const paraCima = abaixo < 180 && acima > abaixo;
-    const altura = Math.max(120, Math.min(224, paraCima ? acima : abaixo));
+    const altura = Math.max(120, Math.min(224, abaixo));
     setCaixa({
-      topo:     paraCima ? r.top - 4 - altura : r.bottom + 4,
+      topo:     r.bottom + 4,
       esquerda: r.left,
       largura:  r.width,
       altura,

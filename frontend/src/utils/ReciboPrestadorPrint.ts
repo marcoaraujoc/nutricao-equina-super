@@ -24,7 +24,15 @@ export interface ReciboItem {
   animal:       string;
   procedimento: string;
   quantidade:   number;
-  valorCliente: number;
+  /**
+   * O que a clínica COBROU do cliente por este serviço.
+   *
+   * ⚠️ `null` = a origem não sabe esse número, e a COLUNA INTEIRA some da folha. É o
+   * caso do recibo emitido a partir de Financeiro > Pagamentos, cuja conta a pagar
+   * registra só o que se DEVE — imprimir "R$ 0,00" ali afirmaria ao prestador que o
+   * cliente não pagou nada pelo serviço dele, que é outra coisa.
+   */
+  valorCliente: number | null;
   valor:        number;
   explicacao:   string | null;
   executadoEm:  string;
@@ -55,7 +63,8 @@ export interface ReciboPrestador {
   formaPagamento: string | null;
   valorPagamento: number | null;
   itens:          ReciboItem[];
-  totalCliente:   number;
+  /** `null` quando a origem não apura o valor do cliente — ver `ReciboItem.valorCliente`. */
+  totalCliente:   number | null;
   totalAPagar:    number;
   pendentes:      number;
 }
@@ -195,7 +204,11 @@ export function gerarHtmlRecibos(
     ? `Período de ${dia(periodo.inicio)} a ${dia(periodo.fim)}`
     : '';
 
-  const folhas = recibos.map((r, idx) => `
+  const folhas = recibos.map((r, idx) => {
+  // A coluna do valor do cliente só existe quando ALGUM item a conhece — ver
+  // `ReciboItem.valorCliente`.
+  const comCliente = r.itens.some(i => i.valorCliente !== null && i.valorCliente !== undefined);
+  return `
     <div class="rc-folha" style="${idx > 0 ? 'page-break-before:always;' : ''}">
       ${renderCabecalho(logoUrl)}
       ${linhaEmitente(emitente)}
@@ -224,7 +237,7 @@ export function gerarHtmlRecibos(
             <th>Animal</th>
             <th>Procedimento executado</th>
             <th class="num">Data da execução</th>
-            <th class="num">Valor cobrado do cliente</th>
+            ${comCliente ? '<th class="num">Valor cobrado do cliente</th>' : ''}
             <th class="num">Valor a pagar</th>
           </tr>
         </thead>
@@ -237,14 +250,14 @@ export function gerarHtmlRecibos(
               ${i.explicacao ? `<span class="rc-exp">${esc(i.explicacao)}</span>` : ''}
             </td>
             <td class="num">${dia(i.executadoEm)}</td>
-            <td class="num">${brl(i.valorCliente)}</td>
+            ${comCliente ? `<td class="num">${brl(i.valorCliente ?? 0)}</td>` : ''}
             <td class="num">${brl(i.valor)}</td>
           </tr>`).join('')}
         </tbody>
         <tfoot>
           <tr>
             <td colspan="3">Total — ${r.itens.length} procedimento${r.itens.length !== 1 ? 's' : ''}</td>
-            <td class="num">${brl(r.totalCliente)}</td>
+            ${comCliente ? `<td class="num">${brl(r.totalCliente ?? 0)}</td>` : ''}
             <td class="num">${brl(r.totalAPagar)}</td>
           </tr>
         </tfoot>
@@ -264,7 +277,8 @@ export function gerarHtmlRecibos(
       </div>
 
       ${renderRodapeSimples('Recibo de pagamento a prestador')}
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
     <title>Recibo de Prestador</title>

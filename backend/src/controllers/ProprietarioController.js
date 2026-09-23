@@ -20,6 +20,8 @@ const { salvarVinculo, ehProfissionalNaEmpresa, definirAtivoNaEmpresa,
         salvarPagamentoEAcesso, lerPagamentoEAcesso } = require('../lib/usuarioEmpresa');
 const { gerarSenhaInicial } = require('../lib/senhaInicial');
 const { cadastroDaPessoaNaEmpresa, montarResposta } = require('../lib/cadastroPorEmail');
+// COMO o cliente quer receber a fatura nesta empresa (e-mail / WhatsApp / impresso)
+const formasFatura = require('../lib/formasRecebimentoFatura');
 
 // Dia de vencimento da fatura: obrigatório, inteiro entre 1 e 25
 // (rejeita vazio, 0, negativo e > 25 — espelha a validação inline do frontend).
@@ -236,6 +238,10 @@ const ProprietarioController = {
       // interruptor no estado REAL. Sem isso ele nasceria sempre ligado e o primeiro
       // salvar devolveria o login a quem a clínica tinha bloqueado.
       proprietarios = await anexarAcessoEmLista(proprietarios, req.empresaId);
+      // Formas de recebimento da fatura — o formulário precisa abrir com o que o
+      // cliente escolheu. Sem isto ele nasceria com as tres marcadas e o primeiro
+      // salvar devolveria canais que a clinica tinha desligado.
+      proprietarios = await formasFatura.anexarFormas(proprietarios, req.empresaId);
 
       res.json({ sucesso: true, dados: proprietarios });
     } catch (err) {
@@ -269,7 +275,8 @@ const ProprietarioController = {
         proprietario.id, req.empresaId,
       );
       const [comAcesso] = await anexarAcessoEmLista([comLocalidades], req.empresaId);
-      res.json({ sucesso: true, dados: { ...comAcesso, localidadesSugeridas } });
+      const comFormas   = await formasFatura.anexarFormas(comAcesso, req.empresaId);
+      res.json({ sucesso: true, dados: { ...comFormas, localidadesSugeridas } });
     } catch (err) {
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar proprietário' });
     }
@@ -326,7 +333,8 @@ const ProprietarioController = {
       // e as localidades atendidas, que o formulário exige preenchidas.
       const comPerfil     = await perfilProp.aplicarPerfil(cliente, req.empresaId);
       const comLocalidades = await localidadesProp.anexar(comPerfil, req.empresaId);
-      return res.json({ sucesso: true, dados: montarResposta({ registro: comLocalidades, pessoa }) });
+      const comFormas     = await formasFatura.anexarFormas(comLocalidades, req.empresaId);
+      return res.json({ sucesso: true, dados: montarResposta({ registro: comFormas, pessoa }) });
     } catch (err) {
       console.error('[ProprietarioController.buscarPorEmail]', err);
       return res.status(500).json({ sucesso: false, mensagem: 'Erro ao consultar o e-mail' });
@@ -339,7 +347,7 @@ const ProprietarioController = {
       fullName, email, phone, phone2, senha,
       cep, endereco, complemento, bairro, cidade, estado,
       cpf, cnpj, mensalista, valorAssistencia, frequenciaVisitas, diaVencimentoFatura,
-      localidades,
+      formasRecebimentoFatura, localidades,
     } = req.body;
 
     if (!fullName?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
@@ -348,6 +356,11 @@ const ProprietarioController = {
     if (!validarDiaVencimento(diaVencimentoFatura)) {
       return res.status(400).json({ sucesso: false, mensagem: 'Dia de vencimento da fatura é obrigatório e deve ser entre 1 e 25' });
     }
+
+    // Como o cliente quer receber a fatura — ao menos UMA forma. A tela já manda as
+    // três marcadas por padrão; o 400 existe para quem chama a API direto.
+    const formasParsed = formasFatura.normalizarFormas(formasRecebimentoFatura);
+    if (formasParsed.erro) return res.status(400).json({ sucesso: false, mensagem: formasParsed.erro });
 
     // Localidades atendidas, cada uma com a sua frequência de visitas semanais
     const locParsed = localidadesProp.normalizarLocalidades(localidades);
@@ -416,6 +429,9 @@ const ProprietarioController = {
           ativo: true,
         });
         const perfilCriado = await perfilProp.salvarPerfil(prisma, existente.id, req.empresaId, { ...dadosDaEmpresa, ativo: true });
+        // ⚠️ DEPOIS do salvarPerfil: a gravação é um UPDATE na linha do perfil, que
+        // precisa existir. Antes dele o UPDATE acertaria zero linhas, em silêncio.
+        await formasFatura.salvarFormas(prisma, existente.id, req.empresaId, formasParsed.formas);
         await aplicarAcessoSistema(prisma, existente.id, req.empresaId, req.body?.acessoSistema);
         await localidadesProp.salvarLocalidades(prisma, existente.id, req.empresaId, locParsed.localidades);
         // Perfil nasce ativo=true: grava a trilha de ativação também na CRIAÇÃO,
@@ -443,7 +459,7 @@ const ProprietarioController = {
         const comPerfil = await perfilProp.aplicarPerfil(base, req.empresaId);
         return res.status(201).json({
           sucesso: true,
-          dados:   await localidadesProp.anexar(comPerfil, req.empresaId),
+          dados:   await formasFatura.anexarFormas(await localidadesProp.anexar(comPerfil, req.empresaId), req.empresaId),
           mensagem: 'Cliente já possuía acesso ao sistema — foi criado o cadastro desta empresa.',
         });
       }
@@ -478,6 +494,8 @@ const ProprietarioController = {
         if (req.empresaId) {
           await salvarVinculo(tx, criado.id, req.empresaId, { perfil: 'PROPRIETARIO', ...dadosDaEmpresa, ativo: true });
           const perfilCriado = await perfilProp.salvarPerfil(tx, criado.id, req.empresaId, { ...dadosDaEmpresa, ativo: true });
+          // ⚠️ DEPOIS do salvarPerfil (é um UPDATE na linha do perfil, que precisa existir).
+          await formasFatura.salvarFormas(tx, criado.id, req.empresaId, formasParsed.formas);
           await aplicarAcessoSistema(tx, criado.id, req.empresaId, req.body?.acessoSistema);
           await localidadesProp.salvarLocalidades(tx, criado.id, req.empresaId, locParsed.localidades);
           // Perfil nasce ativo=true: grava a trilha de ativação também na CRIAÇÃO,
@@ -502,7 +520,10 @@ const ProprietarioController = {
         senhaInicial:      senhaEfetiva,
       }).catch(err => console.warn('[ProprietarioController] Falha ao enviar e-mail de boas-vindas:', err?.message));
 
-      res.status(201).json({ sucesso: true, dados: await localidadesProp.anexar(proprietario, req.empresaId) });
+      res.status(201).json({
+        sucesso: true,
+        dados:   await formasFatura.anexarFormas(await localidadesProp.anexar(proprietario, req.empresaId), req.empresaId),
+      });
     } catch (err) {
       if (err.code === 'P2002') return res.status(409).json({ sucesso: false, mensagem: 'E-mail já cadastrado' });
       console.error('Erro ao criar proprietário:', err);
@@ -517,7 +538,7 @@ const ProprietarioController = {
       fullName, email, phone, phone2, senha, ativo,
       cep, endereco, complemento, bairro, cidade, estado,
       cpf, cnpj, mensalista, valorAssistencia, frequenciaVisitas, diaVencimentoFatura,
-      localidades,
+      formasRecebimentoFatura, localidades,
     } = req.body;
 
     if (!fullName?.trim()) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
@@ -530,6 +551,11 @@ const ProprietarioController = {
     const locParsed = localidadesProp.normalizarLocalidades(localidades);
     if (locParsed.erro) return res.status(400).json({ sucesso: false, mensagem: locParsed.erro });
 
+    // Formas de recebimento da fatura. `undefined` (campo ausente no payload) NÃO
+    // apaga o que está gravado — só a lista vazia é recusada.
+    const formasParsed = formasFatura.normalizarFormas(formasRecebimentoFatura);
+    if (formasParsed.erro) return res.status(400).json({ sucesso: false, mensagem: formasParsed.erro });
+
     try {
       const isAdmin = req.user?.role === 'ADMIN';
       const existe  = await prisma.user.findFirst({ where: { id: Number(id), ...whereEhClienteDaEmpresa(req.empresaId) } });
@@ -540,6 +566,10 @@ const ProprietarioController = {
       // Comparar contra o User cru daria falso positivo de mudança em todo campo
       // que o perfil da empresa sobrescreve.
       const antes = await perfilProp.aplicarPerfil(existe, req.empresaId);
+      // Preferência ANTERIOR, para o diff da auditoria (a lib devolve TODAS quando o
+      // cliente nunca declarou — é o que ele de fato tinha até este salvar).
+      const formasAntes = (await formasFatura.formasPorUsuario([Number(id)], req.empresaId))
+        .get(Number(id)) ?? [...formasFatura.FORMAS];
 
       if (!isAdmin && req.empresaId) {
         const equipeScope = await getEquipeScopeDoUsuario(req.user.id, req.empresaId, req.equipeId);
@@ -626,6 +656,13 @@ const ProprietarioController = {
           ? { 'frequência de visitas': { de: antes.frequenciaVisitas, para: dadosDaEmpresa.frequenciaVisitas } } : {}),
         ...('diaVencimentoFatura' in dadosDaEmpresa
           ? { 'dia de vencimento': { de: antes.diaVencimentoFatura, para: dadosDaEmpresa.diaVencimentoFatura } } : {}),
+        // ⚠️ Comparadas como TEXTO já normalizado (a lib preserva a ordem de FORMAS),
+        // senão a mesma escolha em ordem diferente apareceria como alteração.
+        ...(formasParsed.formas !== undefined
+          ? { 'formas de recebimento da fatura': {
+                de:   (formasAntes ?? []).join(', '),
+                para: formasParsed.formas.join(', '),
+              } } : {}),
       };
 
       const proprietario = await prisma.$transaction(async (tx) => {
@@ -657,6 +694,9 @@ const ProprietarioController = {
           ...dadosDaEmpresa,
         });
         const perfil = await perfilProp.salvarPerfil(tx, Number(id), req.empresaId, dadosDaEmpresa);
+        // ⚠️ DEPOIS do salvarPerfil: é um UPDATE na linha do perfil, que o upsert acima
+        // garante existir (cliente legado ainda sem cadastro nesta empresa nasce aqui).
+        await formasFatura.salvarFormas(tx, Number(id), req.empresaId, formasParsed.formas);
         // 🔴 O ACESSO É APLICADO NA ALTERAÇÃO TAMBÉM (a pedido, 2026-09-18): marcar a
         // opção libera o login "independente do momento" — cadastro novo ou edição de
         // um cliente que já existe. É por isso que a mesma chamada está nos três
@@ -684,7 +724,10 @@ const ProprietarioController = {
         }).catch(err => console.warn('[ProprietarioController] Falha ao enviar acesso:', err?.message));
       }
 
-      res.json({ sucesso: true, dados: await localidadesProp.anexar(proprietario, req.empresaId) });
+      res.json({
+        sucesso: true,
+        dados:   await formasFatura.anexarFormas(await localidadesProp.anexar(proprietario, req.empresaId), req.empresaId),
+      });
     } catch (err) {
       if (err.code === 'P2025') return res.status(404).json({ sucesso: false, mensagem: 'Proprietário não encontrado' });
       console.error('Erro ao atualizar proprietário:', err);
@@ -697,6 +740,7 @@ const ProprietarioController = {
   // Gestor: não permitido (remover da empresa usa DELETE)
   toggleAtivo: async (req, res) => {
     const { id } = req.params;
+    const { motivo } = req.body ?? {};
     const isAdmin = req.user?.role === 'ADMIN';
 
     if (!isAdmin) {
@@ -709,6 +753,14 @@ const ProprietarioController = {
     try {
       const existe = await prisma.user.findFirst({ where: { id: Number(id), ...whereEhClienteDaEmpresa(req.empresaId) } });
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Proprietário não encontrado' });
+
+      // Justificativa obrigatória para INATIVAR — aqui a inativação é do ACESSO
+      // GLOBAL do cliente (é o caminho do ADMIN da plataforma, não o "Remover da
+      // Empresa" do gestor), então é a mais forte das duas e é justamente a que
+      // passava sem motivo nenhum. Ativar segue direto, como nos demais cadastros.
+      if (existe.ativo && !motivo?.trim()) {
+        return res.status(400).json({ sucesso: false, mensagem: 'É obrigatório informar o motivo da inativação' });
+      }
 
       const proprietario = await prisma.user.update({
         where:  { id: Number(id) },
@@ -725,6 +777,7 @@ const ProprietarioController = {
         categoria:  proprietario.ativo ? 'ATIVACAO' : 'INATIVACAO',
         entidade:   'PROPRIETARIO',
         entidadeId: proprietario.id,
+        motivo:     proprietario.ativo ? null : (motivo?.trim() ?? null),
         detalhes:   `${req.user.fullName ?? req.user.email} ${proprietario.ativo ? 'ativou' : 'inativou'} o proprietário ${proprietario.fullName} (acesso global)`,
       });
       res.json({ sucesso: true, dados: proprietario, mensagem: `Proprietário ${proprietario.ativo ? 'ativado' : 'inativado'}` });

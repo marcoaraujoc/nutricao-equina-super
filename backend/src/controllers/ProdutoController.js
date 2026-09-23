@@ -86,12 +86,22 @@ const listar = async (req, res) => {
     // sobre um catálogo global de milhares de linhas. Ordenando só o que chegou, o item
     // da clínica nem entraria na lista quando o nome fosse alfabeticamente tarde — e o
     // defeito apareceria já na primeira tela, sem erro nenhum.
-    const itens = await prisma.medicamento.findMany({
-      where, select: SELECT_ITEM, orderBy: [{ empresaId: 'asc' }, { nome: 'asc' }],
-      // Teto: o catálogo global tem milhares de linhas e o campo é de BUSCA, não de
-      // rolagem. Sem o corte, abrir a tela baixaria o catálogo inteiro.
-      take: busca ? 100 : 60,
-    });
+    // 🔴 O TETO ERA BAIXO DEMAIS PARA A LISTA SER ROLÁVEL (2026-09-22): com 60
+    // linhas, a clínica com catálogo grande via "um pouco" e não havia como chegar ao
+    // resto — não existe paginação nesta tela, então o corte era o fim da lista.
+    // ⚠️ O teto CONTINUA existindo, e não é cosmético: o catálogo GLOBAL tem milhares
+    // de linhas e baixá-lo inteiro a cada abertura é uma tela que demora a aparecer.
+    // O que se faz agora é (a) subir o corte para uma altura que cobre o catálogo de
+    // uma clínica real e (b) DIZER quando ele cortou — `total` abaixo —, para a tela
+    // pedir que a busca seja refinada em vez de mentir que acabou.
+    const LIMITE = 300;
+    const [itens, total] = await Promise.all([
+      prisma.medicamento.findMany({
+        where, select: SELECT_ITEM, orderBy: [{ empresaId: 'asc' }, { nome: 'asc' }],
+        take: LIMITE,
+      }),
+      prisma.medicamento.count({ where }),
+    ]);
 
     // Multidose vem por SQL cru (coluna nova — §11) e EM BLOCO, nunca um por item.
     const multi = await catalogoEmpresa.multidosePorItem(prisma, itens.map(i => i.id));
@@ -107,6 +117,10 @@ const listar = async (req, res) => {
         dosesPorEmbalagem: multi.get(i.id)?.dosesPorEmbalagem ?? null,
         formaCalculo:      multi.get(i.id)?.formaCalculo ?? null,
       })),
+      // `total` é o que a tela usa para avisar que a lista foi cortada. Sem ele, o
+      // corte é indistinguível do fim do catálogo.
+      total,
+      limite: LIMITE,
       recursos: { disponivel: true, multidose: await catalogoEmpresa.temColunasMultidose(prisma) },
     });
   } catch (err) {
@@ -360,6 +374,12 @@ const atualizar = async (req, res) => {
  * há prescrição e estoque apontando para ele).
  * ⚠️ Item GLOBAL responde 400: ele é de todas as clínicas. Para tirá-lo da frente
  * desta, o caminho é cadastrar o próprio — que o esconde por `preferirCopiaDaEmpresa`.
+ *
+ * ⚠️ FICOU SEM ENTRADA NA UI em 2026-09-22: a tela trocou o "Excluir" pela CHAVE
+ * ativar/inativar, que fala com `toggleAtivo` (abaixo). A rota continua montada e
+ * funcional — é o mesmo efeito, só sem o caminho de volta. Mantida porque cliente
+ * fora da tela (ou uma volta atrás) não precisaria de nada novo; se for para
+ * aposentá-la, é aqui e em `routes/produtos.js`.
  */
 const excluir = async (req, res) => {
   try {
@@ -394,4 +414,59 @@ const excluir = async (req, res) => {
   }
 };
 
-module.exports = { listar, detalhe, porNome, criar, atualizar, excluir };
+/**
+ * PATCH /api/cadastro/produtos/:id/toggle  { motivo? }
+ *
+ * 🔴 ATIVAR/INATIVAR substituiu o "Excluir" na tela (2026-09-22, a pedido). O botão
+ * antigo já fazia soft delete (`ativo = false`) — o que faltava era o CAMINHO DE
+ * VOLTA: inativado um produto, não havia como reativá-lo por tela nenhuma, e o
+ * rótulo "Excluir" prometia uma remoção que nunca aconteceu.
+ *
+ * ⚠️ INATIVAR exige `motivo` e grava `INATIVACAO` na Auditoria; ATIVAR não pede
+ * motivo (§13, armadilha 33: reativar é correção, e pedir justificativa ali é só
+ * atrito). Gate estrutural em `__tests__/inativacaoJustificada.test.js`.
+ * ⚠️ Item GLOBAL responde 400: ele vale para todas as clínicas do SaaS. Para tirá-lo
+ * da frente desta, o caminho é cadastrar o próprio — que o esconde por
+ * `preferirCopiaDaEmpresa`.
+ */
+const toggleAtivo = async (req, res) => {
+  try {
+    if (!req.empresaId) return res.status(400).json({ error: 'Selecione a empresa.' });
+    const id = Number(req.params.id);
+    const item = await prisma.medicamento.findFirst({
+      where: { id, ...escopoDaEmpresa(req.empresaId) },
+      select: { id: true, empresaId: true, nome: true, ativo: true },
+    });
+    if (!item) return res.status(404).json({ error: 'Produto não encontrado.' });
+    if (item.empresaId == null) {
+      return res.status(400).json({
+        error: 'Este item é do catálogo do sistema e vale para todas as clínicas — não pode ser inativado aqui.',
+        code:  'ITEM_DO_SISTEMA',
+      });
+    }
+
+    const vaiInativar = item.ativo;
+    const motivo = String(req.body?.motivo ?? '').trim();
+    if (vaiInativar && motivo.length < 3) {
+      return res.status(400).json({ error: 'É obrigatório informar o motivo da inativação.' });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.medicamento.update({ where: { id }, data: { ativo: !vaiInativar } });
+      await registrarAuditoria(tx, req, {
+        categoria:  vaiInativar ? 'INATIVACAO' : 'ATIVACAO',
+        entidade:   'PRODUTO',
+        entidadeId: id,
+        motivo:     vaiInativar ? motivo : null,
+        detalhes:   `Produto "${item.nome}" ${vaiInativar ? 'inativado' : 'ativado'}`,
+      });
+    });
+    return res.json({ mensagem: vaiInativar ? 'Produto inativado.' : 'Produto ativado.', ativo: !vaiInativar });
+  } catch (err) {
+    return responderErro(res, err, {
+      contexto: 'ProdutoController.toggleAtivo', mensagem: 'Não foi possível alterar a situação do produto.',
+    });
+  }
+};
+
+module.exports = { listar, detalhe, porNome, criar, atualizar, excluir, toggleAtivo };

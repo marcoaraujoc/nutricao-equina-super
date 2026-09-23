@@ -18,6 +18,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { formatAtendimentoNum, valorLiquidoItem } = require('../lib/faturaUtils');
+const { totalFechadoPorFatura } = require('../lib/faturaFechamentoAnimal');
 const { animalVisivelNaEmpresa } = require('../lib/visibilidade');
 
 const SEM_LOCALIZACAO = 'Sem localização';
@@ -163,10 +164,16 @@ async function blocoDevedores(propWhere, mesAtual) {
       ...propWhere,
     },
     select: {
-      proprietarioId: true, total: true, mesReferencia: true,
+      id: true, proprietarioId: true, total: true, mesReferencia: true,
       proprietario: { select: { fullName: true, phone: true } },
     },
   });
+
+  // 🔴 O bloco de paciente fechado à parte continua DEVIDO (2026-09-22): desde o
+  // fechamento por animal, `Fatura.total` é só o que a fatura AINDA cobra. Somar só
+  // `total` faria o devedor aparecer aqui devendo MENOS do que deve — e a diferença
+  // seria invisível, porque a linha continua na lista.
+  const fechadoPorFatura = await totalFechadoPorFatura(prisma, faturas.map(f => f.id));
 
   const porProp = new Map();
   for (const f of faturas) {
@@ -179,7 +186,7 @@ async function blocoDevedores(propWhere, mesAtual) {
       mesMaisAntigo:  f.mesReferencia,
     };
     atual.qtdFaturas  += 1;
-    atual.totalDevido += f.total ?? 0;
+    atual.totalDevido += (f.total ?? 0) + (fechadoPorFatura.get(f.id) ?? 0);
     if (f.mesReferencia && (!atual.mesMaisAntigo || f.mesReferencia < atual.mesMaisAntigo)) {
       atual.mesMaisAntigo = f.mesReferencia;
     }
@@ -192,15 +199,32 @@ async function blocoDevedores(propWhere, mesAtual) {
 }
 
 async function blocoMelhoresPagadores(propWhere, devedores, periodo) {
-  const grupos = await prisma.fatura.groupBy({
-    by:      ['proprietarioId'],
-    where:   { status: 'PAGA', proprietarioId: { not: null }, mesReferencia: mesRefWhereDoPeriodo(periodo), ...propWhere },
-    _sum:    { total: true },
-    _count:  { _all: true },
-    orderBy: { _sum: { total: 'desc' } },
-    take:    15,
+  // 🔴 DEIXOU DE SER `groupBy` (2026-09-22). O ranking precisa somar
+  // `total + totalFechado` — o bloco de paciente fechado à parte saiu do `total` mas
+  // foi pago junto com a fatura —, e `totalFechado` é lido por SQL CRU (o client
+  // Prisma pode não conhecer a coluna, ver lib/faturaFechamentoAnimal.js): num
+  // `_sum` tipado ele derrubaria o relatório inteiro.
+  // ⚠️ O `take: 15` saiu do BANCO e virou `slice` depois da soma, de propósito:
+  // ordenado por `total` no SQL, o cliente cujo pagamento inteiro estivesse no bloco
+  // fechado (total 0) ficaria FORA do top 15 — sem aparecer em lugar nenhum.
+  // A consulta é de faturas PAGAS de UM período, então trazer todas é barato.
+  const faturasPagas = await prisma.fatura.findMany({
+    where:  { status: 'PAGA', proprietarioId: { not: null }, mesReferencia: mesRefWhereDoPeriodo(periodo), ...propWhere },
+    select: { id: true, proprietarioId: true, total: true },
   });
-  if (grupos.length === 0) return [];
+  if (faturasPagas.length === 0) return [];
+
+  const fechadoPorFatura = await totalFechadoPorFatura(prisma, faturasPagas.map(f => f.id));
+  const porProprietario = new Map();
+  for (const f of faturasPagas) {
+    const atual = porProprietario.get(f.proprietarioId) ?? { proprietarioId: f.proprietarioId, pago: 0, qtd: 0 };
+    atual.pago += (f.total ?? 0) + (fechadoPorFatura.get(f.id) ?? 0);
+    atual.qtd  += 1;
+    porProprietario.set(f.proprietarioId, atual);
+  }
+  const grupos = [...porProprietario.values()]
+    .sort((a, b) => b.pago - a.pago)
+    .slice(0, 15);
 
   const users = await prisma.user.findMany({
     where:  { id: { in: grupos.map(g => g.proprietarioId) } },
@@ -212,8 +236,8 @@ async function blocoMelhoresPagadores(propWhere, devedores, periodo) {
   return grupos.map(g => ({
     proprietarioId:  g.proprietarioId,
     nome:            nomePorId.get(g.proprietarioId) ?? '—',
-    totalPago:       g._sum.total ?? 0,
-    qtdFaturasPagas: g._count._all,
+    totalPago:       g.pago,
+    qtdFaturasPagas: g.qtd,
     emDia:           !devedoresSet.has(g.proprietarioId),
   }));
 }

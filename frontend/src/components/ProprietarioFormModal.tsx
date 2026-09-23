@@ -105,6 +105,11 @@ export function parseMoeda(v: string): number {
   return parseFloat(v.replace(/\./g, '').replace(',', '.')) || 0;
 }
 
+import {
+  FORMAS_RECEBIMENTO_FATURA, TODAS_FORMAS_RECEBIMENTO,
+  type FormaRecebimentoFatura,
+} from '../utils/formasRecebimentoFatura';
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type TipoDoc = 'cpf' | 'cnpj';
@@ -129,6 +134,8 @@ export interface Proprietario {
   frequenciaVisitas: number | null;
   localidades:      LocalidadeProp[];
   diaVencimentoFatura: number | null;
+  /** Como o cliente quer receber a fatura NESTA empresa. Vazio/ausente = todas. */
+  formasRecebimentoFatura?: FormaRecebimentoFatura[];
   /** Pode entrar no sistema? Mora em `tb_usuario_empresa` — é POR EMPRESA. */
   acessoSistema?:   boolean;
   cep:              string | null;
@@ -160,6 +167,8 @@ export interface FormProp {
   // derivado (o maior valor) no backend, só para as leituras legadas.
   localidades:       LocalidadeProp[];
   diaVencimentoFatura: string;
+  // Pode ser MAIS DE UMA — é por isso que são checkboxes e não um select.
+  formasRecebimentoFatura: FormaRecebimentoFatura[];
   acessoSistema:     boolean;
   cep:               string;
   endereco:          string;
@@ -173,6 +182,9 @@ export const FORM_INICIAL: FormProp = {
   fullName: '', email: '', phone: '',
   tipoDoc: 'cpf', cpf: '', cnpj: '',
   mensalista: false, valorAssistencia: '', localidades: [], diaVencimentoFatura: '5',
+  // ⚠️ AS TRÊS MARCADAS por padrão: é o que a tela de Faturamento oferece hoje para
+  // qualquer cliente. Nascer com uma só TIRARIA um botão de envio sem ninguém decidir.
+  formasRecebimentoFatura: [...TODAS_FORMAS_RECEBIMENTO],
   // ⚠️ LIGADO por padrão: o cliente novo precisa entrar para ver a fatura e os
   // pacientes dele — foi assim que o cadastro sempre funcionou (o login nascia com
   // a conta). Nascer desligado mudaria o comportamento de todo cadastro existente.
@@ -208,6 +220,11 @@ export function formDeProprietario(p: Proprietario, localidades = p.localidades 
       : '',
     localidades,
     diaVencimentoFatura: p.diaVencimentoFatura ? String(p.diaVencimentoFatura) : '5',
+    // Cliente legado (sem preferência declarada) abre com TODAS — que é o que ele
+    // tem hoje na prática, e o que o backend devolve nesse caso.
+    formasRecebimentoFatura: p.formasRecebimentoFatura?.length
+      ? [...p.formasRecebimentoFatura]
+      : [...TODAS_FORMAS_RECEBIMENTO],
     // `undefined` (cliente legado, sem a coluna lida) = TEM acesso: é o estado em que
     // ele está hoje, e assumir `false` revogaria o login de todo mundo no 1º salvar.
     acessoSistema:     p.acessoSistema !== false,
@@ -267,6 +284,7 @@ function montarNovoProprietario(form: FormProp) {
       frequenciaVisitas: l.frequenciaVisitas,
     })),
     diaVencimentoFatura: Number(form.diaVencimentoFatura),
+    formasRecebimentoFatura: form.formasRecebimentoFatura,
     acessoSistema:    form.acessoSistema,
     cep: form.cep || null, endereco: form.endereco || null, complemento: form.complemento || null,
     bairro: form.bairro || null, cidade: form.cidade || null, estado: form.estado || null,
@@ -293,6 +311,12 @@ function validarFormProprietario(form: FormProp): ErroAcaoDados | null {
   if (form.tipoDoc === 'cnpj' && form.cnpj.trim() && !validarCNPJ(form.cnpj)) return { mensagem: 'CNPJ inválido', campos: ['cnpj'] };
   if (form.mensalista && !form.valorAssistencia) {
     return { mensagem: 'Informe o valor da assistência veterinária', campos: ['valorAssistencia'] };
+  }
+  if (form.formasRecebimentoFatura.length === 0) {
+    return {
+      mensagem: 'Informe ao menos uma forma de recebimento da fatura',
+      campos: ['formasRecebimentoFatura'],
+    };
   }
   return null;
 }
@@ -814,6 +838,63 @@ export default function ProprietarioFormModal({
                   </p>
                 )}
               </div>
+            </div>
+
+            {/* ── Como o cliente quer RECEBER A FATURA (a pedido, 2026-09-22) ──
+                PODE SER MAIS DE UMA — por isso são checkboxes, não um select. O que
+                for marcado aqui é o que a tela de Faturamento HABILITA para este
+                cliente: o canal não escolhido aparece lá cinza, com o motivo no
+                tooltip (§6 — cinza é o indisponível).
+                ⚠️ DESABILITAR, e não esconder, é deliberado: o botão que some é lido
+                como perda de permissão, e ninguém descobre que a decisão está neste
+                cadastro. Mesma escolha dos dois campos do mensalista acima.
+                ⚠️ Ao menos UMA é obrigatória. Nenhuma marcada deixaria a fatura sem
+                saída e o financeiro sem entender por quê — NÃO é a mesma coisa que o
+                cliente legado, que nunca declarou nada e segue com as três.
+                ⚠️ "Exportar CSV" NÃO entra: baixa arquivo para a clínica, não entrega
+                nada ao cliente — e por isso nunca é bloqueado lá. */}
+            <div className="p-3 border border-gray-200 rounded-xl mb-3">
+              <p className="text-sm font-semibold text-gray-900">Como recebe a fatura *</p>
+              <p className="text-xs text-gray-500 mb-2.5">
+                Marque todas as formas combinadas com o cliente. Só as marcadas ficam
+                disponíveis na tela de Faturamento.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {FORMAS_RECEBIMENTO_FATURA.map(opcao => {
+                  const marcada = form.formasRecebimentoFatura.includes(opcao.valor);
+                  return (
+                    <label key={opcao.valor} title={opcao.ajuda}
+                      className={`flex items-start gap-2 px-3 py-2 rounded-xl border cursor-pointer transition-colors ${
+                        marcada
+                          ? 'border-emerald-300 bg-emerald-50'
+                          : 'border-gray-200 hover:bg-gray-50'}`}>
+                      <input type="checkbox" checked={marcada}
+                        onChange={() => onFormChange({
+                          formasRecebimentoFatura: marcada
+                            ? form.formasRecebimentoFatura.filter(v => v !== opcao.valor)
+                            // Reordena pela lista canônica: a mesma escolha grava sempre
+                            // a mesma sequência, e o diff da auditoria não acusa mudança
+                            // onde só a ordem de clique foi diferente.
+                            : TODAS_FORMAS_RECEBIMENTO.filter(
+                                v => v === opcao.valor || form.formasRecebimentoFatura.includes(v),
+                              ),
+                        })}
+                        className="mt-0.5 h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 flex-shrink-0" />
+                      <span className="min-w-0">
+                        <span className={`block text-sm font-medium ${marcada ? 'text-emerald-900' : 'text-gray-700'}`}>
+                          {opcao.rotulo}
+                        </span>
+                        <span className="block text-[10px] text-gray-400 leading-tight">{opcao.ajuda}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              {form.formasRecebimentoFatura.length === 0 && (
+                <p className="text-[11px] text-red-500 mt-2 flex items-center gap-1">
+                  <AlertCircle size={11} /> Marque ao menos uma forma de recebimento.
+                </p>
+              )}
             </div>
 
             {/* ── Acesso ao sistema (a pedido, 2026-09-18) ────────────────────

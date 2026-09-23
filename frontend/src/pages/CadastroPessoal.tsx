@@ -1243,26 +1243,46 @@ export default function CadastroPessoal() {
               {form.locaisTrabalho.length > 0 ? (
                 <div className="space-y-1.5 mt-1 mb-3">
                   {form.locaisTrabalho.map((lt, idx) => (
-                    <div key={idx} className="flex items-start gap-2 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
-                      <MapPin size={13} className="text-emerald-600 flex-shrink-0 mt-1" />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-gray-800 truncate">
-                            {lt.localizacaoNome || `Local #${lt.localizacaoId}`}
-                          </span>
-                          {resumoLocal(lt) && <span className="text-xs text-gray-500 truncate">— {resumoLocal(lt)}</span>}
-                        </div>
-                        {(lt.especialidadeIds ?? []).length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {lt.especialidadeIds.map(id => (
-                              <span key={id} className="text-[10px] bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded-full font-medium">
-                                {espNomeById[id] ?? `#${id}`} · {lt.temposConsulta?.[id] ?? tempoPadraoEmpresa} min
+                    /* 🔴 MOBILE E TABLET: as ações vão ABAIXO do local (2026-09-22).
+                       Lado a lado, "Alterar" e "Excluir" (botões com rótulo) comiam a
+                       largura e o nome do local saía truncado já no primeiro terço —
+                       justamente o dado que identifica a linha. A partir de `lg` sobra
+                       largura para os três na mesma linha, e aí o layout volta a ser
+                       em linha. Mesma regra do card de cadastro na §6 do CLAUDE.md:
+                       ação com rótulo mora no RODAPÉ do card. */
+                    <div key={idx} className="flex flex-col lg:flex-row lg:items-start gap-2 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
+                      <div className="flex items-start gap-2 flex-1 min-w-0">
+                        <MapPin size={13} className="text-emerald-600 flex-shrink-0 mt-1" />
+                        <div className="flex-1 min-w-0">
+                          {/* Sem `truncate`: o nome QUEBRA em duas linhas em vez de
+                              ser cortado. O resumo (dias/horário) desce para a
+                              própria linha abaixo de `lg`, onde não cabe ao lado do
+                              nome — e lá o travessão não faz sentido, por isso ele
+                              só aparece de `lg` para cima. */}
+                          <div className="flex flex-col lg:flex-row lg:items-center lg:gap-2">
+                            <span className="text-sm font-medium text-gray-800 break-words">
+                              {lt.localizacaoNome || `Local #${lt.localizacaoId}`}
+                            </span>
+                            {resumoLocal(lt) && (
+                              <span className="text-xs text-gray-500 break-words">
+                                <span className="hidden lg:inline">— </span>{resumoLocal(lt)}
                               </span>
-                            ))}
+                            )}
                           </div>
-                        )}
+                          {(lt.especialidadeIds ?? []).length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {lt.especialidadeIds.map(id => (
+                                <span key={id} className="text-[10px] bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded-full font-medium">
+                                  {espNomeById[id] ?? `#${id}`} · {lt.temposConsulta?.[id] ?? tempoPadraoEmpresa} min
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1 flex-shrink-0">
+                      {/* Rodapé de ações no mobile/tablet (borda separando); coluna à
+                          direita a partir de `lg`. */}
+                      <div className="flex items-center gap-1 flex-shrink-0 border-t border-gray-100 pt-2 lg:border-t-0 lg:pt-0">
                         <button type="button"
                           onClick={() => {
                             setRascunhoLocal(lt);

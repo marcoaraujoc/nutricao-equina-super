@@ -28,7 +28,9 @@ export interface OpcoesCatalogo {
 export const semAcento = (s: string) =>
   s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
-interface PosicaoFlutuante { left: number; width: number; top?: number; bottom?: number; maxHeight: number }
+// Sem `bottom`: a lista é ancorada SEMPRE pelo topo, logo abaixo do campo
+// (2026-09-22). Ver `usePosicaoFlutuante`.
+interface PosicaoFlutuante { left: number; width: number; top: number; maxHeight: number }
 
 /**
  * 🔴 A LISTA É DESENHADA EM PORTAL, com `position: fixed`.
@@ -54,16 +56,20 @@ function usePosicaoFlutuante(aberto: boolean) {
       const el = ancoraRef.current;
       if (!el) return;
       const r = el.getBoundingClientRect();
+      // 🔴 SEMPRE PARA BAIXO (2026-09-22, a pedido): a lista nasce SOB o campo em
+      // qualquer posição da tela. O flip para cima saiu — ele mudava a direção no
+      // meio do uso (o mesmo combo abria para lados diferentes conforme a rolagem),
+      // e a lista que abria por cima cobria o rótulo do campo que se estava
+      // preenchendo. Quando o espaço abaixo é curto, o que encolhe é a ALTURA da
+      // lista (ela rola por dentro), nunca a direção.
       const abaixo = window.innerHeight - r.bottom - 12;
-      const acima  = r.top - 12;
-      const paraCima = abaixo < 180 && acima > abaixo;
       setPos({
         left: r.left,
         width: r.width,
-        ...(paraCima
-          ? { bottom: window.innerHeight - r.top + 4 }
-          : { top: r.bottom + 4 }),
-        maxHeight: Math.max(120, Math.min(280, paraCima ? acima : abaixo)),
+        top: r.bottom + 4,
+        // Piso de 120px para a lista não virar uma fresta ilegível junto ao rodapé
+        // — nesse caso ela ultrapassa um pouco a dobra e a página rola.
+        maxHeight: Math.max(120, Math.min(280, abaixo)),
       });
     };
     calcular();
@@ -101,8 +107,9 @@ const estiloLista = (pos: PosicaoFlutuante | null): React.CSSProperties => ({
   position: 'fixed',
   left: pos?.left ?? 0,
   width: pos?.width ?? 0,
-  ...(pos?.top !== undefined ? { top: pos.top } : {}),
-  ...(pos?.bottom !== undefined ? { bottom: pos.bottom } : {}),
+  // Só `top`: ancorada pela borda de CIMA, a lista cresce para baixo — a direção
+  // não depende mais de onde o campo está na tela.
+  top: pos?.top ?? 0,
   visibility: pos ? 'visible' : 'hidden',
 });
 

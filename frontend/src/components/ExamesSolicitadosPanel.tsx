@@ -32,6 +32,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { ClipboardList, Scan, Upload, Table2, Loader2, X, Plus, Trash2, CheckCircle2, FilePlus2, Camera, Ban, Eye, AlertTriangle } from 'lucide-react';
 import api from '../services/api';
 import InlineError from './InlineError';
+import SeletorPrestadorExecutante from './SeletorPrestadorExecutante';
 import ModalJustificativa from './ModalJustificativa';
 import DateInput from './DateInput';
 import JanelaLista from './JanelaLista';
@@ -76,6 +77,10 @@ export interface ExameSolicitado {
   resultadoItens:  ResultadoItem[];
   imagens:         { id: number; nome: string | null; arquivoUrl: string }[];
   veterinario:     { id: number; fullName: string } | null;
+  /** QUEM EXECUTOU o exame — prestador externo. É ele que faz a conclusão gerar o
+   *  recibo e a conta a pagar (tela de Pagamentos). `null` = própria equipe, e é o
+   *  estado de todo exame anterior a 2026-09-22. */
+  prestadorId?:    number | null;
 }
 
 export interface ItemManual {
@@ -333,7 +338,7 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
   onClose:  () => void;
   onSalvar: (data: {
     tipo: TipoExame; descricao: string; laboratorio: string; dataExame: string;
-    laudo: string; itens: ItemManual[]; arquivos: File[];
+    laudo: string; itens: ItemManual[]; arquivos: File[]; prestadorId: number | '';
   }) => void;
 }) {
   // `ex` PENDENTE (fila de "aguardando resultado") já tem descrição/laboratório
@@ -363,6 +368,10 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
   const [dataExame,   setDataExame]   = useState('');
   const [laudo,       setLaudo]       = useState(jaTemResultado ? (ex?.resultado ?? '') : '');
   const [laboratorio, setLaboratorio] = useState(ex?.laboratorio ?? '');
+  // QUEM EXECUTOU — escolhido na CONCLUSÃO do exame (2026-09-22), nunca no pedido:
+  // quem pede não sabe ainda quem vai executar. Prefixado com o que já estiver
+  // gravado, para reabrir o resultado não apagar a escolha anterior.
+  const [prestadorId, setPrestadorId] = useState<number | ''>(ex?.prestadorId ?? '');
   const [itens,       setItens]       = useState<ItemManual[]>(
     jaTemResultado && ex && ex.resultadoItens.length > 0
       ? ex.resultadoItens.map(i => ({ parametro: i.parametro, valor: i.valor ?? '', unidade: i.unidade ?? '', referencia: i.referencia ?? '' }))
@@ -635,7 +644,7 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
     setErro(null);
     onSalvar({
       tipo, descricao: descricao.trim(), laboratorio: laboratorio.trim(), dataExame,
-      laudo: laudo.trim(), itens: preenchidos, arquivos,
+      laudo: laudo.trim(), itens: preenchidos, arquivos, prestadorId,
     });
   };
 
@@ -734,6 +743,16 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
                 </div>
               )}
             </div>
+
+            {/* 🔴 QUEM EXECUTOU — é este campo que faz o exame chegar à tela de
+                PAGAMENTOS (recibo + conta a pagar do prestador), do mesmo jeito que
+                o procedimento chega pela tela de Execução de Prescrição.
+                Fica AQUI, na conclusão, e não no pedido: quem pede o exame não sabe
+                ainda quem vai executá-lo — foi por isso que o passo saiu da tela de
+                pedido em 2026-09-11.
+                ⚠️ Vale para TODO tipo de exame, não só Imagem: o laboratório externo
+                é o prestador mais comum de Laboratorial/Bioquímico. */}
+            <SeletorPrestadorExecutante valor={prestadorId} onChange={setPrestadorId} />
           </fieldset>
 
           {/* ARQUIVOS JÁ SALVOS — aparecem também na EDIÇÃO, não só na visualização.
@@ -979,17 +998,21 @@ export function ResultadoManualModal({ ex, saving, onClose, onSalvar }: {
   ex:       ExameSolicitado;
   saving:   boolean;
   onClose:  () => void;
-  onSalvar: (data: { laudo: string; itens: ItemManual[] }) => void;
+  onSalvar: (data: { laudo: string; itens: ItemManual[]; prestadorId: number | '' }) => void;
 }) {
   const [itens, setItens] = useState<ItemManual[]>([{ ...LINHA_VAZIA }]);
   const [laudo, setLaudo] = useState(ex.resultado ?? '');
   const [erro,  setErro]  = useState<string | null>(null);
+  // O preenchimento manual TAMBÉM conclui o exame, então tem de oferecer o mesmo
+  // campo do outro modal — senão o resultado ditado por telefone seria o único
+  // caminho que não gera pagamento ao prestador, sem que nada explicasse a diferença.
+  const [prestadorId, setPrestadorId] = useState<number | ''>(ex.prestadorId ?? '');
 
   const confirmar = () => {
     const preenchidos = itens.filter(i => i.parametro.trim());
     if (preenchidos.length === 0) { setErro('Informe ao menos um parâmetro do resultado'); return; }
     setErro(null);
-    onSalvar({ laudo: laudo.trim(), itens: preenchidos });
+    onSalvar({ laudo: laudo.trim(), itens: preenchidos, prestadorId });
   };
 
   return (
@@ -1021,6 +1044,8 @@ export function ResultadoManualModal({ ex, saving, onClose, onSalvar }: {
               placeholder="Notas adicionais sobre o resultado..."
               className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-emerald-500 resize-none" />
           </div>
+
+          <SeletorPrestadorExecutante valor={prestadorId} onChange={setPrestadorId} />
 
           <InlineError message={erro} />
         </div>
@@ -1130,7 +1155,7 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
     carregar();
   }, [carregar, loadingPerms]);
 
-  const salvarResultado = async ({ laudo, laboratorio, dataExame, itens, arquivos }: { laudo: string; laboratorio: string; dataExame: string; itens: ItemManual[]; arquivos: File[] }) => {
+  const salvarResultado = async ({ laudo, laboratorio, dataExame, itens, arquivos, prestadorId }: { laudo: string; laboratorio: string; dataExame: string; itens: ItemManual[]; arquivos: File[]; prestadorId: number | '' }) => {
     if (!alvo) return;
     setSaving(true);
     setErro(null);
@@ -1144,6 +1169,10 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
       // mostrava o dia em que alguém digitou, não o dia em que o exame foi feito.
       if (dataExame) fd.append('dataExame', dataExame);
       if (itens.length > 0) fd.append('itens', JSON.stringify(itens));
+      // SEMPRE enviado, inclusive vazio: o campo estava na tela e a pessoa pôde
+      // limpá-lo. O backend só distingue "não mandou" (preserva o gravado) de
+      // "mandou vazio" (limpa) se o vazio chegar de fato.
+      fd.append('prestadorId', prestadorId === '' ? '' : String(prestadorId));
       arquivos.forEach(a => fd.append('arquivos', a));
       await api.patch(`/clinica/exames/${alvo.id}/resultado`, fd);
       setAlvo(null);
@@ -1159,7 +1188,7 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
 
   // Preenchimento MANUAL (só Laboratorial) — mesmo endpoint, só a tabela em JSON,
   // sem arquivo nenhum.
-  const salvarResultadoManual = async ({ laudo, itens }: { laudo: string; itens: ItemManual[] }) => {
+  const salvarResultadoManual = async ({ laudo, itens, prestadorId }: { laudo: string; itens: ItemManual[]; prestadorId: number | '' }) => {
     if (!alvoManual) return;
     setSaving(true);
     setErro(null);
@@ -1167,6 +1196,7 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
       const fd = new FormData();
       if (laudo) fd.append('resultado', laudo);
       fd.append('itens', JSON.stringify(itens));
+      fd.append('prestadorId', prestadorId === '' ? '' : String(prestadorId));
       await api.patch(`/clinica/exames/${alvoManual.id}/resultado`, fd);
       setAlvoManual(null);
       await carregar();
@@ -1183,8 +1213,8 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
   // avulso, mesma categoria do exame de Compra). Nenhuma segunda chamada de IA: a
   // tabela já veio revisada pelo modal.
   const salvarNaoPedido = async (
-    { tipo: tipoNovo, descricao, laboratorio, dataExame, laudo, itens, arquivos }:
-    { tipo: TipoExame; descricao: string; laboratorio: string; dataExame: string; laudo: string; itens: ItemManual[]; arquivos: File[] }
+    { tipo: tipoNovo, descricao, laboratorio, dataExame, laudo, itens, arquivos, prestadorId }:
+    { tipo: TipoExame; descricao: string; laboratorio: string; dataExame: string; laudo: string; itens: ItemManual[]; arquivos: File[]; prestadorId: number | '' }
   ) => {
     setSaving(true);
     setErroNaoPedido(null);
@@ -1197,6 +1227,8 @@ export default function ExamesSolicitadosPanel({ animalId, tipo, onSalvo, onReal
       if (dataExame)   fd.append('dataExame', dataExame);
       if (laudo)       fd.append('resultado', laudo);
       if (itens.length > 0) fd.append('itens', JSON.stringify(itens));
+      // Exame avulso nasce CONCLUÍDO — esta é a única chance de dizer quem executou.
+      if (prestadorId !== '') fd.append('prestadorId', String(prestadorId));
       arquivos.forEach(a => fd.append('arquivos', a));
       await api.post('/clinica/exames/nao-pedido', fd);
       setNaoPedidoAberto(false);

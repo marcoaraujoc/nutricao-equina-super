@@ -23,6 +23,7 @@ import FaixaPacienteInativo from '../components/FaixaPacienteInativo';
 import BotaoVoltar from '../components/BotaoVoltar';
 import PageContainer from '../components/PageContainer';
 import SeletorAnimalInteligente from '../components/SeletorAnimalInteligente';
+import PainelSemPaciente from '../components/PainelSemPaciente';
 import SubModuloVacina from './SubModuloVacina';
 import { escolherEvolucaoAtiva, lerEvolucaoSelecionada } from '../utils/evolucaoAtiva';
 
@@ -200,18 +201,15 @@ export default function Vacina() {
       {/* Sem paciente escolhido, o submódulo NÃO é montado: ele carrega catálogo e
           histórico por animal e sairia batendo em `/animal/0`. */}
       {semPaciente ? (
-        <div className="mt-4 bg-white rounded-2xl border border-gray-100 shadow-sm">
-          <div className="flex flex-col items-center justify-center py-14 text-center px-6">
-            <Syringe size={30} className="text-gray-200 mb-3" />
-            <p className="text-sm text-gray-400">
-              {carregandoLista
-                ? 'Carregando pacientes…'
-                : todosAnimais.length === 0
-                  ? 'Nenhum paciente disponível.'
-                  : 'Selecione o paciente acima para registrar ou consultar vacinas.'}
-            </p>
-          </div>
-        </div>
+        // Este bloco era escrito à mão aqui; virou `PainelSemPaciente` quando as
+        // outras quatro telas passaram a abrir vazias também (2026-09-22) — cinco
+        // cópias do mesmo painel divergiriam na primeira correção.
+        <PainelSemPaciente
+          icone={Syringe}
+          carregando={carregandoLista}
+          vazio={todosAnimais.length === 0}
+          acao="registrar ou consultar vacinas"
+        />
       ) : (
       <div className="mt-4 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
         <SubModuloVacina

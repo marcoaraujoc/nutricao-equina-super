@@ -137,7 +137,10 @@ export default function SeletorAnimalInteligente<T extends AnimalSelecionavel>({
           onFocus={() => { setAberto(true); setBusca(rotuloAtual); inputRef.current?.select(); }}
           onClick={() => setAberto(true)}
           onKeyDown={aoTeclar}
-          placeholder={animalAtual ? 'Digite para trocar de paciente…' : 'Digite ou escolha o paciente'}
+          // 🔴 SEM paciente escolhido o campo é uma BUSCA, e diz isso (2026-09-22).
+          // As telas clínicas e nutricionais passaram a abrir VAZIAS, em modo busca —
+          // "Digite ou escolha o paciente" descrevia um campo que já vinha preenchido.
+          placeholder={animalAtual ? 'Digite para trocar de paciente…' : 'Buscar animal…'}
           // `combobox` + `aria-expanded`: sem rótulo de `<select>`, é o que diz ao
           // leitor de tela que há uma lista e se ela está aberta.
           role="combobox"

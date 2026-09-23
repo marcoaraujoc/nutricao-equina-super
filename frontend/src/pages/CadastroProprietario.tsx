@@ -5,10 +5,11 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
   Pencil, Search, Loader2, X, Users,
-  Phone, MapPin, Info,
+  Phone, MapPin,
   ToggleLeft, ToggleRight,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import JanelaLista from '../components/JanelaLista';
 import ProprietarioFormModal, {
   type Proprietario, type FormProp, type LocalidadeProp,
   FORM_INICIAL, resumoLocalidade, validarDiaVencimento, formDeProprietario,
@@ -57,7 +58,6 @@ export default function CadastroProprietario() {
   const [confirmRemov,  setConfirmRemov]  = useState<Proprietario | null>(null);
   const [confirmReativ, setConfirmReativ] = useState<Proprietario | null>(null);
   const [filtroAtivo,   setFiltroAtivo]   = useState<'ativo' | 'inativo' | 'all'>('ativo');
-  const [showInfo,      setShowInfo]      = useState(false);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -189,6 +189,14 @@ export default function CadastroProprietario() {
     if (form.mensalista && !form.valorAssistencia) {
       setErroAcao({ mensagem: 'Informe o valor da assistência veterinária', campos: ['valorAssistencia'] }); return;
     }
+    // Ao menos UMA forma de recebimento da fatura (2026-09-22) — nenhuma marcada
+    // deixaria a fatura deste cliente sem nenhuma saída na tela de Faturamento.
+    if (form.formasRecebimentoFatura.length === 0) {
+      setErroAcao({
+        mensagem: 'Informe ao menos uma forma de recebimento da fatura',
+        campos: ['formasRecebimentoFatura'],
+      }); return;
+    }
 
     setSaving(true);
     const payload = {
@@ -206,6 +214,8 @@ export default function CadastroProprietario() {
         frequenciaVisitas: l.frequenciaVisitas,
       })),
       diaVencimentoFatura: Number(form.diaVencimentoFatura),
+      // Como o cliente quer receber a fatura — é o que a tela de Faturamento obedece.
+      formasRecebimentoFatura: form.formasRecebimentoFatura,
       // Acesso ao sistema — mesma lógica do Incluir Membro (2026-09-18).
       acessoSistema:     form.acessoSistema,
       cep:               form.cep         || null,
@@ -331,11 +341,6 @@ export default function CadastroProprietario() {
           <Users size={22} className="text-emerald-600" /> Proprietários
         </h1>
         <div className="flex items-center gap-2">
-          <button onClick={() => setShowInfo(v => !v)}
-            className="p-2 text-gray-400 hover:text-gray-600 rounded-xl"
-            title="Informações sobre este cadastro">
-            <Info size={18} />
-          </button>
           {podeCriar && (
             <button onClick={abrirNovo}
               className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-2xl text-sm font-semibold hover:bg-emerald-700 transition-colors">
@@ -345,18 +350,6 @@ export default function CadastroProprietario() {
         </div>
       </div>
 
-      {/* ── Info banner ─────────────────────────────────────────────────────── */}
-      {showInfo && (
-        <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-2xl text-sm text-blue-800">
-          <strong>Regras deste cadastro:</strong>
-          <ul className="mt-1 list-disc pl-5 space-y-0.5">
-            <li>Proprietários criados aqui recebem e-mail de boas-vindas com senha inicial.</li>
-            <li>A senha inicial é gerada pelo sistema e vai <strong>somente no e-mail</strong> — troca obrigatória no primeiro acesso.</li>
-            <li>Proprietários são associados à empresa/equipe ativa no momento do cadastro.</li>
-            <li>A remoção da empresa não exclui o proprietário do sistema.</li>
-          </ul>
-        </div>
-      )}
 
       {/* ── Filtros ──────────────────────────────────────────────────────────── */}
       <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center">
@@ -397,7 +390,10 @@ export default function CadastroProprietario() {
           </div>
         ) : (
           <div className="bg-white rounded-3xl border border-gray-200 overflow-hidden">
-            <div className="overflow-x-auto rounded-3xl">
+            {/* Cabeçalho FIXO no topo, dados rolando por baixo: a janela cria o
+                próprio contexto de rolagem (o card é `overflow-hidden`, e sticky
+                não gruda em ancestral sem scroll). Ver JanelaLista. */}
+            <JanelaLista maxItens={8} className="rounded-3xl">
             <table className="w-full min-w-[900px] text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
@@ -486,7 +482,7 @@ export default function CadastroProprietario() {
                 ))}
               </tbody>
             </table>
-            </div>
+            </JanelaLista>
           </div>
         )}
       </div>

@@ -23,18 +23,38 @@
  */
 
 const prisma = require('./prisma').default;
+const { calcularVencimento, statusExibicao } = require('./vencimentoCredor');
 
 const TIPOS = ['FORNECEDOR', 'PRESTADOR'];
-/** Editáveis; só a ABERTA recebe lançamento novo automático. */
-const STATUS_ABERTOS   = ['ABERTA'];
+/**
+ * 🔴 REABERTA NÃO É ABERTA — a MESMA distinção da fatura (`faturaUtils`,
+ * STATUS_FATURA_ABERTOS). As duas são editáveis, mas só a ABERTA é a conta CORRENTE:
+ * é ela que `contaAbertaDoCredor` encontra (índice único PARCIAL `WHERE status =
+ * 'ABERTA'`) para receber o lançamento automático de hoje. Sem a distinção, reabrir a
+ * conta de agosto para corrigir um valor faria a compra de setembro cair dentro dela,
+ * num documento que o credor já tinha recebido uma vez.
+ */
+const STATUS_ABERTOS   = ['ABERTA', 'REABERTA'];
 const STATUS_FECHADOS  = ['FECHADA', 'PAGA', 'CANCELADA'];
 const STATUS_VALIDOS   = [...STATUS_ABERTOS, ...STATUS_FECHADOS];
+/**
+ * 🔴 ATRASADA É DERIVADA, NUNCA GRAVADA (ver `lib/vencimentoCredor.js#statusExibicao`)
+ * — por isso ela vale como FILTRO e não como valor de `alterarStatus`. Aceitá-la na
+ * escrita criaria um segundo dono da verdade: a coluna diria ATRASADA e o cadastro do
+ * credor diria outra coisa, e não haveria em qual acreditar.
+ */
+const STATUS_FILTRAVEIS = [...STATUS_VALIDOS, 'ATRASADA'];
 
 /** Origens do lançamento automático — o que torna cada linha rastreável e idempotente. */
 const ORIGENS = {
   PRESCRICAO_ITEM:    'PRESCRICAO_ITEM',
   VACINA:             'VACINA',
   EXECUCAO_PRESTADOR: 'EXECUCAO_PRESTADOR',
+  // Exame concluído por prestador externo (2026-09-22). Origem PRÓPRIA, e não o
+  // reuso de EXECUCAO_PRESTADOR: o par (origem, id) é a chave de idempotência da
+  // linha, e o exame 47 e o item de prescrição 47 colidiriam — a segunda dívida
+  // seria descartada pelo `ON CONFLICT DO NOTHING` sem ninguém notar.
+  EXAME_PRESTADOR:    'EXAME_PRESTADOR',
   MANUAL:             'MANUAL',
 };
 
@@ -51,6 +71,29 @@ async function temTabelas() {
   return _temTabelas;
 }
 
+/**
+ * A base já tem as colunas de vencimento do credor (migration `20261020000000`)?
+ *
+ * ⚠️ Guarda de COLUNA, no padrão de `temTabelas`: o `JOIN` que as lê roda em SQL cru,
+ * e numa base sem a migration o Postgres responde `column ... does not exist` — o que
+ * derrubaria a LISTAGEM INTEIRA de pagamentos por causa de um campo acessório. Sem
+ * elas a conta simplesmente não tem vencimento e nunca atrasa, que é o comportamento
+ * de antes.
+ */
+let _temVencimento = null;
+async function temColunasVencimento() {
+  if (_temVencimento !== null) return _temVencimento;
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT table_name FROM information_schema.columns
+        WHERE table_schema = 'schs2vet'
+          AND column_name  = 'tipo_vencimento'
+          AND table_name  IN ('tb_fornecedores', 'tb_prestadores')`);
+    _temVencimento = rows.length === 2;
+  } catch { _temVencimento = false; }
+  return _temVencimento;
+}
+
 const num = (v) => {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
@@ -62,6 +105,32 @@ const num = (v) => {
 const cent = (v) => (v == null ? 0 : Math.round(Number(v) * 100) / 100);
 
 const corta = (v, max) => String(v ?? '').trim().slice(0, max);
+
+/**
+ * 🔴 DATA DE PAGAMENTO → TEXTO, NUNCA `Date` (achado rodando o código real contra a
+ * base, 2026-09-22).
+ *
+ * `pago_em` é `timestamp WITHOUT time zone` e o Prisma o lê/escreve como UTC NAIVE.
+ * Mandar um objeto `Date` como parâmetro faz o Postgres tratá-lo como `timestamptz` e
+ * convertê-lo para o fuso da SESSÃO (America/Sao_Paulo nesta base): o dia **01/09**
+ * escolhido na tela era gravado como 31/08 21:00 e voltava **31/08** para o
+ * comprovante — um dia antes, sem erro e sem log. É a mesma armadilha do `NOW()` puro
+ * documentada na §6, pelo outro lado.
+ *
+ * ⚠️ A data escolhida é um DIA DE CALENDÁRIO, não um instante: "YYYY-MM-DD" vira
+ * meia-noite daquele dia, sem conversão nenhuma.
+ * ⚠️ Sem data informada vale AGORA em UTC — o equivalente exato de
+ * `NOW() AT TIME ZONE 'UTC'`, que é o que a coluna espera.
+ */
+function timestampNaive(valor) {
+  const agora = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
+  if (valor === null || valor === undefined || valor === '') return agora();
+  const txt = String(valor).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(txt)) return `${txt} 00:00:00`;
+  const d = new Date(txt);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 19).replace('T', ' ');
+}
 
 /** "2026-09" do instante informado, no formato de `Fatura.mesReferencia`. */
 function mesReferenciaDe(data = new Date()) {
@@ -244,7 +313,9 @@ async function listarContas(empresaId, { tipo, inicio, fim, status, client = pri
     const params = [Number(empresaId)];
     let filtro = '';
     if (tipo && TIPOS.includes(tipo)) { params.push(tipo); filtro += ` AND c.tipo = $${params.length}`; }
-    if (status && STATUS_VALIDOS.includes(status)) { params.push(status); filtro += ` AND c.status = $${params.length}`; }
+    // ⚠️ O filtro de STATUS é aplicado em JS, DEPOIS de derivar a ATRASADA — no SQL ele
+    // devolveria a conta vencida sob o rótulo FECHADA, e o chip "Atrasada" da tela viria
+    // sempre vazio enquanto o "Fechada" mostraria contas que já venceram.
     // ⚠️ A janela recorta pelo ITEM (`ocorrido_em`, o fato gerador), não pela criação
     // da conta: a conta do mês nasce no primeiro lançamento e viveria fora de todo
     // período seguinte se o corte fosse por `created_at`.
@@ -255,10 +326,25 @@ async function listarContas(empresaId, { tipo, inicio, fim, status, client = pri
                                  AND i.ocorrido_em >= $${params.length - 1}
                                  AND i.ocorrido_em <  $${params.length})`;
     }
+    // O vencimento vem do CADASTRO do credor, resolvido no MESMO SELECT: uma consulta
+    // por conta seria uma ida ao banco por linha da tela.
+    // ⚠️ As duas tabelas são INDEPENDENTES e NÃO compartilham id (2026-08-21), por isso
+    // o `JOIN` carrega o `c.tipo` na condição — sem ele, o fornecedor 7 casaria com o
+    // prestador 7 e a conta herdaria o vencimento de quem não é o credor dela.
+    const comVencimento = await temColunasVencimento();
+    const colsVenc = comVencimento
+      ? `, COALESCE(f.tipo_vencimento, p.tipo_vencimento) AS tipo_vencimento,
+           COALESCE(f.dia_vencimento,  p.dia_vencimento)  AS dia_vencimento`
+      : `, NULL::text AS tipo_vencimento, NULL::int AS dia_vencimento`;
+    const joinVenc = comVencimento
+      ? `LEFT JOIN schs2vet.tb_fornecedores f ON c.tipo = 'FORNECEDOR' AND f.id = c.credor_id
+         LEFT JOIN schs2vet.tb_prestadores  p ON c.tipo = 'PRESTADOR'  AND p.id = c.credor_id`
+      : '';
     const contas = await client.$queryRawUnsafe(
       `SELECT c.id, c.tipo, c.credor_id, c.credor_nome, c.mes_referencia, c.total,
-              c.status, c.observacao, c.pago_em, c.created_at
+              c.status, c.observacao, c.pago_em, c.created_at ${colsVenc}
          FROM schs2vet.tb_contas_pagar c
+         ${joinVenc}
         WHERE c.empresa_id = $1 ${filtro}
         ORDER BY c.mes_referencia DESC NULLS LAST, c.credor_nome ASC`,
       ...params,
@@ -281,7 +367,26 @@ async function listarContas(empresaId, { tipo, inicio, fim, status, client = pri
       lista.push(normalizarItem(i));
       porConta.set(i.conta_id, lista);
     }
-    return contas.map(c => ({ ...normalizarConta(c), itens: porConta.get(c.id) ?? [] }));
+    const agora = new Date();
+    const lista = contas.map((c) => {
+      const vencimentoEm = calcularVencimento(
+        { tipoVencimento: c.tipo_vencimento, diaVencimento: c.dia_vencimento },
+        c.mes_referencia,
+      );
+      return {
+        ...normalizarConta(c),
+        vencimentoEm,
+        // `status` continua sendo o GRAVADO; `statusExibicao` é o que a tela mostra e
+        // filtra. Sobrescrever o primeiro esconderia de quem lê a resposta que ATRASADA
+        // é derivada, e a próxima tela a consumir isto tentaria gravá-la.
+        statusExibicao: statusExibicao(c.status, vencimentoEm, agora),
+        itens: porConta.get(c.id) ?? [],
+      };
+    });
+    if (status && STATUS_FILTRAVEIS.includes(status)) {
+      return lista.filter(c => c.statusExibicao === status);
+    }
+    return lista;
   } catch (err) {
     console.error('contasPagar.listarContas:', err.message);
     return [];
@@ -295,20 +400,36 @@ async function listarContas(empresaId, { tipo, inicio, fim, status, client = pri
  * rótulo. Sair de PAGA limpa os dois: um pagamento desfeito não pode deixar a data
  * do anterior no registro, afirmando algo que deixou de valer.
  */
-async function alterarStatus(client, empresaId, contaId, status, usuarioId) {
-  if (!STATUS_VALIDOS.includes(status)) return { erro: 'Status inválido.' };
+async function alterarStatus(client, empresaId, contaId, status, usuarioId, pagoEm = null) {
+  if (!STATUS_VALIDOS.includes(status)) {
+    // ATRASADA cai aqui de propósito — ela é DERIVADA do vencimento (STATUS_FILTRAVEIS)
+    // e gravá-la criaria um segundo dono da verdade.
+    return { erro: 'Status inválido.' };
+  }
   if (!(await temTabelas())) return { erro: 'Recurso ainda não disponível nesta base.' };
+  // 🔴 A DATA DE PAGAMENTO É INFORMADA, não deduzida do relógio. O pagamento costuma
+  // ser registrado no sistema DEPOIS de acontecer no banco, e carimbar `NOW()` jogaria
+  // toda quitação para o dia da digitação — o comprovante diria uma data que não foi a
+  // do pagamento. Sem informar, `NOW()` continua valendo (comportamento anterior).
+  const quandoPagou = status === 'PAGA' ? timestampNaive(pagoEm) : null;
+  if (status === 'PAGA' && quandoPagou === null) {
+    return { erro: 'Data de pagamento inválida.' };
+  }
   try {
     const rows = await client.$queryRawUnsafe(
       `UPDATE schs2vet.tb_contas_pagar
           SET status      = $3,
-              pago_em     = CASE WHEN $3 = 'PAGA' THEN NOW() AT TIME ZONE 'UTC' ELSE NULL END,
-              pago_por_id = CASE WHEN $3 = 'PAGA' THEN $4 ELSE NULL END,
+              pago_em     = CASE WHEN $3 = 'PAGA' THEN $5::timestamp ELSE NULL END,
+              -- ::int obrigatório: sem ele o Postgres infere TEXT para o
+              -- parâmetro nulo e recusa com 42804 (achado ao rodar o código real
+              -- contra a base). O ::timestamp abaixo existe pela mesma razão.
+              pago_por_id = CASE WHEN $3 = 'PAGA' THEN $4::int ELSE NULL END,
               updated_at  = NOW() AT TIME ZONE 'UTC'
         WHERE id = $1 AND empresa_id = $2
         RETURNING id, tipo, credor_id, credor_nome, mes_referencia, total, status,
                   observacao, pago_em, created_at`,
       Number(contaId), Number(empresaId), status, usuarioId ? Number(usuarioId) : null,
+      quandoPagou,
     );
     if (rows.length === 0) return { erro: 'Conta não encontrada.' };
     return { dados: normalizarConta(rows[0]) };
@@ -372,7 +493,11 @@ async function atualizarValorItem(client, empresaId, itemId, valor) {
           SET valor = $3
          FROM schs2vet.tb_contas_pagar c
         WHERE i.id = $1 AND i.conta_id = c.id
-          AND c.empresa_id = $2 AND c.status = 'ABERTA'
+          AND c.empresa_id = $2
+          -- REABERTA é editável como a ABERTA (só ela não é a conta CORRENTE). O
+          -- literal c.status = 'ABERTA' é mantido, e não trocado por um IN, porque
+          -- é ele que o gate estrutural procura.
+          AND (c.status = 'ABERTA' OR c.status = 'REABERTA')
     RETURNING c.id AS conta_id`,
       Number(itemId), Number(empresaId), v,
     );
@@ -394,6 +519,9 @@ module.exports = {
   STATUS_ABERTOS,
   STATUS_FECHADOS,
   STATUS_VALIDOS,
+  STATUS_FILTRAVEIS,
+  temColunasVencimento,
+  timestampNaive,
   temTabelas,
   mesReferenciaDe,
   contaAbertaDoCredor,

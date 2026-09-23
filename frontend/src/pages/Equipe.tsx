@@ -628,7 +628,11 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
         {isGestor && (
           <button onClick={() => setShowConvite(true)}
             className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-2xl font-semibold text-sm transition-colors">
-            <Mail size={16} /> Incluir Membro
+            {/* Rótulo "Novo Membro" (a pedido, 2026-09-22) — a tela é de CADASTRO,
+                e "Incluir" descrevia o efeito na equipe, não o que o botão abre. O
+                ícone de envelope FICA: o cadastro dispara o e-mail de boas-vindas com
+                o acesso, e é isso que ele anuncia. */}
+            <Mail size={16} /> Novo Membro
           </button>
         )}
       </div>
@@ -682,7 +686,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
           {isGestor && (
             <button onClick={() => setShowConvite(true)}
               className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-2xl font-semibold text-sm transition-colors">
-              Incluir primeiro membro
+              <Mail size={16} /> Cadastrar primeiro membro
             </button>
           )}
         </div>
@@ -949,10 +953,10 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
         />
       )}
 
-      {/* Modal Incluir Membro */}
+      {/* Modal Novo Membro */}
       {showConvite && (
         <UsuarioFormModal
-          titulo="Incluir Membro"
+          titulo="Novo Membro"
           equipeId={equipeId}
           infoNota="A pessoa será adicionada imediatamente à equipe. Um e-mail de boas-vindas será enviado."
           textoBotao="Incluir"

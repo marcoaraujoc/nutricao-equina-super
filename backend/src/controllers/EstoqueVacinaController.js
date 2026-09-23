@@ -763,7 +763,8 @@ const toggle = async (req, res) => {
 
     const nome = existe.medicamentoCat?.nome ?? existe.vacina?.nome ?? 'Vacina';
     await registrarAuditoria(null, req, {
-      categoria:  'ALTERACAO',
+      // (In)ativar não é editar um campo — ver EstoqueController.toggle.
+      categoria:  vaiInativar ? 'INATIVACAO' : 'ATIVACAO',
       entidade:   'ESTOQUE_VACINA',
       entidadeId: id,
       motivo:     vaiInativar ? motivo.trim() : null,

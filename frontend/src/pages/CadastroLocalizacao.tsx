@@ -6,13 +6,14 @@ import toast from 'react-hot-toast';
 import {
   Search, Loader2, X, MapPin, Pencil,
   Phone, User, ToggleLeft, ToggleRight,
-  Info,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
+import JanelaLista from '../components/JanelaLista';
 import TipoServicoSelect from '../components/TipoServicoSelect';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
+import ModalJustificativa from '../components/ModalJustificativa';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -114,7 +115,6 @@ export default function CadastroLocalizacao() {
   const [salvando,       setSalvando]       = useState(false);
 
   const [buscandoCEP,    setBuscandoCEP]    = useState(false);
-  const [showInfo,       setShowInfo]       = useState(false);
   // Erros inline: da página (lista/ações) e do modal de cadastro/edição
   const [erroInline,     setErroInline]     = useState<string | null>(null);
   const [erroModal,      setErroModal]      = useState<string | null>(null);
@@ -232,16 +232,31 @@ export default function CadastroLocalizacao() {
   };
 
   // ── Toggle ativo ───────────────────────────────────────────────────────────
-  const toggleAtivo = async (loc: Localizacao) => {
+  // INATIVAR pede justificativa (o backend recusa 400 sem `motivo`) e vai para a
+  // Auditoria; ATIVAR segue direto, sem modal — mesma regra de Fornecedor,
+  // Prestador e Tratador.
+  const [inativando, setInativando]   = useState<Localizacao | null>(null);
+  const [alterandoAtivo, setAlterandoAtivo] = useState(false);
+
+  const toggleAtivo = (loc: Localizacao) => {
     if (loc.tipoEntrada === 'SYSTEM' && !isAdmin) { setErroInline('Apenas ADMIN pode ativar/inativar localizações do catálogo global.'); return; }
     if (!podeAtivar) { setErroInline('Sem permissão para ativar/inativar localizações.'); return; }
     setErroInline(null);
+    if (loc.ativo) { setInativando(loc); return; }
+    confirmarToggle(loc);
+  };
+
+  const confirmarToggle = async (loc: Localizacao, motivo?: string) => {
+    setAlterandoAtivo(true);
     try {
-      await api.patch(`/cadastro/localizacoes/${loc.id}/toggle`);
+      await api.patch(`/cadastro/localizacoes/${loc.id}/toggle`, motivo ? { motivo } : undefined);
       toast.success(`Localização ${loc.ativo ? 'inativada' : 'ativada'}`);
+      setInativando(null);
       carregar();
     } catch {
       setErroInline('Erro ao alterar status');
+    } finally {
+      setAlterandoAtivo(false);
     }
   };
 
@@ -291,11 +306,6 @@ export default function CadastroLocalizacao() {
           Localizações de Animais
         </h1>
         <div className="flex items-center gap-2">
-          <button onClick={() => setShowInfo(v => !v)}
-            className="p-2 text-gray-400 hover:text-gray-600 rounded-xl"
-            title="Informações sobre este cadastro">
-            <Info size={18} />
-          </button>
           {(podeCriar || isAdmin) && (
             <button onClick={abrirNovo}
               className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-2xl text-sm font-semibold hover:bg-emerald-700 transition-colors">
@@ -305,17 +315,6 @@ export default function CadastroLocalizacao() {
         </div>
       </div>
 
-      {/* ── Info banner ─────────────────────────────────────────────────────── */}
-      {showInfo && (
-        <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-2xl text-sm text-blue-800">
-          <strong>Regras deste cadastro:</strong>
-          <ul className="mt-1 list-disc pl-5 space-y-0.5">
-            <li>O catálogo de localizações é <strong>corporativo</strong> (compartilhado entre todas as empresas).</li>
-            <li><strong>Alterar</strong> e <strong>inativar</strong> localizações é exclusivo do <strong>ADMIN</strong>. Os demais usuários apenas visualizam e cadastram novas.</li>
-            <li>Localizações nunca são excluídas, apenas inativadas (pelo ADMIN).</li>
-          </ul>
-        </div>
-      )}
 
       {/* ── Filtros ──────────────────────────────────────────────────────────── */}
       <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center">
@@ -363,7 +362,8 @@ export default function CadastroLocalizacao() {
           </div>
         ) : (
           <div className="bg-white rounded-3xl border border-gray-200 overflow-hidden">
-            <div className="overflow-x-auto rounded-3xl">
+            {/* Cabeçalho FIXO no topo, dados rolando por baixo — ver JanelaLista. */}
+            <JanelaLista maxItens={8} className="rounded-3xl">
             <table className="w-full min-w-[760px] text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
@@ -401,7 +401,7 @@ export default function CadastroLocalizacao() {
                 ))}
               </tbody>
             </table>
-            </div>
+            </JanelaLista>
           </div>
         )}
       </div>
@@ -600,6 +600,16 @@ export default function CadastroLocalizacao() {
           </div>
         </div>
       )}
+
+      <ModalJustificativa
+        aberto={!!inativando}
+        titulo="Inativar localização?"
+        descricao={inativando ? `${inativando.nome} deixa de aparecer nas seleções de local.` : undefined}
+        acaoLabel="Inativar"
+        processando={alterandoAtivo}
+        onConfirmar={(motivo) => { if (inativando) confirmarToggle(inativando, motivo); }}
+        onFechar={() => setInativando(null)}
+      />
     </PageContainer>
   );
 }

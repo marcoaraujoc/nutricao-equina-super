@@ -225,13 +225,23 @@ async function vincularEspecie(tx, medicamentoId, especieId) {
  * Garante o PROCEDIMENTO no catálogo da empresa e devolve o id.
  *
  * @param {object} tx
- * @param {object} dados     { nome, especialidade?, valor?, especieNome? }
+ * @param {object} dados     { nome, especialidade?, valor?, especieNome?, categoria?,
+ *                             tipoProcedimento? }
  *   especieNome — nome da espécie quando a empresa atende só uma; com mais de uma o
  *   procedimento fica genérico (o catálogo guarda uma única espécie, em texto).
+ *   categoria / tipoProcedimento — OPCIONAIS, e só a tela de Cadastro > Procedimentos
+ *   os informa: é o que permite cadastrar um EXAME DE IMAGEM pela clínica
+ *   (`tipoProcedimento = 'IMAGEM'` + `categoria = 'Radiografia'`), que é como
+ *   `listarComValores` recorta essa família. Omitidos, vale o comportamento de
+ *   sempre — 'Cadastrado no atendimento', que é o carimbo de origem do item manual.
  * @param {number|null} empresaId
  * @returns {Promise<number|null>}
  */
-async function garantirProcedimentoDaEmpresa(tx, { nome, especialidade = null, valor = 0, especieNome = null }, empresaId) {
+async function garantirProcedimentoDaEmpresa(
+  tx,
+  { nome, especialidade = null, valor = 0, especieNome = null, categoria = null, tipoProcedimento = null },
+  empresaId,
+) {
   const n = String(nome ?? '').trim().slice(0, 255);
   if (!n) return null;
 
@@ -248,8 +258,9 @@ async function garantirProcedimentoDaEmpresa(tx, { nome, especialidade = null, v
   const criado = await tx.procedimentoVeterinario.create({
     data: {
       nome:          n,
-      categoria:     'Cadastrado no atendimento',
+      categoria:     String(categoria ?? '').trim().slice(0, 100) || 'Cadastrado no atendimento',
       especialidade: especialidade || null,
+      tipoProcedimento: tipoProcedimento ? String(tipoProcedimento).trim().slice(0, 50) : null,
       valorVenda:    Number(valor) || 0,
       especie:       especieNome ? String(especieNome).slice(0, 50) : null, // null = genérico
       empresaId:     empresaId ?? null,

@@ -11,7 +11,6 @@ import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import { useAuth } from '../contexts/AuthContext';
-import ConfirmModal from '../components/ConfirmModal';
 import ModalJustificativa from '../components/ModalJustificativa';
 import InlineError from '../components/InlineError';
 import DateInput from '../components/DateInput';
@@ -704,6 +703,9 @@ export default function CadastroVacina() {
   const [confirmLoteId,   setConfirmLoteId]   = useState<number | null>(null);
   const [vacinaIdLote,    setVacinaIdLote]    = useState<number | null>(null);
   const [savingLegado,    setSavingLegado]    = useState(false);
+  // Inativação com justificativa (vacina do catálogo e lote) — ver handleToggleVacina.
+  const [inativandoVacina, setInativandoVacina] = useState<VacinaLegada | null>(null);
+  const [alterandoAtivo,   setAlterandoAtivo]   = useState(false);
 
   const carregarLegado = useCallback(async () => {
     setLoadingLegado(true);
@@ -760,13 +762,25 @@ export default function CadastroVacina() {
     }
   };
 
-  const handleToggleVacina = async (v: VacinaLegada) => {
+  // INATIVAR pede justificativa (o backend recusa 400 sem `motivo`) e vai para a
+  // Auditoria; ATIVAR segue direto. Esta vacina é do CATÁLOGO GLOBAL — inativá-la
+  // a retira de todas as clínicas, então é a que mais precisa do porquê registrado.
+  const handleToggleVacina = (v: VacinaLegada) => {
+    if (v.ativo) { setInativandoVacina(v); return; }
+    confirmarToggleVacina(v);
+  };
+
+  const confirmarToggleVacina = async (v: VacinaLegada, motivo?: string) => {
+    setAlterandoAtivo(true);
     try {
-      await api.patch(`/admin/vacinas/${v.id}/toggle`);
+      await api.patch(`/admin/vacinas/${v.id}/toggle`, motivo ? { motivo } : undefined);
       toast.success(v.ativo ? 'Vacina inativada' : 'Vacina reativada');
+      setInativandoVacina(null);
       carregarLegado();
     } catch {
       setErroInline('Erro ao alterar status');
+    } finally {
+      setAlterandoAtivo(false);
     }
   };
 
@@ -803,16 +817,19 @@ export default function CadastroVacina() {
 
   const handleInativarLote = (loteId: number) => setConfirmLoteId(loteId);
 
-  const handleInativarLoteConfirmado = async () => {
+  const handleInativarLoteConfirmado = async (motivo: string) => {
     if (confirmLoteId == null) return;
     const loteId = confirmLoteId;
-    setConfirmLoteId(null);
+    setAlterandoAtivo(true);
     try {
-      await api.patch(`/admin/vacinas/lotes/${loteId}/inativar`);
+      await api.patch(`/admin/vacinas/lotes/${loteId}/inativar`, { motivo });
       toast.success('Lote inativado');
+      setConfirmLoteId(null);
       carregarLegado();
     } catch {
       setErroInline('Erro ao inativar lote');
+    } finally {
+      setAlterandoAtivo(false);
     }
   };
 
@@ -1071,14 +1088,27 @@ export default function CadastroVacina() {
         </>
       )}
 
-      <ConfirmModal
-        open={confirmLoteId != null}
-        titulo="Inativar lote"
-        mensagem="Inativar este lote? Ele não estará mais disponível para aplicações."
-        labelConfirmar="Inativar"
-        variante="aviso"
+      {/* Inativar EXIGE justificativa (backend + Auditoria) — por isso o
+          ConfirmModal simples deu lugar ao ModalJustificativa, como no resto
+          dos cadastros. */}
+      <ModalJustificativa
+        aberto={confirmLoteId != null}
+        titulo="Inativar lote?"
+        descricao="O lote deixa de estar disponível para aplicações."
+        acaoLabel="Inativar"
+        processando={alterandoAtivo}
         onConfirmar={handleInativarLoteConfirmado}
-        onCancelar={() => setConfirmLoteId(null)}
+        onFechar={() => setConfirmLoteId(null)}
+      />
+
+      <ModalJustificativa
+        aberto={!!inativandoVacina}
+        titulo="Inativar vacina?"
+        descricao={inativandoVacina ? `${inativandoVacina.nome} sai do catálogo do sistema para todas as clínicas.` : undefined}
+        acaoLabel="Inativar"
+        processando={alterandoAtivo}
+        onConfirmar={(motivo) => { if (inativandoVacina) confirmarToggleVacina(inativandoVacina, motivo); }}
+        onFechar={() => setInativandoVacina(null)}
       />
     </PageContainer>
   );

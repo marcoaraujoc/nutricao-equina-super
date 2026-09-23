@@ -138,6 +138,104 @@ interface PrescricaoGrupo {
 // (SALVO) não tem nenhum dos dois — a coluna mostra "—".
 const dataFimGrupo = (g: PrescricaoGrupo) => g.executadoEm ?? g.finalizadoEm ?? null;
 
+/** Nomes dos itens do documento, na ordem em que foram prescritos. */
+const nomesDosItens = (g: PrescricaoGrupo) =>
+  g.itens.map(i => i.medicamento).filter(Boolean).join(' · ');
+
+/** O que o curso inteiro consome: o total prescrito e as embalagens que ele abre. */
+interface EmbalagensDoCurso { total: number; conteudo: number; qtd: number }
+
+/**
+ * 🔴 QUANTAS EMBALAGENS O CURSO VAI CONSUMIR (2026-09-19, a pedido: "é preciso na
+ * prescrição informar que serão usados dois frascos").
+ *
+ * O caso: frasco de 100 mL, receita de 25 mL × 5 doses = 125 mL. Não cabe num frasco,
+ * e quem prescreve precisa saber disso ANTES de finalizar — é o que sai do estoque e
+ * o que entra na fatura.
+ *
+ * 🔴 FONTE ÚNICA DA TELA (2026-09-22): a mesma função responde pelo aviso do
+ * FORMULÁRIO (o que está sendo digitado agora) e pelo selo de CADA ITEM já inserido
+ * (`ItemRow`). Antes a conta vivia só no formulário e sumia junto com ele: o documento
+ * salvo, o finalizado e a visualização em somente-leitura não diziam em lugar nenhum
+ * que aquele curso consome dois frascos — justamente onde o vet confere antes de
+ * finalizar e onde o financeiro entende a linha da fatura.
+ *
+ * ⚠️ É ESPELHO do backend, não uma segunda regra: a conta é `calcularQuantidadeTotal`
+ * (dosagem × doses por dia × dias) dividida pelo conteúdo, com `embalagensParaQtd`
+ * arredondando para cima — as mesmas funções, com os mesmos nomes, dos dois lados.
+ * Divergir aqui faria a tela prometer um número que a fatura não cobra.
+ *
+ * ⚠️ Só vale para o produto SEM multidose: no multidose a cobrança é PROPORCIONAL ao
+ * prescrito (a sobra do frasco volta para a prateleira), e não há embalagem inteira a
+ * anunciar. Quem separa os dois é `conteudoDaEmbalagemProduto`.
+ *
+ * ⚠️ `null` quando não há o que dizer — item fora do catálogo (digitado à mão, sem
+ * produto e sem conteúdo declarado), sem dosagem, ou com a receita escrita na PRÓPRIA
+ * unidade da embalagem ("2 Un."), em que o número já É a quantidade de embalagens e
+ * repetir isso seria ruído.
+ *
+ * ⚠️ A `unidade` vem de FORA e não do produto: no formulário é a travada pelo catálogo
+ * (`unidadeDoProduto`) e no item já inserido é o SNAPSHOT que ele guarda. Ler sempre a
+ * do catálogo faria um item antigo ser medido pela unidade de hoje.
+ */
+function embalagensDoCurso(args: {
+  tipo:        TipoItem;
+  produto:     MedicamentoCat | null | undefined;
+  unidade:     string | null;
+  dosagem:     string | null;
+  frequencia:  string;
+  duracaoDias: number | '' | null;
+}): EmbalagensDoCurso | null {
+  if (args.tipo !== 'MEDICAMENTO' || !args.produto) return null;
+  const conteudo = conteudoDaEmbalagemProduto(args.produto);
+  if (conteudo == null) return null;
+  // Receita na unidade da EMBALAGEM: ali o vet já prescreveu embalagens.
+  const un = (args.unidade ?? '').trim().toLowerCase();
+  if (un === '' || un === 'un.' || un === 'un' || un === 'unidade') return null;
+  const dose = Number(String(args.dosagem ?? '').replace(',', '.'));
+  if (!Number.isFinite(dose) || dose <= 0) return null;
+  const dias        = Math.max(Number(args.duracaoDias) || 1, 1);
+  const dosesPorDia = DOSES_POR_DIA[args.frequencia] ?? 1;
+  // 'agora' é dose única — o curso é a própria dose (mesma regra do backend).
+  const total = args.frequencia === 'agora' ? dose : dose * dosesPorDia * dias;
+  return { total, conteudo, qtd: embalagensParaQtd(total, conteudo) };
+}
+
+/**
+ * 🔴 O CADASTRO NÃO DECLARA O CONTEÚDO DA EMBALAGEM — e por isso o curso inteiro vai
+ * sair do estoque e ser cobrado como UMA (2026-09-22).
+ *
+ * POR QUE ISTO EXISTE: `embalagensPara` devolve 1 quando o conteúdo é nulo, que é o
+ * comportamento correto para quem não declara nada — mas é uma falha SILENCIOSA quando
+ * a receita está escrita em unidade de CONTEÚDO ("25 mL") contra um estoque contado em
+ * EMBALAGENS. O "Banamine® - frasco 50 mL" com 5 doses de 25 mL consome TRÊS frascos e
+ * é debitado e faturado como um, sem nada na tela dizendo isso.
+ * Medido na base em 2026-09-22: dos 8.277 itens do catálogo, **zero** sem multidose
+ * declaravam conteúdo — ou seja, a regra das N embalagens estava inteira e dormente.
+ *
+ * ⚠️ É o NEGATIVO de `embalagensDoCurso`, com as MESMAS guardas: os dois nunca
+ * respondem juntos, e o que os separa é só o conteúdo estar ou não declarado. Relaxar
+ * uma guarda aqui faria o aviso aparecer no multidose (onde a cobrança é proporcional e
+ * não há embalagem inteira a contar) ou na receita já escrita em "2 Un.".
+ *
+ * ⚠️ AVISO, nunca bloqueio: prescrever não pode depender de alguém arrumar o cadastro
+ * do produto, e o item digitado à mão (sem produto) segue fora disto.
+ */
+function faltaConteudoDaEmbalagem(args: {
+  tipo:       TipoItem;
+  produto:    MedicamentoCat | null | undefined;
+  unidade:    string | null;
+  dosagem:    string | null;
+}): boolean {
+  if (args.tipo !== 'MEDICAMENTO' || !args.produto) return false;
+  if (args.produto.multidose === true) return false;
+  if (conteudoDaEmbalagemProduto(args.produto) != null) return false;
+  const un = (args.unidade ?? '').trim().toLowerCase();
+  if (un === '' || un === 'un.' || un === 'un' || un === 'unidade') return false;
+  const dose = Number(String(args.dosagem ?? '').replace(',', '.'));
+  return Number.isFinite(dose) && dose > 0;
+}
+
 interface FormItem {
   tipo:               TipoItem;
   medicamento:        string;
@@ -1544,41 +1642,37 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   const unidadeCatalogo  = unidadeDoProduto(medCatalogo);
 
   /**
-   * 🔴 QUANTAS EMBALAGENS O CURSO VAI CONSUMIR (2026-09-19, a pedido: "é preciso na
-   * prescrição informar que serão usados dois frascos").
-   *
-   * O caso: frasco de 100 mL, receita de 25 mL × 5 doses = 125 mL. Não cabe num frasco,
-   * e quem prescreve precisa saber disso ANTES de finalizar — é o que sai do estoque e
-   * o que entra na fatura.
-   *
-   * ⚠️ É ESPELHO do backend, não uma segunda regra: a conta é `calcularQuantidadeTotal`
-   * (dosagem × doses por dia × dias) dividida pelo conteúdo, com `embalagensParaQtd`
-   * arredondando para cima — as mesmas funções, com os mesmos nomes, dos dois lados.
-   * Divergir aqui faria a tela prometer um número que a fatura não cobra.
-   *
-   * ⚠️ Só vale para o produto SEM multidose: no multidose a cobrança é PROPORCIONAL ao
-   * prescrito (a sobra do frasco volta para a prateleira), e não há embalagem inteira a
-   * anunciar. Quem separa os dois é `conteudoDaEmbalagemProduto`.
-   *
-   * ⚠️ `null` quando não há o que dizer — sem conteúdo declarado, sem dosagem, ou com a
-   * receita escrita na PRÓPRIA unidade da embalagem ("2 Un."), em que o número já É a
-   * quantidade de embalagens e repetir isso seria ruído.
+   * Quantas embalagens o curso digitado AGORA vai consumir — a conta mora em
+   * `embalagensDoCurso` (topo do arquivo) e é a MESMA que cada item já inserido
+   * exibe. Duas contas separadas divergiriam, e o número que o formulário promete
+   * é o que a fatura cobra.
    */
-  const embalagensDoCurso = (() => {
-    if (!isMed || !medCatalogo) return null;
-    const conteudo = conteudoDaEmbalagemProduto(medCatalogo);
-    if (conteudo == null) return null;
-    // Receita na unidade da EMBALAGEM: ali o vet já prescreveu embalagens.
-    const un = (unidadeCatalogo ?? '').trim().toLowerCase();
-    if (un === '' || un === 'un.' || un === 'un' || un === 'unidade') return null;
-    const dose = Number(String(form.dosagem).replace(',', '.'));
-    if (!Number.isFinite(dose) || dose <= 0) return null;
-    const dias        = Math.max(Number(form.duracaoDias) || 1, 1);
-    const dosesPorDia = DOSES_POR_DIA[form.frequencia] ?? 1;
-    // 'agora' é dose única — o curso é a própria dose (mesma regra do backend).
-    const total = form.frequencia === 'agora' ? dose : dose * dosesPorDia * dias;
-    return { total, conteudo, qtd: embalagensParaQtd(total, conteudo) };
-  })();
+  /**
+   * Produto do catálogo de um item já inserido na lista.
+   *
+   * ⚠️ Procura em `allMeds` (o catálogo COMPLETO, carregado em background) antes de
+   * `medicamentos` — esta última é a lista FILTRADA pelo que foi digitado na busca, e
+   * sozinha faria o selo de embalagens piscar e sumir a cada tecla.
+   * ⚠️ O catálogo é carregado no mount SEM depender de `canEdit`, então a visualização
+   * em somente-leitura também encontra o produto.
+   */
+  const produtoDoItem = useCallback((catId: number | null | undefined): MedicamentoCat | null => {
+    if (catId == null) return null;
+    return allMeds.find(m => m.id === catId) ?? medicamentos.find(m => m.id === catId) ?? null;
+  }, [allMeds, medicamentos]);
+
+  const embalagensForm = embalagensDoCurso({
+    tipo:        form.tipo,
+    produto:     medCatalogo,
+    unidade:     unidadeCatalogo,
+    dosagem:     form.dosagem,
+    frequencia:  form.frequencia,
+    duracaoDias: form.duracaoDias,
+  });
+
+  const semConteudoDeclarado = faltaConteudoDaEmbalagem({
+    tipo: form.tipo, produto: medCatalogo, unidade: unidadeCatalogo, dosagem: form.dosagem,
+  });
 
   const itensExibidos = isCreate ? localItens : serverItens;
   const editandoItem  = editingLocalIdx !== null || editingServerId !== null;
@@ -1984,18 +2078,36 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                     ⚠️ Fica DEPOIS da linha de dosagem/frequência/duração de propósito:
                     ele muda a cada tecla desses três campos, e acima deles empurraria o
                     formulário para baixo enquanto a pessoa digita. */}
-                {embalagensDoCurso && (
+                {embalagensForm && (
                   <div className="flex items-start gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
                     <Package size={14} className="text-sky-600 flex-shrink-0 mt-0.5" />
                     <p className="text-[11px] leading-snug text-sky-800">
                       O curso inteiro usa{' '}
-                      <b>{fmtQtdForma(embalagensDoCurso.total)} {unidadeCatalogo}</b>
-                      {' '}— com {fmtQtdForma(embalagensDoCurso.conteudo)} {unidadeCatalogo} por embalagem,
-                      serão necessárias <b>{embalagensDoCurso.qtd}</b>
-                      {' '}{embalagensDoCurso.qtd === 1 ? 'embalagem' : 'embalagens'}.
+                      <b>{fmtQtdForma(embalagensForm.total)} {unidadeCatalogo}</b>
+                      {' '}— com {fmtQtdForma(embalagensForm.conteudo)} {unidadeCatalogo} por embalagem,
+                      serão necessárias <b>{embalagensForm.qtd}</b>
+                      {' '}{embalagensForm.qtd === 1 ? 'embalagem' : 'embalagens'}.
                       <span className="block text-sky-700/80">
                         É essa quantidade que sai do estoque e vai para a fatura — a embalagem
                         aberta não volta para a prateleira.
+                      </span>
+                    </p>
+                  </div>
+                )}
+
+                {/* 🔴 O NEGATIVO do aviso acima: sem o conteúdo no cadastro, o curso
+                    inteiro é debitado e cobrado como UMA embalagem — e nada na tela
+                    dizia isso. Ver `faltaConteudoDaEmbalagem`. */}
+                {semConteudoDeclarado && (
+                  <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+                    <Package size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                    <p className="text-[11px] leading-snug text-amber-800">
+                      O cadastro deste produto não informa <b>quanto cabe na embalagem</b>, então o
+                      curso inteiro sairá do estoque e será cobrado como <b>1 embalagem</b>.
+                      <span className="block text-amber-700/90">
+                        Para a conta sair certa (ex.: 5 doses de 25 {unidadeCatalogo} num frasco de
+                        100 {unidadeCatalogo} = 2 embalagens), preencha “Conteúdo da embalagem” em
+                        Cadastro › Produtos.
                       </span>
                     </p>
                   </div>
@@ -2122,6 +2234,11 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                           observacao={item.observacao}
                           medicamentoCliente={item.medicamentoCliente}
                           aplicadaPeloProprietario={item.aplicadaPeloProprietario}
+                          embalagens={embalagensDoCurso({
+                            tipo: item.tipo, produto: produtoDoItem(item.medicamentoCatId),
+                            unidade: item.unidade, dosagem: item.dosagem,
+                            frequencia: item.frequencia, duracaoDias: item.duracaoDias,
+                          })}
                           isEditing={editingLocalIdx === idx}
                           canEdit={canEdit}
                           onEdit={() => handleEditarLocal(idx)}
@@ -2152,6 +2269,11 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                           observacao={item.observacao}
                           medicamentoCliente={item.medicamentoCliente}
                           aplicadaPeloProprietario={item.aplicadaPeloProprietario}
+                          embalagens={embalagensDoCurso({
+                            tipo: item.tipo, produto: produtoDoItem(item.medicamentoCatId),
+                            unidade: item.unidade, dosagem: item.dosagem,
+                            frequencia: item.frequencia, duracaoDias: item.duracaoDias,
+                          })}
                           executado={completo}
                           emAndamento={emAndamentoItem ? { diaAtual: diaAtualDoItem(item.dataInicio), totalDias: item.duracaoDias } : null}
                           isEditing={editingServerId === item.id}
@@ -2316,6 +2438,7 @@ function InfoChip({ label, value }: { label: string; value: string | null | unde
 function ItemRow({
   label, tipo, dosagem, unidade, via, frequencia,
   horaInicio, duracaoDias, dataInicio, observacao, medicamentoCliente, aplicadaPeloProprietario, executado, emAndamento,
+  embalagens,
   isEditing, canEdit, canRemove, onEdit, onRemove,
   isDragging, isDragOver, onDragStart, onDragOver, onDrop, onDragEnd,
 }: {
@@ -2325,6 +2448,13 @@ function ItemRow({
   medicamentoCliente?: boolean; aplicadaPeloProprietario?: boolean; executado?: boolean;
   /** Item já teve dose(s) dada(s) mas ainda tem dias restantes — editável, não excluível */
   emAndamento?: { diaAtual: number; totalDias: number } | null;
+  /**
+   * 🔴 Embalagens que ESTE item consome no curso inteiro — `embalagensDoCurso`, a
+   * mesma conta do aviso do formulário e do que o backend debita e fatura.
+   * `null` = nada a dizer (item fora do catálogo, sem conteúdo declarado, ou receita
+   * já escrita em embalagens). Ver o helper no topo do arquivo.
+   */
+  embalagens?: EmbalagensDoCurso | null;
   isEditing: boolean; canEdit: boolean; canRemove?: boolean;
   onEdit: () => void; onRemove: () => void;
   isDragging?: boolean; isDragOver?: boolean;
@@ -2403,6 +2533,22 @@ function ItemRow({
         )}
         {dtIni           && <InfoChip label="Início:" value={dtIni} />}
         {dtFim           && <InfoChip label="Fim:" value={dtFim} />}
+        {/* 🔴 O que o curso consome de PRATELEIRA — e, por consequência, o que entra
+            na fatura. Fica no item (e não só no formulário) porque é aqui que o vet
+            confere antes de finalizar e que a visualização em somente-leitura
+            responde "por que a fatura cobrou dois frascos?". Selo em destaque, não
+            `InfoChip`: não é mais um dado da posologia. */}
+        {embalagens && (
+          <span
+            title={'O curso inteiro usa ' + fmtQtdForma(embalagens.total) + (unidade ? ' ' + unidade : '')
+              + ' — com ' + fmtQtdForma(embalagens.conteudo) + (unidade ? ' ' + unidade : '') + ' por embalagem, '
+              + 'saem ' + embalagens.qtd + (embalagens.qtd === 1 ? ' embalagem' : ' embalagens')
+              + ' do estoque e é essa quantidade que vai para a fatura.'}
+            className="inline-flex items-center gap-1 text-[10px] font-semibold text-sky-700 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded-full flex-shrink-0">
+            <Package size={9} />
+            {embalagens.qtd} {embalagens.qtd === 1 ? 'embalagem' : 'embalagens'}
+          </span>
+        )}
         {observacao      && <InfoChip label="Obs:" value={observacao} />}
       </div>
 
@@ -3010,6 +3156,18 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                         {g.itens.filter(i => i.tipo === 'PROCEDIMENTO').length}P
                       </span>
                     </div>
+                    {/* 🔴 O NOME do que foi prescrito (2026-09-22, a pedido). A célula
+                        dizia só QUANTOS itens e de que tipo — para saber O QUÊ era
+                        preciso abrir o documento. O TABLET cai aqui: o card só vale
+                        abaixo de `md` (768px), e daí para cima quem responde é esta
+                        tabela. `break-words` + largura máxima: nome comprido não pode
+                        esticar a coluna e espremer as Ações. */}
+                    {g.itens.length > 0 && (
+                      <p title={nomesDosItens(g)}
+                        className="mt-1 max-w-[220px] mx-auto text-[11px] leading-snug text-gray-700 break-words">
+                        {nomesDosItens(g)}
+                      </p>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <p className="text-xs font-medium text-gray-800 whitespace-nowrap">{g.veterinario.fullName}</p>
@@ -3058,6 +3216,14 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
                 {statusDoGrupo(g).label}
               </span>
             </div>
+            {/* 🔴 O NOME do que foi prescrito (2026-09-22, a pedido) — no card ele é o
+                que identifica o documento, acima do responsável e da data. Sem ele o
+                histórico no celular era uma pilha de "#001 · 2 itens". */}
+            {g.itens.length > 0 && (
+              <p className="text-sm font-semibold text-gray-800 leading-snug break-words">
+                {nomesDosItens(g)}
+              </p>
+            )}
             <p className="text-xs text-gray-500">{g.veterinario.fullName} • {g.itens.length} item{g.itens.length !== 1 ? 'ns' : ''}</p>
             <p className="text-[11px] text-gray-400 mt-0.5">{formatarData(g.createdAt)}</p>
             {(g.status === 'CANCELADO' || g.status === 'CANCELADO_PARCIALMENTE') && g.motivoCancelamento && (

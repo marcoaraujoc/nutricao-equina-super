@@ -176,13 +176,36 @@ describe('elos que não podem sumir', () => {
     expect(src).toMatch(/exameValor\.gravarPrestadorEValor\(/);
   });
 
-  it('a conclusão do exame alimenta o recibo do prestador', () => {
+  it('a conclusão do exame alimenta o recibo E a conta a pagar do prestador', () => {
+    // 2026-09-22: `registrarReciboDoExame` virou `registrarPagamentoPrestadorDoExame`
+    // e passou a escrever as DUAS metades. Só o ledger deixava o exame fora da tela
+    // de Pagamentos — que é onde o financeiro descobre que a clínica deve algo.
     const src = semComentarios(lerFonte('controllers/ExameClinicoController.js'));
-    expect(src).toMatch(/registrarReciboDoExame\(tx, req, item/);
-    const fn = src.slice(src.indexOf('async function registrarReciboDoExame'));
+    const fn  = src.slice(src.indexOf('async function registrarPagamentoPrestadorDoExame'));
     expect(fn).toMatch(/vinculoPrestador\.registrarExecucao\(/);
-    // Sem prestador não há recibo: exame da própria equipe não gera linha.
+    expect(fn).toMatch(/contasPagar\.lancarItem\(tx, \{/);
+    expect(fn).toMatch(/origemTipo:\s*contasPagar\.ORIGENS\.EXAME_PRESTADOR/);
+    // O ledger precisa dizer de QUAL exame veio — é o que sustenta a idempotência
+    // (índice único parcial da migration 20261019000000).
+    expect(fn).toMatch(/exameClinicoId:\s*exame\.id/);
+    // Sem prestador não há dívida: exame da própria equipe não gera linha nenhuma.
     expect(fn).toMatch(/if \(!dados\?\.prestadorId\) return;/);
+    // Recibo e conta apuram o MESMO número: dois cálculos dariam duas dívidas
+    // diferentes para o mesmo serviço.
+    expect(fn).toMatch(/vinculoPrestador\.calcularValorAPagar\(/);
+  });
+
+  it('a CONCLUSÃO de verdade (salvarResultado) registra o pagamento, não só finalizar', () => {
+    // 🔴 `PATCH /clinica/exames/:id/finalizar` não é chamada por NENHUMA tela — quem
+    // conclui o exame é `salvarResultado` (status REALIZADO). Enquanto o registro
+    // vivia só em `finalizar`, o pagamento ao prestador era código morto.
+    const src = semComentarios(lerFonte('controllers/ExameClinicoController.js'));
+    const fn  = src.slice(src.indexOf('salvarResultado: async'), src.indexOf('finalizar: async'));
+    // Os DOIS ramos (Imagem e Laboratorial/Bioquímico) têm de registrar.
+    const chamadas = fn.match(/registrarPagamentoPrestadorDoExame\(tx, req, exame/g) ?? [];
+    expect(chamadas.length).toBe(2);
+    // E o prestador escolhido na tela tem de ser gravado antes.
+    expect(fn).toMatch(/exameValor\.gravarPrestador\(tx, exame\.id, prestadorEscolhido\)/);
   });
 
   it('o cadastro de procedimentos não oferece mais "Diagnóstico por Imagem"', () => {
