@@ -837,6 +837,16 @@ EmpresaConfiguracao → configuração única por empresa (CNPJ) ou por equipe (
                     validadeOrcamentoDias (migration 20260813000000): validade do ORÇAMENTO em dias,
                     null = não expira. Lida/gravada SEMPRE por `lib/validadeOrcamento.js` (SQL cru —
                     ver armadilha 41), consumida pelo cron `cancelar_orcamentos_vencidos`.
+                    🔴 dispensarExecucaoPrescricao (migration 20261023000000, DEFAULT false): a
+                    clínica NÃO usa a Execução de Prescrição — fatura, baixa de estoque, recibo e
+                    conta a pagar do prestador/fornecedor nascem na FINALIZAÇÃO (prescrição e
+                    vacina), pelo curso inteiro, e o documento já nasce EXECUTADO. Só antecipa o
+                    que a CLÍNICA aplica (a matriz "quem FORNECE × quem APLICA" não muda).
+                    ⚠️ DOIS pontos de entrada, e os dois precisam dela: o `finalizar` de cada
+                    controller E a cascata da finalização do atendimento
+                    (`lib/finalizacaoEvolucao.js`). Lida/gravada SEMPRE por
+                    `lib/etapaExecucaoPrescricao.js`. Gate:
+                    `__tests__/execucaoPrescricaoDispensada.test.js`.
 AgendamentoClinico → (+ migration 20260713010000) lembreteWa1DiaEnviadoEm / lembreteWa2hEnviadoEm
                     (DateTime?) — idempotência dos lembretes de WhatsApp (D-1 e 2h antes).
 CronAlertaConfig  → config global dos alertas de cron (linha única): emails (CSV, null=ADMINs),

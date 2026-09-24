@@ -23,6 +23,9 @@ const { mesmaUnidade } = require('../lib/unidadeMedicamento');
 const formaCobranca     = require('../lib/formaCobrancaEstoque');
 const { garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
 const vinculoPrestador = require('../lib/procedimentoPrestador');
+// Etapa de Execução de Prescrição OPCIONAL por empresa (2026-09-24) — ver
+// `encerrarGrupoSemExecucao`.
+const etapaExecucao = require('../lib/etapaExecucaoPrescricao');
 const { registrarAuditoria, registrarAlteracao, registrarTransferencia, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 // Concorrência de edição: a versão do DOCUMENTO (grupo) é a trava — ver §12.
@@ -1916,6 +1919,13 @@ const finalizar = async (req, res) => {
     // "pelo Proprietário" é a EXIBIÇÃO, a partir da flag dos itens.
     const todosPeloProprietario = cursoTodoDoProprietario(grupo.itens);
 
+    // 🔴 EMPRESA SEM ETAPA DE EXECUÇÃO (Configurações, 2026-09-24): a cobrança, a baixa
+    // de estoque e o pagamento do prestador do que a clínica aplica saem AQUI, pelo
+    // curso inteiro, e o documento termina EXECUTADO — ver `encerrarGrupoSemExecucao`.
+    // Padrão `false`: nada muda para quem não marcou a opção.
+    const semExecucao = await etapaExecucao.execucaoDispensada(prisma, empresaIdEfetivo);
+    const statusFinal = (todosPeloProprietario || semExecucao) ? 'EXECUTADO' : 'FINALIZADO';
+
     const animal = await prisma.animal.findUnique({
       where: { id: grupo.animalId }, select: { userId: true },
     });
@@ -1944,7 +1954,11 @@ const finalizar = async (req, res) => {
       // ⚠️ `criarReservas` PULA o item aplicado pelo proprietário, e tem de continuar
       // pulando: ele é debitado agora mesmo, logo abaixo — reservar e debitar o mesmo
       // frasco o contaria duas vezes contra o saldo.
-      await criarReservas(tx, grupoId, grupo.animalId, grupo.itens, empresaIdEfetivo);
+      // ⚠️ Sem etapa de execução não há o que reservar: o curso inteiro é debitado
+      // agora mesmo, em `encerrarGrupoSemExecucao`.
+      if (!semExecucao) {
+        await criarReservas(tx, grupoId, grupo.animalId, grupo.itens, empresaIdEfetivo);
+      }
 
       // ── MATRIZ "quem FORNECE × quem APLICA" (2026-08-01) ────────────────────
       // MEDICAMENTO:
@@ -2062,8 +2076,17 @@ const finalizar = async (req, res) => {
         entidade: 'PRESCRICAO', entidadeId: grupoId, animalId: grupo.animalId,
         donoAnteriorId: grupo.veterinarioId,
         donoAtualId:    veterinarioId,
-        campos: { status: { de: grupo.status, para: todosPeloProprietario ? 'EXECUTADO' : 'FINALIZADO' } },
+        campos: { status: { de: grupo.status, para: statusFinal } },
       });
+
+      // Empresa sem etapa de execução: o que a CLÍNICA aplica é cobrado, debitado e
+      // pago ao prestador AGORA, e o documento vai para EXECUTADO. Na MESMA transaction:
+      // ou a prescrição encerra com a cobrança, ou nada acontece.
+      if (semExecucao) {
+        await encerrarGrupoSemExecucao(tx, grupoId, {
+          empresaId: empresaIdEfetivo, porUsuarioId: veterinarioId, agora, req,
+        });
+      }
     });
 
     const grupoAtualizado = await prisma.prescricaoGrupo.findUnique({ where: { id: grupoId }, include: GRUPO_INCLUDE });
@@ -2073,6 +2096,259 @@ const finalizar = async (req, res) => {
     return res.status(500).json({ error: 'Erro ao finalizar prescrição.' });
   }
 };
+
+// ─── Empresa SEM etapa de Execução de Prescrição ─────────────────────────────
+//
+// 🔴 A clínica que marcou "Dispensar a etapa de Execução de Prescrição" em
+// Configurações (lib/etapaExecucaoPrescricao.js) não usa o plantão: o que em outras
+// clínicas nasce na EXECUÇÃO, dose a dose, nasce AQUI, na FINALIZAÇÃO, pelo CURSO
+// INTEIRO — linha de fatura, baixa de estoque, recibo e conta a pagar do prestador,
+// conta a pagar do fornecedor e os insumos da aplicação injetável. E o documento já
+// nasce EXECUTADO.
+//
+// ⚠️ Só o que a CLÍNICA aplica. O item aplicado pelo proprietário segue a matriz de
+// `finalizar` (já é cobrado lá, no quadrante "clínica fornece × proprietário aplica"),
+// e o fornecido pelo cliente continua sem cobrança — a opção muda o MOMENTO, não a
+// matriz "quem FORNECE × quem APLICA".
+//
+// ⚠️ DOIS chamadores, e os dois precisam dela: `finalizar` e a cascata da finalização
+// do ATENDIMENTO (lib/finalizacaoEvolucao.js), que promove o grupo SALVO sem passar por
+// `finalizar`. Sem o segundo, a prescrição fechada junto do atendimento ficaria
+// FINALIZADA esperando um plantão que a clínica não tem — e nunca seria cobrada.
+//
+// ⚠️ IDEMPOTENTE: item já marcado como executado é pulado e a linha de fatura passa
+// por `origemJaFaturada` — rodar duas vezes não cobra duas vezes.
+//
+// ⚠️ As doses NÃO ganham linha em `tb_prescricao_execucoes_dose`: ninguém executou
+// dose nenhuma, e o log é append-only do que ACONTECEU no plantão. O item é marcado
+// com o curso completo (`dosesExecutadas` = total) só para nenhum leitor — Mapa de
+// Atendimento, fila do plantão, lembrete de WhatsApp — projetar dose pendente num
+// documento encerrado.
+
+// Quantas vezes o item acontece no curso — é a QUANTIDADE da linha do procedimento e
+// o número de insumos da aplicação injetável. Item sem agenda (dose única 'agora',
+// SOS, "se necessário") vale UMA vez: não há como saber quantas.
+function vezesNoCurso(item) {
+  return elegivelParaFluxoNovo(item) ? dosesTotaisEsperadas(item) : 1;
+}
+
+async function encerrarGrupoSemExecucao(tx, grupoId, { empresaId = null, porUsuarioId, agora = new Date(), req = null } = {}) {
+  const grupo = await tx.prescricaoGrupo.findUnique({
+    where:   { id: Number(grupoId) },
+    include: {
+      itens:  { where: { ativo: true } },
+      animal: { select: { nome: true, userId: true } },
+    },
+  });
+  if (!grupo || !['FINALIZADO', 'EXECUTADO'].includes(grupo.status)) return { lancados: 0 };
+
+  grupo.itens = await anexarCamposDoItem(tx, grupo.itens);
+  const empresaIdEfetivo = grupo.empresaId ?? empresaId ?? null;
+  const itens = grupo.itens.filter(i =>
+    i.status !== 'CANCELADA' && !i.aplicadaPeloProprietario && !i.executadoEm);
+
+  let fatura   = null;
+  let lancados = 0;
+  if (itens.length > 0) {
+    const proprietarioId = grupo.animal?.userId ?? null;
+    // Quem SOLICITOU é quem PRESCREVEU — mesma regra de `executar`.
+    const solicitante = grupo.veterinarioId
+      ? await tx.user.findUnique({
+          where: { id: Number(grupo.veterinarioId) }, select: { id: true, fullName: true },
+        }).catch(() => null)
+      : null;
+
+    // O CURSO INTEIRO sai do estoque agora (`calcularQuantidadeTotal`), pelas mesmas
+    // regras de sempre: embalagem por embalagem no produto sem multidose, o
+    // proporcional no multidose, unidades avulsas no 'Un.'.
+    const { precos, porEmbalagem, entregas, unidadesFaturadas } =
+      await debitarEstoqueDia(tx, itens, empresaIdEfetivo, grupo.id, calcularQuantidadeTotal);
+
+    if (proprietarioId) fatura = await getOrCreateFatura(tx, proprietarioId, empresaIdEfetivo);
+
+    for (const item of itens) {
+      const vezes = vezesNoCurso(item);
+
+      // Valor TOTAL do item no curso + a quantidade da linha. O `valor` gravado é o
+      // UNITÁRIO (total ÷ quantidade) — a linha multiplica de volta.
+      //   orçado       → o valor aceito é por dose/sessão, vezes o curso;
+      //   procedimento → valor da sessão (vínculo do prestador > combo > empresa >
+      //                  catálogo), vezes o curso;
+      //   medicamento  → o que saiu do estoque; quantidade = embalagens entregues,
+      //                  unidades avulsas ou, no multidose, as doses do curso.
+      let valorTotal;
+      let quantidade;
+      if (item.valorOrcado != null) {
+        quantidade = vezes;
+        valorTotal = Number(item.valorOrcado) * vezes;
+      } else if (item.tipo === 'PROCEDIMENTO') {
+        quantidade = vezes;
+        valorTotal = (await resolverValorProcedimento(tx, empresaIdEfetivo, item.medicamento, item.prestadorId)) * vezes;
+      } else {
+        valorTotal = item.medicamentoCatId ? (precos.get(item.medicamentoCatId) ?? 0) : 0;
+        quantidade = porEmbalagem.has(item.id)
+          ? (entregas.get(item.id) ?? 1)
+          : (unidadesFaturadas.get(item.id) ?? vezes);
+      }
+      quantidade = Math.max(Number(quantidade) || 1, 1);
+
+      // Fornecido pelo cliente NÃO é cobrado — igual à execução.
+      if (fatura && !item.medicamentoCliente
+          && !(await itemOrigens.origemJaFaturada(tx, 'prescricaoId', item.id))) {
+        await adicionarOuSomarFaturaItem(tx, {
+          faturaId:     fatura.id,
+          animalId:     grupo.animalId,
+          tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
+          descricao:    descricaoItemFatura(item),
+          valor:        valorTotal / quantidade,
+          quantidade,
+          veterinarioId: porUsuarioId ?? null,
+          prescricaoId: item.id,
+          ocorridoEm:   agora,
+        });
+        lancados++;
+      }
+
+      // RECIBO + CONTA A PAGAR DO PRESTADOR — o curso inteiro numa execução só.
+      // `valorCliente` é o TOTAL (base do PERCENTUAL) e `quantidade` as sessões (base
+      // do valor fixo) — a mesma leitura de `calcularValorAPagar` que o plantão faz.
+      if (item.tipo === 'PROCEDIMENTO' && item.prestadorId) {
+        const doVinculo = await vinculoPrestador.resolverValoresPorNome(
+          tx, empresaIdEfetivo, item.medicamento, item.prestadorId,
+        );
+        const prestador = await tx.prestador.findUnique({
+          where:  { id: Number(item.prestadorId) },
+          select: { nome: true, tipoPagamento: true, formaPagamento: true, valorPagamento: true },
+        });
+        const valorCliente = item.medicamentoCliente ? 0 : valorTotal;
+        await vinculoPrestador.registrarExecucao(tx, {
+          empresaId:        empresaIdEfetivo,
+          prestadorId:      item.prestadorId,
+          prescricaoId:     item.id,
+          animalId:         grupo.animalId,
+          animalNome:       grupo.animal?.nome ?? '',
+          procedimentoNome: item.medicamento,
+          quantidade:       vezes,
+          valorCliente,
+          valorPrestador:   doVinculo.valorPrestador,
+          tipoPagamento:    prestador?.tipoPagamento  ?? null,
+          formaPagamento:   prestador?.formaPagamento ?? null,
+          valorPagamento:   prestador?.valorPagamento ?? null,
+          executadoEm:      agora,
+          executadoPorId:   porUsuarioId ?? null,
+          faturaItemId:     null,
+        });
+        const { valorAPagar } = vinculoPrestador.calcularValorAPagar({
+          valorCliente,
+          valorPrestador: doVinculo.valorPrestador,
+          tipoPagamento:  prestador?.tipoPagamento  ?? null,
+          formaPagamento: prestador?.formaPagamento ?? null,
+          valorPagamento: prestador?.valorPagamento ?? null,
+          quantidade:     vezes,
+        });
+        await contasPagar.lancarItem(tx, {
+          empresaId:   empresaIdEfetivo,
+          tipo:        'PRESTADOR',
+          credorId:    item.prestadorId,
+          credorNome:  prestador?.nome ?? '',
+          animalId:    grupo.animalId,
+          animalNome:  grupo.animal?.nome ?? '',
+          descricao:   item.medicamento,
+          quantidade:  vezes,
+          valor:       valorAPagar,
+          solicitanteId:   solicitante?.id ?? null,
+          solicitanteNome: solicitante?.fullName ?? '',
+          ocorridoEm:  agora,
+          origemTipo:  contasPagar.ORIGENS.EXECUCAO_PRESTADOR,
+          origemId:    item.id,
+          permitirSemValor: true,
+        });
+      }
+
+      // CONTA A PAGAR DO FORNECEDOR — o medicamento que a clínica não estoca.
+      if (item.tipo === 'MEDICAMENTO' && !item.medicamentoCliente && item.medicamentoCatId) {
+        const produto = await produtoFornecedor.fornecedorDoItem(tx, empresaIdEfetivo, item.medicamentoCatId);
+        if (produto?.valorUnitario != null) {
+          await contasPagar.lancarItem(tx, {
+            empresaId:   empresaIdEfetivo,
+            tipo:        'FORNECEDOR',
+            credorId:    produto.fornecedorId,
+            credorNome:  produto.fornecedorNome ?? '',
+            animalId:    grupo.animalId,
+            animalNome:  grupo.animal?.nome ?? '',
+            descricao:   item.medicamento,
+            quantidade:  porEmbalagem.has(item.id)
+              ? (entregas.get(item.id) ?? 1)
+              : (Number(calcularQuantidadeTotal(item)) || 1),
+            valor:       produto.valorUnitario,
+            solicitanteId:   solicitante?.id ?? null,
+            solicitanteNome: solicitante?.fullName ?? '',
+            ocorridoEm:  agora,
+            origemTipo:  contasPagar.ORIGENS.PRESCRICAO_ITEM,
+            origemId:    item.id,
+          });
+        }
+      }
+
+      // Insumos da aplicação injetável: 1 seringa + 1 agulha POR APLICAÇÃO do curso,
+      // como o plantão lança a cada dose. Sem estoque do insumo, apenas não lança.
+      if (item.tipo === 'MEDICAMENTO' && isViaInjetavel(item.via) && fatura) {
+        for (let n = 0; n < vezes; n++) {
+          for (const prefixo of ['Seringa', 'Agulha']) {
+            const insumo = await debitarInsumoUnidade(
+              tx, prefixo, empresaIdEfetivo,
+              `Aplicação injetável (${item.via}): ${item.medicamento}`,
+            );
+            if (!insumo) continue;
+            await adicionarOuSomarFaturaItem(tx, {
+              faturaId:     fatura.id,
+              animalId:     grupo.animalId,
+              tipo:         'PROCEDIMENTO',
+              descricao:    `${insumo.nome} — aplicação ${item.via} (${item.medicamento})`,
+              valor:        insumo.valor,
+              quantidade:   1,
+              veterinarioId: porUsuarioId ?? null,
+              prescricaoId: item.id,
+              ocorridoEm:   agora,
+            });
+          }
+        }
+      }
+
+      // Curso completo: nenhum leitor pode projetar dose pendente num documento
+      // encerrado. Ver a nota no topo do bloco.
+      await tx.prescricao.update({
+        where: { id: item.id },
+        data:  {
+          executadoEm: agora,
+          ...(elegivelParaFluxoNovo(item)
+            ? { dosesExecutadas: dosesTotaisEsperadas(item), proximaDoseEm: null }
+            : {}),
+        },
+      });
+    }
+  }
+
+  await tx.prescricaoGrupo.update({
+    where: { id: grupo.id },
+    data:  { status: 'EXECUTADO', executadoPorId: porUsuarioId ?? null, executadoEm: agora },
+  });
+  // Nada fica reservado: o curso inteiro já saiu do estoque (ou nunca vai sair).
+  await liberarReservas(tx, grupo.id);
+  if (fatura) await recalcularTotal(tx, fatura.id);
+
+  if (req) {
+    await registrarAuditoria(tx, req, {
+      categoria:  'EXECUCAO',
+      entidade:   'PRESCRICAO',
+      entidadeId: grupo.id,
+      animalId:   grupo.animalId,
+      detalhes:   `Encerrada na finalização — empresa sem etapa de Execução de Prescrição `
+        + `(${itens.length} item(ns), ${lancados} lançado(s) na fatura)`,
+    });
+  }
+  return { lancados };
+}
 
 // ─── Cancelar grupo ───────────────────────────────────────────────────────────
 // Libera reservas de estoque sem dar baixa.
@@ -3382,6 +3658,9 @@ module.exports = {
   criarReservas,
   liberarReservas,
   anexarAplicadaProprietario,
+  // Reusada pela cascata da finalização do ATENDIMENTO (`lib/finalizacaoEvolucao.js`):
+  // empresa sem etapa de execução cobra ali também o grupo promovido de SALVO.
+  encerrarGrupoSemExecucao,
   // Exportadas para TESTE: a regra da dose multidose quebra em silêncio (o valor da
   // fatura sai errado sem erro nenhum), então precisa de gate sobre a conta PURA.
   qtdDoEstoque,

@@ -1018,6 +1018,39 @@ export default function CadastroEmpresa() {
                 </div>
               </div>
 
+              {/* ── Etapa de Execução de Prescrição (2026-09-24) ─────────────────
+                  NÃO nasce marcada. Marcada, a clínica deixa de usar o plantão: a
+                  fatura, a baixa de estoque e o pagamento do prestador saem na
+                  FINALIZAÇÃO da prescrição, da vacina e do procedimento, e o documento
+                  já nasce executado. Regra em
+                  `backend/src/lib/etapaExecucaoPrescricao.js`. */}
+              <label className={`flex items-start gap-3 rounded-xl border px-4 py-3 ${
+                op.dispensarExecucao ? 'border-emerald-200 bg-emerald-50/50' : 'border-gray-200'
+              } ${podeEditar ? 'cursor-pointer' : 'cursor-default'}`}>
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                  checked={op.dispensarExecucao}
+                  disabled={!podeEditar}
+                  onChange={e => op.setDispensarExecucao(e.target.checked)}
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-gray-700">
+                    Não utilizar a etapa de Execução de Prescrição
+                  </span>
+                  <span className="block text-xs text-gray-500 mt-0.5">
+                    {op.dispensarExecucao
+                      ? 'O lançamento na fatura, a baixa de estoque e o pagamento do prestador são gerados ao finalizar a prescrição, a vacina ou o procedimento — sem passar pela Execução de Prescrição.'
+                      : 'Padrão: o lançamento na fatura, a baixa de estoque e o pagamento do prestador são gerados na Execução de Prescrição, a cada aplicação.'}
+                  </span>
+                  {op.dispensarExecucao && (
+                    <span className="block text-xs text-amber-700 mt-1">
+                      O que já foi finalizado antes desta opção continua aguardando a Execução de Prescrição.
+                    </span>
+                  )}
+                </span>
+              </label>
+
                 {/* ⚠️ O FUSO HORÁRIO NÃO APARECE MAIS AQUI (removido a pedido, 2026-08-24):
                     o campo era só leitura e não havia nada a fazer com ele nesta tela.
                     O fuso CONTINUA existindo e valendo — é ele que faz o horário das

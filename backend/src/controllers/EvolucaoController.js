@@ -717,6 +717,7 @@ const EvolucaoController = {
           await cascataDaFinalizacao(tx, Number(id), {
             agendamentoId: existente.agendamentoId,
             porUsuarioId:  userId,
+            req,
           });
         }
 

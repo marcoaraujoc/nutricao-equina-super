@@ -34,6 +34,55 @@ paths:
 As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão em `CLAUDE.md`.
 
 ---
+# Atualizado em: 2026-09-24 (🔴 **A ETAPA DE EXECUÇÃO DE PRESCRIÇÃO VIROU OPCIONAL POR
+#   EMPRESA** — Configurações ganhou "Não utilizar a etapa de Execução de Prescrição",
+#   que **NÃO nasce marcada**. Marcada, o lançamento na fatura deixa de nascer na
+#   execução (dose a dose, no plantão) e passa a nascer na FINALIZAÇÃO da prescrição
+#   (medicamento e procedimento) e da vacina.
+#   **Migration `20261023000000_empresa_dispensar_execucao_prescricao` — GERADA, NÃO
+#   APLICADA.** Aditiva: `dispensar_execucao_prescricao BOOLEAN NOT NULL DEFAULT false`
+#   em `tb_empresa_configuracoes`, sem backfill (false = comportamento de hoje). Sem RLS
+#   novo. Aplicar com `DATABASE_URL=$DATABASE_URL_MIGRATIONS npx prisma migrate deploy`.
+#   ⚠️ Funciona ANTES da migration: leitura/escrita por SQL cru em
+#   `lib/etapaExecucaoPrescricao.js`; sem a coluna, lê `false`, e gravar `false` é
+#   ignorado (a tela manda o campo sempre). Gravar `true` sem a coluna devolve **400**
+#   nomeando a migration — fingir que ligou faria a clínica esperar uma cobrança que
+#   nunca aconteceria.
+#   **O que acontece na finalização com a opção ligada** (`encerrarGrupoSemExecucao` /
+#   `executarNaFinalizacao`), pelo CURSO INTEIRO e na MESMA transaction:
+#   · baixa de estoque (`debitarEstoqueDia` com `calcularQuantidadeTotal` — as mesmas
+#     regras de embalagem/multidose/avulso) e SEM reserva;
+#   · linha de fatura consolidada: procedimento = valor da sessão × sessões do curso;
+#     medicamento = o que saiu do estoque (embalagens, unidades ou doses do curso);
+#     `valorOrcado` = por dose × curso;
+#   · recibo + conta a pagar do PRESTADOR (quantidade = sessões, `valorCliente` = total)
+#     e conta a pagar do FORNECEDOR;
+#   · seringa + agulha por aplicação injetável do curso;
+#   · itens marcados com o curso completo (`dosesExecutadas` = total) e grupo EXECUTADO —
+#     sem isso o Mapa de Atendimento projetaria dose atrasada num documento encerrado.
+#     ⚠️ NÃO grava linha em `tb_prescricao_execucoes_dose`: o log é do que aconteceu no
+#     plantão, e ninguém executou dose nenhuma.
+#   · vacina: débito do lote, fatura, reforço agendado e EXECUTADA.
+#   ⚠️ **Só o que a CLÍNICA aplica.** Aplicado pelo proprietário e fornecido pelo cliente
+#   seguem a matriz "quem FORNECE × quem APLICA" — a opção muda o MOMENTO, não a matriz.
+#   🔴 **DOIS pontos de entrada.** Além do `finalizar`, a CASCATA da finalização do
+#   atendimento (`lib/finalizacaoEvolucao.js` — Finalizar evolução, inativar paciente e o
+#   cron de evolução abandonada) promove SALVO → FINALIZADO sem passar pelo `finalizar`.
+#   Sem encerrar ali também, a clínica sem plantão teria prescrição fechada junto do
+#   atendimento parada para sempre, e NUNCA cobrada. A leitura da empresa na cascata não
+#   lança (a opção é acessória e não pode derrubar o fechamento do atendimento); as
+#   vacinas a encerrar são lidas ANTES do UPDATE, senão se misturariam às já FINALIZADAS.
+#   ⚠️ O que já estava FINALIZADO antes de ligar a opção continua na fila do plantão —
+#   por isso a tela de Execução de Prescrição NÃO some do menu.
+#   ⚠️ Os gates de contagem de `faturaOrigensConsolidadas.test.js` subiram (vacina
+#   `origemJaFaturada` 4 → 5; prescrição `adicionarOuSomarFaturaItem` 3 → 5): pontos NOVOS
+#   de cobrança, todos consolidando e com a checagem de "já faturado".
+#   Gate novo: `__tests__/execucaoPrescricaoDispensada.test.js` (12 casos; verificado
+#   que REPROVA — desligado o encerramento no `finalizar` e na cascata, 2 falham).
+#   Suíte: **1516**; `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
+#   ⚠️ NÃO verificado em navegador nem contra o banco — migration não aplicada.)
+
+---
 # Atualizado em: 2026-09-23 (parte 2) (🔴 **O CICLO DA FATURA PAROU DE INVENTAR MÊS, E
 #   "FECHADO" PASSOU A SIGNIFICAR SOMENTE LEITURA** — nos dois lados do balcão.
 #   Migration `20261022000000_encaminhamento_prestador_cadastro`, **APLICADA** (era a

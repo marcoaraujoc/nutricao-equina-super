@@ -1371,6 +1371,7 @@ class AnimalController {
           await cascataDaFinalizacao(tx, ev.id, {
             agendamentoId: ev.agendamentoId,
             porUsuarioId:  req.user.id,
+            req,
           });
 
           // Quem estiver com essa evolução aberta na tela leva 409 no próximo

@@ -252,6 +252,10 @@ export function useConfiguracaoOperacional() {
   // que vale é VALOR_REPASSADO, e um seletor em branco esconderia a regra em vigor.
   const [formaCobranca,      setFormaCobranca]      = useState<FormaCobranca>('VALOR_REPASSADO');
   const [percentualCobranca, setPercentualCobranca] = useState('');
+  // Etapa de Execução de Prescrição dispensada? NÃO nasce marcada: `false` é o
+  // comportamento de sempre (fatura na execução). Regra em
+  // `backend/src/lib/etapaExecucaoPrescricao.js`.
+  const [dispensarExecucao, setDispensarExecucao] = useState(false);
   // ⚠️ O `fusoLabel` que este hook expunha foi REMOVIDO em 2026-08-24, junto com o
   // campo só-leitura "Fuso Horário" da tela de Configurações — sem consumidor, ele
   // seria estado morto. O backend CONTINUA devolvendo `fusoLabel` em
@@ -283,6 +287,7 @@ export function useConfiguracaoOperacional() {
         setPercentualCobranca(
           dados.percentualCobrancaEstoque != null ? String(dados.percentualCobrancaEstoque) : '',
         );
+        setDispensarExecucao(dados.dispensarExecucaoPrescricao === true);
 
         if (dados.tipoFechamento === 'DIA_UTIL') {
           setTipoSelecao('DIA_UTIL');
@@ -442,6 +447,7 @@ export function useConfiguracaoOperacional() {
       // um número esquecido aqui não voltar a valer ao trocar a forma de volta.
       fd.append('percentualCobrancaEstoque',
         formaCobranca === 'PERCENTUAL' ? percentualCobranca.trim().replace(',', '.') : '');
+      fd.append('dispensarExecucaoPrescricao', dispensarExecucao ? 'true' : 'false');
       if (logoFile) fd.append('logo', logoFile);
       if (logoRemovido) fd.append('removerLogo', 'true');
 
@@ -450,16 +456,26 @@ export function useConfiguracaoOperacional() {
       });
 
       const dados = res.data?.dados;
-      if (dados) setLogoPreview(dados.logoUrl ?? null);
+      if (dados) {
+        setLogoPreview(dados.logoUrl ?? null);
+        // O que ficou EFETIVO no banco, não o que foi enviado.
+        if (typeof dados.dispensarExecucaoPrescricao === 'boolean') {
+          setDispensarExecucao(dados.dispensarExecucaoPrescricao);
+        }
+      }
       setLogoFile(null);
       setLogoRemovido(false);
       window.dispatchEvent(new CustomEvent('s2vet:config-atualizada'));
       return true;
-    } catch {
-      setErroAcao({ mensagem: 'Erro ao salvar as configurações operacionais.' });
+    } catch (err: unknown) {
+      // Recusa de regra do backend (400) chega com o motivo em `mensagem` — ex.: ligar a
+      // dispensa da execução numa base sem a migration. Sem o motivo, a tela só diria
+      // "erro ao salvar" e ninguém saberia o que falta.
+      const motivo = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
+      setErroAcao({ mensagem: motivo ?? 'Erro ao salvar as configurações operacionais.' });
       return false;
     }
-  }, [tipoSelecao, diaEspecifico, nDiaUtil, whatsapp, especiesAtendidas, diasAtend, horaInicio, horaFim, tempoConsultaPadrao, validadeOrcamento, formaCobranca, percentualCobranca, logoFile, logoRemovido]);
+  }, [tipoSelecao, diaEspecifico, nDiaUtil, whatsapp, especiesAtendidas, diasAtend, horaInicio, horaFim, tempoConsultaPadrao, validadeOrcamento, formaCobranca, percentualCobranca, dispensarExecucao, logoFile, logoRemovido]);
 
   return {
     loading, erroAcao,
@@ -482,6 +498,7 @@ export function useConfiguracaoOperacional() {
     validadeOrcamento, setValidadeOrcamento,
     formaCobranca, setFormaCobranca,
     percentualCobranca, setPercentualCobranca,
+    dispensarExecucao, setDispensarExecucao,
 
     especies, especiesAtendidas, setEspeciesAtendidas,
 

@@ -11,6 +11,9 @@ const itemOrigens = require('../lib/faturaItemOrigens');
 const contasPagar       = require('../lib/contasPagar');
 const produtoFornecedor = require('../lib/produtoFornecedor');
 const formaCobranca     = require('../lib/formaCobrancaEstoque');
+// Etapa de Execução de Prescrição OPCIONAL por empresa (2026-09-24) — ver
+// `executarNaFinalizacao`.
+const etapaExecucao     = require('../lib/etapaExecucaoPrescricao');
 const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 const { animalEstaInativo, bloquearSeAnimalInativo, lerInativosEmLote } = require('../lib/animalInativo');
@@ -824,6 +827,31 @@ async function finalizar(req, res) {
 
     const empresaIdEfetivo = req.empresaId ?? null;
     const agora = new Date();
+
+    // 🔴 EMPRESA SEM ETAPA DE EXECUÇÃO (Configurações, 2026-09-24): a dose que a
+    // CLÍNICA aplica não vai para o plantão — é debitada, cobrada e tem o reforço
+    // agendado AQUI, e a vacina já nasce EXECUTADA. Ver `executarNaFinalizacao`.
+    // ⚠️ A aplicada pelo proprietário segue a matriz de sempre (ramo abaixo).
+    if (!aplicaDono && await etapaExecucao.execucaoDispensada(prisma, empresaIdEfetivo)) {
+      await prisma.$transaction(async (tx) => {
+        await executarNaFinalizacao(tx, vacina.id, {
+          veterinarioId, empresaId: empresaIdEfetivo, equipeId: req.equipeId ?? null, agora, req,
+        });
+      });
+      const executada = await prisma.vacinaClinica.findUnique({
+        where: { id: Number(id) }, include: INCLUDE_VACINA,
+      });
+      const extrasExec = await prisma.$queryRawUnsafe(
+        `SELECT id, numero, tipo_atendimento AS "tipoAtendimento",
+                quantidade, valor::float AS valor, cliente, status,
+                aplicada_pelo_proprietario AS "aplicadaPeloProprietario",
+                motivo_inativacao AS "motivoInativacao"
+         FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`,
+        Number(id)
+      );
+      return res.json({ dados: { ...executada, ...(extrasExec[0] ?? {}) } });
+    }
+
     let evolucao = null;
     let animal   = null;
     if (cobrarAgora && !jaFaturada) {
@@ -1265,6 +1293,77 @@ async function executar(req, res) {
 }
 
 /**
+ * 🔴 EMPRESA SEM ETAPA DE EXECUÇÃO — a vacina que a CLÍNICA aplica é "executada" na
+ * própria finalização: débito do lote (FEFO), linha de fatura, conta a pagar do
+ * fornecedor, reforço agendado e status EXECUTADA. É o que `executar` faz no plantão,
+ * sem o plantão. Ver lib/etapaExecucaoPrescricao.js.
+ *
+ * DOIS chamadores: `finalizar` e a cascata da finalização do ATENDIMENTO
+ * (lib/finalizacaoEvolucao.js), que promove a vacina SALVA sem passar por `finalizar` —
+ * sem o segundo, a vacina fechada junto do atendimento ficaria FINALIZADA esperando um
+ * plantão que a clínica não tem, e nunca seria cobrada.
+ *
+ * ⚠️ Pula a aplicada pelo proprietário (matriz de sempre, tratada em `finalizar`) e a
+ * que já passou adiante (EXECUTADA/CANCELADA). Fornecida pelo cliente: sem débito nem
+ * cobrança, mas a dose ACONTECEU — status e reforço seguem.
+ * ⚠️ IDEMPOTENTE: `origemJaFaturada` impede a segunda cobrança.
+ * ⚠️ `req` é opcional (o cron da cascata não tem): sem ele não há linha de auditoria,
+ * que é só o que alimenta o Histórico do plantão.
+ */
+async function executarNaFinalizacao(tx, vacinaId, { veterinarioId, empresaId = null, equipeId = null, agora = new Date(), req = null } = {}) {
+  const vacina = await tx.vacinaClinica.findUnique({ where: { id: Number(vacinaId) }, include: INCLUDE_VACINA });
+  if (!vacina || !vacina.ativo) return false;
+
+  const rows = await tx.$queryRawUnsafe(
+    `SELECT status, quantidade, valor::float AS valor, cliente, numero,
+            aplicada_pelo_proprietario AS "aplicadaPeloProprietario",
+            tipo_atendimento AS "tipoAtendimento", medicamento_cat_id AS "medicamentoCatId"
+     FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`,
+    Number(vacinaId)
+  );
+  const info = rows?.[0] ?? {};
+  if (info.aplicadaPeloProprietario === true) return false;
+  if (info.status === 'EXECUTADA' || info.status === 'CANCELADA') return false;
+
+  const qtd        = dosagemDaVacina(info.quantidade);
+  const isCliente  = info.cliente === true;
+  const jaFaturada = await itemOrigens.origemJaFaturada(tx, 'vacinaClinicaId', vacina.id);
+  const animal     = await tx.animal.findUnique({
+    where: { id: vacina.animalId }, select: { userId: true, nome: true },
+  });
+
+  if (!isCliente && !jaFaturada) {
+    await darBaixaEFaturar(tx, {
+      vacina, info, qtd, veterinarioId, empresaIdEfetivo: empresaId, agora, animal,
+    });
+  }
+
+  await tx.$executeRawUnsafe(
+    `UPDATE schs2vet.tb_vacinas_clinicas SET status = 'EXECUTADA' WHERE id = $1`, Number(vacinaId)
+  );
+
+  if (req) {
+    await registrarAuditoria(tx, req, {
+      categoria:  'EXECUCAO',
+      entidade:   'VACINA',
+      entidadeId: vacina.id,
+      animalId:   vacina.animalId,
+      detalhes:   `${vacina.nome}${vacina.dose ? ` — ${vacina.dose}` : ''} (encerrada na finalização — empresa sem etapa de Execução de Prescrição)`,
+    });
+  }
+
+  await agendarReforcos(tx, {
+    vacina,
+    dose:       vacina.dose,
+    veterinarioId,
+    empresaId,
+    equipeId,
+    aplicadaEm: vacina.dataAplicacao ?? agora,
+  });
+  return true;
+}
+
+/**
  * Debita o lote (FEFO quando o vinculado não serve) e lança o FaturaItem da vacina.
  *
  * Extraído de `executar` porque a EXECUÇÃO deixou de ser o único momento em que isso
@@ -1538,4 +1637,7 @@ module.exports = {
   listarExecutadasHoje,
   executar,
   excluir,
+  // Reusada pela cascata da finalização do ATENDIMENTO (`lib/finalizacaoEvolucao.js`):
+  // empresa sem etapa de execução cobra ali também a vacina promovida de SALVA.
+  executarNaFinalizacao,
 };

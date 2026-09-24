@@ -430,14 +430,15 @@ describe('GATE ESTRUTURAL — os elos que somem em silêncio', () => {
   });
 
   it('TODO "já foi faturado?" da vacina passa por `origemJaFaturada`', () => {
-    // 🔴 São QUATRO desde 2026-09-23: `registrar`, `finalizar`, `executar` e o
+    // 🔴 São CINCO desde 2026-09-24: `registrar`, `finalizar`, `executar`, o
     // `atualizar` — que passou a poder mover uma vacina FINALIZADA para o quadrante
-    // "clínica fornece × proprietário aplica", onde a cobrança acontece na hora.
+    // "clínica fornece × proprietário aplica", onde a cobrança acontece na hora — e
+    // `executarNaFinalizacao` (empresa sem etapa de Execução de Prescrição).
     // ⚠️ O número é o que impede um ponto novo nascer com a FK crua: a linha da fatura
     // é COMPARTILHADA e a FK guarda só a PRIMEIRA vacina que caiu nela, então pela FK
     // a segunda pareceria nunca cobrada e seria cobrada de novo.
     const vac = semComentarios(ler('controllers/VacinaClinicaController.js'));
-    expect(vac.match(/origemJaFaturada\(/g) ?? []).toHaveLength(4);
+    expect(vac.match(/origemJaFaturada\(/g) ?? []).toHaveLength(5);
     // O padrão antigo (FK crua) não pode voltar em nenhum deles.
     expect(vac).not.toMatch(/faturaItem\.findFirst\(\{\s*\n?\s*where: \{ vacinaClinicaId/);
   });
@@ -446,9 +447,12 @@ describe('GATE ESTRUTURAL — os elos que somem em silêncio', () => {
     // O item que o proprietário aplica em casa é cobrado na finalização (nunca chega
     // ao plantão). Se ele abrisse linha nova enquanto a dose executada soma, a MESMA
     // fatura teria dois comportamentos para a mesma pergunta.
+    // São CINCO desde 2026-09-24: a dose e o insumo da EXECUÇÃO, a entrega ao
+    // proprietário na FINALIZAÇÃO, e a dose e o insumo de `encerrarGrupoSemExecucao`
+    // (empresa sem etapa de Execução de Prescrição) — todos consolidando.
     const src = semComentarios(ler('controllers/PrescricaoGrupoController.js'));
     expect(src).not.toContain('adicionarFaturaItem(');
-    expect(src.match(/adicionarOuSomarFaturaItem\(tx, \{/g) ?? []).toHaveLength(3);
+    expect(src.match(/adicionarOuSomarFaturaItem\(tx, \{/g) ?? []).toHaveLength(5);
   });
 
   it('a fatura devolve as contribuições de cada item', () => {

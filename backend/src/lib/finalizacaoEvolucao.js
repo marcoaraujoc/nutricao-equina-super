@@ -21,6 +21,13 @@
 // `lancarExamesDaEvolucao`, chamado DEPOIS do commit porque não pode derrubar a
 // finalização se a fatura de destino estiver paga.
 //
+// 🔴 EXCEÇÃO POR EMPRESA (2026-09-24): a clínica que DISPENSOU a etapa de Execução de
+// Prescrição (Configurações → lib/etapaExecucaoPrescricao.js) não tem plantão, então
+// o que esta cascata promove é ENCERRADO aqui mesmo — cobrado, debitado e EXECUTADO —
+// pelos MESMOS helpers do `finalizar` de cada controller. Sem isso, a prescrição e a
+// vacina fechadas junto do atendimento ficariam FINALIZADAS esperando uma execução que
+// a clínica não faz, e nunca seriam cobradas.
+//
 // ⚠️ IDEMPOTENTE: todo `updateMany` filtra pelo status de origem, então rodar duas
 // vezes não desfaz nada nem promove o que já passou adiante.
 'use strict';
@@ -28,6 +35,7 @@
 const prismaPadrao = require('./prisma').default;
 const { invalidarVersoes } = require('./concorrenciaRegistro');
 const { lancarExameNaFatura } = require('./faturaUtils');
+const etapaExecucao = require('./etapaExecucaoPrescricao');
 
 /**
  * Move os filhos do atendimento para o estado de "finalizado".
@@ -39,7 +47,7 @@ const { lancarExameNaFatura } = require('./faturaUtils');
  * @param {number}      opts.porUsuarioId    quem está finalizando (grava em `finalizadoPorId`)
  * @returns {Promise<{grupos:number[], agendamento:boolean}>} o que realmente mudou
  */
-async function cascataDaFinalizacao(tx, evolucaoId, { agendamentoId = null, porUsuarioId }) {
+async function cascataDaFinalizacao(tx, evolucaoId, { agendamentoId = null, porUsuarioId, req = null }) {
   const id = Number(evolucaoId);
 
   // Evolução nascida de um agendamento (AG-XXXX): ele sai de EM_ANDAMENTO para
@@ -74,6 +82,18 @@ async function cascataDaFinalizacao(tx, evolucaoId, { agendamentoId = null, porU
     await invalidarVersoes(tx, 'PRESCRICAO_GRUPO', grupoIds);
   }
 
+  // 🔴 Empresa SEM etapa de execução? Decidido ANTES de promover as vacinas: é preciso
+  // saber QUAIS estavam SALVAS para encerrá-las logo abaixo — depois do UPDATE elas se
+  // misturam às que já estavam FINALIZADAS por outro caminho.
+  const empresaId  = await empresaDaEvolucao(tx, id);
+  const dispensada = await etapaExecucao.execucaoDispensada(tx, empresaId);
+  const vacinaIds  = dispensada
+    ? ((await tx.$queryRawUnsafe(
+        `SELECT id FROM schs2vet.tb_vacinas_clinicas
+          WHERE evolucao_id = $1 AND status = 'SALVA' AND ativo = true`, id)) ?? [])
+        .map(v => Number(v.id))
+    : [];
+
   // Vacinas SALVAS → FINALIZADA. Por SQL cru: `status` de VacinaClinica vive fora do
   // client gerado (CLAUDE.md §11), e um `updateMany` tipado quebraria antes do generate.
   await tx.$executeRawUnsafe(
@@ -83,7 +103,49 @@ async function cascataDaFinalizacao(tx, evolucaoId, { agendamentoId = null, porU
     id,
   );
 
-  return { grupos: grupoIds, agendamento };
+  // Encerra aqui (cobra, debita, EXECUTADO) o que acabou de ser promovido.
+  let encerradosSemExecucao = 0;
+  if (dispensada && (grupoIds.length > 0 || vacinaIds.length > 0)) {
+    // `require` LOCAL: esta lib é carregada pelos controllers, e o topo do arquivo
+    // criaria um ciclo de módulos.
+    const { encerrarGrupoSemExecucao } = require('../controllers/PrescricaoGrupoController');
+    const { executarNaFinalizacao }    = require('../controllers/VacinaClinicaController');
+    const agora = new Date();
+    const encerrar = async (db) => {
+      for (const grupoId of grupoIds) {
+        await encerrarGrupoSemExecucao(db, grupoId, { empresaId, porUsuarioId, agora, req });
+        encerradosSemExecucao++;
+      }
+      for (const vacinaId of vacinaIds) {
+        if (await executarNaFinalizacao(db, vacinaId, {
+          veterinarioId: porUsuarioId, empresaId, equipeId: req?.equipeId ?? null, agora, req,
+        })) encerradosSemExecucao++;
+      }
+    };
+    // Chamado de dentro de uma transaction (controllers) → usa ela: o client de
+    // transação interativa não expõe `$transaction`. Chamado com o client solto
+    // (cron) → abre uma: cobrança, baixa e status andam juntos.
+    if (typeof tx.$transaction === 'function') await tx.$transaction(encerrar);
+    else await encerrar(tx);
+  }
+
+  return { grupos: grupoIds, agendamento, encerradosSemExecucao };
+}
+
+/**
+ * Empresa da evolução. NUNCA lança: a opção de dispensar a execução é acessória, e
+ * não pode derrubar o fechamento do atendimento — na dúvida, `null` → a regra de
+ * sempre (os filhos vão ao plantão).
+ */
+async function empresaDaEvolucao(tx, evolucaoId) {
+  try {
+    const ev = await tx.evolucaoClinica.findUnique({
+      where: { id: Number(evolucaoId) }, select: { empresaId: true },
+    });
+    return ev?.empresaId ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**

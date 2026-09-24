@@ -2500,6 +2500,12 @@ model EmpresaConfiguracao {
   // não tem backfill. 🔴 LEITURA/ESCRITA por SQL cru (`lib/formaCobrancaEstoque.js`) — §11.
   formaCobrancaEstoque      String? @map("forma_cobranca_estoque") @db.VarChar(20)
   percentualCobrancaEstoque Float?  @map("percentual_cobranca_estoque")
+  // Dispensa a etapa de EXECUÇÃO DE PRESCRIÇÃO (migration 20261023000000). true = a
+  // fatura, a baixa de estoque e o pagamento do prestador saem na FINALIZAÇÃO da
+  // prescrição/vacina, e o documento já nasce EXECUTADO. false (padrão) = como sempre:
+  // tudo acontece na execução, no plantão.
+  // 🔴 LEITURA/ESCRITA por SQL cru (`lib/etapaExecucaoPrescricao.js`) — §11.
+  dispensarExecucaoPrescricao Boolean @default(false) @map("dispensar_execucao_prescricao")
   // Fuso horário da clínica (IANA, ex.: "America/Manaus") — migration 20260823000000.
   // A aplicação roda nos 4 fusos do Brasil (UTC−2 a UTC−5); sem isto o backend
   // assumia America/Sao_Paulo fixo e a fila do plantão / e-mail / WhatsApp saíam

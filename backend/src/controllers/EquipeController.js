@@ -17,6 +17,8 @@ const { storage }      = require('../storage');
 const { TIPOS_FECHAMENTO_VALIDOS } = require('../lib/faturaUtils');
 const { normalizarValidade, lerValidade, salvarValidade } = require('../lib/validadeOrcamento');
 const formaCobranca = require('../lib/formaCobrancaEstoque');
+// Etapa de Execução de Prescrição OPCIONAL por empresa (2026-09-24).
+const etapaExecucao = require('../lib/etapaExecucaoPrescricao');
 // Fuso horário da clínica — a aplicação roda nos 4 fusos do Brasil (ver lib/fusoEmpresa.js).
 const { normalizarFuso, salvarFuso, fusoDaEmpresa, rotuloFuso } = require('../lib/fusoEmpresa');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
@@ -1138,6 +1140,7 @@ const EquipeController = {
         : null;
 
       const cobranca = await formaCobranca.lerFormaDoEscopo(prisma, escopo.empresaId, escopo.equipeId);
+      const dispensaExecucao = await etapaExecucao.lerDoEscopo(prisma, escopo.empresaId, escopo.equipeId);
 
       // Mesma resolução de compat que deveFecharHoje (faturaUtils.js): nunca retorna
       // tipoFechamento null pro frontend — sempre o efetivamente aplicado hoje.
@@ -1171,6 +1174,9 @@ const EquipeController = {
           // está valendo. Ver lib/formaCobrancaEstoque.js.
           formaCobrancaEstoque:      cobranca.forma,
           percentualCobrancaEstoque: cobranca.percentual,
+          // true = a clínica NÃO tem a etapa de Execução de Prescrição: fatura, estoque e
+          // pagamento do prestador saem na FINALIZAÇÃO. Ver lib/etapaExecucaoPrescricao.js.
+          dispensarExecucaoPrescricao: dispensaExecucao,
           // Fuso EFETIVO da clínica — DEDUZIDO do endereço (CEP/UF) que o cadastro
           // já coletou. O gestor não escolhe fuso: a tela só EXIBE qual foi detectado,
           // para ele conferir. Ver lib/fusoEmpresa.js#fusoPorEndereco.
@@ -1277,8 +1283,13 @@ const EquipeController = {
         tipoFechamento, diaFechamentoFatura, removerLogo, whatsapp,
         diasAtendimento, horaInicioAtendimento, horaFimAtendimento,
         especiesAtendidas, tempoConsultaPadraoMin, validadeOrcamentoDias, fusoHorario,
-        formaCobrancaEstoque, percentualCobrancaEstoque,
+        formaCobrancaEstoque, percentualCobrancaEstoque, dispensarExecucaoPrescricao,
       } = req.body;
+
+      // Etapa de Execução de Prescrição. undefined = não altera. NÃO nasce marcada —
+      // ver lib/etapaExecucaoPrescricao.js.
+      const dispensa = etapaExecucao.normalizarDispensa(dispensarExecucaoPrescricao);
+      if (dispensa.erro) return res.status(400).json({ sucesso: false, mensagem: dispensa.erro });
 
       // Forma de cobrança de medicamento/vacina. undefined = não altera; vazio = volta
       // ao padrão (VALOR_REPASSADO). O percentual só é aceito na forma PERCENTUAL —
@@ -1468,6 +1479,10 @@ const EquipeController = {
       );
       const cobrancaAtual = await formaCobranca.lerFormaDoEscopo(prisma, escopo.empresaId, escopo.equipeId);
 
+      // Etapa de execução: mesmo caminho (SQL cru, depois do upsert). Devolve o EFETIVO.
+      await etapaExecucao.salvarDispensa(prisma, escopo.empresaId, escopo.equipeId, dispensa.valor);
+      const dispensaAtual = await etapaExecucao.lerDoEscopo(prisma, escopo.empresaId, escopo.equipeId);
+
       // Fuso: o gestor NÃO envia este campo (a tela só exibe o detectado), então
       // `fusoFinal` é `undefined` no fluxo normal e nada é gravado. O caminho de
       // escrita segue existindo como OVERRIDE do ADMIN para o caso raro em que o
@@ -1491,11 +1506,17 @@ const EquipeController = {
           validadeOrcamentoDias:  validadeAtual,
           formaCobrancaEstoque:      cobrancaAtual.forma,
           percentualCobrancaEstoque: cobrancaAtual.percentual,
+          dispensarExecucaoPrescricao: dispensaAtual,
           fusoHorario:            fusoAtual,
           fusoLabel:              rotuloFuso(fusoAtual),
         },
       });
     } catch (err) {
+      // Recusa de REGRA escrita para ser lida (ex.: a opção de dispensar a execução
+      // numa base sem a migration) — passa inteira, com o status dela.
+      if (err?.status && err.status < 500) {
+        return res.status(err.status).json({ sucesso: false, mensagem: err.message });
+      }
       console.error('Erro ao salvar configuração:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
     }
