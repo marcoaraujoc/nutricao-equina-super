@@ -55,6 +55,19 @@ router.patch('/:faturaId/fechar', authenticate, checkPermission('financeiro.fatu
 router.patch('/:faturaId/animais/:animalId/fechar',  authenticate, checkPermission('financeiro.faturas.fechar', 'PROPRIO'), Ctrl.fecharAnimal);
 router.patch('/:faturaId/animais/:animalId/reabrir', authenticate, checkPermission('financeiro.faturas.fechar', 'PROPRIO'), Ctrl.reabrirAnimal);
 
+// 🔴 PAGAMENTO POR ANIMAL — a baixa do bloco de UM paciente (2026-09-23).
+//
+// Slug de EDITAR (`financeiro.faturas.editar`), o MESMO de `PATCH /:faturaId/status`,
+// e não o de fechar: dar baixa no que o paciente devia é a mesma decisão de marcar a
+// fatura como PAGA, só mais estreita — quem configura "pode marcar pago" espera que
+// isso valha para o acerto por paciente também. Fechar (tirar do total, seguir devido)
+// é outra pergunta e tem o seu slug.
+// ⚠️ Estornar usa o MESMO slug pelo motivo de sempre: quem dá a baixa é quem a desfaz.
+// A restrição extra de ESTORNAR ser ato de gestor mora no controller, junto da mesma
+// regra que já vale para reabrir fatura paga — não é permissão de matriz.
+router.patch('/:faturaId/animais/:animalId/pagar',    authenticate, checkPermission('financeiro.faturas.editar', 'PROPRIO'), Ctrl.pagarAnimal);
+router.patch('/:faturaId/animais/:animalId/estornar', authenticate, checkPermission('financeiro.faturas.editar', 'PROPRIO'), Ctrl.estornarPagamentoAnimal);
+
 // Status da fatura (uso geral: PAGA, ABERTA, CANCELADA)
 //
 // 🔴 NIVEL 'PROPRIO', NAO 'EQUIPE' (2026-09-04). Exigir EQUIPE aqui devolvia 403

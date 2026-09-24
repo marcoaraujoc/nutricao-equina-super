@@ -21,6 +21,7 @@
 const prisma = require('../lib/prisma').default;
 const contasPagar = require('../lib/contasPagar');
 const { registrarAuditoria } = require('../lib/auditoria');
+const { ehGestorNoContexto } = require('../middlewares/permissao.middleware');
 const { resolverPeriodo } = require('./RelatorioGerencialController');
 
 /** Fornecedores e prestadores da empresa, para o seletor do lançamento manual. */
@@ -124,6 +125,20 @@ const alterarStatus = async (req, res) => {
       return res.status(400).json({ error: 'Informe o motivo do cancelamento.' });
     }
 
+    // 🔴 CONTA PAGA É SOMENTE LEITURA, E SÓ O GESTOR A REABRE (2026-09-23) — a MESMA
+    // regra da fatura paga (`FaturaController.atualizarStatus`). Reabrir continua
+    // existindo, senão um clique errado em "Marcar como Pago" congelaria a dívida para
+    // sempre; o que muda é quem pode, e que a reabertura deixa rastro na auditoria.
+    const atual = await contasPagar.lerConta(prisma, req.empresaId, req.params.id);
+    if (!atual) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const saindoDePaga = atual.status === 'PAGA' && status !== 'PAGA';
+    if (saindoDePaga && !ehGestorNoContexto(req)) {
+      return res.status(400).json({
+        error: 'Conta paga fica em SOMENTE LEITURA. Só o gestor pode reabri-la.',
+        code:  'CONTA_PAGA',
+      });
+    }
+
     const resultado = await prisma.$transaction(async (tx) => {
       const r = await contasPagar.alterarStatus(
         tx, req.empresaId, req.params.id, status, req.user?.id, pagoEm ?? null);
@@ -135,7 +150,8 @@ const alterarStatus = async (req, res) => {
         motivo:     motivo || null,
         // A DATA do pagamento entra no rastro: ela é informada por quem registra e pode
         // ser anterior a hoje — sem isso a auditoria só saberia quando alguém digitou.
-        detalhes:   `Conta de ${r.dados.tipo.toLowerCase()} "${r.dados.credorNome}" → ${status}`
+        detalhes:   `Conta de ${r.dados.tipo.toLowerCase()} "${r.dados.credorNome}" → ${r.dados.status}`
+                    + (saindoDePaga ? ' (conta PAGA reaberta)' : '')
                     + (r.dados.pagoEm ? ` (pago em ${new Date(r.dados.pagoEm).toLocaleDateString('pt-BR')})` : ''),
       });
       return r;
@@ -196,7 +212,14 @@ const removerItem = async (req, res) => {
       });
       return true;
     });
-    if (!ok) return res.status(404).json({ error: 'Item não encontrado.' });
+    // A remoção só alcança conta EM ABERTO (o `JOIN` de `contasPagar.removerItem`), e a
+    // mensagem precisa dizer isso — "não encontrado" mandaria procurar o item errado.
+    if (!ok) {
+      return res.status(400).json({
+        error: 'Item não encontrado ou a conta não está aberta. Reabra a conta para removê-lo.',
+        code:  'CONTA_NAO_EDITAVEL',
+      });
+    }
     return res.json({ mensagem: 'Item removido.' });
   } catch (err) {
     console.error('ContaPagarController.removerItem:', err);

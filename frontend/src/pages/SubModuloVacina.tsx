@@ -183,6 +183,13 @@ const STATUS_VACINA: Record<StatusVacina, { label: string; cls: string }> = {
 // Ordem das abas de filtro no histórico (mesma progressão do ciclo de vida)
 const STATUS_ORDER: StatusVacina[] = ['SALVA', 'FINALIZADA', 'EXECUTADA', 'CANCELADA'];
 
+// 🔴 ESPELHO de `STATUS_ALTERAVEIS` (VacinaClinicaController): a vacina é corrigível
+// enquanto a dose NÃO foi aplicada. FINALIZADA entrou em 2026-09-23 — ela só tem
+// RESERVA de estoque, e o backend a refaz ao salvar.
+// ⚠️ As duas listas mudam JUNTAS: só aqui, o botão aparece para uma dose que a rota
+// recusa; só lá, a rota aceita uma edição que a tela nunca oferece.
+const STATUS_ALTERAVEIS_VAC: StatusVacina[] = ['SALVA', 'FINALIZADA'];
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 // DOSES/INTERVALO_REFORCO_MESES/VIAS_PADRAO/normalizeVia vêm de utils/vacina.ts —
 // fonte única, reusada pelo Orçamento (aba Vacinas) para capturar os mesmos campos.
@@ -609,10 +616,10 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   const [viewingV,    setViewingV]    = useState<VacinaClinica | null>(null);
   const [excluindoId, setExcluindoId] = useState<number | null>(null);
   const [filtroStatus, setFiltroStatus] = useState<FiltroStatus>('todos');
-  // Vacina SALVA do histórico em edição no formulário principal — mesmo fluxo do
-  // "Alterar" da prescrição (handleEditarServer): carrega os dados na tela principal
-  // em vez de abrir modal. Distinto de `editandoKey` (edição de item ainda em rascunho,
-  // não persistido).
+  // Vacina do histórico em edição no formulário principal — mesmo fluxo do "Alterar"
+  // da prescrição (handleEditarServer): carrega os dados na tela principal em vez de
+  // abrir modal. Distinto de `editandoKey` (edição de item ainda em rascunho, não
+  // persistido). Vale para SALVA e FINALIZADA — ver `STATUS_ALTERAVEIS_VAC`.
   const [editandoHistoricoId, setEditandoHistoricoId] = useState<number | null>(null);
 
   const [page, setPage] = useState(1);
@@ -801,6 +808,12 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   });
   const totalPags    = Math.ceil(historicoOrdenado.length / limit);
   const historicoPage = historicoOrdenado.slice((page - 1) * limit, page * limit);
+
+  // A vacina em edição já está na fila do plantão? É o que decide o aviso extra do
+  // formulário — editar uma FINALIZADA refaz a reserva de estoque.
+  const editandoHistoricoFinalizada =
+    editandoHistoricoId != null
+    && getStatus(historico.find(v => v.id === editandoHistoricoId) ?? ({} as VacinaClinica)) === 'FINALIZADA';
 
   // 🔴 PACIENTE INATIVO = SOMENTE LEITURA. O prontuário fica congelado na data e hora
   // da inativação: tudo continua visível, nada mais é criado, alterado, finalizado ou
@@ -1127,9 +1140,14 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
     executarSalvar();
   };
 
-  // Carrega uma vacina SALVA do HISTÓRICO no formulário principal para edição — mesmo
-  // fluxo do "Alterar" da prescrição (`handleEditarServer`). Só é oferecido enquanto a
-  // vacina segue SALVA: depois de finalizada ela pode ter fatura/estoque envolvidos.
+  // Carrega uma vacina do HISTÓRICO no formulário principal para edição — mesmo fluxo
+  // do "Alterar" da prescrição (`handleEditarServer`).
+  // 🔴 SALVA **e** FINALIZADA (2026-09-23): enquanto a dose não foi APLICADA o registro
+  // é corrigível. A FINALIZADA tem apenas RESERVA de estoque — o débito e a cobrança
+  // acontecem em `executar` —, e o backend refaz a reserva ao salvar. Antes, corrigir a
+  // dose de uma vacina já na fila do plantão obrigava a cancelar e registrar de novo.
+  // ⚠️ Mudar "fornecida pelo cliente"/"aplicada pelo proprietário" numa FINALIZADA pode
+  // tirá-la do plantão e cobrá-la na hora (matriz de `VacinaClinicaController`).
   const editarHistoricoNoForm = (v: VacinaClinica) => {
     if (!podeEditarVac(v)) { semPermissao('alterar vacina', v.id); return; }
     carregandoEdicaoRef.current = true; // impede os efeitos reativos de resetar via/lote
@@ -1197,8 +1215,8 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   // ORDEM/COR da §6: Alterar (laranja) → Visualizar (emerald) → Imprimir (azul) →
   // WhatsApp (verde) → E-mail (azul) → Cancelar (vermelho). `AcaoRegistro` decide a
   // FORMA por CSS — ícone no desktop, botão com rótulo no mobile.
-  // ⚠️ Não há ALTERAR fora de SALVA: depois de finalizada a vacina já reservou
-  // estoque, e a rota de edição recusa.
+  // ⚠️ ALTERAR vale até a dose ser APLICADA — SALVA e FINALIZADA (`STATUS_ALTERAVEIS`
+  // no backend). EXECUTADA e CANCELADA não: ali há fatura e baixa de estoque.
   // WhatsApp / E-mail mandam o PDF da MESMA folha do Imprimir, anexado de verdade
   // pelo backend — ver utils/compartilharPdf.ts. `prepararPrescricao` roda antes
   // para resolver a assinatura e converter as imagens em `data:` (o PDF do
@@ -1224,7 +1242,7 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
   const acoesDaVacina = (v: VacinaClinica) => (
     <AcoesRegistro>
       <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Alterar" titulo="Alterar vacina"
-        visivel={getStatus(v) === 'SALVA' && v.ativo && podeEditarVac(v)}
+        visivel={STATUS_ALTERAVEIS_VAC.includes(getStatus(v)) && v.ativo && podeEditarVac(v)}
         onClick={() => editarHistoricoNoForm(v)} />
       <AcaoRegistro tom="ver" icone={Eye} rotulo="Visualizar"
         onClick={() => setViewingV(v)} />
@@ -1322,11 +1340,22 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
             </div>
           )}
 
-          {/* Aviso de edição de vacina JÁ SALVA do histórico */}
+          {/* Aviso de edição de vacina do histórico. Editar uma FINALIZADA (já na fila
+              do plantão) tem consequência de estoque — a reserva é refeita —, e quem
+              corrige precisa saber disso ANTES de salvar, não depois. */}
           {editandoHistoricoId != null && (
-            <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-xl bg-orange-50 border border-orange-200 text-xs text-orange-700">
-              <Pencil size={12} />
-              Editando a vacina do histórico — ajuste os campos e clique em <b>Atualizar vacina</b>.
+            <div className="mb-4 flex items-start gap-2 px-3 py-2 rounded-xl bg-orange-50 border border-orange-200 text-xs text-orange-700">
+              <Pencil size={12} className="flex-shrink-0 mt-0.5" />
+              <span>
+                Editando a vacina do histórico — ajuste os campos e clique em <b>Atualizar vacina</b>.
+                {editandoHistoricoFinalizada && (
+                  <span className="block mt-0.5 text-orange-600">
+                    Esta vacina já está <b>em execução</b>: ao salvar, a reserva de estoque é refeita
+                    e a fila do plantão passa a mostrar os dados novos. Marcar{' '}
+                    <b>aplicada pelo proprietário</b> tira a dose do plantão e a cobra agora.
+                  </span>
+                )}
+              </span>
             </div>
           )}
 

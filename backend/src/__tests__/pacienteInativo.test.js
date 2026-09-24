@@ -123,9 +123,35 @@ describe('fatura paga é somente leitura', () => {
   });
 
   it('incluir, alterar e remover item continuam recusados na fatura paga', () => {
+    // 🔴 Desde 2026-09-23 a recusa mora numa guarda ÚNICA (`bloqueioDeEscritaNaFatura`),
+    // que responde FATURA_PAGA na paga e FATURA_NAO_EDITAVEL na fechada/atrasada. O
+    // gate passou a exigir as duas metades: os três handlers CHAMANDO a guarda, e a
+    // guarda devolvendo o código. Conferir só o texto em cada handler deixaria de
+    // detectar justamente o caso que a extração criou — um handler que esquece de
+    // chamá-la.
     for (const nome of ['adicionarItem', 'atualizarItem', 'removerItem']) {
-      expect(corpoDoHandler(fonte, nome)).toMatch(/FATURA_PAGA/);
+      expect(corpoDoHandler(fonte, nome)).toMatch(/bloqueioDeEscritaNaFatura/);
     }
+    expect(fonte).toMatch(/function bloqueioDeEscritaNaFatura[\s\S]*?code:\s*'FATURA_PAGA'/);
+    expect(fonte).toMatch(/function bloqueioDeEscritaNaFatura[\s\S]*?faturaEditavel\(fatura\.status\)/);
+  });
+
+  // 🔴 FECHADA TAMBÉM É SOMENTE LEITURA (2026-09-23, a pedido: "se ela for fechada
+  // nada pode ser editada no item do paciente"). Até aqui só a tela escondia os botões
+  // (`canEdit = ABERTA || REABERTA`) e o `PUT /itens/:id` passava numa fatura fechada.
+  it('a fatura FECHADA/ATRASADA também recusa escrita de item', () => {
+    expect(fonte).toMatch(/code:\s*'FATURA_NAO_EDITAVEL'/);
+  });
+
+  // 🔴 O BLOCO DO PACIENTE SEGUE A MESMA REGRA DA FATURA: fechado/pago = somente
+  // leitura. Sem isto, fechar o bloco tirava o valor do total e a linha continuava
+  // editável — mudar o valor dali reescreveria uma cobrança já apartada.
+  it('item de bloco de paciente FECHADO ou PAGO recusa alteração e remoção', () => {
+    for (const nome of ['atualizarItem', 'removerItem']) {
+      expect(corpoDoHandler(fonte, nome)).toMatch(/bloqueioDoBlocoDoPaciente/);
+    }
+    expect(fonte).toMatch(/function bloqueioDoBlocoDoPaciente[\s\S]*?BLOCO_PACIENTE_PAGO/);
+    expect(fonte).toMatch(/function bloqueioDoBlocoDoPaciente[\s\S]*?BLOCO_PACIENTE_FECHADO/);
   });
 });
 

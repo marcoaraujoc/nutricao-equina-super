@@ -482,8 +482,54 @@ Prescricao        → prescrições médicas (tipo: MEDICAMENTO|PROCEDIMENTO, st
                     horariosGerados: JSONB, diasAplicacaoInicio, diasAplicacaoFim)
 VacinaClinica     → registro de vacinas (status: SALVA|FINALIZADA|EXECUTADA — mesma lógica da
                     Prescrição: fatura + débito de estoque só na EXECUÇÃO, ver seção do fluxo da vacina)
-EncaminhamentoClinico → encaminhamentos (prestadorId: User FORNECEDOR da equipe, null = destino externo;
-                    status PENDENTE|CONCLUIDO|CANCELADO; urgencia NORMAL|ALTA|URGENTE)
+                    🔴 **CORRIGÍVEL ATÉ A DOSE SER APLICADA** (2026-09-23):
+                    `STATUS_ALTERAVEIS = ['SALVA', 'FINALIZADA']` no
+                    `VacinaClinicaController`, espelhado em `STATUS_ALTERAVEIS_VAC`
+                    (SubModuloVacina). A FINALIZADA não tirou frasco da prateleira —
+                    ela tem RESERVA, e o débito e a cobrança só acontecem em
+                    `executar`. EXECUTADA e CANCELADA seguem fechadas.
+                    ⚠️ **Alterar uma FINALIZADA REFAZ o destino pela MATRIZ "quem
+                    FORNECE × quem APLICA"**, com o MESMO encadeamento de `finalizar`:
+                    a reserva antiga sai sempre e é recriada se a dose segue no
+                    plantão; marcar "aplicada pelo proprietário" debita, fatura, agenda
+                    o reforço e vai para EXECUTADA (é a única chance de cobrar);
+                    "fornecida pelo cliente" libera a reserva sem débito nem cobrança.
+                    Gravar só os campos deixaria a reserva presa no lote do produto
+                    ANTIGO. Gate: `__tests__/vacinaAlteravelAteAplicar.test.js`.
+                    ⚠️ **SALDO não recusa o registro** (2026-09-23): o 400 `Lote sem
+                    saldo disponível` saiu de `registrar` e `atualizar` — mesma decisão
+                    da prescrição. **A trava de VALIDADE FICA**: "acabou o saldo" e "o
+                    frasco está vencido" são perguntas diferentes.
+EncaminhamentoClinico → encaminhamentos (status PENDENTE|CONCLUIDO|CANCELADO;
+                    urgencia NORMAL|ALTA|URGENTE)
+                    🔴 **O DESTINO INTERNO É O CADASTRO DE PRESTADOR, NÃO UM USUÁRIO**
+                    (migration 20261022000000): `prestadorCadastroId` +
+                    `prestadorCadastroOrigem` ('PRESTADOR'|'FORNECEDOR'). `tb_prestadores`
+                    e `tb_fornecedores` são tabelas distintas e não cabem numa FK só —
+                    é o mesmo par (origem, id) de `lib/contasPagar.js`.
+                    POR QUÊ: prestador só ganha usuário quando o cadastro é salvo com
+                    "acesso ao sistema", então o ferrador/quiroprata cadastrado sem
+                    login **não existia no seletor** — e a lista era completada com os
+                    VETERINÁRIOS da equipe, que não é o que a aba se propõe a oferecer.
+                    LEITURA/ESCRITA: SEMPRE por `lib/encaminhamentoPrestador.js` (SQL
+                    cru com guarda de coluna) — passar as colunas ao
+                    `encaminhamentoClinico.create` tipado com o client defasado
+                    derrubaria a CRIAÇÃO INTEIRA, não só o campo novo. O nome vem por
+                    JOIN na leitura, nunca por snapshot: o cadastro é soft-deleted e
+                    renomeá-lo deve aparecer no histórico.
+                    ⚠️ `prestadorId` (o LOGIN) CONTINUA e continua sendo quem recebe a
+                    `DesignacaoPrestador` — designação é ESCOPO DE ACESSO, e sem
+                    usuário não há a quem dar acesso. Encaminhar para prestador sem
+                    login grava o registro clínico e **NÃO libera o paciente**; a tela
+                    diz isso antes de salvar, e o selo "Prestador com acesso a este
+                    paciente" olha `enc.prestadorId`, nunca "destino interno".
+                    ⚠️ A especialidade da aba sai do `tipo_servico` do CADASTRO —
+                    `UsuarioEspecialidade`/`FornecedorEspecialidade` saíram da conta,
+                    era por elas que o veterinário entrava na lista.
+                    ⚠️ FORNECEDOR entra junto de PRESTADOR: o cargo novo nasceu em
+                    2026-09-09 e nada foi migrado. Quem só VENDE (loja, laboratório,
+                    farmácia) sai da lista inteira.
+                    Gate: `__tests__/encaminhamentoPrestadorCadastro.test.js`.
 AgendamentoClinico → agendamentos do animal (tb_agendamentos_clinicos) — tipo CONSULTA|VACINA|
                     RETORNO|EXAME|PROCEDIMENTO, status AGENDADO|CONCLUIDO|CANCELADO, dataHora,
                     veterinarioId?, criadoPorId?. Gerenciado por ADMIN/VETERINARIO/ESTAGIARIO;
@@ -497,7 +543,33 @@ DesignacaoPrestador → escopo de acesso do prestador por animal (tb_designacoes
                     fornece o tipoServico (especialidade) do prestador. Migration 20260611170000.
 Fatura / FaturaItem → financeiro básico
                     Fatura: animalId? (legado, nullable desde migration 20260605), proprietarioId?,
-                    mesReferencia? VARCHAR(7) ex: "2026-06", status (ABERTA|PAGA|CANCELADA|FECHADA)
+                    mesReferencia? VARCHAR(7) ex: "2026-06", status (ABERTA|REABERTA|PAGA|
+                    CANCELADA|FECHADA|ATRASADA)
+                    🔴 **QUANDO O CICLO SEGUINTE NASCE** (`faturaUtils.abreProximoCiclo`,
+                    2026-09-23) — consultado por `abrirProximaFatura`, logo vale pelas QUATRO
+                    portas de fechamento (`fecharFatura`, `atualizarStatus`, `fecharFaturasLote`
+                    e o cron, que passaram a informar `statusAnterior`):
+                    · **REABERTA fechada de novo NÃO abre nada.** Ela é um documento ANTIGO
+                      destravado para corrigir uma linha; abrir um ciclo ali criava uma fatura
+                      do mês seguinte a cada correção, e o cliente terminava o ano com faturas
+                      vazias de meses que nunca foram faturados.
+                    · **Não se abre fatura de mês FUTURO.** Fechar a de setembro no dia 23
+                      criava a de outubro com setembro ainda correndo, e toda cobrança do
+                      resto do mês caía lá dentro. Quando outubro chegar, o primeiro
+                      lançamento clínico cria a fatura sozinho (`getOrCreateFatura`) — a
+                      assistência mensal não se perde, ela é lançada no FECHAMENTO de cada
+                      fatura, não na criação da seguinte.
+                    🔴 **UMA ABERTA NÃO CONVIVE COM UMA REABERTA DO MESMO MÊS** (2026-09-23).
+                    Duas faturas do mesmo mês partem a cobrança em dois documentos e
+                    `getOrCreateFatura` pega a primeira que achar — metade dos lançamentos vai
+                    parar na outra, sem erro e sem log. Fechado pelos dois lados:
+                    `getOrCreateFatura` **ADOTA a REABERTA do mês CORRENTE** em vez de criar
+                    uma ABERTA ao lado dela, e a reabertura recusa com 400
+                    `FATURA_ABERTA_NO_MES` (helper `faturaAbertaNoMes`) quando o par já existe.
+                    ⚠️ A REABERTA de mês ANTERIOR CONTINUA fora de `getOrCreateFatura` — é o
+                    caso que a regra de 2026-09-06 protege (reabrir agosto e receber a
+                    cobrança de setembro). "Reaberta do mês corrente" só existe quando alguém
+                    fechou o mês antes do fim e reabriu; ali ela É a fatura corrente.
                     🔴 **FECHAMENTO POR ANIMAL** (migration 20261018000000): `total` passou a
                     ser O QUE A FATURA AINDA COBRA — só os itens ABERTOS; o bloco de um
                     paciente fechado à parte (`FaturaItem.fechadoEm`) sai dele e vai para
@@ -515,15 +587,50 @@ Fatura / FaturaItem → financeiro básico
                     que lançam cobrança. Rotas
                     `PATCH /clinica/faturas/:id/animais/:animalId/{fechar,reabrir}`
                     (`financeiro.faturas.fechar`, o MESMO slug de fechar a fatura inteira).
+                    🔴 **PAGAMENTO POR ANIMAL** (migration 20261021000000): `totalPagoAnimal`
+                    é o bloco de paciente JÁ ACERTADO (`FaturaItem.pagoEm`) — ele NÃO é mais
+                    a receber, e por isso SAI de `totalFechado`. São TRÊS totais, todos
+                    gravados só por `recalcularTotal`: `total` (cobra) · `totalFechado`
+                    (fechado e ainda DEVIDO) · `totalPagoAnimal` (recebido).
+                    ⚠️ **PAGO VENCE FECHADO** no recálculo: todo item pago também está
+                    fechado (pagar fecha o que estiver aberto), e contá-lo nos dois somaria
+                    o MESMO valor como recebido E como devido.
+                    ⚠️ Por isso "a receber" continua sendo `total + totalFechado` em TODO
+                    indicador — nada ali mudou. Quem conta RECEBIDO é que soma
+                    `totalPagoAnimal` (melhores pagadores, que passou a varrer as faturas do
+                    período e não só as quitadas: acerto em fatura ABERTA é dinheiro que
+                    entrou).
+                    ⚠️ **Pagar o bloco NÃO mexe no status da fatura** — ela segue ABERTA
+                    cobrando os outros pacientes, que é o ponto inteiro do pagamento por
+                    animal. E **reabrir não toca no que foi pago**: desfazer a baixa é
+                    `estornar`, ato de GESTOR (mesmo critério de reabrir fatura paga).
+                    Rotas `PATCH .../animais/:animalId/{pagar,estornar}` com
+                    `financeiro.faturas.editar` — o MESMO slug de marcar a fatura como paga.
+                    Gate: `__tests__/faturaPagamentoPorAnimal.test.js`.
                     FaturaItem: animalId? (adicionado migration 20260605), tipo VARCHAR(50), veterinarioId?
+                    FaturaItem.pagoEm/pagoPorId (migration 20261021000000): preenchido = o
+                    bloco deste paciente já foi ACERTADO — fora do `total` e fora do
+                    `totalFechado`. Item pago é SEMPRE item fechado.
                     FaturaItem.fechadoEm/fechadoPorId (migration 20261018000000): preenchido =
                     a linha foi encerrada junto com o bloco do paciente dela e está FORA do
                     `Fatura.total`. ⚠️ A marca é do ITEM, NUNCA do par (fatura, animal): é o
                     que faz a cobrança que chega DEPOIS do fechamento nascer ABERTA e voltar
                     a contar — com a marca no par, toda dose aplicada depois cairia calada
                     dentro de um bloco encerrado e o cliente deixaria de ser cobrado.
-                    ⚠️ Fechar NÃO congela a linha: fatura FECHADA no S2Vet segue aceitando
-                    correção de item; quem congela é o status PAGA.
+                    🔴 **FECHAR CONGELA A LINHA** (2026-09-23, a pedido — REVERTE "fatura
+                    FECHADA segue aceitando correção de item"). Fechado é somente leitura em
+                    TODA escala: a fatura FECHADA/ATRASADA, o bloco do PACIENTE fechado
+                    (`fechadoEm`) e o bloco PAGO (`pagoEm`). A saída é **Reabrir** (fatura) ou
+                    **Reabrir paciente** / **Estornar pagamento** (bloco), que já existem,
+                    gravam REABERTA e deixam rastro na auditoria.
+                    ⚠️ O enforcement é do SERVIDOR: guarda única `bloqueioDeEscritaNaFatura`
+                    (→ `FATURA_PAGA` / `FATURA_NAO_EDITAVEL`) e `bloqueioDoBlocoDoPaciente`
+                    (→ `BLOCO_PACIENTE_PAGO` / `BLOCO_PACIENTE_FECHADO`) em `adicionarItem`,
+                    `atualizarItem` e `removerItem`, mais `OrcamentoController.lancarNaFatura`,
+                    que é a OUTRA porta de entrada de item. Até aqui a regra vivia só no
+                    `canEdit` da tela, e um `PUT /itens/:id` passava na fatura fechada.
+                    ⚠️ Nenhuma cobrança automática é perdida: o lançamento clínico entra por
+                    `getOrCreateFatura`, que só devolve fatura em aberto (ou cria uma).
                     FaturaItem.descontoTipo (PERCENTUAL|VALOR|null) + descontoValor (Float, default 0)
                     [migration 20260725000000] — desconto POR ITEM. O total da fatura é sempre a soma
                     do LÍQUIDO: usar `valorLiquidoItem(item)` / `descontoDoItem(item)` de lib/faturaUtils.js
@@ -1392,6 +1499,16 @@ juntos imprimiam "Paciente" DUAS VEZES nas três telas nutricionais.
 ⚠️ `SeletorAnimal` também não esconde mais o campo quando há um paciente só — com a tela
 abrindo vazia, isso deixava a clínica de um paciente sem nenhuma forma de escolher. Quem
 decide "não há o que escolher" é o `semEscolha` do combobox.
+🔴 **O MENU LATERAL TAMBÉM NÃO CARREGA PACIENTE NA URL** (2026-09-23). As telas
+cumpriam a regra e o `Sidebar` a desfazia: ele montava o destino como
+`animalId ? `/dieta/${animalId}` : '/dieta'`, com `animalId = selectedAnimal?.id`, e a
+tela recebia PELA URL exatamente o paciente que a regra mandava não herdar. Valia para
+os QUATRO itens — Plano de Dieta, Relatório Nutricional, Vacina e Resultado de Exame
+(Atendimento já apontava para `/clinica/agenda`, sem id).
+⚠️ **Não reintroduzir `selectedAnimal?.id` nos destinos do menu.** Para ir a um
+paciente, o caminho é o SELETOR da própria tela, que navega e escreve no
+`SelectedAnimalContext`. Quebra em SILÊNCIO: nada falha, a tela só abre preenchida com
+cara de conveniência. Gate: `__tests__/menuSemPacienteHerdado.test.js`.
 
 #### SELETOR ABRE SEMPRE PARA BAIXO (2026-09-22)
 Nenhum combo do sistema decide a direção medindo o espaço na tela. Com pouco
@@ -2074,13 +2191,13 @@ New-Item -ItemType Junction `
       `getEquipeIdsDoProprietario`, já exportado de `permissao.middleware.js`, mapeia para o escopo de
       `EmpresaConfiguracao` de cada uma). Fallback: se nenhuma equipe do proprietário tiver
       configuração, o comportamento antigo é preservado — fecha só no último dia do mês.
-      **Fatura fechada vs paga:** `FECHADA` continua permitindo edição de itens existentes E
-      lançamento manual de novos itens pelo financeiro (`FaturaController.adicionarItem`) — só `PAGA`
-      bloqueia qualquer alteração (`adicionarItem`/`atualizarItem`/`removerItem` agora checam
-      `fatura.status === 'PAGA'` → 400 `FATURA_PAGA`, mesmo código usado pelos helpers de sincronização
-      de `faturaUtils.js`). Itens de origem clínica (exame/vacina/encaminhamento/prescrição) nunca
-      caem numa fatura fechada por construção: `getOrCreateFatura` só busca fatura `status: 'ABERTA'` —
-      se a do mês já fechou, cria uma nova automaticamente. Não precisou de nenhuma mudança pra isso.
+      **Fatura fechada vs paga:** 🔴 **REVISADO em 2026-09-23** — `FECHADA` NÃO aceita mais edição
+      nem lançamento de item; só `ABERTA`/`REABERTA` aceitam (`faturaEditavel`). O texto original
+      dizia o contrário e vale como história: até aqui a recusa era só da PAGA, e quem escondia os
+      botões na fechada era a TELA. Ver a linha `FaturaItem.fechadoEm` na §5 para a regra vigente e
+      os códigos de erro. Itens de origem clínica (exame/vacina/encaminhamento/prescrição) nunca
+      caem numa fatura fechada por construção: `getOrCreateFatura` só busca fatura em aberto —
+      se a do mês já fechou, cria uma nova automaticamente.
 - [x] **Farmácia — Ajuste de Estoque + regra de item "em uso" (2026-07-10):**
       Bug corrigido: `EstoqueController.atualizar` bloqueava edição de quantidade/lote/validade
       contando QUALQUER movimento — mas `criar` gera automaticamente um movimento ENTRADA

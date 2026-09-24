@@ -32,6 +32,31 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-09-23 (🔴 **O MENU LATERAL DEIXOU DE CARREGAR PACIENTE NA URL.**
+#
+#   A §6 manda, desde 2026-09-22, que Atendimento · Vacina · Resultado de Exame · Plano
+#   de Dieta · Relatorio Nutricional abram em MODO BUSCA, sem paciente herdado — e as
+#   cinco telas cumprem a regra (`animalIdParam ?? ''`, sem auto-selecao).
+#   Quem a contrariava era o **Sidebar**: ele montava o destino como
+#   `animalId ? '/dieta/<id>' : '/dieta'`, com `animalId = selectedAnimal?.id`. A tela
+#   entao recebia PELA URL exatamente o paciente que a regra mandava nao herdar — ou
+#   seja, a regra estava escrita, implementada nas telas, e desfeita no menu.
+#   Relatado como "a tela nutricional esta vindo com um paciente previamente
+#   selecionado; precisa ser feito igual a do atendimento" — e o Atendimento estava
+#   certo justamente porque o item dele aponta para `/clinica/agenda`, sem id.
+#   🔴 **QUEBRA EM SILENCIO**: nada falha, nada e registrado, a tela so abre preenchida
+#   com cara de conveniencia. O defeito aparece quando alguem escreve no paciente
+#   errado, que e o custo que a regra existe para evitar numa tela de escrita clinica.
+#   ⚠️ Foram os QUATRO itens que faziam isso, nao so os dois nutricionais: Vacina e
+#   Resultado de Exame estao na mesma lista da §6 e tinham o mesmo defeito.
+#   ⚠️ `selectedAnimal` saiu da desestruturacao do `useSelectedAnimal()` no Sidebar —
+#   era usado so para isso. **Nao reintroduzir `selectedAnimal?.id` nos destinos do
+#   menu**: para ir a um paciente, o caminho e o SELETOR da propria tela, que navega e
+#   escreve no `SelectedAnimalContext`.
+#   Gate: `__tests__/menuSemPacienteHerdado.test.js` (verificado que reprova).)
+
+---
+
 # Atualizado em: 2026-09-22 (parte 2) (🔴 **AS TELAS CLÍNICAS E NUTRICIONAIS ABREM EM
 #   MODO BUSCA, SEM PACIENTE ESCOLHIDO** + a palavra "Paciente" que saía DUAS VEZES no
 #   módulo nutricional — os dois a pedido.

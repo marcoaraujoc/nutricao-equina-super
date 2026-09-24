@@ -344,7 +344,10 @@ export default function CadastroProprietario() {
           {podeCriar && (
             <button onClick={abrirNovo}
               className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-2xl text-sm font-semibold hover:bg-emerald-700 transition-colors">
-              Novo Proprietário
+              {/* Ícone da ENTIDADE à esquerda do rótulo, no mesmo tamanho (16) dos
+                  botões "Novo Fornecedor" / "Novo Prestador" / "Novo Tratador" — é o
+                  padrão do módulo de Cadastro, e era o único botão sem ele. */}
+              <Users size={16} /> Novo Proprietário
             </button>
           )}
         </div>

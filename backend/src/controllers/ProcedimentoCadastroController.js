@@ -953,10 +953,147 @@ const toggleAtivoProprio = async (req, res) => {
   }
 };
 
+/**
+ * Quantas execuções o LEDGER do prestador tem com este nome.
+ *
+ * ⚠️ SQL CRU e atrás do guarda de `lib/procedimentoPrestador.js`: a tabela nasceu numa
+ * migration que pode não estar aplicada, e no Windows o `prisma generate` falha com o
+ * backend rodando (§11) — pelo client tipado, uma base defasada derrubaria a checagem
+ * inteira com 500. Sem a tabela não há execução registrada, então 0 é a resposta certa.
+ *
+ * ⚠️ O recorte por empresa é do RLS (a tabela é tenant plane e tem `empresa_id`).
+ */
+async function contarNoLedgerDoPrestador(nome) {
+  if (!(await vinculoPrestador.temTabelas())) return 0;
+  const rows = await prisma.$queryRaw`
+    SELECT COUNT(*)::int AS n
+      FROM "schs2vet"."tb_execucoes_procedimento_prestador"
+     WHERE lower("procedimento_nome") = lower(${nome})`;
+  return Number(rows?.[0]?.n ?? 0);
+}
+
+/**
+ * Onde o procedimento pode estar SENDO USADO. Devolve a lista de motivos que impedem
+ * a exclusão definitiva — vazia = nada o referencia.
+ *
+ * 🔴 A LIGAÇÃO É PELO NOME, não por FK. `tb_prescricoes` guarda o procedimento em
+ * `medicamento` (texto) com `tipo = 'PROCEDIMENTO'`, e o ledger do prestador guarda
+ * `procedimento_nome`: nenhuma das duas tem `procedimento_id`. Isso é intencional lá
+ * (prontuário não muda porque um cadastro foi mexido), e aqui vira a única forma de
+ * perguntar "isto já foi usado?".
+ *
+ * ⚠️ O recorte por empresa vem do RLS, não de um `where` escrito aqui: `tb_prescricoes`,
+ * `tb_orcamento_itens` e `tb_execucoes_procedimento_prestador` são tenant plane, então
+ * a contagem já é a DESTA clínica. Não somar um filtro por empresa à mão — seria uma
+ * segunda regra a divergir da policy.
+ *
+ * ⚠️ Prescrição CANCELADA ou soft-deletada CONTA. O que se pergunta é "este nome já
+ * apareceu num prontuário?", e apagar o cadastro por trás de um registro clínico que
+ * existiu deixa o histórico apontando para nada. Inativar é o caminho para esse caso.
+ */
+async function usosDoProcedimento(nome, id) {
+  const porNome = { equals: nome, mode: 'insensitive' };
+
+  const [emPrescricoes, emOrcamentos, emCombos, emExecucoes] = await Promise.all([
+    prisma.prescricao.count({ where: { tipo: 'PROCEDIMENTO', medicamento: porNome } }),
+    prisma.orcamentoItem.count({
+      where: { tipo: 'PROCEDIMENTO', OR: [{ refId: id }, { descricao: porNome }] },
+    }),
+    prisma.procedimentoComboItem.count({ where: { procedimentoId: id } }),
+    contarNoLedgerDoPrestador(nome),
+  ]);
+
+  const motivos = [];
+  if (emPrescricoes) motivos.push(`${emPrescricoes} prescrição(ões)/evolução(ões)`);
+  if (emOrcamentos)  motivos.push(`${emOrcamentos} item(ns) de orçamento`);
+  if (emCombos)      motivos.push(`${emCombos} combo(s) desta clínica`);
+  if (emExecucoes)   motivos.push(`${emExecucoes} execução(ões) já lançada(s)`);
+  return motivos;
+}
+
+/**
+ * DELETE /api/procedimentos/cadastro/proprio/:id  { motivo }
+ *
+ * 🔴 EXCLUSÃO DEFINITIVA, e SÓ quando o procedimento nunca foi usado (2026-09-23, a
+ * pedido). O erro de digitação recém-cadastrado não precisa ficar para sempre na lista
+ * como "inativo"; o que já entrou num prontuário, sim.
+ *
+ * ⚠️ NÃO substitui o inativar (`toggleAtivoProprio`), e a tela oferece os dois: usado
+ * uma vez, o cadastro deixa de ser excluível para sempre — sem o soft delete não
+ * haveria como tirá-lo da frente. Esta rota é a saída para o caso em que não há
+ * histórico a preservar.
+ *
+ * ⚠️ Linha GLOBAL responde 400: ela vale para TODAS as clínicas do SaaS e o RLS de
+ * `tb_procedimentos_vet` recusaria a escrita de qualquer forma — o que viraria um 500
+ * sem explicação no lugar de uma recusa legível.
+ *
+ * ⚠️ `motivo` é OBRIGATÓRIO e vai para a Auditoria (§13, armadilha 33). A auditoria é
+ * gravada ANTES do `delete`, na MESMA transação: a linha some do catálogo, então o
+ * rastro é o único lugar onde ela continua existindo.
+ *
+ * ⚠️ O `delete` CASCATEIA para `tb_procedimento_valores_empresa` e
+ * `tb_procedimento_prestadores` (configuração, sem histórico). Para
+ * `tb_procedimento_combo_itens` a cascata também existe — e é justamente por isso que
+ * o combo entra na checagem acima: sem ela, excluir o procedimento esvaziaria o pacote
+ * de alguém em silêncio.
+ */
+const excluirProprio = async (req, res) => {
+  try {
+    if (!req.empresaId) return res.status(400).json({ error: 'Selecione a empresa.' });
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Procedimento inválido.' });
+
+    const item = await prisma.procedimentoVeterinario.findFirst({
+      where:  procedimentoVisivel(req.empresaId, id),
+      select: { id: true, nome: true, empresaId: true },
+    });
+    // Procedimento privado de outra clínica responde 404 — não confirma que existe.
+    if (!item) return res.status(404).json({ error: 'Procedimento não encontrado.' });
+
+    if (item.empresaId == null) {
+      return res.status(400).json({
+        error: 'Este procedimento é do catálogo do sistema e vale para todas as clínicas — não pode ser excluído aqui.',
+        code:  'ITEM_DO_SISTEMA',
+      });
+    }
+
+    const motivo = String(req.body?.motivo ?? '').trim();
+    if (motivo.length < 3) {
+      return res.status(400).json({ error: 'É obrigatório informar o motivo da exclusão.' });
+    }
+
+    const motivos = await usosDoProcedimento(item.nome, id);
+    if (motivos.length > 0) {
+      return res.status(409).json({
+        error: `"${item.nome}" já foi usado em ${motivos.join(', ')} e não pode ser excluído. Inative-o para tirá-lo do Orçamento e da Prescrição sem apagar o histórico.`,
+        code:  'PROCEDIMENTO_EM_USO',
+        usos:  motivos,
+      });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await registrarAuditoria(tx, req, {
+        categoria:  'EXCLUSAO',
+        entidade:   'PROCEDIMENTO',
+        entidadeId: id,
+        motivo,
+        detalhes:   `Procedimento "${item.nome}" excluído do catálogo da clínica (nunca usado)`,
+      });
+      await tx.procedimentoVeterinario.delete({ where: { id } });
+    });
+
+    return res.json({ mensagem: 'Procedimento excluído.' });
+  } catch (err) {
+    console.error('ProcedimentoCadastroController.excluirProprio:', err);
+    return res.status(500).json({ error: 'Erro ao excluir o procedimento.' });
+  }
+};
+
 module.exports = {
   criarProprio,
   atualizarProprio,
   toggleAtivoProprio,
+  excluirProprio,
   especialidadesMinhas,
   listarComValores,
   definirValor,

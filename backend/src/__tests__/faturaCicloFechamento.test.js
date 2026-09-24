@@ -90,9 +90,26 @@ function bancoFalso({ faturas = [], assistencia = null } = {}) {
   };
 }
 
+/** 'YYYY-MM' deslocado de `n` meses a partir de hoje (−1 = mês passado). */
+function mesRelativo(n) {
+  const d = new Date();
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() + n);
+  return d.toISOString().slice(0, 7);
+}
+const MES_ATUAL    = mesRelativo(0);
+const MES_PASSADO  = mesRelativo(-1);
+
+// 🔴 O mês da fixture é RELATIVO a hoje, não fixo: desde 2026-09-23 `abrirProximaFatura`
+// recusa abrir fatura de mês FUTURO, então um '2026-09' cravado faria a suíte inteira
+// mudar de resultado conforme o calendário andasse.
+// `statusAnterior: 'ABERTA'` é o caso normal — a REABERTA fechada de novo não abre
+// ciclo nenhum, e tem teste próprio abaixo.
 const fechada = (extra = {}) => ({
-  id: 10, proprietarioId: 7, empresaId: 42, mesReferencia: '2026-09', status: 'FECHADA', ...extra,
+  id: 10, proprietarioId: 7, empresaId: 42, mesReferencia: MES_PASSADO, status: 'FECHADA', ...extra,
 });
+const abrirSeguinte = (fat = fechada(), opts = {}) =>
+  abrirProximaFatura(fat, { statusAnterior: 'ABERTA', ...opts });
 
 // ─── o mês da fatura que nasce ───────────────────────────────────────────────
 
@@ -136,14 +153,27 @@ describe('statusAoReabrir — reabrir não devolve a fatura a ABERTA', () => {
   });
 });
 
-describe('a fatura REABERTA não é a fatura corrente', () => {
-  it('getOrCreateFatura ignora a REABERTA e abre uma nova ABERTA', async () => {
+describe('a fatura REABERTA de mês ANTERIOR não é a fatura corrente', () => {
+  it('getOrCreateFatura ignora a REABERTA de outro mês e abre uma nova ABERTA', async () => {
     const db = bancoFalso({ faturas: [fechada({ id: 5, status: 'REABERTA' })] });
     const f = await getOrCreateFatura(db, 7, 42);
     // Achou a reaberta e reaproveitou? O lançamento de hoje cairia num documento que
     // o cliente já recebeu uma vez.
     expect(f.id).not.toBe(5);
     expect(f.status).toBe('ABERTA');
+  });
+
+  // 🔴 A REABERTA **DO MÊS CORRENTE** É a fatura corrente (2026-09-23): ela só existe
+  // quando alguém fechou o mês antes do fim e reabriu, e não há outra daquele mês.
+  // Criar uma ABERTA ao lado dela partiria o mês em dois documentos — e é exatamente
+  // o par que a regra "uma ABERTA não convive com uma REABERTA do mesmo mês" proíbe.
+  it('getOrCreateFatura ADOTA a REABERTA do mês corrente em vez de criar outra', async () => {
+    const db = bancoFalso({
+      faturas: [fechada({ id: 5, status: 'REABERTA', mesReferencia: MES_ATUAL })],
+    });
+    const f = await getOrCreateFatura(db, 7, 42);
+    expect(f.id).toBe(5);
+    expect(db.estado.faturas).toHaveLength(1);
   });
 
   it('mas continua contando como "em aberto" para não duplicar o ciclo', () => {
@@ -156,18 +186,18 @@ describe('a fatura REABERTA não é a fatura corrente', () => {
 describe('abrirProximaFatura — fechar uma abre a seguinte, com os itens padrão', () => {
   it('cria a fatura do mês seguinte, ABERTA, na mesma empresa e cliente', async () => {
     const db = bancoFalso();
-    const nova = await abrirProximaFatura(fechada(), { db });
+    const nova = await abrirSeguinte(fechada(), { db });
 
     expect(nova).not.toBeNull();
     expect(nova.status).toBe('ABERTA');
-    expect(nova.mesReferencia).toBe('2026-10');
+    expect(nova.mesReferencia).toBe(MES_ATUAL);
     expect(nova.proprietarioId).toBe(7);
     expect(nova.empresaId).toBe(42);
   });
 
   it('a Assistência Veterinária Mensal já nasce dentro dela', async () => {
     const db = bancoFalso({ assistencia: 350 });
-    const nova = await abrirProximaFatura(fechada(), { db });
+    const nova = await abrirSeguinte(fechada(), { db });
 
     const assist = db.estado.itens.filter(i => i.faturaId === nova.id && i.tipo === 'ASSISTENCIA');
     expect(assist).toHaveLength(1);
@@ -179,17 +209,17 @@ describe('abrirProximaFatura — fechar uma abre a seguinte, com os itens padrã
 
   it('cliente que não é mensalista abre a fatura vazia, sem inventar cobrança', async () => {
     const db = bancoFalso({ assistencia: null });
-    const nova = await abrirProximaFatura(fechada(), { db });
+    const nova = await abrirSeguinte(fechada(), { db });
     expect(db.estado.itens.filter(i => i.faturaId === nova.id)).toHaveLength(0);
   });
 
   it.each(['ABERTA', 'REABERTA'])(
     'NÃO cria uma segunda quando o cliente já tem fatura %s nesta empresa', async (status) => {
       const db = bancoFalso({
-        faturas: [fechada({ id: 99, status, mesReferencia: '2026-10' })],
+        faturas: [fechada({ id: 99, status, mesReferencia: MES_ATUAL })],
         assistencia: 350,
       });
-      const nova = await abrirProximaFatura(fechada(), { db });
+      const nova = await abrirSeguinte(fechada(), { db });
 
       expect(nova).toBeNull();
       expect(db.estado.faturas).toHaveLength(1); // nada foi criado
@@ -197,30 +227,53 @@ describe('abrirProximaFatura — fechar uma abre a seguinte, com os itens padrã
 
   it('a fatura em aberto de OUTRA empresa não impede — o ciclo é por clínica', async () => {
     const db = bancoFalso({ faturas: [fechada({ id: 99, status: 'ABERTA', empresaId: 58 })] });
-    const nova = await abrirProximaFatura(fechada(), { db });
+    const nova = await abrirSeguinte(fechada(), { db });
     expect(nova).not.toBeNull();
     expect(nova.empresaId).toBe(42);
   });
 
   it('chamar duas vezes para o mesmo fechamento não duplica (idempotente)', async () => {
     const db = bancoFalso({ assistencia: 350 });
-    const um   = await abrirProximaFatura(fechada(), { db });
-    const dois = await abrirProximaFatura(fechada(), { db });
+    const um   = await abrirSeguinte(fechada(), { db });
+    const dois = await abrirSeguinte(fechada(), { db });
 
     expect(um).not.toBeNull();
     expect(dois).toBeNull();
     expect(db.estado.faturas.filter(f => f.status === 'ABERTA')).toHaveLength(1);
   });
 
+  // 🔴 REABERTA FECHADA DE NOVO NÃO ABRE CICLO (2026-09-23, a pedido). Ela é um
+  // documento ANTIGO destravado para correção; fechá-la é devolvê-la ao estado em que
+  // já estava. Abrir um ciclo ali criava uma fatura do mês seguinte a cada correção de
+  // linha de um mês já entregue — e o cliente terminava o ano com faturas vazias.
+  it('REABERTA fechada de novo NÃO abre a seguinte — só volta a FECHADA', async () => {
+    const db = bancoFalso({ assistencia: 350 });
+    const nova = await abrirProximaFatura(
+      fechada({ status: 'FECHADA' }), { db, statusAnterior: 'REABERTA' });
+    expect(nova).toBeNull();
+    expect(db.estado.faturas).toHaveLength(0);
+  });
+
+  // 🔴 NÃO SE ABRE FATURA DE MÊS FUTURO (2026-09-23, a pedido). Fechar a de setembro
+  // no dia 23 criava a de outubro com o mês ainda correndo: o seletor de mês oferecia
+  // outubro em setembro e toda cobrança do resto do mês caía lá dentro. Quando outubro
+  // chegar, o primeiro lançamento clínico cria a fatura sozinho.
+  it('fechar a fatura do mês CORRENTE não abre a do mês que vem', async () => {
+    const db = bancoFalso({ assistencia: 350 });
+    const nova = await abrirSeguinte(fechada({ mesReferencia: MES_ATUAL }), { db });
+    expect(nova).toBeNull();
+    expect(db.estado.faturas).toHaveLength(0);
+  });
+
   it('fatura LEGADA por animal (sem proprietário) não tem ciclo mensal a abrir', async () => {
     const db = bancoFalso();
-    expect(await abrirProximaFatura(fechada({ proprietarioId: null }), { db })).toBeNull();
+    expect(await abrirSeguinte(fechada({ proprietarioId: null }), { db })).toBeNull();
     expect(db.estado.faturas).toHaveLength(0);
   });
 
   it('sem empresa não se cria fatura — ela nasceria sem tenant', async () => {
     const db = bancoFalso();
-    expect(await abrirProximaFatura(fechada({ empresaId: null }), { db })).toBeNull();
+    expect(await abrirSeguinte(fechada({ empresaId: null }), { db })).toBeNull();
     expect(db.estado.faturas).toHaveLength(0);
   });
 });
@@ -272,7 +325,7 @@ describe('todo caminho de fechamento abre a fatura seguinte', () => {
     expect(ini).toBeGreaterThan(-1);
     const corpo = server.slice(ini, server.indexOf('registrarJob(', ini));
     // `tx`, não o prisma global: fora dele o RLS recusa a criação em silêncio.
-    expect(corpo.includes('abrirProximaFatura(fatura, { db: tx })')).toBe(true);
+    expect(corpo.includes("abrirProximaFatura(fatura, { db: tx, statusAnterior: 'ABERTA' })")).toBe(true);
   });
 });
 

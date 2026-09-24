@@ -159,9 +159,14 @@ describe('gate: o SQL de fechar/reabrir o bloco do paciente', () => {
   });
 
   it('a guarda de coluna usa o client GLOBAL, nunca o `tx` (SQL cru inválido aborta a transaction inteira)', () => {
+    // As DUAS guardas — a do fechamento e a do pagamento (migrations distintas, base
+    // pode ter uma e não a outra). Basta uma delas perguntar pelo `tx` para o SQL cru
+    // contra coluna inexistente abortar a transaction inteira e o erro aparecer no
+    // comando seguinte, longe do culpado.
     const trecho = lib.slice(lib.indexOf('async function temColunas'), lib.indexOf('async function fechadosDaFatura'));
     expect(trecho).toMatch(/prismaGlobal\(\)\.\$queryRawUnsafe/);
     expect(trecho).not.toMatch(/clienteOu\(/);
+    expect(trecho).toMatch(/async function temColunasPagamento/);
   });
 
   it('não importa `lib/prisma` no topo (é TypeScript: derrubaria a carga do módulo no jest)', () => {
@@ -202,8 +207,15 @@ describe('gate: quem pode fechar o bloco, e quando', () => {
   });
 
   it('🔴 marcar, recalcular e auditar acontecem na MESMA transaction', () => {
+    // As quatro ações do bloco (fechar/reabrir/pagar/estornar) saem de UM mapa
+    // `EXECUTAR[acao]`, chamado DENTRO da transaction — é ele que garante que nenhuma
+    // delas escape do "ou muda com a auditoria junto, ou nada acontece".
+    const mapa = trecho.slice(trecho.indexOf('const EXECUTAR'), trecho.indexOf('prisma.$transaction'));
+    for (const fn of ['fecharAnimal', 'reabrirAnimal', 'pagarAnimal', 'desfazerPagamentoAnimal']) {
+      expect(mapa).toMatch(new RegExp(`fechamentoAnimal\\.${fn}\\(tx`));
+    }
     const tx = trecho.slice(trecho.indexOf('prisma.$transaction'));
-    expect(tx).toMatch(/fechamentoAnimal\.(fecharAnimal|reabrirAnimal)\(tx/);
+    expect(tx).toMatch(/EXECUTAR\[acao\]\(tx\)/);
     expect(tx).toMatch(/recalcularTotalCompartilhado\(tx, faturaId\)/);
     expect(tx).toMatch(/registrarAuditoria\(tx, req/);
   });
@@ -287,7 +299,10 @@ describe('gate: migration e tela', () => {
 
   it('🔴 a folha impressa mostra o bloco fechado FORA do total (o cliente precisa conferir)', () => {
     const exportacao = semComentarios(ler('../../frontend/src/utils/FaturaExport.ts'));
-    expect(exportacao).toMatch(/const totalFechado\s*=\s*fatura\.itens\.filter\(i => !!i\.fechadoEm\)/);
+    // `&& !i.pagoEm` não é detalhe: o "fechado à parte" impresso é o que o cliente
+    // AINDA deve acertar. Somar ali o que ele já pagou é cobrar duas vezes, no papel.
+    expect(exportacao).toMatch(/const totalFechado\s*=\s*fatura\.itens\.filter\(i => !!i\.fechadoEm && !i\.pagoEm\)/);
     expect(exportacao).toMatch(/Fechado à parte/);
+    expect(exportacao).toMatch(/Já pago/);
   });
 });

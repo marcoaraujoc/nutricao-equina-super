@@ -15,7 +15,7 @@ const { buildAnimalScopeWhere } = require('../lib/animalScope');
 const { proprietarioAtivoNaEmpresa } = require('../lib/visibilidade');
 const { registrarAuditoria } = require('../lib/auditoria');
 const { salvarMotivoOrcamento, salvarMotivoItem, faltaMotivoDeRecusa } = require("../lib/orcamentoRecusa");
-const { recalcularTotal, normalizarDesconto, descontoDoItem } = require('../lib/faturaUtils');
+const { recalcularTotal, normalizarDesconto, descontoDoItem, faturaEditavel } = require('../lib/faturaUtils');
 const {
   garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa, normalizarEspecies,
 } = require('../lib/catalogoManual');
@@ -645,8 +645,14 @@ const OrcamentoController = {
       if (fatura.status === 'PAGA') {
         return res.status(400).json({ error: 'Fatura já paga não pode receber novos itens.', code: 'FATURA_PAGA' });
       }
-      if (fatura.status === 'CANCELADA') {
-        return res.status(400).json({ error: 'Fatura cancelada não pode receber novos itens.' });
+      // 🔴 Só fatura EM ABERTO recebe lançamento (2026-09-23) — a mesma regra de
+      // `FaturaController.adicionarItem`. Antes FECHADA/ATRASADA passavam por aqui e o
+      // item entrava num documento que o cliente já tinha recebido.
+      if (!faturaEditavel(fatura.status)) {
+        return res.status(400).json({
+          error: `Fatura ${String(fatura.status).toLowerCase()} não recebe novos itens. Reabra-a para lançar.`,
+          code:  'FATURA_NAO_EDITAVEL',
+        });
       }
 
       const itens = await prisma.orcamentoItem.findMany({

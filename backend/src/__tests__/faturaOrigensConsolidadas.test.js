@@ -429,10 +429,16 @@ describe('GATE ESTRUTURAL — os elos que somem em silêncio', () => {
     expect(fn).toContain('itemOrigens.reapontarOrigemPrincipal');
   });
 
-  it('os três "já foi faturado?" passam por `origemJaFaturada`', () => {
+  it('TODO "já foi faturado?" da vacina passa por `origemJaFaturada`', () => {
+    // 🔴 São QUATRO desde 2026-09-23: `registrar`, `finalizar`, `executar` e o
+    // `atualizar` — que passou a poder mover uma vacina FINALIZADA para o quadrante
+    // "clínica fornece × proprietário aplica", onde a cobrança acontece na hora.
+    // ⚠️ O número é o que impede um ponto novo nascer com a FK crua: a linha da fatura
+    // é COMPARTILHADA e a FK guarda só a PRIMEIRA vacina que caiu nela, então pela FK
+    // a segunda pareceria nunca cobrada e seria cobrada de novo.
     const vac = semComentarios(ler('controllers/VacinaClinicaController.js'));
-    expect(vac.match(/origemJaFaturada\(/g) ?? []).toHaveLength(3);
-    // O padrão antigo (FK crua) não pode voltar em nenhum dos três.
+    expect(vac.match(/origemJaFaturada\(/g) ?? []).toHaveLength(4);
+    // O padrão antigo (FK crua) não pode voltar em nenhum deles.
     expect(vac).not.toMatch(/faturaItem\.findFirst\(\{\s*\n?\s*where: \{ vacinaClinicaId/);
   });
 

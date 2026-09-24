@@ -27,7 +27,13 @@ const forma      = require('../lib/formaCalculo');
 const { qtdDoEstoque, entregaPorEmbalagem, embalagensDaExecucao } = Prescricao;
 const leia = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 const leiaFront = (rel) =>
-  fs.readFileSync(path.join(__dirname, '..', '..', '..', 'frontend', 'src', rel), 'utf8');
+  // A NORMALIZACAO DE FIM DE LINHA NAO E COSMETICA: no Windows o working tree
+  // fica em CRLF (`core.autocrlf=true`), e os recortes daqui procuram quebra + '}'
+  // + quebra em LF. Sem normalizar, o `indexOf` devolve -1, o gate passa a comparar
+  // um PEDACO de duas letras e reprova sozinho — deixando de dizer qualquer coisa
+  // sobre a regra que ele protege.
+  fs.readFileSync(path.join(__dirname, '..', '..', '..', 'frontend', 'src', rel), 'utf8')
+    .replace(/\r\n/g, '\n');
 // Comentários explicam a regra CITANDO as mesmas palavras; um gate que se satisfaz
 // com a própria documentação é um gate que se aprende a ignorar.
 const semComentarios = (src) =>
@@ -553,11 +559,31 @@ describe('ordem da lista de produtos', () => {
     // Ordenar só a página recebida deixaria o item da clínica FORA dela: a consulta
     // CORTA sobre um catálogo global de milhares de linhas.
     // ⚠️ O que se trava aqui é a EXISTÊNCIA do corte, não o número: ele subiu de
-    // 60/100 para 300 em 2026-09-22 (a lista precisava ser rolável até o fim do
-    // catálogo da clínica) e vai subir de novo. Fixar o literal transformava um
-    // ajuste de teto num teste vermelho sem defeito nenhum por trás.
-    expect(prod).toMatch(/take: LIMITE/);
-    expect(prod).toMatch(/const LIMITE = \d+/);
+    // 60/100 para 300 em 2026-09-22 e virou `porPagina` em 2026-09-23, quando a lista
+    // ganhou PAGINAÇÃO. Fixar o literal transformava um ajuste de teto num teste
+    // vermelho sem defeito nenhum por trás.
+    expect(prod).toMatch(/take: porPagina/);
+    expect(prod).toMatch(/POR_PAGINA_MAXIMO = \d+/);
+  });
+
+  // 🔴 O corte sozinho era um BECO: o que passasse dele não tinha caminho de tela
+  // nenhum, e o único recurso oferecido era "refine a busca". A paginação é o que dá
+  // para onde ir — sem `skip`, virar a página traria sempre a MESMA lista.
+  test('a lista é PAGINADA — o corte tem para onde ir', () => {
+    const prod = semComentarios(leia('controllers/ProdutoController.js'));
+    expect(prod).toMatch(/skip: \(pagina - 1\) \* porPagina/);
+    // A página vai clampada contra o total NO BACKEND: inativar o último item da
+    // última página deixaria a tela pedindo uma página que não existe mais e
+    // recebendo lista vazia — sem erro e sem explicação.
+    expect(prod).toMatch(/Math\.min\(Math\.max\(paraInteiro\(req\.query\.pagina, 1\), 1\), totalPaginas\)/);
+    // E a tela precisa saber quantas páginas existem para desenhar o paginador.
+    expect(prod).toMatch(/totalPaginas,/);
+
+    const tela = leiaFront('pages/Produtos.tsx');
+    expect(tela).toMatch(/porPagina: POR_PAGINA/);
+    // Trocar de tipo/busca/filtro VOLTA para a primeira página — sem isso, buscar
+    // estando na página 4 devolve lista vazia e parece "não encontrou nada".
+    expect(tela).toMatch(/setPagina\(1\); \}, \[tipo, busca, filtroAtivo\]/);
   });
 });
 
@@ -640,19 +666,26 @@ describe('receita em conteudo contra estoque em embalagens', () => {
     // dose. Sem esta perna, um item legado ja executado cai na conta com "nada
     // consumido" e volta a debitar/cobrar uma embalagem A CADA execucao.
     expect(fn.slice(0, 3200)).toMatch(/if \(item\.executadoEm && doses === 0\) \{ jaEntregues\.add\(item\.id\); continue; \}/);
-    expect(fn).toMatch(/return \{ precos, unidades, jaEntregues, porEmbalagem, entregas \};/);
+    expect(fn).toMatch(/return \{ precos, unidades, jaEntregues, porEmbalagem, entregas, unidadesFaturadas \};/);
     // E o `executar` PRECISA usar os conjuntos: recebe-los e ignora-los e o modo
     // silencioso de a regra deixar de existir.
-    expect(controller).toMatch(/const \{ precos, jaEntregues, porEmbalagem, entregas \} = await debitarEstoqueDia\(/);
+    expect(controller).toMatch(/const \{ precos, jaEntregues, porEmbalagem, entregas, unidadesFaturadas \} =/);
+    expect(controller).toMatch(/await debitarEstoqueDia\(tx, itensHoje, empresaIdEfetivo, grupoId, resolverQtdExecucao\)/);
     expect(controller).toMatch(/const entregaJaFeita = jaEntregues\.has\(item\.id\);/);
     expect(controller).toMatch(/if \(!item\.medicamentoCliente && !entregaJaFeita\)/);
     // 🔴 A QUANTIDADE E A DE EMBALAGENS ABERTAS NESTA EXECUCAO, nunca 1 fixo: uma dose
     // maior que o frasco abre varias de uma vez, e `1` cobraria (e compraria) uma so.
     expect(controller).toMatch(/const embalagensEntregues = porEmbalagem\.has\(item\.id\) \? \(entregas\.get\(item\.id\) \?\? 1\) : 1;/);
-    expect(controller).toMatch(/quantidade:   embalagensEntregues,/);
+    // 🔴 A quantidade da LINHA passou por `qtdFaturada` (2026-09-23): embalagem quando
+    // ha entrega por embalagem, UNIDADES quando o produto e contado em 'Un.', e 1 (uma
+    // dose) no multidose. Era o "1" fixo do caso do meio que fazia a fatura mostrar
+    // "Qtd. 1 · R$ 200,00" para duas ampolas de R$ 100,00.
+    expect(controller).toMatch(/const qtdFaturada = porEmbalagem\.has\(item\.id\)/);
+    expect(controller).toMatch(/: \(unidadesFaturadas\.get\(item\.id\) \?\? 1\);/);
+    expect(controller).toMatch(/quantidade:   qtdFaturada,/);
     // ⚠️ E o valor da linha precisa ser o UNITARIO: com a quantidade acima e o TOTAL no
     // `valor`, a fatura multiplicaria de novo o que ja saiu multiplicado.
-    expect(controller).toMatch(/valor:        valorDaDose \/ embalagensEntregues,/);
+    expect(controller).toMatch(/valor:        valorDaDose \/ qtdFaturada,/);
     expect(controller).toMatch(/item\.medicamentoCatId && !entregaJaFeita\)/);
   });
 
@@ -804,37 +837,16 @@ describe('nome do medicamento/procedimento no histórico de prescrições', () =
   });
 });
 
-// ─── 10. O CADASTRO SEM CONTEÚDO DEIXOU DE FALHAR EM SILÊNCIO (2026-09-22) ────
+// ─── 10. O AVISO DO CADASTRO SEM CONTEÚDO FOI REMOVIDO (2026-09-23) ───────
 //
-// 🔴 Medido na base nesta data: **8.277 itens de catálogo, ZERO** sem multidose com
-// `doses_por_embalagem` preenchido. A regra das N embalagens estava inteira, testada e
-// DORMENTE — todo curso era debitado e faturado como uma embalagem, que é exatamente o
-// defeito relatado. O código estava certo; o dado é que não existia, e nada na tela
-// pedia por ele.
+// A seção 10 exigia, na tela de Prescrição, o predicado `faltaConteudoDaEmbalagem` e o
+// aviso âmbar "o cadastro deste produto não informa quanto cabe na embalagem". Os dois
+// saíram A PEDIDO, por decisão de tela — não por defeito.
 //
-// ⚠️ O aviso é o NEGATIVO de `embalagensDoCurso` e usa as MESMAS guardas: os dois nunca
-// aparecem juntos. Relaxar uma delas faria o aviso surgir no multidose (cobrança
-// proporcional, sem embalagem inteira a contar) ou na receita já escrita em "2 Un.".
-describe('produto sem conteúdo declarado avisa em vez de cobrar 1 em silêncio', () => {
-  const presc = semComentarios(leiaFront('pages/SubModuloPrescricao.tsx'));
-
-  test('o predicado existe e recusa multidose, unidade avulsa e dose vazia', () => {
-    const fn = presc.slice(presc.indexOf('function faltaConteudoDaEmbalagem('));
-    expect(fn).toBeTruthy();
-    const corpo = fn.slice(0, fn.indexOf('\n}\n') + 3);
-    expect(corpo).toMatch(/if \(args\.produto\.multidose === true\) return false;/);
-    expect(corpo).toMatch(/if \(conteudoDaEmbalagemProduto\(args\.produto\) != null\) return false;/);
-    expect(corpo).toMatch(/un === 'un\.' \|\| un === 'un' \|\| un === 'unidade'/);
-  });
-
-  test('a tela avisa, e o aviso aponta o campo que resolve', () => {
-    expect(presc).toMatch(/\{semConteudoDeclarado && \(/);
-    expect(presc).toMatch(/Conteúdo da embalagem/);
-    // ⚠️ AVISO, nunca bloqueio: prescrever não pode depender de arrumar o cadastro.
-    expect(presc).not.toMatch(/semConteudoDeclarado[\s\S]{0,80}disabled/);
-  });
-
-  test('o campo que o aviso manda preencher existe no cadastro do produto', () => {
-    expect(leiaFront('components/produtos/FormProduto.tsx')).toMatch(/Conteúdo da embalagem/);
-  });
-});
+// ⚠️ O QUE ESTE ARQUIVO CONTINUA TRAVANDO é o CÁLCULO, que não mudou: `embalagensPara`
+// devolve 1 quando o conteúdo é nulo, e a regra das N embalagens segue valendo para o
+// produto que declara conteúdo (seções anteriores). O aviso era só a NARRAÇÃO disso na
+// tela; travar a narração aqui faria o gate reprovar uma remoção que o usuário pediu.
+//
+// NÃO recriar estes testes sem que o aviso volte a ser pedido — e, se voltar, ele nasce
+// como AVISO, nunca bloqueio (prescrever não pode depender de arrumar o cadastro).

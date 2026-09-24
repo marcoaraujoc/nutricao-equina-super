@@ -50,12 +50,36 @@ const SELECT_ITEM = {
   vias: { select: { id: true, via: true }, orderBy: { via: 'asc' } },
 };
 
+// ─── Paginação da listagem ───────────────────────────────────────────────────
+// O TETO por página não é cosmético: o catálogo GLOBAL tem milhares de linhas e
+// baixá-lo inteiro a cada abertura é uma tela que demora a aparecer.
+const POR_PAGINA_PADRAO = 20;
+const POR_PAGINA_MAXIMO = 100;
+
+const paraInteiro = (valor, padrao) => {
+  const n = Number.parseInt(String(valor ?? ''), 10);
+  return Number.isFinite(n) ? n : padrao;
+};
+
+const limitarPorPagina = (valor) =>
+  Math.min(Math.max(paraInteiro(valor, POR_PAGINA_PADRAO), 1), POR_PAGINA_MAXIMO);
+
 /**
- * GET /api/cadastro/produtos?tipo=medicamento|vacina&busca=&ativo=
+ * GET /api/cadastro/produtos?tipo=medicamento|vacina&busca=&ativo=&pagina=&porPagina=
  *
  * 🔴 A BUSCA TRAZ OS ITENS JÁ CADASTRADOS (a pedido, 2026-09-15) — medicamentos e
  * vacinas do catálogo visível da clínica. Achado um, a tela CARREGA os dados dele
  * para alteração; a alteração pertence só a esta empresa (copy-on-write).
+ *
+ * 🔴 PAGINADA (2026-09-23, a pedido). Antes a lista tinha só um TETO: o que passasse
+ * dele era inalcançável por qualquer caminho de tela, e o único recurso oferecido era
+ * "refine a busca" — o que não ajuda quem quer justamente PERCORRER o catálogo.
+ * ⚠️ O teto continua existindo, agora como `porPagina` MÁXIMO: o catálogo GLOBAL tem
+ * milhares de linhas e baixá-lo inteiro a cada abertura é uma tela que demora a
+ * aparecer. O que mudou é que o resto passou a ter para onde ir.
+ * ⚠️ `pagina` é CLAMPADA contra o total aqui, e não só na tela: apagar/inativar o
+ * último item da última página deixaria a tela pedindo uma página que não existe
+ * mais e recebendo lista vazia — sem erro e sem explicação.
  */
 const listar = async (req, res) => {
   try {
@@ -82,26 +106,25 @@ const listar = async (req, res) => {
     // não-nulo (a empresa) vem primeiro e o global (`empresa_id IS NULL`) por último.
     // Mesma precedência de `ordemEmpresaPrimeiro` e de `garantirMedicamentoDaEmpresa`.
     //
-    // ⚠️ A ordenação é do BANCO, não da página recebida: o `take` abaixo corta em 60/100
-    // sobre um catálogo global de milhares de linhas. Ordenando só o que chegou, o item
-    // da clínica nem entraria na lista quando o nome fosse alfabeticamente tarde — e o
-    // defeito apareceria já na primeira tela, sem erro nenhum.
-    // 🔴 O TETO ERA BAIXO DEMAIS PARA A LISTA SER ROLÁVEL (2026-09-22): com 60
-    // linhas, a clínica com catálogo grande via "um pouco" e não havia como chegar ao
-    // resto — não existe paginação nesta tela, então o corte era o fim da lista.
-    // ⚠️ O teto CONTINUA existindo, e não é cosmético: o catálogo GLOBAL tem milhares
-    // de linhas e baixá-lo inteiro a cada abertura é uma tela que demora a aparecer.
-    // O que se faz agora é (a) subir o corte para uma altura que cobre o catálogo de
-    // uma clínica real e (b) DIZER quando ele cortou — `total` abaixo —, para a tela
-    // pedir que a busca seja refinada em vez de mentir que acabou.
-    const LIMITE = 300;
-    const [itens, total] = await Promise.all([
-      prisma.medicamento.findMany({
-        where, select: SELECT_ITEM, orderBy: [{ empresaId: 'asc' }, { nome: 'asc' }],
-        take: LIMITE,
-      }),
-      prisma.medicamento.count({ where }),
-    ]);
+    // ⚠️ A ordenação é do BANCO, não da página recebida: o `skip`/`take` abaixo recorta
+    // um catálogo global de milhares de linhas. Ordenando só o que chegou, o item da
+    // clínica nem entraria na primeira página quando o nome fosse alfabeticamente
+    // tarde — e o defeito apareceria já na abertura, sem erro nenhum.
+    // ⚠️ O `count` vem ANTES do `findMany` de propósito: é ele que diz quantas
+    // páginas existem, e sem isso não dá para clampar a página pedida. Duas idas ao
+    // banco em vez de uma em paralelo — o custo é irrelevante perto de devolver uma
+    // página vazia para quem só apagou o último item da última.
+    const total = await prisma.medicamento.count({ where });
+
+    const porPagina   = limitarPorPagina(req.query.porPagina);
+    const totalPaginas = Math.max(1, Math.ceil(total / porPagina));
+    const pagina      = Math.min(Math.max(paraInteiro(req.query.pagina, 1), 1), totalPaginas);
+
+    const itens = await prisma.medicamento.findMany({
+      where, select: SELECT_ITEM, orderBy: [{ empresaId: 'asc' }, { nome: 'asc' }],
+      skip: (pagina - 1) * porPagina,
+      take: porPagina,
+    });
 
     // Multidose vem por SQL cru (coluna nova — §11) e EM BLOCO, nunca um por item.
     const multi = await catalogoEmpresa.multidosePorItem(prisma, itens.map(i => i.id));
@@ -117,10 +140,14 @@ const listar = async (req, res) => {
         dosesPorEmbalagem: multi.get(i.id)?.dosesPorEmbalagem ?? null,
         formaCalculo:      multi.get(i.id)?.formaCalculo ?? null,
       })),
-      // `total` é o que a tela usa para avisar que a lista foi cortada. Sem ele, o
-      // corte é indistinguível do fim do catálogo.
+      // `total` é o CATÁLOGO INTEIRO (não a página); os três abaixo são o que a tela
+      // usa para desenhar o paginador e dizer "Mostrando X-Y de N".
       total,
-      limite: LIMITE,
+      pagina,
+      porPagina,
+      totalPaginas,
+      // Mantido por compatibilidade com o contrato anterior desta rota.
+      limite: porPagina,
       recursos: { disponivel: true, multidose: await catalogoEmpresa.temColunasMultidose(prisma) },
     });
   } catch (err) {

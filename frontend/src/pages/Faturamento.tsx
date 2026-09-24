@@ -16,6 +16,7 @@ import {
   Pencil, Check, X, RefreshCw, Receipt,
   CheckCircle2, Download, Printer, ChevronDown, ChevronRight, MessageCircle, Mail,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { imprimirFatura, exportarFaturaCSV, gerarHtmlFatura } from '../utils/FaturaExport';
 import { BTN_ACAO, TOM_ACAO } from '../utils/tomAcao';
 import type { DadosRecebimento } from '../utils/FaturaExport';
@@ -27,7 +28,7 @@ import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/comp
 // Como o CLIENTE escolheu receber a fatura (cadastro do proprietário) — é o que decide
 // quais destes botões ficam habilitados para ele. Ver utils/formasRecebimentoFatura.ts.
 import {
-  formaLiberada, motivoFormaBloqueada, resumoFormas,
+  formaLiberada, motivoFormaBloqueada,
   type FormaRecebimentoFatura,
 } from '../utils/formasRecebimentoFatura';
 import { ordenarComInsumos } from '../utils/faturaInsumos';
@@ -106,6 +107,11 @@ interface FaturaItem {
    *  com o bloco do paciente dela e NÃO entra mais no total da fatura. `null` = aberta,
    *  o estado de sempre. Quem marca é `PATCH /clinica/faturas/:id/animais/:animalId/fechar`. */
   fechadoEm?: string | null;
+  /** 🔴 PAGAMENTO POR ANIMAL (2026-09-23): preenchido = o bloco deste paciente já foi
+   *  ACERTADO. A linha continua na fatura (o cliente precisa ver o que pagou), fora do
+   *  total e fora do "fechado à parte" — que é o que ele AINDA deve.
+   *  Quem marca é `PATCH /clinica/faturas/:id/animais/:animalId/pagar`. */
+  pagoEm?: string | null;
 }
 
 interface Fatura {
@@ -332,6 +338,23 @@ function montarTextoFatura(fatura: Fatura, prop: ProprietarioItem): string {
     fatura.mesReferencia ? `Mês: ${formatMes(fatura.mesReferencia)}` : '',
     `Ref: INV-${String(fatura.id).padStart(3, '0')}`,
     `Total: ${formatBRL(fatura.total)}`,
+  ].filter(Boolean).join('\n');
+}
+
+/**
+ * Texto que acompanha o PDF do BLOCO DE UM PACIENTE (2026-09-23).
+ *
+ * ⚠️ Diz o nome do paciente e o valor DAQUELE bloco, nunca o total da fatura: o
+ * cliente que recebe "Fatura — Fulano · R$ 4.300" para acertar um cavalo de R$ 900
+ * não tem como saber que só aquela parte está sendo cobrada.
+ */
+function montarTextoFaturaAnimal(fatura: Fatura, prop: ProprietarioItem, nomeAnimal: string, total: number): string {
+  return [
+    `*Fatura — ${prop.fullName}*`,
+    `Paciente: ${nomeAnimal}`,
+    fatura.mesReferencia ? `Mês: ${formatMes(fatura.mesReferencia)}` : '',
+    `Ref: INV-${String(fatura.id).padStart(3, '0')}`,
+    `Total do paciente: ${formatBRL(total)}`,
   ].filter(Boolean).join('\n');
 }
 
@@ -1106,22 +1129,68 @@ type MesFatura = { id: number; mesReferencia?: string; status: string };
  * pacientes desta clínica e os "de outro atendimento deste cliente". Duas cópias
  * divergiriam na primeira correção — e o que divergiria é quanto a fatura cobra.
  *
+ * 🔴 O BLOCO DO PACIENTE TEM AS MESMAS AÇÕES DA FATURA INTEIRA (2026-09-23): fechar,
+ * marcar como pago, e-mail, WhatsApp, imprimir e exportar. O bloco é uma cobrança
+ * completa — foi para isso que o fechamento por paciente existe —, e ter só o botão de
+ * fechar obrigava a mandar a fatura do cliente INTEIRA para acertar um cavalo só.
+ * ⚠️ E-mail/WhatsApp/Imprimir seguem as FORMAS DE RECEBIMENTO do cliente, igual à
+ * barra da fatura: o canal não escolhido fica cinza com o motivo no `title` (§6).
+ * Exportar CSV nunca é bloqueado — baixa arquivo para a clínica, não entrega nada.
+ *
  * ⚠️ `visivel={false}` não existe aqui: a ação simplesmente NÃO é renderizada sem
  * permissão ou sem nada a fechar (28-d — ação sem permissão não vira botão cinza).
  * ⚠️ Fica FORA de `PainelFatura` de propósito: declarado lá dentro, seria um tipo de
  * componente NOVO a cada render e o React remontaria o botão a cada tecla digitada.
  */
-function ResumoDoBloco({
-  animalId, nome, subtotal, subtotalFechado, abertos, fechados,
-  podeFechar, faturaEditavel, ocupado, onAlterar,
+/** Botão da barra do paciente — mesma forma para as seis ações. */
+function AcaoBloco({
+  tom, icone: Icone, rotulo, onClick, titulo, carregando = false, desabilitado = false,
 }: {
-  animalId: number; nome: string;
-  subtotal: number; subtotalFechado: number;
-  abertos: number; fechados: number;
-  podeFechar: boolean; faturaEditavel: boolean; ocupado: boolean;
-  onAlterar: (animalId: number, fechar: boolean, nome: string) => void;
+  tom: keyof typeof TOM_ACAO; icone: LucideIcon; rotulo: string;
+  onClick: () => void; titulo?: string; carregando?: boolean; desabilitado?: boolean;
 }) {
-  const podeAgir = podeFechar && faturaEditavel;
+  return (
+    <button onClick={onClick} disabled={carregando || desabilitado} title={titulo || rotulo}
+      className={`${BTN_ACAO} ${TOM_ACAO[tom]} !px-2 !py-1 !text-[11px] disabled:opacity-50 disabled:cursor-not-allowed`}>
+      {carregando ? <Loader2 size={11} className="animate-spin"/> : <Icone size={12}/>} {rotulo}
+    </button>
+  );
+}
+
+export type AcaoAnimal = 'fechar' | 'reabrir' | 'pagar' | 'estornar';
+
+/**
+ * 🔴 A BARRA DO PACIENTE FICA NA PRÓPRIA LINHA, COMO A DA FATURA (2026-09-23, a
+ * pedido: "no mobile e no tablet, coloque os botões da mesma forma que fechar a
+ * fatura total").
+ *
+ * Ela morava DENTRO do bloco do subtotal, à direita do nome do cavalo — numa coluna
+ * que divide a largura com a foto, o nome e a espécie. No celular e no tablet as seis
+ * ações com rótulo espremiam tudo: o nome do paciente quebrava em três linhas e os
+ * botões viravam uma pilha estreita. A barra da FATURA sempre foi uma faixa inteira
+ * (`justify-end`, `flex-wrap`) logo abaixo do cabeçalho; esta passa a ser igual.
+ *
+ * ⚠️ Vale em TODAS as larguras, não só abaixo de `lg`: "da mesma forma que fechar a
+ * fatura total" é uma faixa própria, e mantê-la ancorada à direita do nome no desktop
+ * deixaria duas gramáticas para a mesma barra — a divergência que a §6 fecha com o
+ * `AcaoRegistro`.
+ */
+interface PropsDoBloco {
+  animalId: number; nome: string;
+  subtotal: number; subtotalFechado: number; subtotalPago: number;
+  abertos: number; fechados: number; pagos: number; naoPagos: number;
+  podeFechar: boolean; podePagar: boolean; isGestor: boolean;
+  faturaEditavel: boolean; ocupado: boolean; envio: 'email' | 'whatsapp' | null;
+  onAlterar: (animalId: number, acao: AcaoAnimal, nome: string) => void;
+  bloqueioEmail: string | null; bloqueioWhatsApp: string | null; bloqueioImpresso: string | null;
+  onEmail: (animalId: number, nome: string) => void;
+  onWhatsApp: (animalId: number, nome: string) => void;
+  onImprimir: (animalId: number, nome: string) => void;
+  onExportar: (animalId: number, nome: string) => void;
+}
+
+/** O subtotal do bloco — fica ao lado do nome do paciente, no cabeçalho do cartão. */
+function ResumoDoBloco({ subtotal, subtotalFechado, subtotalPago }: PropsDoBloco) {
   return (
     <div className="text-right flex-shrink-0">
       <p className="text-[9px] text-gray-400 uppercase tracking-wide">Subtotal</p>
@@ -1131,24 +1200,69 @@ function ResumoDoBloco({
           + {formatBRL(subtotalFechado)} fechado à parte
         </p>
       )}
-      {podeAgir && (abertos > 0 || fechados > 0) && (
-        <div className="mt-1.5 flex flex-col items-end gap-1">
-          {abertos > 0 && (
-            <button onClick={() => onAlterar(animalId, true, nome)} disabled={ocupado}
-              title="Fecha a cobrança deste paciente e tira o valor dele do total da fatura"
-              className={`${BTN_ACAO} ${TOM_ACAO.finalizar} !px-2 !py-1 !text-[11px]`}>
-              {ocupado ? <Loader2 size={11} className="animate-spin"/> : <Check size={12}/>} Fechar paciente
-            </button>
-          )}
-          {fechados > 0 && (
-            <button onClick={() => onAlterar(animalId, false, nome)} disabled={ocupado}
-              title="Devolve os lançamentos fechados deste paciente ao total da fatura"
-              className={`${BTN_ACAO} ${TOM_ACAO.alterar} !px-2 !py-1 !text-[11px]`}>
-              {ocupado ? <Loader2 size={11} className="animate-spin"/> : <RefreshCw size={11}/>} Reabrir paciente
-            </button>
-          )}
-        </div>
+      {subtotalPago > 0 && (
+        <p className="text-[10px] font-semibold text-emerald-700 mt-0.5 whitespace-nowrap">
+          {formatBRL(subtotalPago)} já pago
+        </p>
       )}
+    </div>
+  );
+}
+
+/** A faixa de ações do bloco do paciente — ver o porquê acima de `ResumoDoBloco`. */
+function AcoesDoBloco({ separador = 'border-gray-200/70', ...props }: PropsDoBloco & { separador?: string }) {
+  const {
+    animalId, nome, abertos, fechados, pagos, naoPagos,
+    podeFechar, podePagar, isGestor, faturaEditavel, ocupado, envio, onAlterar,
+    bloqueioEmail, bloqueioWhatsApp, bloqueioImpresso,
+    onEmail, onWhatsApp, onImprimir, onExportar,
+  } = props;
+  const podeFecharAgir = podeFechar && faturaEditavel;
+  const podePagarAgir  = podePagar  && faturaEditavel;
+  const temLancamento  = abertos > 0 || fechados > 0 || pagos > 0;
+  if (!temLancamento) return null;
+
+  return (
+    <div className={`mt-2.5 pt-2.5 border-t ${separador} flex flex-wrap items-center justify-end gap-1.5`}>
+      {podeFecharAgir && abertos > 0 && (
+        <AcaoBloco tom="finalizar" icone={Check} rotulo="Fechar paciente" carregando={ocupado}
+          titulo="Fecha a cobrança deste paciente e tira o valor dele do total da fatura"
+          onClick={() => onAlterar(animalId, 'fechar', nome)} />
+      )}
+      {podeFecharAgir && fechados > 0 && (
+        <AcaoBloco tom="alterar" icone={RefreshCw} rotulo="Reabrir paciente" carregando={ocupado}
+          titulo="Devolve os lançamentos fechados deste paciente ao total da fatura"
+          onClick={() => onAlterar(animalId, 'reabrir', nome)} />
+      )}
+      {/* Dar baixa fecha o que ainda estiver aberto — por isso aparece com QUALQUER
+          lançamento a receber, não só depois de fechar. */}
+      {podePagarAgir && naoPagos > 0 && (
+        <AcaoBloco tom="finalizar" icone={CheckCircle2} rotulo="Marcar como Pago" carregando={ocupado}
+          titulo="Registra o acerto deste paciente: fecha o que estiver aberto e tira o valor de contas a receber"
+          onClick={() => onAlterar(animalId, 'pagar', nome)} />
+      )}
+      {/* Estornar é ato de GESTOR (o backend recusa os demais) — e é por isso que
+          ele nem aparece para quem não é: botão que só falha no clique é 28-d. */}
+      {podePagarAgir && pagos > 0 && isGestor && (
+        <AcaoBloco tom="alterar" icone={RefreshCw} rotulo="Estornar pagamento" carregando={ocupado}
+          titulo="Desfaz a baixa: os lançamentos deste paciente voltam a ser devidos"
+          onClick={() => onAlterar(animalId, 'estornar', nome)} />
+      )}
+      <AcaoBloco tom="email" icone={Mail} rotulo="E-mail"
+        carregando={envio === 'email'} desabilitado={!!bloqueioEmail}
+        titulo={bloqueioEmail || `Enviar por e-mail só os lançamentos de ${nome}`}
+        onClick={() => onEmail(animalId, nome)} />
+      <AcaoBloco tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp"
+        carregando={envio === 'whatsapp'} desabilitado={!!bloqueioWhatsApp}
+        titulo={bloqueioWhatsApp || `Enviar por WhatsApp só os lançamentos de ${nome}`}
+        onClick={() => onWhatsApp(animalId, nome)} />
+      <AcaoBloco tom="imprimir" icone={Printer} rotulo="Imprimir"
+        desabilitado={!!bloqueioImpresso}
+        titulo={bloqueioImpresso || `Imprimir só os lançamentos de ${nome}`}
+        onClick={() => onImprimir(animalId, nome)} />
+      <AcaoBloco tom="exportar" icone={Download} rotulo="Exportar"
+        titulo={`Baixar em CSV só os lançamentos de ${nome}`}
+        onClick={() => onExportar(animalId, nome)} />
     </div>
   );
 }
@@ -1573,25 +1687,111 @@ function PainelFatura({
   // ⚠️ A resposta traz a fatura INTEIRA (total novo + estado de cada bloco): recarregar
   // a tela aqui perderia o mês/aba em que a pessoa está, e atualizar só o contador
   // deixaria o valor do topo desatualizado até alguém recarregar.
-  const alterarFechamentoAnimal = async (animalId: number, fechar: boolean, nomeAnimal: string) => {
-    if (!podeFechar) { semPermissao(fechar ? 'fechar a fatura do paciente' : 'reabrir a fatura do paciente'); return; }
+  // 🔴 E PAGAR / ESTORNAR o bloco de um paciente (2026-09-23) — a outra metade.
+  // Fechar tira do total mas o valor CONTINUA devido; pagar registra que o acerto à
+  // parte aconteceu e tira de contas a receber. A fatura NÃO muda de status: ela segue
+  // aberta cobrando os outros pacientes, que é o ponto inteiro do pagamento por animal.
+  const ACAO_ANIMAL: Record<AcaoAnimal, { permissao: 'fechar' | 'pagar'; verbo: string; ok: (n: string) => string }> = {
+    fechar:   { permissao: 'fechar', verbo: 'fechar a fatura do paciente',
+                ok: n => `Fatura de ${n} fechada — o valor saiu do total` },
+    reabrir:  { permissao: 'fechar', verbo: 'reabrir a fatura do paciente',
+                ok: n => `Fatura de ${n} reaberta — o valor voltou ao total` },
+    pagar:    { permissao: 'pagar',  verbo: 'marcar como pago a fatura do paciente',
+                ok: n => `Fatura de ${n} marcada como paga — saiu de contas a receber` },
+    estornar: { permissao: 'pagar',  verbo: 'estornar o pagamento do paciente',
+                ok: n => `Pagamento de ${n} estornado — o valor voltou a ser devido` },
+  };
+
+  const alterarFechamentoAnimal = async (animalId: number, acao: AcaoAnimal, nomeAnimal: string) => {
+    const cfg = ACAO_ANIMAL[acao];
+    const autorizado = cfg.permissao === 'fechar' ? podeFechar : podeEditar;
+    if (!autorizado) { semPermissao(cfg.verbo); return; }
     if (!fatura) return;
     setFechandoAnimalId(animalId);
     try {
-      const acao = fechar ? 'fechar' : 'reabrir';
       const r = await api.patch(`/clinica/faturas/${fatura.id}/animais/${animalId}/${acao}`);
       setFatura(r.data.dados);
-      toast.success(fechar
-        ? `Fatura de ${nomeAnimal} fechada — o valor saiu do total`
-        : `Fatura de ${nomeAnimal} reaberta — o valor voltou ao total`);
+      toast.success(cfg.ok(nomeAnimal));
       // O total da fatura mudou: a lista de clientes ao lado mostra esse número.
       onStatusChange();
     } catch (err) {
       const e = err as { response?: { data?: { error?: string } } };
-      setErroInline(e.response?.data?.error
-        ?? (fechar ? 'Erro ao fechar a fatura do paciente' : 'Erro ao reabrir a fatura do paciente'));
+      setErroInline(e.response?.data?.error ?? `Erro ao ${cfg.verbo}`);
     }
     finally { setFechandoAnimalId(null); }
+  };
+
+  /**
+   * A fatura RECORTADA no bloco de um paciente — é ela que vira PDF, impressão e CSV
+   * das ações do bloco.
+   *
+   * 🔴 O `total` é recalculado a partir dos itens ABERTOS deste paciente, nunca
+   * copiado de `fatura.total`: aquele número é o da fatura inteira, e o cliente
+   * receberia um documento com os lançamentos de um cavalo e o valor de todos.
+   * ⚠️ Os itens fechados e os já pagos VÃO no documento (o gerador os separa em faixas
+   * próprias): o cliente precisa ver o que foi cobrado à parte e o que já acertou.
+   */
+  const faturaDoAnimal = (animalId: number) => {
+    if (!fatura) return null;
+    const itens = fatura.itens.filter(i => i.animalId === animalId);
+    return {
+      ...fatura,
+      itens,
+      total: itens.filter(i => !i.fechadoEm).reduce((acc, i) => acc + totalItem(i), 0),
+    };
+  };
+
+  /** Nome do paciente para o gerador — `prop.animais` não tem o do bloco "de outro
+   *  atendimento deste cliente", e sem isto a folha sairia com "Animal #12". */
+  const animaisDoDocumento = (animalId: number, nome: string) =>
+    [{ id: animalId, nome }];
+
+  /** Paciente cujo envio (e-mail/WhatsApp) está em curso — trava só aquele botão. */
+  const [envioAnimal, setEnvioAnimal] = useState<{ id: number; canal: 'email' | 'whatsapp' } | null>(null);
+
+  const handleImprimirAnimal = (animalId: number, nome: string) => {
+    const f = faturaDoAnimal(animalId);
+    if (!f) return;
+    if (bloqueioImpresso) { setErroInline(bloqueioImpresso); return; }
+    imprimirFatura(f, animaisDoDocumento(animalId, nome), logoUrl, recebimento);
+  };
+
+  const handleCSVAnimal = (animalId: number, nome: string) => {
+    const f = faturaDoAnimal(animalId);
+    if (!f) return;
+    exportarFaturaCSV(f, animaisDoDocumento(animalId, nome));
+    toast.success(`CSV de ${nome} gerado`);
+  };
+
+  const opcoesCompartilharAnimal = (animalId: number, nome: string) => {
+    const f = faturaDoAnimal(animalId);
+    if (!f) return null;
+    const inv = `INV-${String(f.id).padStart(3, '0')}`;
+    return {
+      gerarHtml:   () => gerarHtmlFatura(f, animaisDoDocumento(animalId, nome), logoUrl, recebimento),
+      nomeArquivo: `fatura-${inv}-${nome.replace(/\s+/g, '-')}.pdf`,
+      documento:   'Fatura',
+      texto:       montarTextoFaturaAnimal(f, prop, nome, f.total),
+      titulo:      `Fatura — ${prop.fullName} · ${nome}`,
+    };
+  };
+
+  const handleEmailAnimal = async (animalId: number, nome: string) => {
+    const opcoes = opcoesCompartilharAnimal(animalId, nome);
+    if (!opcoes) return;
+    if (bloqueioEmail) { setErroInline(bloqueioEmail); return; }
+    setEnvioAnimal({ id: animalId, canal: 'email' });
+    try { await enviarPdfEmailComAviso(opcoes, prop.email); }
+    finally { setEnvioAnimal(null); }
+  };
+
+  const handleWhatsAppAnimal = async (animalId: number, nome: string) => {
+    const opcoes = opcoesCompartilharAnimal(animalId, nome);
+    if (!opcoes) return;
+    if (bloqueioWhatsApp) { setErroInline(bloqueioWhatsApp); return; }
+    setEnvioAnimal({ id: animalId, canal: 'whatsapp' });
+    try { await enviarPdfWhatsAppComAviso(opcoes, prop.phone); }
+    finally { setEnvioAnimal(null); }
   };
 
   const handleFechar = async () => {
@@ -1653,8 +1853,11 @@ function PainelFatura({
   // lido de `fatura.totalFechado`) porque é a MESMA fonte que desenha cada bloco — dois
   // caminhos para o mesmo número divergiriam, e a soma do rodapé deixaria de bater com
   // o que está na tela.
+  const totalPagoAParte = (fatura?.itens ?? [])
+    .filter(i => !!i.pagoEm)
+    .reduce((acc, i) => acc + totalItem(i), 0);
   const totalFechadoAParte = (fatura?.itens ?? [])
-    .filter(i => !!i.fechadoEm)
+    .filter(i => !!i.fechadoEm && !i.pagoEm)
     .reduce((s, i) => s + totalItem(i), 0);
 
   const invoiceRef = fatura ? `INV-${String(fatura.id).padStart(3, '0')}` : '—';
@@ -1682,9 +1885,10 @@ function PainelFatura({
         <div className="text-xs text-emerald-50 space-y-0.5">
           {prop.phone && <p>Telefone: <span className="text-white font-medium">{prop.phone}</span></p>}
           <p className="break-all">E-mail: <span className="text-white font-medium">{prop.email}</span></p>
-          {/* Deixa à vista POR QUE um dos botões abaixo pode estar cinza — sem isto a
-              única pista seria o tooltip, que ninguém procura sem motivo. */}
-          <p>Recebe a fatura por: <span className="text-white font-medium">{resumoFormas(formas)}</span></p>
+          {/* ⚠️ A linha "Recebe a fatura por: …" foi REMOVIDA a pedido (2026-09-23).
+              A preferência continua valendo e continua desabilitando o canal que o
+              cliente não escolheu — o que sobrou como pista é o `title` do próprio
+              botão, que diz o motivo e onde corrigi-lo. */}
         </div>
         <div className="mt-2.5 pt-2.5 border-t border-white/15 text-xs text-emerald-100 text-right">
           Fatura Mês:{' '}
@@ -1831,11 +2035,32 @@ function PainelFatura({
           // 🔴 O bloco fechado à parte sai do subtotal e do total da fatura, mas
           // CONTINUA no documento: ele foi cobrado, só é acertado separadamente.
           const itensAbertos     = todosItens.filter(i => !i.fechadoEm);
-          const itensFechados    = todosItens.filter(i => !!i.fechadoEm);
+          // O já PAGO sai do "fechado à parte": aquele número é o que o cliente ainda
+          // deve acertar, e somar o recebido ali o faria aparecer devendo de novo.
+          const itensFechados    = todosItens.filter(i => !!i.fechadoEm && !i.pagoEm);
+          const itensPagos       = todosItens.filter(i => !!i.pagoEm);
           const itensAssistencia = itensAbertos.filter(i => i.tipo === 'ASSISTENCIA');
           const itensOutros      = itensAbertos.filter(i => i.tipo !== 'ASSISTENCIA');
           const subtotal        = itensAbertos.reduce((s: number, i: FaturaItem) => s + totalItem(i), 0);
           const subtotalFechado = itensFechados.reduce((s: number, i: FaturaItem) => s + totalItem(i), 0);
+          const subtotalPago    = itensPagos.reduce((s: number, i: FaturaItem) => s + totalItem(i), 0);
+
+          // Declarado UMA vez e espalhado nos dois componentes do bloco: subtotal e
+          // barra de ações leem exatamente os mesmos números.
+          const propsDoBloco = {
+            animalId: animal.id, nome: animal.nome,
+            subtotal, subtotalFechado, subtotalPago,
+            abertos: itensAbertos.length, fechados: itensFechados.length,
+            pagos: itensPagos.length, naoPagos: itensAbertos.length + itensFechados.length,
+            podeFechar, podePagar: podeEditar, isGestor,
+            faturaEditavel: podeMexerNoFechamento,
+            ocupado: fechandoAnimalId === animal.id,
+            envio: envioAnimal?.id === animal.id ? envioAnimal.canal : null,
+            onAlterar: alterarFechamentoAnimal,
+            bloqueioEmail, bloqueioWhatsApp, bloqueioImpresso,
+            onEmail: handleEmailAnimal, onWhatsApp: handleWhatsAppAnimal,
+            onImprimir: handleImprimirAnimal, onExportar: handleCSVAnimal,
+          };
 
           return (
             <div key={animal.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -1857,15 +2082,11 @@ function PainelFatura({
                       </p>
                     </div>
                   </div>
-                  <ResumoDoBloco
-                    animalId={animal.id} nome={animal.nome}
-                    subtotal={subtotal} subtotalFechado={subtotalFechado}
-                    abertos={itensAbertos.length} fechados={itensFechados.length}
-                    podeFechar={podeFechar} faturaEditavel={podeMexerNoFechamento}
-                    ocupado={fechandoAnimalId === animal.id}
-                    onAlterar={alterarFechamentoAnimal}
-                  />
+                  <ResumoDoBloco {...propsDoBloco} />
                 </div>
+                {/* A barra na PRÓPRIA linha — ver `AcoesDoBloco`. É o que impede as
+                    seis ações de espremerem o nome do paciente no celular. */}
+                <AcoesDoBloco {...propsDoBloco} separador="border-indigo-100/70" />
               </div>
 
               {/* ── Assistência & Serviços Gerais ── */}
@@ -1907,12 +2128,36 @@ function PainelFatura({
                 <>
                   <div className="px-4 py-2 bg-amber-50/70 border-y border-amber-100">
                     <p className="text-[10px] font-bold text-amber-700 uppercase tracking-widest">
-                      Fechado à parte — não entra no total da fatura
+                      Fechado à parte — não entra no total da fatura · somente leitura
+                    </p>
+                    <p className="text-[10px] text-amber-700/80 mt-0.5 normal-case tracking-normal">
+                      Reabra o paciente para voltar a alterar estes lançamentos.
                     </p>
                   </div>
                   <JanelaLista className="divide-y divide-gray-50 opacity-80">
                     {ordenarComInsumos(itensFechados).map(item => (
-                      <ItemRow key={item.id} item={item} canEdit={canEdit}
+                      <ItemRow key={item.id} item={item} canEdit={false}
+                        onDelete={handleDeleteItem} onSave={handleSaveItem}/>
+                    ))}
+                  </JanelaLista>
+                </>
+              )}
+
+              {/* ── Já pago ── faixa PRÓPRIA, nunca misturada com o fechado à parte:
+                  aquela é o que o cliente ainda deve, esta é o que ele já acertou. */}
+              {itensPagos.length > 0 && (
+                <>
+                  <div className="px-4 py-2 bg-emerald-50/70 border-y border-emerald-100">
+                    <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest">
+                      Já pago — acertado à parte, nada a cobrar · somente leitura
+                    </p>
+                    <p className="text-[10px] text-emerald-700/80 mt-0.5 normal-case tracking-normal">
+                      Estorne o pagamento para voltar a alterar estes lançamentos.
+                    </p>
+                  </div>
+                  <JanelaLista className="divide-y divide-gray-50 opacity-80">
+                    {ordenarComInsumos(itensPagos).map(item => (
+                      <ItemRow key={item.id} item={item} canEdit={false}
                         onDelete={handleDeleteItem} onSave={handleSaveItem}/>
                     ))}
                   </JanelaLista>
@@ -1932,7 +2177,24 @@ function PainelFatura({
             proprietário, então os lançamentos aparecem aqui em vez de sumirem. */}
         {animaisForaDoEscopo.map(grupo => {
           const abertos  = grupo.itens.filter(i => !i.fechadoEm);
-          const fechados = grupo.itens.filter(i => !!i.fechadoEm);
+          const fechados = grupo.itens.filter(i => !!i.fechadoEm && !i.pagoEm);
+          const pagosG   = grupo.itens.filter(i => !!i.pagoEm);
+          const propsDoBloco = {
+            animalId: grupo.id, nome: grupo.nome,
+            subtotal:        abertos.reduce((s, i) => s + totalItem(i), 0),
+            subtotalFechado: fechados.reduce((s, i) => s + totalItem(i), 0),
+            subtotalPago:    pagosG.reduce((s, i) => s + totalItem(i), 0),
+            abertos: abertos.length, fechados: fechados.length,
+            pagos: pagosG.length, naoPagos: abertos.length + fechados.length,
+            podeFechar, podePagar: podeEditar, isGestor,
+            faturaEditavel: podeMexerNoFechamento,
+            ocupado: fechandoAnimalId === grupo.id,
+            envio: envioAnimal?.id === grupo.id ? envioAnimal.canal : null,
+            onAlterar: alterarFechamentoAnimal,
+            bloqueioEmail, bloqueioWhatsApp, bloqueioImpresso,
+            onEmail: handleEmailAnimal, onWhatsApp: handleWhatsAppAnimal,
+            onImprimir: handleImprimirAnimal, onExportar: handleCSVAnimal,
+          };
           return (
           <div key={`fora-${grupo.id}`} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
             <div className="px-4 pt-3 pb-2.5 border-b border-gray-100 bg-gray-50">
@@ -1944,16 +2206,9 @@ function PainelFatura({
                   <p className="text-sm font-bold text-gray-900">{grupo.nome}</p>
                   <p className="text-[10px] text-gray-400">Lançamentos de outro atendimento deste cliente</p>
                 </div>
-                <ResumoDoBloco
-                  animalId={grupo.id} nome={grupo.nome}
-                  subtotal={abertos.reduce((s, i) => s + totalItem(i), 0)}
-                  subtotalFechado={fechados.reduce((s, i) => s + totalItem(i), 0)}
-                  abertos={abertos.length} fechados={fechados.length}
-                  podeFechar={podeFechar} faturaEditavel={podeMexerNoFechamento}
-                  ocupado={fechandoAnimalId === grupo.id}
-                  onAlterar={alterarFechamentoAnimal}
-                />
+                <ResumoDoBloco {...propsDoBloco} />
               </div>
+              <AcoesDoBloco {...propsDoBloco} />
             </div>
             <JanelaLista className="divide-y divide-gray-50">
               {ordenarComInsumos(abertos).map(item => (
@@ -1970,7 +2225,22 @@ function PainelFatura({
                 </div>
                 <JanelaLista className="divide-y divide-gray-50 opacity-80">
                   {ordenarComInsumos(fechados).map(item => (
-                    <ItemRow key={item.id} item={item} canEdit={canEdit}
+                    <ItemRow key={item.id} item={item} canEdit={false}
+                      onDelete={handleDeleteItem} onSave={handleSaveItem}/>
+                  ))}
+                </JanelaLista>
+              </>
+            )}
+            {pagosG.length > 0 && (
+              <>
+                <div className="px-4 py-2 bg-emerald-50/70 border-y border-emerald-100">
+                  <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest">
+                    Já pago — acertado à parte, nada a cobrar
+                  </p>
+                </div>
+                <JanelaLista className="divide-y divide-gray-50 opacity-80">
+                  {ordenarComInsumos(pagosG).map(item => (
+                    <ItemRow key={item.id} item={item} canEdit={false}
                       onDelete={handleDeleteItem} onSave={handleSaveItem}/>
                   ))}
                 </JanelaLista>
@@ -1999,6 +2269,17 @@ function PainelFatura({
                 Fechado à parte (cobrado separadamente, fora do total acima):
               </p>
               <p className="text-sm font-bold text-amber-700 whitespace-nowrap">{formatBRL(totalFechadoAParte)}</p>
+            </div>
+          )}
+          {/* O já acertado por paciente. Sem esta linha o valor sumiria da tela ao ser
+              pago — e o financeiro não teria onde conferir quanto já entrou deste
+              cliente no ciclo, só o que falta. */}
+          {totalPagoAParte > 0 && (
+            <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between gap-3">
+              <p className="text-xs text-emerald-800">
+                Já pago por paciente (acertado à parte, nada a cobrar):
+              </p>
+              <p className="text-sm font-bold text-emerald-700 whitespace-nowrap">{formatBRL(totalPagoAParte)}</p>
             </div>
           )}
         </div>
@@ -2157,12 +2438,17 @@ function PainelFatura({
 // contagens NÃO somam o total — cada número responde "quantos clientes têm fatura
 // NESTE estado", nunca "quantos clientes existem ao todo".
 
-type FiltroLista = 'TODAS' | 'ABERTA' | 'REABERTA' | 'FECHADA' | 'ATRASADA' | 'PAGA';
+// 🔴 O FILTRO "TODAS" SAIU (2026-09-23, a pedido). Ele misturava num só recorte
+// cliente com fatura aberta, fechada, atrasada e paga — e, como o mesmo cliente
+// aparece em vários estados, a lista não respondia a pergunta nenhuma. A tela abre
+// agora em **Aberta**, que é o trabalho do dia; os demais estados continuam a um
+// clique. Consequência a conhecer: não existe mais uma visão "todos os clientes" —
+// quem procura alguém por nome usa a BUSCA, que incide antes do filtro.
+type FiltroLista = 'ABERTA' | 'REABERTA' | 'FECHADA' | 'ATRASADA' | 'PAGA';
 
 /** Mesma paleta da barra "Fatura:" do detalhe — o mesmo estado não pode ter uma cor
  *  na lista e outra no painel ao lado. */
 const STATUS_LISTA: { key: FiltroLista; label: string; cor: string }[] = [
-  { key: 'TODAS',    label: 'Todas',    cor: 'bg-gray-700'    },
   { key: 'ABERTA',   label: 'Aberta',   cor: 'bg-amber-500'   },
   { key: 'REABERTA', label: 'Reaberta', cor: 'bg-orange-600'  },
   { key: 'FECHADA',  label: 'Fechada',  cor: 'bg-indigo-600'  },
@@ -2173,7 +2459,7 @@ const STATUS_LISTA: { key: FiltroLista; label: string; cor: string }[] = [
 /** Cor/rotulo da BOLINHA por status — tom mais claro que o da pilha (pilha é fundo
  *  sólido com texto branco; a bolinha é um ponto de 8px e precisa de contraste
  *  próprio). Mantém exatamente as cores que o card já usava. */
-const BOLINHA_STATUS: Record<Exclude<FiltroLista, 'TODAS'>, { cor: string; titulo: string }> = {
+const BOLINHA_STATUS: Record<FiltroLista, { cor: string; titulo: string }> = {
   ABERTA:   { cor: 'bg-amber-400',   titulo: 'Fatura aberta'   },
   REABERTA: { cor: 'bg-orange-400',  titulo: 'Fatura reaberta' },
   FECHADA:  { cor: 'bg-indigo-400',  titulo: 'Fatura fechada'  },
@@ -2188,7 +2474,6 @@ function temStatusNaLista(p: ProprietarioItem, filtro: FiltroLista): boolean {
     case 'FECHADA':  return !!p.faturaFechada;
     case 'ATRASADA': return !!p.faturaAtrasada;
     case 'PAGA':     return !!p.faturaPaga;
-    default:         return true;
   }
 }
 
@@ -2200,8 +2485,7 @@ function FiltroStatusLista({ valor, onChange, base, className = '' }: {
   base:       ProprietarioItem[];
   className?: string;
 }) {
-  const contar = (key: FiltroLista) =>
-    key === 'TODAS' ? base.length : base.filter(p => temStatusNaLista(p, key)).length;
+  const contar = (key: FiltroLista) => base.filter(p => temStatusNaLista(p, key)).length;
 
   return (
     <div className={`flex flex-wrap items-center gap-1.5 lg:flex-nowrap ${className}`}>
@@ -2224,13 +2508,14 @@ function FiltroStatusLista({ valor, onChange, base, className = '' }: {
 }
 
 function CardProprietario({
-  prop, selecionado, onClick, filtro = 'TODAS',
+  prop, selecionado, onClick, filtro,
 }: {
   prop: ProprietarioItem; selecionado: boolean; onClick: () => void;
-  /** Status escolhido na lista. Com um status ativo a bolinha mostra EXATAMENTE ele
-   *  — sem isso o cliente filtrado por "Atrasada" continuaria exibindo também a
-   *  bolinha âmbar da fatura aberta, e a cor contradiria o filtro em vigor. */
-  filtro?: FiltroLista;
+  /** Status escolhido na lista. A bolinha mostra EXATAMENTE ele — sem isso o cliente
+   *  filtrado por "Atrasada" continuaria exibindo também a bolinha âmbar da fatura
+   *  aberta, e a cor contradiria o filtro em vigor. Desde que "Todas" saiu (2026-09-23)
+   *  há sempre um status em vigor, então a bolinha é sempre uma só. */
+  filtro: FiltroLista;
 }) {
   return (
     <button
@@ -2264,17 +2549,7 @@ function CardProprietario({
             cliente tem (o mesmo cliente pode ter aberta + atrasada); com filtro, só
             a do status filtrado — a bolinha passa a ser a resposta do filtro. */}
         <div className="flex gap-1 flex-shrink-0">
-          {filtro === 'TODAS' ? (
-            <>
-              {prop.faturaAtiva    && <span className="w-2 h-2 rounded-full bg-amber-400" title="Fatura aberta"/>}
-              {prop.faturaReaberta && <span className="w-2 h-2 rounded-full bg-orange-400" title="Fatura reaberta"/>}
-              {prop.faturaFechada  && <span className="w-2 h-2 rounded-full bg-indigo-400" title="Fatura fechada"/>}
-              {prop.faturaAtrasada && <span className="w-2 h-2 rounded-full bg-red-500" title="Fatura atrasada"/>}
-              {prop.faturaPaga     && <span className="w-2 h-2 rounded-full bg-emerald-500" title="Fatura paga"/>}
-            </>
-          ) : (
-            <span className={`w-2 h-2 rounded-full ${BOLINHA_STATUS[filtro].cor}`} title={BOLINHA_STATUS[filtro].titulo}/>
-          )}
+          <span className={`w-2 h-2 rounded-full ${BOLINHA_STATUS[filtro].cor}`} title={BOLINHA_STATUS[filtro].titulo}/>
         </div>
       </div>
     </button>
@@ -2478,9 +2753,9 @@ function ModalFechamentoLote({ proprietarios, onClose, onDone }: {
 export default function Faturamento() {
   const { podeExecutar, isGestor, loading: loadingPerm } = usePermissoes();
 
-  /** Aba de fatura DENTRO do cliente — os mesmos status da lista, sem o "Todas".
+  /** Aba de fatura DENTRO do cliente — os mesmos status da lista.
    *  Derivado de propósito: status novo entra em UM lugar só (`FiltroLista`). */
-  type FiltroTipo = Exclude<FiltroLista, 'TODAS'>;
+  type FiltroTipo = FiltroLista;
 
   const [proprietarios, setProprietarios] = useState<ProprietarioItem[]>([]);
   const [loading,       setLoading]       = useState(true);
@@ -2489,11 +2764,11 @@ export default function Faturamento() {
   const [contadores,    setContadores]    = useState({ abertas: 0, fechadas: 0, pagas: 0 });
   const [filtroStatus,  setFiltroStatus]  = useState<FiltroTipo>('ABERTA');
   // Filtro por status da LISTA de proprietários (distinto do `filtroStatus`, que é a
-  // aba de fatura DENTRO do cliente selecionado). Começa em "Todas": abrir a tela já
-  // escondendo cliente é o oposto do que ela existe para fazer.
+  // aba de fatura DENTRO do cliente selecionado). Começa em **Aberta** — o "Todas"
+  // saiu em 2026-09-23 (ver `FiltroLista`), e aberta é o trabalho do dia.
   // `?status=` na URL pré-seleciona o filtro — é por aí que os números dos Relatórios
   // Financeiros (contas a receber, inadimplência) chegam já no recorte certo. Valor
-  // fora da lista cai em "Todas", nunca num filtro que a tela não sabe exibir.
+  // fora da lista cai em "Aberta", nunca num filtro que a tela não sabe exibir.
   const [searchParams] = useSearchParams();
   const statusDaUrl = (searchParams.get('status') ?? '').toUpperCase() as FiltroLista;
   // `?proprietarioId=` abre a tela JÁ NO CLIENTE — é assim que a linha "Faturas
@@ -2504,8 +2779,12 @@ export default function Faturamento() {
   const proprietarioDaUrl = Number(searchParams.get('proprietarioId')) || null;
   const jaAplicouUrlRef = useRef(false);
   const [filtroLista,   setFiltroLista]   = useState<FiltroLista>(
-    STATUS_LISTA.some(x => x.key === statusDaUrl) ? statusDaUrl : 'TODAS',
+    STATUS_LISTA.some(x => x.key === statusDaUrl) ? statusDaUrl : 'ABERTA',
   );
+  /** O filtro da renderização anterior — é ele que distingue "a pessoa TROCOU o
+   *  status" de "o efeito rodou na montagem". Sem a distinção, a montagem limparia a
+   *  seleção que `?proprietarioId=` acabou de fazer. */
+  const filtroAnteriorRef = useRef<FiltroLista>(filtroLista);
   // Seletor de mês/ano (só para fatura FECHADA/PAGA) — controla o mês visualizado.
   const [mesView,       setMesView]       = useState<string | null>(null);
   const [faturaMeta,    setFaturaMeta]    = useState<{ meses: MesFatura[]; mesAtual?: string }>({ meses: [] });
@@ -2544,30 +2823,26 @@ export default function Faturamento() {
     if (alvo) setSelecionado(alvo);
   }, [proprietarioDaUrl, proprietarios]);
 
-  // Trocar de proprietário — ou o filtro de status da lista — realinha o detalhe: com
-  // "Atrasada" filtrado, abrir o cliente na aba "Aberta" mostraria vazio justamente no
-  // estado que a pessoa acabou de pedir.
-  // ⚠️ Em "Todas" o status é o PRIMEIRO que o cliente realmente tem, na ordem
-  // Aberta → Reaberta → Atrasada → Fechada → Paga (o padrão segue sendo a Aberta).
-  // Isto passou a importar quando a barra "Fatura:" do detalhe foi removida: fixar
-  // ABERTA deixaria o painel VAZIO, sem nenhuma pista, para o cliente que só tem
-  // fatura fechada — e não há mais pílula desabilitada ali dizendo o que ele tem.
+  // O status da lista MANDA no detalhe: com "Atrasada" filtrado, abrir o cliente na
+  // aba "Aberta" mostraria vazio justamente no estado que a pessoa acabou de pedir.
+  // Sem o "Todas" (2026-09-23) há sempre um status em vigor, então a aba do detalhe é
+  // literalmente ele — a derivação "o primeiro que o cliente tem" deixou de existir.
+  //
+  // 🔴 TROCAR O STATUS DESSELECIONA O CLIENTE (2026-09-23, a pedido). A lista muda
+  // embaixo do filtro e o cliente que estava aberto pode nem constar nela — o painel
+  // ficava mostrando a fatura de alguém que sumiu da lista ao lado, num estado que não
+  // é o filtrado. Deselecionado, a tela volta ao "escolha um proprietário", que é o
+  // estado honesto depois de trocar o recorte.
+  // ⚠️ SÓ na troca de verdade (`filtroAnteriorRef`): na montagem isto apagaria a
+  // seleção que `?proprietarioId=` faz ao chegar do Relatório de Gestão.
   useEffect(() => {
-    setFiltroStatus(
-      filtroLista !== 'TODAS' ? filtroLista
-      : selecionado?.faturaAtiva    ? 'ABERTA'
-      : selecionado?.faturaReaberta ? 'REABERTA'
-      : selecionado?.faturaAtrasada ? 'ATRASADA'
-      : selecionado?.faturaFechada  ? 'FECHADA'
-      : selecionado?.faturaPaga     ? 'PAGA'
-      :                               'ABERTA',
-    );
+    setFiltroStatus(filtroLista);
     setMesView(null);
-    // ⚠️ Deps PRIMITIVAS, nunca o objeto `selecionado`: ele troca de identidade a
-    // cada recarga da lista, e o efeito zeraria o mês que a pessoa acabou de escolher.
-  }, [selecionado?.id, !!selecionado?.faturaAtiva, !!selecionado?.faturaReaberta,
-      !!selecionado?.faturaAtrasada, !!selecionado?.faturaFechada, !!selecionado?.faturaPaga,
-      filtroLista]);
+    if (filtroAnteriorRef.current !== filtroLista) {
+      filtroAnteriorRef.current = filtroLista;
+      setSelecionado(null);
+    }
+  }, [filtroLista]);
   // Trocar o tipo de fatura reseta o mês visualizado.
   useEffect(() => { setMesView(null); }, [filtroStatus]);
 
@@ -2683,9 +2958,9 @@ export default function Faturamento() {
                   <div className="text-center py-8">
                     <DollarSign size={28} className="mx-auto text-gray-200 mb-2"/>
                     <p className="text-xs text-gray-400">
-                      {busca                    ? 'Nenhum resultado.'
-                        : filtroLista !== 'TODAS' ? `Nenhum proprietário com fatura ${STATUS_LISTA.find(x => x.key === filtroLista)?.label.toLowerCase()}.`
-                        :                           'Nenhum proprietário encontrado.'}
+                      {busca
+                        ? 'Nenhum resultado.'
+                        : `Nenhum proprietário com fatura ${STATUS_LISTA.find(x => x.key === filtroLista)?.label.toLowerCase()}.`}
                     </p>
                   </div>
                 ) : (
@@ -2731,9 +3006,9 @@ export default function Faturamento() {
                 <div className="text-center py-8">
                   <DollarSign size={28} className="mx-auto text-gray-200 mb-2"/>
                   <p className="text-xs text-gray-400">
-                    {busca                    ? 'Nenhum resultado.'
-                      : filtroLista !== 'TODAS' ? `Nenhum proprietário com fatura ${STATUS_LISTA.find(x => x.key === filtroLista)?.label.toLowerCase()}.`
-                      :                           'Nenhum proprietário encontrado.'}
+                    {busca
+                      ? 'Nenhum resultado.'
+                      : `Nenhum proprietário com fatura ${STATUS_LISTA.find(x => x.key === filtroLista)?.label.toLowerCase()}.`}
                   </p>
                 </div>
               ) : (

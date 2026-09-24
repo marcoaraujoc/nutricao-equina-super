@@ -590,6 +590,17 @@ async function debitarEstoqueDia(
   // Quantas embalagens saíram NESTA execução, por item. É ela que vira a quantidade da
   // linha da fatura e da conta a pagar — `1` fixo cobraria um frasco onde saíram dois.
   const entregas     = new Map();
+  // 🔴 QUANTAS UNIDADES INTEIRAS ESTA DOSE ENTREGOU, por item (2026-09-23).
+  //
+  // Só existe para o produto contado em unidades AVULSAS ("Un.", ampola, comprimido) e
+  // prescrito nelas: ali a dose de "2 Un." entrega DUAS unidades, e a linha da fatura
+  // precisa sair `2 × R$ 100,00` — não `1 × R$ 200,00`, que era o que aparecia (o valor
+  // fechava, a quantidade mentia e não havia como conferir o unitário contra a nota).
+  //
+  // ⚠️ Produto MULTIDOSE (mL/g) fica FORA de propósito: lá a linha conta DOSES
+  // ("5 mL × 3x ao dia (1 dose)"), e trocar a quantidade para 5 passaria a exibir um
+  // R$/mL onde a tela sempre mostrou o preço da dose. Nada muda para ele.
+  const unidadesFaturadas = new Map();
   // 🔴 A unidade em que cada item é contado. Com a FORMA DE CÁLCULO declarada, a
   // dosagem da receita já está na unidade do estoque — não há conversão nem divisão,
   // e a fatura sai por `qtd × preço da embalagem ÷ conteúdo` sozinha.
@@ -672,7 +683,8 @@ async function debitarEstoqueDia(
       ? `${item.dosagem}${item.unidade ? ' ' + item.unidade : ''} × ${item.frequencia} (1 dose)`
       : `${item.frequencia} (1 dose)`;
 
-    let valorDaDose = 0;
+    let valorDaDose   = 0;
+    let debitadoTotal = 0;
     for (const estoque of estoques) {
       if (restante <= 0.0001) break;
       if (estoque.qtdEstoque <= 0) continue;
@@ -709,12 +721,20 @@ async function debitarEstoqueDia(
       );
       valorDaDose += qtdDebitBase * precoUnit;
 
+      debitadoTotal += deduzido;
       restante -= deduzido;
+    }
+
+    // Unidade AVULSA e sem entrega por embalagem = a receita está escrita na MESMA
+    // unidade do estoque, então o debitado É a contagem de unidades entregues. Em
+    // mL/g (multidose) o mapa fica vazio e a linha continua valendo "1 dose".
+    if (!entregaUnica && ehAvulsa(unidadeEstoque) && debitadoTotal > 0) {
+      unidadesFaturadas.set(item.id, debitadoTotal);
     }
 
     precos.set(item.medicamentoCatId, valorDaDose);
   }
-  return { precos, unidades, jaEntregues, porEmbalagem, entregas };
+  return { precos, unidades, jaEntregues, porEmbalagem, entregas, unidadesFaturadas };
 }
 
 // ─── Insumos de aplicação injetável (seringa + agulha) ───────────────────────
@@ -1965,12 +1985,16 @@ const finalizar = async (req, res) => {
       //
       // ⚠️ `incluirDoProprietario` é OPT-IN e existe só para este caminho: na EXECUÇÃO
       // o item continua fora, porque lá ele nem chega (`itensHoje` já o exclui).
-      const { precos: precosDaEntrega, entregas: entregasDaEntrega } = itensParaFaturarAgora.length > 0
+      const {
+        precos: precosDaEntrega,
+        entregas: entregasDaEntrega,
+        unidadesFaturadas: unidadesDaEntrega,
+      } = itensParaFaturarAgora.length > 0
         ? await debitarEstoqueDia(
             tx, itensParaFaturarAgora, empresaIdEfetivo, grupoId, calcularQuantidadeTotal,
             { incluirDoProprietario: true },
           )
-        : { precos: new Map(), entregas: new Map() };
+        : { precos: new Map(), entregas: new Map(), unidadesFaturadas: new Map() };
 
       // Sem nada a cobrar agora, nem abre fatura: senão a finalização criaria uma
       // fatura vazia para o cliente todo mês.
@@ -2003,7 +2027,12 @@ const finalizar = async (req, res) => {
           // ⚠️ E o `valor` tem de virar UNITÁRIO junto — `valorDaEntrega` é o TOTAL do
           // que saiu do estoque, e a linha multiplica de volta por `quantidade`. Mexer
           // num sem o outro dobra (ou divide) a cobrança, sem nada acusar.
-          const embalagensDaEntrega = entregasDaEntrega.get(item.id) ?? 1;
+          // ⚠️ Produto contado em unidades AVULSAS entra por `unidadesFaturadas`: o
+          // cliente leva 14 ampolas do curso, e "Quant.: 1" ao lado do valor de 14 não
+          // é conferível. Ver a mesma decisão na EXECUÇÃO (`qtdFaturada`).
+          const embalagensDaEntrega = entregasDaEntrega.get(item.id)
+            ?? unidadesDaEntrega.get(item.id)
+            ?? 1;
           await adicionarOuSomarFaturaItem(tx, {
             faturaId:     fatura.id,
             animalId:     grupo.animalId,
@@ -2533,10 +2562,29 @@ const executar = async (req, res) => {
 
     const empresaIdEfetivo = grupo.empresaId ?? req.empresaId ?? null;
 
-    const alertasEstoque = await verificarEstoqueParaDia(itensHoje, empresaIdEfetivo, resolverQtdExecucao);
-    if (alertasEstoque.length > 0) {
-      return res.status(409).json({ erro: 'ESTOQUE_INSUFICIENTE', alertas: alertasEstoque });
-    }
+    // 🔴 SALDO DE ESTOQUE NÃO BLOQUEIA A EXECUÇÃO (2026-09-23, a pedido).
+    //
+    // Aqui havia um 409 `ESTOQUE_INSUFICIENTE` (`verificarEstoqueParaDia`) que RECUSAVA
+    // a execução quando o saldo não cobria a dose — e só acontecia para o medicamento
+    // CADASTRADO no estoque: o que não está cadastrado sempre passou direto
+    // (`estoques.length === 0` → ignora). Ou seja, a clínica que controla o estoque
+    // direitinho era a única impedida de registrar a dose que ela ACABOU DE APLICAR.
+    //
+    // Estoque é CONTROLE, não autorização clínica: a dose já foi dada na baia, e recusar
+    // o registro não devolve o frasco — só apaga o rastro (fatura, histórico, conta a
+    // pagar). A divergência de saldo se resolve no Ajuste de Estoque, que existe
+    // exatamente para isso.
+    //
+    // ⚠️ `debitarEstoqueDia` continua debitando o que HOUVER, em FEFO, e para quando o
+    // lote zera (`if (estoque.qtdEstoque <= 0) continue`) — não gera saldo negativo nem
+    // movimento fantasma. O que faltar simplesmente não é debitado, e a linha da fatura
+    // sai pelo que de fato saiu da prateleira (mesmo caminho do item sem estoque
+    // cadastrado, que já era lançado com valor 0 "para o financeiro saber").
+    //
+    // ⚠️ A trava da FINALIZAÇÃO (`finalizar`, 409 com `forcarFinalizacao`) NÃO muda:
+    // lá a prescrição ainda vai ser escrita e dá tempo de decidir. Aqui a aplicação já
+    // aconteceu. `verificarEstoqueParaDia` segue existindo (e travada por
+    // `produtoMultidose.test.js`) — o que saiu foi o BLOQUEIO, não a regra de unidade.
 
     const animal = await prisma.animal.findUnique({ where: { id: grupo.animalId }, select: { userId: true } });
     const proprietarioId = animal?.userId ?? null;
@@ -2556,7 +2604,8 @@ const executar = async (req, res) => {
       // Debita a quantidade resolvida por item (multi-lote FEFO) e retorna
       // preços/unidades por medicamento. Passa o grupoId para abater as reservas
       // deste grupo junto com a baixa.
-      const { precos, jaEntregues, porEmbalagem, entregas } = await debitarEstoqueDia(tx, itensHoje, empresaIdEfetivo, grupoId, resolverQtdExecucao);
+      const { precos, jaEntregues, porEmbalagem, entregas, unidadesFaturadas } =
+        await debitarEstoqueDia(tx, itensHoje, empresaIdEfetivo, grupoId, resolverQtdExecucao);
 
       // Lança na fatura ABERTA do proprietário NESTA empresa
       const fatura = await getOrCreateFatura(tx, proprietarioId, empresaIdEfetivo);
@@ -2617,6 +2666,15 @@ const executar = async (req, res) => {
         // ⚠️ Fora da entrega por embalagem nada muda: quantidade 1 e o valor da dose,
         // que é o que a consolidação vem somando desde sempre.
         const embalagensEntregues = porEmbalagem.has(item.id) ? (entregas.get(item.id) ?? 1) : 1;
+        // 🔴 QUANTIDADE DA LINHA DA FATURA (2026-09-23). Três casos, nesta ordem:
+        //   1. entrega por EMBALAGEM  → tantas quantas esta execução abriu;
+        //   2. unidade AVULSA         → as unidades que saíram do estoque ("2 Un.");
+        //   3. multidose / sem estoque→ 1, que é "uma dose", como sempre foi.
+        // `valorDaDose` é sempre o TOTAL do que foi entregue, então o `valor` da linha
+        // é ele DIVIDIDO por isto — senão a fatura cobraria a quantidade ao quadrado.
+        const qtdFaturada = porEmbalagem.has(item.id)
+          ? embalagensEntregues
+          : (unidadesFaturadas.get(item.id) ?? 1);
 
         if (!item.medicamentoCliente && !entregaJaFeita) {
           // Prescrição finalizada ANTES da mudança já tem uma linha zerada criada na
@@ -2653,10 +2711,10 @@ const executar = async (req, res) => {
               animalId:     grupo.animalId,
               tipo:         item.tipo === 'MEDICAMENTO' ? 'MEDICAMENTO' : 'PROCEDIMENTO',
               descricao,
-              // UNITÁRIO: o valor da dose (regra de 3) ou, na entrega por embalagem, o
-              // preço de UMA embalagem — `valorDaDose` traz o total das que saíram.
-              valor:        valorDaDose / embalagensEntregues,
-              quantidade:   embalagensEntregues,
+              // UNITÁRIO: `valorDaDose` é o TOTAL entregue nesta execução; a linha
+              // guarda o preço de UMA unidade/embalagem/dose. Ver `qtdFaturada`.
+              valor:        valorDaDose / qtdFaturada,
+              quantidade:   qtdFaturada,
               veterinarioId,
               prescricaoId: item.id,
               // Data da CONTRIBUIÇÃO, que é o que a observação da linha mostra — a

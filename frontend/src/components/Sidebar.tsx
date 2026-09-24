@@ -96,7 +96,7 @@ export default function Sidebar() {
   // do ProtectedRoute (fonte única — evita competir com o gate de troca de senha
   // obrigatória e causar loop de mount/unmount do Sidebar, que gerava tempestade
   // de requisições 429 nos hooks de polling abaixo).
-  const { isNewUser, selectedAnimal, cadastroCompleto, isGestorEmpresa, empresaConfigurada } = useSelectedAnimal();
+  const { isNewUser, cadastroCompleto, isGestorEmpresa, empresaConfigurada } = useSelectedAnimal();
   const location                      = useLocation();
   const navigate                      = useNavigate();
   const { marca } = useEmpresa();
@@ -214,7 +214,17 @@ export default function Sidebar() {
     podeVerProprietarios ||
     podeVerTratadores;
 
-  const animalId         = selectedAnimal?.id;
+  // 🔴 O MENU NÃO CARREGA PACIENTE NA URL (a pedido, 2026-09-23).
+  // Atendimento · Vacina · Resultado de Exame · Plano de Dieta · Relatório Nutricional
+  // abrem em MODO BUSCA — é a regra da §6 do CLAUDE.md desde 2026-09-22, e as cinco
+  // telas já a cumprem (`animalIdParam ?? ''`). Quem a contrariava era ESTE menu:
+  // ele montava `/dieta/${selectedAnimal.id}`, então a tela recebia pela URL o
+  // paciente que a regra mandava não herdar, e abria o prontuário de alguém que
+  // ninguém pediu — numa tela de escrita clínica, é o começo do registro no
+  // paciente errado.
+  // ⚠️ NÃO reintroduzir `selectedAnimal?.id` nos destinos do menu. Para ir ao
+  // paciente, o caminho é o seletor da própria tela (que navega e escreve no
+  // `SelectedAnimalContext`), nunca o item do menu.
 
   const activeSection = detectSection(location.pathname);
   const isMapaActive  = activeSection === 'mapa';
@@ -473,7 +483,7 @@ export default function Sidebar() {
                       própria entrada: sem ela não haveria como registrar vacina nova. */}
                   {temAcessoClinico && podeVerVacinas && (
                     <button
-                      onClick={() => irParaModulo(animalId ? `/clinica/vacina/${animalId}` : '/clinica/vacina')}
+                      onClick={() => irParaModulo('/clinica/vacina')}
                       className={`w-full flex items-center gap-3 px-5 py-3 rounded-3xl text-sm font-semibold transition-colors ${
                         p.startsWith('/clinica/vacina') ? CLS_MODULE_ACTIVE : CLS_MODULE_INACTIVE
                       }`}
@@ -539,12 +549,12 @@ export default function Sidebar() {
                       {openGroup === 'exames' && (
                         <div className="mt-1 pl-6 space-y-0.5">
                           {subLink(
-                            animalId ? `/exames/${animalId}?tipo=laboratorial` : '/exames?tipo=laboratorial',
+                            '/exames?tipo=laboratorial',
                             <ClipboardList size={14} />, 'Laboratorial',
                             p.startsWith('/exames') && search.includes('tipo=laboratorial'),
                           )}
                           {subLink(
-                            animalId ? `/exames/${animalId}?tipo=imagem` : '/exames?tipo=imagem',
+                            '/exames?tipo=imagem',
                             <Scan size={14} />, 'Imagem',
                             p.startsWith('/exames') && search.includes('tipo=imagem'),
                           )}
@@ -560,12 +570,12 @@ export default function Sidebar() {
                       {openGroup === 'nutricional' && (
                         <div className="mt-1 pl-6 space-y-0.5">
                           {podeVerDieta && subLink(
-                            animalId ? `/dieta/${animalId}` : '/dieta',
+                            '/dieta',
                             <Utensils size={14} />, 'Plano de Dieta',
                             isNutricionalSubActive('/dieta'),
                           )}
                           {podeVerRelatorio && subLink(
-                            animalId ? `/relatorio-nutricional/${animalId}` : '/relatorio-nutricional',
+                            '/relatorio-nutricional',
                             <FileBarChart size={14} />, 'Relatório Nutricional',
                             isNutricionalSubActive('/relatorio-nutricional'),
                           )}

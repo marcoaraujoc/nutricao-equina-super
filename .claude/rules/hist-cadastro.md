@@ -37,6 +37,56 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-09-23 (parte 2) (**LEVA DE AJUSTES NOS CADASTROS** — 4 pedidos.
+#   O que muda regra, e não só rótulo:
+#   1. 🔴 **EXCLUIR PROCEDIMENTO DA CLÍNICA — e SÓ o que nunca foi usado.**
+#      `DELETE /procedimentos/cadastro/proprio/:id` (`excluirProprio`), com o MESMO
+#      slug do inativar (`cadastro.procedimento.deletar`): são as duas formas de tirar
+#      o cadastro da frente, e separá-las faria o gestor configurar duas permissões
+#      para uma decisão só — além do absurdo de quem pode APAGAR não poder inativar.
+#      ⚠️ **NÃO substitui o inativar, e a tela oferece os dois.** Usado uma vez, o
+#      cadastro deixa de ser excluível PARA SEMPRE; sem o soft delete não haveria como
+#      tirá-lo da lista. A exclusão é a saída para o erro de digitação recém-cadastrado,
+#      que hoje ficava eternamente na aba "Inativos".
+#      🔴 **A LIGAÇÃO COM O USO É PELO NOME, NÃO POR FK.** `tb_prescricoes` guarda o
+#      procedimento em `medicamento` (texto) com `tipo = 'PROCEDIMENTO'`, e o ledger do
+#      recibo em `procedimento_nome` — nenhuma das duas tem `procedimento_id`. Como o
+#      banco não tem FK para recusar, o `DELETE` PASSARIA e o prontuário ficaria
+#      apontando para um cadastro inexistente: nada quebra na hora, e o buraco só
+#      aparece quando alguém abre um atendimento antigo. `usosDoProcedimento` consulta
+#      QUATRO origens — prescrição/evolução, item de orçamento (`refId` OU descrição),
+#      combo da clínica e execução já lançada — e responde **409
+#      `PROCEDIMENTO_EM_USO`** dizendo ONDE e apontando o inativar como saída.
+#      ⚠️ **O combo entra na conta porque `tb_procedimento_combo_itens` é
+#      `onDelete: Cascade`**: sem a checagem, excluir o procedimento ESVAZIARIA o
+#      pacote de alguém em silêncio.
+#      ⚠️ **Prescrição CANCELADA ou soft-deletada CONTA.** A pergunta é "este nome já
+#      apareceu num prontuário?", não "ainda está ativo".
+#      ⚠️ O ledger do prestador é lido por **SQL CRU e atrás de
+#      `procedimentoPrestador.temTabelas()`**: a tabela nasceu numa migration que pode
+#      não estar aplicada e, pelo client tipado, uma base defasada derrubaria a
+#      checagem inteira com 500 — e ninguém saberia que o uso não foi conferido.
+#      ⚠️ Linha GLOBAL responde 400 `ITEM_DO_SISTEMA`: vale para todas as clínicas e o
+#      RLS recusaria de qualquer forma, virando um 500 sem explicação.
+#      ⚠️ `motivo` obrigatório e **auditoria `EXCLUSAO` ANTES do `delete`, na MESMA
+#      transação** (armadilha 33): a linha some do catálogo, então o rastro é o único
+#      lugar onde ela continua existindo.
+#      ⚠️ O erro da recusa é mostrado **DENTRO do `ModalJustificativa`** (§6): no topo
+#      da página ficaria atrás do overlay, e o clique pareceria não ter feito nada.
+#      Gate: `__tests__/procedimentoExclusaoSemUso.test.js` (verificado que reprova).
+#   2. **E-MAIL DEIXOU DE SER OBRIGATÓRIO no "Novo Fornecedor" rápido**
+#      (`ModalNovoFornecedor`, aberto pela Farmácia e pelo Estoque de Vacinas). A tela
+#      `/cadastro/fornecedores` NUNCA o exigiu — era o modal que divergia dela, e o
+#      fornecedor de balcão muitas vezes não tem e-mail. ⚠️ Preenchido, continua tendo
+#      de ser VÁLIDO: o que saiu foi a exigência, não a validação.
+#   3. **"Novo Proprietário" ganhou o ícone da entidade** (`Users`, 16px) à esquerda do
+#      rótulo — era o único botão de Cadastro sem ele (Fornecedor, Prestador e Tratador
+#      já seguiam o padrão).
+#   4. **O botão "Novo Paciente" trocou a PATA pelo RAIO** (`Zap`), que é o ícone com
+#      que o menu lateral chama a tela e com que o título dela se anuncia. A pata tinha
+#      entrado no commit anterior e deixava o mesmo assunto com dois símbolos na mesma
+#      tela.)
+
 # Atualizado em: 2026-09-22 (parte 2) (**LEVA DE AJUSTES DE TELA NOS CADASTROS** — 9
 #   pedidos, todos em Cadastro. O que muda regra, e não só rótulo:
 #   1. 🔴 **RAÇA E PELAGEM SE COMPLETAM SOZINHAS AO SAIR DO CAMPO.** O `buscavel` do

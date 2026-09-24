@@ -201,40 +201,15 @@ function embalagensDoCurso(args: {
   return { total, conteudo, qtd: embalagensParaQtd(total, conteudo) };
 }
 
-/**
- * 🔴 O CADASTRO NÃO DECLARA O CONTEÚDO DA EMBALAGEM — e por isso o curso inteiro vai
- * sair do estoque e ser cobrado como UMA (2026-09-22).
- *
- * POR QUE ISTO EXISTE: `embalagensPara` devolve 1 quando o conteúdo é nulo, que é o
- * comportamento correto para quem não declara nada — mas é uma falha SILENCIOSA quando
- * a receita está escrita em unidade de CONTEÚDO ("25 mL") contra um estoque contado em
- * EMBALAGENS. O "Banamine® - frasco 50 mL" com 5 doses de 25 mL consome TRÊS frascos e
- * é debitado e faturado como um, sem nada na tela dizendo isso.
- * Medido na base em 2026-09-22: dos 8.277 itens do catálogo, **zero** sem multidose
- * declaravam conteúdo — ou seja, a regra das N embalagens estava inteira e dormente.
- *
- * ⚠️ É o NEGATIVO de `embalagensDoCurso`, com as MESMAS guardas: os dois nunca
- * respondem juntos, e o que os separa é só o conteúdo estar ou não declarado. Relaxar
- * uma guarda aqui faria o aviso aparecer no multidose (onde a cobrança é proporcional e
- * não há embalagem inteira a contar) ou na receita já escrita em "2 Un.".
- *
- * ⚠️ AVISO, nunca bloqueio: prescrever não pode depender de alguém arrumar o cadastro
- * do produto, e o item digitado à mão (sem produto) segue fora disto.
- */
-function faltaConteudoDaEmbalagem(args: {
-  tipo:       TipoItem;
-  produto:    MedicamentoCat | null | undefined;
-  unidade:    string | null;
-  dosagem:    string | null;
-}): boolean {
-  if (args.tipo !== 'MEDICAMENTO' || !args.produto) return false;
-  if (args.produto.multidose === true) return false;
-  if (conteudoDaEmbalagemProduto(args.produto) != null) return false;
-  const un = (args.unidade ?? '').trim().toLowerCase();
-  if (un === '' || un === 'un.' || un === 'un' || un === 'unidade') return false;
-  const dose = Number(String(args.dosagem ?? '').replace(',', '.'));
-  return Number.isFinite(dose) && dose > 0;
-}
+// 🔴 O AVISO "o cadastro deste produto não informa quanto cabe na embalagem"
+// FOI REMOVIDO A PEDIDO (2026-09-23), junto do predicado `faltaConteudoDaEmbalagem`
+// que o acionava. Ele era o NEGATIVO de `embalagensDoCurso`: aparecia quando o
+// produto sem multidose não declara conteúdo e a receita está escrita em unidade de
+// CONTEÚDO, para dizer que o curso inteiro sairia do estoque como UMA embalagem.
+// ⚠️ O COMPORTAMENTO NÃO MUDOU — só o aviso saiu: `embalagensPara` continua
+// devolvendo 1 quando o conteúdo é nulo, no front e no backend. Quem quiser a conta
+// proporcional preenche "Conteúdo da embalagem" em Cadastro › Produtos, como antes.
+// NÃO reintroduzir sem pedido: foi retirado por decisão de tela, não por defeito.
 
 interface FormItem {
   tipo:               TipoItem;
@@ -1557,17 +1532,6 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     else          await handleSalvarEditMode();
   };
 
-  if (alertaEstoque) {
-    return (
-      <AlertaEstoqueModal
-        alertas={alertaEstoque}
-        loading={finalizing}
-        onContinuar={() => executarFinalizacao(true)}
-        onCancelar={() => setAlertaEstoque(null)}
-      />
-    );
-  }
-
   // Conteúdo reutilizável do dropdown de medicamentos (usado em 2 layouts distintos)
   const renderMedList = () => {
     const termo = medBusca.trim();
@@ -1670,10 +1634,6 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     duracaoDias: form.duracaoDias,
   });
 
-  const semConteudoDeclarado = faltaConteudoDaEmbalagem({
-    tipo: form.tipo, produto: medCatalogo, unidade: unidadeCatalogo, dosagem: form.dosagem,
-  });
-
   const itensExibidos = isCreate ? localItens : serverItens;
   const editandoItem  = editingLocalIdx !== null || editingServerId !== null;
 
@@ -1686,6 +1646,23 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     || (!isCreate && canEdit && !isReadOnly && !showItemForm)                      // "Inserir" (abre o form)
     || !isInline                                                                   // "Fechar/Cancelar" do modal
     || (!showItemForm && (canEdit || canFinalizarCancelar) && !isReadOnly);         // "Finalizar"
+
+  // ⚠️ Todo return condicional deste componente fica AQUI, depois do último
+  // hook. Este bloco já esteve ~130 linhas acima, antes do `useCallback` de
+  // `produtoDoItem`: o 409 ESTOQUE_INSUFICIENTE setava `alertaEstoque`, o
+  // re-render saltava aquele hook e o React derrubava a tela inteira com
+  // "Rendered fewer hooks than expected" — o alerta de estoque nunca chegava a
+  // aparecer. Hook novo entra ACIMA daqui.
+  if (alertaEstoque) {
+    return (
+      <AlertaEstoqueModal
+        alertas={alertaEstoque}
+        loading={finalizing}
+        onContinuar={() => executarFinalizacao(true)}
+        onCancelar={() => setAlertaEstoque(null)}
+      />
+    );
+  }
 
   return (
     <div className={isInline ? '' : 'fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4'}>
@@ -2020,8 +1997,18 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                 {/* Frequência + Hora + Duração + Data Início
                     Larguras via fr (não col-span inteiro): Hora Início pediu +30% e Qtd
                     pediu redução — em grid-cols-8 (inteiros) essas frações não cabem, daí
-                    o grid-template-columns explícito só no breakpoint sm+. */}
-                <div className="grid grid-cols-2 sm:grid-cols-[3fr_1.3fr_1.3fr_2fr] gap-3">
+                    o grid-template-columns explícito só no breakpoint sm+.
+
+                    🔴 `items-end` + rótulo QUE QUEBRA (2026-09-23): no MOBILE e no TABLET
+                    o rótulo "DURAÇÃO (DIAS)" invadia o campo vizinho — ele é
+                    `whitespace-nowrap` e a coluna é `minmax(0, 1fr)`/`1.3fr`, ou seja,
+                    ESTREITA e sem obrigação de crescer: o texto simplesmente transbordava
+                    por cima de "HORA INÍCIO". Quem tinha de ceder era o rótulo, não a
+                    grade — as proporções acima foram pedidas.
+                    ⚠️ Quebrar em duas linhas desalinha os campos entre si (um rótulo de 1
+                    linha ao lado de outro de 2). `items-end` alinha as células PELA BASE,
+                    então os inputs continuam na mesma linha e só os rótulos sobem. */}
+                <div className="grid grid-cols-2 sm:grid-cols-[3fr_1.3fr_1.3fr_2fr] gap-3 items-end">
                   <div className="col-span-2 sm:col-span-1">
                     <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 whitespace-nowrap">FREQUÊNCIA *</label>
                     <select value={form.frequencia}
@@ -2036,15 +2023,15 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                       {POSOLOGIAS.map(p => <option key={p.value} value={p.value} className="text-gray-900">{p.label}</option>)}
                     </select>
                   </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 whitespace-nowrap">
+                  <div className="min-w-0">
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 leading-tight">
                       HORA INÍCIO
                     </label>
                     <input type="time" value={form.horaInicio} onChange={e => set('horaInicio', e.target.value)}
                       className={classeErro(erroAcao, 'horaInicio', 'w-full border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-emerald-500')} />
                   </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 whitespace-nowrap">
+                  <div className="min-w-0">
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 leading-tight">
                       {intervaloDias ? QTD_LABEL[form.frequencia] ?? 'QTD. DE VEZES' : 'DURAÇÃO (DIAS)'}{!isDoseUnica && !isUsoContinuo && ' *'}
                     </label>
                     <input type="number" min="1"
@@ -2090,24 +2077,6 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                       <span className="block text-sky-700/80">
                         É essa quantidade que sai do estoque e vai para a fatura — a embalagem
                         aberta não volta para a prateleira.
-                      </span>
-                    </p>
-                  </div>
-                )}
-
-                {/* 🔴 O NEGATIVO do aviso acima: sem o conteúdo no cadastro, o curso
-                    inteiro é debitado e cobrado como UMA embalagem — e nada na tela
-                    dizia isso. Ver `faltaConteudoDaEmbalagem`. */}
-                {semConteudoDeclarado && (
-                  <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
-                    <Package size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
-                    <p className="text-[11px] leading-snug text-amber-800">
-                      O cadastro deste produto não informa <b>quanto cabe na embalagem</b>, então o
-                      curso inteiro sairá do estoque e será cobrado como <b>1 embalagem</b>.
-                      <span className="block text-amber-700/90">
-                        Para a conta sair certa (ex.: 5 doses de 25 {unidadeCatalogo} num frasco de
-                        100 {unidadeCatalogo} = 2 embalagens), preencha “Conteúdo da embalagem” em
-                        Cadastro › Produtos.
                       </span>
                     </p>
                   </div>

@@ -947,7 +947,10 @@ async function fecharFaturasDoMes() {
           // ficava sem fatura corrente — e sem a Assistência Veterinária Mensal, que é
           // recorrente — até o próximo atendimento. `tx` obrigatório: fora dele o RLS
           // recusa a criação (ver `lib/cronTenant.js`).
-          const proxima = await abrirProximaFatura(fatura, { db: tx });
+          // `statusAnterior` é ABERTA por construção: o `findMany` acima só traz ABERTA.
+          // É ele que faz `abreProximoCiclo` distinguir o fechamento do ciclo (abre a
+          // seguinte) da REABERTA fechada de novo (não abre nada).
+          const proxima = await abrirProximaFatura(fatura, { db: tx, statusAnterior: 'ABERTA' });
 
           diario.ok(empresa, `${quem} — fechada, total R$ ${Number(total).toFixed(2)}`
             + (proxima ? ` · fatura ${proxima.mesReferencia ?? 'seguinte'} aberta (#${proxima.id})` : ''));

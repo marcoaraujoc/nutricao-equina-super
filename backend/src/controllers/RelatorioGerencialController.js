@@ -18,7 +18,7 @@
 
 const prisma = require('../lib/prisma').default;
 const { formatAtendimentoNum, valorLiquidoItem } = require('../lib/faturaUtils');
-const { totalFechadoPorFatura } = require('../lib/faturaFechamentoAnimal');
+const { totalFechadoPorFatura, totalPagoAnimalPorFatura } = require('../lib/faturaFechamentoAnimal');
 const { animalVisivelNaEmpresa } = require('../lib/visibilidade');
 
 const SEM_LOCALIZACAO = 'Sem localização';
@@ -208,18 +208,39 @@ async function blocoMelhoresPagadores(propWhere, devedores, periodo) {
   // ordenado por `total` no SQL, o cliente cujo pagamento inteiro estivesse no bloco
   // fechado (total 0) ficaria FORA do top 15 — sem aparecer em lugar nenhum.
   // A consulta é de faturas PAGAS de UM período, então trazer todas é barato.
-  const faturasPagas = await prisma.fatura.findMany({
-    where:  { status: 'PAGA', proprietarioId: { not: null }, mesReferencia: mesRefWhereDoPeriodo(periodo), ...propWhere },
-    select: { id: true, proprietarioId: true, total: true },
+  // 🔴 A CONSULTA NÃO FILTRA MAIS SÓ `status: 'PAGA'` (2026-09-23). Com o PAGAMENTO
+  // POR ANIMAL, o cliente pode ter acertado o bloco de um paciente numa fatura que
+  // segue ABERTA cobrando os outros — dinheiro recebido de verdade, que ficaria fora
+  // do ranking se a lista continuasse sendo só a das faturas quitadas. Por isso vêm
+  // as faturas PAGAS do período E as demais, para somar o `total_pago_animal` delas.
+  const faturasDoPeriodo = await prisma.fatura.findMany({
+    where:  { proprietarioId: { not: null }, mesReferencia: mesRefWhereDoPeriodo(periodo), ...propWhere },
+    select: { id: true, proprietarioId: true, total: true, status: true },
   });
-  if (faturasPagas.length === 0) return [];
+  if (faturasDoPeriodo.length === 0) return [];
 
-  const fechadoPorFatura = await totalFechadoPorFatura(prisma, faturasPagas.map(f => f.id));
+  const [fechadoPorFatura, pagoAnimalPorFatura] = await Promise.all([
+    totalFechadoPorFatura(prisma, faturasDoPeriodo.map(f => f.id)),
+    totalPagoAnimalPorFatura(prisma, faturasDoPeriodo.map(f => f.id)),
+  ]);
   const porProprietario = new Map();
-  for (const f of faturasPagas) {
+  for (const f of faturasDoPeriodo) {
+    const quitada  = f.status === 'PAGA';
+    const pagoBloco = pagoAnimalPorFatura.get(f.id) ?? 0;
+    // Fatura quitada: tudo que ela cobrava foi pago (o bloco fechado inclusive).
+    // Fatura não quitada: só o que foi acertado por paciente é recebido.
+    // ⚠️ `total_pago_animal` NÃO é somado duas vezes na quitada: desde o pagamento
+    // por animal, o valor já acertado sai de `total_fechado` (ver recalcularTotal).
+    const recebido = quitada
+      ? (f.total ?? 0) + (fechadoPorFatura.get(f.id) ?? 0) + pagoBloco
+      : pagoBloco;
+    if (recebido <= 0) continue;
     const atual = porProprietario.get(f.proprietarioId) ?? { proprietarioId: f.proprietarioId, pago: 0, qtd: 0 };
-    atual.pago += (f.total ?? 0) + (fechadoPorFatura.get(f.id) ?? 0);
-    atual.qtd  += 1;
+    atual.pago += recebido;
+    // `qtdFaturasPagas` conta FATURA QUITADA — o acerto de um paciente dentro de uma
+    // fatura aberta não fecha fatura nenhuma, e contá-lo aqui faria a coluna dizer
+    // que o cliente quitou mais faturas do que quitou.
+    if (quitada) atual.qtd += 1;
     porProprietario.set(f.proprietarioId, atual);
   }
   const grupos = [...porProprietario.values()]

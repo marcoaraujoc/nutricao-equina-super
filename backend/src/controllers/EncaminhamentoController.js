@@ -14,6 +14,7 @@ const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 const { animalEstaInativo, bloquearSeAnimalInativo } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const { garantirEspecialidadeDaEmpresa } = require('../lib/catalogoManual');
+const encPrestador = require('../lib/encaminhamentoPrestador');
 
 const INCLUDE = {
   veterinario: { select: { id: true, fullName: true } },
@@ -50,7 +51,7 @@ const EncaminhamentoController = {
         include: INCLUDE,
       });
       if (!item) return res.status(404).json({ error: 'Encaminhamento não encontrado' });
-      res.json({ dados: item });
+      res.json({ dados: await encPrestador.anexar(prisma, item) });
     } catch (err) {
       console.error('Erro ao obter encaminhamento:', err);
       res.status(500).json({ error: 'Erro ao obter encaminhamento' });
@@ -105,7 +106,7 @@ const EncaminhamentoController = {
           : it);
       }
 
-      res.json({ dados, total });
+      res.json({ dados: await encPrestador.anexarEmLista(prisma, dados), total });
     } catch (err) {
       console.error('Erro ao listar encaminhamentos:', err);
       res.status(500).json({ error: 'Erro ao listar encaminhamentos' });
@@ -113,11 +114,33 @@ const EncaminhamentoController = {
   },
 
   // GET /clinica/encaminhamentos/prestadores/:animalId
-  // Especialistas das equipes do escopo do animal para encaminhamento interno:
-  //  - FORNECEDOR (prestador externo): especialidade via cadastro Fornecedor + catálogo;
-  //    encaminhar cria/reativa DesignacaoPrestador (escopo de acesso ao animal).
-  //  - VETERINARIO: especialidade via catálogo (UsuarioEspecialidade); já tem acesso de
-  //    equipe, então encaminhar NÃO cria designação (precisaDesignacao=false).
+  //
+  // 🔴 A ABA "PRESTADOR" LISTA O CADASTRO, NÃO A EQUIPE (2026-09-23).
+  //
+  // Até aqui esta rota varria `MembroEquipe` e devolvia duas coisas misturadas: os
+  // prestadores externos COM login e os VETERINÁRIOS da equipe que tivessem alguma
+  // especialidade. Duas consequências, as duas relatadas:
+  //   • o prestador cadastrado SEM acesso ao sistema (o ferrador, o quiroprata) não
+  //     existia no seletor — `MembroEquipe` só nasce quando há login;
+  //   • o veterinário da própria equipe aparecia como destino de encaminhamento, que
+  //     não é o que a aba se propõe a oferecer. Para ele, o caminho é o destino
+  //     EXTERNO (ou assumir o atendimento).
+  //
+  // Agora a fonte é o CADASTRO — `tb_prestadores` + `tb_fornecedores` —, e a
+  // especialidade sai do `tipo_servico` gravado lá, que é o campo que a tela de
+  // Cadastro › Prestadores preenche.
+  //
+  // ⚠️ FORNECEDOR entra junto de propósito: `PRESTADOR` nasceu em 2026-09-09 e NADA foi
+  // migrado (CLAUDE.md §4) — quem já estava cadastrado segue em `tb_fornecedores`.
+  //
+  // ⚠️ `UsuarioEspecialidade`/`FornecedorEspecialidade` SAÍRAM da conta: elas são o
+  // catálogo de especialidade do USUÁRIO/do vínculo, e era por elas que o veterinário
+  // entrava na lista. A pergunta da tela é "que serviço este prestador presta", e quem
+  // responde isso é o cadastro dele.
+  //
+  // ⚠️ `precisaDesignacao` virou "tem login": designação é ESCOPO DE ACESSO, e sem
+  // usuário não há a quem dar acesso. O encaminhamento para prestador sem login é
+  // registro clínico e não libera o paciente — a tela avisa antes de salvar.
   listarPrestadores: async (req, res) => {
     try {
       const { animalId } = req.params;
@@ -132,166 +155,80 @@ const EncaminhamentoController = {
       });
       if (!animal) return res.status(404).json({ error: 'Animal não encontrado' });
 
-      const equipeIds = await getEquipeIdsDoAnimal(animal, req.equipeId);
-
       const normalizar = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
-      const [membros, servicosFornecedor, servicosPrestador] = await Promise.all([
-        equipeIds.length === 0
-          ? Promise.resolve([])
-          : prisma.membroEquipe.findMany({
-              where: {
-                equipeId: { in: equipeIds },
-                OR: [
-                  // FORNECEDOR **e** PRESTADOR — os dois cargos do prestador externo
-                  // (`lib/cargosPrestador.js`). Deixar PRESTADOR de fora aqui o faria
-                  // sumir do seletor de destino sem nenhum erro na tela.
-                  ...OR_CARGO_PRESTADOR,
-                  { cargo: 'VETERINARIO' }, { cargos: { has: 'VETERINARIO' } },
-                ],
-                user: { ativo: true },
-              },
-              select: {
-                equipeId: true,
-                cargo:    true,
-                cargos:   true,
-                user: { select: { id: true, fullName: true, email: true, phone: true } },
-              },
-            }),
-        prisma.fornecedor.findMany({
-          where: {
-            ativo: true,
-            tipoEntrada: 'CLIENTE',
-            empresaId: req.empresaId ?? null,
-          },
-          select: { tipoServico: true },
-        }),
-        // Mesmo levantamento no cadastro de PRESTADORES — o cargo novo (2026-09-09)
-        // guarda o tipo de serviço lá, e sem isto ele não apareceria no filtro.
-        prisma.prestador.findMany({
-          where: {
-            ativo: true,
-            tipoEntrada: 'CLIENTE',
-            empresaId: req.empresaId ?? null,
-          },
-          select: { tipoServico: true },
-        }),
-      ]);
-
+      // `tb_fornecedores` guarda também quem NÃO é prestador de serviço (a loja, o
+      // laboratório, a farmácia que vende o frasco). Encaminhar paciente para eles não
+      // faz sentido, então o serviço é descartado — e o cadastro que fica sem NENHUM
+      // serviço depois do corte sai da lista inteira.
       const EXCLUIR_SERVICOS = new Set([
         'clinico', 'clinica', 'farmacia', 'loja', 'supermercado', 'laboratorio',
       ]);
 
-      const servicosSet = new Set();
-      for (const f of [...servicosFornecedor, ...servicosPrestador]) {
-        if (!f.tipoServico) continue;
-        for (const s of f.tipoServico.split(',')) {
-          const nome = s.trim();
-          if (nome && !EXCLUIR_SERVICOS.has(normalizar(nome))) servicosSet.add(nome);
-        }
-      }
-      const servicosDisponiveis = [...servicosSet]
-        .sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
+      // Escopo: a empresa do CONTEXTO. O filtro é explícito, e não só o RLS, para a
+      // resposta ser a mesma com e sem o carimbo de tenant (ADMIN de plataforma).
+      const escopoCadastro = { ativo: true, tipoEntrada: 'CLIENTE', empresaId: req.empresaId ?? null };
 
-      if (equipeIds.length === 0) return res.json({ dados: [], servicosDisponiveis });
-
-      const userIds = [...new Set(membros.map(m => m.user.id))];
-
-      const [fornecedores, prestadores, designacoes, userEspecs, fornecedorEspecs] = await Promise.all([
-        prisma.fornecedor.findMany({
-          where:  { userId: { in: userIds } },
-          select: { id: true, userId: true, tipoServico: true },
-        }),
-        // Cadastro do cargo PRESTADOR — o tipoServico dele mora em `tb_prestadores`.
+      const [prestadores, fornecedores] = await Promise.all([
         prisma.prestador.findMany({
-          where:  { userId: { in: userIds } },
-          select: { id: true, userId: true, tipoServico: true },
+          where:  escopoCadastro,
+          select: { id: true, nome: true, email: true, telefone: true, tipoServico: true, userId: true },
         }),
-        prisma.designacaoPrestador.findMany({
-          where:  { animalId: Number(animalId), prestadorId: { in: userIds }, ativo: true },
-          select: { prestadorId: true },
-        }),
-        // Especialidades do catálogo (UsuarioEspecialidade) — membro incluído na equipe
-        // com especialidade aparece mesmo sem/além do tipoServico do cadastro Fornecedor.
-        // ESCOPADO À EMPRESA: a especialidade é POR EMPRESA (migration 20260807000000) —
-        // sem o filtro, o prestador que é ortopedista em OUTRA clínica aparecia aqui como
-        // ortopedista. Vínculo legado (empresaId null) continua valendo, senão o cadastro
-        // anterior à migration sumiria da tela.
-        prisma.usuarioEspecialidade.findMany({
-          where: {
-            userId: { in: userIds },
-            ...(req.empresaId
-              // `tb_usuario_especialidades.empresa_id` é NOT NULL desde a fase 5.
-              ? { empresaId: Number(req.empresaId) }
-              : {}),
-          },
-          select: { userId: true, especialidade: { select: { nome: true } } },
-        }),
-        // Especialidades gravadas no CADASTRO de Fornecedor (FornecedorEspecialidade,
-        // usado quando o cadastro foi feito por /cadastro/fornecedores) — sem isso, um
-        // prestador com 2+ especialidades cadastradas por lá só aparecia com a 1ª (a
-        // única que o campo legado Fornecedor.tipoServico armazena).
-        prisma.fornecedorEspecialidade.findMany({
-          where:  { fornecedor: { userId: { in: userIds } } },
-          select: { fornecedor: { select: { userId: true } }, especialidade: { select: { nome: true } } },
+        prisma.fornecedor.findMany({
+          where:  escopoCadastro,
+          select: { id: true, nome: true, email: true, telefone: true, tipoServico: true, userId: true },
         }),
       ]);
 
-      // Um usuário tem no máximo UM dos dois cadastros (`userId` é @unique nas duas
-      // tabelas), então não há conflito de chave — o Map só reúne as duas origens.
-      const tipoPorUser  = new Map([...fornecedores, ...prestadores].map(f => [f.userId, f.tipoServico]));
-      const designadoSet = new Set(designacoes.map(d => d.prestadorId));
-      const especPorUser = new Map();
-      const addEspec = (userId, nome) => {
-        nome = nome?.trim();
-        if (!userId || !nome) return;
-        const arr = especPorUser.get(userId) ?? [];
-        arr.push(nome);
-        especPorUser.set(userId, arr);
-      };
-      for (const ue of userEspecs) addEspec(ue.userId, ue.especialidade?.nome);
-      for (const fe of fornecedorEspecs) addEspec(fe.fornecedor?.userId, fe.especialidade?.nome);
+      const brutos = [
+        ...prestadores.map(p  => ({ ...p, origem: encPrestador.ORIGENS.PRESTADOR  })),
+        ...fornecedores.map(f => ({ ...f, origem: encPrestador.ORIGENS.FORNECEDOR })),
+      ];
 
-      const vistos = new Set();
-      const dados  = [];
-      for (const m of membros) {
-        if (vistos.has(m.user.id)) continue;
-        vistos.add(m.user.id);
-        // Une tipoServico do cadastro Fornecedor (legado, pode ser CSV) com as
-        // especialidades do catálogo do usuário — sem duplicar nomes
-        const servicos = [...new Set([
-          ...String(tipoPorUser.get(m.user.id) ?? '').split(',').map(s => s.trim()).filter(Boolean),
-          ...(especPorUser.get(m.user.id) ?? []),
-        ])];
-        for (const s of servicos) {
-          if (!EXCLUIR_SERVICOS.has(normalizar(s))) servicosSet.add(s);
-        }
-        // PRESTADOR (cargo FORNECEDOR ou PRESTADOR) precisa de designação (escopo de
-        // acesso ao animal); VETERINARIO
-        // já tem acesso de equipe — encaminhar não altera acesso.
-        const precisaDesignacao = membroEhPrestador(m);
-        // Vet sem nenhuma especialidade não é "especialista" — não entra na lista
-        // (fornecedor entra mesmo sem, para não regredir o comportamento anterior).
-        if (!precisaDesignacao && servicos.length === 0) continue;
+      // Designações ativas DESTE animal — só alcançam quem tem login.
+      const userIds = [...new Set(brutos.map(b => b.userId).filter(Boolean).map(Number))];
+      const designacoes = userIds.length === 0 ? [] : await prisma.designacaoPrestador.findMany({
+        where:  { animalId: Number(animalId), prestadorId: { in: userIds }, ativo: true },
+        select: { prestadorId: true },
+      });
+      const designadoSet = new Set(designacoes.map(d => d.prestadorId));
+
+      const servicosSet = new Set();
+      const dados = [];
+      for (const b of brutos) {
+        const servicos = String(b.tipoServico ?? '')
+          .split(',')
+          .map(x => x.trim())
+          .filter(x => x && !EXCLUIR_SERVICOS.has(normalizar(x)));
+        // Fornecedor que só vende (loja, laboratório) some da lista — não é destino de
+        // paciente, e mantê-lo aqui obrigaria quem encaminha a filtrá-lo com o olho.
+        if (servicos.length === 0) continue;
+        for (const x of servicos) servicosSet.add(x);
+
+        const userId    = b.userId != null ? Number(b.userId) : null;
+        const temAcesso = userId != null;
         dados.push({
-          userId:      m.user.id,
-          fullName:    m.user.fullName,
-          email:       m.user.email,
-          phone:       m.user.phone,
-          tipoServico: servicos.join(', ') || null,
+          cadastroId:     b.id,
+          cadastroOrigem: b.origem,
+          // `userId` segue no payload: é ele que vira `prestadorId` e recebe a
+          // designação. `null` = prestador sem acesso ao sistema.
+          userId,
+          temAcesso,
+          fullName:    b.nome,
+          email:       b.email,
+          phone:       b.telefone,
+          tipoServico: servicos.join(', '),
           servicos,
-          equipeId:    m.equipeId,
-          precisaDesignacao,
-          jaDesignado: precisaDesignacao && designadoSet.has(m.user.id),
+          precisaDesignacao: temAcesso,
+          jaDesignado:       temAcesso && designadoSet.has(userId),
         });
       }
-      dados.sort((a, b) => a.fullName.localeCompare(b.fullName));
+      dados.sort((a, b) => a.fullName.localeCompare(b.fullName, 'pt-BR', { sensitivity: 'base' }));
 
-      // Recalcula com os serviços dos prestadores incluídos
-      const servicosDisponiveisFinal = [...servicosSet]
+      const servicosDisponiveis = [...servicosSet]
         .sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
 
-      res.json({ dados, servicosDisponiveis: servicosDisponiveisFinal });
+      res.json({ dados, servicosDisponiveis });
     } catch (err) {
       console.error('Erro ao listar prestadores:', err);
       res.status(500).json({ error: 'Erro ao listar prestadores' });
@@ -299,24 +236,60 @@ const EncaminhamentoController = {
   },
 
   // POST /clinica/encaminhamentos
-  // body: { animalId, especialidade, motivo, evolucaoId, prestadorId?, veterinarioDestino?,
+  // body: { animalId, especialidade, motivo, evolucaoId,
+  //         prestadorCadastroId? + prestadorCadastroOrigem?, veterinarioDestino?,
   //         clinicaDestino?, urgencia?, observacao?, valor? }
-  // prestadorId presente → cria/reativa DesignacaoPrestador (acesso do prestador ao animal)
+  //
+  // 🔴 O DESTINO INTERNO É O CADASTRO DO PRESTADOR (2026-09-23), não mais um usuário.
+  // A tela manda o par (origem, id) e é AQUI que se resolve o login dele — quando há.
+  // Havendo login, nada muda: `prestadorId` é gravado e a `DesignacaoPrestador` libera
+  // o paciente. Sem login, o encaminhamento é registro clínico e não libera acesso
+  // nenhum (não há a quem dar).
+  //
+  // ⚠️ `prestadorId` cru no body CONTINUA aceito, de propósito: é o contrato antigo, e
+  // quebrá-lo derrubaria qualquer integração/tela que ainda o use. Quando os dois vêm,
+  // o CADASTRO vence — é ele que a tela nova escolhe.
   criar: async (req, res) => {
     try {
       const {
-        animalId, especialidade, motivo, evolucaoId, prestadorId,
+        animalId, especialidade, motivo, evolucaoId,
+        prestadorId: prestadorIdBody,
+        prestadorCadastroId, prestadorCadastroOrigem,
         veterinarioDestino, clinicaDestino, urgencia = 'NORMAL', observacao, valor,
       } = req.body;
 
       if (!animalId || !especialidade || !motivo) {
         return res.status(400).json({ error: 'animalId, especialidade e motivo são obrigatórios' });
       }
-      // Todo encaminhamento tem de dizer PARA QUEM o paciente foi: prestador da equipe
-      // (prestadorId) ou o nome do profissional externo. Sem isso o registro clínico
-      // afirma que houve encaminhamento e não permite saber quem recebeu o paciente —
-      // a clínica continua opcional (o profissional externo pode ser autônomo).
-      if (!prestadorId && !String(veterinarioDestino || '').trim()) {
+
+      // Resolve o cadastro ANTES de qualquer outra coisa: é ele que diz se existe (e
+      // quem é) o login do destino, e a validação de "destino informado" logo abaixo
+      // depende disso.
+      let cadastroDestino = null;
+      if (prestadorCadastroId) {
+        cadastroDestino = await encPrestador.buscarCadastro(prisma, {
+          origem:    prestadorCadastroOrigem,
+          id:        prestadorCadastroId,
+          empresaId: req.empresaId ?? null,
+        });
+        if (!cadastroDestino) {
+          return res.status(400).json({
+            error: 'Prestador não encontrado no cadastro desta clínica',
+            code:  'PRESTADOR_CADASTRO_INVALIDO',
+          });
+        }
+      }
+      // O login do destino: o do cadastro escolhido, ou o `prestadorId` do contrato
+      // antigo. `null` = prestador sem acesso ao sistema (ou destino externo).
+      const prestadorId = cadastroDestino ? cadastroDestino.userId : (prestadorIdBody ?? null);
+
+      // Todo encaminhamento tem de dizer PARA QUEM o paciente foi: um prestador do
+      // cadastro ou o nome do profissional externo. Sem isso o registro clínico afirma
+      // que houve encaminhamento e não permite saber quem recebeu o paciente — a
+      // clínica continua opcional (o profissional externo pode ser autônomo).
+      // ⚠️ O teste é pelo CADASTRO, não por `prestadorId`: o prestador sem login é um
+      // destino perfeitamente informado, e exigir o usuário aqui o recusaria.
+      if (!cadastroDestino && !prestadorId && !String(veterinarioDestino || '').trim()) {
         return res.status(400).json({
           error: 'Informe o profissional de destino',
           code:  'DESTINO_OBRIGATORIO',
@@ -379,8 +352,20 @@ const EncaminhamentoController = {
           },
           select: { equipeId: true, cargo: true, cargos: true },
         });
+        // ⚠️ SEM VÍNCULO DE EQUIPE NÃO É ERRO QUANDO O DESTINO VEIO DO CADASTRO.
+        // `buscarCadastro` já garantiu que o prestador é DESTA empresa; o que falta é
+        // só a equipe em que o animal está, e disso depende a DESIGNAÇÃO — não o
+        // registro clínico. Recusar aqui devolveria "não é membro de uma equipe deste
+        // animal" para um prestador que a própria tela ofereceu, e o veterinário
+        // ficaria sem saída (ele não administra equipe).
+        // Para o contrato ANTIGO (`prestadorId` cru, sem cadastro) o 400 fica: ali o
+        // id chegou de fora e ninguém conferiu a que empresa ele pertence.
         if (memberships.length === 0) {
-          return res.status(400).json({ error: 'Destinatário não é membro de uma equipe deste animal' });
+          if (!cadastroDestino) {
+            return res.status(400).json({ error: 'Destinatário não é membro de uma equipe deste animal' });
+          }
+          // Segue sem designação: o encaminhamento é gravado e o acesso ao paciente
+          // não é liberado. A tela avisa disso antes de salvar.
         }
         // Designação de acesso só para o prestador externo — vet já tem acesso de equipe.
         const fornecedorMemberships = memberships.filter(membroEhPrestador);
@@ -422,6 +407,17 @@ const EncaminhamentoController = {
           include: INCLUDE,
         });
 
+        // ⚠️ UPDATE por SQL cru, SEMPRE depois do `create` — antes acerta zero linhas
+        // em silêncio. Fica fora do `create` porque o client Prisma em execução pode
+        // não conhecer as colunas novas (§11, Windows), e passá-las ao `create` tipado
+        // derrubaria a criação inteira do encaminhamento, não só o campo novo.
+        if (cadastroDestino) {
+          await encPrestador.gravarCadastro(tx, enc.id, {
+            origem: cadastroDestino.origem,
+            id:     cadastroDestino.id,
+          });
+        }
+
         if (prestadorId && equipeDesignacao) {
           await tx.designacaoPrestador.upsert({
             where: {
@@ -457,9 +453,12 @@ const EncaminhamentoController = {
           });
           if (animal?.userId) {
             const atendNum  = formatAtendimentoNum(evolucao.tipoAtendimento, evolucao.numero);
-            const destino   = prestadorId
-              ? (enc.prestador?.fullName ?? especialidade)
-              : (veterinarioDestino || clinicaDestino || 'externo');
+            // O nome do destino na linha da fatura. O CADASTRO vem primeiro: o
+            // prestador sem login não tem `enc.prestador`, e cair em `especialidade`
+            // faria a cobrança dizer "Fisioterapia — Fisioterapia".
+            const destino   = cadastroDestino?.nome
+              ?? (prestadorId ? (enc.prestador?.fullName ?? especialidade) : null)
+              ?? veterinarioDestino ?? clinicaDestino ?? 'externo';
             const descricao = `[${atendNum}] ${especialidade} — ${destino}`;
             // Escopo por empresa: a cobrança entra na fatura DESTA clínica
             const fatura    = await getOrCreateFatura(tx, animal.userId, req.empresaId);
@@ -479,7 +478,10 @@ const EncaminhamentoController = {
         return enc;
       });
 
-      res.status(201).json({ dados: resultado });
+      // A tela pinta o destino a partir do que volta daqui — sem o cadastro anexado, o
+      // encaminhamento recém-criado para um prestador SEM login apareceria como
+      // "Não informado" até a próxima recarga.
+      res.status(201).json({ dados: await encPrestador.anexar(prisma, resultado) });
     } catch (err) {
       console.error('Erro ao criar encaminhamento:', err);
       res.status(500).json({ error: 'Erro ao criar encaminhamento' });

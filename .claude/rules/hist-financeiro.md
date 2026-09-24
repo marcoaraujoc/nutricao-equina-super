@@ -34,6 +34,207 @@ paths:
 As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão em `CLAUDE.md`.
 
 ---
+# Atualizado em: 2026-09-23 (parte 2) (🔴 **O CICLO DA FATURA PAROU DE INVENTAR MÊS, E
+#   "FECHADO" PASSOU A SIGNIFICAR SOMENTE LEITURA** — nos dois lados do balcão.
+#   Migration `20261022000000_encaminhamento_prestador_cadastro`, **APLICADA** (era a
+#   única pendente; a base está com as 210).
+#
+#   1. 🔴 **REABERTA FECHADA DE NOVO NÃO ABRE CICLO NENHUM** (a pedido: "fatura reaberta
+#      fechada, só muda o status para fechada"). Fechar chamava `abrirProximaFatura` por
+#      QUALQUER porta, e a REABERTA é uma fatura ANTIGA destravada para corrigir uma
+#      linha — cada correção de agosto criava uma fatura de setembro, vazia, no seletor
+#      de mês do cliente. Ninguém percebia: nada dá erro ao criar uma fatura a mais.
+#
+#   2. 🔴 **NÃO SE ABRE FATURA DE MÊS FUTURO** (a pedido: "não se deve abrir uma fatura
+#      para o mês seguinte estando no mês anterior"). Fechar a de setembro no dia 23
+#      criava a de outubro com setembro ainda correndo: o seletor oferecia outubro em
+#      setembro e toda cobrança do resto do mês caía lá dentro.
+#      ⚠️ **Não se perde nada esperando**: quando outubro chegar, o primeiro lançamento
+#      clínico cria a fatura sozinho (`getOrCreateFatura`), e a **assistência mensal
+#      continua sendo lançada no FECHAMENTO de cada fatura** — não dependia da criação
+#      antecipada. Foi essa a razão de NÃO resolver o pedido "rebaixando" o mês da nova
+#      fatura para o corrente: isso criaria duas linhas com o mesmo rótulo de mês.
+#
+#      As duas regras moram em **`faturaUtils.abreProximoCiclo(statusAnterior, mesRef)`**
+#      e `abrirProximaFatura` as consulta — então valem pelas QUATRO portas de
+#      fechamento (`fecharFatura`, `atualizarStatus`, `fecharFaturasLote` e o cron), que
+#      passaram a informar `statusAnterior`. Pôr a decisão em cada caller deixaria cada
+#      porta com a sua regra, que é como o elo se perde.
+#
+#   3. 🔴 **UMA FATURA ABERTA NÃO CONVIVE COM UMA REABERTA DO MESMO MÊS** (a pedido).
+#      Duas faturas do mesmo mês partem a cobrança em dois documentos e
+#      `getOrCreateFatura` pega a primeira que achar — metade dos lançamentos vai parar
+#      na outra, sem erro e sem log. Fechado pelos DOIS lados:
+#      · **`getOrCreateFatura` passou a ADOTAR a REABERTA do mês CORRENTE** em vez de
+#        criar uma ABERTA ao lado dela. ⚠️ A exclusão da REABERTA CONTINUA valendo para
+#        a de mês ANTERIOR, que é o caso que a regra de 2026-09-06 protegia (reabrir
+#        agosto e receber a cobrança de setembro). "Reaberta do mês corrente" só existe
+#        quando alguém fechou o mês antes do fim e reabriu — ali ela É a fatura corrente.
+#      · **A reabertura recusa com 400 `FATURA_ABERTA_NO_MES`** quando já existe uma
+#        ABERTA daquele mês, dizendo qual e o que fazer. Guarda para a base que já tenha
+#        o par formado antes desta regra.
+#
+#   4. 🔴 **FECHADO É SOMENTE LEITURA — E AGORA NO SERVIDOR** (a pedido: "se ela for
+#      fechada nada pode ser editada no item do paciente e assim como as demais regras").
+#      O backend só barrava a fatura **PAGA**; quem escondia os botões na FECHADA era a
+#      TELA (`canEdit = ABERTA || REABERTA`). Ou seja, a regra existia na interface e não
+#      no sistema: um `PUT /clinica/faturas/itens/:id` numa fatura fechada passava.
+#      · Guarda única **`bloqueioDeEscritaNaFatura`** em `adicionarItem`/`atualizarItem`/
+#        `removerItem` → `FATURA_PAGA` na paga, `FATURA_NAO_EDITAVEL` na fechada/atrasada.
+#      · A **outra porta de entrada de item** seguiu junto: `OrcamentoController.
+#        lancarNaFatura` (a taxa avulsa do orçamento) só barrava PAGA e CANCELADA.
+#      ⚠️ **Nenhuma cobrança automática é perdida**: o lançamento clínico entra por
+#      `getOrCreateFatura`, que só devolve fatura em aberto (ou cria uma).
+#      ⚠️ Isto REVISA o "Fatura fechada vs paga" de 2026-07 (§12), que dizia que a
+#      FECHADA seguia aceitando correção de item. A saída passou a ser **Reabrir**, que
+#      já existe, grava REABERTA e deixa rastro.
+#
+#   5. 🔴 **O BLOCO DO PACIENTE FECHADO/PAGO TAMBÉM CONGELA** — "a regra de fechar
+#      somente o paciente deve ser a mesma para a fatura". Fechar o bloco apartou aquele
+#      valor do total; pagar registrou que o cliente acertou. A linha continuava
+#      editável, e mudar o valor ali reescrevia uma cobrança já encerrada.
+#      `bloqueioDoBlocoDoPaciente` (→ `faturaFechamentoAnimal.estadoDoItem`, SQL cru com
+#      guarda de coluna) responde `BLOCO_PACIENTE_PAGO` / `BLOCO_PACIENTE_FECHADO`. No
+#      front as faixas "Fechado à parte" e "Já pago" passam `canEdit={false}` e DIZEM a
+#      saída (Reabrir paciente / Estornar pagamento) — sem a frase, some o lápis e a
+#      pessoa conclui que perdeu permissão.
+#
+#   6. 🔴 **A FATURA MOSTRAVA "QTD. 1 · R$ 200,00" PARA DUAS AMPOLAS DE R$ 100,00**
+#      (defeito relatado). `debitarEstoqueDia` devolve o **TOTAL** debitado, e a linha
+#      saía com `quantidade: 1` sempre que o item não fosse entrega por embalagem — o
+#      valor fechava, a quantidade mentia e não havia como conferir o unitário contra a
+#      nota. Agora a quantidade da linha é **`qtdFaturada`**, em três casos:
+#        entrega por EMBALAGEM → as que esta execução abriu (como já era);
+#        unidade AVULSA ('Un.', ampola, comprimido) → as unidades debitadas  ← o defeito;
+#        multidose (mL/g) / sem estoque → 1, que é "uma dose", como sempre foi.
+#      `valor` é sempre `valorDaDose / qtdFaturada`, senão a fatura multiplicaria de novo
+#      o que já saiu multiplicado.
+#      ⚠️ **O multidose fica FORA de propósito**: lá a linha conta DOSES ("5 mL × 3x ao
+#      dia (1 dose)"), e trocar a quantidade para 5 passaria a exibir um R$/mL onde a
+#      tela sempre mostrou o preço da dose. Nada muda para ele.
+#      ⚠️ A mesma correção vale na **FINALIZAÇÃO** (o item que a clínica fornece e o
+#      proprietário aplica em casa): o cliente leva 14 ampolas, e "Quant.: 1" ao lado do
+#      valor de 14 não é conferível.
+#
+#   7. **TELA DE PAGAMENTOS — o MESMO ciclo da fatura** (a pedido: "deverá ser aplicada a
+#      mesma regra que existe na tela de fatura, reabertura, fechamento, etc").
+#      · `contasPagar.statusAoReabrir` — espelho literal do da fatura: pedir ABERTA numa
+#        conta que já fechou grava **REABERTA**, e uma REABERTA nunca volta a ABERTA.
+#      · `contasPagar.transicaoInvalida` — o `UPDATE` era CEGO: gravava o que chegasse,
+#        de onde quer que a conta estivesse. Dava para escrever FECHADA sobre uma conta
+#        **PAGA** e apagar a data do pagamento, em silêncio.
+#      · **Conta PAGA é somente leitura e só o GESTOR a reabre** (mesma regra e mesmo
+#        texto da fatura paga), com faixa explicativa no card e auditoria na reabertura.
+#      · **Remover item só em conta ABERTA/REABERTA** — a rota não checava status nenhum.
+#        O gate é o `JOIN` do `DELETE`, nunca a tela.
+#      · **Coluna "Valor Unit."** na aba de FORNECEDORES: a conta dele é uma COMPRA e é o
+#        unitário que se confere contra a nota; a coluna "Valor" traz o total da linha.
+#        ⚠️ Fora da aba de PRESTADOR, mesmo critério da coluna "Animal" — ali a linha é
+#        um serviço de quantidade 1 e o unitário repetiria o total.
+#      · **"+ Lançar" virou "Novo Pagamento"**: o verbo sozinho não dizia o que nasce do
+#        clique.
+#
+#   8. **FATURAMENTO — três mudanças de tela, a pedido:**
+#      · **O filtro "Todas" SAIU.** Ele misturava num só recorte cliente com fatura
+#        aberta, fechada, atrasada e paga — e, como o mesmo cliente aparece em vários
+#        estados, a lista não respondia pergunta nenhuma. A tela abre em **Aberta**.
+#        ⚠️ Consequência a conhecer: não existe mais uma visão "todos os clientes" —
+#        quem procura alguém por nome usa a BUSCA, que incide ANTES do filtro.
+#        ⚠️ Com isso a aba do detalhe é literalmente o filtro da lista, e a derivação
+#        "o primeiro status que o cliente tem" deixou de existir.
+#      · **Trocar o status DESSELECIONA o cliente.** A lista muda embaixo do filtro e o
+#        cliente aberto podia nem constar nela — o painel seguia mostrando a fatura de
+#        alguém que sumiu da lista ao lado, num estado que não é o filtrado.
+#        ⚠️ Só na troca de VERDADE (`filtroAnteriorRef`): na montagem isto apagaria a
+#        seleção que `?proprietarioId=` faz ao chegar do Relatório de Gestão.
+#      · **A linha "Recebe a fatura por: …" saiu do card do cliente.** A preferência
+#        continua valendo e continua desabilitando o canal não escolhido; o que sobrou
+#        como pista é o `title` do próprio botão, que diz o motivo e onde corrigi-lo.
+#      · **A barra do PACIENTE virou faixa própria**, como a da fatura inteira ("no
+#        mobile e no tablet, coloque os botões da mesma forma que fechar a fatura
+#        total"). Ela morava à direita do nome do cavalo, dividindo a largura com a foto
+#        e a espécie: no celular e no tablet as seis ações com rótulo espremiam tudo.
+#        `ResumoDoBloco` (subtotal) e `AcoesDoBloco` (a faixa) recebem o MESMO objeto de
+#        props, declarado uma vez por bloco — dois cálculos dariam dois números.
+#        ⚠️ Vale em TODAS as larguras: manter a barra ancorada ao nome no desktop
+#        deixaria duas gramáticas para a mesma coisa.
+#
+#   Gates novos: `__tests__/cicloPagamentoEFatura.test.js` (22 casos — verificado que
+#   reprova removendo a regra da REABERTA). Atualizados por mudança DELIBERADA de regra:
+#   `faturaCicloFechamento`, `pacienteInativo`, `produtoMultidose`, `vencimentoCredor`.
+#   ⚠️ A fixture de `faturaCicloFechamento` passou a usar mês RELATIVO a hoje: com o mês
+#   cravado, a regra "não abre mês futuro" faria a suíte mudar de resultado conforme o
+#   calendário andasse.)
+
+---
+
+
+# Atualizado em: 2026-09-23 (🔴 **O BLOCO DO PACIENTE VIROU UMA COBRANÇA COMPLETA** —
+#   as MESMAS ações da fatura inteira, e a baixa por paciente. Migration
+#   `20261021000000_fatura_pagamento_por_animal`, **APLICADA**.
+#   1. 🔴 **PAGAR A FATURA POR ANIMAL** — a outra metade do fechamento por paciente
+#      (2026-09-22). Fechar tirava o bloco do `total` mas o mantinha DEVIDO
+#      (`total_fechado`), porque fechar não é receber; faltava registrar que o acerto à
+#      parte ACONTECEU. Sem isso, quem quitou o cavalo vendido seguia aparecendo devendo
+#      o valor dele em contas a receber, nos devedores e no Dashboard **para sempre**, e
+#      a única saída era marcar a FATURA INTEIRA como paga — cobrando por tabela o que
+#      ainda está aberto dos outros pacientes.
+#      Colunas: `tb_fatura_itens.pago_em`/`pago_por_id` e `tb_faturas.total_pago_animal`.
+#      Rotas `PATCH /clinica/faturas/:id/animais/:animalId/{pagar,estornar}`.
+#      ⚠️ **A marca é do ITEM**, como no fechamento: cobrança que chega DEPOIS do acerto
+#      nasce ABERTA e volta a contar. Com a marca no par (fatura, animal), toda dose
+#      aplicada depois cairia calada dentro de um bloco já acertado.
+#      ⚠️ **PAGAR FECHA o que estiver aberto** (`pagarAnimal` faz os dois UPDATEs): item
+#      pago e aberto ao mesmo tempo é o MESMO valor cobrado pela fatura e contado como
+#      recebido pelo relatório.
+#      ⚠️ **NÃO mexe no status da FATURA.** Ela segue ABERTA cobrando os outros
+#      pacientes — é exatamente isso que o pagamento por animal veio permitir. Há gate
+#      reprovando `status: 'PAGA'` dentro do controller da ação.
+#      ⚠️ **REABRIR não toca no que foi PAGO** (`reabrirAnimal` ganhou `pago_em IS NULL`):
+#      reabrir devolve a linha à cobrança, e sobre um bloco acertado isso é cobrar de
+#      novo o que o cliente pagou. Quem precisa desfazer usa **Estornar**, que é ato de
+#      GESTOR (mesmo critério de reabrir fatura paga) e desfaz SÓ a baixa — o bloco
+#      continua fechado.
+#   2. 🔴 **SÃO TRÊS TOTAIS, e `recalcularTotal` continua sendo a fonte ÚNICA deles**:
+#      `total` (o que cobra) · `total_fechado` (fechado e AINDA devido) · `total_pago_animal`
+#      (já acertado). **PAGO VENCE FECHADO** no laço — todo item pago também está fechado,
+#      e contá-lo nos dois somaria o mesmo valor como recebido E como devido, com a fatura
+#      fechando "certa" na soma das linhas.
+#      ⚠️ Por isso **nenhum dos indicadores de "a receber" precisou mudar**: eles somam
+#      `total + totalFechado` como sempre e ficam certos sozinhos, porque o valor pago SAI
+#      de `totalFechado`. Quem conta RECEBIDO é que aprendeu a somar `total_pago_animal` —
+#      o ranking de melhores pagadores, que passou a varrer as faturas do período (e não
+#      só as quitadas): acerto por paciente em fatura ABERTA é dinheiro que entrou e não
+#      apareceria em lugar nenhum. ⚠️ `qtdFaturasPagas` só conta fatura QUITADA.
+#      ⚠️ Base com o fechamento e SEM o pagamento (migrations distintas) devolve o pago a
+#      `total_fechado` — isto é, segue cobrando, o comportamento anterior. Guarda de
+#      coluna PRÓPRIA (`temColunasPagamento`), nunca colapsada na do fechamento.
+#   3. 🔴 **O BLOCO DO PACIENTE GANHOU AS MESMAS AÇÕES DA FATURA INTEIRA** (a pedido):
+#      Fechar · Marcar como Pago · E-mail · WhatsApp · Imprimir · Exportar (+ Reabrir e
+#      Estornar quando cabem). O bloco É uma cobrança completa — foi para isso que o
+#      fechamento por paciente existe —, e ter só o "Fechar" obrigava a mandar a fatura do
+#      cliente INTEIRA para acertar um cavalo só.
+#      ⚠️ **O documento do paciente leva o total DELE**, recalculado dos itens abertos
+#      daquele animal — copiar `fatura.total` mandaria ao cliente uma folha com os
+#      lançamentos de um cavalo e o valor de todos. O texto do WhatsApp/e-mail diz o nome
+#      do paciente pela mesma razão. Há gate reprovando `total: fatura.total` ali.
+#      ⚠️ E-mail/WhatsApp/Imprimir seguem as FORMAS DE RECEBIMENTO do cliente, igual à
+#      barra da fatura (cinza + motivo no `title`); **Exportar CSV nunca é bloqueado** —
+#      baixa arquivo para a clínica, não entrega nada ao cliente.
+#      ⚠️ **Estornar não aparece para quem não é gestor** (28-d): o backend recusa, e
+#      botão que só falha depois do clique é a armadilha que a §6 fecha.
+#      ⚠️ `ResumoDoBloco` continua sendo DECLARADO UMA VEZ e usado nos dois lugares que
+#      desenham bloco de paciente (os da clínica e os "de outro atendimento deste
+#      cliente") — duas cópias divergiriam, e o que divergiria é quanto se cobra.
+#   4. **A folha e o CSV separam as três situações**: "Fechado à parte" (o que o cliente
+#      ainda deve) passou a excluir o pago, e "Já pago" ganhou faixa PRÓPRIA. Somar o
+#      recebido no fechado é cobrar duas vezes, no papel que vai ao cliente.
+#   Gates: `__tests__/faturaPagamentoPorAnimal.test.js` (21 casos — verificado que
+#   REPROVA ao inverter a precedência pago/fechado e ao tirar a proteção do pago no
+#   reabrir). Os 3 gates do fechamento que mudaram de FORMA foram atualizados, não
+#   afrouxados.)
+
+---
 
 # Atualizado em: 2026-09-22 (parte 4) (🔴 **O QUE A CLÍNICA PAGA GANHOU VENCIMENTO E O
 #   CICLO DA FATURA** — a pedido. Migration `20261020000000_vencimento_credor`,

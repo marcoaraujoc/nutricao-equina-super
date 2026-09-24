@@ -35,12 +35,25 @@ function formatAtendimentoNum(tipo, numero) {
 async function getOrCreateFatura(tx, proprietarioId, empresaId = null) {
   const mesAtual = new Date().toISOString().slice(0, 7); // '2026-06'
   const empresa  = empresaId ? Number(empresaId) : null;
-  // ⚠️ SÓ `ABERTA` — nunca `REABERTA`. A fatura reaberta é um documento ANTIGO
-  // destravado para correção; jogar o lançamento de hoje dentro dela misturaria o
-  // mês corrente com um mês já entregue ao cliente. Ver STATUS_FATURA_ABERTOS.
+  // ⚠️ `REABERTA` de mês ANTERIOR nunca entra: ela é um documento ANTIGO destravado
+  // para correção, e jogar o lançamento de hoje lá dentro misturaria o mês corrente
+  // com um mês já entregue ao cliente. Ver STATUS_FATURA_ABERTOS.
   let fatura = await tx.fatura.findFirst({
     where: { proprietarioId, status: 'ABERTA', empresaId: empresa },
   });
+  // 🔴 A REABERTA **DO MÊS CORRENTE** É A FATURA CORRENTE (2026-09-23).
+  //
+  // Ela só existe quando alguém fechou o mês antes do fim e reabriu — e aí não há
+  // outra fatura daquele mês. Criar uma ABERTA ao lado dela partiria o mês em dois
+  // documentos e violaria a regra pedida: "uma fatura aberta não pode existir no
+  // mesmo mês de uma fatura reaberta". O caso que a exclusão original protegia
+  // (reabrir agosto e receber a cobrança de setembro) segue protegido, porque
+  // aquela é de mês ANTERIOR e continua fora daqui.
+  if (!fatura) {
+    fatura = await tx.fatura.findFirst({
+      where: { proprietarioId, status: 'REABERTA', empresaId: empresa, mesReferencia: mesAtual },
+    });
+  }
   if (!fatura) {
     fatura = await tx.fatura.create({
       data: { proprietarioId, empresaId: empresa, mesReferencia: mesAtual, status: 'ABERTA', total: 0 },
@@ -299,17 +312,22 @@ function normalizarDesconto(descontoTipo, descontoValor) {
  * Recalcula os totais da fatura a partir da soma dos valores LÍQUIDOS dos itens
  * (valor × quantidade − desconto). Aceita tanto o client `prisma` quanto um `tx`.
  *
- * 🔴 SÃO DOIS TOTAIS desde o FECHAMENTO POR ANIMAL (2026-09-22):
+ * 🔴 SÃO TRÊS TOTAIS desde o PAGAMENTO POR ANIMAL (2026-09-23):
  *
- *   total         → o que ESTA fatura cobra: só os itens ABERTOS.
- *   totalFechado  → o que saiu dela por fechamento de bloco de paciente.
+ *   total            → o que ESTA fatura cobra: só os itens ABERTOS.
+ *   totalFechado     → bloco de paciente fechado à parte e AINDA DEVIDO.
+ *   totalPagoAnimal  → bloco de paciente já ACERTADO (`FaturaItem.pagoEm`).
  *
- * Esta função é a FONTE ÚNICA dos dois — é por isso que o fechamento por animal não
- * precisou tocar em nenhum dos ~10 pontos que lançam cobrança: todos passam por aqui.
+ * Esta função é a FONTE ÚNICA dos três — é por isso que fechar e pagar por animal não
+ * precisaram tocar em nenhum dos ~10 pontos que lançam cobrança: todos passam por aqui.
  *
  * ⚠️ O bloco fechado NÃO deixou de ser devido — ele é acertado à parte. Indicador de
  * "contas a receber"/"devedores" soma `total + totalFechado`; somar só `total` faria o
  * fechamento por animal apagar dinheiro do relatório em silêncio.
+ * ⚠️ E é por isso que o PAGO sai de `totalFechado` e vai para coluna própria: quem
+ * soma "a receber" continua somando os mesmos dois campos e fica certo sozinho, sem
+ * precisar aprender a descontar o que já foi recebido. Quem conta RECEBIDO (melhores
+ * pagadores) é que soma `totalPagoAnimal`.
  *
  * ⚠️ O retorno continua sendo só o `total` (o que a fatura cobra): é o que os callers
  * devolvem à tela como `totalFatura`, e mudar isso reescreveria o contrato de 4 rotas.
@@ -320,18 +338,27 @@ function normalizarDesconto(descontoTipo, descontoValor) {
  */
 async function recalcularTotal(client, faturaId) {
   const itens    = await client.faturaItem.findMany({ where: { faturaId } });
-  // Leitura à parte, em SQL cru: o `findMany` tipado não traz `fechadoEm` enquanto o
-  // client Prisma não for regenerado, e sem ela TODO item pareceria aberto — o bloco
-  // fechado voltaria calado para o total. Ver lib/faturaFechamentoAnimal.js.
-  const fechados = await fechamentoAnimal.fechadosDaFatura(client, faturaId);
+  // Leitura à parte, em SQL cru: o `findMany` tipado não traz `fechadoEm`/`pagoEm`
+  // enquanto o client Prisma não for regenerado, e sem elas TODO item pareceria
+  // aberto — o bloco fechado (ou já recebido) voltaria calado para o total da fatura.
+  // Ver lib/faturaFechamentoAnimal.js.
+  const [fechados, pagos] = await Promise.all([
+    fechamentoAnimal.fechadosDaFatura(client, faturaId),
+    fechamentoAnimal.pagosDaFatura(client, faturaId),
+  ]);
 
-  let total = 0, totalFechado = 0;
+  let total = 0, totalFechado = 0, totalPagoAnimal = 0;
   for (const i of itens) {
     const liquido = valorLiquidoItem(i);
-    if (fechados.has(Number(i.id))) totalFechado += liquido;
-    else                            total        += liquido;
+    const id      = Number(i.id);
+    // A ordem importa: PAGO vence FECHADO. Todo item pago também está fechado (quem
+    // paga, fecha — ver `pagarAnimal`), e contá-lo nos dois somaria o mesmo valor
+    // como recebido E como devido.
+    if      (pagos.has(id))    totalPagoAnimal += liquido;
+    else if (fechados.has(id)) totalFechado    += liquido;
+    else                       total           += liquido;
   }
-  await fechamentoAnimal.gravarTotais(client, faturaId, { total, totalFechado });
+  await fechamentoAnimal.gravarTotais(client, faturaId, { total, totalFechado, totalPagoAnimal });
   return total;
 }
 
@@ -644,6 +671,64 @@ function proximoMesReferencia(mesRef) {
   return `${proxAno}-${String(proxMes).padStart(2, '0')}`;
 }
 
+/**
+ * Já existe outra fatura ABERTA deste cliente NESTE mês, nesta empresa?
+ *
+ * 🔴 A regra pedida em 2026-09-23: **uma fatura ABERTA não pode coexistir com uma
+ * REABERTA do MESMO mês**. Duas faturas do mesmo mês partem a cobrança em dois
+ * documentos, e `getOrCreateFatura` pega a primeira que achar — metade dos
+ * lançamentos vai parar na outra, sem erro e sem log.
+ *
+ * ⚠️ É guarda de REABERTURA, não de criação: quem cria a corrente do mês é
+ * `getOrCreateFatura`, e ele já prefere a REABERTA do mês corrente justamente para
+ * não gerar o par. Esta função existe para a base que já tenha o par de antes.
+ */
+async function faturaAbertaNoMes(db, { proprietarioId, empresaId, mesReferencia, exceto = null }) {
+  if (!proprietarioId || !mesReferencia) return null;
+  return db.fatura.findFirst({
+    where: {
+      proprietarioId,
+      empresaId: empresaId ?? null,
+      mesReferencia,
+      status:    'ABERTA',
+      ...(exceto ? { id: { not: exceto } } : {}),
+    },
+    select: { id: true, mesReferencia: true },
+  });
+}
+
+/** 'YYYY-MM' do mês CORRENTE — o mesmo formato de `Fatura.mesReferencia`. */
+function mesReferenciaAtual(hoje = new Date()) {
+  return hoje.toISOString().slice(0, 7);
+}
+
+/**
+ * 🔴 O CICLO SEGUINTE SÓ NASCE QUANDO O MÊS DELE CHEGA (2026-09-23, a pedido).
+ *
+ * Duas regras que a tela pedia e que moram AQUI para valerem por qualquer porta de
+ * fechamento (`fecharFatura`, `atualizarStatus`, `fecharFaturasLote`, cron):
+ *
+ * 1. **REABERTA fechada NÃO abre nada.** Ela é um documento ANTIGO que voltou a ser
+ *    editável; fechá-la de novo é só devolvê-la ao estado em que já estava. Abrir um
+ *    ciclo ali criava uma fatura do mês SEGUINTE toda vez que alguém corrigia uma
+ *    linha de um mês já entregue — e o cliente terminava o ano com faturas vazias de
+ *    meses que nunca foram faturados.
+ *
+ * 2. **Não se abre fatura de mês FUTURO.** Fechar a fatura de setembro no dia 23 de
+ *    setembro criava a de outubro com o mês ainda correndo: o seletor de mês da tela
+ *    passava a oferecer outubro em setembro, e toda cobrança do resto de setembro caía
+ *    dentro dela. Quando outubro chegar, o primeiro lançamento clínico cria a fatura
+ *    do mês sozinho (`getOrCreateFatura`) — não há nada a perder em esperar, e a
+ *    assistência mensal continua sendo lançada no FECHAMENTO de cada fatura.
+ *
+ * @param {string|null} statusAnterior  o status da fatura ANTES de fechar
+ * @param {string|null} mesRefFechada   `mesReferencia` da fatura que acabou de fechar
+ */
+function abreProximoCiclo(statusAnterior, mesRefFechada, hoje = new Date()) {
+  if (statusAnterior === 'REABERTA') return false;
+  return proximoMesReferencia(mesRefFechada) <= mesReferenciaAtual(hoje);
+}
+
 module.exports = {
   formatAtendimentoNum,
   // Fechamento por animal — reexportado para quem já importa `faturaUtils` não ter
@@ -655,6 +740,9 @@ module.exports = {
   faturaEditavel,
   statusAoReabrir,
   proximoMesReferencia,
+  mesReferenciaAtual,
+  abreProximoCiclo,
+  faturaAbertaNoMes,
   adicionarFaturaItem,
   adicionarOuSomarFaturaItem,
   lancarExameNaFatura,

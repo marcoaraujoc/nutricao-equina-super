@@ -23,7 +23,7 @@
 // das demais clínicas nunca é tocado, e o RLS de `tb_medicamentos` é a rede por baixo
 // disso.
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Package, Pill, Syringe, Search, Loader2, Layers, Pencil, Globe, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Package, Pill, Syringe, Search, Loader2, Layers, Pencil, Globe, ToggleLeft, ToggleRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import PageContainer from '../components/PageContainer';
@@ -47,6 +47,11 @@ type TipoProduto = 'medicamento' | 'vacina';
 
 const OPCOES_VAZIAS: OpcoesCatalogo = { formas: [], unidades: [], apresentacoes: [], vias: [] };
 
+/** Itens por página. A janela da lista mostra 12 de cada vez e rola por dentro, então
+ *  a página é pouco maior que a janela: rolar um tanto e então virar a página é um
+ *  percurso previsível — página gigante devolveria o problema que a paginação resolve. */
+const POR_PAGINA = 20;
+
 export default function Produtos() {
   const { podeExecutar, loading: loadingPerms } = usePermissoes();
   const { loading: empresaLoading } = useEmpresa();
@@ -69,9 +74,19 @@ export default function Produtos() {
   // Ativos / Inativos / Todos — mesmo trio das demais telas de cadastro. Sem ele o
   // produto inativado sumiria e não haveria de onde reativá-lo.
   const [filtroAtivo, setFiltroAtivo] = useState<'all' | 'ativo' | 'inativo'>('ativo');
-  // Quantos existem de fato × quantos vieram. A lista tem TETO no backend e, sem
-  // este número, o corte seria indistinguível do fim do catálogo.
+  // Quantos existem de fato × quantos vieram nesta PÁGINA.
   const [total, setTotal] = useState(0);
+  // ── Paginação (2026-09-23, a pedido) ──────────────────────────────────────
+  // A lista era só um TETO no backend: o que passasse dele não tinha caminho de
+  // tela nenhum, e o único recurso oferecido era "refine a busca" — que não serve
+  // a quem quer justamente PERCORRER o catálogo.
+  // ⚠️ Quem CLAMPA a página é o backend (ver `ProdutoController.listar`): inativar o
+  // último item da última página deixaria a tela pedindo uma página que não existe
+  // e recebendo lista vazia, sem erro e sem explicação. O estado abaixo é espelho
+  // do que o backend devolveu, nunca a autoridade.
+  const [pagina, setPagina] = useState(1);
+  const [totalPaginas, setTotalPaginas] = useState(1);
+  const [porPagina, setPorPagina] = useState(POR_PAGINA);
 
   const [erroInline, setErroInline] = useState<string | null>(null);
   const [erroForm,   setErroForm]   = useState<ErroAcaoDados | null>(null);
@@ -104,16 +119,23 @@ export default function Produtos() {
           // 'all' traz ativos e inativos; 'false' só os inativos. O backend já lia
           // este parâmetro — a tela é que nunca o enviava.
           ativo: filtroAtivo === 'all' ? 'all' : filtroAtivo === 'inativo' ? 'false' : undefined,
+          pagina,
+          porPagina: POR_PAGINA,
         },
       });
       if (!res.data) return;                       // GET 403 resolve com data null
       setItens(res.data.dados ?? []);
       setTotal(res.data.total ?? (res.data.dados?.length ?? 0));
+      // ⚠️ A página exibida é a que o BACKEND devolveu, não a que a tela pediu — é
+      // ele quem a clampa contra o total.
+      setPagina(res.data.pagina ?? 1);
+      setTotalPaginas(res.data.totalPaginas ?? 1);
+      setPorPagina(res.data.porPagina ?? POR_PAGINA);
       // A bandeira do multidose vem já na carga — o campo não pode aparecer antes de
       // se saber se a base o grava (senão a marcação some no salvar, calada).
       setMultidoseDisponivel(res.data.recursos?.multidose !== false);
     } catch { /* silencioso */ }
-  }, [tipo, busca, filtroAtivo]);
+  }, [tipo, busca, filtroAtivo, pagina]);
 
   /**
    * As opções de Forma / Unidade / Apresentação / Via saem do BANCO, recortadas por
@@ -130,6 +152,13 @@ export default function Produtos() {
       .finally(() => { if (vivo) setCarregandoOpcoes(false); });
     return () => { vivo = false; };
   }, [tipo, loadingPerms, empresaLoading, podeVer]);
+
+  // Trocar de tipo, buscar ou mudar o filtro VOLTA para a primeira página. Sem isso a
+  // pessoa digita uma busca estando na página 4 e recebe uma lista vazia, porque o
+  // resultado novo não tem quatro páginas — parece "não encontrou nada".
+  // ⚠️ Declarado ANTES do efeito de carga: o `setPagina(1)` chega a tempo de cancelar
+  // o debounce de 300ms abaixo, então não sai uma requisição com a página velha.
+  useEffect(() => { setPagina(1); }, [tipo, busca, filtroAtivo]);
 
   useEffect(() => {
     // ⚠️ Espera o contexto de empresa resolver: chamada escopada por empresa antes
@@ -289,6 +318,11 @@ export default function Produtos() {
   };
 
   const nenhumResultado = useMemo(() => !loading && itens.length === 0, [loading, itens]);
+
+  // Faixa exibida ("Mostrando 21–40 de 137"). Sai de `porPagina` DEVOLVIDO pelo
+  // backend, não da constante local: se o teto de lá mudar, a conta acompanha.
+  const primeiroDaPagina = itens.length === 0 ? 0 : (pagina - 1) * porPagina + 1;
+  const ultimoDaPagina   = (pagina - 1) * porPagina + itens.length;
 
   if (!loadingPerms && !podeVer) {
     return (
@@ -578,13 +612,32 @@ export default function Produtos() {
             </JanelaLista>
           </div>
 
-          {/* ⚠️ A lista tem TETO no backend. Sem esta linha, o corte é indistinguível
-              do fim do catálogo — que era exatamente a queixa de "só traz um pouco". */}
-          {total > itens.length && (
-            <p className="mt-2 text-xs text-gray-400 text-center">
-              Mostrando {itens.length} de {total} — refine a busca para alcançar o restante.
+          {/* ── Paginação ────────────────────────────────────────────────────
+              ⚠️ A contagem fica VISÍVEL mesmo com uma página só: é ela que diz que a
+              lista acabou de verdade. Antes daqui existia só o aviso "refine a busca",
+              e o corte era indistinguível do fim do catálogo.
+              ⚠️ Os botões são CROMO de navegação, não ação de registro — por isso não
+              passam por `AcaoRegistro` (§6). */}
+          <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-xs text-gray-400">
+              {total === 0
+                ? 'Nenhum item'
+                : `Mostrando ${primeiroDaPagina}–${ultimoDaPagina} de ${total}`}
             </p>
-          )}
+            {totalPaginas > 1 && (
+              <div className="flex items-center gap-2">
+                <button type="button" disabled={pagina <= 1} onClick={() => setPagina(n => Math.max(1, n - 1))}
+                  className="flex items-center gap-1 px-3 py-1.5 border border-gray-200 rounded-xl text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent">
+                  <ChevronLeft size={13} /> Anterior
+                </button>
+                <span className="text-xs text-gray-500">Página {pagina} de {totalPaginas}</span>
+                <button type="button" disabled={pagina >= totalPaginas} onClick={() => setPagina(n => n + 1)}
+                  className="flex items-center gap-1 px-3 py-1.5 border border-gray-200 rounded-xl text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent">
+                  Próxima <ChevronRight size={13} />
+                </button>
+              </div>
+            )}
+          </div>
         </>
       )}
 

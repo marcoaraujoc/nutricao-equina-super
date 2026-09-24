@@ -186,8 +186,12 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
   const handleSalvar = async (force = false) => {
     if (!form.nome.trim())             { setErroInline('Nome é obrigatório'); return; }
     if (!form.tipoServico)             { setErroInline('Selecione o tipo de fornecedor'); return; }
-    if (!form.email.trim())            { setErroInline('E-mail é obrigatório'); return; }
-    if (!isValidEmail(form.email))     { setErroInline('Informe um e-mail válido'); return; }
+    // ⚠️ E-mail é OPCIONAL (2026-09-23, a pedido) — mesma regra da tela
+    // `/cadastro/fornecedores`, que nunca o exigiu: fornecedor de balcão muitas
+    // vezes não tem e-mail, e a obrigatoriedade daqui impedia o cadastro rápido
+    // a partir da Farmácia / do Estoque de Vacinas. Quando PREENCHIDO, continua
+    // tendo de ser válido — o que sai da conta é a exigência, não a validação.
+    if (form.email.trim() && !isValidEmail(form.email)) { setErroInline('Informe um e-mail válido'); return; }
     if (!form.telefone.trim())         { setErroInline('Telefone é obrigatório'); return; }
     const docCPF  = form.cpf.replace(/\D/g,'');
     const docCNPJ = form.cnpj.replace(/\D/g,'');
@@ -329,7 +333,7 @@ export default function ModalNovoFornecedor({ onSalvo, onClose }: Props) {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className={lbl}>E-mail *</label>
+                  <label className={lbl}>E-mail</label>
                   <input type="email" value={form.email}
                     onChange={e => upd({ email: e.target.value })}
                     placeholder="email@exemplo.com" className={inp} />

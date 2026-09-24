@@ -32,6 +32,10 @@ interface ItemMin   {
   /** Bloco do paciente FECHADO À PARTE (2026-09-22): a linha continua no documento e
    *  fica FORA do total da fatura — é cobrada separadamente. `null` = aberta. */
   fechadoEm?: string | null;
+  /** Bloco do paciente JÁ ACERTADO (2026-09-23). A linha continua no documento — o
+   *  cliente precisa ver o que pagou —, fora do total e marcada como PAGA. Item pago
+   *  é sempre item fechado, por isso a folha o tira do "a acertar à parte". */
+  pagoEm?: string | null;
 }
 
 /**
@@ -177,7 +181,9 @@ export function gerarHtmlFatura(
 
   const linhasGrupos = [...grupos.values()].map(g => {
     const abertos  = g.itens.filter(i => !i.fechadoEm);
-    const fechados = g.itens.filter(i => !!i.fechadoEm);
+    // Pago sai do "fechado à parte": aquele número é o que o cliente AINDA deve
+    // acertar, e somar o já recebido ali faria a folha cobrar duas vezes.
+    const fechados = g.itens.filter(i => !!i.fechadoEm && !i.pagoEm);
     const subtotal        = abertos.reduce((s, i) => s + totalItem(i), 0);
     const subtotalFechado = fechados.reduce((s, i) => s + totalItem(i), 0);
     const blocoFechado = fechados.length === 0 ? '' : `
@@ -195,7 +201,8 @@ export function gerarHtmlFatura(
       ${blocoFechado}`;
   }).join('');
 
-  const totalFechado = fatura.itens.filter(i => !!i.fechadoEm).reduce((s, i) => s + totalItem(i), 0);
+  const totalFechado = fatura.itens.filter(i => !!i.fechadoEm && !i.pagoEm).reduce((s, i) => s + totalItem(i), 0);
+  const totalPagoAparte = fatura.itens.filter(i => !!i.pagoEm).reduce((s, i) => s + totalItem(i), 0);
 
   const html = `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -287,6 +294,10 @@ export function gerarHtmlFatura(
     <span style="font-size:11px;color:#92400e">Fechado à parte (cobrado separadamente, fora do total acima)</span>
     <span style="font-size:14px;font-weight:700;color:#b45309">${brl(totalFechado)}</span>
   </div>` : ''}
+  ${totalPagoAparte > 0 ? `<div style="margin-top:8px;padding:8px 20px;border:1px solid #a7f3d0;background:#ecfdf5;border-radius:8px;display:flex;justify-content:space-between;align-items:center">
+    <span style="font-size:11px;color:#065f46">Já pago (acertado à parte — nada a pagar destes lançamentos)</span>
+    <span style="font-size:14px;font-weight:700;color:#047857">${brl(totalPagoAparte)}</span>
+  </div>` : ''}
 
   ${blocoPagamentoHtml(recebimento)}
 
@@ -338,15 +349,19 @@ export function exportarFaturaCSV(fatura: FaturaMin, animais: AnimalMin[]) {
       // ⚠️ Coluna nova em vez de LINHA a menos: tirar o item fechado do arquivo mudaria
       // o número de linhas que o financeiro usa como base de conferência, e o valor
       // "sumiria" do CSV sem nada explicando.
-      item.fechadoEm ? 'Fechado à parte' : 'Em aberto',
+      item.pagoEm ? 'Pago à parte' : item.fechadoEm ? 'Fechado à parte' : 'Em aberto',
     ]);
   }
 
-  const totalFechadoCsv = fatura.itens.filter(i => !!i.fechadoEm).reduce((s, i) => s + totalItem(i), 0);
+  const totalFechadoCsv = fatura.itens.filter(i => !!i.fechadoEm && !i.pagoEm).reduce((s, i) => s + totalItem(i), 0);
+  const totalPagoCsv    = fatura.itens.filter(i => !!i.pagoEm).reduce((s, i) => s + totalItem(i), 0);
   linhas.push(['']);
   linhas.push(['', '', '', '', '', 'TOTAL', fatura.total.toFixed(2).replace('.', ',')]);
   if (totalFechadoCsv > 0) {
     linhas.push(['', '', '', '', '', 'FECHADO À PARTE', totalFechadoCsv.toFixed(2).replace('.', ',')]);
+  }
+  if (totalPagoCsv > 0) {
+    linhas.push(['', '', '', '', '', 'JÁ PAGO À PARTE', totalPagoCsv.toFixed(2).replace('.', ',')]);
   }
 
   const csv = linhas

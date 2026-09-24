@@ -1,7 +1,16 @@
 // src/pages/SubModuloEncaminhamento.tsx
-// Encaminhamentos clínicos — destino interno (prestador da equipe, ex: quiroprata,
-// ferrador) ou externo (texto livre). Encaminhar para prestador da equipe libera o
-// acesso dele a ESTE animal (DesignacaoPrestador); concluir/cancelar encerra o acesso.
+// Encaminhamentos clínicos — destino PRESTADOR (do cadastro: quiroprata, ferrador,
+// fisioterapeuta) ou EXTERNO (texto livre).
+//
+// 🔴 A aba "Prestador da equipe" virou "Prestador" e passou a listar o CADASTRO
+// (2026-09-23). Antes ela varria a EQUIPE, o que produzia dois erros ao mesmo tempo: o
+// prestador cadastrado SEM acesso ao sistema não aparecia (não há `MembroEquipe` sem
+// login) e o VETERINÁRIO da própria equipe aparecia como destino. A especialidade
+// agora sai do "tipo de serviço" gravado em Cadastro › Prestadores.
+//
+// ⚠️ Encaminhar para prestador COM login libera o acesso dele a ESTE animal
+// (DesignacaoPrestador); concluir/cancelar encerra o acesso. Prestador SEM login é um
+// destino válido, mas não recebe acesso — a tela diz isso antes de salvar.
 //
 // No destino EXTERNO a especialidade é um COMBOBOX, não um <select> fechado: quem é de
 // fora pode ter uma área que o catálogo da clínica não cobre (quiropraxia, acupuntura,
@@ -38,18 +47,34 @@ type DestinoTipo = 'EQUIPE' | 'EXTERNO';
 // que `classeErro` usa para destacar a borda do input.
 type CampoForm   = 'especialidade' | 'prestador' | 'profissional' | 'motivo';
 
+/**
+ * Prestador OFERECIDO COMO DESTINO — vem do CADASTRO (Cadastro › Prestadores e
+ * Fornecedores), não mais da equipe (2026-09-23).
+ *
+ * ⚠️ `userId` é NULO quando o prestador foi cadastrado sem acesso ao sistema. Ele
+ * continua sendo um destino válido; o que ele não recebe é a DESIGNAÇÃO, porque
+ * designação é escopo de acesso e não há a quem dar. Quem endereça o prestador é o par
+ * `(cadastroOrigem, cadastroId)`.
+ */
 interface Prestador {
-  userId:      number;
+  cadastroId:     number;
+  cadastroOrigem: 'PRESTADOR' | 'FORNECEDOR';
+  /** Login do prestador — `null` quando ele não tem acesso ao sistema. */
+  userId:      number | null;
+  temAcesso:   boolean;
   fullName:    string;
-  email:       string;
+  email:       string | null;
   phone:       string | null;
   tipoServico: string | null;
-  /** Serviços/especialidades individuais (tipoServico legado + catálogo do usuário) */
+  /** Tipos de serviço do cadastro, já separados do CSV pelo backend */
   servicos?:   string[];
-  /** FORNECEDOR (true) ganha acesso ao animal via designação; VETERINARIO (false) já tem acesso de equipe */
+  /** Tendo login (true), encaminhar libera o acesso dele a este paciente */
   precisaDesignacao?: boolean;
   jaDesignado: boolean;
 }
+
+/** Endereço estável do prestador na lista — serve de `key` e de comparação de seleção. */
+const chaveDoPrestador = (p: Prestador): string => `${p.cadastroOrigem}-${p.cadastroId}`;
 
 // Serviços do prestador como lista — usa `servicos` do backend; fallback: CSV do tipoServico
 const servicosDoPrestador = (p: Prestador): string[] =>
@@ -72,6 +97,11 @@ interface Encaminhamento {
   observacao:         string | null;
   prestadorId:        number | null;
   prestador:          { id: number; fullName: string } | null;
+  // Cadastro de destino (migration 20261022000000) — é o que dá o NOME quando o
+  // prestador não tem login e, portanto, não há `prestador` para resolver.
+  prestadorCadastroId?:     number | null;
+  prestadorCadastroOrigem?: 'PRESTADOR' | 'FORNECEDOR' | null;
+  prestadorCadastroNome?:   string | null;
   veterinario:        { id: number; fullName: string } | null;
   // Justificativa do CANCELAMENTO (não confundir com `motivo`, que é o motivo do
   // ENCAMINHAMENTO em si). O registro não tem coluna própria — o backend a resolve
@@ -117,10 +147,20 @@ const formatData = (iso: string) =>
 
 // ─── Helpers de item ──────────────────────────────────────────────────────────
 
+/**
+ * Quem recebeu o paciente.
+ *
+ * ⚠️ "Interno" passou a ser "veio do CADASTRO de prestador" (2026-09-23), e não "tem
+ * login": o prestador cadastrado sem acesso ao sistema é destino interno igual — ele só
+ * não recebe a designação. Olhar apenas `enc.prestador` faria o encaminhamento para ele
+ * aparecer como EXTERNO e sem nome ("Não informado"), porque os campos de texto livre
+ * do destino externo estão vazios nesse caso.
+ */
 const getDestino = (enc: Encaminhamento): { destino: string; interno: boolean } => {
-  const interno = !!enc.prestador;
+  const nomeCadastro = enc.prestadorCadastroNome ?? null;
+  const interno = !!enc.prestador || !!enc.prestadorCadastroId;
   const destino = interno
-    ? enc.prestador!.fullName
+    ? (nomeCadastro ?? enc.prestador?.fullName ?? 'Não informado')
     : [enc.veterinarioDestino, enc.clinicaDestino].filter(Boolean).join(' — ') || 'Não informado';
   return { destino, interno };
 };
@@ -131,7 +171,7 @@ const montarTextoEncaminhamento = (enc: Encaminhamento): string => {
   return [
     '*Encaminhamento*',
     `Especialidade: ${enc.especialidade}`,
-    `Destino: ${destino}${interno ? ' (prestador da equipe)' : ' (externo)'}`,
+    `Destino: ${destino}${interno ? ' (prestador)' : ' (externo)'}`,
     enc.urgencia !== 'NORMAL' ? `Urgência: ${urgencia.label}` : '',
     `Data: ${formatData(enc.dataEncaminhamento)}`,
     enc.veterinario ? `Responsável: ${enc.veterinario.fullName}` : '',
@@ -252,7 +292,10 @@ function EncaminhamentoCard({ enc, animal, podeEditar, podeFinalizar, podeCompar
         </p>
       )}
 
-      {interno && enc.status === 'PENDENTE' && (
+      {/* ⚠️ `enc.prestadorId` (o LOGIN), nunca `interno`: desde 2026-09-23 o destino
+          interno pode ser um prestador cadastrado SEM acesso ao sistema, e para ele não
+          existe designação — afirmar "com acesso a este paciente" seria falso. */}
+      {enc.prestadorId != null && enc.status === 'PENDENTE' && (
         <p className="flex items-center gap-1 mt-1 text-[11px] text-emerald-700">
           <ShieldCheck size={12} className="flex-shrink-0" /> Prestador com acesso a este paciente
         </p>
@@ -316,7 +359,7 @@ function EncaminhamentoRow({ enc, animal, podeEditar, podeFinalizar, podeCompart
             : <ExternalLink size={12} className="text-gray-400 flex-shrink-0" />}
           <span className="truncate">{destino}</span>
         </p>
-        <span className="text-[10px] text-gray-400">{interno ? 'prestador da equipe' : 'externo'}</span>
+        <span className="text-[10px] text-gray-400">{interno ? 'prestador' : 'externo'}</span>
       </td>
       <td className="px-4 py-3 whitespace-nowrap">
         <p className="text-xs font-medium text-gray-800">{enc.veterinario?.fullName ?? '—'}</p>
@@ -460,7 +503,10 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
     return () => { cancelado = true; };
   }, [animalId]);
 
-  // União: especialidades do catálogo (banco) + serviços dos prestadores da equipe
+  // União: especialidades do catálogo (banco) + tipos de serviço dos prestadores
+  // cadastrados. A lista serve aos DOIS destinos: no EXTERNO ela é sugestão de um
+  // combobox aberto, então uma especialidade que só um prestador presta continua
+  // disponível para quem é de fora.
   const servicos = useMemo(() =>
     [...new Set([...servicosDisponiveis, ...especialidadesBanco])]
       .sort((a, b) => a.localeCompare(b, 'pt-BR')),
@@ -511,7 +557,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
       return;
     }
     if (destinoTipo === 'EQUIPE' && !prestadorSel) {
-      reprovar('prestador', 'Selecione o prestador da equipe', refEspecEquipe.current);
+      reprovar('prestador', 'Selecione o prestador', refEspecEquipe.current);
       return;
     }
     // Profissional é OBRIGATÓRIO no destino EXTERNO: sem o nome, o encaminhamento não
@@ -534,13 +580,19 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
         motivo:             motivo.trim(),
         urgencia,
         observacao:         observacao.trim() || undefined,
-        prestadorId:        destinoTipo === 'EQUIPE' ? prestadorSel?.userId : undefined,
+        // O destino interno é o CADASTRO, não o usuário: é o backend que resolve o
+        // login a partir dele (e grava `prestadorId` quando existe). Mandar o `userId`
+        // daqui deixaria de fora justamente o prestador sem acesso ao sistema.
+        prestadorCadastroId:     destinoTipo === 'EQUIPE' ? prestadorSel?.cadastroId : undefined,
+        prestadorCadastroOrigem: destinoTipo === 'EQUIPE' ? prestadorSel?.cadastroOrigem : undefined,
         veterinarioDestino: destinoTipo === 'EXTERNO' ? vetDestino.trim() || undefined : undefined,
         clinicaDestino:     destinoTipo === 'EXTERNO' ? clinicaDestino.trim() || undefined : undefined,
       });
       toast.success(
         destinoTipo === 'EQUIPE'
-          ? (prestadorSel?.precisaDesignacao !== false
+          // Só quem TEM login ganha acesso ao paciente. Prometer "acesso liberado" para
+          // quem não tem usuário seria mentira na confirmação da ação.
+          ? (prestadorSel?.temAcesso
               ? `Encaminhado para ${prestadorSel?.fullName} — acesso ao paciente liberado`
               : `Encaminhado para ${prestadorSel?.fullName}`)
           : 'Encaminhamento registrado');
@@ -564,7 +616,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
       {/* Tipo de destino */}
       <div className="flex gap-2">
         {([
-          { key: 'EQUIPE',  label: 'Prestador da equipe', icon: <UserCheck size={13} /> },
+          { key: 'EQUIPE',  label: 'Prestador', icon: <UserCheck size={13} /> },
           { key: 'EXTERNO', label: 'Profissional externo', icon: <ExternalLink size={13} /> },
         ] as { key: DestinoTipo; label: string; icon: React.ReactNode }[]).map(opt => (
           <button key={opt.key} onClick={() => { setDestinoTipo(opt.key); setPrestadorSel(null); setEspecialidade(''); setFiltroServico(''); setErro(null); }}
@@ -609,24 +661,31 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
               <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5">
                 <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
                 <span>
-                  Nenhum profissional com a especialidade {filtroServico} na equipe deste paciente.
-                  Cadastre a especialidade no profissional (Cadastro Pessoal) ou inclua um
-                  fornecedor pela aba Equipe do Controle de Acesso e tente novamente.
+                  Nenhum prestador com o tipo de serviço {filtroServico} cadastrado nesta clínica.
+                  Cadastre-o em <strong>Cadastro › Prestadores</strong> (o tipo de serviço é o que
+                  alimenta esta lista) ou use <strong>Profissional externo</strong>.
                 </span>
               </div>
             ) : (
               <div className="space-y-1.5 max-h-56 overflow-y-auto">
-                {prestadoresFiltrados.map(p => (
-                  <button key={p.userId} onClick={() => selecionarPrestador(p)}
+                {/* ⚠️ A chave e a comparação de seleção são o par (origem, id) do
+                    CADASTRO, nunca `userId`: prestador sem acesso ao sistema tem
+                    `userId` nulo, e `key={null}` colapsaria todos eles num item só —
+                    selecionar um marcaria os outros. */}
+                {prestadoresFiltrados.map(p => {
+                  const selecionado = prestadorSel != null
+                    && chaveDoPrestador(prestadorSel) === chaveDoPrestador(p);
+                  return (
+                  <button key={chaveDoPrestador(p)} onClick={() => selecionarPrestador(p)}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors ${
-                      prestadorSel?.userId === p.userId
+                      selecionado
                         ? 'border-emerald-500 bg-emerald-50'
                         : 'border-gray-200 bg-white hover:border-emerald-300'
                     }`}>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-900 truncate">{p.fullName}</p>
                       <p className="text-[11px] text-gray-400 truncate">
-                        {p.tipoServico ?? 'Especialidade não informada'}
+                        {p.tipoServico ?? 'Tipo de serviço não informado'}
                         {p.phone ? ` · ${p.phone}` : ''}
                       </p>
                     </div>
@@ -635,16 +694,20 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
                         já tem acesso
                       </span>
                     )}
-                    {prestadorSel?.userId === p.userId && (
+                    {selecionado && (
                       <Check size={15} className="text-emerald-600 flex-shrink-0" />
                     )}
                   </button>
-                ))}
+                  );
+                })}
               </div>
             )
           )}
 
-          {prestadorSel && prestadorSel.precisaDesignacao !== false && !prestadorSel.jaDesignado && (
+          {/* O QUE SALVAR VAI FAZER COM O ACESSO — três respostas, e nenhuma pode ser
+              colapsada nas outras: liberar agora, já estar liberado, ou não haver
+              acesso a liberar (prestador cadastrado sem login). */}
+          {prestadorSel && prestadorSel.temAcesso && !prestadorSel.jaDesignado && (
             <div className="flex items-start gap-2 text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">
               <ShieldCheck size={13} className="flex-shrink-0 mt-0.5" />
               <span>
@@ -654,11 +717,14 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
             </div>
           )}
 
-          {prestadorSel && prestadorSel.precisaDesignacao === false && (
-            <div className="flex items-start gap-2 text-[11px] text-gray-500 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
-              <UserCheck size={13} className="flex-shrink-0 mt-0.5 text-emerald-600" />
+          {prestadorSel && !prestadorSel.temAcesso && (
+            <div className="flex items-start gap-2 text-[11px] text-gray-600 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2">
+              <UserCheck size={13} className="flex-shrink-0 mt-0.5 text-gray-400" />
               <span>
-                <strong>{prestadorSel.fullName}</strong> é veterinário da equipe e já tem acesso a este paciente.
+                <strong>{prestadorSel.fullName}</strong> não tem acesso ao sistema, então o
+                encaminhamento fica apenas como registro clínico — ele não passa a ver este
+                paciente. Para liberar o acesso, marque “Acesso ao sistema” no cadastro dele em
+                Cadastro › Prestadores.
               </span>
             </div>
           )}
@@ -892,7 +958,7 @@ export default function SubModuloEncaminhamento({ animalId, animal, evolucaoId, 
 
   const LIMIT_ENC = 10;
   // Ordena o histórico inteiro e só então pagina.
-  // `destino` é o prestador da equipe OU o profissional/clínica externa — a mesma
+  // `destino` é o prestador do cadastro OU o profissional/clínica externa — a mesma
   // ordem de leitura que a coluna usa para exibi-lo.
   const ordenados = ordenarLista(encaminhamentos, ordenacao, (enc, campo) => {
     switch (campo) {
@@ -936,7 +1002,7 @@ export default function SubModuloEncaminhamento({ animalId, animal, evolucaoId, 
           <p className="text-sm text-gray-400">Nenhum encaminhamento encontrado</p>
           {podeCriar && (
             <p className="text-xs text-gray-300 mt-1">
-              Encaminhe o paciente a um prestador da equipe ou profissional externo.
+              Encaminhe o paciente a um prestador cadastrado ou a um profissional externo.
             </p>
           )}
         </div>

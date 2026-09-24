@@ -32,6 +32,184 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-09-23 (parte 3) (🔴 **A ABA "PRESTADOR" DO ENCAMINHAMENTO PASSOU
+#   A LISTAR O CADASTRO, NAO A EQUIPE** + a vacina virou corrigivel ate ser aplicada, e o
+#   saldo deixou de recusar o registro dela.
+#
+#   1. **ENCAMINHAMENTO — "Prestador da equipe" virou "Prestador".** `listarPrestadores`
+#      varria `MembroEquipe` e devolvia duas coisas misturadas, com dois estragos que
+#      NAO produzem erro nenhum na tela:
+#        - o prestador cadastrado **SEM acesso ao sistema nao existia no seletor** —
+#          `MembroEquipe` so nasce quando ha login (`PrestadorController` ->
+#          `provisionarLogin`), entao o ferrador e o quiroprata que a clinica cadastrou
+#          sem login simplesmente nao apareciam. Ninguem via falha: via uma lista curta;
+#        - o **VETERINARIO da propria equipe entrava na lista**, por
+#          `UsuarioEspecialidade`. A pergunta da aba e "que servico este prestador
+#          presta", e quem responde isso e o `tipo_servico` do CADASTRO.
+#      Agora a fonte sao `tb_prestadores` + `tb_fornecedores`, e a especialidade sai do
+#      `tipo_servico` gravado em Cadastro > Prestadores. `UsuarioEspecialidade` e
+#      `FornecedorEspecialidade` sairam da conta — era por elas que o vet entrava.
+#      ⚠️ **FORNECEDOR entra junto de PRESTADOR de proposito**: o cargo `PRESTADOR`
+#      nasceu em 2026-09-09 e NADA foi migrado (§4) — quem ja estava cadastrado segue em
+#      `tb_fornecedores`. Ler so `tb_prestadores` sumiria com a maior parte da base.
+#      ⚠️ Fornecedor que so VENDE (loja, laboratorio, farmacia — `EXCLUIR_SERVICOS`) sai
+#      da lista inteira, nao so do filtro: nao e destino de paciente.
+#      **Migration `20261022000000`** (gerada, nao aplicada): o encaminhamento ganhou
+#      `prestador_cadastro_id` + `prestador_cadastro_origem` ('PRESTADOR'|'FORNECEDOR').
+#      Duas tabelas distintas nao cabem numa FK so — e o mesmo par (origem, id) de
+#      `lib/contasPagar.js`. Colunas lidas/gravadas SEMPRE por
+#      `lib/encaminhamentoPrestador.js` (SQL cru com guarda de coluna): passa-las ao
+#      `encaminhamentoClinico.create` tipado com o client defasado derrubaria a CRIACAO
+#      INTEIRA do encaminhamento, nao so o campo novo.
+#      ⚠️ **`prestador_id` (o LOGIN) continua, e continua sendo quem recebe a
+#      `DesignacaoPrestador`.** Designacao e ESCOPO DE ACESSO: sem usuario nao ha a quem
+#      dar acesso. Encaminhar para prestador sem login grava o registro clinico e **NAO
+#      libera o paciente** — a tela diz isso ANTES de salvar, e o selo "Prestador com
+#      acesso a este paciente" passou a olhar `enc.prestadorId`, nunca `interno` (que
+#      agora inclui o prestador sem login).
+#      ⚠️ **Sem vinculo de equipe deixou de ser 400** quando o destino veio do cadastro:
+#      `buscarCadastro` ja garantiu que ele e DESTA empresa, e o que falta e so a equipe
+#      do animal — disso depende a DESIGNACAO, nao o registro clinico. Recusar ali
+#      devolveria "nao e membro de uma equipe deste animal" para um prestador que a
+#      propria tela ofereceu, sem saida para quem nao administra equipe. O 400 fica so
+#      para o contrato ANTIGO (`prestadorId` cru, cuja empresa ninguem conferiu).
+#      ⚠️ A chave da lista na tela e o par `(cadastroOrigem, cadastroId)`, nunca
+#      `userId`: prestador sem login tem `userId` nulo, e `key={null}` colapsaria todos
+#      eles num item so — selecionar um marcaria os outros.
+#      Gate: `__tests__/encaminhamentoPrestadorCadastro.test.js` (verificado que reprova).
+#
+#   2. **A VACINA E CORRIGIVEL ATE A DOSE SER APLICADA.** `atualizar` recusava tudo fora
+#      de `SALVA`, "porque a partir da finalizacao pode haver fatura/estoque". O que a
+#      FINALIZADA tem e uma **RESERVA**, nao uma baixa — o debito e a cobranca so
+#      acontecem em `executar`. Na pratica, corrigir a dose de uma vacina que ja estava
+#      na fila do plantao exigia CANCELAR e registrar de novo, e cancelar pede
+#      justificativa e tira o registro do historico util.
+#      Agora `STATUS_ALTERAVEIS = ['SALVA', 'FINALIZADA']`, espelhado no botao da tela
+#      (`STATUS_ALTERAVEIS_VAC`). EXECUTADA e CANCELADA seguem fechadas: ali ha fatura e
+#      baixa de estoque que nao podem ser reescritas por baixo.
+#      🔴 **Alterar uma FINALIZADA REFAZ o destino pela MATRIZ "quem FORNECE x quem
+#      APLICA"** — nao basta gravar os campos, e e o MESMO encadeamento de `finalizar`
+#      de proposito (duas leituras da matriz cobrariam a dose corrigida por um criterio
+#      e a original por outro):
+#        - a RESERVA antiga sai SEMPRE (mudou a vacina, a quantidade ou o quadrante) e e
+#          recriada quando a dose segue indo ao plantao — sem isso o plantao continuava
+#          separando o lote do produto ANTIGO;
+#        - marcar "aplicada pelo proprietario" tira a dose do plantao: ela e debitada,
+#          faturada e agendada AQUI, e o status vai para EXECUTADA. E a unica chance de
+#          cobra-la; parada em FINALIZADA ela esperaria para sempre uma execucao que,
+#          por construcao, nao acontece;
+#        - marcar "fornecida pelo cliente" libera a reserva sem debito nem cobranca.
+#      ⚠️ `info.valor: null` na rechamada de `darBaixaEFaturar`: o preco volta a sair do
+#      LOTE debitado agora, nao do valor de referencia gravado quando a vacina foi
+#      registrada com OUTRO produto.
+#      ⚠️ A cobranca dupla e impedida por `origemJaFaturada`, nunca pela FK — a linha da
+#      fatura e COMPARTILHADA desde 2026-09-17 e pela FK a segunda vacina pareceria
+#      nunca cobrada. Sao **QUATRO** chamadas no controller agora, e o gate
+#      `faturaOrigensConsolidadas.test.js` trava o numero.
+#      ⚠️ Os dois checkboxes e o `status` entraram no `registrarAlteracao`: sem isso o
+#      ledger mostraria a vacina cobrada sem dizer o que mudou.
+#      A tela de Execucao de Prescricao acompanha sozinha (`para-execucao` le ao vivo).
+#      Gate: `__tests__/vacinaAlteravelAteAplicar.test.js` (verificado que reprova).
+#
+#   3. **SALDO DEIXOU DE RECUSAR O REGISTRO DA VACINA.** `registrar` e `atualizar`
+#      devolviam 400 `Lote sem saldo disponivel`. E a MESMA decisao tomada para a
+#      prescricao na parte 2 deste mesmo dia: estoque e CONTROLE, nao autorizacao
+#      clinica — recusar nao devolve o frasco, so apaga o rastro. E o recorte era
+#      igualmente perverso: so alcancava quem escolheu um lote, ou seja, a clinica que
+#      mantem o estoque cadastrado.
+#      ⚠️ **A trava de VALIDADE FICA**, e e assertada como presente no gate: "acabou o
+#      saldo" e "o frasco esta vencido" sao perguntas diferentes, e a segunda e
+#      seguranca do paciente, nao controle de inventario.
+#      ⚠️ A BAIXA continua acontecendo em `executar` — o que saiu foi o BLOQUEIO.
+#
+#   4. **A frase "O cadastro deste produto nao informa quanto cabe na embalagem" saiu da
+#      Prescricao**, a pedido, junto do predicado `faltaConteudoDaEmbalagem`. ⚠️ O
+#      CALCULO nao mudou: `embalagensPara` segue devolvendo 1 quando o conteudo e nulo,
+#      no front e no backend, e a regra das N embalagens continua valendo para o produto
+#      que declara conteudo. Saiu a NARRACAO, nao o comportamento — a secao 10 de
+#      `produtoMultidose.test.js`, que exigia o aviso, foi removida com essa nota.
+#      NAO recriar sem pedido: foi retirado por decisao de tela, nao por defeito.)
+
+---
+
+# Atualizado em: 2026-09-23 (parte 2) (🔴 **O PLANTÃO DEIXOU DE RECUSAR DOSE — nem
+#   por SALDO, nem por ATRASO** — e o rótulo da prescrição parou de se sobrepor no
+#   celular/tablet. Três pedidos, dois deles com o mesmo estrago: a dose foi aplicada na
+#   baia e o sistema não deixava registrar.
+#
+#   1. **ESTOQUE NÃO BLOQUEIA MAIS A EXECUÇÃO.** `executar` devolvia 409
+#      `ESTOQUE_INSUFICIENTE` quando o saldo não cobria a dose. 🔴 O recorte era
+#      perverso: a crítica só alcançava o medicamento **CADASTRADO** no estoque — sem
+#      cadastro, `verificarEstoqueParaDia` ignora (`estoques.length === 0`) e a execução
+#      passava. Ou seja, a única clínica impedida de registrar era a que mantém o
+#      controle em dia.
+#      **Estoque é CONTROLE, não autorização clínica**: recusar o registro não devolve o
+#      frasco — só apaga o rastro (fatura, histórico, conta a pagar). A divergência de
+#      saldo se acerta no Ajuste de Estoque, que existe para isso.
+#      ⚠️ **A baixa continua acontecendo**: `debitarEstoqueDia` debita o que HOUVER, em
+#      FEFO, e para no lote zerado (`if (estoque.qtdEstoque <= 0) continue`) — sem saldo
+#      negativo e sem movimento fantasma. O que faltar não é debitado, e a linha da
+#      fatura sai pelo que de fato saiu da prateleira (o mesmo caminho do item sem
+#      estoque cadastrado, que sempre foi lançado com valor 0 "para o financeiro saber").
+#      ⚠️ **A trava da FINALIZAÇÃO NÃO mudou** (`finalizar`, 409 com escape por
+#      `forcarFinalizacao`): lá a receita ainda vai ser escrita e dá tempo de decidir;
+#      aqui a aplicação já aconteceu. `verificarEstoqueParaDia` segue existindo (e travada
+#      por `produtoMultidose.test.js`) — saiu o BLOQUEIO, não a regra de unidade.
+#      No front saíram junto o painel vermelho "Estoque insuficiente para executar" e o
+#      ramo de 409 do `tratarErroExec`.
+#
+#   2. **DOSE ATRASADA VOLTOU A SER EXECUTÁVEL.** 🔴 `itemDevidoHoje` — o filtro que
+#      decide o que entra no MODAL — comparava `diaISO(proximaDoseEm) === dataRef`,
+#      igualdade ESTRITA. A **LISTA** já usava `<=` desde 2026-08-29 (`itemDeveDoseEm`,
+#      correção do "a dose sumia no dia seguinte"), e o modal não acompanhou: a dose
+#      vencida ficava no card marcada **ATRASADA** e **SUMIA ao abrir** — `itensDoDia`
+#      vazio, "Nenhum item ativo", nada para executar. Era o defeito relatado ("ao abrir a
+#      tela não permite executar porque está atrasada").
+#      ⚠️ **Lista e modal precisam responder à MESMA pergunta.** Divergindo, um oferece a
+#      dose que o outro esconde — e o usuário fica olhando para um botão que não existe.
+#      ⚠️ Atrasar **não inventa dose nova**: o backend classifica ATRASADA e pede a
+#      confirmação simples (`confirmarHorario`), que o modal "Dose atrasada" já fazia —
+#      ele só nunca chegava a ser aberto. Quem tira dose perdida da fila continua sendo o
+#      cron `cancelar_doses_prescricao_perdidas` (23:35), e **só ele**: um filtro de tela
+#      esconde a dose sem cancelar nada.
+#      `proximaDoseRealHoje` (o rótulo da linha) seguiu junto — com `===` a dose vencida
+#      se anunciava "Prevista para 22/09", uma data que já passou, em vez de "Em Execução".
+#
+#   3. **O RÓTULO "DURAÇÃO (DIAS)" INVADIA "HORA INÍCIO"** no mobile e no tablet
+#      (`SubModuloPrescricao`). Ele era `whitespace-nowrap` numa coluna
+#      `minmax(0, 1fr)`/`1.3fr` — estreita e sem obrigação de crescer —, então
+#      transbordava por cima do campo vizinho. Quem cedeu foi o RÓTULO (quebra em duas
+#      linhas), não a grade: as proporções (`3fr_1.3fr_1.3fr_2fr`) foram pedidas.
+#      ⚠️ Rótulo que quebra desalinha os campos entre si — por isso a linha ganhou
+#      `items-end`: as células alinham PELA BASE, os inputs ficam na mesma altura e só os
+#      rótulos sobem.
+#
+#   🔴 As duas travas quebram **EM SILÊNCIO** quando alguém as reintroduz: a primeira
+#   devolve um 409 "legítimo", a segunda apenas não renderiza a linha. Nenhuma derruba
+#   teste de comportamento. Gate estrutural em `__tests__/execucaoSemTravas.test.js`,
+#   verificado que reprova — ele também ASSERTA que a trava da finalização continua de
+#   pé, para "tirei de lá" não virar licença para tirar daqui.)
+
+---
+
+# Atualizado em: 2026-09-23 (🔴 **FINALIZAR PRESCRIÇÃO DERRUBAVA A TELA quando faltava
+#   estoque** — e o alerta que deveria aparecer nunca aparecia.
+#   O 409 `ESTOQUE_INSUFICIENTE` é comportamento ESPERADO do backend: ele existe para o
+#   modal `AlertaEstoqueModal` oferecer o "finalizar mesmo assim". O que estava quebrado
+#   era o caminho até ele: `setAlertaEstoque(...)` re-renderizava o `GrupoModal`, o
+#   `if (alertaEstoque) return <AlertaEstoqueModal/>` saltava ~130 linhas e com elas o
+#   `useCallback` de `produtoDoItem` — React derrubava o componente inteiro com
+#   *"Rendered fewer hooks than expected"* e a tela caía no ErrorBoundary.
+#   ⚠️ **TODO return condicional do componente fica DEPOIS do último hook.** O bloco foi
+#   movido para logo antes do `return` principal, com a explicação no lugar — hook novo
+#   entra ACIMA dele. O early return não é o problema; hook ABAIXO de um early return é.
+#   ⚠️ Sintoma a reconhecer: a ação parece "dar erro 409 e travar tudo". O 409 estava
+#   certo; quem quebrou foi o render que ia mostrar o alerta.
+#   Nada do fluxo de finalização mudou — nem o payload, nem `forcarFinalizacao`, nem o
+#   backend.)
+
+---
+
 # Atualizado em: 2026-09-22 (parte 2) (**exames dentro do Atendimento passaram a gerar
 #   PAGAMENTO AO PRESTADOR** e a tela abre em modo BUSCA — os dois a pedido.
 #   1. O modal de resultado do exame (pedido, avulso e edição) ganhou o campo **"Prestador

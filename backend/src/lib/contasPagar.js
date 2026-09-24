@@ -58,6 +58,40 @@ const ORIGENS = {
   MANUAL:             'MANUAL',
 };
 
+/**
+ * 🔴 O CICLO DA CONTA É O DA FATURA (2026-09-23, a pedido: "deverá ser aplicada a
+ * mesma regra que existe na tela de fatura, reabertura, fechamento, etc.").
+ *
+ * Espelho literal de `faturaUtils.statusAoReabrir`: pedir ABERTA numa conta que já
+ * FECHOU grava **REABERTA**, e uma REABERTA nunca volta a ser ABERTA. A conversão é
+ * do BACKEND para que nenhum chamador precise conhecer a regra — e para que as duas
+ * telas do balcão não possam divergir nela.
+ */
+function statusAoReabrir(statusAtual, statusPedido) {
+  if (statusPedido !== 'ABERTA') return statusPedido;
+  if (statusAtual === 'REABERTA') return 'REABERTA';
+  // CANCELADA fica de fora: desfazer um cancelamento é UNDO, não reabertura.
+  return ['FECHADA', 'PAGA'].includes(statusAtual) ? 'REABERTA' : statusPedido;
+}
+
+/**
+ * A transição pedida é possível a partir do status atual?
+ *
+ * ⚠️ Mesma leitura da fatura: só conta EM ABERTO fecha (ABERTA/REABERTA → FECHADA), e
+ * conta CANCELADA não volta por aqui. Antes `alterarStatus` aceitava qualquer salto —
+ * dava para gravar FECHADA sobre uma conta já PAGA e perder a data do pagamento.
+ */
+function transicaoInvalida(statusAtual, statusFinal) {
+  if (statusAtual === statusFinal) return null;
+  if (statusFinal === 'FECHADA' && !STATUS_ABERTOS.includes(statusAtual)) {
+    return 'Só uma conta aberta ou reaberta pode ser fechada.';
+  }
+  if (statusAtual === 'CANCELADA') {
+    return 'Conta cancelada não muda de status.';
+  }
+  return null;
+}
+
 let _temTabelas = null;
 async function temTabelas() {
   if (_temTabelas !== null) return _temTabelas;
@@ -393,6 +427,23 @@ async function listarContas(empresaId, { tipo, inicio, fim, status, client = pri
   }
 }
 
+/** A conta pelo par (id, empresa) — o estado ANTES de qualquer escrita. */
+async function lerConta(client, empresaId, contaId) {
+  try {
+    const rows = await client.$queryRawUnsafe(
+      `SELECT id, tipo, credor_id, credor_nome, mes_referencia, total, status,
+              observacao, pago_em, created_at
+         FROM schs2vet.tb_contas_pagar
+        WHERE id = $1 AND empresa_id = $2`,
+      Number(contaId), Number(empresaId),
+    );
+    return rows[0] ? normalizarConta(rows[0]) : null;
+  } catch (err) {
+    console.error('contasPagar.lerConta:', err.message);
+    return null;
+  }
+}
+
 /**
  * Muda o status da conta.
  *
@@ -400,13 +451,23 @@ async function listarContas(empresaId, { tipo, inicio, fim, status, client = pri
  * rótulo. Sair de PAGA limpa os dois: um pagamento desfeito não pode deixar a data
  * do anterior no registro, afirmando algo que deixou de valer.
  */
-async function alterarStatus(client, empresaId, contaId, status, usuarioId, pagoEm = null) {
-  if (!STATUS_VALIDOS.includes(status)) {
+async function alterarStatus(client, empresaId, contaId, statusPedido, usuarioId, pagoEm = null) {
+  if (!STATUS_VALIDOS.includes(statusPedido)) {
     // ATRASADA cai aqui de propósito — ela é DERIVADA do vencimento (STATUS_FILTRAVEIS)
     // e gravá-la criaria um segundo dono da verdade.
     return { erro: 'Status inválido.' };
   }
   if (!(await temTabelas())) return { erro: 'Recurso ainda não disponível nesta base.' };
+
+  // 🔴 O ESTADO ATUAL É LIDO ANTES DE GRAVAR — é dele que saem a conversão para
+  // REABERTA e a checagem de transição. Sem esta leitura o UPDATE era cego: gravava
+  // o que chegasse, de onde quer que a conta estivesse.
+  const atual = await lerConta(client, empresaId, contaId);
+  if (!atual) return { erro: 'Conta não encontrada.' };
+
+  const status = statusAoReabrir(atual.status, statusPedido);
+  const impedimento = transicaoInvalida(atual.status, status);
+  if (impedimento) return { erro: impedimento };
   // 🔴 A DATA DE PAGAMENTO É INFORMADA, não deduzida do relógio. O pagamento costuma
   // ser registrado no sistema DEPOIS de acontecer no banco, e carimbar `NOW()` jogaria
   // toda quitação para o dia da digitação — o comprovante diria uma data que não foi a
@@ -462,9 +523,14 @@ async function removerItem(client, empresaId, itemId) {
   if (!(await temTabelas())) return false;
   try {
     const rows = await client.$queryRawUnsafe(
+      // ⚠️ Só conta EM ABERTO (2026-09-23) — a mesma regra de `atualizarValorItem` e do
+      // item de fatura fechada. Conta FECHADA/PAGA é documento que o credor já recebeu;
+      // apagar uma linha dela mudaria o que foi combinado. O gate é o `JOIN`, nunca a
+      // tela: a rota existia sem checagem nenhuma de status.
       `DELETE FROM schs2vet.tb_conta_pagar_itens i
         USING schs2vet.tb_contas_pagar c
         WHERE i.id = $1 AND i.conta_id = c.id AND c.empresa_id = $2
+          AND (c.status = 'ABERTA' OR c.status = 'REABERTA')
         RETURNING c.id AS conta_id`,
       Number(itemId), Number(empresaId),
     );
@@ -514,6 +580,9 @@ async function atualizarValorItem(client, empresaId, itemId, valor) {
 
 module.exports = {
   atualizarValorItem,
+  lerConta,
+  statusAoReabrir,
+  transicaoInvalida,
   TIPOS,
   ORIGENS,
   STATUS_ABERTOS,

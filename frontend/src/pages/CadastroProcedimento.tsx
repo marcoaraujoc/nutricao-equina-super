@@ -28,7 +28,7 @@ import InlineError from '../components/InlineError';
 import ModalJustificativa from '../components/ModalJustificativa';
 import DropdownSelect from '../components/DropdownSelect';
 import {
-  ListChecks, Search, Pencil, X, Loader2, Check, Layers, PackagePlus, ToggleRight, ToggleLeft, Globe,
+  ListChecks, Search, Pencil, X, Loader2, Check, Layers, PackagePlus, ToggleRight, ToggleLeft, Globe, Trash2,
 } from 'lucide-react';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -148,13 +148,14 @@ function SelosProcedimento({ p }: { p: Procedimento }) {
  * clique é a armadilha 28-d.
  */
 function AcoesProcedimento({
-  p, podeEditar, podeExcluir, onEditar, onAlternar,
+  p, podeEditar, podeExcluir, onEditar, onAlternar, onExcluir,
 }: {
   p: Procedimento;
   podeEditar: boolean;
   podeExcluir: boolean;
   onEditar: (p: Procedimento) => void;
   onAlternar: (p: Procedimento) => void;
+  onExcluir: (p: Procedimento) => void;
 }) {
   return (
     <AcoesRegistro>
@@ -166,6 +167,15 @@ function AcoesProcedimento({
         rotulo={p.ativo ? 'Inativar' : 'Ativar'}
         visivel={podeExcluir && p.daEmpresa}
         onClick={() => onAlternar(p)} />
+      {/* EXCLUIR DE VEZ (2026-09-23) — vermelho e por último, depois da chave.
+          ⚠️ Convive com o INATIVAR, não o substitui: quem já foi usado uma vez deixa
+          de ser excluível para sempre, e sem a chave não haveria como tirá-lo da
+          frente. Quem responde "já foi usado?" é o BACKEND (409 `PROCEDIMENTO_EM_USO`)
+          — a tela não tem como saber, e esconder o botão por um palpite deixaria a
+          pessoa sem entender por que ele some em algumas linhas e não em outras. */}
+      <AcaoRegistro tom="cancelar" icone={Trash2} rotulo="Excluir"
+        visivel={podeExcluir && p.daEmpresa}
+        onClick={() => onExcluir(p)} />
     </AcoesRegistro>
   );
 }
@@ -182,13 +192,14 @@ function AcoesProcedimento({
  * sem saber qual dos dois valia.
  */
 function LinhaProcedimento({
-  p, podeEditar, podeExcluir, onEditar, onAlternar,
+  p, podeEditar, podeExcluir, onEditar, onAlternar, onExcluir,
 }: {
   p: Procedimento;
   podeEditar: boolean;
   podeExcluir: boolean;
   onEditar: (p: Procedimento) => void;
   onAlternar: (p: Procedimento) => void;
+  onExcluir: (p: Procedimento) => void;
 }) {
   return (
     <tr className={`border-b border-gray-50 hover:bg-gray-50/60 ${p.ativo ? '' : 'opacity-60'}`}>
@@ -206,7 +217,7 @@ function LinhaProcedimento({
       </td>
       <td className="px-5 py-3 text-right whitespace-nowrap">
         <AcoesProcedimento p={p} podeEditar={podeEditar} podeExcluir={podeExcluir}
-          onEditar={onEditar} onAlternar={onAlternar} />
+          onEditar={onEditar} onAlternar={onAlternar} onExcluir={onExcluir} />
       </td>
     </tr>
   );
@@ -215,13 +226,14 @@ function LinhaProcedimento({
 // ─── Card do procedimento (mobile) ───────────────────────────────────────────
 /** Espelho do desktop — mesmos dados, mesmas ações, mesma regra de visibilidade. */
 function CardProcedimento({
-  p, podeEditar, podeExcluir, onEditar, onAlternar,
+  p, podeEditar, podeExcluir, onEditar, onAlternar, onExcluir,
 }: {
   p: Procedimento;
   podeEditar: boolean;
   podeExcluir: boolean;
   onEditar: (p: Procedimento) => void;
   onAlternar: (p: Procedimento) => void;
+  onExcluir: (p: Procedimento) => void;
 }) {
   return (
     <div data-item-lista className={`bg-white rounded-2xl border border-gray-100 shadow-sm p-4 ${p.ativo ? '' : 'opacity-60'}`}>
@@ -243,7 +255,7 @@ function CardProcedimento({
       {(podeEditar || (podeExcluir && p.daEmpresa)) && (
         <div className="mt-3 pt-3 border-t border-gray-50">
           <AcoesProcedimento p={p} podeEditar={podeEditar} podeExcluir={podeExcluir}
-            onEditar={onEditar} onAlternar={onAlternar} />
+            onEditar={onEditar} onAlternar={onAlternar} onExcluir={onExcluir} />
         </div>
       )}
     </div>
@@ -406,6 +418,14 @@ export default function CadastroProcedimento() {
   const [procEditando,  setProcEditando]  = useState<Procedimento | null>(null);
   const [salvandoProc,  setSalvandoProc]  = useState(false);
   const [inativandoProc, setInativandoProc] = useState<Procedimento | null>(null);
+  // Exclusão DEFINITIVA (2026-09-23) — só o procedimento da clínica que nunca foi
+  // usado. Quem decide isso é o backend; a tela oferece e mostra a recusa.
+  const [excluindoProc, setExcluindoProc] = useState<Procedimento | null>(null);
+  const [excluindoEmCurso, setExcluindoEmCurso] = useState(false);
+  // ⚠️ O erro da exclusão fica NO MODAL, não no topo da página (§6): com o overlay
+  // aberto, a explicação de por que o procedimento não pôde ser excluído ficaria
+  // atrás dele — e o clique pareceria não ter feito nada.
+  const [erroExcluir, setErroExcluir] = useState<string | null>(null);
 
   /**
    * CHEGADA GUIADA — `?especialidade=&busca=<procedimento>` posiciona a tela na
@@ -611,6 +631,32 @@ export default function CadastroProcedimento() {
       const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
       if (!e.isPermissionError) setErroInline(e.response?.data?.error ?? 'Erro ao alterar a situação do procedimento.');
     }
+  };
+
+  const abrirExclusaoProc = (p: Procedimento) => { setErroExcluir(null); setExcluindoProc(p); };
+
+  /**
+   * EXCLUIR DE VEZ. O backend recusa com 409 `PROCEDIMENTO_EM_USO` quando o
+   * procedimento já apareceu numa prescrição/evolução, num orçamento, num combo ou
+   * numa execução lançada — e a mensagem dele já diz ONDE e aponta o inativar como
+   * saída. Por isso o modal continua ABERTO na recusa: fechá-lo apagaria a
+   * explicação junto.
+   *
+   * ⚠️ `motivo` vai em `data` da config do DELETE — o axios não aceita corpo no
+   * segundo argumento (armadilha 33).
+   */
+  const excluirProc = async (p: Procedimento, motivo: string) => {
+    setErroExcluir(null);
+    setExcluindoEmCurso(true);
+    try {
+      await api.delete(`/procedimentos/cadastro/proprio/${p.id}`, { data: { motivo } });
+      toast.success('Procedimento excluído.');
+      setExcluindoProc(null);
+      await carregarProcedimentos(espSel, selEhImagem, filtroAtivoProcs);
+    } catch (err) {
+      const e = err as { isPermissionError?: boolean; response?: { data?: { error?: string } } };
+      if (!e.isPermissionError) setErroExcluir(e.response?.data?.error ?? 'Erro ao excluir o procedimento.');
+    } finally { setExcluindoEmCurso(false); }
   };
 
   // Busca pelo NOME do combo OU pelo seu CONTEÚDO (nome de qualquer procedimento
@@ -904,6 +950,7 @@ export default function CadastroProcedimento() {
                         podeExcluir={podeExcluir}
                         onEditar={abrirEdicaoProc}
                         onAlternar={x => (x.ativo ? setInativandoProc(x) : alternarAtivoProc(x))}
+                        onExcluir={abrirExclusaoProc}
                       />
                     ))}
                   </tbody>
@@ -922,6 +969,7 @@ export default function CadastroProcedimento() {
                       podeExcluir={podeExcluir}
                       onEditar={abrirEdicaoProc}
                       onAlternar={x => (x.ativo ? setInativandoProc(x) : alternarAtivoProc(x))}
+                      onExcluir={abrirExclusaoProc}
                     />
                   ))}
                 </JanelaLista>
@@ -1173,6 +1221,21 @@ export default function CadastroProcedimento() {
         acaoLabel="Inativar"
         onConfirmar={async motivo => { if (inativandoProc) await alternarAtivoProc(inativandoProc, motivo); }}
         onFechar={() => setInativandoProc(null)}
+      />
+
+      {/* Exclusão definitiva — justificativa obrigatória e Auditoria, como toda ação
+          destrutiva (§13, armadilha 33). */}
+      <ModalJustificativa
+        aberto={excluindoProc !== null}
+        titulo="Excluir procedimento"
+        descricao={excluindoProc
+          ? `"${excluindoProc.nome}" será APAGADO do catálogo desta clínica, junto com o valor e os prestadores configurados para ele. Só é possível se ele nunca tiver sido usado — caso contrário, o caminho é inativar.`
+          : undefined}
+        acaoLabel="Excluir"
+        processando={excluindoEmCurso}
+        erro={erroExcluir}
+        onConfirmar={async motivo => { if (excluindoProc) await excluirProc(excluindoProc, motivo); }}
+        onFechar={() => { setExcluindoProc(null); setErroExcluir(null); }}
       />
 
       <ModalJustificativa

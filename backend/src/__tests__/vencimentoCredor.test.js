@@ -185,7 +185,7 @@ describe('gate estrutural — os elos que somem em silêncio', () => {
     const src = ler('lib/contasPagar.js');
     // O `NOW()` continua como fallback de quem não informa — o que não pode é ser o
     // ÚNICO caminho, senão toda quitação vira a data da digitação.
-    expect(src).toMatch(/alterarStatus\(client, empresaId, contaId, status, usuarioId, pagoEm = null\)/);
+    expect(src).toMatch(/alterarStatus\(client, empresaId, contaId, statusPedido, usuarioId, pagoEm = null\)/);
     expect(src).toMatch(/pago_em\s+= CASE WHEN \$3 = 'PAGA' THEN \$5::timestamp/);
     expect(ler('controllers/ContaPagarController.js')).toMatch(/pagoEm \?\? null\)/);
   });

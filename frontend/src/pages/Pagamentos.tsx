@@ -149,7 +149,7 @@ const ORIGEM_LABEL: Record<string, string> = {
 const dataDia = (iso: string | null) => (iso ? formatDate(iso.slice(0, 10)) : '—');
 
 export default function Pagamentos() {
-  const { podeExecutar, loading: loadingPerms } = usePermissoes();
+  const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
   const { loading: empresaLoading, marca } = useEmpresa();
   const { granularidade, data: dataRef } = usePeriodo();
 
@@ -479,9 +479,11 @@ export default function Pagamentos() {
           </p>
         </div>
         {podeLancar && (
+          /* "Novo Pagamento" e não "Lançar" (2026-09-23, a pedido): o verbo sozinho não
+             dizia o que nasce do clique, e a tela inteira fala em pagamentos. */
           <button onClick={() => setMostrarLancar(v => !v)}
             className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-semibold">
-            <Plus size={15} /> Lançar
+            <Plus size={15} /> Novo Pagamento
           </button>
         )}
       </div>
@@ -628,12 +630,31 @@ export default function Pagamentos() {
                 </div>
               </div>
 
+              {/* 🔴 Sem esta faixa, a conta paga só aparece SEM os botões de editar e
+                  a pessoa conclui que perdeu permissão — o mesmo motivo (e o mesmo
+                  texto) da faixa da fatura paga em `Faturamento.tsx`. */}
+              {st === 'PAGA' && (
+                <div className="mx-4 mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+                  <p className="text-xs font-semibold text-emerald-900">Conta paga — somente leitura.</p>
+                  <p className="text-[11px] text-emerald-800 mt-0.5">
+                    Os lançamentos não podem ser alterados nem removidos. Imprimir, exportar
+                    e enviar por e-mail/WhatsApp continuam disponíveis.
+                    {isGestor
+                      ? ' Para voltar a lançar, use Reabrir — a reabertura fica registrada na auditoria.'
+                      : ' Reabrir uma conta paga é ação do gestor.'}
+                  </p>
+                </div>
+              )}
+
               {/* ── Barra de ações — a MESMA da fatura (rótulo visível, tom por
                   significado). Ação sem permissão NÃO é renderizada (28-d). */}
               <div className="flex flex-wrap items-center justify-end gap-2 px-4 py-2.5 border-b border-gray-50 bg-gray-50/40">
                 {/* 🔴 Reabrir existe para que um clique errado em "Marcar como Pago" não
-                    congele a dívida para sempre — e é o que torna REABERTA alcançável. */}
-                {podePagar && (st === 'FECHADA' || st === 'ATRASADA' || st === 'PAGA') && (
+                    congele a dívida para sempre — e é o que torna REABERTA alcançável.
+                    ⚠️ **Da conta PAGA, só o GESTOR reabre** (2026-09-23) — a MESMA regra
+                    da fatura paga, e o backend recusa os demais. Por isso o botão nem
+                    aparece para quem não é: botão que só falha no clique é 28-d. */}
+                {podePagar && (st === 'FECHADA' || st === 'ATRASADA' || (st === 'PAGA' && isGestor)) && (
                   <button onClick={() => mudarStatus(conta, 'REABERTA')} disabled={emCurso}
                     className={`${BTN_ACAO} ${TOM_ACAO.alterar}`}>
                     {emCurso ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />} Reabrir
@@ -705,6 +726,18 @@ export default function Pagamentos() {
                           sem a coluna, o total aparece ao lado de um unitário invisível e não há
                           como conferir a compra contra a nota. */}
                       <th className="px-4 py-2 font-semibold text-center whitespace-nowrap">Qtd.</th>
+                      {/* 🔴 VALOR UNITÁRIO — só na aba de FORNECEDORES (2026-09-23, a
+                          pedido). A conta dele é uma COMPRA, e é o unitário que se
+                          confere contra a nota: a coluna "Valor" traz o total da linha
+                          (unitário × quantidade), então sem esta a pessoa tinha de
+                          dividir de cabeça para saber por quanto cada frasco entrou.
+                          ⚠️ Fora da aba de PRESTADOR de propósito: ali a linha é um
+                          serviço executado, quase sempre de quantidade 1, e o unitário
+                          repetiria o total em toda linha. Mesmo critério da coluna
+                          "Animal", que é só do prestador. */}
+                      {tipo === 'FORNECEDOR' && (
+                        <th className="px-4 py-2 font-semibold text-right whitespace-nowrap">Valor Unit.</th>
+                      )}
                       {/* "Data do Pedido" (2026-09-22): é a data do FATO GERADOR — a entrada
                           no estoque, na compra, e a execução, no serviço —, nunca a do
                           lançamento. */}
@@ -729,6 +762,14 @@ export default function Pagamentos() {
                         </td>
                         <td className="px-4 py-2 text-gray-500 text-xs">{it.solicitanteNome || '—'}</td>
                         <td className="px-4 py-2 text-center text-gray-700 whitespace-nowrap">{fmtQtdForma(it.quantidade ?? 1)}</td>
+                        {tipo === 'FORNECEDOR' && (
+                          <td className="px-4 py-2 text-right text-gray-600 whitespace-nowrap">
+                            {/* "a definir" e não "R$ 0,00": o item sem preço é uma
+                                PENDÊNCIA, e zero se leria como "é de graça". Mesma
+                                decisão da coluna de valor ao lado. */}
+                            {it.valor > 0 ? brl(it.valor) : <span className="text-amber-700 text-xs">a definir</span>}
+                          </td>
+                        )}
                         <td className="px-4 py-2 text-gray-500 text-xs whitespace-nowrap">
                           {/* INSTANTE — `formatDataHora`, nunca `formatDate` (§6): a
                               execução das 22h cairia no dia seguinte lida em UTC. */}
@@ -764,16 +805,19 @@ export default function Pagamentos() {
                           )}
                         </td>
                         <td className="px-4 py-2 text-right">
-                          {/* Conta PAGA é somente leitura: remover item de um pagamento
-                              já quitado mudaria um documento que o credor recebeu. O
-                              mesmo vale para EDITAR o valor — e o backend recusa, então
-                              a ação nem é renderizada (28-d). */}
+                          {/* Conta FECHADA/PAGA é somente leitura: mexer no item de um
+                              pagamento já conferido mudaria um documento que o credor
+                              recebeu. O backend recusa, então a ação nem é renderizada
+                              (28-d). */}
                           <AcoesRegistro>
                             <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Editar valor"
                               visivel={podeLancar && editavel && editandoItem !== it.id}
                               onClick={() => abrirEdicaoValor(it)} />
+                            {/* Só conta EM ABERTO (2026-09-23) — a MESMA regra do item de
+                                fatura fechada, e a que o backend passou a impor. Conta
+                                FECHADA/PAGA é documento que o credor já recebeu. */}
                             <AcaoRegistro tom="cancelar" icone={Trash2} rotulo="Remover"
-                              visivel={podeLancar && st !== 'PAGA' && st !== 'CANCELADA'}
+                              visivel={podeLancar && editavel}
                               onClick={() => setRemovendo(it)} />
                           </AcoesRegistro>
                         </td>

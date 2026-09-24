@@ -1253,7 +1253,14 @@ model EncaminhamentoClinico {
   id                 Int      @id @default(autoincrement())
   animalId           Int
   veterinarioId      Int?
-  prestadorId        Int?     @map("prestador_id") // prestador da equipe (User FORNECEDOR) — null = destino externo
+  prestadorId             Int?     @map("prestador_id") // LOGIN do prestador — null quando o prestador não tem acesso ao sistema, ou quando o destino é externo
+  // 🔴 CADASTRO de origem do prestador (migration 20261022000000). O destino interno
+  // deixou de exigir login: `tb_prestadores` e `tb_fornecedores` são tabelas distintas,
+  // então o endereço é o par (origem, id) — o mesmo padrão de conta a pagar.
+  // ⚠️ `prestadorId` continua sendo quem recebe a `DesignacaoPrestador`; sem login não
+  // há a quem dar acesso, e o encaminhamento fica só como registro clínico.
+  prestadorCadastroId     Int?     @map("prestador_cadastro_id")
+  prestadorCadastroOrigem String?  @map("prestador_cadastro_origem") @db.VarChar(12) // PRESTADOR | FORNECEDOR
   evolucaoId         Int?     @map("evolucao_id")
   especialidade      String
   motivo             String   @db.Text
@@ -1273,6 +1280,7 @@ model EncaminhamentoClinico {
   faturaItens FaturaItem[]          @relation("FaturaItemEncaminhamento")
 
   @@index([prestadorId])
+  @@index([prestadorCadastroOrigem, prestadorCadastroId])
   @@index([evolucaoId])
   @@index([animalId])
   @@index([veterinarioId])
@@ -1329,6 +1337,10 @@ model Fatura {
   // então "contas a receber" e "devedores" somam `total + totalFechado`.
   // Mantido por `recalcularTotal` (lib/faturaUtils.js), junto com `total`.
   totalFechado     Float        @default(0) @map("total_fechado")
+  // O que já foi ACERTADO à parte, por bloco de paciente pago (`FaturaItem.pagoEm`).
+  // Não é mais "a receber" — por isso sai de `totalFechado` ao ser marcado. Quem quer
+  // o RECEBIDO (melhores pagadores) soma esta coluna. Mantido por `recalcularTotal`.
+  totalPagoAnimal  Float        @default(0) @map("total_pago_animal")
   status           String       @default("ABERTA") // ABERTA | PAGA | CANCELADA
   criadoEm         DateTime     @default(now())
   qtdCorrecoes     Int          @default(0) @map("qtd_correcoes") // nº de edições/remoções de itens existentes
@@ -1448,6 +1460,15 @@ model FaturaItem {
   // Quem fechou. SEM FK de propósito (registro histórico — ver a migration):
   // conta excluída depois não pode apagar nem alterar quem encerrou a cobrança.
   fechadoPorId            Int?      @map("fechado_por_id")
+  // 🔴 PAGAMENTO POR ANIMAL (2026-09-23): preenchido = o bloco deste paciente já foi
+  // ACERTADO à parte. Sai de `Fatura.totalFechado` (que é o fechado ainda DEVIDO) e
+  // entra em `Fatura.totalPagoAnimal`. Item pago é sempre item FECHADO — pagar o
+  // bloco fecha o que estiver aberto antes de dar a baixa.
+  // ⚠️ A marca é do ITEM pela mesma razão de `fechadoEm`: cobrança que chegue DEPOIS
+  // do acerto nasce aberta e volta a contar.
+  pagoEm                  DateTime? @map("pago_em")
+  // Quem deu a baixa. SEM FK de propósito (registro histórico — ver a migration).
+  pagoPorId               Int?      @map("pago_por_id")
 
   fatura                Fatura                 @relation(fields: [faturaId], references: [id])
   origens               FaturaItemOrigem[]     @relation("FaturaItemOrigens")

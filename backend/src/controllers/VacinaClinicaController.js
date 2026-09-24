@@ -24,6 +24,14 @@ const INCLUDE_VACINA = {
   loteVacina: { select: { id: true, lote: true, validade: true, qtdDisponivel: true } },
 };
 
+// 🔴 ATÉ SER APLICADA, A VACINA É CORRIGÍVEL (2026-09-23). SALVA é o rascunho e
+// FINALIZADA é a dose na fila do plantão — nenhuma das duas tirou frasco da prateleira
+// nem gerou cobrança (a FINALIZADA tem RESERVA, que `atualizar` refaz). EXECUTADA e
+// CANCELADA ficam de fora: lá existe fatura e baixa de estoque para preservar.
+// ⚠️ Lista usada pelo backend E espelhada no botão "Alterar" da tela (SubModuloVacina):
+// afrouxar uma sem a outra deixa o botão aparecendo para uma dose que a rota recusa.
+const STATUS_ALTERAVEIS = ['SALVA', 'FINALIZADA'];
+
 // ─── Reserva de estoque (FEFO) para VACINA ───────────────────────────────────
 // Espelha PrescricaoGrupoController (medicamento): reserva ao FINALIZAR (SALVA→
 // FINALIZADA), consome de verdade (decrementa qtd_disponivel) ao EXECUTAR, libera sem
@@ -375,7 +383,18 @@ async function registrar(req, res) {
       const loteData = await prisma.loteVacina.findUnique({ where: { id: loteIdFinal } });
       if (!loteData) return res.status(404).json({ error: 'Lote não encontrado' });
       if (!isCliente) {
-        if (loteData.qtdDisponivel < qtdFinal) return res.status(400).json({ error: 'Lote sem saldo disponível' });
+        // 🔴 SALDO NÃO RECUSA O REGISTRO DA VACINA (2026-09-23) — aqui havia um
+        // 400 'Lote sem saldo disponível'. Mesma decisão já tomada para a prescrição
+        // em 2026-09-23 (`__tests__/execucaoSemTravas.test.js`): estoque é CONTROLE,
+        // não autorização clínica. A dose foi (ou será) aplicada na baia de qualquer
+        // jeito; recusar o registro não devolve o frasco — só apaga o rastro (fatura,
+        // histórico, baixa, conta a pagar) e pune a clínica que mantém o estoque em dia,
+        // porque quem não cadastra lote nenhum nunca foi barrado.
+        // ⚠️ A BAIXA continua acontecendo, e nunca gera saldo negativo: `executar` →
+        // `darBaixaEFaturar` debita o que HOUVER, em FEFO. O que saiu foi o BLOQUEIO.
+        // ⚠️ A VALIDADE segue barrando, logo abaixo, e de propósito: "acabou o saldo"
+        // e "o frasco está vencido" são perguntas diferentes — a segunda é segurança do
+        // paciente, não controle de inventário.
         if (loteData.validade && new Date(loteData.validade) < new Date()) {
           return res.status(400).json({ error: `Lote ${loteData.lote} está vencido (validade: ${new Date(loteData.validade).toLocaleDateString('pt-BR')}). Selecione um lote dentro da validade.` });
         }
@@ -482,10 +501,27 @@ async function registrar(req, res) {
 }
 
 // PUT /clinica/vacinas/:id — altera um registro ainda SALVA (antes de finalizar).
-// Mesma autoria de editar/finalizar/excluir (`podeOperarRegistro`). Depois de
-// FINALIZADA/EXECUTADA/CANCELADA a alteração é bloqueada — a partir da finalização o
-// registro pode ter fatura/estoque envolvidos (ver `finalizar`), e reescrever os
-// campos por baixo comprometeria o que já foi cobrado/debitado.
+// Mesma autoria de editar/finalizar/excluir (`podeOperarRegistro`).
+//
+// 🔴 ALTERÁVEL ENQUANTO A DOSE NÃO FOI APLICADA (2026-09-23) — vale para SALVA **e**
+// FINALIZADA. Antes só a SALVA era editável, "porque a partir da finalização o registro
+// pode ter fatura/estoque envolvidos". O que a FINALIZADA tem é uma RESERVA, não uma
+// baixa: o débito e a cobrança só acontecem em `executar`. Na prática, corrigir a dose
+// de uma vacina que já estava na fila do plantão exigia cancelar e registrar de novo —
+// e o cancelamento pede justificativa e some do histórico útil.
+//
+// ⚠️ EXECUTADA e CANCELADA continuam fechadas: ali a dose foi aplicada (ou o registro
+// desfeito), e existe fatura e baixa de estoque que não podem ser reescritas por baixo.
+//
+// ⚠️ Alterar uma FINALIZADA REFAZ o destino dela pela MATRIZ "quem FORNECE × quem
+// APLICA" (a mesma de `finalizar`) — não basta gravar os campos:
+//   • a RESERVA antiga sai sempre (a vacina, a quantidade ou o quadrante podem ter
+//     mudado) e é recriada quando a dose segue indo ao plantão;
+//   • marcar "aplicada pelo proprietário" tira a dose do plantão: ela é debitada,
+//     faturada e agendada AQUI, e o status vai para EXECUTADA — é a única oportunidade
+//     de cobrá-la, exatamente como em `finalizar`;
+//   • marcar "fornecida pelo cliente" libera a reserva sem débito nem cobrança.
+// A tela de Execução de Prescrição lê ao vivo (`para-execucao`), então acompanha sozinha.
 async function atualizar(req, res) {
   try {
     const { id } = req.params;
@@ -500,15 +536,21 @@ async function atualizar(req, res) {
     }
 
     const infoRows = await prisma.$queryRawUnsafe(
-      `SELECT status, quantidade, cliente, medicamento_cat_id AS "medicamentoCatId",
+      `SELECT status, quantidade, valor::float AS valor, cliente,
+              medicamento_cat_id AS "medicamentoCatId",
               aplicada_pelo_proprietario AS "aplicadaPeloProprietario"
        FROM schs2vet.tb_vacinas_clinicas WHERE id = $1`,
       Number(id)
     );
     const infoAntes = infoRows[0] ?? {};
-    if (infoAntes.status !== 'SALVA') {
-      return res.status(400).json({ error: 'Só é possível alterar vacinas ainda não finalizadas.' });
+    // Enquanto a dose NÃO foi aplicada, o registro é corrigível — ver a nota da função.
+    if (!STATUS_ALTERAVEIS.includes(infoAntes.status)) {
+      return res.status(400).json({
+        error: 'Só é possível alterar vacinas que ainda não foram aplicadas.',
+        code:  'VACINA_JA_APLICADA',
+      });
     }
+    const eraFinalizada = infoAntes.status === 'FINALIZADA';
 
     const {
       medicamentoCatId, loteId, dose, via, dataAplicacao, observacao,
@@ -536,7 +578,18 @@ async function atualizar(req, res) {
       const loteData = await prisma.loteVacina.findUnique({ where: { id: loteIdFinal } });
       if (!loteData) return res.status(404).json({ error: 'Lote não encontrado' });
       if (!isCliente) {
-        if (loteData.qtdDisponivel < qtdFinal) return res.status(400).json({ error: 'Lote sem saldo disponível' });
+        // 🔴 SALDO NÃO RECUSA O REGISTRO DA VACINA (2026-09-23) — aqui havia um
+        // 400 'Lote sem saldo disponível'. Mesma decisão já tomada para a prescrição
+        // em 2026-09-23 (`__tests__/execucaoSemTravas.test.js`): estoque é CONTROLE,
+        // não autorização clínica. A dose foi (ou será) aplicada na baia de qualquer
+        // jeito; recusar o registro não devolve o frasco — só apaga o rastro (fatura,
+        // histórico, baixa, conta a pagar) e pune a clínica que mantém o estoque em dia,
+        // porque quem não cadastra lote nenhum nunca foi barrado.
+        // ⚠️ A BAIXA continua acontecendo, e nunca gera saldo negativo: `executar` →
+        // `darBaixaEFaturar` debita o que HOUVER, em FEFO. O que saiu foi o BLOQUEIO.
+        // ⚠️ A VALIDADE segue barrando, logo abaixo, e de propósito: "acabou o saldo"
+        // e "o frasco está vencido" são perguntas diferentes — a segunda é segurança do
+        // paciente, não controle de inventário.
         if (loteData.validade && new Date(loteData.validade) < new Date()) {
           return res.status(400).json({ error: `Lote ${loteData.lote} está vencido (validade: ${new Date(loteData.validade).toLocaleDateString('pt-BR')}). Selecione um lote dentro da validade.` });
         }
@@ -546,6 +599,14 @@ async function atualizar(req, res) {
 
     const doseNova = dose?.trim() || null;
     const viaNova  = via?.trim() || null;
+
+    // Só quem pode sair do plantão nesta alteração precisa do dono (fatura) e do nome
+    // do paciente (conta a pagar) — ler sempre seria um SELECT por edição de campo.
+    const empresaIdEfetivo = req.empresaId ?? null;
+    const agora = new Date();
+    const animal = eraFinalizada
+      ? await prisma.animal.findUnique({ where: { id: vacina.animalId }, select: { userId: true, nome: true } })
+      : null;
 
     const atualizada = await prisma.$transaction(async (tx) => {
       const upd = await tx.vacinaClinica.update({
@@ -569,6 +630,73 @@ async function atualizar(req, res) {
         medCatIdFinal, qtdFinal, isCliente, isAplicadaProp, vacina.id,
       );
 
+      // 🔴 A FINALIZADA REFAZ O DESTINO PELA MATRIZ — ver a nota da função. É o MESMO
+      // encadeamento de `finalizar`, e de propósito: duas leituras diferentes da matriz
+      // fariam a dose corrigida ser cobrada por um critério e a original por outro.
+      if (eraFinalizada) {
+        // A reserva antiga sai SEMPRE: mudou a vacina, a quantidade ou o quadrante, e
+        // uma reserva do estado anterior seguraria lote que não é mais o desta dose.
+        await tx.$executeRawUnsafe(
+          `DELETE FROM schs2vet.tb_reservas_estoque_vacina WHERE "vacinaClinicaId" = $1`, vacina.id,
+        );
+
+        // Quadrante "clínica FORNECE × proprietário APLICA": nunca chega ao plantão, e
+        // esta é a única chance de cobrar. Debita, fatura e agenda o reforço agora.
+        const cobrarAgora = isAplicadaProp && !isCliente;
+        if (cobrarAgora) {
+          // `origemJaFaturada`, não a FK: a linha da fatura é COMPARTILHADA (2026-09-17)
+          // e pela FK uma segunda vacina na mesma linha pareceria nunca cobrada.
+          const jaFaturada = await itemOrigens.origemJaFaturada(tx, 'vacinaClinicaId', vacina.id);
+          if (!jaFaturada) {
+            await darBaixaEFaturar(tx, {
+              vacina: upd,
+              // `valor: null` de propósito: o preço volta a sair do LOTE debitado agora,
+              // e não do valor de referência gravado quando a vacina foi registrada com
+              // outro produto. Passar o antigo cobraria o frasco errado.
+              info: {
+                ...infoAntes,
+                valor:            null,
+                quantidade:       qtdFinal,
+                cliente:          isCliente,
+                medicamentoCatId: medCatIdFinal,
+              },
+              qtd:           qtdFinal,
+              veterinarioId: req.user.id,
+              empresaIdEfetivo,
+              agora,
+              animal,
+            });
+            await agendarReforcos(tx, {
+              vacina:        upd,
+              dose:          doseNova,
+              veterinarioId: req.user.id,
+              empresaId:     empresaIdEfetivo,
+              equipeId:      req.equipeId ?? null,
+              aplicadaEm:    upd.dataAplicacao ?? agora,
+            });
+          }
+        } else if (!isCliente) {
+          // Segue indo ao plantão e sai do estoque da clínica → reserva de novo, agora
+          // com a vacina e a quantidade corrigidas.
+          await criarReservaVacina(tx, {
+            vacinaId:         vacina.id,
+            animalId:         vacina.animalId,
+            medicamentoCatId: medCatIdFinal,
+            quantidade:       qtdFinal,
+            empresaId:        empresaIdEfetivo,
+          });
+        }
+        // Fornecida pelo cliente e aplicada pela clínica: sem reserva (nada sai do
+        // estoque) e SEGUE no plantão — é lá que a aplicação é registrada.
+
+        // Mesma regra de `finalizar`: quem aplica em casa já nasce no último passo, em
+        // vez de ficar esperando para sempre uma execução que não vai acontecer.
+        await tx.$executeRawUnsafe(
+          `UPDATE schs2vet.tb_vacinas_clinicas SET status = $2 WHERE id = $1`,
+          vacina.id, isAplicadaProp ? 'EXECUTADA' : 'FINALIZADA',
+        );
+      }
+
       await registrarAlteracao(tx, req, {
         entidade:       'VACINA',
         entidadeId:     vacina.id,
@@ -580,6 +708,13 @@ async function atualizar(req, res) {
           dose:       { de: vacina.dose, para: doseNova },
           via:        { de: vacina.via,  para: viaNova },
           quantidade: { de: infoAntes.quantidade, para: qtdFinal },
+          // Os dois checkboxes e o status entram no rastro porque, depois que a
+          // FINALIZADA passou a ser editável, alterá-los MOVE a dose de quadrante:
+          // pode tirá-la do plantão, debitar o lote e lançar a cobrança na hora.
+          // Sem isto o ledger mostraria a vacina cobrada sem dizer o que mudou.
+          cliente:                  { de: infoAntes.cliente, para: isCliente },
+          aplicadaPeloProprietario: { de: infoAntes.aplicadaPeloProprietario, para: isAplicadaProp },
+          status: { de: infoAntes.status, para: eraFinalizada ? (isAplicadaProp ? 'EXECUTADA' : 'FINALIZADA') : infoAntes.status },
         },
       });
 

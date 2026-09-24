@@ -1165,6 +1165,47 @@ export default function EstoqueVacina() {
                 </div>
               </div>
 
+              {/* ⚠️ FORNECEDOR + NOTA FISCAL ficam LOGO ABAIXO DA VACINA (a pedido,
+                  2026-09-23). Estavam no fim do formulário, depois de validade,
+                  quantidades e alertas — quem lança a entrada lê a nota do começo
+                  (de quem veio, qual NF) e só depois os dados do frasco. */}
+              {/* 🔴 FORNECEDOR + NOTA FISCAL (2026-09-19) — as colunas existiam desde a
+                  migration `20261006000000` e só a tela de Produtos as gravava: a
+                  Entrada de Vacina não sabia dizer de quem veio o frasco, então a
+                  compra não virava CONTA A PAGAR.
+                  ⚠️ O fornecedor é OPCIONAL: sem ele a entrada acontece normalmente
+                  (só não gera dívida). Exigi-lo travaria o estoque por causa de um
+                  cadastro — e o frasco já está na clínica. */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2">
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Fornecedor</label>
+                  <select
+                    value={form.fornecedorId}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      if (val === NOVO_FORNECEDOR) { setShowNovoForn(true); return; }
+                      setForm(f => ({ ...f, fornecedorId: val }));
+                    }}
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white text-gray-900">
+                    <option value={0}>Selecione o fornecedor...</option>
+                    {fornecedores.map(f => (
+                      <option key={f.id} value={f.id}>{f.nome}</option>
+                    ))}
+                    <option value={NOVO_FORNECEDOR}>+ Cadastrar novo fornecedor...</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Nota Fiscal</label>
+                  <input
+                    type="text"
+                    value={form.notaFiscal}
+                    onChange={e => setForm(f => ({ ...f, notaFiscal: e.target.value }))}
+                    placeholder="Nº da NF"
+                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+              </div>
+
               {/* ── Lote + Data Recebimento ────────────────────────────────── */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -1319,43 +1360,6 @@ export default function EstoqueVacina() {
                     onChange={(e) => setForm((f) => ({ ...f, estoqueAlarmante: e.target.value === '' ? 0 : Number(e.target.value) }))}
                     placeholder="0"
                     className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500" />
-                </div>
-              </div>
-
-              {/* 🔴 FORNECEDOR + NOTA FISCAL (2026-09-19) — as colunas existiam desde a
-                  migration `20261006000000` e só a tela de Produtos as gravava: a
-                  Entrada de Vacina não sabia dizer de quem veio o frasco, então a
-                  compra não virava CONTA A PAGAR.
-                  ⚠️ O fornecedor é OPCIONAL: sem ele a entrada acontece normalmente
-                  (só não gera dívida). Exigi-lo travaria o estoque por causa de um
-                  cadastro — e o frasco já está na clínica. */}
-              <div className="grid grid-cols-3 gap-3">
-                <div className="col-span-2">
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Fornecedor</label>
-                  <select
-                    value={form.fornecedorId}
-                    onChange={(e) => {
-                      const val = Number(e.target.value);
-                      if (val === NOVO_FORNECEDOR) { setShowNovoForn(true); return; }
-                      setForm(f => ({ ...f, fornecedorId: val }));
-                    }}
-                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white text-gray-900">
-                    <option value={0}>Selecione o fornecedor...</option>
-                    {fornecedores.map(f => (
-                      <option key={f.id} value={f.id}>{f.nome}</option>
-                    ))}
-                    <option value={NOVO_FORNECEDOR}>+ Cadastrar novo fornecedor...</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Nota Fiscal</label>
-                  <input
-                    type="text"
-                    value={form.notaFiscal}
-                    onChange={e => setForm(f => ({ ...f, notaFiscal: e.target.value }))}
-                    placeholder="Nº da NF"
-                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
-                  />
                 </div>
               </div>
 

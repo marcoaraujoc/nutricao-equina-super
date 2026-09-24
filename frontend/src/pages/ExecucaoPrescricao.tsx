@@ -254,13 +254,6 @@ function rotuloDosagemVacina(q: number | null | undefined, forma?: string | null
   return q > 1 ? `${n} doses` : `${n} dose`;
 }
 
-interface AlertaEstoque {
-  medicamento:   string;
-  unidade:       string;
-  qtdNecessaria: number;
-  qtdDisponivel: number;
-}
-
 // ─── Shared Helpers ───────────────────────────────────────────────────────────
 
 export const POSOLOGIAS: Record<string, string> = {
@@ -921,7 +914,6 @@ export function ModalExecucao({
   // QUAL item está sendo executado — sem isso o spinner apareceria em TODOS os ícones
   // (`salvando` é do modal inteiro; era o defeito do antigo rótulo "Executando…").
   const [execItemId,  setExecItemId]  = useState<number | null>(null);
-  const [erroEstoque, setErroEstoque] = useState<AlertaEstoque[]>([]);
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
   // Item escolhido para cancelar (botão ao lado do item). O cancelamento da PRESCRIÇÃO
@@ -1014,10 +1006,21 @@ export function ModalExecucao({
   //   ELEGÍVEL (rolling schedule) → 🔴 NUNCA usar `diaAtual <= duracaoDias`: essa é
   //     a janela do CURSO INTEIRO (28 dias de "1x/semana × 4"), então valeria TODO
   //     santo dia da janela, não só nas 4 datas certas — era exatamente esse o bug
-  //     reportado. 🔴 Regra de produto (2026-08-18): devido SÓ quando a data
-  //     exibida é EXATAMENTE `proximaDoseEm` — nunca antes, e NUNCA depois (dose
-  //     perdida não fica "atrasada, ainda pendente": some no dia seguinte, cancelada
-  //     pelo cron `cancelar_doses_prescricao_perdidas`). Executado NA DATA continua
+  //     reportado. Devido a partir de `proximaDoseEm`: nunca ANTES — e, desde
+  //     2026-09-23, também DEPOIS.
+  //     🔴 `<=`, e não `===` (2026-09-23) — é a MESMA correção que a LISTA
+  //     recebeu em 2026-08-29 (`itemDeveDoseEm`) e que este filtro não acompanhou.
+  //     Enquanto foi igualdade estrita, a dose vencida e não aplicada continuava no
+  //     card da fila, marcada ATRASADA, e SUMIA ao abrir o modal: `itensDoDia` vinha
+  //     vazio, não havia o que executar, e a tela dizia "Nenhum item ativo". Era o
+  //     defeito relatado — "ao abrir a tela não permite executar porque está
+  //     atrasada". Lista e modal precisam responder a MESMA pergunta: divergindo,
+  //     um oferece a dose que o outro esconde.
+  //     ⚠️ Atrasar NÃO inventa dose nova: o backend classifica como ATRASADA e
+  //     pede a confirmação simples (`confirmarHorario`), que o modal "Dose atrasada"
+  //     já faz. Quem tira a dose perdida da fila continua sendo o cron
+  //     `cancelar_doses_prescricao_perdidas` (23:35), e só ele — não um filtro de
+  //     tela que a esconde sem cancelar nada. Executado NA DATA continua
   //     aparecendo (alimenta o Histórico do dia).
   //   🔴 `dataRef` FUTURA (além de hoje): `proximaDoseEm` sozinho só conhece a
   //     PRÓXIMA dose real — cai na mesma prévia teórica da lista
@@ -1034,7 +1037,11 @@ export function ModalExecucao({
       // nenhuma dose dada): vale a janela do curso. Era `return false`, o que com
       // Hora Início opcional esconderia o item do modal e o deixaria inexecutável.
       if (!i.proximaDoseEm) return i.diaAtual >= 1 && i.diaAtual <= i.duracaoDias;
-      return diaISO(i.proximaDoseEm) === dataRef;
+      // `diaISO` pode devolver null (data inválida) — com `===` isso caía em false
+      // sozinho, mas `<=` compararia null com string. Guarda explícita, igual a
+      // `itemDeveDoseEm`.
+      const diaPrevisto = diaISO(i.proximaDoseEm);
+      return !!diaPrevisto && diaPrevisto <= dataRef;
     }
     return i.diaAtual >= 1 && i.diaAtual <= i.duracaoDias;
   };
@@ -1095,13 +1102,15 @@ export function ModalExecucao({
     return updated;
   };
 
+  // 🔴 FALTA DE ESTOQUE NÃO É MAIS ERRO DE EXECUÇÃO (2026-09-23).
+  // O backend deixou de recusar a dose por saldo (`executar`, 409
+  // `ESTOQUE_INSUFICIENTE`), então o ramo que pintava o painel vermelho
+  // "Estoque insuficiente para executar" saiu junto — ele só poderia reaparecer
+  // se alguém reintroduzisse a trava. A dose já foi aplicada na baia; o acerto de
+  // saldo é no Ajuste de Estoque, não na porta do plantão.
   const tratarErroExec = (err: unknown, fallback: string) => {
-    const e = err as { response?: { status?: number; data?: { error?: string; erro?: string; alertas?: AlertaEstoque[] } } };
-    if (e?.response?.status === 409 && e?.response?.data?.erro === 'ESTOQUE_INSUFICIENTE') {
-      setErroEstoque(e.response.data?.alertas ?? []);
-    } else {
-      setErroInline(e?.response?.data?.error ?? fallback);
-    }
+    const e = err as { response?: { data?: { error?: string } } };
+    setErroInline(e?.response?.data?.error ?? fallback);
   };
 
   // Execução ITEM A ITEM: lança o item na fatura assim que ele é executado.
@@ -1124,7 +1133,6 @@ export function ModalExecucao({
     const foiPrimeiraDose = (item.dosesExecutadas ?? 0) === 0;
     setSalvando(true);
     setExecItemId(item.id);
-    setErroEstoque([]);
     try {
       const res = await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, {
         itemIds: [item.id],
@@ -1271,7 +1279,6 @@ export function ModalExecucao({
   // debitar/faturar também o Procedimento da mesma prescrição.
   const handleExecutarTodos = async (confirmarAntecipacao = false) => {
     setSalvando(true);
-    setErroEstoque([]);
     try {
       const itemIds = itensComInfo.filter(x => !x.activeDone).map(x => x.item.id);
       await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, {
@@ -1424,9 +1431,13 @@ export function ModalExecucao({
             // de "1x/semana" hoje não pode fazer a dose 2 anunciar-se "Em Execução":
             // ela só vence em 7 dias, e é o `proximaDoseEm` (rolling schedule) que
             // sabe disso, não o contador de doses feitas.
+            // ⚠️ `<=`, e não `===` (2026-09-23): a dose VENCIDA e não aplicada é a dose da
+            // vez tanto quanto a de hoje — com igualdade estrita ela se anunciava
+            // "Prevista para 22/09" (data que JÁ PASSOU) em vez de "Em Execução".
+            const diaProximaDose = diaISO(item.proximaDoseEm);
             const proximaDoseRealHoje = item.dosesTotaisEsperadas == null
               || semAncora
-              || (!!item.proximaDoseEm && diaISO(item.proximaDoseEm) === hojeISO());
+              || (!!diaProximaDose && diaProximaDose <= hojeISO());
             // 🔴 A DOSE DA VEZ SEMPRE TEM BOTÃO (2026-09-18) — `proximaDoseRealHoje`
             // SAIU daqui. Enquanto ele entrava nesta conta, a dose cuja próxima
             // ocorrência caía em OUTRO dia do calendário ficava sem Executar nenhum:
@@ -1702,17 +1713,6 @@ export function ModalExecucao({
             );
           })}
         </div>
-
-        {erroEstoque.length > 0 && (
-          <div className="mx-4 mb-2 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 space-y-1">
-            <p className="font-semibold">Estoque insuficiente para executar:</p>
-            {erroEstoque.map((a, i) => (
-              <p key={i}>
-                • {a.medicamento}: disponível {a.qtdDisponivel.toFixed(1)}{a.unidade ? ` ${a.unidade}` : ''} / necessário {a.qtdNecessaria.toFixed(1)}{a.unidade ? ` ${a.unidade}` : ''}
-              </p>
-            ))}
-          </div>
-        )}
 
         <div className="px-4 pt-2 pb-4 border-t border-gray-100 flex-shrink-0">
           {grupo.status === 'CANCELADO' ? (

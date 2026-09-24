@@ -28,6 +28,85 @@ paths:
 As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão em `CLAUDE.md`.
 
 ---
+# Atualizado em: 2026-09-23 (parte 2) (🔴 **A FATURA MOSTRAVA "QTD. 1 · R$ 200,00" PARA
+#   DUAS AMPOLAS DE R$ 100,00** — defeito relatado. O valor fechava, a QUANTIDADE mentia.
+#
+#   CAUSA: `debitarEstoqueDia` devolve em `precos` o **TOTAL** do que foi debitado na
+#   execução, e a linha da fatura saía com `quantidade: 1` sempre que o item não fosse
+#   entrega por embalagem (`embalagensEntregues` só é preenchido nesse caso). Numa receita
+#   de "2 Un." o estoque baixava 2, o valor da dose vinha 200 e a linha dizia
+#   "Quant.: 1 · R$ 200,00" — sem nenhum jeito de conferir o unitário contra a nota.
+#
+#   AGORA a quantidade da linha é **`qtdFaturada`**, em três casos, nesta ordem:
+#     1. entrega por EMBALAGEM → as que ESTA execução abriu (como já era desde 2026-09-19);
+#     2. unidade AVULSA ('Un.', ampola, comprimido) → as unidades debitadas  ← o defeito;
+#     3. multidose (mL/g) ou sem estoque cadastrado → **1**, que é "uma dose", como sempre.
+#   E `valor` é SEMPRE `valorDaDose / qtdFaturada`: com a quantidade certa e o TOTAL no
+#   `valor`, a fatura multiplicaria de novo o que já saiu multiplicado.
+#
+#   ⚠️ **O MULTIDOSE FICA DE FORA DE PROPÓSITO.** Lá a linha conta DOSES — a descrição é
+#   literalmente "5 mL × 3x ao dia (1 dose)" e a consolidação soma uma por aplicação.
+#   Trocar a quantidade para 5 passaria a exibir um R$/mL onde a tela sempre mostrou o
+#   preço da DOSE, e mudaria o sentido de toda linha de prescrição já faturada. O sinal
+#   que separa os dois casos é `ehAvulsa(unidadeEstoque)`, resolvido dentro de
+#   `debitarEstoqueDia` (que é quem sabe o que de fato saiu do estoque) e devolvido no mapa
+#   novo **`unidadesFaturadas`**, chaveado por `item.id`.
+#
+#   ⚠️ A mesma correção vale na **FINALIZAÇÃO** — o item que a clínica FORNECE e o
+#   proprietário APLICA em casa (`incluirDoProprietario`), que nunca chega ao plantão e é
+#   cobrado ali. O cliente leva as 14 ampolas do curso, e "Quant.: 1" ao lado do valor de
+#   14 não é conferível. Ali a ordem é `entregas ?? unidadesFaturadas ?? 1`.
+#
+#   ⚠️ A **conta a pagar do fornecedor** já estava certa: ela usa
+#   `resolverQtdExecucao(item)` fora da entrega por embalagem, isto é, a quantidade da
+#   dose. Nada mudou nela.
+#
+#   Gate: `__tests__/produtoMultidose.test.js` (o bloco de `qtdFaturada`) e
+#   `__tests__/cicloPagamentoEFatura.test.js`. O resto desta leva é do FINANCEIRO — o
+#   ciclo da fatura e o "fechado é somente leitura" estão em
+#   `.claude/rules/hist-financeiro.md`, mesma data.)
+
+---
+
+
+# Atualizado em: 2026-09-23 (parte 2) (🔴 **CADASTRO > PRODUTOS GANHOU PAGINAÇÃO** —
+#   medicamentos e vacinas. O que havia era só um TETO (`take: 300`): o que passasse
+#   dele não tinha caminho de tela NENHUM, e o único recurso oferecido era o aviso
+#   "refine a busca" — que não serve a quem quer justamente PERCORRER o catálogo.
+#   `GET /cadastro/produtos` passou a aceitar `pagina`/`porPagina` (padrão 20, teto
+#   100) e a devolver `pagina`, `porPagina` e `totalPaginas` junto do `total`.
+#   ⚠️ **O teto por página CONTINUA existindo, e não é cosmético**: o catálogo GLOBAL
+#   tem milhares de linhas e baixá-lo inteiro a cada abertura é uma tela que demora a
+#   aparecer. O que mudou é que o resto passou a ter para onde ir.
+#   ⚠️ **Quem CLAMPA a página é o BACKEND**, contra o total — e por isso o `count` roda
+#   ANTES do `findMany`, em vez de em paralelo. Inativar o último item da última página
+#   deixaria a tela pedindo uma página que não existe mais e recebendo lista vazia, sem
+#   erro e sem log. O estado da tela é ESPELHO do que voltou, nunca a autoridade.
+#   ⚠️ **Trocar de tipo, buscar ou mudar o filtro volta para a página 1** — sem isso,
+#   digitar uma busca estando na página 4 devolve lista vazia e parece "não encontrou
+#   nada". O `setPagina(1)` é declarado ANTES do efeito de carga, para chegar a tempo
+#   de cancelar o debounce de 300ms.
+#   ⚠️ A ordenação segue sendo do BANCO (`empresaId asc, nome asc` — o da clínica antes
+#   do global): ordenar só a página recebida deixaria o item da clínica fora dela.
+#   ⚠️ A contagem ("Mostrando 21–40 de 137") fica VISÍVEL mesmo com uma página só — é
+#   ela que diz que a lista acabou de verdade. Os botões são CROMO de navegação, não
+#   ação de registro, e por isso não passam por `AcaoRegistro` (§6).
+#   Gate: `__tests__/produtoMultidose.test.js` (o teste do corte trocou `take: LIMITE`
+#   por `take: porPagina` e ganhou o par `skip`/clamp).)
+
+# Atualizado em: 2026-09-23 (Entrada de estoque de VACINA: **Fornecedor e Nota Fiscal
+#   subiram para logo abaixo do campo "Vacina *"**, a pedido.
+#   Os dois campos ja existiam (migration `20261006000000`, gravados pela tela desde
+#   2026-09-19), mas ficavam no FIM do formulario — depois de validade, quantidades,
+#   unidade, minimo e alarmante. Quem lanca a entrada le a NOTA de cima para baixo: de
+#   quem veio e qual NF vem primeiro, os dados do frasco depois.
+#   ⚠️ Nada mudou no comportamento: o fornecedor segue OPCIONAL (sem ele a entrada
+#   acontece, so nao gera CONTA A PAGAR) e a gravacao e a mesma.
+#   ⚠️ Ver tambem a parte 3 de `hist-atendimento.md` desta data: o 400 `Lote sem saldo
+#   disponivel` saiu de `registrar`/`atualizar` da vacina clinica — a trava de VALIDADE
+#   ficou.)
+
+---
 
 # Atualizado em: 2026-09-22 (parte 2) (🔴 **A REGRA DAS N EMBALAGENS ESTAVA INTEIRA E
 #   DORMENTE** — e o histórico da prescrição passou a dizer O QUE foi prescrito.

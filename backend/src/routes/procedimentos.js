@@ -41,6 +41,13 @@ router.post('/cadastro/proprio', authenticate, checkPermission('cadastro.procedi
 //    `routes/produtos.js`.
 router.put('/cadastro/proprio/:id', authenticate, checkPermission('cadastro.procedimento.editar', 'PROPRIO'), cadastro.atualizarProprio);
 router.patch('/cadastro/proprio/:id/toggle', authenticate, checkPermission('cadastro.procedimento.deletar', 'PROPRIO'), cadastro.toggleAtivoProprio);
+// EXCLUIR DE VEZ o procedimento da clínica (2026-09-23) — só quando ele nunca foi
+// usado; o controller responde 409 `PROCEDIMENTO_EM_USO` quando foi.
+// ⚠️ MESMO slug do inativar, de propósito: são as duas formas de tirar o cadastro da
+//    frente, e separá-las faria o gestor configurar duas permissões para uma decisão só
+//    — além de permitir o absurdo de quem pode APAGAR não poder inativar.
+// ⚠️ LITERAL, e por isso antes do `router.delete('/:id')` lá embaixo (armadilha 1).
+router.delete('/cadastro/proprio/:id', authenticate, checkPermission('cadastro.procedimento.deletar', 'PROPRIO'), cadastro.excluirProprio);
 
 // ── Prestador × procedimento (2026-09-08) ───────────────────────────────────
 // Vários prestadores podem executar o MESMO procedimento com valores diferentes.
