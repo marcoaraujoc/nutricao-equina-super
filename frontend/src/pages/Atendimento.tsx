@@ -32,6 +32,7 @@ import { formatDataHora } from '../utils/dateUtils';
 import { escolherEvolucaoAtiva, descricaoAtendimento, lerEvolucaoSelecionada, salvarEvolucaoSelecionada } from '../utils/evolucaoAtiva';
 import JanelaLista from '../components/JanelaLista';
 import PainelSemPaciente from '../components/PainelSemPaciente';
+import { usePacienteDoModulo } from '../hooks/usePacienteDoModulo';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -551,7 +552,12 @@ const Atendimento = () => {
   // ninguém ter pedido aquele. Só a URL escolhe o paciente agora; quem chega pelo
   // menu busca no seletor, que é o que o "Iniciar" da agenda e os links do paciente
   // continuam pulando (eles trazem o id na rota).
-  const effectiveAnimalId = animalIdParam ?? '';
+  // Escolhido, o paciente FICA dentro do módulo: a aba Agenda e o menu lateral
+  // navegam sem id, e sem a memória do módulo o paciente se perdia ao trocar de aba.
+  // A memória é SÓ do Atendimento — o Nutricional, a Vacina e o Resultado de Exame
+  // continuam abrindo em busca (hooks/usePacienteDoModulo.ts).
+  const { animalId: effectiveAnimalId, esquecer: esquecerPaciente, lembrar: lembrarPaciente } =
+    usePacienteDoModulo('atendimento', animalIdParam);
 
   // Persiste o agendamentoId entre navegações e re-logins (localStorage por animal).
   // Recalculado a cada mudança de location.search/animalId — não pode ser um useState
@@ -797,10 +803,10 @@ const Atendimento = () => {
       // todos os submódulos batendo 403 nesse id —, larga o id da URL e devolve a tela
       // ao modo BUSCA, que é o estado padrão desde 2026-09-22.
       if (!res.data) {
+        esquecerPaciente();
         if (animalIdParam) navigate(location.pathname.replace(/\/\d+$/, ''), { replace: true });
-        // Sem id na URL este efeito nem roda (ele retorna cedo), mas a seleção do
-        // contexto pode ter ficado apontando para paciente de outra empresa e ainda
-        // alimenta outras telas — refazê-la aqui é barato e evita o card vazio lá.
+        // Sem id na URL o id veio da memória do módulo — esquecida acima. A seleção
+        // do contexto também pode estar apontando para outra empresa: refazê-la é barato.
         else await refreshSelectedAnimal();
         return;
       }
@@ -909,8 +915,11 @@ const Atendimento = () => {
       setAnimal(a);
       setSelectedAnimal(a);
       setTodosAnimais(prev => prev.some(x => x.id === a.id) ? prev : [...prev, a]);
+      // Vira o paciente do MÓDULO: sem isso, trocar de aba traria de volta o anterior.
+      lembrarPaciente(String(a.id));
     } catch { /* silencioso */ }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lembrarPaciente]);
 
   // ── Sem paciente escolhido ────────────────────────────────────────────────
   // A aba "Minha Agenda" funciona sem paciente; as demais mostram o CABEÇALHO e o

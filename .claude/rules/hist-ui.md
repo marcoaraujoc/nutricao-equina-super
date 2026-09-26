@@ -32,6 +32,25 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-09-25 (🔴 **PACIENTE POR MÓDULO** — a pedido: "a regra do modo
+#   busca vale ENTRE módulos; DENTRO de cada módulo o paciente continua selecionado".
+#   Até aqui só a URL escolhia o paciente, e a aba Agenda do Atendimento, os sub-itens do
+#   menu (Laboratorial/Imagem, Plano de Dieta/Relatório) e o próprio item do menu navegam
+#   SEM id — então o paciente escolhido se perdia ao trocar de aba DENTRO do módulo.
+#   `hooks/usePacienteDoModulo.ts`: um paciente lembrado POR MÓDULO, em sessionStorage —
+#   `atendimento` · `vacina` · `exames` · `nutricional` (Dieta + Relatório COMPARTILHAM).
+#   URL vence (escolha explícita) e passa a ser o lembrado; sem id, usa o lembrado.
+#   ⚠️ Nenhuma tela lê a memória de outro módulo nem o `selectedAnimal` global — é isso
+#   que mantém o Nutricional em branco depois de escolher no Atendimento.
+#   ⚠️ Paciente clicado na aba Agenda (rota sem id) chama `lembrar`, senão trocar de aba
+#   traria de volta o anterior. ⚠️ GET 403 no lembrado → `esquecer` (paciente de outra
+#   empresa). Login, logout e `trocarContexto` limpam tudo (`esquecerPacientesDosModulos`).
+#   ⚠️ sessionStorage e não localStorage: a memória é da ABA; fechar a aba volta à busca.
+#   Gate: `__tests__/pacientePorModulo.test.js` (verificado que reprova). `tsc -b` limpo.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.)
+
+---
+
 # Atualizado em: 2026-09-23 (🔴 **O MENU LATERAL DEIXOU DE CARREGAR PACIENTE NA URL.**
 #
 #   A §6 manda, desde 2026-09-22, que Atendimento · Vacina · Resultado de Exame · Plano

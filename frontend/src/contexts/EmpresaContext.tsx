@@ -10,6 +10,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { useAuth } from './AuthContext';
 import api from '../services/api';
+import { esquecerPacientesDosModulos } from '../hooks/usePacienteDoModulo';
 import { registrarAcesso } from '../utils/contextoAcessos';
 import { definirFusoDaEmpresa } from '../utils/dateUtils';
 
@@ -176,6 +177,7 @@ export function EmpresaProvider({ children }: { children: ReactNode }) {
     // O paciente selecionado é DAQUELA empresa — mantê-lo faz a próxima empresa abrir
     // as telas com um animal a que ela não tem acesso, e tudo responde 403.
     localStorage.removeItem('lastSelectedAnimalId');
+    esquecerPacientesDosModulos();
 
     // Troca de contexto sempre pousa no Painel Principal — a tela em que se estava é
     // de outra empresa (paciente, agenda, fatura...) e não faz sentido no contexto novo.

@@ -905,17 +905,28 @@ model ProcedimentoVeterinario {
   // (criado por item manual de orçamento) — só a empresa dona vê/edita.
   empresaId        Int?     @map("empresa_id")
   ativo            Boolean  @default(true)
+  // Copy-on-write (2026-09-25): aponta para a linha GLOBAL da qual esta cópia da
+  // empresa nasceu (ex.: ao inativar um item do sistema). null = linha global, ou
+  // procedimento criado do zero pela própria clínica (sem origem a rastrear).
+  origemId         Int?     @map("origem_id")
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
+  origem         ProcedimentoVeterinario?   @relation("ProcedimentoOrigem", fields: [origemId], references: [id], onDelete: SetNull)
+  copias         ProcedimentoVeterinario[]  @relation("ProcedimentoOrigem")
   valoresEmpresa ProcedimentoValorEmpresa[] @relation("ProcedimentoValoresEmpresa")
   prestadores    ProcedimentoPrestador[]    @relation("ProcedimentoPrestadores")
   comboItens     ProcedimentoComboItem[]    @relation("ProcedimentoComboItens")
 
+  // Uma empresa não forka o mesmo item global duas vezes. NULLs são distintos por
+  // padrão no Postgres — não incomoda linhas globais (origemId null) nem os
+  // procedimentos que a própria clínica cria do zero (idem).
+  @@unique([empresaId, origemId])
   @@index([ativo])
   @@index([categoria])
   @@index([especie])
   @@index([empresaId])
+  @@index([origemId])
   @@map("tb_procedimentos_vet")
   @@schema("schs2vet")
 }

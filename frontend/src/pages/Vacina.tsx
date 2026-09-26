@@ -17,6 +17,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { usePacienteDoModulo } from '../hooks/usePacienteDoModulo';
 import api from '../services/api';
 import AnimalCard from '../components/AnimalCard';
 import FaixaPacienteInativo from '../components/FaixaPacienteInativo';
@@ -64,7 +65,10 @@ export default function Vacina() {
   // localStorage, então abrir a tela trazia pré-escolhido um paciente que a pessoa
   // não escolheu para ESTA aplicação — e vacina é registro clínico com baixa de
   // estoque e cobrança. Escolher é o primeiro passo da tela.
-  const effectiveAnimalId = animalIdParam ?? '';
+  // Escolhido AQUI, o paciente fica lembrado para a Vacina (e só para ela) — ver
+  // hooks/usePacienteDoModulo.ts.
+  const { animalId: effectiveAnimalId, esquecer: esquecerPaciente } =
+    usePacienteDoModulo('vacina', animalIdParam);
 
   const [animal,        setAnimal]        = useState<AnimalExtended | null>(null);
   const [todosAnimais,  setTodosAnimais]  = useState<AnimalExtended[]>([]);
@@ -88,6 +92,7 @@ export default function Vacina() {
       // Larga o id da URL e cai no paciente do contexto ativo — mesmo tratamento do
       // shell de Atendimento, senão a tela fica batendo 403 nesse id.
       if (!res.data) {
+        esquecerPaciente();
         if (animalIdParam) navigate('/clinica/vacina', { replace: true });
         else await refreshSelectedAnimal();
         return;

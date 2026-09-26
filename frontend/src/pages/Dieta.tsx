@@ -5,6 +5,7 @@ import { useParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { usePacienteDoModulo } from '../hooks/usePacienteDoModulo';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import {
@@ -534,7 +535,10 @@ const Dieta = () => {
   const { animalId } = useParams<{ animalId?: string }>();
 
   // 🔴 ABRE EM MODO BUSCA, SEM PACIENTE HERDADO (a pedido, 2026-09-22) — ver §6.
-  const effectiveAnimalId = animalId ?? '';
+  // Memória do módulo NUTRICIONAL (Plano de Dieta + Relatório): escolhido aqui, o
+  // paciente segue no Relatório, e vice-versa — nunca vem do Atendimento.
+  const { animalId: effectiveAnimalId, esquecer: esquecerPaciente } =
+    usePacienteDoModulo('nutricional', animalId);
 
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline,            setErroInline]            = useState<string | null>(null);
@@ -569,7 +573,8 @@ const Dieta = () => {
     if (!effectiveAnimalId) return;
     try {
       const res = await api.get(`/animais/${effectiveAnimalId}`);
-      if (!res.data) return;
+      // GET 403 → paciente de outra empresa (memória antiga): volta ao modo busca.
+      if (!res.data) { esquecerPaciente(); setAnimal(null); return; }
       const a = (res.data?.dados ?? res.data) as AnimalExtended;
       setAnimal(a); setSelectedAnimal(a);
       api.get(`/animais/${effectiveAnimalId}/logo-empresa`)
@@ -579,7 +584,7 @@ const Dieta = () => {
         })
         .catch(() => {});
     } catch { /* silencioso */ }
-  }, [effectiveAnimalId]);
+  }, [effectiveAnimalId, esquecerPaciente]);
 
   const carregarAnimais = useCallback(async () => {
     try {

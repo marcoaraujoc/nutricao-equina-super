@@ -1491,8 +1491,17 @@ classes antigas.
 Atendimento · Vacina · Resultado de Exame · Dieta · Relatório Nutricional
   → abrem SEM paciente escolhido, com o seletor em "Buscar animal…"
 ```
-Só a URL escolhe o paciente (`animalIdParam ?? ''`). Nenhuma dessas telas herda o
-`selectedAnimal` do contexto nem auto-seleciona o primeiro da lista.
+Nenhuma dessas telas herda o `selectedAnimal` do contexto nem auto-seleciona o primeiro
+da lista. O paciente vem da URL ou da **memória DO MÓDULO** (2026-09-25).
+🔴 **ESCOLHIDO, O PACIENTE FICA DENTRO DO MÓDULO — E SÓ NELE.** `hooks/usePacienteDoModulo.ts`
+guarda um paciente por módulo (sessionStorage): `atendimento` (Agenda, Evolução, Prescrição,
+Exames, Encaminhamento) · `vacina` · `exames` (Laboratorial e Imagem) · `nutricional` (Plano
+de Dieta **e** Relatório — compartilham). Escolher o Thor no Atendimento o mantém ao trocar
+de aba; ir ao Nutricional abre em busca.
+⚠️ Sem a memória o paciente se PERDIA dentro do módulo: a aba Agenda e o menu lateral
+navegam SEM id. ⚠️ Escolha sem navegar (paciente clicado na aba Agenda) chama `lembrar`.
+⚠️ GET 403 no paciente lembrado → `esquecer` (volta à busca). Login, logout e troca de
+empresa limpam todos. Gate: `__tests__/pacientePorModulo.test.js`.
 ⚠️ **Não reintroduzir auto-seleção.** O argumento antigo ("a tela fica utilizável logo
 após o login") custava abrir o prontuário de alguém que ninguém pediu — e, numa tela de
 ESCRITA CLÍNICA, o paciente errado na tela é o começo do registro no paciente errado.

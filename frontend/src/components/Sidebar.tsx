@@ -25,15 +25,6 @@ const CLS_MODULE_INACTIVE= 'text-gray-500 hover:bg-gray-50';
 
 const ROLES_CLINICAS = ['ADMIN', 'VETERINARIO', 'ESTAGIARIO', 'FORNECEDOR'];
 
-// 🔴 PAINEL PRINCIPAL ESCONDIDO DO MENU (a pedido, 2026-09-18) — a tela NÃO foi
-// removida: a rota `/painel-principal`, `pages/PainelPrincipal.tsx` e o gate
-// `dashboard.geral.ler` seguem montados e funcionais; chega-se a ela pela URL.
-// Mesmo padrão (e mesma lição) do `MOSTRAR_MAPA_ATENDIMENTO` de 2026-09-05: esconder
-// o ITEM fez a volta dele custar UMA LINHA em 09/09, em vez de uma reconstrução.
-// ⚠️ Para trazer de volta, troque para `true` e REMOVA o flag junto — um `if (true)`
-// não configura nada. Não apague a rota nem a tela.
-const MOSTRAR_PAINEL_PRINCIPAL = false;
-
 // 🔴 RECIBOS DE PRESTADOR ESCONDIDO DO MENU (a pedido, 2026-09-19) — a tela NÃO foi
 // removida: a rota `/recibos-prestador`, `pages/RecibosPrestador.tsx`, o backend
 // (`/api/recibos-prestador`) e o gate `financeiro.recibos.ler` seguem montados e
@@ -357,7 +348,7 @@ export default function Sidebar() {
               veterinária nesta clínica vê o item, e quem é estagiária aqui não —
               mesmo sendo vet na outra. Sem `isVetOuSuperior`: o item foi pedido para
               o veterinário, e o gestor tem o Mapa de Atendimento logo abaixo. */}
-          {MOSTRAR_PAINEL_PRINCIPAL && isVet && (
+          {isVet && (
             <div className="space-y-0.5">
               {navLink('/painel-principal', <Stethoscope size={20} />, 'Painel Principal', p.startsWith('/painel-principal'))}
             </div>

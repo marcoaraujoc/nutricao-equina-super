@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { usePacienteDoModulo } from '../hooks/usePacienteDoModulo';
 import api from '../services/api';
 import AnimalCard from '../components/AnimalCard';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -215,7 +216,9 @@ const RelatorioNutricional = () => {
   }, [showExportMenu]);
 
   // 🔴 ABRE EM MODO BUSCA, SEM PACIENTE HERDADO (a pedido, 2026-09-22) — ver §6.
-  const effectiveAnimalId = paramAnimalId ?? '';
+  // Memória do módulo NUTRICIONAL — a MESMA do Plano de Dieta. Ver hooks/usePacienteDoModulo.ts.
+  const { animalId: effectiveAnimalId, esquecer: esquecerPaciente } =
+    usePacienteDoModulo('nutricional', paramAnimalId);
 
   const relatorio = snapshot?.linhas ?? [];
 
@@ -271,11 +274,13 @@ const RelatorioNutricional = () => {
     if (!effectiveAnimalId) return;
     try {
       const res = await api.get(`/animais/${effectiveAnimalId}`);
+      // GET 403 → paciente de outra empresa (memória antiga): volta ao modo busca.
+      if (!res.data) { esquecerPaciente(); setCurrentAnimal(null); return; }
       setCurrentAnimal(res.data?.dados ?? res.data);
     } catch (error) {
       console.error(error);
     }
-  }, [effectiveAnimalId]);
+  }, [effectiveAnimalId, esquecerPaciente]);
 
   const gerarRelatorio = useCallback(async () => {
     if (!effectiveAnimalId) return;

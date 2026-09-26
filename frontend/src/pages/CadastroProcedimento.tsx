@@ -143,9 +143,10 @@ function SelosProcedimento({ p }: { p: Procedimento }) {
  *
  * ⚠️ Ordem e cor da §6: Alterar (laranja) primeiro; a CHAVE (tom `ativar`, azul) por
  * último — é o ÍCONE que diz a posição, não a cor.
- * ⚠️ A chave só aparece no procedimento DA CLÍNICA. O do sistema é de todas, o backend
- * recusa com 400 e o RLS recusaria de qualquer forma: botão que só falha depois do
- * clique é a armadilha 28-d.
+ * ⚠️ A chave (2026-09-25) vale também no procedimento DO SISTEMA: o backend cria uma
+ * cópia própria da clínica na primeira vez que ela ativa/inativa um item global — ver
+ * `toggleAtivoProprio`. **Excluir** continua só no procedimento DA CLÍNICA: só faz
+ * sentido apagar uma linha que já é dela (a cópia recém-criada já entra nesse grupo).
  */
 function AcoesProcedimento({
   p, podeEditar, podeExcluir, onEditar, onAlternar, onExcluir,
@@ -165,7 +166,7 @@ function AcoesProcedimento({
         tom="ativar"
         icone={p.ativo ? ToggleRight : ToggleLeft}
         rotulo={p.ativo ? 'Inativar' : 'Ativar'}
-        visivel={podeExcluir && p.daEmpresa}
+        visivel={podeExcluir}
         onClick={() => onAlternar(p)} />
       {/* EXCLUIR DE VEZ (2026-09-23) — vermelho e por último, depois da chave.
           ⚠️ Convive com o INATIVAR, não o substitui: quem já foi usado uma vez deixa
@@ -252,7 +253,7 @@ function CardProcedimento({
 
       {/* ⚠️ As ações do card vão no RODAPÉ (§6): com rótulo, ao lado do nome elas
           espremeriam o procedimento até ele quebrar de linha. */}
-      {(podeEditar || (podeExcluir && p.daEmpresa)) && (
+      {(podeEditar || podeExcluir) && (
         <div className="mt-3 pt-3 border-t border-gray-50">
           <AcoesProcedimento p={p} podeEditar={podeEditar} podeExcluir={podeExcluir}
             onEditar={onEditar} onAlternar={onAlternar} onExcluir={onExcluir} />
@@ -619,12 +620,20 @@ export default function CadastroProcedimento() {
     } finally { setSalvandoProc(false); }
   };
 
-  /** Inativar pede justificativa; ativar é correção e vai direto (§13, armadilha 33). */
+  /**
+   * Inativar pede justificativa; ativar é correção e vai direto (§13, armadilha 33).
+   *
+   * ⚠️ Em item DO SISTEMA (2026-09-25) o backend cria uma CÓPIA própria da clínica
+   * (`copiado: true` na resposta) e aplica o ativo/inativo NELA — o global nunca é
+   * tocado. O toast avisa, senão a pessoa veria o item ganhar as ações de "da
+   * clínica" (chave, excluir) sem entender por quê.
+   */
   const alternarAtivoProc = async (p: Procedimento, motivo?: string) => {
     setErroInline(null);
     try {
-      await api.patch(`/procedimentos/cadastro/proprio/${p.id}/toggle`, motivo ? { motivo } : {});
-      toast.success(p.ativo ? 'Procedimento inativado.' : 'Procedimento ativado.');
+      const res = await api.patch(`/procedimentos/cadastro/proprio/${p.id}/toggle`, motivo ? { motivo } : {});
+      const base = p.ativo ? 'Procedimento inativado.' : 'Procedimento ativado.';
+      toast.success(res.data?.copiado ? `${base} Foi criada uma cópia própria da sua clínica.` : base);
       setInativandoProc(null);
       await carregarProcedimentos(espSel, selEhImagem, filtroAtivoProcs);
     } catch (err) {

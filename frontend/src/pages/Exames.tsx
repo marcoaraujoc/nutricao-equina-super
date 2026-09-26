@@ -2,6 +2,7 @@
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { usePacienteDoModulo } from '../hooks/usePacienteDoModulo';
 import api from '../services/api';
 import InlineError from '../components/InlineError';
 import JanelaLista from '../components/JanelaLista';
@@ -450,7 +451,10 @@ const Exames = () => {
   // 🔴 ABRE EM MODO BUSCA, SEM PACIENTE HERDADO (a pedido, 2026-09-22) — ver §6.
   // Só a URL escolhe o paciente; o `selectedAnimal` deixou de decidir o que esta tela
   // carrega (ele continua sendo ESCRITO ao escolher, para as outras telas).
-  const effectiveAnimalId = animalId ?? '';
+  // Escolhido, fica para o módulo Resultado de Exame inteiro (Laboratorial e Imagem
+  // chegam pelo menu SEM id) — e só para ele. Ver hooks/usePacienteDoModulo.ts.
+  const { animalId: effectiveAnimalId, esquecer: esquecerPaciente } =
+    usePacienteDoModulo('exames', animalId);
 
   useEffect(() => {
     const loadNutrientes = async () => {
@@ -485,6 +489,8 @@ const Exames = () => {
       const resExames = await api.get(`/exames/animal/${effectiveAnimalId}`);
       setExames(resExames.data?.dados ?? resExames.data ?? []);
       const resAnimal = await api.get(`/animais/${effectiveAnimalId}`);
+      // GET 403 → paciente de outra empresa (memória antiga): volta ao modo busca.
+      if (!resAnimal.data) { esquecerPaciente(); setCurrentAnimal(null); return; }
       setCurrentAnimal(resAnimal.data?.dados ?? resAnimal.data);
     } catch (error) {
       console.error('Erro ao carregar dados:', error);

@@ -13,6 +13,9 @@ const vinculoPrestador = require('../lib/procedimentoPrestador');
 // FONTE ÚNICA da criação de procedimento DA EMPRESA — o mesmo helper que a Prescrição
 // e o Orçamento usam quando alguém digita um procedimento que não está no catálogo.
 const { garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
+// COPY-ON-WRITE do item GLOBAL — hoje só o toggle ativar/inativar o dispara
+// (nome/categoria seguem travados no item que não é da própria clínica).
+const { garantirCopiaProcedimento, origensJaForkadas } = require('../lib/catalogoProcedimento');
 const {
   CATEGORIAS_IMAGEM, TIPO_IMAGEM, ESPECIALIDADE_IMAGEM,
 } = require('../seeds/005_procedimentos_imagem.seed');
@@ -187,6 +190,15 @@ const listarComValores = async (req, res) => {
 
     // Catálogo global (empresaId null) + procedimentos próprios da empresa ativa
     where.AND = [{ OR: [{ empresaId: null }, ...(req.empresaId ? [{ empresaId: req.empresaId }] : [])] }];
+
+    // 🔴 COPY-ON-WRITE (2026-09-25): item global que esta empresa já FORKOU (ao
+    // ativar/inativar) some daqui — a cópia dela já aparece pelo `OR` acima, com
+    // o `ativo` que a clínica escolheu. Sem isso o global e a cópia apareceriam
+    // como dois procedimentos "iguais" na mesma lista.
+    const origensForkadas = await origensJaForkadas(prisma, req.empresaId);
+    if (origensForkadas.length > 0) {
+      where.AND.push({ NOT: { empresaId: null, id: { in: origensForkadas } } });
+    }
 
     let procedimentos = await prisma.procedimentoVeterinario.findMany({
       where,
@@ -897,17 +909,19 @@ const atualizarProprio = async (req, res) => {
 /**
  * PATCH /api/procedimentos/cadastro/proprio/:id/toggle  { motivo? }
  *
- * ATIVAR/INATIVAR o procedimento DA CLÍNICA — o par que a tela passou a oferecer em
- * 2026-09-22, no mesmo formato de Produtos. O que faltava não era o soft delete e sim
- * o CAMINHO DE VOLTA: inativado, não havia como reativá-lo por tela nenhuma.
+ * ATIVAR/INATIVAR o procedimento — da clínica OU do catálogo do sistema.
  *
  * ⚠️ INATIVAR exige `motivo` e grava `INATIVACAO` na Auditoria; ATIVAR não pede
  * motivo (§13, armadilha 33: reativar é correção, e pedir justificativa ali é só
  * atrito). Gate estrutural em `__tests__/inativacaoJustificada.test.js`.
  *
- * ⚠️ Linha GLOBAL responde 400: ela vale para TODAS as clínicas do SaaS, e o RLS de
- * `tb_procedimentos_vet` recusa a escrita de qualquer forma. Para tirá-la da frente
- * desta clínica, o caminho é cadastrar o próprio procedimento.
+ * 🔴 COPY-ON-WRITE (2026-09-25): item GLOBAL deixou de ser recusado aqui. Em vez
+ * disso nasce a CÓPIA da empresa (`garantirCopiaProcedimento`) — o global vale
+ * para TODAS as clínicas e o RLS recusaria a escrita nele de qualquer forma —, e
+ * é ELA que recebe o `ativo` pedido. O global NUNCA é tocado, e passa a ficar
+ * fora da listagem desta empresa (`listarComValores`/`origensJaForkadas`).
+ * ⚠️ O NOME não muda por aqui: essa recusa continua em `atualizarProprio`, sem
+ * fork nenhum — só ativo/inativo (e o valor, já isolado à parte) saem do global.
  */
 const toggleAtivoProprio = async (req, res) => {
   try {
@@ -916,15 +930,12 @@ const toggleAtivoProprio = async (req, res) => {
 
     const item = await prisma.procedimentoVeterinario.findFirst({
       where:  procedimentoVisivel(req.empresaId, id),
-      select: { id: true, nome: true, ativo: true, empresaId: true },
+      select: { id: true, nome: true, ativo: true, empresaId: true, codigo: true, nomeAbreviado: true,
+                descricao: true, categoria: true, subcategoria: true, especialidade: true,
+                tipoProcedimento: true, duracao: true, requerAnestesia: true, requerInternacao: true,
+                risco: true, valorCusto: true, valorVenda: true, especie: true },
     });
     if (!item) return res.status(404).json({ error: 'Procedimento não encontrado.' });
-    if (item.empresaId == null) {
-      return res.status(400).json({
-        error: 'Este procedimento é do catálogo do sistema e vale para todas as clínicas — não pode ser inativado aqui.',
-        code:  'ITEM_DO_SISTEMA',
-      });
-    }
 
     const vaiInativar = item.ativo;
     const motivo = String(req.body?.motivo ?? '').trim();
@@ -932,22 +943,28 @@ const toggleAtivoProprio = async (req, res) => {
       return res.status(400).json({ error: 'É obrigatório informar o motivo da inativação.' });
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.procedimentoVeterinario.update({ where: { id }, data: { ativo: !vaiInativar } });
+    const resultado = await prisma.$transaction(async (tx) => {
+      const { item: alvo, copiado } = await garantirCopiaProcedimento(tx, item, req.empresaId);
+      await tx.procedimentoVeterinario.update({ where: { id: alvo.id }, data: { ativo: !vaiInativar } });
       await registrarAuditoria(tx, req, {
         categoria:  vaiInativar ? 'INATIVACAO' : 'ATIVACAO',
         entidade:   'PROCEDIMENTO',
-        entidadeId: id,
+        entidadeId: alvo.id,
         motivo:     vaiInativar ? motivo : null,
-        detalhes:   `Procedimento "${item.nome}" ${vaiInativar ? 'inativado' : 'ativado'} no catálogo da clínica`,
+        detalhes:   `Procedimento "${item.nome}" ${vaiInativar ? 'inativado' : 'ativado'}`
+                    + (copiado ? ' — cópia própria da clínica criada a partir do catálogo do sistema' : ' no catálogo da clínica'),
       });
+      return { id: alvo.id, copiado };
     });
 
     return res.json({
       mensagem: vaiInativar ? 'Procedimento inativado.' : 'Procedimento ativado.',
       ativo:    !vaiInativar,
+      id:       resultado.id,
+      copiado:  resultado.copiado,
     });
   } catch (err) {
+    if (err?.status === 404) return res.status(404).json({ error: err.message });
     console.error('ProcedimentoCadastroController.toggleAtivoProprio:', err);
     return res.status(500).json({ error: 'Erro ao alterar a situação do procedimento.' });
   }

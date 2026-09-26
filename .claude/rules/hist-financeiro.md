@@ -39,8 +39,11 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 #   que **NÃO nasce marcada**. Marcada, o lançamento na fatura deixa de nascer na
 #   execução (dose a dose, no plantão) e passa a nascer na FINALIZAÇÃO da prescrição
 #   (medicamento e procedimento) e da vacina.
-#   **Migration `20261023000000_empresa_dispensar_execucao_prescricao` — GERADA, NÃO
-#   APLICADA.** Aditiva: `dispensar_execucao_prescricao BOOLEAN NOT NULL DEFAULT false`
+#   ✅ **Migration `20261023000000_empresa_dispensar_execucao_prescricao` — APLICADA**
+#   (autorizada, 2026-09-24; `migrate status`: 211, em dia; `prisma generate` ok).
+#   🔴 Ela chegou a FALHAR antes (07:46) com `42501 must be owner of table` — deploy
+#   rodado com o usuário da APLICAÇÃO (§11). Nada foi aplicado (0 passos); recuperada
+#   com `migrate resolve --rolled-back` + deploy com `DATABASE_URL_MIGRATIONS`. Aditiva: `dispensar_execucao_prescricao BOOLEAN NOT NULL DEFAULT false`
 #   em `tb_empresa_configuracoes`, sem backfill (false = comportamento de hoje). Sem RLS
 #   novo. Aplicar com `DATABASE_URL=$DATABASE_URL_MIGRATIONS npx prisma migrate deploy`.
 #   ⚠️ Funciona ANTES da migration: leitura/escrita por SQL cru em
@@ -80,7 +83,7 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 #   Gate novo: `__tests__/execucaoPrescricaoDispensada.test.js` (12 casos; verificado
 #   que REPROVA — desligado o encerramento no `finalizar` e na cascata, 2 falham).
 #   Suíte: **1516**; `tsc --noEmit` (backend), `tsc -b` e `vite build` limpos.
-#   ⚠️ NÃO verificado em navegador nem contra o banco — migration não aplicada.)
+#   ⚠️ NÃO verificado em navegador — coluna conferida no banco (boolean NOT NULL DEFAULT false).)
 
 ---
 # Atualizado em: 2026-09-23 (parte 2) (🔴 **O CICLO DA FATURA PAROU DE INVENTAR MÊS, E

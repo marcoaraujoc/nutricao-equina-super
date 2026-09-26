@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import { encerrarEventos } from '../hooks/useEventosTempoReal';
+import { esquecerPacientesDosModulos } from '../hooks/usePacienteDoModulo';
 import type { ReactNode } from 'react';
 
 export interface PendingInvite {
@@ -211,6 +212,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (): Promise<User | null> => {
     localStorage.removeItem('s2vet_empresa_id');
     localStorage.removeItem('s2vet_equipe_id');
+    // Paciente lembrado por módulo é da sessão anterior (outra pessoa/empresa).
+    esquecerPacientesDosModulos();
     const me = await fetchMe();
     if (me) setUser(me);
     return me;
@@ -227,6 +230,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }).catch(() => { /* best-effort */ });
     localStorage.removeItem('s2vet_empresa_id');
     localStorage.removeItem('s2vet_equipe_id');
+    esquecerPacientesDosModulos();
     // Fecha o canal de eventos: ele foi aberto com o cookie da sessão que acabou
     // de ser revogada. Sem isto, o `EventSource` continua tentando reconectar
     // sozinho a cada 5s, agora sem sessão — 401 em laço na tela de login.
