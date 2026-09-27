@@ -608,10 +608,10 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
   return (
     <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
 
-      {/* Alterou qualquer campo → o erro anterior some (change borbulha) */}
+      {/* Alterou qualquer campo → o erro anterior some (change borbulha).
+          Só `onChange`: `onInput` junto revertia o <select> — ver SubModuloPrescricao. */}
       <div className="p-5 space-y-4"
-        onChange={() => setErro(null)}
-        onInput={() => setErro(null)}>
+        onChange={() => setErro(null)}>
 
       {/* Tipo de destino */}
       <div className="flex gap-2">

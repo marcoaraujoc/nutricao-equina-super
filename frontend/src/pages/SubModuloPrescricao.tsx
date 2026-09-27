@@ -1440,6 +1440,16 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         if (itens.length === 0) { setErroInline('Adicione ao menos um item'); return; }
         if (!formEstaVazio() && !validarForm()) return;
         if (bloqueadoPorDosagem(itens)) return;
+        // 🔴 ESTOQUE CONFERIDO ANTES DE CRIAR (2026-09-26). Quem finaliza não pode ficar
+        // com prescrição SALVA: com a checagem depois de criar, cancelar o alerta de
+        // estoque deixava o documento parado em SALVO. Agora o alerta aparece com NADA
+        // gravado — Cancelar não deixa rastro, Continuar cria e finaliza forçando.
+        // (`forcar` = a pessoa já viu o alerta e mandou seguir.)
+        if (!forcar) {
+          const chk = await api.post('/clinica/prescricoes/grupos/verificar-estoque', { itens: semRastreio(itens) });
+          const alertasPrev = (chk.data?.alertas ?? []) as AlertaEstoque[];
+          if (alertasPrev.length > 0) { setAlertaEstoque(alertasPrev); return; }
+        }
         const res = await api.post('/clinica/prescricoes/grupos', { animalId, evolucaoId, itens: semRastreio(itens) });
         const grupos = res.data.dados as { id: number; numeroFormatado: string }[];
         // Grupos criados (persistidos) → marca os itens de orçamento como importados
@@ -1515,6 +1525,13 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
     onSaved();
     onClose();
   };
+
+  // 🔴 O NOME DO BOTÃO DIZ O QUE ELE FAZ (2026-09-26, a pedido). Ele sempre se chamou
+  // "Finalizar", mas para quem NÃO tem a permissão de finalizar o clique só gravava a
+  // prescrição como SALVO — e aparecia um status que o botão nunca anunciou.
+  //   com a permissão → "Finalizar": grava E finaliza; SALVO não existe para ela.
+  //   sem a permissão → "Salvar": grava como SALVO e quem pode finaliza depois.
+  const rotuloGravar = canFinalizarCancelar ? 'Finalizar' : 'Salvar';
 
   // Salvar unificado — o botão Finalizar foi absorvido pelo Salvar:
   // com permissão de finalizar, salva e finaliza em uma única ação;
@@ -1693,10 +1710,14 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
         {/* Rede de segurança: React normaliza `change` para BORBULHAR, então o
             handler aqui cobre todo campo de dentro — inclusive o que não passa
             pelo `set` (combobox de medicamento, seletor de procedimento) e o que
-            for adicionado depois, sem precisar tocar em cada um. */}
+            for adicionado depois, sem precisar tocar em cada um.
+            🔴 SÓ `onChange`, NUNCA `onInput` também (2026-09-26). No <select> o
+            navegador dispara `input` ANTES de `change`: com um erro na tela, o
+            `onInput` o limpava, o React re-renderizava na hora e o select controlado
+            voltava ao valor do estado (vazio) — quando o `change` chegava, lia vazio.
+            Era o "Frequência é obrigatória" que não saía nunca, zerando o campo. */}
         <div className={isInline ? '' : 'flex-1 overflow-y-auto'}
-          onChange={() => setErroAcao(null)}
-          onInput={() => setErroAcao(null)}>
+          onChange={() => setErroAcao(null)}>
           <div className="px-5 py-3 space-y-3">
 
             {/* O botão "Importar orçamento" saiu daqui: passou para a MESMA LINHA das
@@ -2154,7 +2175,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                         disabled={saving || finalizing || (isCreate && localItens.length === 0 && formEstaVazio())}
                         className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
                         {(saving || finalizing) ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
-                        Finalizar
+                        {rotuloGravar}
                       </button>
                     )}
                   </div>
@@ -2171,7 +2192,11 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                     ? `${savedGrupos.length} prescrições salvas (${savedGrupos.map(g => `#${g.numeroFormatado}`).join(', ')})`
                     : `Prescrição #${savedGrupos[0].numeroFormatado} salva`}
                 </p>
-                <p className="text-xs text-gray-400 mt-1">Salve para ativar ou crie uma nova prescrição</p>
+                <p className="text-xs text-gray-400 mt-1">
+                  {canFinalizarCancelar
+                    ? 'Finalize para ativar ou crie uma nova prescrição'
+                    : 'Aguardando finalização por quem tem essa permissão'}
+                </p>
               </div>
             )}
 
@@ -2337,7 +2362,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                     disabled={saving || finalizing || (isCreate && localItens.length === 0 && formEstaVazio())}
                     className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
                     {(saving || finalizing) ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
-                    Finalizar
+                    {rotuloGravar}
                   </button>
                 )}
               </>
@@ -2689,6 +2714,8 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   // (volta para rascunho e libera reservas) antes de editar.
   const [reabrindo,        setReabrindo]        = useState<PrescricaoGrupo | null>(null);
   const [reabrindoLoading, setReabrindoLoading] = useState(false);
+  /** Prescrição FINALIZADA reaberta nesta tela — ver `fecharModal`. */
+  const reabertaRef = useRef<number | null>(null);
   // Erro de CARGA da página (falha ao listar) — este sim pertence ao topo.
   // Erro de AÇÃO vive em `erroLinha` (na linha) ou `erroReabrir` (no modal).
   const [erroInline, setErroInline] = useState<string | null>(null);
@@ -2711,6 +2738,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
     try {
       const res = await api.post(`/clinica/prescricoes/grupos/${reabrindo.id}/reabrir`);
       const g = (res.data?.dados as PrescricaoGrupo) ?? { ...reabrindo, status: 'SALVO' as StatusGrupo };
+      reabertaRef.current = g.id;
       setReabrindo(null);
       abrirEdicao(g);
       carregar();
@@ -2867,7 +2895,31 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
     );
   };
 
-  const fecharModal = () => { setEditingGrupo(null); };
+  // 🔴 REABRIR NÃO PODE TERMINAR EM "SALVO" PARA QUEM FINALIZA (2026-09-26). Alterar
+  // uma prescrição FINALIZADA a devolve a SALVO para edição (libera as reservas); se a
+  // pessoa sai sem clicar em Finalizar, ela ficava parada nesse status. Ao fechar a
+  // edição, a prescrição reaberta NESTA tela que continuar SALVA é finalizada de novo —
+  // forçando, porque o estoque já tinha sido aceito na finalização original.
+  // ⚠️ Só a reaberta aqui (`reabertaRef`): o rascunho de um profissional SEM permissão,
+  // que o gestor abriu para conferir, continua SALVO — é o fluxo normal dele.
+  // ⚠️ Fechar a aba do navegador no meio da edição ainda a deixa SALVA; o botão
+  // Finalizar da lista resolve.
+  const fecharModal = async () => {
+    setEditingGrupo(null);
+    const id = reabertaRef.current;
+    reabertaRef.current = null;
+    if (!id || !canFinalizarCancelar) return;
+    try {
+      const r = await api.get(`/clinica/prescricoes/grupos/${id}`);
+      if ((r.data?.dados as PrescricaoGrupo | undefined)?.status !== 'SALVO') return;
+      await api.post(`/clinica/prescricoes/grupos/${id}/finalizar`, { forcarFinalizacao: true });
+      carregar(); onFaturaAtualizada(); onSalvo?.();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setErroLinha({ id, mensagem: msg ?? 'A prescrição reaberta não pôde ser finalizada de novo — use Finalizar.' });
+      carregar();
+    }
+  };
   const onSaved = () => { carregar(); onFaturaAtualizada(); onSalvo?.(); };
 
   const handleExcluirCancelar = async (motivo: string) => {

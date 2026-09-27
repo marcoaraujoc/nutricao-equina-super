@@ -185,10 +185,12 @@ export const FORM_INICIAL: FormProp = {
   // ⚠️ AS TRÊS MARCADAS por padrão: é o que a tela de Faturamento oferece hoje para
   // qualquer cliente. Nascer com uma só TIRARIA um botão de envio sem ninguém decidir.
   formasRecebimentoFatura: [...TODAS_FORMAS_RECEBIMENTO],
-  // ⚠️ LIGADO por padrão: o cliente novo precisa entrar para ver a fatura e os
-  // pacientes dele — foi assim que o cadastro sempre funcionou (o login nascia com
-  // a conta). Nascer desligado mudaria o comportamento de todo cadastro existente.
-  acessoSistema: true,
+  // ⚠️ DESLIGADO por padrão (a pedido): o cliente novo nasce SEM acesso ao sistema,
+  // tanto cadastrado por aqui quanto pela tela do Paciente. O gestor liga depois,
+  // caso o cliente vá mesmo usar o portal — não afeta quem já tem cadastro:
+  // `formDeProprietario` lê o valor GRAVADO (`p.acessoSistema !== false`) na edição,
+  // então isto só vale para o formulário em branco de um cadastro NOVO.
+  acessoSistema: false,
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
 

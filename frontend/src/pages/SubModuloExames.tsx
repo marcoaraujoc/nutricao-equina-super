@@ -1513,10 +1513,10 @@ export default function SubModuloExames({
       {/* ── Formulário ────────────────────────────────────────────────────── */}
       <div ref={viewTopRef} />
       {(podeCriar || exameVisualizando) && (
-        // Alterou qualquer campo → o erro anterior some (change borbulha)
+        // Alterou qualquer campo → o erro anterior some (change borbulha).
+        // Só `onChange`: `onInput` junto revertia o <select> — ver SubModuloPrescricao.
         <div className="border-b border-gray-100"
-          onChange={() => setErroInline(null)}
-          onInput={() => setErroInline(null)}>
+          onChange={() => setErroInline(null)}>
           {exameVisualizando && (
             <div className="flex items-center justify-between px-4 pt-3">
               <div className="flex items-center gap-1.5">

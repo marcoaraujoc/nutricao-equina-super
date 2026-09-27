@@ -176,6 +176,44 @@ export function ehFormaContavel(v: string | null | undefined): boolean {
 }
 
 /**
+ * 🔴 Acha, em QUALQUER dos textos dados, o número que precede EXATAMENTE a
+ * unidade-alvo (2026-09-26, a pedido — "varrer apresentação e nome do produto").
+ *
+ * "Seringa de 30 g"    + g   → 30
+ * "Ivermectina 500 mg" + mg  → 500
+ * "Ivermectina 500 mg" + g   → null   ("500" não precede "g" — precede "mg")
+ * "3 gotas"            + g   → null   ("g" de "gotas" continua em outra letra)
+ *
+ * A regra é uma só: o número tem de estar IMEDIATAMENTE (espaço opcional) antes da
+ * unidade-alvo, e a unidade não pode CONTINUAR em outra letra logo depois. É esse par
+ * que evita ler "500 mg" como 500 g (a unidade-alvo não pode estar dentro de outra) e
+ * "3 gotas" como 3 g (a letra seguinte à unidade quebra a correspondência) — sem
+ * precisar de uma lista de unidades concorrentes para desambiguar.
+ *
+ * ⚠️ Quem chama decide a ORDEM dos textos — em geral apresentação primeiro (é lá que o
+ * tamanho da embalagem costuma estar escrito, "Seringa de 30 g") e o nome depois (que
+ * geralmente carrega a concentração do princípio ativo, não o conteúdo da embalagem).
+ */
+export function qtdDaUnidadeNoTexto(
+  textos: Array<string | null | undefined>,
+  unidadeAlvo: string | null | undefined,
+): number | null {
+  const alvo = String(unidadeAlvo ?? '').trim();
+  if (!alvo) return null;
+  const escapado = alvo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(\\d+(?:[.,]\\d+)?)\\s*${escapado}(?![a-zà-öø-ÿA-ZÀ-ÖØ-Ý])`, 'i');
+  for (const texto of textos) {
+    if (!texto) continue;
+    const m = String(texto).match(re);
+    if (m) {
+      const n = Number(m[1].replace(',', '.'));
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+  return null;
+}
+
+/**
  * Acha no NOME do produto a quantidade da embalagem, na forma escolhida.
  *
  * "Ocitocina 20 mL"        + mL → 20
@@ -187,21 +225,14 @@ export function ehFormaContavel(v: string | null | undefined): boolean {
  * número que não é dela — e esse número divide o preço da dose na fatura.
  * ⚠️ `doses` nunca é extraída do nome: rótulo de produto não traz contagem de
  * aplicação, e o que viesse daí seria palpite.
+ *
+ * ⚠️ Delega para `qtdDaUnidadeNoTexto` — mantido como função própria só porque quem já
+ * chama espera `(nome, forma)`; o comportamento é o mesmo de sempre.
  */
 export function qtdDoNome(nome: string, forma: string | null | undefined): number | null {
   const alvo = normalizarFormaCalculo(forma);
   if (!alvo || alvo === FORMA_DOSES) return null;
-
-  // Ordem LONGA → CURTA: a alternação do regex é leftmost-first, então sem isso
-  // "500mg" casaria com "g" e devolveria a massa errada.
-  const re = /(\d+(?:[.,]\d+)?)\s*(mcg|mg|kg|ml|l|g)\b/gi;
-  const texto = String(nome ?? '');
-  for (const m of texto.matchAll(re)) {
-    if (m[2].toLowerCase() !== alvo.toLowerCase()) continue;
-    const n = Number(m[1].replace(',', '.'));
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return null;
+  return qtdDaUnidadeNoTexto([nome], alvo);
 }
 
 /** Formata a quantidade sem zeros à toa: 20 → "20", 2.5 → "2,5". */

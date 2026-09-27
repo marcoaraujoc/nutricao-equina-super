@@ -102,6 +102,27 @@ async function comOrigensDetalhadas(fatura) {
 // A evolução é o ATENDIMENTO ao qual a cobrança pertence — é dela que sai o número
 // `[AG-0012]`/`[EV-0007]` já gravado na descrição do item, e é para ela (ou para o
 // agendamento que a originou) que o financeiro precisa conseguir ir a partir da fatura.
+/**
+ * 🔴 PARA ONDE A FATURA VAI PELO WHATSAPP — um critério só para todo envio
+ * (2026-09-26).
+ *
+ * Até aqui cada botão escolhia um telefone: o fechamento em LOTE mandava para o do
+ * LOGIN (`users.phone`) e o painel da fatura (aberta e por paciente) para o do
+ * CADASTRO desta empresa (`tb_proprietario_perfis`). Cliente com o cadastro da
+ * empresa sem telefone e o login com telefone (caso real na base) recebia pelo lote e
+ * NÃO pelo painel: sem número, o envio automático não tinha destino e a tela caía no
+ * plano B — baixar o PDF e abrir o WhatsApp do desktop, sem anexo.
+ *
+ * Ordem: o telefone do cadastro DESTA empresa (é o que a clínica cadastrou para
+ * cobrar) → o do login, só quando o cadastro não tem nenhum.
+ * ⚠️ É só o DESTINO do envio. O telefone EXIBIDO continua sendo o do cadastro (§36):
+ * a regra "null no perfil = vazio naquela empresa" não muda para a tela.
+ */
+function telefoneDeEnvio(telefonePerfil, telefoneLogin) {
+  const limpo = (v) => (typeof v === 'string' && v.replace(/\D/g, '').length >= 10 ? v : null);
+  return limpo(telefonePerfil) ?? limpo(telefoneLogin);
+}
+
 const EVOLUCAO_ORIGEM_SELECT = {
   id: true, numero: true, tipoAtendimento: true, animalId: true, agendamentoId: true,
 };
@@ -695,7 +716,7 @@ const FaturaController = {
         const faturaAtrasada = prop.faturas.find(f => f.status === 'ATRASADA') ?? null;
         const faturaPaga     = prop.faturas.find(f => f.status === 'PAGA')     ?? null;
         const dados = await formasFatura.anexarFormas(
-          [{ ...prop, faturaAtiva: faturaAberta ?? null, faturaReaberta, faturaFechada, faturaAtrasada, faturaPaga, faturas: undefined }],
+          [{ ...prop, telefoneEnvio: telefoneDeEnvio(prop.phone, prop.phone), faturaAtiva: faturaAberta ?? null, faturaReaberta, faturaFechada, faturaAtrasada, faturaPaga, faturas: undefined }],
           empresaId,
         );
         return res.json({ dados });
@@ -797,6 +818,7 @@ const FaturaController = {
       }, {});
 
       // Nome/telefone/condição comercial conforme o cadastro DESTA empresa
+      const foneLogin = new Map(proprietarios.map(p => [p.id, p.phone]));
       const comPerfil = await aplicarPerfilProprietarioEmLista(proprietarios, req.empresaId);
       // Preferência de recebimento do cadastro DESTA empresa. Cliente sem escolha
       // declarada volta com TODAS — é o comportamento que a tela sempre teve.
@@ -817,6 +839,7 @@ const FaturaController = {
         .filter(p => p.animais.length > 0)
         .map(p => ({
           ...p,
+          telefoneEnvio:  telefoneDeEnvio(p.phone, foneLogin.get(p.id)),
           faturaAtiva:    p.faturas.find(f => f.status === 'ABERTA')   ?? null,
           faturaReaberta: p.faturas.find(f => f.status === 'REABERTA') ?? null,
           faturaFechada:  p.faturas.find(f => f.status === 'FECHADA')  ?? null,
@@ -926,7 +949,8 @@ const FaturaController = {
       if (empresaId && !(await ehClienteDaEmpresa(req.params.proprietarioId, empresaId))) {
         return res.status(404).json({ error: 'Proprietário não encontrado' });
       }
-      const logoUrl = await resolverLogoPorProprietario(req.params.proprietarioId);
+      // Logo da clínica DA FATURA (a do contexto), pelo mesmo motivo do PIX abaixo.
+      const logoUrl = await resolverLogoPorProprietario(req.params.proprietarioId, empresaId, req.equipeId ?? null);
       // Os dados de recebimento saem PELA MESMA rota da logo (a pedido, 2026-09-08):
       // as duas são identidade da clínica na folha, buscadas no mesmo ponto do
       // carregamento da fatura. Uma rota nova só para cinco campos custaria uma ida a
@@ -934,7 +958,13 @@ const FaturaController = {
       // ⚠️ Empresa do CONTEXTO, nunca a do proprietário: o mesmo cliente atendido por
       // duas clínicas receberia o PIX da outra.
       const recebimento = await lerDadosRecebimento(empresaId);
-      res.json({ dados: { logoUrl, recebimento } });
+      // Nome da clínica — é o que a folha escreve no topo quando não há logo
+      // cadastrada (2026-09-26). O MESMO `empresa.nome` que a aplicação exibe no
+      // rodapé e na barra lateral (`/equipes/logo`).
+      const empresa = empresaId
+        ? await prisma.empresa.findUnique({ where: { id: empresaId }, select: { nome: true } })
+        : null;
+      res.json({ dados: { logoUrl, recebimento, empresaNome: empresa?.nome ?? null } });
     } catch (err) {
       console.error('Erro ao obter logo do proprietário:', err);
       res.status(500).json({ error: 'Erro interno' });
@@ -1502,14 +1532,17 @@ const FaturaController = {
           { veterinarioId: req.user.id, statusAnterior: fatura.status },
         );
 
+        // Mesmo destino do painel da fatura: o telefone do cadastro DESTA empresa, e o
+        // do login só na falta dele (`telefoneDeEnvio`).
+        const comPerfilLote = await aplicarPerfilProprietario(fatura.proprietario, fatura.empresaId ?? req.empresaId);
         fechadas.push({
           faturaId:      atualizada.id,
           total:         atualizada.total,
           mesReferencia: atualizada.mesReferencia,
           proprietario:  {
             id:       fatura.proprietario.id,
-            fullName: fatura.proprietario.fullName,
-            phone:    fatura.proprietario.phone,
+            fullName: comPerfilLote?.fullName ?? fatura.proprietario.fullName,
+            phone:    telefoneDeEnvio(comPerfilLote?.phone, fatura.proprietario.phone),
             email:    fatura.proprietario.email,
           },
         });
@@ -1619,3 +1652,4 @@ module.exports.abrirProximaFatura              = abrirProximaFatura;
 module.exports.diaVencimentoDoProprietario     = diaVencimentoDoProprietario;
 module.exports.recalcularTotal            = recalcularTotal;
 module.exports.alterarFechamentoDoAnimal  = alterarFechamentoDoAnimal;
+module.exports.telefoneDeEnvio            = telefoneDeEnvio;

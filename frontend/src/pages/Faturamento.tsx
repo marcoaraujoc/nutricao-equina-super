@@ -14,7 +14,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import {
   DollarSign, Search, Loader2, Trash2,
   Pencil, Check, X, RefreshCw, Receipt,
-  CheckCircle2, Download, Printer, ChevronDown, ChevronRight, MessageCircle, Mail,
+  CheckCircle2, Download, Printer, ChevronDown, ChevronRight, Mail,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { imprimirFatura, exportarFaturaCSV, gerarHtmlFatura } from '../utils/FaturaExport';
@@ -24,7 +24,8 @@ import { carregarComoDataUri } from '../utils/printUrl';
 import CompartilharPdfBotoes from '../components/CompartilharPdfBotoes';
 // O MESMO par que a Prescrição usa: PDF anexado pelo backend, barra de progresso no
 // centro da tela, botão Cancelar e veredito no mesmo lugar (ver `handleShare`).
-import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
+import { enviarPdfEmailComAviso, type CompartilharPdfOpcoes } from '../utils/compartilharPdf';
+import EnviarWhatsApp from '../components/EnviarWhatsApp';
 // Como o CLIENTE escolheu receber a fatura (cadastro do proprietário) — é o que decide
 // quais destes botões ficam habilitados para ele. Ver utils/formasRecebimentoFatura.ts.
 import {
@@ -130,6 +131,10 @@ interface FaturaResumo {
 
 interface ProprietarioItem {
   id: number; fullName: string; email: string; phone?: string;
+  /** Destino do WhatsApp: o telefone do cadastro DESTA empresa e, na falta dele, o do
+   *  login. Resolvido no backend (`telefoneDeEnvio`) — o MESMO critério do fechamento
+   *  em lote. `phone` segue sendo o EXIBIDO. */
+  telefoneEnvio?: string | null;
   valorAssistencia?: number; mensalista?: boolean;
   // Proprietário INATIVADO ainda aparece aqui quando tem PACIENTE ativo na empresa —
   // e é por isso que o selo "Inativo" existe. ⚠️ Desde 2026-09-02 cliente SEM NENHUM
@@ -1180,11 +1185,13 @@ interface PropsDoBloco {
   subtotal: number; subtotalFechado: number; subtotalPago: number;
   abertos: number; fechados: number; pagos: number; naoPagos: number;
   podeFechar: boolean; podePagar: boolean; isGestor: boolean;
-  faturaEditavel: boolean; ocupado: boolean; envio: 'email' | 'whatsapp' | null;
+  faturaEditavel: boolean; ocupado: boolean; envio: 'email' | null;
   onAlterar: (animalId: number, acao: AcaoAnimal, nome: string) => void;
   bloqueioEmail: string | null; bloqueioWhatsApp: string | null; bloqueioImpresso: string | null;
   onEmail: (animalId: number, nome: string) => void;
-  onWhatsApp: (animalId: number, nome: string) => void;
+  /** Documento do bloco para o WhatsApp — `null` quando não há o que mandar. */
+  whatsapp: (animalId: number, nome: string) => CompartilharPdfOpcoes | null;
+  telefoneWhatsApp: string | null | undefined;
   onImprimir: (animalId: number, nome: string) => void;
   onExportar: (animalId: number, nome: string) => void;
 }
@@ -1215,8 +1222,9 @@ function AcoesDoBloco({ separador = 'border-gray-200/70', ...props }: PropsDoBlo
     animalId, nome, abertos, fechados, pagos, naoPagos,
     podeFechar, podePagar, isGestor, faturaEditavel, ocupado, envio, onAlterar,
     bloqueioEmail, bloqueioWhatsApp, bloqueioImpresso,
-    onEmail, onWhatsApp, onImprimir, onExportar,
+    onEmail, whatsapp, telefoneWhatsApp, onImprimir, onExportar,
   } = props;
+  const docWhatsApp = whatsapp(animalId, nome);
   const podeFecharAgir = podeFechar && faturaEditavel;
   const podePagarAgir  = podePagar  && faturaEditavel;
   const temLancamento  = abertos > 0 || fechados > 0 || pagos > 0;
@@ -1252,10 +1260,11 @@ function AcoesDoBloco({ separador = 'border-gray-200/70', ...props }: PropsDoBlo
         carregando={envio === 'email'} desabilitado={!!bloqueioEmail}
         titulo={bloqueioEmail || `Enviar por e-mail só os lançamentos de ${nome}`}
         onClick={() => onEmail(animalId, nome)} />
-      <AcaoBloco tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp"
-        carregando={envio === 'whatsapp'} desabilitado={!!bloqueioWhatsApp}
-        titulo={bloqueioWhatsApp || `Enviar por WhatsApp só os lançamentos de ${nome}`}
-        onClick={() => onWhatsApp(animalId, nome)} />
+      {docWhatsApp && (
+        <EnviarWhatsApp {...docWhatsApp} tipo="Fatura" aparencia="compacto"
+          telefone={telefoneWhatsApp} indisponivel={bloqueioWhatsApp}
+          titulo={`Enviar por WhatsApp só os lançamentos de ${nome}`} />
+      )}
       <AcaoBloco tom="imprimir" icone={Printer} rotulo="Imprimir"
         desabilitado={!!bloqueioImpresso}
         titulo={bloqueioImpresso || `Imprimir só os lançamentos de ${nome}`}
@@ -1294,6 +1303,8 @@ function PainelFatura({
   // Chave PIX / banco da clínica — impressos no rodapé da fatura (2026-09-08).
   // `null` = a clínica não cadastrou, e o bloco não é impresso.
   const [recebimento,    setRecebimento]    = useState<DadosRecebimento | null>(null);
+  // Nome da clínica — vai no topo da folha quando não há logo cadastrada.
+  const [empresaNome,    setEmpresaNome]    = useState<string | null>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
 
   // Logo da empresa/equipe do proprietário para PDF/impressão/compartilhamento —
@@ -1314,9 +1325,10 @@ function PainelFatura({
         // Os dados de pagamento vêm na MESMA resposta — as duas coisas são identidade
         // da clínica na folha, e uma rota só evita uma ida a mais por abertura.
         if (!cancelado) setRecebimento(res.data?.dados?.recebimento ?? null);
+        if (!cancelado) setEmpresaNome(res.data?.dados?.empresaNome ?? null);
         if (!cancelado) setLogoUrl(dataUri);
       })
-      .catch(() => { if (!cancelado) { setLogoUrl(null); setRecebimento(null); } });
+      .catch(() => { if (!cancelado) { setLogoUrl(null); setRecebimento(null); setEmpresaNome(null); } });
     return () => { cancelado = true; };
   }, [prop.id]);
 
@@ -1342,12 +1354,15 @@ function PainelFatura({
   const formas = prop.formasRecebimentoFatura;
   const bloqueioEmail    = formaLiberada(formas, 'EMAIL')    ? null : motivoFormaBloqueada('EMAIL');
   const bloqueioWhatsApp = formaLiberada(formas, 'WHATSAPP') ? null : motivoFormaBloqueada('WHATSAPP');
+  // Destino do WhatsApp — o MESMO critério do fechamento em lote (`telefoneDeEnvio` no
+  // backend). `prop.phone` fica só como reserva para resposta antiga sem o campo.
+  const telefoneWhatsApp = prop.telefoneEnvio ?? prop.phone ?? null;
   const bloqueioImpresso = formaLiberada(formas, 'IMPRESSO') ? null : motivoFormaBloqueada('IMPRESSO');
 
   const handlePDF = () => {
     if (!fatura) return;
     if (bloqueioImpresso) { setErroInline(bloqueioImpresso); return; }
-    imprimirFatura(fatura, prop.animais, logoUrl, recebimento);
+    imprimirFatura(fatura, prop.animais, logoUrl, recebimento, empresaNome);
     setShowExportMenu(false);
   };
 
@@ -1358,7 +1373,6 @@ function PainelFatura({
     toast.success('CSV gerado');
   };
 
-  const [compartilhando, setCompartilhando] = useState(false);
   const [enviandoEmail,  setEnviandoEmail]  = useState(false);
 
 
@@ -1369,7 +1383,7 @@ function PainelFatura({
     const inv         = `INV-${String(fatura.id).padStart(3, '0')}`;
     const nomeDestino = prop.fullName;
     return {
-      gerarHtml:   () => gerarHtmlFatura(fatura, prop.animais, logoUrl, recebimento),
+      gerarHtml:   () => gerarHtmlFatura(fatura, prop.animais, logoUrl, recebimento, empresaNome),
       nomeArquivo: `fatura-${inv}-${nomeDestino.replace(/\s+/g, '-')}.pdf`,
       documento:   'Fatura',
       texto:       montarTextoFatura(fatura, prop),
@@ -1392,23 +1406,14 @@ function PainelFatura({
   // que já saíram precisam seguir revogáveis, e o cron `reenviar_links_fatura` depende
   // deles. O que mudou foi por onde ESTES DOIS BOTÕES mandam a fatura.
   //
+  // 🔴 O WHATSAPP SAI PELO COMPONENTE ÚNICO `EnviarWhatsApp` (2026-09-26) — o mesmo
+  // do fechamento em lote, com o destino `telefoneWhatsApp` (cadastro da empresa →
+  // login). Era o telefone que divergia: o painel mandava só o do cadastro e, vazio,
+  // o envio caía no plano B (abrir o WhatsApp do desktop sem anexo).
+  //
   // ⚠️ Nenhum `try/catch` aqui: `enviarPdf*ComAviso` NUNCA lança — ela mesma conta o
   // resultado (e o motivo da falha) no card central. Um catch em volta só produziria
   // uma segunda mensagem sobre o mesmo clique.
-  const handleShare = async () => {
-    const opcoes = opcoesCompartilhar();
-    if (!fatura || !opcoes) return;
-    // Guarda de teclado/leitor de tela: o botão já está desabilitado, mas a regra não
-    // pode morar só no atributo `disabled`.
-    if (bloqueioWhatsApp) { setErroInline(bloqueioWhatsApp); return; }
-    setCompartilhando(true);
-    try {
-      await enviarPdfWhatsAppComAviso(opcoes, prop.phone);
-    } finally {
-      setCompartilhando(false);
-    }
-  };
-
   const handleEmail = async () => {
     const opcoes = opcoesCompartilhar();
     if (!fatura || !opcoes) return;
@@ -1747,13 +1752,13 @@ function PainelFatura({
     [{ id: animalId, nome }];
 
   /** Paciente cujo envio (e-mail/WhatsApp) está em curso — trava só aquele botão. */
-  const [envioAnimal, setEnvioAnimal] = useState<{ id: number; canal: 'email' | 'whatsapp' } | null>(null);
+  const [envioAnimal, setEnvioAnimal] = useState<{ id: number; canal: 'email' } | null>(null);
 
   const handleImprimirAnimal = (animalId: number, nome: string) => {
     const f = faturaDoAnimal(animalId);
     if (!f) return;
     if (bloqueioImpresso) { setErroInline(bloqueioImpresso); return; }
-    imprimirFatura(f, animaisDoDocumento(animalId, nome), logoUrl, recebimento);
+    imprimirFatura(f, animaisDoDocumento(animalId, nome), logoUrl, recebimento, empresaNome);
   };
 
   const handleCSVAnimal = (animalId: number, nome: string) => {
@@ -1768,7 +1773,7 @@ function PainelFatura({
     if (!f) return null;
     const inv = `INV-${String(f.id).padStart(3, '0')}`;
     return {
-      gerarHtml:   () => gerarHtmlFatura(f, animaisDoDocumento(animalId, nome), logoUrl, recebimento),
+      gerarHtml:   () => gerarHtmlFatura(f, animaisDoDocumento(animalId, nome), logoUrl, recebimento, empresaNome),
       nomeArquivo: `fatura-${inv}-${nome.replace(/\s+/g, '-')}.pdf`,
       documento:   'Fatura',
       texto:       montarTextoFaturaAnimal(f, prop, nome, f.total),
@@ -1782,15 +1787,6 @@ function PainelFatura({
     if (bloqueioEmail) { setErroInline(bloqueioEmail); return; }
     setEnvioAnimal({ id: animalId, canal: 'email' });
     try { await enviarPdfEmailComAviso(opcoes, prop.email); }
-    finally { setEnvioAnimal(null); }
-  };
-
-  const handleWhatsAppAnimal = async (animalId: number, nome: string) => {
-    const opcoes = opcoesCompartilharAnimal(animalId, nome);
-    if (!opcoes) return;
-    if (bloqueioWhatsApp) { setErroInline(bloqueioWhatsApp); return; }
-    setEnvioAnimal({ id: animalId, canal: 'whatsapp' });
-    try { await enviarPdfWhatsAppComAviso(opcoes, prop.phone); }
     finally { setEnvioAnimal(null); }
   };
 
@@ -1949,11 +1945,11 @@ function PainelFatura({
           className={`${BTN_ACAO} ${TOM_ACAO.email} disabled:opacity-50 disabled:cursor-not-allowed`}>
           {enviandoEmail ? <Loader2 size={13} className="animate-spin"/> : <Mail size={13}/>} E-mail
         </button>
-        <button onClick={handleShare} disabled={compartilhando || !!bloqueioWhatsApp}
-          title={bloqueioWhatsApp || 'Enviar a fatura por WhatsApp'}
-          className={`${BTN_ACAO} ${TOM_ACAO.whatsapp} disabled:opacity-50 disabled:cursor-not-allowed`}>
-          {compartilhando ? <Loader2 size={13} className="animate-spin"/> : <MessageCircle size={13}/>} WhatsApp
-        </button>
+        {opcoesCompartilhar() && (
+          <EnviarWhatsApp {...opcoesCompartilhar()!} tipo="Fatura" aparencia="barra"
+            telefone={telefoneWhatsApp} indisponivel={bloqueioWhatsApp}
+            titulo="Enviar a fatura por WhatsApp" />
+        )}
         <button onClick={handlePDF} disabled={!!bloqueioImpresso}
           title={bloqueioImpresso || 'Imprimir a fatura'}
           className={`${BTN_ACAO} ${TOM_ACAO.imprimir} disabled:opacity-50 disabled:cursor-not-allowed`}>
@@ -2058,7 +2054,8 @@ function PainelFatura({
             envio: envioAnimal?.id === animal.id ? envioAnimal.canal : null,
             onAlterar: alterarFechamentoAnimal,
             bloqueioEmail, bloqueioWhatsApp, bloqueioImpresso,
-            onEmail: handleEmailAnimal, onWhatsApp: handleWhatsAppAnimal,
+            onEmail: handleEmailAnimal,
+            whatsapp: opcoesCompartilharAnimal, telefoneWhatsApp,
             onImprimir: handleImprimirAnimal, onExportar: handleCSVAnimal,
           };
 
@@ -2192,7 +2189,8 @@ function PainelFatura({
             envio: envioAnimal?.id === grupo.id ? envioAnimal.canal : null,
             onAlterar: alterarFechamentoAnimal,
             bloqueioEmail, bloqueioWhatsApp, bloqueioImpresso,
-            onEmail: handleEmailAnimal, onWhatsApp: handleWhatsAppAnimal,
+            onEmail: handleEmailAnimal,
+            whatsapp: opcoesCompartilharAnimal, telefoneWhatsApp,
             onImprimir: handleImprimirAnimal, onExportar: handleCSVAnimal,
           };
           return (
@@ -2600,6 +2598,7 @@ function ModalFechamentoLote({ proprietarios, onClose, onDone }: {
   const [faturas, setFaturas] = useState<Map<number, Fatura>>(new Map());
   const [logo,    setLogo]    = useState<string | null>(null);
   const [recebimento, setRecebimento] = useState<DadosRecebimento | null>(null);
+  const [empresaNome, setEmpresaNome] = useState<string | null>(null);
   const [carregandoFaturas, setCarregandoFaturas] = useState(false);
 
   useEffect(() => {
@@ -2615,6 +2614,7 @@ function ModalFechamentoLote({ proprietarios, onClose, onDone }: {
         const bruto = r.data?.dados?.logoUrl ?? null;
         // Os dados de pagamento são da EMPRESA, iguais em todas as linhas do lote.
         if (vivo) setRecebimento(r.data?.dados?.recebimento ?? null);
+        if (vivo) setEmpresaNome(r.data?.dados?.empresaNome ?? null);
         if (vivo && bruto) setLogo(await carregarComoDataUri(bruto));
       } catch { /* sem logo a folha sai sem timbre, que é melhor que não sair */ }
 
@@ -2722,7 +2722,7 @@ function ModalFechamentoLote({ proprietarios, onClose, onDone }: {
                           <CompartilharPdfBotoes
                             telefone={f.proprietario.phone}
                             emailPara={f.proprietario.email}
-                            gerarHtml={() => gerarHtmlFatura(fat, animais, logo, recebimento)}
+                            gerarHtml={() => gerarHtmlFatura(fat, animais, logo, recebimento, empresaNome)}
                             nomeArquivo={`fatura-${inv}-${nomeDestino.replace(/\s+/g, '-')}.pdf`}
                             documento="Fatura"
                             texto={montarTextoFaturaLote(nomeDestino, f.mesReferencia, f.faturaId, f.total)}

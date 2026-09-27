@@ -831,9 +831,9 @@ function NovaEvolucaoModal({
     // Mexeu no formulário, o erro anterior perdeu a validade: some. React normaliza
     // `change` para BORBULHAR, então um handler no container cobre todo
     // input/select/textarea de dentro — inclusive os que vierem depois.
+    // Só `onChange`: `onInput` junto revertia o <select> — ver SubModuloPrescricao.
     <div className="border-b border-gray-100"
-      onChange={() => setErroInline(null)}
-      onInput={() => setErroInline(null)}>
+      onChange={() => setErroInline(null)}>
       {avisoTopo && <div className="px-5 pt-4">{avisoTopo}</div>}
       {/* A tarja genérica some quando há um aviso específico: dois textos
           dizendo 'somente leitura' competem, e o que EXPLICA o motivo é o que

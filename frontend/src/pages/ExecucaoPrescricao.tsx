@@ -1490,7 +1490,7 @@ export function ModalExecucao({
                   disabled={salvando}
                   title="Executar"
                   aria-label="Executar item"
-                  className="p-1 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors">
+                  className="p-1 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
                   {execItemId === item.id
                     ? <Loader2 size={15} className="animate-spin" />
                     : <CheckCircle2 size={15} />}
@@ -1681,16 +1681,20 @@ export function ModalExecucao({
                 ) : !temHistorico ? (
                   // Item SEM histórico (dose única/SOS/etc.) mantém os botões aqui —
                   // os itens com histórico têm os botões na linha "Em Execução".
+                  // Executado o item, os DOIS ícones ficam INATIVOS (cinza, §6) e o
+                  // card fica verde. O Cancelar seguia ligado depois da execução — e o
+                  // backend recusa cancelar item executado (400 EXECUTADO), então era
+                  // um botão que só falhava depois do clique (armadilha 28-d).
                   <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
                     <button
                       onClick={() => handleExecutarItem(item, slots)}
                       disabled={activeDone || salvando}
-                      title={activeDone ? 'Executado' : 'Executar item'}
+                      title={activeDone ? 'Item já executado' : 'Executar item'}
                       aria-label={activeDone ? 'Item executado' : 'Executar item'}
                       className={`p-1.5 rounded-lg transition-colors ${
                         activeDone
-                          ? 'text-emerald-600 cursor-default'
-                          : 'text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50'
+                          ? 'text-gray-300 cursor-not-allowed'
+                          : 'text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 disabled:opacity-50'
                       }`}>
                       {execItemId === item.id
                         ? <Loader2 size={16} className="animate-spin" />
@@ -1699,10 +1703,14 @@ export function ModalExecucao({
                     {podeCancelar && (
                       <button
                         onClick={() => { setErroInline(null); setCancelarItem(item); }}
-                        disabled={salvando || cancelando}
-                        title="Cancelar item"
+                        disabled={activeDone || salvando || cancelando}
+                        title={activeDone ? 'Item já executado — não pode ser cancelado' : 'Cancelar item'}
                         aria-label="Cancelar item"
-                        className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50">
+                        className={`p-1.5 rounded-lg transition-colors ${
+                          activeDone
+                            ? 'text-gray-300 cursor-not-allowed'
+                            : 'text-red-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-50'
+                        }`}>
                         <Ban size={16} />
                       </button>
                     )}

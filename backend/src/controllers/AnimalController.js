@@ -44,6 +44,9 @@ const {
   aplicarPerfil: aplicarPerfilProprietario,
   aplicarPerfilEmRelacao: aplicarPerfilProprietarioEmRelacao,
 } = require('../lib/proprietarioPerfil');
+// Vínculo usuário×empresa do cliente novo — só para nascer SEM acesso ao sistema
+// (mesmo padrão do cadastro pela tela de Proprietário, ver criação abaixo).
+const { salvarVinculo, salvarPagamentoEAcesso, perfilDaEmpresa, ehProfissionalNaEmpresa } = require('../lib/usuarioEmpresa');
 
 async function notificarGestoresDaEmpresa(empresaId, { animalNome, proprietarioNome, vetNome }) {
   if (!empresaId) return;
@@ -591,6 +594,11 @@ class AnimalController {
       // Senha inicial do cliente CRIADO agora — calculada uma vez e usada tanto no
       // hash quanto no e-mail de boas-vindas. Ver o bloco de criação abaixo.
       let senhaInicialNovoProp = null;
+      // "Terá acesso ao sistema" — MESMO checkbox do Cadastro de Proprietário
+      // (ProprietarioFormModal), replicado nesta tela. Decide `acessoSistema` no
+      // PRIMEIRO vínculo com esta empresa e, junto com `isNewProprietario`, se o
+      // e-mail leva credenciais (ver o envio de `enviarVinculoInformativo` abaixo).
+      let acessoSistemaConcedido = false;
 
             // Somente ADMIN pode redirecionar a criação para outro proprietário
             if (proprietarioId && isAdminCriando) {
@@ -606,6 +614,7 @@ class AnimalController {
               const propData = typeof req.body.proprietario === 'string'
                 ? JSON.parse(req.body.proprietario)
                 : req.body.proprietario;
+              acessoSistemaConcedido = propData?.acessoSistema === true || propData?.acessoSistema === 'true';
 
               if (propData?.email) {
                 const emailProp = normalizeEmail(propData.email);
@@ -701,12 +710,41 @@ class AnimalController {
                 // perfil com os dados que o vet digitou — sem herdar nem alterar o
                 // cadastro da outra. Já existindo perfil aqui, ele é preservado.
                 if (vetEmpresaId) {
+                  // 🔴 O ACESSO AO SISTEMA SEGUE O CHECKBOX "Terá acesso ao sistema"
+                  // desta tela — MESMO campo e MESMO default (desmarcado) do Cadastro
+                  // de Proprietário (2026-09-27). `isNewProprietario` NÃO bastava para
+                  // decidir SE grava vínculo: cobre só o LOGIN novo, mas um profissional
+                  // de OUTRA clínica que vira cliente AQUI pela primeira vez (login já
+                  // existia, ex.: veterinário cadastrado como cliente de uma clínica
+                  // onde nunca trabalhou) também precisa do PRÓPRIO vínculo — sem ele em
+                  // `tb_usuario_empresa` PARA ESTA EMPRESA, `podeAcessarSistema` libera
+                  // por padrão (zero vínculo = livre). O que importa é se JÁ havia
+                  // vínculo com ESTA empresa, não se o `User` é novo — por isso a
+                  // checagem é feita ANTES de `garantirPerfilProprietario` criar
+                  // qualquer coisa.
+                  const primeiroVinculoAqui = !(await perfilDaEmpresa(prop.id, vetEmpresaId, prisma));
+
                   await garantirPerfilProprietario(prisma, prop.id, vetEmpresaId, {
                     fullName: propData.fullName || prop.fullName || 'Proprietário',
                     phone:    propData.phone  || null,
                     phone2:   propData.phone2 || null,
                     ativo:    true,
                   });
+
+                  if (primeiroVinculoAqui) {
+                    // `ehProfissionalNaEmpresa` cobre o DONO da empresa sem
+                    // `MembroEquipe`/vínculo ainda — cadastrá-lo como cliente da
+                    // própria clínica não pode rebaixar nem bloquear o acesso de quem
+                    // a gerencia.
+                    const jaEhProfissionalAqui = await ehProfissionalNaEmpresa(prop.id, vetEmpresaId, prisma);
+                    await salvarVinculo(prisma, prop.id, vetEmpresaId, {
+                      ...(jaEhProfissionalAqui ? {} : { perfil: 'PROPRIETARIO' }),
+                      ativo: true,
+                    });
+                    if (!jaEhProfissionalAqui) {
+                      await salvarPagamentoEAcesso(prisma, prop.id, vetEmpresaId, { acessoSistema: acessoSistemaConcedido });
+                    }
+                  }
 
                   // Reativa o cliente NESTA empresa — mantém o invariante "dono de
                   // animal ativo é cliente ativo da empresa" (sem ele o paciente nasce
@@ -954,19 +992,27 @@ class AnimalController {
           await garantirFaturaAberta(Number(targetUserId));
 
           // E-mail meramente informativo ao proprietário (sem link de aprovação).
-          // Proprietário recém-criado recebe também a senha inicial de acesso.
+          // 🔴 CREDENCIAIS SÓ VÃO JUNTO QUANDO "Terá acesso ao sistema" FOI MARCADO
+          // *E* a conta nasceu agora (2026-09-27). Marcado com um e-mail que JÁ
+          // EXISTIA na base, a conta não é nova — não há senha nova para anunciar, e
+          // "Sua conta foi criada" seria falso; some com o bloco de credenciais e o
+          // e-mail vira o mesmo informativo de sempre ("X foi cadastrado para você").
+          // Desmarcado, é sempre o informativo, novo ou não.
+          const enviarCredenciais = acessoSistemaConcedido && isNewProprietario;
           if (proprietarioEmailParaEmail) {
             emailService.enviarVinculoInformativo({
               proprietarioEmail: proprietarioEmailParaEmail,
               proprietarioNome:  proprietarioNomeParaEmail,
               animalNome:        animal.nome,
               vetNome:           vetNomeCompleto,
-              isNewUser:         isNewProprietario,
+              isNewUser:         enviarCredenciais,
+              // Sem "Terá acesso ao sistema", o e-mail não leva o botão de login.
+              temAcesso:         acessoSistemaConcedido,
               // 🔴 A MESMA senha que foi para o HASH — nunca recalculada aqui.
               // Recalcular com dados diferentes (era o caso: `telefone: null`, enquanto
               // o cadastro tinha telefone) produz outra senha, e o cliente recebe algo
               // que não abre a conta. É exatamente o que uma FONTE ÚNICA impede.
-              senhaInicial: senhaInicialNovoProp ?? undefined,
+              senhaInicial: enviarCredenciais ? (senhaInicialNovoProp ?? undefined) : undefined,
             })
               .then(() => console.log(`[emailService] Email informativo enviado → ${proprietarioEmailParaEmail}`))
               .catch(err => console.error('[emailService] FALHA ao enviar informativo:', err?.message ?? err));

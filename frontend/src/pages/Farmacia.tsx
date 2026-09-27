@@ -27,7 +27,7 @@ import { unidadeOperativaProduto } from '../utils/formaCalculo';
 import DateInput from '../components/DateInput';
 import ModalNovoFornecedor, { type NovoFornecedorResult } from '../components/ModalNovoFornecedor';
 import InlineError from '../components/InlineError';
-import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
+import ErroAcao, { classeErro, type ErroAcaoDados } from '../components/ErroAcao';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
@@ -270,6 +270,9 @@ export default function Farmacia() {
   const [ajusteFrascos,  setAjusteFrascos]  = useState<number | ''>('');
   const [ajusteMotivo,   setAjusteMotivo]   = useState('');
   const [ajustando,      setAjustando]      = useState(false);
+  // Erro de AÇÃO do modal — renderizado DENTRO dele (junto ao rodapé), nunca no
+  // InlineError do topo da página, que fica atrás do overlay (ver ErroAcao.tsx).
+  const [erroAjuste,     setErroAjuste]     = useState<ErroAcaoDados | null>(null);
   const [valorStr,             setValorStr]             = useState('');
   const [valorRepassadoStr,    setValorRepassadoStr]    = useState('');
   const [repassadoEditado,     setRepassadoEditado]     = useState(false);
@@ -778,23 +781,26 @@ export default function Farmacia() {
     setAjusteMotivo('');
     setBuscaAjuste('');
     setDropdownAjusteAberto(false);
+    setErroAjuste(null);
     setModalAjusteAberto(true);
   };
 
   const fecharAjuste = () => {
     setModalAjusteAberto(false);
     setAjusteItemId(null);
+    setErroAjuste(null);
   };
 
   const confirmarAjuste = async () => {
     if (!podeAjustar) { semPermissao('ajustar estoque'); return; }
-    if (!itemAjuste)             return setErroInline('Selecione um medicamento do estoque.');
-    if (ajusteQtd === '')        return setErroInline('Informe a quantidade em estoque.');
+    setErroAjuste(null);
+    if (!itemAjuste)             return setErroAjuste({ mensagem: 'Selecione um medicamento do estoque.', campos: ['medicamento'] });
+    if (ajusteQtd === '')        return setErroAjuste({ mensagem: 'Informe a quantidade em estoque.', campos: ['quantidade'] });
     const qtd = Number(ajusteQtd);
-    if (qtd < 0)                 return setErroInline('Quantidade não pode ser negativa.');
-    if (!ajusteMotivo.trim())    return setErroInline('Informe o motivo do ajuste.');
+    if (qtd < 0)                 return setErroAjuste({ mensagem: 'Quantidade não pode ser negativa.', campos: ['quantidade'] });
+    if (!ajusteMotivo.trim())    return setErroAjuste({ mensagem: 'Informe o motivo do ajuste.', campos: ['motivo'] });
     const delta = qtd - itemAjuste.qtdEstoque;
-    if (delta === 0)             return setErroInline('A quantidade informada é igual ao estoque atual.');
+    if (delta === 0)             return setErroAjuste({ mensagem: 'A quantidade informada é igual ao estoque atual.', campos: ['quantidade'] });
 
     setAjustando(true);
     try {
@@ -808,7 +814,7 @@ export default function Farmacia() {
       carregarEstoque();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroInline(msg ?? 'Erro ao ajustar estoque.');
+      setErroAjuste({ mensagem: msg ?? 'Erro ao ajustar estoque.' });
     } finally { setAjustando(false); }
   };
 
@@ -1630,7 +1636,8 @@ export default function Farmacia() {
                     <button
                       type="button"
                       onClick={() => { setDropdownAjusteAberto(true); setBuscaAjuste(''); }}
-                      className="w-full flex items-center justify-between border border-gray-300 rounded-xl px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
+                      className={classeErro(erroAjuste, 'medicamento',
+                        'w-full flex items-center justify-between border border-gray-300 rounded-xl px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white')}>
                       <span className={itemAjuste ? 'text-gray-900 truncate' : 'text-gray-400'}>
                         {itemAjuste
                           ? `${itemAjuste.medicamento.nome}${itemAjuste.lote ? ` · Lote ${itemAjuste.lote}` : ''}`
@@ -1678,6 +1685,7 @@ export default function Farmacia() {
                                       setAjusteFrascos(mpf > 0 ? Math.round((i.qtdEstoque / mpf) * 100) / 100 : '');
                                       setDropdownAjusteAberto(false);
                                       setBuscaAjuste('');
+                                      setErroAjuste(null);
                                     }}
                                     className={`w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 transition-colors ${
                                       ajusteItemId === i.id ? 'bg-emerald-50 text-emerald-700 font-semibold' : 'text-gray-800'
@@ -1731,13 +1739,15 @@ export default function Farmacia() {
                       <span className="block text-[10px] text-gray-400 mb-0.5">Frascos</span>
                       <input type="number" min={0} step="any" value={ajusteFrascos === '' ? '' : ajusteFrascos}
                         onChange={(e) => {
+                          setErroAjuste(null);
                           if (e.target.value === '') { setAjusteFrascos(''); setAjusteQtd(''); return; }
                           const f = Number(e.target.value);
                           setAjusteFrascos(f);
                           setAjusteQtd(arred2(f * mlPorFrasco));
                         }}
                         placeholder="0"
-                        className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                        className={classeErro(erroAjuste, 'quantidade',
+                          'w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500')} />
                     </div>
                   )}
                   <div>
@@ -1748,6 +1758,7 @@ export default function Farmacia() {
                     )}
                     <input type="number" min={0} step="0.01" value={ajusteQtd === '' ? '' : ajusteQtd}
                       onChange={(e) => {
+                        setErroAjuste(null);
                         if (e.target.value === '') { setAjusteQtd(''); setAjusteFrascos(''); return; }
                         // Máximo de 2 casas decimais (00.00)
                         const v = arred2(Number(e.target.value));
@@ -1755,7 +1766,8 @@ export default function Farmacia() {
                         setAjusteFrascos(frascosDe(v));
                       }}
                       placeholder={mlPorFrasco > 0 ? `Total (${itemAjuste ? unidadeOperativaMed(itemAjuste.medicamento) : ''})` : '0'}
-                      className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                      className={classeErro(erroAjuste, 'quantidade',
+                        'w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500')} />
                   </div>
                 </div>
                 {itemAjuste && (
@@ -1771,9 +1783,10 @@ export default function Farmacia() {
                   Motivo <span className="text-red-500">*</span>
                 </label>
                 <input type="text" value={ajusteMotivo}
-                  onChange={(e) => setAjusteMotivo(e.target.value)}
+                  onChange={(e) => { setAjusteMotivo(e.target.value); setErroAjuste(null); }}
                   placeholder="Ex: correção de inventário, perda, quebra..."
-                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  className={classeErro(erroAjuste, 'motivo',
+                    'w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500')} />
               </div>
 
               {/* Preview da diferença */}
@@ -1799,6 +1812,8 @@ export default function Farmacia() {
                   </p>
                 );
               })()}
+
+              <ErroAcao erro={erroAjuste} className="mb-1" />
 
               <div className="flex justify-end gap-2">
                 <button onClick={fecharAjuste}

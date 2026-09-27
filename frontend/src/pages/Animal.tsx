@@ -88,10 +88,14 @@ interface Localizacao {
 }
 
 interface FormProprietario {
-  nomeCompleto: string;
-  email:        string;
-  telefone:     string;
-  telefone2:    string;
+  nomeCompleto:   string;
+  email:          string;
+  telefone:       string;
+  telefone2:      string;
+  // "Terá acesso ao sistema" — mesmo campo do Cadastro de Proprietário
+  // (ProprietarioFormModal). Só é enviado ao criar (`criandoNovoRegistro`); decide
+  // se o e-mail leva credenciais — ver a regra completa no handleSubmit.
+  acessoSistema:  boolean;
 }
 
 
@@ -397,7 +401,7 @@ const Animal = () => {
   >({ estado: 'idle' });
 
   const [formProp, setFormProp] = useState<FormProprietario>({
-    nomeCompleto: '', email: '', telefone: '', telefone2: '',
+    nomeCompleto: '', email: '', telefone: '', telefone2: '', acessoSistema: false,
   });
 
   // ── Rascunho do cadastro NÃO SALVO ───────────────────────────────────────────
@@ -968,7 +972,8 @@ const Animal = () => {
         if (!formProp.email.trim()) return 'Informe o e-mail do proprietário';
         return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(formProp.email.trim()) ? null : 'E-mail inválido';
       case 'propTelefone':
-        return digitosTel && (digitosTel.length < 10 || digitosTel.length > 11)
+        if (!digitosTel) return 'Informe o telefone do proprietário';
+        return (digitosTel.length < 10 || digitosTel.length > 11)
           ? 'Telefone inválido — use (00) 00000-0000' : null;
       default: return null;
     }
@@ -1032,7 +1037,10 @@ const Animal = () => {
     // número pela metade seguiria para o cadastro do cliente sem ninguém avisar.
     const campos = [
       ...CAMPOS_ANIMAL,
-      ...(criandoNovoRegistro ? CAMPOS_PROPRIETARIO : isEditMode ? (['propTelefone'] as const) : []),
+      // Telefone 1 é SEMPRE editável (mesmo com proprietário já cadastrado ou na
+      // edição do animal) e agora é OBRIGATÓRIO nos três casos — por isso entra
+      // sozinho fora do `criandoNovoRegistro`, que cobre nome/e-mail também.
+      ...(criandoNovoRegistro ? CAMPOS_PROPRIETARIO : (['propTelefone'] as const)),
     ];
     const novosErros: Record<string, string> = {};
     for (const campo of campos) {
@@ -1098,10 +1106,11 @@ const Animal = () => {
         // Vet criando animal novo (inclusive duplicado) → envia dados do proprietário
         ...(criandoNovoRegistro && {
           proprietario: {
-            fullName: (formProp.nomeCompleto ?? '').trim(),
-            email:    (formProp.email        ?? '').trim(),
-            phone:    (formProp.telefone     ?? '').trim() || null,
-            phone2:   (formProp.telefone2    ?? '').trim() || null,
+            fullName:      (formProp.nomeCompleto ?? '').trim(),
+            email:         (formProp.email        ?? '').trim(),
+            phone:         (formProp.telefone     ?? '').trim() || null,
+            phone2:        (formProp.telefone2    ?? '').trim() || null,
+            acessoSistema: formProp.acessoSistema === true,
           },
         }),
         // Edição: o ÚNICO dado do proprietário que esta tela grava é o CONTATO — não
@@ -1132,10 +1141,11 @@ const Animal = () => {
         // proprietario é um objeto → precisa ser serializado manualmente
         if (criandoNovoRegistro) {
           fd.append('proprietario', JSON.stringify({
-            fullName: (formProp.nomeCompleto ?? '').trim(),
-            email:    (formProp.email        ?? '').trim(),
-            phone:    (formProp.telefone     ?? '').trim() || null,
-            phone2:   (formProp.telefone2    ?? '').trim() || null,
+            fullName:      (formProp.nomeCompleto ?? '').trim(),
+            email:         (formProp.email        ?? '').trim(),
+            phone:         (formProp.telefone     ?? '').trim() || null,
+            phone2:        (formProp.telefone2    ?? '').trim() || null,
+            acessoSistema: formProp.acessoSistema === true,
           }));
         } else if (isEditMode) {
           fd.append('proprietario', JSON.stringify({
@@ -1980,7 +1990,9 @@ const Animal = () => {
                       não apaga o número que a clínica já tem. */}
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-semibold text-gray-700 mb-1">Telefone 1</label>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">
+                        Telefone 1 <span className="text-red-500">*</span>
+                      </label>
                       <input
                         type="tel"
                         value={formProp.telefone}
@@ -2003,19 +2015,34 @@ const Animal = () => {
                       />
                     </div>
                   </div>
-                  {/* 🔴 TODO AVISO SOBRE O E-MAIL DE ACESSO SAIU DAQUI (2026-09-22, a
-                      pedido) — tanto a faixa "Proprietário não encontrado, encaminhado
-                      e-mail com as informações de acesso." (retirada em 2026-09-18)
-                      quanto a que explicava as duas saídas possíveis antes de a busca
-                      responder.
-                      O COMPORTAMENTO não mudou: cliente novo continua nascendo com
-                      login e recebendo o e-mail de boas-vindas (a senha é DERIVADA em
-                      `lib/senhaInicial.js` e sai SÓ por e-mail — nunca na tela de quem
-                      cadastra, que é um TERCEIRO), e e-mail já conhecido continua
-                      vinculando o animal ao cadastro existente. O que saiu foi o AVISO:
-                      quem cadastra o paciente não decide nada com essa informação.
-                      ⚠️ A faixa de cadastro ENCONTRADO (`AvisoCadastroEncontrado`) é
-                      outra coisa e FICA — ali há uma decisão a tomar. */}
+                  {/* ── Acesso ao sistema (2026-09-27) ──────────────────────────
+                      MESMA lógica e MESMO campo do "Terá acesso ao sistema" do
+                      Cadastro de Proprietário (ProprietarioFormModal). Só existe na
+                      CRIAÇÃO (`!isEditMode`): trocar o dono não é assunto desta seção
+                      (nome/e-mail seguem travados na edição), e o acesso só é gravado
+                      no PRIMEIRO vínculo com esta empresa (AnimalController.criar).
+                      ⚠️ Governa o CONTEÚDO do e-mail, não só o vínculo: credenciais só
+                      são enviadas quando marcado E o e-mail ainda não existe na base
+                      — usuário já existente recebe só o aviso de que o animal foi
+                      adicionado, marcado ou não (a senha dele não muda por aqui). */}
+                  {!isEditMode && (
+                    <div className="flex items-center justify-between p-3 border border-gray-200 rounded-xl">
+                      <div className="min-w-0 pr-3">
+                        <p className="text-sm font-semibold text-gray-900">Terá acesso ao sistema</p>
+                        <p className="text-xs text-gray-500">
+                          {formProp.acessoSistema
+                            ? 'O cliente recebe por e-mail os dados de acesso (se ainda não tiver conta) e pode entrar no sistema.'
+                            : 'O cliente fica cadastrado, mas não consegue entrar no sistema.'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setFormProp(p => ({ ...p, acessoSistema: !p.acessoSistema }))}
+                        className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${formProp.acessoSistema ? 'bg-emerald-600' : 'bg-gray-200'}`}>
+                        <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transform transition-transform ${formProp.acessoSistema ? 'translate-x-6' : 'translate-x-1'}`} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

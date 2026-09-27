@@ -152,6 +152,8 @@ function blocoPagamentoHtml(r?: DadosRecebimento | null): string {
 export function gerarHtmlFatura(
   fatura: FaturaMin, animais: AnimalMin[], logoUrl?: string | null,
   recebimento?: DadosRecebimento | null,
+  /** Escrito no topo quando a clínica não tem logo cadastrada. */
+  empresaNome?: string | null,
 ): string {
   const contato   = contatoDaFatura(fatura);
   const animalMap = new Map(animais.map(a => [a.id, a]));
@@ -219,8 +221,15 @@ export function gerarHtmlFatura(
     .header h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
     .header .sub { font-size: 11px; opacity: .8; }
     .header .meta { margin-top: 10px; font-size: 11px; opacity: .75; display: flex; gap: 24px; flex-wrap: wrap; }
-    .brand-logo-box { background: #fff; border-radius: 8px; padding: 6px 10px; flex-shrink: 0; }
-    .brand-logo { max-height: 32px; max-width: 160px; object-fit: contain; display: block; }
+    /* 🔴 A LOGO DA CLÍNICA ABRE A FOLHA (2026-09-26, a pedido) — acima da faixa verde,
+       no canto superior esquerdo e no MESMO tamanho do cabeçalho padrão dos outros
+       documentos (.doc-logo de DocumentoPrint.ts). Antes ela era um selo de 32px no
+       canto direito da faixa, e na folha impressa quase não aparecia. */
+    .topo-logo { margin-bottom: 12px; }
+    /* Sem logo cadastrada, o NOME da clínica ocupa o lugar dela — a folha nunca sai
+       sem dizer quem está cobrando (mesma regra do cabeçalho padrão dos documentos). */
+    .topo-nome { font-size: 18px; font-weight: 700; color: #166534; }
+    .brand-logo { max-height: 52px; max-width: 190px; object-fit: contain; display: block; }
 
     .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 9px; font-weight: 700; text-transform: uppercase; }
     .badge.assistencia  { background: #dbeafe; color: #1d4ed8; }
@@ -258,6 +267,9 @@ export function gerarHtmlFatura(
   </style>
 </head>
 <body>
+  ${resolverUrlAbsoluta(logoUrl)
+    ? `<div class="topo-logo"><img class="brand-logo" src="${resolverUrlAbsoluta(logoUrl)}" alt="Logo"></div>`
+    : (empresaNome?.trim() ? `<div class="topo-logo topo-nome">${esc(empresaNome.trim())}</div>` : '')}
   <div class="header">
     <div>
       <h1>${contato.nome}</h1>
@@ -268,7 +280,6 @@ export function gerarHtmlFatura(
         <span>Status: <span class="status-badge status-${fatura.status}">${fatura.status}</span></span>
       </div>
     </div>
-    ${resolverUrlAbsoluta(logoUrl) ? `<div class="brand-logo-box"><img class="brand-logo" src="${resolverUrlAbsoluta(logoUrl)}" alt="Logo"></div>` : ''}
   </div>
 
   <table>
@@ -313,8 +324,9 @@ export function gerarHtmlFatura(
 export function imprimirFatura(
   fatura: FaturaMin, animais: AnimalMin[], logoUrl?: string | null,
   recebimento?: DadosRecebimento | null,
+  empresaNome?: string | null,
 ) {
-  imprimirHtml(gerarHtmlFatura(fatura, animais, logoUrl, recebimento));
+  imprimirHtml(gerarHtmlFatura(fatura, animais, logoUrl, recebimento, empresaNome));
 }
 
 // ─── CSV ──────────────────────────────────────────────────────────────────────

@@ -28,7 +28,7 @@ import ErroAcao from './ErroAcao';
 // 🔴 Os seletores moram em `catalogo/SeletoresCatalogo` desde 2026-09-15: a tela de
 // Produtos cadastra os MESMOS campos, e duas cópias divergiriam (28-g).
 import { SeletorBusca, SeletorVias, type OpcoesCatalogo } from './catalogo/SeletoresCatalogo';
-import { FORMAS_CALCULO, qtdDoNome, fmtQtdForma, numeroDoCampo } from '../utils/formaCalculo';
+import { FORMAS_CALCULO, qtdDaUnidadeNoTexto, fmtQtdForma, numeroDoCampo } from '../utils/formaCalculo';
 
 export interface ItemCatalogoCriado {
   id: number;
@@ -235,10 +235,12 @@ export default function CadastroCatalogoModal({
                   <select value={formaCalc}
                     onChange={e => {
                       // Mesma regra da tela de Produtos: trocar a forma repreenche a
-                      // Qtd a partir do NOME, e `qtdDoNome` já devolve null no que não
-                      // deve preencher (doses, ou nome sem a medida escolhida).
-                      const achada = qtdDoNome(nome, e.target.value);
-                      setFormaCalc(e.target.value);
+                      // Qtd a partir da Apresentação e do NOME — `qtdDaUnidadeNoTexto`
+                      // já devolve null no que não deve preencher (nome/apresentação
+                      // sem a medida escolhida); `doses` nunca é extraída.
+                      const nova = e.target.value;
+                      const achada = nova === 'doses' ? null : qtdDaUnidadeNoTexto([apresentacao, nome], nova);
+                      setFormaCalc(nova);
                       setDoses(achada != null ? fmtQtdForma(achada) : '');
                     }}
                     className={inputCls('formaCalculo')}>

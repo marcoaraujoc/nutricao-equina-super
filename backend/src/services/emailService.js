@@ -169,7 +169,12 @@ const emailService = {
   // ── Cadastro de animal com notificação ao proprietário ───────────────────────
   // isNewUser=true → exibe bloco de credenciais (conta criada agora)
   // isNewUser=false → email informativo para conta já existente
-  async enviarVinculoInformativo({ proprietarioEmail, proprietarioNome, animalNome, vetNome, isNewUser = false, senhaInicial = null }) {
+  // temAcesso=false → "Terá acesso ao sistema" NÃO foi marcado (2026-09-27): o e-mail
+  //   só avisa que o animal foi cadastrado — sem o botão "Acessar o S2Vet" e sem a
+  //   promessa de acompanhar pela plataforma. Mandar um link de login para quem a
+  //   clínica não liberou é convite para um "acesso negado".
+  //   Default `true` preserva quem chama sem informar.
+  async enviarVinculoInformativo({ proprietarioEmail, proprietarioNome, animalNome, vetNome, isNewUser = false, senhaInicial = null, temAcesso = true }) {
     if (!podeEnviar()) return;
 
     const appUrl   = process.env.APP_URL || 'http://localhost:5173';
@@ -204,9 +209,21 @@ const emailService = {
     const corpoPrincipal = isNewUser
       ? `Sua conta no S2Vet foi criada por <strong>${vetNome}</strong>. A partir de agora você
          poderá acompanhar faturas, dietas e evoluções clínicas dos seus animais de forma automática.`
-      : `Dr(a). <strong>${vetNome}</strong> cadastrou o animal <strong>${animalNome}</strong>
-         no S2Vet. A partir de agora você poderá acompanhar faturas, dietas e evoluções clínicas
-         deste animal na plataforma.`;
+      : temAcesso
+        ? `Dr(a). <strong>${vetNome}</strong> cadastrou o animal <strong>${animalNome}</strong>
+           no S2Vet. A partir de agora você poderá acompanhar faturas, dietas e evoluções clínicas
+           deste animal na plataforma.`
+        : `Dr(a). <strong>${vetNome}</strong> cadastrou o animal <strong>${animalNome}</strong>
+           para você no S2Vet.`;
+
+    const botaoAcesso = temAcesso ? `
+            <div style="margin-top:24px;text-align:center;">
+              <a href="${loginUrl}"
+                 style="background:#059669;color:white;padding:12px 28px;border-radius:8px;
+                        text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
+                Acessar o S2Vet →
+              </a>
+            </div>` : '';
 
     await getEmailProvider().enviar({
       from:    remetente(),
@@ -228,13 +245,7 @@ const emailService = {
               <p style="margin:0;font-size:13px;color:#6b7280;">🐾 Animal cadastrado</p>
               <p style="margin:4px 0 0;font-size:17px;font-weight:700;color:#065f46;">${animalNome}</p>
             </div>
-            <div style="margin-top:24px;text-align:center;">
-              <a href="${loginUrl}"
-                 style="background:#059669;color:white;padding:12px 28px;border-radius:8px;
-                        text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
-                Acessar o S2Vet →
-              </a>
-            </div>
+            ${botaoAcesso}
             <p style="color:#9ca3af;font-size:12px;border-top:1px solid #e5e7eb;padding-top:16px;margin-top:24px;">
               Se não reconhece esta ação, entre em contato com o suporte.
             </p>

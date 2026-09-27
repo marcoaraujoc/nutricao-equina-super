@@ -32,6 +32,74 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-09-26 (parte 3) (**EXECUÇÃO DE PRESCRIÇÃO: ITEM EXECUTADO DESLIGA
+#   OS DOIS ÍCONES** — a pedido. No modal de execução, o item SEM histórico de doses
+#   (dose única, SOS, se necessário) ficava com o card verde depois de executado, mas o
+#   Executar só parava de responder (continuava pintado de emerald) e o **Cancelar
+#   continuava LIGADO** — e o backend recusa cancelar item executado (400 `EXECUTADO`),
+#   ou seja, um botão que só falhava depois do clique (28-d). Agora, com `activeDone`,
+#   os dois ficam `disabled` e CINZA (§6: cinza = indisponível), com o motivo no
+#   `title`; o card continua verde. O item COM histórico não mudou: concluído o curso,
+#   a linha "da vez" deixa de existir e os botões já não eram renderizados.
+#   ⚠️ A dose seguinte de um curso em andamento CONTINUA com Executar ativo depois de
+#   executar a de hoje — é a antecipação de 2026-09-18, e não é "executado".
+#   Só front (`ExecucaoPrescricao.tsx`). SEM MIGRATION. `tsc -b` limpo.
+#   ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-09-26 (parte 2) (🔴 **"FREQUÊNCIA É OBRIGATÓRIA" NÃO SAÍA MAIS** —
+#   escolhida a frequência depois do erro, o novo Finalizar repetia o erro e o campo
+#   aparecia zerado. Causa: o contêiner do formulário limpava o erro em `onChange` E
+#   `onInput`. No <select> o navegador dispara `input` ANTES de `change`; com o erro na
+#   tela, o `onInput` o limpava, o React re-renderizava na hora e o select controlado
+#   voltava ao valor do estado (vazio) — o `change` seguinte lia ''. Sem erro na tela
+#   não havia re-render, por isso só acontecia DEPOIS da primeira validação.
+#   Valia para QUALQUER select dos formulários com esse contêiner: Prescrição
+#   (frequência, via, unidade), Vacina (dose, via), Evolução, Exames e Encaminhamento.
+#   `onInput` removido dos cinco — `onChange` sozinho já cobre tudo. Armadilha **46**.
+#   Gate `__tests__/erroSemOnInput.test.js` (5; verificado que reprova). `tsc -b` limpo.
+#   SEM MIGRATION. ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-09-26 (🔴 **QUEM PODE FINALIZAR NÃO FICA COM PRESCRIÇÃO "SALVA"; O
+#   BOTÃO DIZ O QUE FAZ** — a pedido, depois de uma volta à prancheta:
+#   "quando o profissional tiver a permissão de finalizar, a opção salvar e o status
+#   salvo não podem existir. Sem a permissão, o botão passa a se chamar Salvar e segue o
+#   fluxo normal."
+#   1. **O botão sempre se chamou "Finalizar"**, mas para quem NÃO tem
+#      `atendimento.prescricoes.finalizar` (o VETERINÁRIO, no padrão do seed) o clique só
+#      gravava SALVO — um status que o botão nunca anunciou. Agora `rotuloGravar =
+#      canFinalizarCancelar ? 'Finalizar' : 'Salvar'`, nos DOIS lugares onde o botão é
+#      desenhado. O texto de confirmação diz "Aguardando finalização por quem tem essa
+#      permissão" no lugar do "Salve para ativar".
+#      ⚠️ **O SALVO continua existindo** — é o fluxo de quem não finaliza, e a Regra 2
+#      (VET não finaliza) segue de pé. A aba "Salvo", o selo e o aviso "N salvas
+#      aguardando finalização" FICAM: é por eles que o gestor acha o rascunho do vet.
+#   2. 🔴 **Estoque conferido ANTES de criar.** O formulário criava o documento e só
+#      então chamava `finalizar`; com estoque insuficiente vinha o 409 e, se a pessoa
+#      cancelava o alerta, a prescrição ficava parada em SALVO. Rota nova
+#      `POST /grupos/verificar-estoque` (`atendimento.prescricoes.finalizar`) — a MESMA
+#      `verificarDisponibilidade` do `finalizar`, sem gravar nada. Cancelar o alerta não
+#      deixa rastro; Continuar cria e finaliza com `forcarFinalizacao`.
+#      ⚠️ O `finalizar` continua checando: há uma janela entre as duas chamadas.
+#   3. 🔴 **Reaberta e abandonada volta a FINALIZADA.** Alterar uma prescrição FINALIZADA
+#      a reabre em SALVO; se a pessoa saísse sem clicar em Finalizar, ela ficava assim.
+#      `fecharModal` finaliza de novo (forçando — o estoque já fora aceito) a que foi
+#      reaberta NESTA tela (`reabertaRef`) e continua SALVA.
+#      ⚠️ Só a reaberta aqui: o rascunho de um vet SEM permissão, aberto pelo gestor para
+#      conferir, continua SALVO. ⚠️ Fechar a aba do navegador no meio da edição ainda
+#      deixa SALVA — o Finalizar da lista resolve.
+#   ⚠️ Resta um caminho raro: erro que NÃO seja de estoque no `finalizar` logo após criar
+#   (ex.: paciente inativado entre as chamadas) deixa o documento SALVO, com o erro na tela.
+#   As **6 prescrições já em SALVO** na base (ids 118-120, 187-189, todas de evolução em
+#   andamento) ficaram como estão, por decisão — a finalização do atendimento as promove.
+#   Gate `__tests__/prescricaoSemSalvoParaQuemFinaliza.test.js` (5; verificado que
+#   reprova). Suíte: **1560**. SEM MIGRATION. ⚠️ NÃO verificado em navegador.)
+
+---
+
 # Atualizado em: 2026-09-23 (parte 3) (🔴 **A ABA "PRESTADOR" DO ENCAMINHAMENTO PASSOU
 #   A LISTAR O CADASTRO, NAO A EQUIPE** + a vacina virou corrigivel ate ser aplicada, e o
 #   saldo deixou de recusar o registro dela.

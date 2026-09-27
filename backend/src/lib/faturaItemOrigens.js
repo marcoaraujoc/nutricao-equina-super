@@ -118,8 +118,11 @@ async function origensPorItem(client, faturaItemIds) {
               ev.numero                   AS "evolucaoNumero",
               ev.tipo_atendimento         AS "tipoAtendimento",
               ev.agendamento_id           AS "agendamentoId",
-              ev."animalId"               AS "evolucaoAnimalId"
+              ev."animalId"               AS "evolucaoAnimalId",
+              f.empresa_id                AS "empresaId"
          FROM schs2vet.tb_fatura_item_origens o
+         JOIN schs2vet.tb_fatura_itens fi           ON fi.id = o.fatura_item_id
+         JOIN schs2vet.tb_faturas f                 ON f.id  = fi."faturaId"
          LEFT JOIN schs2vet.tb_prescricoes p        ON p.id  = o.prescricao_id
          LEFT JOIN schs2vet.tb_prescricao_grupos g  ON g.id  = p."grupoId"
          LEFT JOIN schs2vet.tb_vacinas_clinicas vc  ON vc.id = o.vacina_clinica_id
@@ -136,6 +139,24 @@ async function origensPorItem(client, faturaItemIds) {
   }
 
   const { formatAtendimentoNum } = require('./faturaUtils');
+  const { fusoDaEmpresa, diaNaEmpresa } = require('./fusoEmpresa');
+
+  // 🔴 UMA CONTRIBUIÇÃO POR REGISTRO E POR DIA — não por dose (2026-09-26).
+  // `registrarOrigem` grava uma linha a cada EXECUÇÃO, então o "12 em 12h" do mesmo
+  // atendimento no mesmo dia saía como "EV-0001 26/09 Quant.: 1" DUAS vezes, quando o
+  // que o financeiro e o cliente conferem é "EV-0001 26/09 Quant.: 2".
+  // ⚠️ Agrupa só na LEITURA: a tabela continua uma linha por execução, que é o que o
+  // estorno (`contribuicoesDaOrigem`/`removerFaturaItensDaOrigem`) precisa.
+  // ⚠️ Dias DIFERENTES seguem separados: somar o curso inteiro numa linha só com a data
+  // da 1ª dose tiraria do cliente a conferência dia a dia.
+  // ⚠️ O dia é o da CLÍNICA (`diaNaEmpresa`), não o UTC: a dose das 22:00 em Brasília já
+  // é o dia seguinte em UTC e cairia num grupo à parte.
+  const fusos = new Map();
+  for (const empresaId of new Set(linhas.map(l => l.empresaId).filter(v => v != null))) {
+    try { fusos.set(Number(empresaId), await fusoDaEmpresa(empresaId, client)); } catch { /* padrão */ }
+  }
+  const grupos = new Map(); // `${faturaItemId}|${registro}|${dia}` → contribuição agregada
+
   for (const l of linhas) {
     const atendimento = formatAtendimentoNum(l.tipoAtendimento, l.evolucaoNumero);
     // A VACINA é o registro de origem dela mesma: o clique vai para a tela de Vacina,
@@ -150,8 +171,27 @@ async function origensPorItem(client, faturaItemIds) {
           : atendimento);
 
     const item = Number(l.faturaItemId);
+    // O "registro" é o que o número exibido identifica: a vacina, o exame ou o
+    // atendimento (evolução). Sem nenhum resolvido (registro excluído, legado), cai na
+    // origem crua — e sem nem ela a contribuição fica sozinha, nunca é fundida às cegas.
+    const registro = ehVacina ? `V${l.vacinaClinicaId}`
+      : ehExame && l.exameNumero != null ? `X${l.exameClinicoId}`
+      : l.evolucaoId != null ? `E${l.evolucaoId}`
+      : l.prescricaoId != null ? `P${l.prescricaoId}`
+      : l.encaminhamentoClinicoId != null ? `N${l.encaminhamentoClinicoId}`
+      : `O${l.id}`;
+    const dia = l.ocorridoEm
+      ? diaNaEmpresa(l.ocorridoEm, fusos.get(Number(l.empresaId)))
+      : null;
+    const chave = `${item}|${registro}|${dia ?? `sem-data-${l.id}`}`;
+    const existente = grupos.get(chave);
+    if (existente) {
+      existente.quantidade += Number(l.quantidade) || 0;
+      continue;
+    }
+
     if (!mapa.has(item)) mapa.set(item, []);
-    mapa.get(item).push({
+    const contribuicao = {
       id:         Number(l.id),
       quantidade: Number(l.quantidade) || 0,
       data:       l.ocorridoEm,
@@ -164,7 +204,9 @@ async function origensPorItem(client, faturaItemIds) {
       animalId: l.vacinaAnimalId != null
         ? Number(l.vacinaAnimalId)
         : (l.evolucaoAnimalId != null ? Number(l.evolucaoAnimalId) : null),
-    });
+    };
+    grupos.set(chave, contribuicao);
+    mapa.get(item).push(contribuicao);
   }
   return mapa;
 }

@@ -34,6 +34,74 @@ paths:
 As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão em `CLAUDE.md`.
 
 ---
+# Atualizado em: 2026-09-26 (parte 3) (**A LOGO DA CLÍNICA ABRE A FATURA** — a pedido.
+#   1. Na folha (`gerarHtmlFatura` → impressão, PDF, WhatsApp, e-mail, lote) a logo
+#      saiu de dentro da faixa verde (selo de 32px no canto direito) e foi para o TOPO,
+#      acima dela, no canto esquerdo e no tamanho do cabeçalho padrão dos documentos
+#      (52×190px, o `.doc-logo` de `DocumentoPrint.ts`). Sem logo, nada é desenhado.
+#   2. 🔴 **A LOGO ERA DA CLÍNICA ERRADA para cliente de duas clínicas.**
+#      `resolverLogoPorProprietario` pegava a PRIMEIRA equipe do cliente em qualquer
+#      empresa (`equipeIds[0]`). Agora recebe a empresa do CONTEXTO (a da fatura) —
+#      o mesmo critério do PIX/banco impressos na mesma folha. Sem empresa no contexto
+#      fica o comportamento antigo.
+#   3. **Sem logo cadastrada, o NOME da clínica ocupa o lugar dela** (a pedido, mesma
+#      parte 3) — `.topo-nome`, verde, 18px. A rota `/proprietario/:id/logo-empresa`
+#      passou a devolver `empresaNome` (o `empresa.nome` da empresa do CONTEXTO, o mesmo
+#      que o rodapé/Sidebar exibem), e `gerarHtmlFatura`/`imprimirFatura` ganharam o 5º
+#      parâmetro `empresaNome`, passado nas 5 chamadas (painel, bloco do paciente, lote).
+#      Sem logo e sem nome, nada é desenhado.
+#   ⚠️ A tela de Faturamento (card verde do cliente) NÃO ganhou logo — só o documento.
+#   Gate `__tests__/faturaLogoTopo.test.js` (4). Suíte: **1555**. SEM MIGRATION.
+#   ⚠️ NÃO verificado em navegador.)
+
+---
+# Atualizado em: 2026-09-26 (parte 2) (🔴 **O WHATSAPP DA FATURA ABERTA E DA FATURA POR
+#   PACIENTE ABRIA O DESKTOP SEM ANEXO; O DO FECHAMENTO EM LOTE ANEXAVA** (relatado).
+#   Os três botões chamavam a MESMA função (`enviarPdfWhatsAppComAviso`). O que divergia
+#   era o TELEFONE: o lote mandava `users.phone` (login) e o painel o do cadastro da
+#   empresa (`tb_proprietario_perfis`, autoridade — null = vazio ali). Cliente com o
+#   cadastro sem telefone e o login com telefone (caso real: "Marina", empresa 58/59)
+#   ficava SEM DESTINO no painel → plano B (baixar o PDF + abrir o WhatsApp).
+#   1. **`telefoneDeEnvio(perfil, login)`** em `FaturaController`: cadastro DESTA
+#      empresa → login só na falta dele (e ≥10 dígitos). Usado por
+#      `listarProprietarios` (campo novo `telefoneEnvio`, nos dois ramos) e por
+#      `fecharFaturasLote` — que passou a mandar o do CADASTRO primeiro: com o do login
+#      cru, cliente com número diferente em cada clínica recebia no número errado.
+#      ⚠️ Só o DESTINO do envio. O telefone EXIBIDO continua sendo o do cadastro (§36).
+#   2. **`components/EnviarWhatsApp.tsx`** — componente ÚNICO de envio por WhatsApp. O
+#      `tipo` (Fatura, Prescrição, Vacina, Exame…) é SÓ SAÍDA (frase do resultado e
+#      rótulo). `CompartilharPdfBotoes` passou a usá-lo; a fatura usa no painel
+#      (`aparencia="barra"`) e no bloco do paciente (`"compacto"`). Saíram `handleShare`,
+#      `handleWhatsAppAnimal` e o estado `compartilhando`.
+#      ⚠️ Prescrição, Vacina e Exames continuam chamando `enviarPdfWhatsAppComAviso`
+#      direto: montam o documento de forma assíncrona e a Prescrição passa antes pelo
+#      receituário controlado. Migrar pede um `preparar` que DEVOLVA as opções.
+#   Gate novo `__tests__/envioWhatsAppUnico.test.js` (6 — verificado que reprova sem o
+#   fallback do login). `formasRecebimentoFatura.test.js` passou a conferir a trava do
+#   WhatsApp dentro do componente (`indisponivel`). Suíte: **1551**; `tsc -b` e
+#   `vite build` limpos. **SEM MIGRATION.** ⚠️ NÃO verificado em navegador.)
+
+---
+# Atualizado em: 2026-09-26 (🔴 **A OBSERVAÇÃO DA LINHA DA FATURA REPETIA O MESMO
+#   ATENDIMENTO, UMA VEZ POR DOSE** (defeito relatado): "Ivermectina · Quant.: 2" saía
+#   com `↳ EV-0001 · 26/09 · Quant.: 1` DUAS vezes. `registrarOrigem` grava uma
+#   contribuição por EXECUÇÃO, e `origensPorItem` devolvia cada uma crua.
+#   Agora `origensPorItem` AGRUPA por (linha, registro, DIA) e soma a quantidade —
+#   `EV-0001 · 26/09 · Quant.: 2`. Com uma entrada só, a tela cai no formato de linha
+#   única (badge + data + quantidade), a regra de 2026-09-17.
+#   ⚠️ **Só na LEITURA**: a tabela continua uma linha por execução — é o que o estorno
+#   por origem (`contribuicoesDaOrigem`) precisa. Tela e PDF recebem o agrupado juntos,
+#   porque os dois consomem `origensPorItem`.
+#   ⚠️ **Dias diferentes seguem separados**: somar o curso inteiro sob a data da 1ª dose
+#   tiraria do cliente a conferência dia a dia.
+#   ⚠️ O dia é o da CLÍNICA (`fusoDaEmpresa` pela `empresa_id` da fatura, via JOIN), não
+#   UTC: a dose das 22:00 em Brasília cairia num "dia" à parte.
+#   ⚠️ Contribuição sem registro resolvido nunca é fundida (chave pelo id dela).
+#   **SEM MIGRATION.** Gate: `__tests__/faturaOrigensAgrupadas.test.js` (6 casos —
+#   verificado que reprova sem o agrupamento). Suíte: **1545**.
+#   ⚠️ NÃO verificado em navegador.)
+
+---
 # Atualizado em: 2026-09-24 (🔴 **A ETAPA DE EXECUÇÃO DE PRESCRIÇÃO VIROU OPCIONAL POR
 #   EMPRESA** — Configurações ganhou "Não utilizar a etapa de Execução de Prescrição",
 #   que **NÃO nasce marcada**. Marcada, o lançamento na fatura deixa de nascer na

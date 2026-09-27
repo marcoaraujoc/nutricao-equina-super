@@ -48,10 +48,20 @@ async function resolverLogoPorAnimal(animalId) {
   return buscarLogoPelaChave(chave);
 }
 
-// Logo do proprietário — usado por fatura (Fatura não tem empresaId direto, só
-// proprietarioId). Reusa a mesma agregação de equipes já usada para permissões de
-// PROPRIETARIO; pega a primeira equipe encontrada (uma clínica na prática comum).
-async function resolverLogoPorProprietario(proprietarioId) {
+// Logo do proprietário — usado pela FATURA (impressão, PDF, WhatsApp, e-mail).
+//
+// 🔴 COM EMPRESA NO CONTEXTO, A LOGO É A DELA (2026-09-26). Antes a logo saía da
+// PRIMEIRA equipe do cliente em QUALQUER clínica (`equipeIds[0]`): o cliente atendido
+// por duas clínicas recebia a fatura da MarcoVet com a logo da Patyvet — ou sem logo
+// nenhuma, quando a primeira não tinha cadastrado. A fatura é POR EMPRESA, e o PIX e o
+// banco impressos nela já saíam da empresa do contexto; a logo segue o mesmo critério.
+// ⚠️ Sem empresa no contexto (legado/ADMIN) fica o comportamento antigo.
+async function resolverLogoPorProprietario(proprietarioId, empresaId = null, equipeId = null) {
+  if (empresaId) {
+    const chave = await resolverChaveConfiguracao(empresaId, equipeId);
+    return buscarLogoPelaChave(chave);
+  }
+
   const equipeIds = await getEquipeIdsDoProprietario(Number(proprietarioId));
   if (equipeIds.length === 0) return null;
 

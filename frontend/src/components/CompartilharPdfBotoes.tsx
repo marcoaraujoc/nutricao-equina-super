@@ -7,9 +7,10 @@
 // Cores da ação seguem a paleta do módulo de Atendimento (CLAUDE.md §6): WhatsApp
 // verde (cor da própria marca), e-mail azul.
 import { useState } from 'react';
-import { MessageCircle, Mail } from 'lucide-react';
-import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso, type CompartilharPdfOpcoes } from '../utils/compartilharPdf';
+import { Mail } from 'lucide-react';
+import { enviarPdfEmailComAviso, type CompartilharPdfOpcoes } from '../utils/compartilharPdf';
 import AcaoRegistro from './AcaoRegistro';
+import EnviarWhatsApp from './EnviarWhatsApp';
 
 export interface CompartilharPdfBotoesProps extends CompartilharPdfOpcoes {
   /** Telefone do destinatário (WhatsApp) — dígitos com DDI, ex: 5511987654321. */
@@ -51,17 +52,9 @@ export default function CompartilharPdfBotoes({
 }: CompartilharPdfBotoesProps) {
   const [enviando, setEnviando] = useState<'whatsapp' | 'email' | null>(null);
 
-  // Os avisos vivem em utils/compartilharPdf.ts para que este componente e as
-  // telas com fluxo próprio (ex.: o receituário de controle especial da
-  // Prescrição) digam exatamente a mesma coisa ao usuário.
-  const handleWhatsApp = async () => {
-    setEnviando('whatsapp');
-    try {
-      await aoPreparar?.();
-      await enviarPdfWhatsAppComAviso(opts, telefone);
-    } finally { setEnviando(null); }
-  };
-
+  // O WhatsApp é o componente único de envio (`EnviarWhatsApp`) — o MESMO que a
+  // fatura usa no painel e no bloco do paciente. Aqui fica só o e-mail, e o estado
+  // compartilhado impede os dois envios ao mesmo tempo.
   const handleEmail = async () => {
     setEnviando('email');
     try {
@@ -75,11 +68,11 @@ export default function CompartilharPdfBotoes({
   // assinatura por compatibilidade, mas quem dita o tamanho agora é o breakpoint.
   return (
     <>
-      <AcaoRegistro tom="whatsapp" icone={MessageCircle} rotulo="WhatsApp"
-        titulo={whatsappIndisponivel || 'Enviar por WhatsApp'} className={className}
-        desabilitado={disabled || enviando !== null || !!whatsappIndisponivel}
-        carregando={enviando === 'whatsapp'}
-        onClick={handleWhatsApp} />
+      <EnviarWhatsApp {...opts} tipo={opts.documento ?? 'Documento'} telefone={telefone}
+        aoPreparar={aoPreparar} indisponivel={whatsappIndisponivel}
+        titulo="Enviar por WhatsApp" className={className}
+        desabilitado={disabled || enviando === 'email'}
+        onEnviandoChange={(on) => setEnviando(on ? 'whatsapp' : null)} />
       <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail"
         titulo={emailIndisponivel || 'Enviar por e-mail'} className={className}
         desabilitado={disabled || enviando !== null || !!emailIndisponivel}

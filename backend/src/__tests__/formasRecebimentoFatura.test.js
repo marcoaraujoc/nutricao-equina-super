@@ -141,13 +141,22 @@ describe('gate estrutural — a tela de Faturamento OBEDECE a escolha', () => {
 
   test('E-mail, WhatsApp e Imprimir são desabilitados conforme a escolha', () => {
     const tela = leFront('pages', 'Faturamento.tsx');
-    for (const b of ['bloqueioEmail', 'bloqueioWhatsApp', 'bloqueioImpresso']) {
+    for (const b of ['bloqueioEmail', 'bloqueioImpresso']) {
       // Derivado da preferência, aplicado ao `disabled` E guardado no handler —
       // a regra não pode morar só no atributo (teclado / leitor de tela).
       expect(tela).toMatch(new RegExp('const ' + b + '\\s*='));
       expect(tela).toMatch(new RegExp('disabled=\\{[^}]*!!' + b));
       expect(tela).toMatch(new RegExp('if \\(' + b + '\\)'));
     }
+    // O WhatsApp saiu pelo componente único `EnviarWhatsApp` (2026-09-26): a
+    // preferência entra como `indisponivel`, e o componente desabilita E trava o
+    // handler — as duas metades da regra moram lá dentro agora.
+    expect(tela).toMatch(/const bloqueioWhatsApp\s*=/);
+    expect((tela.match(/indisponivel=\{bloqueioWhatsApp\}/g) ?? []).length).toBe(2);
+    const comp = leFront('components', 'EnviarWhatsApp.tsx');
+    expect(comp).toMatch(/disabled=\{travado\}/);
+    expect(comp).toMatch(/travado = [^;]*!!indisponivel/);
+    expect(comp).toMatch(/if \(enviando \|\| desabilitado \|\| indisponivel\) return;/);
   });
 
   test('o fechamento em LOTE não vira a porta dos fundos', () => {

@@ -19,9 +19,10 @@
 // 🔴 EDITAR UM ITEM GLOBAL NÃO ALTERA O GLOBAL: o backend cria a cópia desta clínica
 // (copy-on-write, `lib/catalogoEmpresa.js`). A faixa no topo diz isso — sem ela o
 // gestor acharia que está mudando o catálogo do sistema.
+import { useEffect, useRef } from 'react';
 import { Loader2, Layers, Pencil, Globe } from 'lucide-react';
 import { SeletorBusca, SeletorVias, type OpcoesCatalogo } from '../catalogo/SeletoresCatalogo';
-import { FORMAS_CALCULO, FORMA_DOSES, qtdDoNome, fmtQtdForma } from '../../utils/formaCalculo';
+import { FORMAS_CALCULO, FORMA_DOSES, qtdDaUnidadeNoTexto, fmtQtdForma } from '../../utils/formaCalculo';
 import type { FormProdutoDados } from './tiposProduto';
 
 const inputCls =
@@ -118,18 +119,55 @@ export default function FormProduto({
   };
 
   /**
-   * Trocar a Forma de Cálculo REPREENCHE a Qtd a partir do NOME do produto.
+   * Trocar a Forma de Cálculo REPREENCHE a Qtd a partir da Apresentação e do NOME do
+   * produto — nessa ordem, porque é na apresentação que o tamanho da embalagem costuma
+   * estar escrito ("Seringa de 20 mL"); o nome geralmente traz a concentração do
+   * princípio ativo, não o conteúdo da embalagem.
    *
-   * As três regras pedidas caem numa linha só, porque `qtdDoNome` já devolve `null`
-   * no que não deve preencher: `doses` nunca é extraída do nome (rótulo não traz
-   * contagem de aplicação) e nome sem a medida na forma escolhida também não casa.
-   * ⚠️ Só no TROCA da forma, nunca a cada tecla do Nome: repreencher enquanto a pessoa
-   * digita sobrescreveria a Qtd que ela acabou de informar à mão.
+   * ⚠️ Só no TROCA da forma, nunca a cada tecla do Nome/Apresentação: repreencher
+   * enquanto a pessoa digita sobrescreveria a Qtd que ela acabou de informar à mão.
+   * `doses` nunca é extraída (rótulo não traz contagem de aplicação — `qtdDaUnidadeNoTexto`
+   * não é chamada nesse caso).
    */
   const trocarForma = (nova: string) => {
-    const achada = qtdDoNome(form.nome, nova);
+    const achada = nova === FORMA_DOSES ? null : qtdDaUnidadeNoTexto([form.apresentacao, form.nome], nova);
     onForm({ formaCalculo: nova, dosesPorEmbalagem: achada != null ? fmtQtdForma(achada) : '' });
   };
+
+  /**
+   * 🔴 CONTEÚDO DA EMBALAGEM (produto SEM multidose) TAMBÉM É SUGERIDO PELO TEXTO DO
+   * PRODUTO (2026-09-26, a pedido: "varrer apresentação e nome do produto"). Caso real
+   * que motivou o pedido: Ivermectina cadastrada com Apresentação "Seringa de 30 g" e
+   * Unidade "g" — o cadastro já TINHA o dado escrito, só não estava no campo que a
+   * conta de embalagens lê (`lib/formaCalculo.conteudoDaEmbalagem`), e por isso um
+   * curso de 60 g sempre debitava e faturava 1 embalagem, nunca 2.
+   *
+   * ⚠️ SÓ SUGERE — nunca sobrescreve o que já está no campo. É o mesmo princípio da Qtd
+   * do multidose: o número fica no campo EDITÁVEL, visível e conferível antes de
+   * salvar, nunca um cálculo escondido dentro do backend. Sem unidade escolhida não há
+   * o que procurar no texto (a "unidade-alvo" é o que diferencia "30 g" de "30 mL").
+   */
+  const tentarPreencherConteudo = (overrides: Partial<FormProdutoDados> = {}) => {
+    const dados = { ...form, ...overrides };
+    const podeSugerir = !dados.multidose && !dados.dosesPorEmbalagem.trim() && !!dados.unidade;
+    const achada = podeSugerir ? qtdDaUnidadeNoTexto([dados.apresentacao, dados.nome], dados.unidade) : null;
+    const patch = achada != null ? { ...overrides, dosesPorEmbalagem: fmtQtdForma(achada) } : overrides;
+    // `overrides` vazio (a varredura única do useEffect) só grava algo quando ACHOU —
+    // sem isso, cada montagem despacharia um patch {} e um re-render sem propósito.
+    if (Object.keys(patch).length > 0) onForm(patch);
+  };
+
+  // Item CARREGADO para edição (o caso real: Apresentação/Unidade já cadastradas, só
+  // faltando o Conteúdo) — varre UMA vez por item, sem exigir que a pessoa retoque
+  // Unidade/Apresentação/Nome só para disparar a sugestão. `jaVarrido` evita repetir a
+  // varredura a cada render e evita brigar com o texto que a PESSOA já apagou de propósito.
+  const jaVarrido = useRef<number | null | undefined>(undefined);
+  useEffect(() => {
+    if (jaVarrido.current === form.medicamentoId) return;
+    jaVarrido.current = form.medicamentoId;
+    tentarPreencherConteudo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.medicamentoId]);
 
   return (
     <div className="space-y-4">
@@ -165,7 +203,7 @@ export default function FormProduto({
               onChange={e => onForm({ nome: e.target.value })}
               /* 🔴 Consulta ao SAIR do campo, nunca a cada tecla: um gancho por tecla
                  viraria uma consulta por caractere digitado. */
-              onBlur={() => onNomeSaiu?.()}
+              onBlur={() => { onNomeSaiu?.(); tentarPreencherConteudo(); }}
               maxLength={90}
               placeholder={ehVacina ? 'Ex.: Vacina contra Influenza' : 'Ex.: Dipirona 500 mg/mL'}
               className={`${inputCls} ${consultandoNome ? 'pr-9' : ''} ${erro('Nome') ? 'border-red-400' : ''}`}
@@ -181,7 +219,8 @@ export default function FormProduto({
           erro={erro('Forma farmacêutica')} onChange={v => onForm({ formaFarmaceutica: v })} />
         <SeletorBusca label="Apresentação" valor={form.apresentacao}
           opcoes={opcoes.apresentacoes} placeholder="Selecione a apresentação…"
-          erro={erro('Apresentação')} onChange={v => onForm({ apresentacao: v })} />
+          erro={erro('Apresentação')}
+          onChange={v => tentarPreencherConteudo({ apresentacao: v })} />
       </div>
 
       {/* 🔴 PREENCHER SOZINHO SEM DIZER POR QUÊ ASSUSTA (mesma regra do
@@ -225,7 +264,7 @@ export default function FormProduto({
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <SeletorBusca label="Unidade" valor={form.unidade}
           opcoes={unidadesOferecidas(opcoes.unidades)} placeholder="Selecione a unidade…"
-          erro={erro('Unidade')} onChange={v => onForm({ unidade: v })} />
+          erro={erro('Unidade')} onChange={v => tentarPreencherConteudo({ unidade: v })} />
         <SeletorVias valores={form.vias} opcoes={opcoes.vias}
           erro={erro('Via de administração')} onChange={v => onForm({ vias: v })} />
 

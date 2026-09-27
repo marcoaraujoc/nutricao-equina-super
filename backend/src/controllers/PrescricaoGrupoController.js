@@ -1857,6 +1857,35 @@ const removerItem = async (req, res) => {
   }
 };
 
+// ─── Verificar estoque ANTES de criar ─────────────────────────────────────────
+// POST /grupos/verificar-estoque { itens }
+//
+// 🔴 QUEM PODE FINALIZAR NUNCA FICA COM UMA PRESCRIÇÃO "SALVA" (2026-09-26, a pedido).
+// O botão do formulário cria o documento e em seguida o finaliza. Com o estoque
+// insuficiente, o `finalizar` respondia 409 DEPOIS de o documento existir — e, se a
+// pessoa cancelava o alerta, a prescrição ficava parada em SALVO, um status que para
+// quem tem a permissão de finalizar não pode existir. Com a checagem ANTES de criar,
+// cancelar o alerta não grava nada.
+// ⚠️ É a MESMA `verificarDisponibilidade` do `finalizar` — um segundo cálculo de
+// estoque divergiria do primeiro na primeira correção. O `finalizar` continua checando
+// (há uma janela entre as duas chamadas em que outra prescrição pode reservar o saldo).
+// ⚠️ NÃO grava nada: sem transaction, sem reserva, sem auditoria.
+const verificarEstoque = async (req, res) => {
+  try {
+    const bruto = Array.isArray(req.body?.itens) ? req.body.itens : [];
+    const itens = bruto.map(i => ({
+      ...i,
+      medicamentoCatId: i.medicamentoCatId ? Number(i.medicamentoCatId) : null,
+      medicamentoCliente: i.medicamentoCliente === true,
+    }));
+    const alertas = await verificarDisponibilidade(itens, null, req.empresaId ?? null);
+    return res.json({ alertas });
+  } catch (err) {
+    console.error('PrescricaoGrupoController.verificarEstoque:', err);
+    return res.status(500).json({ error: 'Erro ao verificar o estoque.' });
+  }
+};
+
 // ─── Finalizar grupo ──────────────────────────────────────────────────────────
 // SALVO → FINALIZADO.
 
@@ -3646,6 +3675,7 @@ module.exports = {
   atualizarItem,
   removerItem,
   finalizar,
+  verificarEstoque,
   cancelar,
   cancelarNaExecucao,
   reabrirParaEdicao,

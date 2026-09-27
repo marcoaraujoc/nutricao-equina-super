@@ -1302,10 +1302,10 @@ export default function SubModuloVacina({ animalId, animal, evolucaoId, onSalvo,
 
       {/* ── Formulário de registro ─────────────────────────────────────────── */}
       {podeCriar && (
-        // Alterou qualquer campo → o erro anterior some (change borbulha)
+        // Alterou qualquer campo → o erro anterior some (change borbulha).
+        // Só `onChange`: `onInput` junto revertia o <select> — ver SubModuloPrescricao.
         <div ref={formRef} className="p-5 border-b border-gray-100"
-          onChange={() => setErroForm(null)}
-          onInput={() => setErroForm(null)}>
+          onChange={() => setErroForm(null)}>
 
           {/* Importar orçamento (opcional) */}
           <button onClick={() => setShowImportOrc(true)}

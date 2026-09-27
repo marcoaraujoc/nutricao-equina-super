@@ -13,6 +13,9 @@ const { checkPermission }        = require('../middlewares/permissao.middleware'
 router.get('/grupos/execucao',            authenticate, checkPermission('atendimento.prescricoes.ler',     'LEITURA'), PrescricaoGrupoController.listarParaExecucao);
 router.get('/grupos/animal/:animalId',    authenticate, checkPermission('atendimento.prescricoes.ler',     'LEITURA'), PrescricaoGrupoController.listarPorAnimal);
 router.get('/grupos/:id',                 authenticate, checkPermission('atendimento.prescricoes.ler',     'LEITURA'), PrescricaoGrupoController.obterPorId);
+// Checagem de estoque ANTES de criar — só para quem vai FINALIZAR no mesmo clique
+// (ver `verificarEstoque`). Literal antes de `/grupos/:id`.
+router.post('/grupos/verificar-estoque',  authenticate, checkPermission('atendimento.prescricoes.finalizar', 'PROPRIO'), PrescricaoGrupoController.verificarEstoque);
 router.post('/grupos',                    authenticate, checkPermission('atendimento.prescricoes.criar',   'PROPRIO'), PrescricaoGrupoController.criar);
 router.post('/grupos/:id/itens',          authenticate, checkPermission('atendimento.prescricoes.editar',  'PROPRIO'), PrescricaoGrupoController.adicionarItem);
 router.put('/grupos/:id/itens/:itemId',   authenticate, checkPermission('atendimento.prescricoes.editar',  'PROPRIO'), PrescricaoGrupoController.atualizarItem);
