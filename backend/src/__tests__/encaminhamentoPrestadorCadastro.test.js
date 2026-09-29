@@ -24,6 +24,15 @@
  * ESCOPO DE ACESSO — sem usuário não há a quem dar acesso. Encaminhar para prestador
  * sem login grava o registro clínico e NÃO libera o paciente, e a tela diz isso ANTES
  * de salvar (prometer acesso que não acontece é pior que não oferecer o destino).
+ *
+ * 🔴 (2026-09-29) A ESPECIALIDADE VOLTOU A SAIR DO CATÁLOGO OFICIAL, PARCIALMENTE.
+ * A frase acima ("quem responde é o tipo_servico do CADASTRO") deixa de ser a regra
+ * inteira: quando o cadastro (Prestador OU Fornecedor) tem especialidade vinculada no
+ * catálogo (`tb_prestador_especialidades` / `tb_fornecedor_especialidades`), são os
+ * NOMES dela que entram como `servicos` — o `tipoServico` cru vira FALLBACK, só para
+ * quem ainda não tem vínculo (cadastro não reaberto na tela nova, ou fornecedor de
+ * produto puro, que nunca ganha especialidade). Ver o describe "o catálogo vence,
+ * tipoServico é o FALLBACK de transição" abaixo.
  */
 
 const fs   = require('fs');
@@ -63,14 +72,15 @@ describe('a lista de destino vem dos CADASTROS de prestador', () => {
     expect(listar).toMatch(/prisma\.fornecedor\.findMany/);
   });
 
-  test('nao varre mais a equipe nem o catalogo de especialidade do usuario', () => {
+  test('nao varre mais a equipe nem o catalogo de especialidade do VETERINARIO', () => {
     expect(listar).not.toMatch(/membroEquipe\.findMany/);
-    expect(listar).not.toMatch(/usuarioEspecialidade|fornecedorEspecialidade/);
+    expect(listar).not.toMatch(/usuarioEspecialidade/);
     // O veterinario entrava por aqui.
     expect(listar).not.toMatch(/cargo: 'VETERINARIO'/);
   });
 
-  test('a especialidade sai do `tipoServico` do cadastro', () => {
+  test('a especialidade cai para o `tipoServico` do cadastro SÓ como fallback', () => {
+    // Ver o describe seguinte para a prioridade: catálogo vence quando existe.
     expect(listar).toMatch(/String\(b\.tipoServico \?\? ''\)/);
   });
 
@@ -91,6 +101,25 @@ describe('a lista de destino vem dos CADASTROS de prestador', () => {
 
   test('a designacao so alcanca quem tem login', () => {
     expect(listar).toMatch(/jaDesignado:\s+temAcesso && designadoSet\.has\(userId\)/);
+  });
+});
+
+describe('o catálogo vence, tipoServico é o FALLBACK de transição (2026-09-29)', () => {
+  const listar = corpoDoMetodo(CTRL, 'listarPrestadores');
+
+  test('PRESTADOR: especialidade vem de tb_prestador_especialidades (SQL cru)', () => {
+    expect(listar).toMatch(/FROM "schs2vet"\."tb_prestador_especialidades" pe/);
+    expect(listar).toMatch(/JOIN "schs2vet"\."tb_especialidades" e ON e\."id" = pe\."especialidade_id"/);
+    // Base sem a migration/generate não derruba a lista.
+    expect(listar).toMatch(/especPrestadorLinhas = prestadorIds\.length === 0 \? \[\] : await prisma\.\$queryRaw`[\s\S]*`\.catch\(\(\) => \[\]\)/);
+  });
+
+  test('FORNECEDOR: especialidade vem da relação TIPADA fornecedorEspecialidade', () => {
+    expect(listar).toMatch(/especialidades:\s*\{\s*select:\s*\{\s*especialidade:\s*\{\s*select:\s*\{\s*nome:\s*true/);
+  });
+
+  test('o catálogo VENCE quando existe; sem vínculo, cai no split de tipoServico', () => {
+    expect(listar).toMatch(/const servicos = b\.especialidadesCatalogo\.length > 0\s*\n\s*\? b\.especialidadesCatalogo\s*\n\s*: String\(b\.tipoServico/);
   });
 });
 

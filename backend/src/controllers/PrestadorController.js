@@ -14,15 +14,21 @@ const emailService = require('../services/emailService');
 const { gerarSenhaInicial } = require('../lib/senhaInicial');
 const { normalizeEmail, whereEmailInsensitive } = require('../lib/email');
 const { cadastroDaPessoaNaEmpresa, montarResposta } = require('../lib/cadastroPorEmail');
+const { escopoDaEmpresa } = require('../lib/especialidadeEscopo');
 // Vencimento da conta a pagar deste prestador — a MESMA forma do fechamento da fatura
 // no cadastro da empresa. Lido/gravado por SQL cru (ver o cabeçalho da lib).
 const {
   resolverVencimento, gravarVencimento, anexarVencimento, anexarVencimentoEmLista,
 } = require('../lib/vencimentoCredor');
 
-// Whitelist fixa SAIU (2026-08-25) — o tipo de serviço agora vem do catálogo
-// tenant-scoped (tb_catalogo_tipo_servico, CatalogoTipoServicoController), que
-// cresce por uso. Validação aqui é só "não vazio, tamanho razoável".
+// 🔴 O TIPO DE SERVIÇO DEIXOU DE SER DIGITADO (2026-09-29) — vem do catálogo
+// OFICIAL `tb_especialidades` (multi-select, via `especialidadeIds`), não mais do
+// catálogo tenant-scoped de texto livre (`tb_catalogo_tipo_servico`, categoria
+// PRESTADOR) que a whitelist fixa deu lugar em 2026-08-25. `tipoServico` (a coluna)
+// continua existindo e sendo gravado, mas agora DERIVADO das especialidades
+// escolhidas — ver `resolverEspecialidadesPrestador` abaixo.
+// ⚠️ `Fornecedor.tipoServico` é OUTRO CAMPO, independente, e continua sendo
+// digitado (categoria de fornecedor de produto) — não confundir os dois cadastros.
 
 // ⚠️ A senha inicial deixou de ser CONSTANTE (2026-09-08): ela é derivada do cadastro
 // de cada pessoa (`lib/senhaInicial.js`) e sai só pelo e-mail de boas-vindas.
@@ -41,15 +47,17 @@ const normalizarTipos   = v => (v ?? '').split(',').map(t => t.trim().toLowerCas
 
 // ─── Tipos de serviço: VÁRIOS por prestador (2026-09-15) ──────────────────────
 // O mesmo profissional externo acumula atuações (ferrador E fisioterapeuta), e o
-// cadastro obrigava a escolher uma só. Gravados como CSV na MESMA coluna
+// cadastro obrigava a escolher uma só. Continuam gravados como CSV na MESMA coluna
 // `tipo_servico`, que é o formato que os leitores já esperam:
 // `EncaminhamentoController` monta o filtro de serviços com `tipoServico.split(',')`
 // e a checagem de duplicidade aqui já compara a LISTA (`normalizarTipos`, acima).
-// ⚠️ Por isso NÃO nasceu tabela nova: a convenção já existia: o que faltava era o
-// cadastro saber produzi-la.
+// 🔴 (2026-09-29) O CSV deixou de ser DIGITADO — `sanearTiposServico` agora recebe
+// os NOMES das especialidades escolhidas no catálogo (`resolverEspecialidadesPrestador`),
+// nunca mais texto livre do body. O saneamento (sem vazio, sem repetido, separador
+// uniforme) continua igual: é útil também para a lista de nomes vinda do catálogo.
 const LIMITE_TIPO_SERVICO = 255;
 
-/** CSV recebido → CSV canônico (sem vazio, sem repetido, separador uniforme). */
+/** CSV/lista de nomes → CSV canônico (sem vazio, sem repetido, separador uniforme). */
 function sanearTiposServico(v) {
   const vistos = new Set();
   const lista  = [];
@@ -193,6 +201,72 @@ async function anexarRestricaoPorLocal(lista) {
   return lista.map(p => ({ ...p, restringirPorLocal: mapa.get(p.id) ?? false }));
 }
 
+// ─── Especialidade do Prestador — fonte oficial `tb_especialidades` (2026-09-29) ──
+// `tb_prestador_especialidades` (migration 20261025000000) é TABELA NOVA: o model
+// Prisma existe no `schema.prisma` para documentar a relação, mas o CLIENT gerado
+// nesta base pode não a conhecer ainda (migration não aplicada / generate não
+// rodado — §11). Por isso as três funções abaixo usam SQL CRU com `catch`, no MESMO
+// padrão de `gravarRestricaoPorLocal`/`anexarRestricaoPorLocal` — nunca
+// `tx.prestadorEspecialidade`, que derrubaria o CADASTRO INTEIRO numa base ainda
+// não migrada.
+
+/**
+ * Valida `especialidadeIds` contra o catálogo (`tb_especialidades`, ativo + do
+ * escopo da empresa) e deriva o CSV que vai para a coluna legada `tipo_servico`.
+ * Devolve `null` quando nenhum id é válido (equivalente a "não escolheu nada").
+ */
+async function resolverEspecialidadesPrestador(especialidadeIds, empresaId) {
+  const ids = [...new Set((Array.isArray(especialidadeIds) ? especialidadeIds : []).map(Number))]
+    .filter(Number.isInteger);
+  if (ids.length === 0) return null;
+
+  const especialidades = await prisma.especialidade.findMany({
+    where:  { id: { in: ids }, ativo: true, ...escopoDaEmpresa(empresaId) },
+    select: { id: true, nome: true },
+    orderBy: { nome: 'asc' },
+  });
+  if (especialidades.length === 0) return null;
+
+  return {
+    ids: especialidades.map(e => e.id),
+    tipoServico: sanearTiposServico(especialidades.map(e => e.nome).join(',')),
+  };
+}
+
+/** Apaga e recria os vínculos do prestador com as especialidades escolhidas. */
+async function gravarEspecialidadesPrestador(tx, prestadorId, especialidadeIds) {
+  await tx.$executeRaw`
+    DELETE FROM "schs2vet"."tb_prestador_especialidades" WHERE "prestador_id" = ${Number(prestadorId)}
+  `.catch(() => {});
+  for (const especialidadeId of especialidadeIds) {
+    await tx.$executeRaw`
+      INSERT INTO "schs2vet"."tb_prestador_especialidades" ("prestador_id", "especialidade_id")
+      VALUES (${Number(prestadorId)}, ${Number(especialidadeId)})
+      ON CONFLICT ("prestador_id", "especialidade_id") DO NOTHING
+    `.catch(() => {});
+  }
+}
+
+/**
+ * Anexa `especialidadeIds` (ids do catálogo hoje vinculados) à lista devolvida ao
+ * front — é o que alimenta o `EspecialidadeSelector` na edição. Base sem a
+ * migration aplicada devolve `[]` para todos (nunca deixa a listagem cair).
+ */
+async function anexarEspecialidadesPrestador(lista) {
+  if (!lista?.length) return lista;
+  const linhas = await prisma.$queryRaw`
+    SELECT pe."prestador_id" AS "prestadorId", pe."especialidade_id" AS "especialidadeId"
+      FROM "schs2vet"."tb_prestador_especialidades" pe
+     WHERE pe."prestador_id" = ANY(${lista.map(p => p.id)}::int[])
+  `.catch(() => []);
+  const porPrestador = new Map();
+  for (const l of linhas) {
+    if (!porPrestador.has(l.prestadorId)) porPrestador.set(l.prestadorId, []);
+    porPrestador.get(l.prestadorId).push(l.especialidadeId);
+  }
+  return lista.map(p => ({ ...p, especialidadeIds: porPrestador.get(p.id) ?? [] }));
+}
+
 // ─── Login opcional do Prestador — SEM MembroEquipe ────────────────────────────
 // Só roda quando acessoSistema===true e o prestador ainda não tem userId. Cria (ou
 // reaproveita, por e-mail) um `User`: a pessoa passa a poder logar, mas sem
@@ -316,7 +390,7 @@ const PrestadorController = {
       // ⚠️ A listagem TEM de devolver o vencimento: a tela edita a partir do que ela
       // trouxe, e sem o campo o salvar o apagaria em silêncio.
       const comAcesso = await anexarEquipeDoAcesso(prisma,
-        await anexarRestricaoPorLocal(await anexarTrilha(prestadores, 'prestador')));
+        await anexarEspecialidadesPrestador(await anexarRestricaoPorLocal(await anexarTrilha(prestadores, 'prestador'))));
       res.json({ sucesso: true, dados: await anexarVencimentoEmLista(prisma, 'PRESTADOR', comAcesso) });
     } catch (err) {
       console.error('Erro ao listar prestadores:', err);
@@ -365,7 +439,7 @@ const PrestadorController = {
       // habilita "Gerenciar Acesso".
       const [enriquecido] = await anexarEquipeDoAcesso(
         prisma,
-        await anexarRestricaoPorLocal(await anexarTrilha([registro], 'prestador')),
+        await anexarEspecialidadesPrestador(await anexarRestricaoPorLocal(await anexarTrilha([registro], 'prestador'))),
       );
       return res.json({ sucesso: true, dados: montarResposta({ registro: enriquecido, pessoa }) });
     } catch (err) {
@@ -389,7 +463,8 @@ const PrestadorController = {
         include: PRESTADOR_INCLUDE,
       });
       if (!prestador) return res.status(404).json({ sucesso: false, mensagem: 'Prestador não encontrado' });
-      res.json({ sucesso: true, dados: await anexarVencimento(prisma, 'PRESTADOR', prestador) });
+      const [comEspecialidades] = await anexarEspecialidadesPrestador([prestador]);
+      res.json({ sucesso: true, dados: await anexarVencimento(prisma, 'PRESTADOR', comEspecialidades) });
     } catch {
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar prestador' });
     }
@@ -399,7 +474,7 @@ const PrestadorController = {
   // ADMIN → tipoEntrada=SYSTEM; demais → tipoEntrada=CLIENTE
   criar: async (req, res) => {
     const {
-      nome, cpf, cnpj, telefone, email, tipoServico,
+      nome, cpf, cnpj, telefone, email, especialidadeIds,
       cep, endereco, complemento, bairro, cidade, estado,
       acessoSistema, locaisTrabalho, restringirPorLocal,
     } = req.body;
@@ -408,11 +483,6 @@ const PrestadorController = {
       return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
     if (!telefone?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
-    const tiposServicoCriar = sanearTiposServico(tipoServico);
-    if (!tiposServicoCriar)
-      return res.status(400).json({ sucesso: false, mensagem: 'Selecione ao menos um tipo de serviço' });
-    if (tiposServicoCriar.length > LIMITE_TIPO_SERVICO)
-      return res.status(400).json({ sucesso: false, mensagem: `Tipos de serviço muito longos (máx. ${LIMITE_TIPO_SERVICO} caracteres somados). Remova algum.` });
     if (acessoSistema === true && !email?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório para conceder acesso ao sistema.' });
 
@@ -429,7 +499,16 @@ const PrestadorController = {
     const equipeAlvo  = tipoEntrada === 'CLIENTE' ? (req.equipeId ?? null)  : null;
 
     try {
-      const dup = await verificarDuplicidade({ cpf, nome, tipoServico: tiposServicoCriar, telefone, empresaId: empresaAlvo });
+      // Especialidade vem do catálogo, nunca mais texto digitado — ver o bloco
+      // "Especialidade do Prestador" acima. Resolvida DENTRO do try: é a primeira
+      // consulta assíncrona real da função (as validações de cima são síncronas).
+      const especResolvido = await resolverEspecialidadesPrestador(especialidadeIds, empresaAlvo);
+      if (!especResolvido)
+        return res.status(400).json({ sucesso: false, mensagem: 'Selecione ao menos uma especialidade' });
+      if (especResolvido.tipoServico.length > LIMITE_TIPO_SERVICO)
+        return res.status(400).json({ sucesso: false, mensagem: `Especialidades demais somadas (máx. ${LIMITE_TIPO_SERVICO} caracteres). Remova alguma.` });
+
+      const dup = await verificarDuplicidade({ cpf, nome, tipoServico: especResolvido.tipoServico, telefone, empresaId: empresaAlvo });
       if (dup) {
         if (dup.ativo) return res.status(409).json({ sucesso: false, mensagem: MSG_DUPLICADO[dup.tipo] });
         if (!req.body.force) return res.status(409).json({
@@ -452,7 +531,7 @@ const PrestadorController = {
             cnpj:        cnpj?.trim()        || null,
             telefone:    telefone.trim(),
             email:       email?.trim() ? email.trim().toLowerCase() : null,
-            tipoServico: tiposServicoCriar,
+            tipoServico: especResolvido.tipoServico,
             tipoEntrada,
             cep:         cep?.trim()         || null,
             endereco:    endereco?.trim()    || null,
@@ -465,6 +544,7 @@ const PrestadorController = {
           },
         });
 
+        await gravarEspecialidadesPrestador(tx, criado.id, especResolvido.ids);
         await gravarLocaisTrabalho(tx, criado.id, locaisTrabalho, empresaAlvo, equipeAlvo);
         await gravarRestricaoPorLocal(tx, criado.id, restringirPorLocal);
         // ⚠️ É um UPDATE (SQL cru): SEMPRE depois do `create`, senão acerta zero linhas
@@ -518,8 +598,9 @@ const PrestadorController = {
       // e reativar o registro.
       await registrarAtivacao(prisma, 'prestador', prestadorId, req.user.id);
 
-      const prestador = await anexarVencimento(prisma, 'PRESTADOR',
-        await prisma.prestador.findUnique({ where: { id: prestadorId }, include: PRESTADOR_INCLUDE }));
+      const [comEspecialidades] = await anexarEspecialidadesPrestador(
+        [await prisma.prestador.findUnique({ where: { id: prestadorId }, include: PRESTADOR_INCLUDE })]);
+      const prestador = await anexarVencimento(prisma, 'PRESTADOR', comEspecialidades);
       await registrarAuditoria(prisma, req, {
         categoria:  'CRIACAO',
         entidade:   'PRESTADOR',
@@ -542,7 +623,7 @@ const PrestadorController = {
   atualizar: async (req, res) => {
     const { id } = req.params;
     const {
-      nome, cpf, cnpj, telefone, email, tipoServico,
+      nome, cpf, cnpj, telefone, email, especialidadeIds,
       cep, endereco, complemento, bairro, cidade, estado,
       acessoSistema, locaisTrabalho, restringirPorLocal,
     } = req.body;
@@ -551,12 +632,6 @@ const PrestadorController = {
       return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
     if (!telefone?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'Telefone é obrigatório' });
-    // `undefined` PRESERVA o que está gravado (PATCH parcial); lista vazia enviada
-    // de propósito é recusada abaixo, junto do `tipoServicoFinal`.
-    const tiposServicoEditar = tipoServico === undefined ? undefined : sanearTiposServico(tipoServico);
-    if (tiposServicoEditar !== undefined && tiposServicoEditar.length > LIMITE_TIPO_SERVICO) {
-      return res.status(400).json({ sucesso: false, mensagem: `Tipos de serviço muito longos (máx. ${LIMITE_TIPO_SERVICO} caracteres somados). Remova algum.` });
-    }
     if (acessoSistema === true && !email?.trim())
       return res.status(400).json({ sucesso: false, mensagem: 'E-mail é obrigatório para conceder acesso ao sistema.' });
 
@@ -572,7 +647,20 @@ const PrestadorController = {
       if (!podeAlterarRegistroEscopado(existe, req))
         return res.status(403).json({ sucesso: false, mensagem: 'Você não tem acesso para alterar este prestador.' });
 
-      const tipoServicoFinal = tiposServicoEditar || existe.tipoServico;
+      // `especialidadeIds === undefined` PRESERVA o vínculo atual (PATCH parcial);
+      // vindo (mesmo vazio) é resolvido e validado — vazio é recusado, como na criação.
+      let tipoServicoFinal = existe.tipoServico;
+      let especialidadeIdsResolvidos = null; // null = não mexe no vínculo gravado
+      if (especialidadeIds !== undefined) {
+        const especResolvido = await resolverEspecialidadesPrestador(especialidadeIds, existe.empresaId);
+        if (!especResolvido)
+          return res.status(400).json({ sucesso: false, mensagem: 'Selecione ao menos uma especialidade' });
+        if (especResolvido.tipoServico.length > LIMITE_TIPO_SERVICO) {
+          return res.status(400).json({ sucesso: false, mensagem: `Especialidades demais somadas (máx. ${LIMITE_TIPO_SERVICO} caracteres). Remova alguma.` });
+        }
+        tipoServicoFinal = especResolvido.tipoServico;
+        especialidadeIdsResolvidos = especResolvido.ids;
+      }
 
       const dup = await verificarDuplicidade({
         cpf, nome, telefone,
@@ -617,6 +705,9 @@ const PrestadorController = {
           },
         });
 
+        if (especialidadeIdsResolvidos !== null) {
+          await gravarEspecialidadesPrestador(tx, Number(id), especialidadeIdsResolvidos);
+        }
         await gravarLocaisTrabalho(tx, Number(id), locaisTrabalho, existe.empresaId, existe.equipeId);
         await gravarRestricaoPorLocal(tx, Number(id), restringirPorLocal);
         await gravarVencimento(tx, 'PRESTADOR', Number(id), vencimento);
@@ -672,8 +763,9 @@ const PrestadorController = {
         }).catch(err => console.error('[emailService] Falha ao enviar boas-vindas do prestador:', err));
       }
 
-      const prestador = await anexarVencimento(prisma, 'PRESTADOR',
-        await prisma.prestador.findUnique({ where: { id: Number(id) }, include: PRESTADOR_INCLUDE }));
+      const [comEspecialidades] = await anexarEspecialidadesPrestador(
+        [await prisma.prestador.findUnique({ where: { id: Number(id) }, include: PRESTADOR_INCLUDE })]);
+      const prestador = await anexarVencimento(prisma, 'PRESTADOR', comEspecialidades);
 
       await registrarAlteracao(prisma, req, {
         entidade:   'PRESTADOR',
@@ -777,3 +869,4 @@ module.exports = PrestadorController;
 module.exports.sanearTiposServico = sanearTiposServico;
 module.exports.normalizarTipos    = normalizarTipos;
 module.exports.LIMITE_TIPO_SERVICO = LIMITE_TIPO_SERVICO;
+module.exports.resolverEspecialidadesPrestador = resolverEspecialidadesPrestador;

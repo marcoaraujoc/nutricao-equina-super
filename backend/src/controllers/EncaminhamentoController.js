@@ -126,21 +126,36 @@ const EncaminhamentoController = {
   //     não é o que a aba se propõe a oferecer. Para ele, o caminho é o destino
   //     EXTERNO (ou assumir o atendimento).
   //
-  // Agora a fonte é o CADASTRO — `tb_prestadores` + `tb_fornecedores` —, e a
-  // especialidade sai do `tipo_servico` gravado lá, que é o campo que a tela de
-  // Cadastro › Prestadores preenche.
+  // Agora a fonte é o CADASTRO — `tb_prestadores` + `tb_fornecedores` — e o destino
+  // continua sendo escolhido por especialidade/serviço.
   //
   // ⚠️ FORNECEDOR entra junto de propósito: `PRESTADOR` nasceu em 2026-09-09 e NADA foi
   // migrado (CLAUDE.md §4) — quem já estava cadastrado segue em `tb_fornecedores`.
   //
-  // ⚠️ `UsuarioEspecialidade`/`FornecedorEspecialidade` SAÍRAM da conta: elas são o
-  // catálogo de especialidade do USUÁRIO/do vínculo, e era por elas que o veterinário
-  // entrava na lista. A pergunta da tela é "que serviço este prestador presta", e quem
-  // responde isso é o cadastro dele.
-  //
   // ⚠️ `precisaDesignacao` virou "tem login": designação é ESCOPO DE ACESSO, e sem
   // usuário não há a quem dar acesso. O encaminhamento para prestador sem login é
   // registro clínico e não libera o paciente — a tela avisa antes de salvar.
+  //
+  // 🔴 A ESPECIALIDADE VOLTOU A SAIR DO CATÁLOGO OFICIAL (2026-09-29) — REVERTE, só
+  // nesta parte, o parágrafo acima: até aqui a especialidade saía inteiramente do
+  // `tipo_servico` (texto livre) gravado no cadastro, e `UsuarioEspecialidade`/
+  // `FornecedorEspecialidade` foram deliberadamente excluídas da conta. Relatado que
+  // isso deixava a Especialidade do Encaminhamento presa a texto solto em vez do
+  // catálogo `tb_especialidades` — e que `tb_fornecedor_especialidades` nunca chegava
+  // a ser preenchida (a tela de cadastro nunca mandava `especialidadeIds`).
+  // Agora, POR CADASTRO (prestador ou fornecedor): se há especialidade vinculada no
+  // catálogo (`tb_prestador_especialidades` — nova — ou `tb_fornecedor_especialidades`
+  // — já existia, agora alimentada por `FornecedorController`), são os NOMES dela que
+  // viram `servicos`. SEM vínculo — fornecedor de produto puro (Farmácia/Laboratório/
+  // Loja, que nunca ganha especialidade) OU cadastro ainda não reaberto na tela nova
+  // — cai no comportamento ANTERIOR: split de `tipo_servico` + `EXCLUIR_SERVICOS`.
+  // ⚠️ Esse fallback NÃO é gambiarra temporária a remover: é o que faz o fornecedor
+  // de produto continuar FORA da lista (ele nunca vai ganhar especialidade) e o que
+  // evita que prestador/fornecedor de serviço já cadastrado suma do Encaminhamento
+  // enquanto ninguém reabre o cadastro dele para escolher a especialidade.
+  // Prestador (cadastro NOVO 2026-08-14, migração completa) passa a EXIGIR a escolha
+  // na próxima edição; Fornecedor (cadastro antigo, `tipoServico` com outro sentido —
+  // ver FornecedorController) continua com a especialidade OPCIONAL.
   listarPrestadores: async (req, res) => {
     try {
       const { animalId } = req.params;
@@ -176,13 +191,41 @@ const EncaminhamentoController = {
         }),
         prisma.fornecedor.findMany({
           where:  escopoCadastro,
-          select: { id: true, nome: true, email: true, telefone: true, tipoServico: true, userId: true },
+          select: {
+            id: true, nome: true, email: true, telefone: true, tipoServico: true, userId: true,
+            especialidades: { select: { especialidade: { select: { nome: true } } } },
+          },
         }),
       ]);
 
+      // Especialidade do catálogo vinculada a PRESTADOR — tabela NOVA
+      // (`tb_prestador_especialidades`, migration 20261025000000), lida por SQL CRU:
+      // pode não estar no client tipado ainda (§11) — sem o vínculo, cai no fallback
+      // do comentário acima, não derruba a listagem. Fornecedor já usa a relação
+      // TIPADA (`especialidades`, acima) — `tb_fornecedor_especialidades` está no
+      // client desde 2026-07-17.
+      const prestadorIds = prestadores.map(p => p.id);
+      const especPrestadorLinhas = prestadorIds.length === 0 ? [] : await prisma.$queryRaw`
+        SELECT pe."prestador_id" AS "prestadorId", e."nome" AS "nome"
+          FROM "schs2vet"."tb_prestador_especialidades" pe
+          JOIN "schs2vet"."tb_especialidades" e ON e."id" = pe."especialidade_id"
+         WHERE pe."prestador_id" = ANY(${prestadorIds}::int[])
+      `.catch(() => []);
+      const especPorPrestador = new Map();
+      for (const l of especPrestadorLinhas) {
+        if (!especPorPrestador.has(l.prestadorId)) especPorPrestador.set(l.prestadorId, []);
+        especPorPrestador.get(l.prestadorId).push(l.nome);
+      }
+
       const brutos = [
-        ...prestadores.map(p  => ({ ...p, origem: encPrestador.ORIGENS.PRESTADOR  })),
-        ...fornecedores.map(f => ({ ...f, origem: encPrestador.ORIGENS.FORNECEDOR })),
+        ...prestadores.map(p => ({
+          ...p, origem: encPrestador.ORIGENS.PRESTADOR,
+          especialidadesCatalogo: especPorPrestador.get(p.id) ?? [],
+        })),
+        ...fornecedores.map(f => ({
+          ...f, origem: encPrestador.ORIGENS.FORNECEDOR,
+          especialidadesCatalogo: f.especialidades.map(e => e.especialidade.nome),
+        })),
       ];
 
       // Designações ativas DESTE animal — só alcançam quem tem login.
@@ -196,10 +239,15 @@ const EncaminhamentoController = {
       const servicosSet = new Set();
       const dados = [];
       for (const b of brutos) {
-        const servicos = String(b.tipoServico ?? '')
-          .split(',')
-          .map(x => x.trim())
-          .filter(x => x && !EXCLUIR_SERVICOS.has(normalizar(x)));
+        // Especialidade do catálogo VENCE quando existe. Sem vínculo, cai no split de
+        // `tipoServico` + `EXCLUIR_SERVICOS` de sempre — ver o comentário no topo do
+        // handler.
+        const servicos = b.especialidadesCatalogo.length > 0
+          ? b.especialidadesCatalogo
+          : String(b.tipoServico ?? '')
+              .split(',')
+              .map(x => x.trim())
+              .filter(x => x && !EXCLUIR_SERVICOS.has(normalizar(x)));
         // Fornecedor que só vende (loja, laboratório) some da lista — não é destino de
         // paciente, e mantê-lo aqui obrigaria quem encaminha a filtrá-lo com o olho.
         if (servicos.length === 0) continue;
@@ -238,7 +286,13 @@ const EncaminhamentoController = {
   // POST /clinica/encaminhamentos
   // body: { animalId, especialidade, motivo, evolucaoId,
   //         prestadorCadastroId? + prestadorCadastroOrigem?, veterinarioDestino?,
-  //         clinicaDestino?, urgencia?, observacao?, valor? }
+  //         clinicaDestino?, telefoneDestino?, urgencia?, observacao?, valor? }
+  //
+  // `telefoneDestino` só se aplica ao destino EXTERNO (texto livre) — é o telefone do
+  // profissional/clínica para onde o paciente foi, usado pelo WhatsApp da tela. Antes
+  // não existia campo nenhum ali, e o botão de WhatsApp mandava, por engano, o telefone
+  // do PROPRIETÁRIO do paciente. Destino INTERNO (prestador do cadastro) não usa este
+  // campo: o telefone dele já está no cadastro e é lido ao vivo na listagem.
   //
   // 🔴 O DESTINO INTERNO É O CADASTRO DO PRESTADOR (2026-09-23), não mais um usuário.
   // A tela manda o par (origem, id) e é AQUI que se resolve o login dele — quando há.
@@ -255,7 +309,8 @@ const EncaminhamentoController = {
         animalId, especialidade, motivo, evolucaoId,
         prestadorId: prestadorIdBody,
         prestadorCadastroId, prestadorCadastroOrigem,
-        veterinarioDestino, clinicaDestino, urgencia = 'NORMAL', observacao, valor,
+        veterinarioDestino, clinicaDestino, telefoneDestino,
+        urgencia = 'NORMAL', observacao, valor,
       } = req.body;
 
       if (!animalId || !especialidade || !motivo) {
@@ -416,6 +471,11 @@ const EncaminhamentoController = {
             origem: cadastroDestino.origem,
             id:     cadastroDestino.id,
           });
+        } else if (String(telefoneDestino || '').trim()) {
+          // Só no destino EXTERNO: o telefone do prestador do cadastro é lido AO VIVO
+          // (anexarEmLista), nunca gravado aqui — grava-lo duas vezes divergiria se o
+          // cadastro trocasse de telefone depois.
+          await encPrestador.gravarTelefoneDestino(tx, enc.id, telefoneDestino);
         }
 
         if (prestadorId && equipeDesignacao) {
@@ -557,7 +617,7 @@ const EncaminhamentoController = {
   atualizar: async (req, res) => {
     try {
       const { id } = req.params;
-      const { especialidade, motivo, urgencia, observacao, veterinarioDestino, clinicaDestino } = req.body;
+      const { especialidade, motivo, urgencia, observacao, veterinarioDestino, clinicaDestino, telefoneDestino } = req.body;
 
       const enc = await prisma.encaminhamentoClinico.findUnique({
         where:   { id: Number(id) },
@@ -597,6 +657,14 @@ const EncaminhamentoController = {
           },
           include: INCLUDE,
         });
+
+        // `telefoneDestino` fora do `data` tipado (coluna nova, guarda de coluna —
+        // ver `lib/encaminhamentoPrestador.js`). Só se aplica ao destino EXTERNO; num
+        // encaminhamento com cadastro (`prestadorCadastroId`), o telefone é lido ao
+        // vivo do cadastro e esta chamada não tem o que gravar.
+        if (telefoneDestino !== undefined) {
+          await encPrestador.gravarTelefoneDestino(tx, enc.id, telefoneDestino);
+        }
 
         // Especialidade/destino mudaram → sincroniza a descrição do FaturaItem vinculado
         // (se houver). Bloqueia (lança FaturaPagaError) se a fatura já estiver PAGA.

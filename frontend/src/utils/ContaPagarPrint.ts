@@ -18,7 +18,6 @@ import { imprimirHtml } from './print/imprimirHtml';
 import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeSimples } from './print/PrintShell';
 
 export interface ContaPagarItemPrint {
-  animalNome:      string;
   descricao:       string;
   solicitanteNome: string;
   ocorridoEm:      string;
@@ -74,7 +73,6 @@ export function gerarHtmlContasPagar(contas: ContaPagarPrint[], logoUrl?: string
     const semValor = c.itens.filter(i => !i.valor || i.valor <= 0).length;
     const linhas = c.itens.map(i => `
       <tr>
-        <td>${esc(i.animalNome) || '—'}</td>
         <td>${esc(i.descricao)}</td>
         <td>${esc(i.solicitanteNome) || '—'}</td>
         <td class="cp-num">${dataHora(i.ocorridoEm)}</td>
@@ -98,11 +96,11 @@ export function gerarHtmlContasPagar(contas: ContaPagarPrint[], logoUrl?: string
         <table class="cp-tab">
           <thead>
             <tr>
-              <th>Paciente</th><th>Item</th><th>Solicitante</th>
+              <th>Item</th><th>Solicitante</th>
               <th class="cp-num">Data do pedido</th><th class="cp-num">Qtd.</th><th class="cp-num">Valor</th>
             </tr>
           </thead>
-          <tbody>${linhas || '<tr><td colspan="6">Nenhum lançamento.</td></tr>'}</tbody>
+          <tbody>${linhas || '<tr><td colspan="5">Nenhum lançamento.</td></tr>'}</tbody>
         </table>
         <div class="cp-total">Total: ${brl(c.total)}</div>
         ${semValor > 0 ? `<div class="cp-sub cp-pendente" style="margin-top:6px;">
@@ -138,13 +136,12 @@ export function exportarContaPagarCSV(c: ContaPagarPrint): void {
     ['Data de Vencimento', soData(c.vencimentoEm)],
     ['Status', c.status],
     [''],
-    ['Paciente', 'Item', 'Solicitante', 'Data do Pedido', 'Quantidade', 'Valor Unitário (R$)', 'Subtotal (R$)'],
+    ['Item', 'Solicitante', 'Data do Pedido', 'Quantidade', 'Valor Unitário (R$)', 'Subtotal (R$)'],
   ];
 
   for (const i of c.itens) {
     const qtd = i.quantidade ?? 1;
     linhas.push([
-      i.animalNome || '',
       i.descricao,
       i.solicitanteNome || '',
       dataHora(i.ocorridoEm),
@@ -156,7 +153,7 @@ export function exportarContaPagarCSV(c: ContaPagarPrint): void {
     ]);
   }
 
-  linhas.push([''], ['', '', '', '', '', 'TOTAL', (c.total ?? 0).toFixed(2).replace('.', ',')]);
+  linhas.push([''], ['', '', '', '', 'TOTAL', (c.total ?? 0).toFixed(2).replace('.', ',')]);
 
   const csv = linhas
     .map(row => row.map(x => `"${String(x).replace(/"/g, '""')}"`).join(';'))

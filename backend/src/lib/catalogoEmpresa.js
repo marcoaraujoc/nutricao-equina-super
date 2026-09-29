@@ -36,7 +36,10 @@ const {
 // FORMA DE CÁLCULO: em que o conteúdo da embalagem é medido (mL, g, doses…).
 // Ver `lib/formaCalculo.js` — é ela que faz 5 mL saírem de um frasco de 20 mL em vez
 // de debitarem cinco frascos.
-const { normalizarFormaCalculo, numeroPositivo } = require('./formaCalculo');
+const {
+  normalizarFormaCalculo, numeroPositivo,
+  unidadeOperativa, qtdPorEmbalagemDe,
+} = require('./formaCalculo');
 
 const texto = (v, max) => {
   const t = String(v ?? '').trim();
@@ -113,6 +116,25 @@ async function temColunaFormaCalculo(client) {
 async function gravarMultidose(client, medicamentoId, { multidose, dosesPorEmbalagem, formaCalculo }) {
   if (multidose === undefined && dosesPorEmbalagem === undefined && formaCalculo === undefined) return;
   if (!(await temColunasMultidose(client))) return;
+  const temForma = await temColunaFormaCalculo(client);
+
+  // 🔴 ESTADO ANTES DA GRAVAÇÃO — necessário para `reconverterEstoqueAtivo` saber
+  // qual era a unidade operativa ANTIGA do item (ver o comentário da função). Sem
+  // isto, a única forma de comparar seria confiar num "antes" implícito que o
+  // chamador nem sempre tem (o cadastro rápido do atendimento, por exemplo, só
+  // conhece os campos do FORMULÁRIO, nunca o que já estava gravado).
+  const antesRows = await client.$queryRawUnsafe(
+    temForma
+      ? `SELECT multidose, doses_por_embalagem AS "dosesPorEmbalagem",
+                forma_calculo AS "formaCalculo", unidade, empresa_id AS "empresaId"
+           FROM schs2vet.tb_medicamentos WHERE id = $1`
+      : `SELECT multidose, doses_por_embalagem AS "dosesPorEmbalagem", unidade,
+                empresa_id AS "empresaId"
+           FROM schs2vet.tb_medicamentos WHERE id = $1`,
+    Number(medicamentoId),
+  ).catch(() => []);
+  const antes = antesRows[0] ?? null;
+
   // 🔴 DESMARCAR LIMPA A FORMA, MAS NÃO MAIS O NÚMERO (2026-09-19). O número passou a
   // ter significado nos DOIS estados, e são significados diferentes:
   //
@@ -134,7 +156,6 @@ async function gravarMultidose(client, medicamentoId, { multidose, dosesPorEmbal
   const marcado = multidose === true;
   const qtd     = numeroPositivo(dosesPorEmbalagem);
   const forma   = marcado ? normalizarFormaCalculo(formaCalculo) : null;
-  const temForma = await temColunaFormaCalculo(client);
   await client.$executeRawUnsafe(
     temForma
       ? `UPDATE schs2vet.tb_medicamentos
@@ -147,6 +168,114 @@ async function gravarMultidose(client, medicamentoId, { multidose, dosesPorEmbal
       ? [Number(medicamentoId), marcado, qtd, forma]
       : [Number(medicamentoId), marcado, qtd]),
   ).catch(() => {});
+
+  // 🔴 RECONVERTE O ESTOQUE ATIVO — fora do `.catch` acima: se isto falhar, a
+  // transação inteira do controller precisa reverter (nunca deixar a marcação nova
+  // gravada com o estoque na interpretação antiga). Sem `antes` (coluna ausente ou
+  // item inexistente) não há o que comparar.
+  // ⚠️ `antes.empresaId == null` = item GLOBAL: por construção, `salvarItemDoCatalogo`
+  // nunca chama `gravarMultidose` sobre um id global (o copy-on-write sempre resolve
+  // para a cópia da empresa antes) — mas a checagem AQUI é o que faz essa garantia não
+  // depender só da disciplina de quem chama. Reconverter um item global bagunçaria o
+  // estoque de TODAS as clínicas que o têm em estoque de uma vez só.
+  if (antes && antes.empresaId != null) {
+    await reconverterEstoqueAtivo(
+      client,
+      medicamentoId,
+      {
+        multidose: antes.multidose === true,
+        dosesPorEmbalagem: antes.dosesPorEmbalagem != null ? Number(antes.dosesPorEmbalagem) : null,
+        formaCalculo: antes.formaCalculo ?? null,
+        unidade: antes.unidade,
+      },
+      { multidose: marcado, dosesPorEmbalagem: qtd, formaCalculo: forma, unidade: antes.unidade },
+      antes.empresaId,
+    );
+  }
+}
+
+/**
+ * 🔴 RECONVERTE O ESTOQUE ATIVO quando editar o produto muda a UNIDADE OPERATIVA —
+ * multidose ligado/desligado, ou o conteúdo da embalagem alterado (2026-09-29).
+ *
+ * `EstoqueClinica.qtdEstoque` é lido em runtime na unidade operativa ATUAL do
+ * catálogo (`lib/formaCalculo.js#unidadeOperativa`), nunca na que valia quando a
+ * entrada foi gravada — é assim que a prescrição e a Farmácia sempre souberam ler o
+ * saldo certo sem reler a entrada inteira. Sem reconverter aqui, o MESMO número
+ * passa a SIGNIFICAR outra coisa: 3 frascos de 20 mL (`qtdEstoque = 60`, unidade
+ * 'mL') viram "60 unidades" — 60 FRASCOS — assim que o multidose é desligado, e o
+ * preço, que era R$/mL, passa a ser lido como R$/Un. É a MESMA conta que os
+ * backfills de 2026-09-17/19 (`20261013000000`/`20261014000000`) fizeram uma única
+ * vez para consertar dado legado — só que agora ela roda a cada edição do produto,
+ * não apenas naquele dia.
+ *
+ * A quantidade FÍSICA de embalagens é preservada: `qtdEstoque ÷ renderAntes` dá o
+ * número de embalagens abertas (com fração — 2,5 frascos abertos não viram 2 nem 3,
+ * mesma regra do backfill), e `× renderDepois` reexpressa esse mesmo físico na
+ * unidade NOVA. `pesoPorEmbalagem` é regravado com o conteúdo novo — o que uma
+ * entrada criada agora traria — e `precoUnitarioBase` é recalculado pela MESMA
+ * função que a entrada de estoque usa (`calcPrecoUnitarioBase`), nunca dividido
+ * pelo saldo, que é o que faz o preço subir a cada dose aplicada.
+ *
+ * ⚠️ **O "conteúdo" aqui é SEMPRE `qtdPorEmbalagemDe` — o do MULTIDOSE — nunca
+ * `conteudoDaEmbalagem` (o do não-multidose).** Este último, por desenho
+ * (`lib/formaCalculo.js`), NÃO muda a unidade em que o estoque é contado — o
+ * não-multidose está SEMPRE em 'Un.', declare ele conteúdo ou não; o conteúdo ali
+ * serve só para o cálculo de "quantas embalagens o curso gasta" na prescrição,
+ * lido direto do catálogo em cada uso. Misturar os dois faria uma alteração no
+ * "Conteúdo da embalagem" de um produto NÃO-multidose reconverter o estoque como
+ * se ele tivesse virado multidose — e `unidadeOperativa` (a mesma fonte que a
+ * prescrição e a Farmácia leem) concorda: só reage a `qtdPorEmbalagemDe`.
+ * ⚠️ `tb_movimentos_estoque` NÃO é tocado — ele registra o que aconteceu, na
+ * unidade em que aconteceu (mesma decisão do backfill).
+ * ⚠️ Só entradas ATIVAS: a inativa é histórico na unidade em que foi encerrada,
+ * mesma decisão de `reapontarParaCopia` (lib/unidadeMedicamento.js).
+ * ⚠️ Roda DENTRO da mesma transaction do chamador e propaga erro — reconversão
+ * parcial é pior que a edição do produto falhar inteira.
+ *
+ * 🔴 `empresaId` é OBRIGATÓRIO e ENTRA NO FILTRO — `tb_estoque_clinica` ainda está em
+ * AGUARDANDO_RLS (sem policy de banco; ver `__tests__/tenancyRls.test.js`), então este
+ * `where` é a ÚNICA barreira entre o estoque de uma empresa e o de outra. Sem ele, um
+ * `medicamentoId` que por engano deixasse de ser exclusivo de uma empresa (item
+ * GLOBAL, ou um bug num chamador futuro) reconverteria — e RECALCULARIA O PREÇO — do
+ * estoque de TODAS as clínicas que o têm, numa chamada só. `medicamentoId` sozinho
+ * não é garantia: é o filtro por empresa que faz.
+ */
+async function reconverterEstoqueAtivo(tx, medicamentoId, produtoAntes, produtoDepois, empresaId) {
+  if (empresaId == null) {
+    throw new Error('reconverterEstoqueAtivo: empresaId é obrigatório (nunca reconverte item global).');
+  }
+  const unidadeAntes   = unidadeOperativa(produtoAntes);
+  const unidadeDepois  = unidadeOperativa(produtoDepois);
+  const conteudoAntes  = qtdPorEmbalagemDe(produtoAntes);
+  const conteudoDepois = qtdPorEmbalagemDe(produtoDepois);
+  if (unidadeAntes === unidadeDepois && conteudoAntes === conteudoDepois) return;
+
+  const entradas = await tx.estoqueClinica.findMany({
+    where: { medicamentoId: Number(medicamentoId), empresaId: Number(empresaId), ativo: true },
+  });
+  if (entradas.length === 0) return;
+
+  const renderAntes  = numeroPositivo(conteudoAntes)  ?? 1;
+  const renderDepois = numeroPositivo(conteudoDepois) ?? 1;
+  // require TARDIO: EstoqueController já importa este módulo no topo — um require
+  // no topo daqui fecharia o ciclo com o export ainda incompleto (§11-adjacente).
+  const { calcPrecoUnitarioBase } = require('../controllers/EstoqueController');
+
+  for (const e of entradas) {
+    const fisico    = Number(e.qtdEstoque) / renderAntes;
+    const novoPreco = calcPrecoUnitarioBase(Number(e.valorRepassado), renderDepois, unidadeDepois);
+    await tx.estoqueClinica.update({
+      where: { id: e.id },
+      data: {
+        qtdEstoque:       fisico * renderDepois,
+        estoqueMinimo:    (Number(e.estoqueMinimo)    / renderAntes) * renderDepois,
+        estoqueAlarmante: (Number(e.estoqueAlarmante)  / renderAntes) * renderDepois,
+        pesoPorEmbalagem: numeroPositivo(conteudoDepois),
+        ...(novoPreco !== null ? { precoUnitarioBase: novoPreco } : {}),
+      },
+    });
+  }
 }
 
 /** Lê multidose de VÁRIOS itens de uma vez (a lista da tela). */
@@ -374,4 +503,6 @@ module.exports = {
   temColunaFormaCalculo,
   ehVacinaPelaClassificacao,
   CLASSIFICACAO_VACINA,
+  gravarMultidose,
+  reconverterEstoqueAtivo,
 };

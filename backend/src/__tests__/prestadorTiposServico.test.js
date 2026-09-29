@@ -13,6 +13,13 @@
 //   3. A DUPLICIDADE. `normalizarTipos` compara a lista ORDENADA — "Ferrador,
 //      Quiroprata" e "Quiroprata, Ferrador" são o MESMO cadastro. Perder isso deixa
 //      o mesmo prestador entrar duas vezes no catálogo da clínica.
+//
+// 🔴 (2026-09-29) A ENTRADA deixou de ser texto digitado — o cadastro passou a exigir
+// `especialidadeIds` do catálogo oficial `tb_especialidades` (via
+// `resolverEspecialidadesPrestador`), e o CSV acima é DERIVADO dos nomes escolhidos.
+// `sanearTiposServico`/`normalizarTipos`/`LIMITE_TIPO_SERVICO` CONTINUAM valendo tal
+// como testado abaixo — só mudou de onde vem o texto que entra neles. O describe
+// "gate estrutural" foi atualizado para a entrada nova; os demais não.
 
 jest.mock('../lib/prisma', () => ({ default: {} }), { virtual: true });
 jest.mock('../services/emailService', () => ({}), { virtual: true });
@@ -107,32 +114,34 @@ describe('gate estrutural — os elos que somem sem erro', () => {
   const controller = leia('backend/src/controllers/PrestadorController.js');
   const tela       = leia('frontend/src/pages/CadastroPrestador.tsx');
 
-  it('🔴 criar e atualizar gravam o CSV SANEADO, nunca o corpo cru', () => {
-    expect(controller).toMatch(/const tiposServicoCriar = sanearTiposServico\(tipoServico\)/);
-    expect(controller).toMatch(/const tiposServicoEditar = tipoServico === undefined \? undefined : sanearTiposServico\(tipoServico\)/);
-    expect(controller).toMatch(/tipoServico: tiposServicoCriar/);
-    expect(controller).toMatch(/tipoServico: tipoServicoFinal/);
-    // O teto antigo não pode voltar: com ele, o quarto tipo é recusado sem motivo.
+  it('🔴 criar e atualizar resolvem a especialidade pelo CATÁLOGO, nunca por texto cru', () => {
+    expect(controller).toMatch(/const especResolvido = await resolverEspecialidadesPrestador\(especialidadeIds, empresaAlvo\)/);
+    expect(controller).toMatch(/tipoServico: especResolvido\.tipoServico/);
+    // O teto antigo (digitação livre) não pode voltar.
     expect(controller).not.toMatch(/máx\. 50 caracteres/);
+    // A função que resolve o catálogo usa o helper de saneamento CSV nos nomes.
+    expect(controller).toMatch(/sanearTiposServico\(especialidades\.map\(e => e\.nome\)\.join\(','\)\)/);
   });
 
-  it('🔴 a duplicidade é conferida com a lista SANEADA', () => {
-    expect(controller).toMatch(/verificarDuplicidade\(\{ cpf, nome, tipoServico: tiposServicoCriar/);
+  it('🔴 a duplicidade é conferida com o tipoServico DERIVADO do catálogo', () => {
+    expect(controller).toMatch(/verificarDuplicidade\(\{ cpf, nome, tipoServico: especResolvido\.tipoServico/);
   });
 
-  it('🔴 undefined PRESERVA o que está gravado — PATCH parcial não apaga o cadastro', () => {
-    expect(controller).toMatch(/tipoServico === undefined \? undefined/);
-    expect(controller).toMatch(/tiposServicoEditar \|\| existe\.tipoServico/);
+  it('🔴 especialidadeIds ausente PRESERVA o vínculo gravado — PATCH parcial não apaga o cadastro', () => {
+    expect(controller).toMatch(/especialidadeIds !== undefined/);
+    expect(controller).toMatch(/especialidadeIdsResolvidos = null/); // null = não mexe no vínculo
+    expect(controller).toMatch(/if \(especialidadeIdsResolvidos !== null\)/);
   });
 
-  it('🔴 a tela usa o seletor MÚLTIPLO e converte nas duas pontas', () => {
-    expect(tela).toMatch(/TipoServicoMultiSelect/);
-    // Carrega o gravado como lista…
-    expect(tela).toMatch(/tiposServico: tiposServicoDaString\(p\.tipoServico\)/);
-    // …e devolve como CSV, senão o backend receberia "[object Object]".
-    expect(tela).toMatch(/tipoServico: tiposServicoParaString\(form\.tiposServico\)/);
-    // Sem esta validação, salvar sem nenhum tipo só falharia no backend.
-    expect(tela).toMatch(/form\.tiposServico\.length === 0/);
+  it('🔴 a tela usa o EspecialidadeSelector (catálogo oficial), não texto livre', () => {
+    expect(tela).toMatch(/<EspecialidadeSelector/);
+    expect(tela).not.toMatch(/TipoServicoMultiSelect/);
+    // Carrega o vínculo gravado…
+    expect(tela).toMatch(/especialidadeIds:\s*p\.especialidadeIds\s*\?\?\s*\[\]/);
+    // …e devolve os ids, nunca texto montado à mão.
+    expect(tela).toMatch(/especialidadeIds:\s*form\.especialidadeIds,/);
+    // Sem esta validação, salvar sem nenhuma especialidade só falharia no backend.
+    expect(tela).toMatch(/form\.especialidadeIds\.length === 0/);
   });
 
   it('🔴 o catálogo é carregado UMA vez — duas cópias divergiriam no que entra nele', () => {

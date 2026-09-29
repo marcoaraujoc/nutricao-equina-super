@@ -37,6 +37,75 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-09-29 (🔴 **A ESPECIALIDADE DO PRESTADOR PASSOU A VIR DO
+#   CATÁLOGO OFICIAL `tb_especialidades`** — relatado que o Encaminhamento (aba
+#   Prestador/Profissional Externo) mostrava "Especialidade" tirada do texto livre de
+#   "Tipo de Fornecedor"/"Tipo de Serviço", e que `tb_fornecedor_especialidades` nunca
+#   era preenchida. Confirmado: a tela `/cadastro/fornecedores` nunca chegou a mandar
+#   `especialidadeIds` (tabela vazia), e o cadastro de Prestador nunca teve vínculo
+#   nenhum com `tb_especialidades` — era puro texto de um catálogo PRÓPRIO
+#   (`tb_catalogo_tipo_servico`, categoria PRESTADOR).
+#   🔴 **REVERTE, só nessa parte, a decisão de 2026-09-23 (parte 3)** — aquela sessão
+#   excluiu deliberadamente `FornecedorEspecialidade`/`UsuarioEspecialidade` da conta
+#   do Encaminhamento. O motivo daquela decisão CONTINUA correto (a pergunta da tela é
+#   "que serviço este prestador presta", não uma especialidade clínica emprestada do
+#   veterinário) — o que mudou foi de ONDE vem a resposta: do catálogo oficial, não de
+#   texto digitado.
+#   **ESCOPO — os dois cadastros, de formas diferentes:**
+#   1. **PRESTADOR migra por inteiro.** Não tinha a ambiguidade do Fornecedor (seu
+#      `tipoServico` só é lido para EXIBIÇÃO — recibo, seletor de executante, grade da
+#      Agenda, lista de credores — nunca por um valor mágico como "Farmácia"). Tabela
+#      NOVA `tb_prestador_especialidades` (espelha `tb_fornecedor_especialidades`,
+#      RLS tenant-via-pai idêntico). `CadastroPrestador.tsx` trocou
+#      `TipoServicoMultiSelect` (catálogo de texto livre) por `EspecialidadeSelector`
+#      (multi, `tb_especialidades`, filtrado pelas espécies que a empresa atende).
+#      `Prestador.tipoServico` (coluna legada, VARCHAR 255) **deixou de ser digitado
+#      e passou a ser DERIVADO** — CSV com os nomes das especialidades vinculadas,
+#      montado por `resolverEspecialidadesPrestador` em `PrestadorController.js`. Os
+#      leitores que só EXIBEM o texto (recibo, seletor, agenda) não precisaram mudar.
+#   2. **FORNECEDOR ganha campo ADITIVO, `tipoServico` fica INTOCADO.** O "Tipo de
+#      Fornecedor" (Farmácia/Laboratório/Loja...) continua sendo a categoria de
+#      PRODUTO, texto livre como sempre — `utils/fornecedorProduto.ts#fornecedorDeProduto()`
+#      (Farmácia, Estoque de Vacinas) depende dele e não foi tocado.
+#      `CadastroFornecedor.tsx` ganhou um segundo campo, opcional, "Especialidades"
+#      (`EspecialidadeSelector`), independente do primeiro — grava em
+#      `tb_fornecedor_especialidades` (a tabela já existia; o backend
+#      (`FornecedorController.resolverEspecialidadesFornecedor`) só passou a ser
+#      DESACOPLADO de `tipoServico`: antes, mandar `especialidadeIds` SOBRESCREVIA
+#      `tipoServico` com o nome da 1ª especialidade — esse acoplamento foi removido).
+#   3. **`EncaminhamentoController.listarPrestadores` unificado**: para os dois tipos,
+#      se há especialidade vinculada no catálogo, os NOMES dela viram `servicos`.
+#      **SEM vínculo, cai no comportamento ANTERIOR** — split de `tipoServico` +
+#      `EXCLUIR_SERVICOS`. Esse fallback NÃO é gambiarra a remover depois: é o que
+#      mantém o fornecedor de produto puro (nunca vai ganhar especialidade) fora da
+#      lista, e o que evita que prestador/fornecedor de serviço já cadastrado suma do
+#      Encaminhamento até alguém reabrir o cadastro dele e escolher a especialidade.
+#   ⚠️ **Migration `20261025000000_prestador_especialidades` GERADA, NÃO APLICADA**
+#   (regra do projeto). Enquanto não aplicada: `PrestadorController` lê/grava o vínculo
+#   por SQL CRU com `.catch(() => ...)` (mesmo padrão de `restringir_por_local`), então
+#   o cadastro de prestador segue funcionando — só sem persistir a especialidade — numa
+#   base ainda não migrada.
+#   ⚠️ **`tb_prestador_especialidades` NÃO entrou em `TENANT_PLANE` de
+#   `__tests__/tenancyRls.test.js` ainda** — só depois de a migration ser aplicada,
+#   senão o teste 3 ("fantasmas") acusa classificação de tabela que não existe no
+#   banco (é o padrão já registrado na sessão 2026-09-10 deste arquivo). Está
+#   pré-cadastrada em `lib/tenancyMap.js`, com o aviso, pronta para o dia em que
+#   aplicar.
+#   ⚠️ Nenhum dado é perdido/reescrito: as duas tabelas de vínculo estavam vazias.
+#   Prestador existente vai EXIGIR a escolha na próxima edição (campo obrigatório);
+#   Fornecedor continua opcional.
+#   Testes: `prestadorTiposServico.test.js` (gate estrutural reescrito para a entrada
+#   por `especialidadeIds`) e `encaminhamentoPrestadorCadastro.test.js` (novo describe
+#   "o catálogo vence, tipoServico é o FALLBACK de transição"). Suíte completa rodada:
+#   nenhuma regressão nova — as 3 suítes que falham (`produtoPorNome.test.js`,
+#   `pacienteInativo.test.js`, `tb_medicamentos_bkp2709` em `tenancyRls.test.js`) já
+#   falhavam antes desta sessão, por mudanças não relacionadas (FaturaController/
+#   MedicamentoController em curso na mesma working tree). `tsc -b`/`vite build`
+#   (frontend) e `prisma validate` limpos.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.)
+
+---
+
 # Atualizado em: 2026-09-23 (parte 2) (**LEVA DE AJUSTES NOS CADASTROS** — 4 pedidos.
 #   O que muda regra, e não só rótulo:
 #   1. 🔴 **EXCLUIR PROCEDIMENTO DA CLÍNICA — e SÓ o que nunca foi usado.**

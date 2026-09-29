@@ -433,10 +433,24 @@ Especialidade     → catálogo de especialidades POR espécie (tb_especialidade
                     Seed: backend/scripts/seedEspecialidades.js (72 itens: Equino/Canino/Felino/Bovino/Réptil).
                     Rota GET /api/especialidades?especieIds=1,2 (EspecialidadeController). Migration 20260717000000.
 UsuarioEspecialidade    → especialidades do usuário (VET/FORNECEDOR c/ login). unique(userId, especialidadeId).
-FornecedorEspecialidade → especialidades do cadastro Fornecedor. unique(fornecedorId, especialidadeId).
-                    Fornecedor.tipoServico (VARCHAR 50, legado) é DERIVADO do nome da 1ª especialidade.
+FornecedorEspecialidade → especialidades OPCIONAIS do cadastro Fornecedor. unique(fornecedorId, especialidadeId).
+                    🔴 (2026-09-29) INDEPENDENTE de `Fornecedor.tipoServico` — aquele é a
+                    categoria de fornecedor de PRODUTO (Farmácia/Laboratório/Loja...), texto
+                    livre/catálogo, usado por `fornecedorDeProduto()` (Farmácia, Estoque de
+                    Vacinas); NÃO é mais derivado da especialidade. Preencher especialidade é
+                    só para o fornecedor que TAMBÉM presta serviço clínico e deve aparecer no
+                    Encaminhamento por especialidade.
+PrestadorEspecialidade  → especialidades do cadastro Prestador (migration 20261025000000,
+                    GERADA/NÃO APLICADA). unique(prestadorId, especialidadeId). Ao contrário do
+                    Fornecedor, aqui é OBRIGATÓRIA: `Prestador.tipoServico` (VARCHAR 255) DEIXOU
+                    DE SER DIGITADO e é DERIVADO do CSV dos nomes vinculados
+                    (`PrestadorController#resolverEspecialidadesPrestador`) — só para
+                    compatibilidade de quem ainda exibe o texto (recibo, seletor de executante,
+                    agenda). Ver `.claude/rules/hist-cadastro.md`, sessão 2026-09-29.
                     Multi-especialidade em: Cadastro Pessoal (UsuarioEspecialidade — VET e FORNECEDOR),
-                    Novo Fornecedor (FornecedorEspecialidade), Novo Membro (UsuarioFormModal → incluir-membro).
+                    Cadastro de Fornecedor (FornecedorEspecialidade, opcional), Cadastro de
+                    Prestador (PrestadorEspecialidade, obrigatório), Novo Membro (UsuarioFormModal
+                    → incluir-membro).
                     Filtro por "espécies que a empresa atende" (EmpresaConfiguracao.especiesAtendidas, CSV de
                     IDs, configurado em /configuracoes) via GET /api/equipes/especies-atendidas (qualquer membro).
                     No Cadastro Pessoal do convidado o filtro usa as espécies da empresa; no cadastro direto
@@ -448,9 +462,12 @@ Prestador         → catálogo de PRESTADORES de serviço (tb_prestadores) — 
                     tipoEntrada SYSTEM|CLIENTE, empresaId/equipeId SEM FK) mas TABELA e RLS PRÓPRIAS
                     (migration 20260821000000, decisão explícita: entidade independente, não view/
                     filtro sobre Fornecedor). RLS tenant direto igual tb_fornecedores (policy
-                    `empresa_id = app_empresa_id() OR app_empresa_id() IS NULL`). Sem especialidade
-                    por catálogo (FornecedorEspecialidade) nem vínculo a User — é um cadastro mais
-                    simples, sem a integração com login/estoque que Fornecedor tem.
+                    `empresa_id = app_empresa_id() OR app_empresa_id() IS NULL`).
+                    🔴 (2026-09-29) TEM especialidade por catálogo — `PrestadorEspecialidade`
+                    (migration 20261025000000, GERADA/NÃO APLICADA), OBRIGATÓRIA no cadastro.
+                    `tipo_servico` deixou de ser digitado: é DERIVADO dela. Ver a entrada de
+                    `FornecedorEspecialidade`/`PrestadorEspecialidade` acima e
+                    `.claude/rules/hist-cadastro.md` (sessão 2026-09-29).
                     Controller/rotas: PrestadorController.js + routes/prestadores.js, mesmo padrão
                     de FornecedorController (verificarDuplicidade por CPF ou nome+tipo+telefone,
                     podeAlterarRegistroEscopado de lib/cadastroScopeAccess.js). Slugs

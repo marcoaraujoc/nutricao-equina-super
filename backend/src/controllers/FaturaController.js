@@ -1133,22 +1133,22 @@ const FaturaController = {
         return res.status(404).json({ error: 'Fatura não encontrada' });
       }
 
-      // 🔴 FATURA PAGA É SOMENTE LEITURA (2026-09-02).
+      // 🔴 FATURA PAGA É SOMENTE LEITURA E NUNCA É REABERTA (2026-09-02, endurecido
+      // 2026-09-29 a pedido).
       //
       // Item de fatura paga já não podia ser incluído, alterado nem removido — mas o
       // STATUS podia voltar para ABERTA por esta rota, e a partir daí tudo voltava a
       // ser editável. Era a porta dos fundos do bloqueio inteiro: bastava reabrir para
       // reescrever uma cobrança que o cliente já quitou.
       //
-      // ⚠️ REABRIR continua POSSÍVEL, mas só para o GESTOR — mesma escolha da
-      // reativação do paciente (`AnimalController.ativar`). Sem nenhuma saída, um
-      // clique errado em "Marcar como Pago" congelaria a fatura para sempre, o que é
-      // pior que o problema. E a reabertura vai para a AUDITORIA, porque é ela que
-      // responde "quem destravou uma fatura quitada, e quando".
+      // ⚠️ NÃO HÁ MAIS EXCEÇÃO PARA O GESTOR — havia uma (mesma escolha da reativação
+      // do paciente), e foi removida a pedido: fatura paga não deve ser reaberta por
+      // ninguém. Quem precisar corrigir um valor já quitado faz isso por outro
+      // caminho (nota de ajuste, nova fatura), nunca reabrindo o documento pago.
       const saindoDePaga = alvo.status === 'PAGA' && status !== 'PAGA';
-      if (saindoDePaga && !ehGestorNoContexto(req)) {
+      if (saindoDePaga) {
         return res.status(400).json({
-          error: 'Fatura paga fica em SOMENTE LEITURA. Só o gestor pode reabri-la.',
+          error: 'Fatura paga fica em SOMENTE LEITURA e não pode ser reaberta.',
           code:  'FATURA_PAGA',
         });
       }
@@ -1195,22 +1195,11 @@ const FaturaController = {
       // PAGA → FECHADA é acerto de status, não um ciclo que terminou.
       const estaFechando = statusFinal === 'FECHADA' && STATUS_FATURA_ABERTOS.includes(alvo.status);
 
-      const fatura = await prisma.$transaction(async (tx) => {
-        const atualizada = await tx.fatura.update({
-          where:   { id: Number(faturaId) },
-          data:    { status: statusFinal },
-          include: FATURA_INCLUDE,
-        });
-        if (saindoDePaga) {
-          await registrarAuditoria(tx, req, {
-            categoria:  'ALTERACAO',
-            entidade:   'FATURA',
-            entidadeId: alvo.id,
-            detalhes:   `Fatura PAGA reaberta como ${statusFinal}`,
-          });
-        }
-        return atualizada;
-      });
+      const fatura = await prisma.$transaction(async (tx) => tx.fatura.update({
+        where:   { id: Number(faturaId) },
+        data:    { status: statusFinal },
+        include: FATURA_INCLUDE,
+      }));
 
       const proxima = estaFechando
         ? await abrirProximaFaturaSemQuebrar(fatura, { veterinarioId: req.user.id, statusAnterior: alvo.status })

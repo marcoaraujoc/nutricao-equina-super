@@ -1904,22 +1904,19 @@ function PainelFatura({
           </p>
           <p className="text-xs text-emerald-800 mt-0.5">
             Os itens não podem ser incluídos, alterados nem removidos. Imprimir, exportar
-            e enviar por e-mail/WhatsApp continuam disponíveis.
-            {isGestor
-              ? ' Para voltar a lançar, use Reabrir — a reabertura fica registrada na auditoria.'
-              : ' Reabrir uma fatura paga é ação do gestor.'}
+            e enviar por e-mail/WhatsApp continuam disponíveis. Fatura paga não pode ser
+            reaberta.
           </p>
         </div>
       )}
 
       {/* Ações da fatura — FORA do card */}
       <div className="flex flex-wrap items-center justify-end gap-2 mb-3 flex-shrink-0">
-        {/* 🔴 FATURA PAGA É SOMENTE LEITURA. Reabrir continua existindo — sem saída,
-            um clique errado em "Marcar como Pago" congelaria a cobrança para sempre —
-            mas é ato de GESTOR, e o backend registra na auditoria quem destravou uma
-            fatura quitada (mesma escolha da reativação do paciente). */}
-        {(fatura.status === 'FECHADA' || fatura.status === 'ATRASADA'
-          || (fatura.status === 'PAGA' && isGestor)) && (
+        {/* 🔴 FATURA PAGA É SOMENTE LEITURA E NÃO TEM REABRIR — nem para o gestor
+            (2026-09-29, a pedido). O backend recusa incondicionalmente qualquer saída
+            do status PAGA; não renderizar o botão aqui evita a armadilha 28-d (botão
+            que só falha depois do clique). */}
+        {(fatura.status === 'FECHADA' || fatura.status === 'ATRASADA') && (
           <button onClick={() => handleStatus('ABERTA')} disabled={salvando}
             className={`${BTN_ACAO} ${TOM_ACAO.alterar}`}>
             {salvando ? <Loader2 size={11} className="animate-spin"/> : <RefreshCw size={11}/>} Reabrir

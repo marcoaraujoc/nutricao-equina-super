@@ -33,7 +33,8 @@ import {
   type CadastroPessoa,
 } from '../utils/cadastroPorEmail';
 import InlineError from '../components/InlineError';
-import { TipoServicoMultiSelect, tiposServicoDaString, tiposServicoParaString } from '../components/TipoServicoSelect';
+import { tiposServicoDaString } from '../components/TipoServicoSelect';
+import EspecialidadeSelector from '../components/EspecialidadeSelector';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
@@ -52,24 +53,6 @@ const DIAS_SEMANA_PREST = [
 ];
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-// Ponto de partida do combobox "criável" (TipoServicoSelect) — o catálogo
-// tenant-scoped (tb_catalogo_tipo_servico) cresce por uso a partir daqui.
-const TIPOS_SERVICO_PADRAO = [
-  'Cardiologista',
-  'Dermatologista',
-  'Ferrador',
-  'Fisioterapeuta',
-  'Quiroprata',
-  'Radiologista',
-  // ⚠️ "Secretária" SAIU (a pedido, 2026-09-08): o Prestador é o profissional EXTERNO
-  // contratado por serviço (ferrador, fisioterapeuta), e secretaria é função INTERNA —
-  // quem a cadastra usa Incluir Membro, com o perfil SECRETARIA e o Controle de Acesso.
-  // ⚠️ Isto é só o PONTO DE PARTIDA do combobox: prestador já cadastrado como
-  // "Secretária" continua existindo, e o catálogo por empresa
-  // (`tb_catalogo_tipo_servico`) segue oferecendo o que a clínica já usou.
-  'Veterinário',
-] as const;
 
 type TipoDoc = 'cpf' | 'cnpj';
 
@@ -168,7 +151,13 @@ interface Prestador {
   cnpj:           string | null;
   telefone:       string | null;
   email:          string | null;
+  /** DERIVADO das especialidades vinculadas (2026-09-29) — CSV só para exibição/
+   *  compatibilidade com quem ainda lê texto (recibo, seletor de executante, agenda).
+   *  Quem edita usa `especialidadeIds`, nunca este campo diretamente. */
   tipoServico:    string;
+  /** Especialidades do catálogo oficial (`tb_especialidades`) vinculadas a este
+   *  prestador — fonte real do "que serviço ele presta". */
+  especialidadeIds?: number[];
   tipoEntrada:    string;
   cep:            string | null;
   endereco:       string | null;
@@ -208,9 +197,10 @@ interface FormPrest {
   cnpj:        string;
   telefone:    string;
   email:       string;
-  /** Tipos de serviço do prestador — VÁRIOS (2026-09-15). Gravados como CSV em
-   *  `tb_prestadores.tipo_servico`, que é o formato que os leitores já esperam. */
-  tiposServico: string[];
+  /** Especialidades do catálogo oficial (`tb_especialidades`) — VÁRIAS por prestador
+   *  (2026-09-15, migrado para o catálogo em 2026-09-29). O backend deriva o CSV
+   *  legado (`tb_prestadores.tipo_servico`) a partir desta lista. */
+  especialidadeIds: number[];
   cep:         string;
   endereco:    string;
   complemento: string;
@@ -231,7 +221,7 @@ interface FormPrest {
 
 const FORM_INICIAL: FormPrest = {
   nome: '', tipoDoc: 'cnpj', cpf: '', cnpj: '', telefone: '', email: '',
-  tiposServico: [],
+  especialidadeIds: [],
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
   // Pagamento nasce em branco (é acordo com a pessoa, sem padrão a chutar).
   // Acesso nasce DESMARCADO — diferente do Incluir Membro: aqui a maioria é externa
@@ -280,12 +270,15 @@ function ModalDuplicataInativa({
 // ─── Modal ────────────────────────────────────────────────────────────────────
 
 function ModalPrestador({
-  editando, form, saving, erro, togglingAtivo, aviso,
+  editando, form, saving, erro, togglingAtivo, aviso, especiesEmpresa,
   onFormChange, onSalvar, onClose, onToggleAtivo, onEmailSaiu, onFecharAviso,
 }: {
   editando:    Prestador | null;
   form:        FormPrest;
   saving:      boolean;
+  /** Espécies que a empresa atende — filtra o catálogo de especialidades, mesmo
+   *  critério de `UsuarioFormModal`/`CadastroPessoal`. */
+  especiesEmpresa: number[];
   /** Preenchimento automático por e-mail: faixa que explica o que foi trazido. */
   aviso:       { mensagem: string; tom: 'carregado' | 'preenchido' } | null;
   /** Consulta o e-mail ao SAIR do campo (ver `utils/cadastroPorEmail.ts`). */
@@ -455,19 +448,19 @@ function ModalPrestador({
                   placeholder="Nome do profissional ou empresa" className={inputCls} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Tipos de Serviço *</label>
-                {/* Vários, no molde do campo "Especialidades" do Cadastro Pessoal: o
-                    <select> so ACRESCENTA e cada escolha vira um chip com X. O mesmo
-                    prestador costuma acumular atuacoes (ferrador E fisioterapeuta), e
-                    com um valor so o cadastro obrigava a escolher uma delas. */}
-                <TipoServicoMultiSelect
-                  categoria="PRESTADOR"
-                  value={form.tiposServico}
-                  onChange={tiposServico => onFormChange({ tiposServico })}
-                  defaults={TIPOS_SERVICO_PADRAO}
-                  className={inputCls}
-                  ajuda="Escolha um ou mais. Aparecem no filtro por serviço do encaminhamento."
+                <label className="block text-xs text-gray-500 mb-1">Especialidades *</label>
+                {/* 🔴 (2026-09-29) Vem do catálogo OFICIAL `tb_especialidades`, não mais
+                    de texto livre — é o que faz esta especialidade valer no filtro por
+                    serviço do Encaminhamento. O mesmo prestador acumula atuações
+                    (ferrageamento E fisioterapia), por isso multi-select. */}
+                <EspecialidadeSelector
+                  variant="dropdown"
+                  value={form.especialidadeIds}
+                  onChange={especialidadeIds => onFormChange({ especialidadeIds })}
+                  especieIds={especiesEmpresa}
+                  emptyText="A empresa ainda não configurou as espécies atendidas (Configurações)."
                 />
+                <p className="text-[11px] text-gray-400 mt-1">Escolha uma ou mais. Aparecem no filtro por serviço do encaminhamento.</p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -809,6 +802,15 @@ export default function CadastroPrestador() {
   const [saving,          setSaving]          = useState(false);
   const [dupInativoInfo,  setDupInativoInfo]  = useState<{ mensagem: string } | null>(null);
 
+  // Espécies que a empresa atende — filtra o EspecialidadeSelector do formulário.
+  // Mesmo endpoint/critério de UsuarioFormModal e CadastroPessoal.
+  const [especiesEmpresa, setEspeciesEmpresa] = useState<number[]>([]);
+  useEffect(() => {
+    api.get('/equipes/especies-atendidas')
+      .then(res => setEspeciesEmpresa(res.data?.dados?.especiesAtendidas ?? []))
+      .catch(() => setEspeciesEmpresa([]));
+  }, []);
+
   /**
    * FLUXO GUIADO vindo da PRESCRIÇÃO (2026-09-08). Quando o veterinário precisa de um
    * prestador que ainda não existe, a tela de prescrição manda para cá com
@@ -892,7 +894,7 @@ export default function CadastroPrestador() {
       cnpj:        p.cnpj ? mascaraCNPJ(p.cnpj.replace(/\D/g,'')) : '',
       telefone:    p.telefone ? mascaraTelefone(p.telefone.replace(/\D/g,'')) : '',
       email:       p.email ?? '',
-      tiposServico: tiposServicoDaString(p.tipoServico),
+      especialidadeIds: p.especialidadeIds ?? [],
       cep:         p.cep         ? mascaraCEP(p.cep.replace(/\D/g,'')) : '',
       endereco:    p.endereco    ?? '',
       complemento: p.complemento ?? '',
@@ -976,7 +978,7 @@ export default function CadastroPrestador() {
     if (editando && !podeEditar) { setErroModal(msgSemPermissao('alterar prestador')); return; }
     if (!editando && !podeCriar) { setErroModal(msgSemPermissao('criar prestador')); return; }
     if (!form.nome.trim())       { setErroModal('Nome é obrigatório'); return; }
-    if (form.tiposServico.length === 0) { setErroModal('Selecione ao menos um tipo de serviço'); return; }
+    if (form.especialidadeIds.length === 0) { setErroModal('Selecione ao menos uma especialidade'); return; }
     if (form.email.trim() && !isValidEmail(form.email)) { setErroModal('Informe um e-mail válido'); return; }
     if (form.acessoSistema && !form.email.trim()) { setErroModal('E-mail é obrigatório para conceder acesso ao sistema'); return; }
     if (!form.telefone.trim())   { setErroModal('Telefone é obrigatório'); return; }
@@ -996,7 +998,7 @@ export default function CadastroPrestador() {
       cnpj:        form.tipoDoc === 'cnpj' && docCNPJ ? form.cnpj : null,
       telefone:    form.telefone,
       email:       form.email.trim() ? form.email.trim().toLowerCase() : null,
-      tipoServico: tiposServicoParaString(form.tiposServico),
+      especialidadeIds: form.especialidadeIds,
       cep:         form.cep         || null,
       endereco:    form.endereco    || null,
       complemento: form.complemento || null,
@@ -1343,6 +1345,7 @@ export default function CadastroPrestador() {
           saving={saving}
           erro={erroModal}
           togglingAtivo={togglingAtivo}
+          especiesEmpresa={especiesEmpresa}
           onFormChange={handleFormChange}
           onSalvar={handleSalvar}
           onClose={fecharModal}

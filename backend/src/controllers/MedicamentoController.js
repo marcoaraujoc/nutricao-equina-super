@@ -630,6 +630,25 @@ const garantirCatalogoManual = async (req, res) => {
       const forma   = normalizarFormaCalculo(formaCalculo);
       const marcado = multidose === true && qtd != null && !!forma;
       const temForma = await catalogoEmpresa.temColunaFormaCalculo(prisma);
+
+      // 🔴 ESTADO ANTES — mesma razão de `catalogoEmpresa.gravarMultidose`: sem ele
+      // não há como saber se esta gravação MUDA a unidade operativa do item (e,
+      // portanto, se o estoque ativo precisa ser reconvertido). Este caminho grava
+      // as mesmas colunas por um UPDATE próprio (a marcação aqui é mais estrita —
+      // exige qtd E forma, nunca só o `multidose`), então ele precisa repetir o
+      // mesmo "antes/depois", não pode delegar a `gravarMultidose`.
+      const antesRows = await prisma.$queryRawUnsafe(
+        temForma
+          ? `SELECT multidose, doses_por_embalagem AS "dosesPorEmbalagem",
+                    forma_calculo AS "formaCalculo", unidade, empresa_id AS "empresaId"
+               FROM schs2vet.tb_medicamentos WHERE id = $1`
+          : `SELECT multidose, doses_por_embalagem AS "dosesPorEmbalagem", unidade,
+                    empresa_id AS "empresaId"
+               FROM schs2vet.tb_medicamentos WHERE id = $1`,
+        Number(id),
+      ).catch(() => []);
+      const antes = antesRows[0] ?? null;
+
       await prisma.$executeRawUnsafe(
         temForma
           ? `UPDATE schs2vet.tb_medicamentos
@@ -647,6 +666,30 @@ const garantirCatalogoManual = async (req, res) => {
           ? [Number(id), marcado, qtd, marcado ? forma : null]
           : [Number(id), marcado, qtd]),
       ).catch(() => {});
+
+      // 🔴 RECONVERTE O ESTOQUE ATIVO (ver `catalogoEmpresa.reconverterEstoqueAtivo`).
+      // ⚠️ Best-effort, como o resto deste bloco: esta chamada NÃO está numa
+      // transaction (`garantirCatalogoManual` grava direto no `prisma` global), e o
+      // cadastro rápido do atendimento não pode falhar por causa da reconversão do
+      // estoque — o item já foi criado/reaproveitado na linha anterior.
+      // ⚠️ `antes.empresaId == null` = item GLOBAL: o UPDATE acima nem o tocou (mesmo
+      // guard `empresa_id IS NOT NULL`), então NADA mudou de verdade — reconverter
+      // aqui bagunçaria o estoque de TODAS as clínicas que têm esse item global,
+      // por uma edição que nunca aconteceu.
+      if (antes && antes.empresaId != null) {
+        await catalogoEmpresa.reconverterEstoqueAtivo(
+          prisma,
+          id,
+          {
+            multidose: antes.multidose === true,
+            dosesPorEmbalagem: antes.dosesPorEmbalagem != null ? Number(antes.dosesPorEmbalagem) : null,
+            formaCalculo: antes.formaCalculo ?? null,
+            unidade: antes.unidade,
+          },
+          { multidose: marcado, dosesPorEmbalagem: qtd, formaCalculo: marcado ? forma : null, unidade: antes.unidade },
+          antes.empresaId,
+        ).catch(() => {});
+      }
     }
 
     // Mesmo formato de `paraAtendimento` — o front trata o resultado como mais um

@@ -30,6 +30,7 @@ import {
   type PrintAnimalEncaminhamento,
 } from '../utils/EncaminhamentoPrint';
 import { usePermissoes } from '../hooks/usePermissoes';
+import { mascaraTelefone } from '../utils/mascaras';
 import ModalJustificativa from '../components/ModalJustificativa';
 import ErroAcao, { classeErro, temErro, type ErroAcaoDados } from '../components/ErroAcao';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
@@ -99,9 +100,13 @@ interface Encaminhamento {
   prestador:          { id: number; fullName: string } | null;
   // Cadastro de destino (migration 20261022000000) — é o que dá o NOME quando o
   // prestador não tem login e, portanto, não há `prestador` para resolver.
-  prestadorCadastroId?:     number | null;
-  prestadorCadastroOrigem?: 'PRESTADOR' | 'FORNECEDOR' | null;
-  prestadorCadastroNome?:   string | null;
+  prestadorCadastroId?:      number | null;
+  prestadorCadastroOrigem?:  'PRESTADOR' | 'FORNECEDOR' | null;
+  prestadorCadastroNome?:    string | null;
+  /** Telefone do cadastro do prestador (destino INTERNO) — lido AO VIVO, não é snapshot. */
+  prestadorCadastroTelefone?: string | null;
+  /** Telefone digitado no destino EXTERNO (texto livre). */
+  telefoneDestino?:          string | null;
   veterinario:        { id: number; fullName: string } | null;
   // Justificativa do CANCELAMENTO (não confundir com `motivo`, que é o motivo do
   // ENCAMINHAMENTO em si). O registro não tem coluna própria — o backend a resolve
@@ -164,6 +169,17 @@ const getDestino = (enc: Encaminhamento): { destino: string; interno: boolean } 
     : [enc.veterinarioDestino, enc.clinicaDestino].filter(Boolean).join(' — ') || 'Não informado';
   return { destino, interno };
 };
+
+/**
+ * Telefone PARA ONDE O ENCAMINHAMENTO FOI — nunca o do proprietário do paciente
+ * (era o bug: o WhatsApp saía para o dono do animal, mesmo quando o destino era um
+ * prestador ou um profissional externo). Interno usa o telefone do CADASTRO
+ * (`prestadorCadastroTelefone`, lido ao vivo); externo usa o que foi digitado no
+ * formulário (`telefoneDestino`). Sem nenhum dos dois, `EnviarWhatsApp` cai no
+ * plano B (baixa o PDF e abre o app) — melhor que mandar para o destinatário errado.
+ */
+const telefoneDoDestino = (enc: Encaminhamento): string | null =>
+  (enc.prestadorCadastroId != null ? enc.prestadorCadastroTelefone : enc.telefoneDestino) ?? null;
 
 const montarTextoEncaminhamento = (enc: Encaminhamento): string => {
   const { destino, interno } = getDestino(enc);
@@ -236,7 +252,7 @@ function AcoesEncaminhamento({ enc, animal, podeEditar, podeFinalizar, podeCompa
           texto={texto}
           documento="Encaminhamento"
           titulo={`Encaminhamento - ${enc.especialidade}`}
-          telefone={animal?.user?.phone}
+          telefone={telefoneDoDestino(enc)}
           emailPara={animal?.user?.email}
         />
       )}
@@ -471,6 +487,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
   const [observacao,     setObservacao]     = useState('');
   const [vetDestino,     setVetDestino]     = useState('');
   const [clinicaDestino, setClinicaDestino] = useState('');
+  const [telefoneDestino, setTelefoneDestino] = useState('');
   const [salvando,       setSalvando]       = useState(false);
   const refEspecEquipe  = useRef<HTMLSelectElement>(null);
   const refEspecExterno = useRef<HTMLElement | null>(null);
@@ -587,6 +604,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
         prestadorCadastroOrigem: destinoTipo === 'EQUIPE' ? prestadorSel?.cadastroOrigem : undefined,
         veterinarioDestino: destinoTipo === 'EXTERNO' ? vetDestino.trim() || undefined : undefined,
         clinicaDestino:     destinoTipo === 'EXTERNO' ? clinicaDestino.trim() || undefined : undefined,
+        telefoneDestino:    destinoTipo === 'EXTERNO' ? telefoneDestino.trim() || undefined : undefined,
       });
       toast.success(
         destinoTipo === 'EQUIPE'
@@ -619,7 +637,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
           { key: 'EQUIPE',  label: 'Prestador', icon: <UserCheck size={13} /> },
           { key: 'EXTERNO', label: 'Profissional externo', icon: <ExternalLink size={13} /> },
         ] as { key: DestinoTipo; label: string; icon: React.ReactNode }[]).map(opt => (
-          <button key={opt.key} onClick={() => { setDestinoTipo(opt.key); setPrestadorSel(null); setEspecialidade(''); setFiltroServico(''); setErro(null); }}
+          <button key={opt.key} onClick={() => { setDestinoTipo(opt.key); setPrestadorSel(null); setEspecialidade(''); setFiltroServico(''); setTelefoneDestino(''); setErro(null); }}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium border transition-colors ${
               destinoTipo === opt.key
                 ? 'bg-emerald-600 text-white border-emerald-600'
@@ -741,7 +759,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
               inputRef={refEspecExterno}
             />
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Profissional *</label>
               <input type="text" ref={refProfissional} value={vetDestino} onChange={e => setVetDestino(e.target.value)}
@@ -754,6 +772,17 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Clínica</label>
               <input type="text" value={clinicaDestino} onChange={e => setClinicaDestino(e.target.value)}
                 placeholder="Nome da clínica"
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600" />
+            </div>
+            <div>
+              {/* Sem este campo o WhatsApp da tela não tem para onde mandar o PDF do
+                  encaminhamento — antes ele saía, por engano, para o telefone do
+                  proprietário do paciente. Opcional: sem telefone, o envio cai no
+                  plano B (baixa o PDF e abre o app para anexar à mão). */}
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Telefone (WhatsApp)</label>
+              <input type="tel" value={telefoneDestino}
+                onChange={e => setTelefoneDestino(mascaraTelefone(e.target.value))}
+                placeholder="(00) 00000-0000"
                 className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600" />
             </div>
           </div>

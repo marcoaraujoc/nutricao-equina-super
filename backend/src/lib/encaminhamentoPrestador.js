@@ -41,6 +41,12 @@ function prismaGlobal() {
 let _temColunas   = null;
 let _temColunasEm = 0;
 
+// Guarda INDEPENDENTE do `telefone_destino` (migration 20261026000000) — coluna
+// diferente, aplicada em sessão diferente de `prestador_cadastro_id`. Uma base pode
+// ter uma sem ter a outra, então o guard não pode ser compartilhado.
+let _temTelefone   = null;
+let _temTelefoneEm = 0;
+
 /**
  * As colunas já existem? `false` expira em 60s — aplicar a migration com o backend no
  * ar volta a funcionar sem restart.
@@ -71,6 +77,27 @@ async function temColunas() {
     return false;
   }
   return _temColunas;
+}
+
+async function temColunaTelefone() {
+  if (_temTelefone === true) return true;
+  if (_temTelefone === false && Date.now() - _temTelefoneEm < 60000) return false;
+  try {
+    const rows = await prismaGlobal().$queryRawUnsafe(
+      `SELECT 1
+         FROM information_schema.columns
+        WHERE table_schema = 'schs2vet'
+          AND table_name   = 'tb_encaminhamentos_clinicos'
+          AND column_name  = 'telefone_destino'
+        LIMIT 1`,
+    );
+    _temTelefone   = rows.length > 0;
+    _temTelefoneEm = Date.now();
+  } catch {
+    if (_temTelefone !== null) return _temTelefone;
+    return false;
+  }
+  return _temTelefone;
 }
 
 /** Normaliza a origem vinda do request. Qualquer outra coisa vira `null`. */
@@ -125,40 +152,79 @@ async function gravarCadastro(tx, encaminhamentoId, { origem, id }) {
 }
 
 /**
- * Anexa `prestadorCadastroId`, `prestadorCadastroOrigem` e `prestadorCadastroNome` a uma
- * lista de encaminhamentos já lida.
+ * Grava o telefone do destino EXTERNO (texto livre, sem cadastro na clínica).
  *
- * O NOME vem por join na leitura, e não por snapshot na escrita, porque o cadastro é
- * soft-deleted (`ativo`) — a linha não desaparece, e renomear o prestador deve aparecer
- * no histórico. Cadastro que o join não alcança cai em `null` e a tela mostra "—".
+ * É um UPDATE, então vai SEMPRE **depois** do `create` — mesma razão de `gravarCadastro`.
+ * Destino INTERNO (prestador do cadastro) não chama isto: o telefone dele é lido AO
+ * VIVO em `anexarEmLista`, junto do nome — não é snapshot.
+ */
+async function gravarTelefoneDestino(tx, encaminhamentoId, telefone) {
+  if (!(await temColunaTelefone())) return;
+  const valor = String(telefone ?? '').replace(/\D/g, '');
+  await tx.$executeRawUnsafe(
+    `UPDATE schs2vet.tb_encaminhamentos_clinicos
+        SET telefone_destino = $2
+      WHERE id = $1`,
+    Number(encaminhamentoId), valor || null,
+  );
+}
+
+/**
+ * Anexa `prestadorCadastroId`, `prestadorCadastroOrigem`, `prestadorCadastroNome`,
+ * `prestadorCadastroTelefone` e `telefoneDestino` a uma lista de encaminhamentos já lida.
+ *
+ * O NOME e o TELEFONE do cadastro vêm por JOIN na leitura, e não por snapshot na
+ * escrita, porque o cadastro é soft-deleted (`ativo`) — a linha não desaparece, e
+ * renomear/trocar o telefone do prestador deve aparecer refletido no histórico.
+ * Cadastro que o join não alcança cai em `null` e a tela mostra "—".
+ *
+ * `telefoneDestino` é a coluna própria da tabela (destino EXTERNO, texto livre) — lida
+ * numa segunda consulta, com guarda de coluna INDEPENDENTE (migration própria).
  */
 async function anexarEmLista(client, itens) {
   if (!Array.isArray(itens) || itens.length === 0) return itens;
-  if (!(await temColunas())) return itens;
   const ids = itens.map(i => Number(i.id)).filter(Number.isFinite);
   if (ids.length === 0) return itens;
 
-  const rows = await (client ?? prismaGlobal()).$queryRawUnsafe(
-    `SELECT e.id,
-            e.prestador_cadastro_id     AS "cadastroId",
-            e.prestador_cadastro_origem AS "cadastroOrigem",
-            COALESCE(p.nome, f.nome)    AS "cadastroNome"
-       FROM schs2vet.tb_encaminhamentos_clinicos e
-       LEFT JOIN schs2vet.tb_prestadores  p
-              ON e.prestador_cadastro_origem = 'PRESTADOR'  AND p.id = e.prestador_cadastro_id
-       LEFT JOIN schs2vet.tb_fornecedores f
-              ON e.prestador_cadastro_origem = 'FORNECEDOR' AND f.id = e.prestador_cadastro_id
-      WHERE e.id = ANY($1::int[])`,
-    ids,
-  );
-  const porId = new Map(rows.map(r => [Number(r.id), r]));
+  let cadastroPorId = new Map();
+  if (await temColunas()) {
+    const rows = await (client ?? prismaGlobal()).$queryRawUnsafe(
+      `SELECT e.id,
+              e.prestador_cadastro_id     AS "cadastroId",
+              e.prestador_cadastro_origem AS "cadastroOrigem",
+              COALESCE(p.nome, f.nome)         AS "cadastroNome",
+              COALESCE(p.telefone, f.telefone) AS "cadastroTelefone"
+         FROM schs2vet.tb_encaminhamentos_clinicos e
+         LEFT JOIN schs2vet.tb_prestadores  p
+                ON e.prestador_cadastro_origem = 'PRESTADOR'  AND p.id = e.prestador_cadastro_id
+         LEFT JOIN schs2vet.tb_fornecedores f
+                ON e.prestador_cadastro_origem = 'FORNECEDOR' AND f.id = e.prestador_cadastro_id
+        WHERE e.id = ANY($1::int[])`,
+      ids,
+    );
+    cadastroPorId = new Map(rows.map(r => [Number(r.id), r]));
+  }
+
+  let telefonePorId = new Map();
+  if (await temColunaTelefone()) {
+    const rows2 = await (client ?? prismaGlobal()).$queryRawUnsafe(
+      `SELECT id, telefone_destino AS "telefoneDestino"
+         FROM schs2vet.tb_encaminhamentos_clinicos
+        WHERE id = ANY($1::int[])`,
+      ids,
+    );
+    telefonePorId = new Map(rows2.map(r => [Number(r.id), r.telefoneDestino]));
+  }
+
   return itens.map((it) => {
-    const r = porId.get(Number(it.id));
+    const r = cadastroPorId.get(Number(it.id));
     return {
       ...it,
-      prestadorCadastroId:     r?.cadastroId != null ? Number(r.cadastroId) : null,
-      prestadorCadastroOrigem: r?.cadastroOrigem ?? null,
-      prestadorCadastroNome:   r?.cadastroNome ?? null,
+      prestadorCadastroId:       r?.cadastroId != null ? Number(r.cadastroId) : null,
+      prestadorCadastroOrigem:   r?.cadastroOrigem ?? null,
+      prestadorCadastroNome:     r?.cadastroNome ?? null,
+      prestadorCadastroTelefone: r?.cadastroTelefone ?? null,
+      telefoneDestino:           telefonePorId.get(Number(it.id)) ?? null,
     };
   });
 }
@@ -175,7 +241,9 @@ module.exports = {
   normalizarOrigem,
   buscarCadastro,
   gravarCadastro,
+  gravarTelefoneDestino,
   anexar,
   anexarEmLista,
   temColunas,
+  temColunaTelefone,
 };

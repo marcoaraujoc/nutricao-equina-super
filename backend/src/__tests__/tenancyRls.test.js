@@ -127,6 +127,17 @@ const TENANT_PLANE = [
   // 20260913000000_fatura_link_canal_status_retry_revogacao (colunas de
   // canal/status/retry/revogação/acesso — não mexe na policy).
   'tb_fatura_links_publicos',
+  // ✅ 2026-09-29 — especialidade do cadastro de PRESTADOR (migration
+  // 20261025000000_prestador_especialidades, APLICADA). TENANT VIA PAI
+  // (tb_prestadores), espelho de tb_fornecedor_especialidades — mas nasceu com a
+  // FORMA fail-open daquela tabela (`app_empresa_id() IS NULL OR …`, o escape da
+  // fase 6), achado por `rlsVarreduraTenant.test.js` ao aplicar. Corrigida para o
+  // padrão fail-closed em 20261027000000_fix_rls_fail_open_prestador_especialidades
+  // (`app_plataforma() OR (...)`, mesma correção de 20260906000000 para
+  // tb_prestadores/tb_prestador_locais_trabalho/tb_animal_historico).
+  // ⚠️ tb_fornecedor_especialidades CONTINUA em AGUARDANDO_RLS — dívida já
+  // rastreada, fora do escopo desta correção.
+  'tb_prestador_especialidades',
 ];
 
 // ─── AGUARDANDO RLS — são de tenant, ainda sem policy ─────────────────────────

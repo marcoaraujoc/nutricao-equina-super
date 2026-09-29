@@ -167,6 +167,12 @@ const CAMINHO_EXPLICITO = {
   tb_membro_locais_trabalho:        'membro_equipe_id',
   tb_procedimento_combo_itens:      'combo_id',
   tb_fornecedor_especialidades:     'fornecedor_id',
+  // ✅ 2026-09-29 — migration 20261025000000_prestador_especialidades APLICADA, e a
+  // policy corrigida do padrão fail-open com que nasceu (copiado de
+  // tb_fornecedor_especialidades) para o fail-closed em
+  // 20261027000000_fix_rls_fail_open_prestador_especialidades — ver TENANT_PLANE em
+  // __tests__/tenancyRls.test.js.
+  tb_prestador_especialidades:      'prestador_id',
   tb_matriz_perfis:                 'equipeId',
   tb_permissoes_membros:            'equipeId',
   tb_permissoes_proprietarios:      'equipeId',

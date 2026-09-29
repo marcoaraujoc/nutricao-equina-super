@@ -338,7 +338,6 @@ export default function Pagamentos() {
     status:        STATUS[c.statusExibicao].label,
     total:         c.total,
     itens: c.itens.map(i => ({
-      animalNome:      i.animalNome,
       descricao:       i.descricao,
       solicitanteNome: i.solicitanteNome,
       ocorridoEm:      i.ocorridoEm,
