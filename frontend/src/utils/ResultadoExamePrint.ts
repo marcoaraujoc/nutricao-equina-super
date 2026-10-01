@@ -5,7 +5,11 @@
 // Distinto de utils/ExamePrint.ts, que imprime a REQUISIÇÃO (Pedido de Exames) — aqui
 // o conteúdo é o que voltou do laboratório, não o que foi pedido.
 
-import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura, srcImpressao } from './print/PrintShell';
+// Desde 2026-09-29 o papel é a FOLHA CLÍNICA (`print/FolhaClinica.ts`); aqui mora só
+// o CORPO — dados do exame, tabela, laudo e imagens.
+
+import { srcImpressao } from './print/PrintShell';
+import { gerarHtmlFolhaClinica, prepararFolhaClinica } from './print/FolhaClinica';
 import { imprimirHtml } from './print/imprimirHtml';
 
 export interface ResultadoItemPrint {
@@ -32,14 +36,17 @@ export interface ExameParaPrint {
   laboratorio?:    string | null;
   resultadoItens:  ResultadoItemPrint[];
   imagens:         ImagemPrint[];
-  veterinario:     { fullName: string } | null;
+  /** `id` habilita CRMV e assinatura de quem solicitou/assina o resultado. */
+  veterinario:     { id?: number | null; fullName: string } | null;
 }
 
 export interface AnimalParaPrint {
-  nome:     string;
-  raca?:    { nome: string } | null;
-  user?:    { fullName: string } | null;
-  logoUrl?: string | null;
+  nome:      string;
+  photoUrl?: string | null;
+  raca?:     { nome: string } | null;
+  especie?:  { nome: string } | null;
+  user?:     { fullName: string } | null;
+  logoUrl?:  string | null;
 }
 
 function esc(s: string): string {
@@ -97,44 +104,7 @@ export function gerarHtmlResultado(ex: ExameParaPrint, animal?: AnimalParaPrint 
       </div>
     </div>` : '';
 
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<title>Resultado de Exame — S2Vet</title>
-<style>
-  ${PRINT_SHELL_CSS}
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; font-size: 14.3px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
-  .doc-info-row { display: flex; justify-content: flex-end; margin-bottom: 12px; }
-  .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
-  .card-title { font-size: 13px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; border-bottom: 1px solid #f3f4f6; padding-bottom: 6px; }
-  .card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 16px; }
-  .lbl { display: block; font-size: 11.7px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
-  .val { font-size: 14.3px; font-weight: 600; color: #111; }
-  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
-</style>
-</head>
-<body>
-  ${renderCabecalho(animal?.logoUrl)}
-
-  <div class="doc-info-row">
-    <div style="text-align:right;">
-      <p style="font-size:13px;color:#9ca3af;margin-bottom:4px;">RESULTADO DE EXAME</p>
-      <span style="display:inline-block;padding:3px 12px;border-radius:20px;font-size:14.3px;font-weight:700;color:#065f46;background:#d1fae5;">${esc(ex.tipo)}</span>
-    </div>
-  </div>
-
-  ${animal ? `
-  <div class="card">
-    <div class="card-title">Animal</div>
-    <div class="card-grid">
-      <div><span class="lbl">Nome</span><span class="val">${esc(animal.nome)}</span></div>
-      ${animal.raca ? `<div><span class="lbl">Raça</span><span class="val">${esc(animal.raca.nome)}</span></div>` : ''}
-      ${animal.user ? `<div><span class="lbl">Proprietário</span><span class="val">${esc(animal.user.fullName)}</span></div>` : ''}
-    </div>
-  </div>` : ''}
-
+  const corpo = `
   <div class="card">
     <div class="card-title">Informações do Exame</div>
     <div class="card-grid">
@@ -149,14 +119,45 @@ export function gerarHtmlResultado(ex: ExameParaPrint, animal?: AnimalParaPrint 
 
   ${tabela}
   ${laudo}
-  ${imagens}
+  ${imagens}`;
 
-  ${renderRodapeAssinatura(ex.veterinario, 'Médico Veterinário Responsável')}
-</body>
-</html>`;
+  return gerarHtmlFolhaClinica({
+    documento:    `Resultado de Exame ${numeroExamePrint(ex)}${animal ? ` — ${animal.nome}` : ''}`,
+    logoUrl:      animal?.logoUrl,
+    profissional: ex.veterinario ? { id: ex.veterinario.id, nome: ex.veterinario.fullName } : null,
+    animal: animal ? {
+      nome:         animal.nome,
+      photoUrl:     animal.photoUrl ?? null,
+      especie:      animal.especie?.nome ?? null,
+      raca:         animal.raca?.nome ?? null,
+      proprietario: animal.user?.fullName ?? null,
+    } : null,
+    paginas: [{
+      titulo:    'Resultado de Exame',
+      subtitulo: `${esc(ex.tipo)} · ${esc(numeroExamePrint(ex))}`,
+      corpoHtml: corpo,
+    }],
+    cssModulo: `
+      .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
+      .card-title { font-size: 12px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; border-bottom: 1px solid #f3f4f6; padding-bottom: 6px; }
+      .card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 16px; }
+      .lbl { display: block; font-size: 10.5px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
+      .val { font-size: 13px; font-weight: 600; color: #111; }
+    `,
+  });
 }
 
-export function imprimirResultadoExame(ex: ExameParaPrint, animal?: AnimalParaPrint | null): void {
+/** Resolve CRMV/assinatura, endereço da clínica e imagens — obrigatório antes de gerar PDF. */
+export async function prepararResultadoExame(ex: ExameParaPrint, animal?: AnimalParaPrint | null): Promise<void> {
+  await prepararFolhaClinica({
+    profissionalId: ex.veterinario?.id ?? null,
+    logoUrl:        animal?.logoUrl,
+    imagens:        [animal?.photoUrl, ...ex.imagens.map(i => i.arquivoUrl)],
+  });
+}
+
+export async function imprimirResultadoExame(ex: ExameParaPrint, animal?: AnimalParaPrint | null): Promise<void> {
+  await prepararResultadoExame(ex, animal);
   imprimirHtml(gerarHtmlResultado(ex, animal));
 }
 

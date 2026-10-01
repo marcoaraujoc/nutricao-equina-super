@@ -22,11 +22,11 @@
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
-import { Share2, Loader2, Check, Ban, CheckSquare, UserCheck, ExternalLink, ShieldCheck, AlertTriangle, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Share2, Loader2, Check, Ban, CheckSquare, UserCheck, ExternalLink, ShieldCheck, AlertTriangle, FileText, ChevronLeft, ChevronRight, Printer } from 'lucide-react';
 import api from '../services/api';
 import CompartilharPdfBotoes from '../components/CompartilharPdfBotoes';
 import {
-  gerarHtmlEncaminhamento, prepararEncaminhamento,
+  gerarHtmlEncaminhamento, prepararEncaminhamento, imprimirEncaminhamento,
   type PrintAnimalEncaminhamento,
 } from '../utils/EncaminhamentoPrint';
 import { usePermissoes } from '../hooks/usePermissoes';
@@ -46,7 +46,7 @@ type Urgencia    = 'NORMAL' | 'ALTA' | 'URGENTE';
 type DestinoTipo = 'EQUIPE' | 'EXTERNO';
 // Campo culpado na validação do formulário novo — vira `ErroAcaoDados.campos`, que é o
 // que `classeErro` usa para destacar a borda do input.
-type CampoForm   = 'especialidade' | 'prestador' | 'profissional' | 'motivo';
+type CampoForm   = 'especialidade' | 'prestador' | 'profissional' | 'telefone' | 'motivo';
 
 /**
  * Prestador OFERECIDO COMO DESTINO — vem do CADASTRO (Cadastro › Prestadores e
@@ -208,7 +208,8 @@ function paraImpressao(enc: Encaminhamento) {
     statusLabel:   STATUS_FOLHA[enc.status] ?? enc.status,
     dataEncaminhamento: enc.dataEncaminhamento,
     observacao:  enc.observacao,
-    veterinario: enc.veterinario ? { fullName: enc.veterinario.fullName } : null,
+    // O `id` é o que permite à folha buscar CRMV e assinatura de QUEM encaminhou.
+    veterinario: enc.veterinario ? { id: enc.veterinario.id, fullName: enc.veterinario.fullName } : null,
   };
 }
 
@@ -244,10 +245,18 @@ function AcoesEncaminhamento({ enc, animal, podeEditar, podeFinalizar, podeCompa
           clínico que ainda saía como texto colado na conversa. `gerarHtml` é
           SÍNCRONO (roda dentro da janela de "user activation" do navegador), então
           o preparo das imagens vai em `aoPreparar`. */}
+      {/* Imprimir: a MESMA folha clínica do PDF enviado (FolhaClinica). Gate = o slug
+          de IMPRIMIR, igual ao compartilhar logo abaixo. */}
+      <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir" titulo="Imprimir encaminhamento"
+        visivel={podeCompartilhar}
+        onClick={() => {
+          imprimirEncaminhamento(paraFolha(), animal)
+            .catch(() => toast.error('Não foi possível imprimir o encaminhamento.'));
+        }} />
       {podeCompartilhar && (
         <CompartilharPdfBotoes
           gerarHtml={() => gerarHtmlEncaminhamento(paraFolha(), animal)}
-          aoPreparar={() => prepararEncaminhamento(animal)}
+          aoPreparar={() => prepararEncaminhamento(animal, paraFolha())}
           nomeArquivo={`encaminhamento-${enc.id}.pdf`}
           texto={texto}
           documento="Encaminhamento"
@@ -492,6 +501,7 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
   const refEspecEquipe  = useRef<HTMLSelectElement>(null);
   const refEspecExterno = useRef<HTMLElement | null>(null);
   const refProfissional = useRef<HTMLInputElement>(null);
+  const refTelefone     = useRef<HTMLInputElement>(null);
   const refMotivo       = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -581,6 +591,15 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
     // registra PARA QUEM o paciente foi. A clínica segue opcional (pode ser autônomo).
     if (destinoTipo === 'EXTERNO' && !vetDestino.trim()) {
       reprovar('profissional', 'Informe o profissional de destino', refProfissional.current);
+      return;
+    }
+    // Telefone (WhatsApp) também é OBRIGATÓRIO no EXTERNO: é para ele que o WhatsApp da
+    // tela manda o PDF do encaminhamento. Mínimo de 10 dígitos (DDD + número) — a mesma
+    // regra do backend (`TELEFONE_DESTINO_OBRIGATORIO`).
+    if (destinoTipo === 'EXTERNO' && telefoneDestino.replace(/\D/g, '').length < 10) {
+      reprovar('telefone',
+        telefoneDestino.trim() ? 'Telefone incompleto — informe DDD e número' : 'Informe o telefone (WhatsApp) do profissional',
+        refTelefone.current);
       return;
     }
     if (!motivo.trim()) {
@@ -777,13 +796,15 @@ function FormNovoEncaminhamento({ animalId, evolucaoId, onCriado, onFechar }: {
             <div>
               {/* Sem este campo o WhatsApp da tela não tem para onde mandar o PDF do
                   encaminhamento — antes ele saía, por engano, para o telefone do
-                  proprietário do paciente. Opcional: sem telefone, o envio cai no
-                  plano B (baixa o PDF e abre o app para anexar à mão). */}
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Telefone (WhatsApp)</label>
-              <input type="tel" value={telefoneDestino}
+                  proprietário do paciente. OBRIGATÓRIO desde 2026-09-29 (a pedido),
+                  validado também no backend. */}
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Telefone (WhatsApp) *</label>
+              <input type="tel" ref={refTelefone} value={telefoneDestino}
                 onChange={e => setTelefoneDestino(mascaraTelefone(e.target.value))}
                 placeholder="(00) 00000-0000"
-                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600" />
+                aria-invalid={temErro(erro, 'telefone')}
+                className={classeErro(erro, 'telefone',
+                  'w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-600')} />
             </div>
           </div>
         </div>

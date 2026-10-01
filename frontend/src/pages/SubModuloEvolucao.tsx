@@ -177,7 +177,8 @@ function paraImpressao(ev: EvolucaoItem): PrintEvolucao {
     id: ev.id, especialidade: ev.especialidade, status: ev.status,
     titulo: ev.titulo, texto: ev.texto,
     dataInicio: ev.dataInicio, dataFim: ev.dataFim, dataModificacao: ev.dataModificacao,
-    veterinario:   { fullName: ev.veterinario?.fullName ?? '—' },
+    // O `id` é o que permite à folha buscar CRMV e assinatura de quem conduziu.
+    veterinario:   { id: ev.veterinario?.id ?? null, fullName: ev.veterinario?.fullName ?? '—' },
     modificadoPor: ev.modificadoPor ? { fullName: ev.modificadoPor.fullName } : null,
     midias: ev.midias,
   };
@@ -962,7 +963,9 @@ function NovaEvolucaoModal({
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Anexos</label>
-              <label className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium cursor-pointer transition-colors ${
+              {/* Somente leitura (evolução FINALIZADA, sem permissão, registro
+                  assumido): nem o botão aparece — anexar é alterar a evolução. */}
+              {podeEscrever && <label className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium cursor-pointer transition-colors ${
                 desativado
                   ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
                   : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -973,13 +976,14 @@ function NovaEvolucaoModal({
                   accept="image/*,video/*,audio/*"
                   disabled={desativado}
                   onChange={e => adicionarArquivos(e.target.files)} />
-              </label>
+              </label>}
             </div>
 
             {todasMidias.length > 0 && (
               <div className="space-y-2 mb-2">
                 {todasMidias.map(m => (
-                  <MidiaViewer key={m.id} midia={m} onRemover={() => onRemoverMidia(m.id)} />
+                  <MidiaViewer key={m.id} midia={m}
+                    onRemover={podeEscrever ? () => onRemoverMidia(m.id) : undefined} />
                 ))}
               </div>
             )}
@@ -1629,7 +1633,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     // editável pelo gestor. Sem isso, o `editItemId` do Histórico seria a porta dos
     // fundos para o formulário de edição do prontuário alheio.
     const meuRegistro = isGestor || ev.veterinarioId === (user?.id ?? 0);
-    setFormLeitura(!podeEditar || !meuRegistro);
+    // FINALIZADA/CANCELADA é documento fechado: abre sempre em somente leitura,
+    // inclusive quando chega por `editItemId` do shell (a URL não é porta dos fundos).
+    setFormLeitura(!podeEditar || !meuRegistro || ev.status !== 'EM_ANDAMENTO');
     setShowModal(true);
     rolarParaFormulario();
   };
@@ -1834,7 +1840,11 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       // gravado no banco. Agora a escrita volta na hora e a IA roda depois, por
       // `POST /:id/titulo-ia` (bloco após o fechamento do modal): uma só chamada, que
       // grava o título e devolve as sugestões de encaminhamento.
+      // 🔴 ANEXOS ENTRAM ANTES DE FINALIZAR (2026-09-30). Evolução FINALIZADA não
+      // aceita mais nada — o backend recusa mídia com 403 `EVOLUCAO_FINALIZADA` —,
+      // então o upload tem de acontecer enquanto ela ainda está EM_ANDAMENTO.
       if (editingEv) {
+        if (arquivosModal.length > 0) await uploadMidias(editingEv.id, arquivosModal);
         await api.put(`/clinica/evolucoes/${editingEv.id}`, {
           especialidade: form.especialidade,
           texto:         form.texto,
@@ -1845,6 +1855,33 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           versao:        editingEv.versao ?? undefined,
         });
         evolucaoId = editingEv.id;
+      } else if (arquivosModal.length > 0) {
+        // Nova COM anexos: nasce EM_ANDAMENTO, recebe os anexos e só então é
+        // finalizada pelo PUT — que também roda a cascata da finalização.
+        // `adiarTituloIa`: o título sai do `titulo-ia` abaixo; sem a flag o criar
+        // dispararia uma SEGUNDA chamada ao Gemini pelo mesmo texto.
+        const createRes = await api.post('/clinica/evolucoes', {
+          animalId,
+          especialidade:  form.especialidade,
+          texto:          form.texto,
+          status:         'EM_ANDAMENTO',
+          agendamentoId:  agendamentoSelecionadoId,
+          confirmarConcorrente: criandoConcorrente,
+          adiarTituloIa:  true,
+        });
+        const criada = createRes.data.dados;
+        evolucaoId = criada?.id as number | undefined;
+        localStorage.removeItem(`s2vet_ag_${animalId}`);
+        localStorage.removeItem(rascunhoKey);
+        if (evolucaoId) {
+          await uploadMidias(evolucaoId, arquivosModal);
+          await api.put(`/clinica/evolucoes/${evolucaoId}`, {
+            especialidade: form.especialidade,
+            texto:         form.texto,
+            status:        'FINALIZADA',
+            versao:        criada?.versao ?? undefined,
+          });
+        }
       } else {
         const createRes = await api.post('/clinica/evolucoes', {
           animalId,
@@ -1860,8 +1897,6 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         // Nasceu já FINALIZADA: não há atendimento aberto a reportar. Quem atualiza o
         // banner é o `carregarEvolucoes()` logo abaixo.
       }
-
-      if (arquivosModal.length > 0 && evolucaoId) await uploadMidias(evolucaoId, arquivosModal);
 
       toast.success('Evolução finalizada!');
       fecharModal();
@@ -1895,8 +1930,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     } finally { setSavingEv(false); }
   };
 
-  // Cobre os DOIS gatilhos do botão Cancelar (Ban): evolução EM_ANDAMENTO (autoria +
-  // nível de deletar) e FINALIZADA (gestor). Evolução EM_ANDAMENTO nunca é excluída
+  // Botão Cancelar (Ban): só evolução EM_ANDAMENTO (autoria + nível de deletar) —
+  // FINALIZADA não se cancela desde 2026-09-30. Evolução EM_ANDAMENTO nunca é excluída
   // (hard delete) pela UI — só cancelada, mesma regra do Agendamento (ver
   // `AgendamentoController`): o registro fica auditável, nunca some.
   const handleCancelarEvolucao = async (justificativa: string) => {
@@ -2022,13 +2057,14 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       <AcoesRegistro>
         {/* Aprovar segue o slug de FINALIZAR (é o que a rota /aprovar exige) — não é
             check de role, senão quem só tem VER enxergaria o botão. */}
+        {/* 🔴 EVOLUÇÃO FINALIZADA É DOCUMENTO FECHADO (2026-09-30): além de
+            Visualizar, só Imprimir, WhatsApp e E-mail. Aprovar, Alterar e Cancelar
+            existem apenas em EM_ANDAMENTO — o backend recusa com 403
+            `EVOLUCAO_FINALIZADA`, inclusive para o gestor. */}
         <AcaoRegistro tom="aprovar" icone={CheckCircle2} rotulo="Aprovar"
-          visivel={!ev.aprovado && podeFinalizar} onClick={() => handleAprovar(ev.id)} />
-        {/* ⚠️ O ramo do GESTOR (reabrir evolução FINALIZADA) precisa do
-            `!pacienteInativo` explícito: ele não passa por `podeEditarEsta` e
-            escapava do congelamento do prontuário. */}
+          visivel={emAndamento && !ev.aprovado && podeFinalizar} onClick={() => handleAprovar(ev.id)} />
         <AcaoRegistro tom="alterar" icone={Pencil} rotulo="Alterar"
-          visivel={(emAndamento && podeEditarEsta) || (!pacienteInativo && isGestor && ev.status === 'FINALIZADA')}
+          visivel={emAndamento && podeEditarEsta}
           onClick={() => { abrirEdicao(ev); onAbrirAtendimento?.(ev.id, 'editar'); }} />
         <AcaoRegistro tom="ver" icone={Eye} rotulo="Visualizar"
           onClick={() => { abrirVisualizacao(ev); onAbrirAtendimento?.(ev.id, 'visualizar'); }} />
@@ -2061,9 +2097,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
             emailPara={animal?.user?.email}
           />
         )}
-        {/* Cancelar finalizada usa o slug de EXCLUIR (rota PATCH /cancelar). */}
+        {/* Cancelar usa o slug de EXCLUIR (rota PATCH /cancelar) — só em andamento. */}
         <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar" titulo="Cancelar evolução"
-          visivel={(emAndamento && podeCancelarPropria) || (ev.status === 'FINALIZADA' && podeDeletar)}
+          visivel={podeCancelarPropria}
           onClick={() => setCancelandoEv(ev)} />
       </AcoesRegistro>
     );
@@ -2418,9 +2454,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       {relatorioModal && (() => {
         const relEv = relatorioModal.ev;
         // Segue o Controle de Acesso (alterar evolução), sem filtro de autoria/cargo
-        const podeEditarRelatorio  = isGestor || podeEditar;
-        const podeAlterarEvolucao  = (relEv.status === 'EM_ANDAMENTO' && podeEditarRelatorio)
-          || (isGestor && relEv.status === 'FINALIZADA');
+        // FINALIZADA não é alterada por ninguém (2026-09-30) — nem pelo gestor, nem o
+        // relatório dela: em documento fechado o modal só visualiza e imprime.
+        const podeEditarRelatorio  = relEv.status === 'EM_ANDAMENTO' && (isGestor || podeEditar);
+        const podeAlterarEvolucao  = podeEditarRelatorio;
         return (
           <RelatorioAtendimentoModal
             dadosIniciais={relatorioModal.dados}

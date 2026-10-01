@@ -1,4 +1,10 @@
 /**
+ * 🔴 APOSENTADO em 2026-10-01 — NÃO RODAR. A planilha foi só a CARGA INICIAL do
+ * catálogo e não deve mais ser usada: o catálogo é mantido pela tela de Produtos.
+ * Saiu do `seed.js`; ficou aqui como registro de como a carga foi feita. Rodar à mão
+ * exige `--confirmar-planilha` e, mesmo assim, só toca o catálogo GLOBAL
+ * (`empresaId: null`) — a versão anterior regravava também as cópias das clínicas.
+ *
  * Seed 003 — Catálogo de Medicamentos
  *
  * Lê C:\Users\marco\Downloads\Apresentacao_Farmaceutica_Processada.csv e popula:
@@ -139,8 +145,10 @@ async function seed(prisma) {
 
     // Upsert medicamento — unique: (nome, formaFarmaceutica, apresentacao)
     let medId;
+    // SÓ o catálogo GLOBAL: sem `empresaId: null` a busca devolvia, às vezes, a CÓPIA
+    // de uma clínica com o mesmo nome — e a regravava (2026-10-01).
     const existing = await prisma.medicamento.findFirst({
-      where: { nome, formaFarmaceutica, apresentacao },
+      where: { nome, formaFarmaceutica, apresentacao, empresaId: null },
       select: { id: true },
     });
 
@@ -200,6 +208,11 @@ async function seed(prisma) {
 
 // Execução standalone: node backend/src/seeds/003_medicamentos.seed.js
 if (require.main === module) {
+  if (!process.argv.includes('--confirmar-planilha')) {
+    console.error('[003] Seed aposentado: a planilha foi só a carga inicial do catálogo. '
+      + 'Para rodar mesmo assim, passe --confirmar-planilha.');
+    process.exit(1);
+  }
   const { PrismaClient } = require('@prisma/client');
   const prisma = new PrismaClient();
   seed(prisma)

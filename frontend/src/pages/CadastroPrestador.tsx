@@ -180,6 +180,8 @@ interface Prestador {
   diaVencimento?:  number | null;
   /** Opcional: cadastro anterior à coluna não devolve o campo. */
   restringirPorLocal?: boolean;
+  /** Tempo de consulta na Agenda (min). null = padrão da empresa. */
+  tempoConsultaMin?: number | null;
   locaisTrabalho: LocalTrabalhoPrestador[];
   createdAt:      string;
   // Trilha de ativação/inativação (quem fez, quando) — ver lib/cadastroAtivacao.js
@@ -216,6 +218,8 @@ interface FormPrest {
   /** "Atender somente no local de trabalho" — mesmo campo do Incluir Membro
    *  (`MembroEquipe.restringirPorLocal`). false = atende em qualquer local. */
   restringirPorLocal: boolean;
+  /** Tempo de consulta na Agenda, em minutos ('' = padrão da empresa). */
+  tempoConsultaMin: string;
   locaisTrabalho: LocalTrabalhoDraft[];
 }
 
@@ -233,6 +237,8 @@ const FORM_INICIAL: FormPrest = {
   // Nasce DESMARCADO, como no Incluir Membro: restringir é a exceção, e ligá-la por
   // padrão esconderia pacientes de quem nunca pediu isso.
   restringirPorLocal: false,
+  // Em branco = o tempo de consulta padrão da empresa (Configurações).
+  tempoConsultaMin: '',
   locaisTrabalho: [],
 };
 
@@ -538,9 +544,29 @@ function ModalPrestador({
             </div>
           </section>
 
-          {/* ── Local de trabalho ── sem especialidade/tempo de consulta (Prestador
-              não entra na Agenda) e sem herança do expediente da empresa: em branco
-              é só "sem horário definido". */}
+          {/* ── Agenda ── 🔴 (2026-10-01) o prestador EXTERNO (não incluído como membro
+              na tela Equipe) é agendado em QUALQUER dia e horário: a única régua da
+              grade dele é este tempo. Quem integra a equipe segue o tempo por
+              especialidade do Incluir Membro — este campo não vale para ele. */}
+          <section>
+            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+              <CalendarClock size={12} /> Agenda
+            </h4>
+            <label className="block text-xs text-gray-500 mb-1">Tempo de consulta (minutos)</label>
+            <input type="number" min={5} max={480} step={5} inputMode="numeric"
+              value={form.tempoConsultaMin}
+              onChange={e => onFormChange({ tempoConsultaMin: e.target.value.replace(/\D/g, '').slice(0, 3) })}
+              placeholder="Padrão da empresa"
+              className={`${inputCls} sm:max-w-[200px]`} />
+            <p className="text-[11px] text-gray-400 mt-1 leading-snug">
+              Duração de cada atendimento na Agenda. O prestador externo pode ser agendado em
+              qualquer dia e horário; em branco, vale o tempo padrão da empresa.
+            </p>
+          </section>
+
+          {/* ── Local de trabalho ── sem especialidade e sem herança do expediente da
+              empresa: em branco é só "sem horário definido". ⚠️ NÃO limita a Agenda do
+              prestador externo (2026-10-01) — ali ele atende em qualquer dia/horário. */}
           <section>
             <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
               <Clock3 size={12} /> Local de trabalho
@@ -658,7 +684,13 @@ function ModalPrestador({
                   onChange={e => {
                     const tipo = e.target.value as 'SALARIO' | 'COMISSAO' | '';
                     const forma = tipo === 'COMISSAO' ? 'PERCENTUAL' : tipo === 'SALARIO' ? 'VALOR' : form.formaPagamento;
-                    onFormChange({ tipoPagamento: tipo, formaPagamento: forma, valorPagamento: mascaraValorPagamento(form.valorPagamento, forma) });
+                    // Sem tipo escolhido não há o que fazer com um valor gravado — limpa
+                    // junto, senão o campo (que fica DESABILITADO logo abaixo) guardaria
+                    // um número que a pessoa não vê mais como ter preenchido.
+                    onFormChange({
+                      tipoPagamento: tipo, formaPagamento: forma,
+                      valorPagamento: tipo ? mascaraValorPagamento(form.valorPagamento, forma) : '',
+                    });
                   }}
                   className={inputCls}>
                   <option value="">Selecionar…</option>
@@ -667,21 +699,25 @@ function ModalPrestador({
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Valor</label>
-                <div className="flex items-stretch border border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
+                <div className={`flex items-stretch border rounded-xl overflow-hidden focus-within:border-emerald-500 ${
+                  form.tipoPagamento ? 'border-gray-200' : 'border-gray-100 bg-gray-50'
+                }`}>
                   <span className="px-3 flex items-center text-sm text-gray-400 bg-gray-50 border-r border-gray-200">
                     {form.formaPagamento === 'PERCENTUAL' ? '%' : 'R$'}
                   </span>
                   <input type="text" inputMode="numeric"
                     value={form.valorPagamento}
+                    disabled={!form.tipoPagamento}
                     onChange={e => onFormChange({ valorPagamento: mascaraValorPagamento(e.target.value, form.formaPagamento) })}
-                    placeholder={form.formaPagamento === 'PERCENTUAL' ? '00,00' : '000.000,00'}
-                    className="flex-1 min-w-0 px-3 py-2.5 text-sm text-gray-900 focus:outline-none" />
+                    placeholder={form.tipoPagamento ? (form.formaPagamento === 'PERCENTUAL' ? '00,00' : '000.000,00') : 'Selecione o tipo primeiro'}
+                    className="flex-1 min-w-0 px-3 py-2.5 text-sm text-gray-900 focus:outline-none disabled:bg-gray-50 disabled:text-gray-400 disabled:cursor-not-allowed" />
                   <select value={form.formaPagamento}
+                    disabled={!form.tipoPagamento}
                     onChange={e => {
                       const forma = e.target.value as 'VALOR' | 'PERCENTUAL';
                       onFormChange({ formaPagamento: forma, valorPagamento: mascaraValorPagamento(form.valorPagamento, forma) });
                     }}
-                    className="px-2 text-sm text-gray-600 bg-gray-50 border-l border-gray-200 focus:outline-none cursor-pointer">
+                    className="px-2 text-sm text-gray-600 bg-gray-50 border-l border-gray-200 focus:outline-none cursor-pointer disabled:cursor-not-allowed disabled:text-gray-400">
                     <option value="VALOR">R$</option>
                     <option value="PERCENTUAL">%</option>
                   </select>
@@ -702,10 +738,12 @@ function ModalPrestador({
               forma do "Fechamento da Fatura" do cadastro da empresa; é daqui que a tela
               de Financeiro > Pagamentos tira a coluna Data de Vencimento e decide se a
               conta está ATRASADA. Fica ao lado da Forma de Pagamento porque as duas
-              respondem à mesma pergunta: QUANTO e QUANDO a clínica paga. */}
+              respondem à mesma pergunta: QUANTO e QUANDO a clínica paga.
+              🔴 OBRIGATÓRIA (a pedido): sem uma data escolhida, o Salvar recusa com
+              "Selecione a data de vencimento" — ver handleSalvar. */}
           <section>
             <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
-              <CalendarClock size={12} /> Vencimento do Pagamento
+              <CalendarClock size={12} /> Vencimento do Pagamento <span className="normal-case font-medium text-gray-400">*</span>
             </h4>
             <SeletorVencimentoCredor
               inputCls={inputCls}
@@ -910,6 +948,7 @@ export default function CadastroPrestador() {
       // `=== true` pelo mesmo motivo do acesso: o backend pode não devolver o campo
       // (cadastro anterior à coluna), e `undefined` marcaria a caixa sozinho.
       restringirPorLocal: p.restringirPorLocal === true,
+      tempoConsultaMin: p.tempoConsultaMin ? String(p.tempoConsultaMin) : '',
       locaisTrabalho: p.locaisTrabalho.map(l => ({
         localizacaoId:      l.localizacaoId,
         localizacaoNome:    l.localizacao?.nome ?? '',
@@ -982,6 +1021,24 @@ export default function CadastroPrestador() {
     if (form.email.trim() && !isValidEmail(form.email)) { setErroModal('Informe um e-mail válido'); return; }
     if (form.acessoSistema && !form.email.trim()) { setErroModal('E-mail é obrigatório para conceder acesso ao sistema'); return; }
     if (!form.telefone.trim())   { setErroModal('Telefone é obrigatório'); return; }
+    // Defesa em profundidade: o campo Valor já nasce DESABILITADO sem tipo escolhido
+    // (ver ModalPrestador), mas um cadastro legado pode ter chegado aqui com valor e
+    // sem tipo — sem esta trava ele seguiria para o backend sem dizer se é salário
+    // ou comissão, e o recibo do prestador não saberia o que fazer com o número.
+    if (!form.tipoPagamento && valorPagamentoNumero(form.valorPagamento) > 0) {
+      setErroModal('Selecione o tipo de pagamento antes de informar o valor'); return;
+    }
+    // Data de vencimento passou a ser OBRIGATÓRIA (a pedido): sem ela a conta deste
+    // prestador nunca entra em Financeiro > Pagamentos com uma data prevista, e não há
+    // como a clínica saber se está atrasada.
+    if (!form.tipoVencimento) { setErroModal('Selecione a data de vencimento'); return; }
+    // Mesma régua do backend (`lib/prestadorTempoConsulta.js`).
+    if (form.tempoConsultaMin.trim()) {
+      const t = Number(form.tempoConsultaMin);
+      if (!Number.isInteger(t) || t < 5 || t > 480 || t % 5 !== 0) {
+        setErroModal('Tempo de consulta deve ser múltiplo de 5, entre 5 e 480 minutos'); return;
+      }
+    }
     const docCPF  = form.cpf.replace(/\D/g,'');
     const docCNPJ = form.cnpj.replace(/\D/g,'');
     if (form.tipoDoc === 'cpf'  && docCPF  && !validarCPF(form.cpf)) {
@@ -1019,6 +1076,8 @@ export default function CadastroPrestador() {
       tipoVencimento: form.tipoVencimento,
       diaVencimento:  form.diaVencimento,
       restringirPorLocal: form.restringirPorLocal,
+      // Enviado SEMPRE: `null` volta ao padrão da empresa; omitir não deixaria apagar.
+      tempoConsultaMin: form.tempoConsultaMin.trim() ? Number(form.tempoConsultaMin) : null,
       locaisTrabalho: form.locaisTrabalho.map(l => ({
         localizacaoId:      l.localizacaoId,
         diasTrabalho:       l.diasTrabalho,
@@ -1059,7 +1118,8 @@ export default function CadastroPrestador() {
   const [inativando, setInativando] = useState<{ p: Prestador; viaModal: boolean } | null>(null);
   // Designação de pacientes — o que substitui o "Gerenciar Acesso" que vivia no
   // Controle de Acesso enquanto o prestador ainda era tratado como equipe.
-  const [modalAcesso, setModalAcesso] = useState<{ equipeId: number; userId: number; nome: string } | null>(null);
+  // Pelo CADASTRO (id do prestador), com ou sem login — ver o botão abaixo.
+  const [modalAcesso, setModalAcesso] = useState<{ id: number; nome: string; semLogin: boolean } | null>(null);
 
   const handleToggle = (p: Prestador) => {
     setErroLista(null);
@@ -1082,13 +1142,16 @@ export default function CadastroPrestador() {
           visivel={podeEditar} onClick={() => abrirEdicao(p)} />
         {/* 🔴 A DESIGNAÇÃO MORA AQUI desde 2026-09-09: o prestador não é equipe, então
             o "Gerenciar Acesso" saiu do Controle de Acesso e veio para o cadastro dele.
-            É ela que define QUAIS pacientes ele enxerga (deny-by-default).
-            ⚠️ Só aparece com cartão de acesso emitido (login + equipe): sem um dos dois
-            a rota de designação não existe, e o botão só falharia depois do clique. */}
+            É ela que define QUAIS pacientes ele atende — e, desde 2026-09-30, para
+            quais pacientes ele pode ser AGENDADO na Agenda.
+            ⚠️ (2026-09-30) Aparece para TODO prestador, com ou sem login. Até aqui ele
+            exigia login + cartão (a designação era gravada pelo usuário), e o prestador
+            salvo sem "Terá acesso ao sistema" ficava sem o botão. Agora a autorização é
+            pelo CADASTRO (`/cadastro/prestadores/:id/designacoes`). */}
         <AcaoRegistro tom="ver" icone={Wrench} rotulo="Gerenciar Acesso"
-          titulo="Definir quais pacientes este prestador pode acessar"
-          visivel={podeEditar && !!p.userId && !!p.acessoEquipeId}
-          onClick={() => setModalAcesso({ equipeId: p.acessoEquipeId as number, userId: p.userId as number, nome: p.nome })} />
+          titulo="Definir para quais pacientes este prestador está autorizado"
+          visivel={podeEditar}
+          onClick={() => setModalAcesso({ id: p.id, nome: p.nome, semLogin: !(p.userId && p.acessoSistema) })} />
         <AcaoRegistro tom="ativar" icone={p.ativo ? ToggleRight : ToggleLeft}
           rotulo={p.ativo ? 'Inativar' : 'Ativar'}
           visivel={podeAtivar} onClick={() => handleToggle(p)} />
@@ -1376,8 +1439,8 @@ export default function CadastroPrestador() {
 
       {modalAcesso && (
         <GerenciarAcessoPrestadorModal
-          equipeId={modalAcesso.equipeId}
-          prestadorUserId={modalAcesso.userId}
+          baseUrl={`/cadastro/prestadores/${modalAcesso.id}/designacoes`}
+          semLogin={modalAcesso.semLogin}
           prestadorNome={modalAcesso.nome}
           onClose={() => setModalAcesso(null)}
         />

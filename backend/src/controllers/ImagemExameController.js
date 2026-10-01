@@ -16,6 +16,7 @@
 
 const prisma = require('../lib/prisma').default;
 const vinculoPrestador = require('../lib/procedimentoPrestador');
+const { lerCobrancaPorImagem } = require('../lib/cobrancaPorImagem');
 const {
   CATEGORIAS_IMAGEM, TIPO_IMAGEM,
 } = require('../seeds/005_procedimentos_imagem.seed');
@@ -167,6 +168,9 @@ const ImagemExameController = {
         ? await vinculoPrestador.vinculosPorProcedimento(req.empresaId, ids)
         : new Map();
 
+      // Valor ÚNICO × POR IMAGEM — a tela mostra "/ imagem" ao lado do valor.
+      const porImagem = await lerCobrancaPorImagem(prisma, ids);
+
       return res.json({
         dados: exames.map(e => {
           const doPrestador = prestadorId
@@ -183,6 +187,7 @@ const ImagemExameController = {
             // Diz se o prestador escolhido tem vínculo NESTE exame: é o que permite a
             // tela avisar "sem valor cadastrado" antes de o item sair por R$ 0,00.
             temVinculo: Boolean(doPrestador),
+            cobrancaPorImagem: porImagem.get(e.id) ?? false,
           };
         }),
       });

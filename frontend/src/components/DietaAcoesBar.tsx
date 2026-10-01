@@ -48,12 +48,13 @@ export interface DietaAcoesBarProps {
 
 // ─── Helper: gerar PDF como Blob (utils/gerarPdf.ts — compartilhado com toda a aplicação) ──
 
-function gerarPdfBlob(
+async function gerarPdfBlob(
   animal: PrintAnimal,
   plano:  PrintPlan,
   itens:  PrintItem[],
   user:   PrintUser | null,
 ): Promise<Blob> {
+  await prepararDieta(animal, user);
   return htmlParaPdfBlob(gerarHtmlDieta(animal, plano, itens, user));
 }
 
@@ -82,7 +83,11 @@ export default function DietaAcoesBar({
 
   // ── Imprimir ────────────────────────────────────────────────────────────
 
-  const imprimir = () => {
+  // Assíncrona: a folha clínica precisa do CRMV/assinatura e do endereço da clínica
+  // ANTES de montar o HTML. A impressão sai por iframe, que não depende da janela de
+  // "user activation" — esperar aqui não custa o clique.
+  const imprimir = async () => {
+    await prepararDieta(animal, user);
     imprimirHtml(gerarHtmlDieta(animal, plano, itens, user));
   };
 
@@ -111,7 +116,7 @@ export default function DietaAcoesBar({
   const enviarPor = async (canal: 'whatsapp' | 'email') => {
     setEnviando(canal);
     try {
-      await prepararDieta(animal);
+      await prepararDieta(animal, user);
       if (canal === 'whatsapp') await enviarPdfWhatsAppComAviso(opcoesEnvio, animal.user?.phone);
       else                      await enviarPdfEmailComAviso(opcoesEnvio, animal.user?.email);
     } finally { setEnviando(null); }
@@ -163,7 +168,7 @@ export default function DietaAcoesBar({
         {podeCompartilhar && (
           <CompartilharPdfBotoes
             {...opcoesEnvio}
-            aoPreparar={() => prepararDieta(animal)}
+            aoPreparar={() => prepararDieta(animal, user)}
             telefone={animal.user?.phone}
             emailPara={animal.user?.email}
           />

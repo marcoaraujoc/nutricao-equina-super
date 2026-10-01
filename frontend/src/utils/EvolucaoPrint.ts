@@ -1,15 +1,17 @@
 // frontend/src/utils/EvolucaoPrint.ts
-// Utilitário de impressão para Evolução Clínica — segue o padrão de Dietaprint.ts
+// Folha da EVOLUÇÃO CLÍNICA. Desde 2026-09-29 o papel é a FOLHA CLÍNICA
+// (`print/FolhaClinica.ts`: logo, veterinário, paciente, título, conteúdo, data e
+// assinatura); aqui mora só o CORPO — os dados do atendimento, o texto e as mídias.
 
-import {
-  PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura, srcImpressao, prepararImagensImpressao,
-} from './print/PrintShell';
+import { srcImpressao } from './print/PrintShell';
+import { gerarHtmlFolhaClinica, prepararFolhaClinica, type AnimalFolha } from './print/FolhaClinica';
 import { imprimirHtml } from './print/imprimirHtml';
 
 export interface PrintAnimal {
   nome:      string;
   photoUrl?: string | null;
   raca?:     { nome: string } | null;
+  especie?:  { nome: string } | null;
   user?:     { fullName: string } | null;
   idadeAnos?: number | null;
   logoUrl?:  string | null;
@@ -31,7 +33,8 @@ export interface PrintEvolucao {
   dataInicio:      string;
   dataFim?:        string | null;
   dataModificacao?: string | null;
-  veterinario:     { fullName: string };
+  /** `id` habilita CRMV e assinatura de quem conduziu o atendimento. */
+  veterinario:     { id?: number | null; fullName: string };
   modificadoPor?:  { fullName: string } | null;
   midias?:         PrintEvolucaoMidia[];
 }
@@ -81,6 +84,18 @@ function escaparHtml(str: string): string {
     .replace(/"/g, '&quot;');
 }
 
+function animalFolha(animal: PrintAnimal | null): AnimalFolha | null {
+  if (!animal) return null;
+  return {
+    nome:         animal.nome,
+    photoUrl:     animal.photoUrl ?? null,
+    especie:      animal.especie?.nome ?? null,
+    raca:         animal.raca?.nome ?? null,
+    idade:        animal.idadeAnos != null ? `${animal.idadeAnos} anos` : null,
+    proprietario: animal.user?.fullName ?? null,
+  };
+}
+
 // ─── Gerador de HTML ──────────────────────────────────────────────────────────
 
 export function gerarHtmlEvolucao(
@@ -90,22 +105,6 @@ export function gerarHtmlEvolucao(
   const statusLabel = STATUS_LABEL[ev.status] ?? ev.status;
   const statusColor = STATUS_COLOR[ev.status] ?? '#6b7280';
   const statusBg    = STATUS_BG[ev.status]    ?? '#f3f4f6';
-
-  const animalSection = animal ? `
-    <div class="card">
-      <div class="card-grid">
-        ${animal.photoUrl ? `
-          <div class="animal-photo-wrap" style="grid-row:1/3">
-            <img src="${srcImpressao(animal.photoUrl) ?? ''}" alt="${escaparHtml(animal.nome)}" class="animal-photo" />
-          </div>
-        ` : ''}
-        <div><span class="lbl">Animal</span><span class="val">${escaparHtml(animal.nome)}</span></div>
-        <div><span class="lbl">Raça</span><span class="val">${animal.raca?.nome ?? '—'}</span></div>
-        <div><span class="lbl">Idade</span><span class="val">${animal.idadeAnos != null ? `${animal.idadeAnos} anos` : '—'}</span></div>
-        <div><span class="lbl">Proprietário</span><span class="val">${animal.user?.fullName ?? '—'}</span></div>
-      </div>
-    </div>
-  ` : '';
 
   const midias = ev.midias ?? [];
   const imagens = midias.filter(m => m.tipo === 'IMAGEM');
@@ -146,73 +145,7 @@ export function gerarHtmlEvolucao(
     </div>
   ` : '';
 
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <title>Evolução Clínica — S2Vet</title>
-  <style>
-    ${PRINT_SHELL_CSS}
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: Arial, sans-serif; font-size: 15.6px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
-
-    /* Cards */
-    .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }
-    .card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px; align-items: start; }
-
-    /* Labels e valores */
-    .lbl { display: block; font-size: 11.7px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
-    .val { font-size: 15.6px; font-weight: 600; color: #111; }
-
-    /* Animal photo */
-    .animal-photo-wrap { display: flex; align-items: center; justify-content: center; }
-    .animal-photo { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; border: 1px solid #e5e7eb; }
-
-    /* Título da evolução */
-    .evolucao-titulo { font-size: 19.5px; font-weight: 700; color: #111; margin-bottom: 8px; }
-
-    /* Status badge */
-    .badge {
-      display: inline-block;
-      padding: 3px 10px;
-      border-radius: 20px;
-      font-size: 13px;
-      font-weight: 700;
-      color: ${statusColor};
-      background: ${statusBg};
-    }
-
-    /* Texto da evolução */
-    .texto {
-      white-space: pre-wrap;
-      font-size: 15.6px;
-      line-height: 1.8;
-      border: 1px solid #e5e7eb;
-      border-radius: 8px;
-      padding: 14px;
-      margin-top: 12px;
-      background: #fafafa;
-    }
-
-    /* Seções de mídia */
-    .section-title { font-size: 14.3px; font-weight: 700; color: #374151; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
-    .media-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-    .media-item { text-align: center; }
-    .media-img { width: 100%; max-height: 130px; object-fit: cover; border-radius: 6px; border: 1px solid #e5e7eb; }
-    .media-nome { font-size: 11.7px; color: #6b7280; margin-top: 3px; word-break: break-all; }
-    .obs { font-size: 11.7px; color: #9ca3af; font-style: italic; margin-top: 4px; }
-
-    @media print {
-      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    }
-  </style>
-</head>
-<body>
-
-  ${renderCabecalho(animal?.logoUrl)}
-
-  ${animalSection}
-
+  const corpo = `
   <div class="card">
     ${ev.titulo ? `<p class="evolucao-titulo">${escaparHtml(ev.titulo)}</p>` : ''}
     <div class="card-grid">
@@ -233,10 +166,6 @@ export function gerarHtmlEvolucao(
         <span class="lbl">Data de Fim</span>
         <span class="val">${fmt(ev.dataFim)}</span>
       </div>` : ''}
-      <div>
-        <span class="lbl">Veterinário Responsável</span>
-        <span class="val">${escaparHtml(ev.veterinario.fullName)}</span>
-      </div>
       ${ev.modificadoPor && ev.modificadoPor.fullName !== ev.veterinario.fullName ? `
       <div>
         <span class="lbl">Modificado por</span>
@@ -253,42 +182,67 @@ export function gerarHtmlEvolucao(
 
   ${imagensHtml}
   ${videosHtml}
-  ${audiosHtml}
+  ${audiosHtml}`;
 
-  <div class="ps-footer">
-    <span>Evolução #${ev.id}</span>
-  </div>
+  const cssModulo = `
+    .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }
+    .card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px; align-items: start; }
+    .lbl { display: block; font-size: 10.5px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
+    .val { font-size: 13.5px; font-weight: 600; color: #111; }
+    .evolucao-titulo { font-size: 16px; font-weight: 700; color: #111; margin-bottom: 8px; }
+    .badge {
+      display: inline-block; padding: 2px 10px; border-radius: 20px;
+      font-size: 12px; font-weight: 700; color: ${statusColor}; background: ${statusBg};
+    }
+    .texto {
+      white-space: pre-wrap; font-size: 13.5px; line-height: 1.7;
+      border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px; margin-top: 12px; background: #fafafa;
+    }
+    .section-title { font-size: 12px; font-weight: 700; color: #374151; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .media-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .media-item { text-align: center; }
+    .media-img { width: 100%; max-height: 130px; object-fit: cover; border-radius: 6px; border: 1px solid #e5e7eb; }
+    .media-nome { font-size: 10.5px; color: #6b7280; margin-top: 3px; word-break: break-all; }
+    .obs { font-size: 10.5px; color: #9ca3af; font-style: italic; margin-top: 4px; }
+  `;
 
-  ${renderRodapeAssinatura({ fullName: ev.veterinario.fullName })}
-
-</body>
-</html>`;
+  return gerarHtmlFolhaClinica({
+    documento:    `Evolução Clínica${animal ? ` — ${animal.nome}` : ''}`,
+    logoUrl:      animal?.logoUrl,
+    profissional: { id: ev.veterinario.id, nome: ev.veterinario.fullName },
+    animal:       animalFolha(animal),
+    paginas:      [{ titulo: 'Evolução Clínica', subtitulo: escaparHtml(fmt(ev.dataInicio)), corpoHtml: corpo }],
+    cssModulo,
+    rodape:       `Evolução #${ev.id}`,
+  });
 }
 
 // ─── Função principal ─────────────────────────────────────────────────────────
 
 /**
- * Resolve as imagens da folha (logo, foto do paciente, mídias) para `data:` ANTES
- * de gerar o HTML.
+ * Resolve o que a folha precisa ANTES de gerar o HTML: CRMV/assinatura de quem
+ * conduziu, endereço da clínica e as imagens (logo, foto, mídias) em `data:`.
  * 🔴 Obrigatório em quem vai mandar a folha por WhatsApp/e-mail: o PDF sai do
- * Puppeteer, que BLOQUEIA toda requisição que não seja `data:` (anti-SSRF, ver
- * printUrl.ts). Sem isto a foto e as mídias imprimem bem na tela e nascem
- * QUEBRADAS no PDF que chega ao cliente. A impressão do navegador não precisa
- * (tem rede e cookie de sessão), mas chamar não custa: o resultado é cacheado.
+ * Puppeteer, que BLOQUEIA toda requisição que não seja `data:` (ver printUrl.ts).
  */
 export async function prepararEvolucao(
   ev:     PrintEvolucao,
   animal: PrintAnimal | null,
 ): Promise<void> {
-  await prepararImagensImpressao([
-    animal?.logoUrl, animal?.photoUrl,
-    ...(ev.midias ?? []).filter(m => m.tipo === 'IMAGEM').map(m => m.url),
-  ]);
+  await prepararFolhaClinica({
+    profissionalId: ev.veterinario.id ?? null,
+    logoUrl:        animal?.logoUrl,
+    imagens: [
+      animal?.photoUrl,
+      ...(ev.midias ?? []).filter(m => m.tipo === 'IMAGEM').map(m => m.url),
+    ],
+  });
 }
 
-export function imprimirEvolucao(
+export async function imprimirEvolucao(
   ev:     PrintEvolucao,
   animal: PrintAnimal | null,
-): void {
+): Promise<void> {
+  await prepararEvolucao(ev, animal);
   imprimirHtml(gerarHtmlEvolucao(ev, animal));
 }

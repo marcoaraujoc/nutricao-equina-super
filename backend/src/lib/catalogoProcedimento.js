@@ -16,6 +16,8 @@
 // criação da cópia inteira se o client não conhecer o campo).
 'use strict';
 
+const { copiarCobrancaPorImagem } = require('./cobrancaPorImagem');
+
 const SELECT_BASE = {
   id: true, codigo: true, nome: true, nomeAbreviado: true, descricao: true,
   categoria: true, subcategoria: true, especialidade: true, tipoProcedimento: true,
@@ -98,6 +100,11 @@ async function garantirCopiaProcedimento(tx, base, empresaId) {
 
   await tx.$executeRaw`
     UPDATE schs2vet.tb_procedimentos_vet SET origem_id = ${base.id} WHERE id = ${copia.id}`;
+
+  // A forma de cobrança do exame de imagem (valor único × por imagem) segue para a
+  // cópia: o `create` tipado acima não a conhece (coluna nova, client defasado) e a
+  // cópia nasceria "valor único" mesmo que o global fosse por imagem.
+  await copiarCobrancaPorImagem(tx, base.id, copia.id);
 
   // Move o overlay para a cópia — MESMA linha lógica, id NOVO — e só então apaga
   // o antigo. Nunca os dois passos trocados: apagar primeiro e a criação falhar

@@ -1,4 +1,8 @@
 /**
+ * 🔴 APOSENTADO em 2026-10-01 — NÃO RODAR. A planilha foi só a CARGA INICIAL; o que
+ * vale é o que está cadastrado no banco. Saiu do `seed.js`: reaplicada, ela regravava
+ * nome, valor de venda/custo e ATIVO de 301 procedimentos globais.
+ *
  * Seed 004 — Catálogo de Procedimentos Veterinários
  *
  * Lê procedimentos_vet.csv e popula tb_procedimentos_vet via SQL raw

@@ -40,6 +40,44 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-09-30 (🔴 **REVISÃO MULTI-TENANT/RLS DAS MUDANÇAS DO DIA + WHATSAPP
+#   SÓ SAI COM O SERVIÇO ATIVO.**
+#   1. **Revisão** (prestador sem login na agenda, "Gerenciar Acesso" por cadastro,
+#      encaminhamento, folha clínica): toda leitura/escrita nova resolve a empresa por
+#      `req.empresaId` (nunca pelo cliente) e passa pelo tenant carimbado — SQL cru
+#      incluído. Policies vivas conferidas no banco: `tb_prestadores`,
+#      `tb_agendamentos_clinicos`, `tb_prestador_*` e `tb_designacoes_prestador` estão
+#      ENABLE + FORCE e fail-closed. Nenhum vazamento encontrado.
+#   2. 🔴 **`WITH CHECK` de `tb_designacoes_prestador_cadastro` REFORÇADO antes de aplicar**:
+#      só `empresa_id = tenant` aceitaria linha da empresa A apontando para PACIENTE ou
+#      PRESTADOR da empresa B — a FK NÃO passa por RLS. Agora exige os dois da MESMA
+#      empresa da linha. ✅ Provado no banco (transação revertida): mesma empresa aceita,
+#      animal de outra empresa → "violates row-level security policy".
+#      ✅ **MIGRATION APLICADA** (autorizada): `20261028000000_prestador_designacao_agenda`;
+#      `prisma generate` OK; tabela em `TENANT_PLANE` do `tenancyRls.test.js`.
+#   3. 🔴 **ANTES DE MANDAR WHATSAPP, O SERVIÇO É CONFERIDO.** `GET /equipes/whatsapp/
+#      prontidao` (qualquer membro — quem envia é a enfermeira/secretária; resposta só com
+#      veredito, sem instância/URL/QR; empresa SEMPRE do contexto) reusa
+#      `provider.prontidaoParaEnviar`. No front, `verificarServicoWhatsApp` roda no início
+#      de `compartilharPdfWhatsApp` (cobre `EnviarWhatsApp`, Prescrição, Vacina, Exames,
+#      Dieta, Pagamentos, Fatura) e do envio do Orçamento. Inativo → card "É necessário
+#      ativar o serviço de WhatsApp", com "peça ao gestor" para quem não pode ativar
+#      (`podeAtivar` = gate de `/whatsapp/conectar`). ⚠️ **Serviço inativo NÃO cai mais
+#      no plano B** (baixar PDF + abrir o app): era o que fazia a clínica seguir mandando à
+#      mão sem ninguém ativar o serviço. O plano B segue para o resto (sem telefone, falha
+#      no envio). ⚠️ Falha AO CONSULTAR também bloqueia — "não sei" não vira "pronto"
+#      (mesma regra de `whatsappStatus.test.js`). Provider `noop` responde pronto (envio
+#      simulado, como antes). Gate: `__tests__/whatsappProntidao.test.js` (8).
+#   ⚠️ **PENDENTE, não é deste código:** `schs2vet.tb_medicamentos_bkp2709` (8.262 linhas,
+#   backup manual de 27/09, dono `postgres`, SEM RLS e sem grant para a role da app) está
+#   dentro do schema do tenant plane e reprova o gate 2 de `tenancyRls.test.js`. A app
+#   não a lê, mas é cópia de catálogo com linhas de clínica sem isolamento — remover ou
+#   mover para fora de `schs2vet` (decisão do Marco).
+#   ⚠️ Suítes vermelhas HERDADAS de `bc9c81e`, fora do escopo: `pacienteInativo` (espera
+#   que o gestor reabra fatura paga — regra endurecida em 2026-09-29) e `produtoPorNome`
+#   (`onBlur` do nome do produto).)
+---
+
 # Atualizado em: 2026-09-18 (parte 2) (🔴 **O JOB DO CRMV SÓ TRAZIA NÚMERO DE 5 DÍGITOS —
 #   e, desde alguma mudança do SISCAD, não trazia mais NADA.** Mais 4 pedidos de tela.
 #   1. 🔴 **CRMV, defeito 1 — A INSCRIÇÃO IA SEM ZERO-PADDING.** A busca do SISCAD é

@@ -5,7 +5,7 @@ const prisma                  = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { escopoFilhoEvolucaoWhere } = require('../lib/clinicalScope');
 const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
-const { lancarExameNaFatura, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem } = require('../lib/faturaUtils');
+const { lancarExameNaFatura, removerFaturaItensDaOrigem, atualizarFaturaItensDaOrigem, reprecificarExameNaFatura } = require('../lib/faturaUtils');
 // Preço/prestador do exame de imagem — colunas novas, lidas e gravadas por SQL cru.
 const exameValor = require('../lib/exameImagemValor');
 const vinculoPrestador = require('../lib/procedimentoPrestador');
@@ -201,6 +201,54 @@ async function exameDuplicado(animalId, tipo, descricao, dataISO, ignorarId = nu
  * pelo índice único de `exame_clinico_id`; a conta a pagar, pelo par
  * (`EXAME_PRESTADOR`, id do exame).
  */
+/**
+ * A "Quantidade de imagens" de um pedido de exame de IMAGEM mudou na edição: refaz o
+ * valor do que é cobrado POR IMAGEM, na fatura e no snapshot `valor_cobrado`.
+ *
+ * 🔴 PRESERVA O SNAPSHOT: o novo total é o antigo + (valor da imagem × diferença de
+ * imagens). Recalcular o pedido inteiro pelo catálogo de HOJE cobraria o exame de
+ * março pelo preço renegociado em setembro — só o que MUDOU (as imagens) é que entra
+ * a preço do dia.
+ * ⚠️ Pedido com MAIS DE UM grupo não é repreçado: a tela de edição tem um campo só
+ * de quantidade, e o pedido guarda a SOMA dos grupos — não há como saber de qual
+ * grupo saíram ou entraram as imagens. Fica o que foi cobrado na criação.
+ * ⚠️ Exame de valor único, ou sem valor resolvido: nada muda.
+ */
+async function reprecificarQtdImagens(tx, req, item, qtdNova, descricaoAtual) {
+  if (!req.empresaId) return;
+  const grupos = exameValor.gruposDaObservacao(item.observacao);
+  if (Array.isArray(grupos) && grupos.filter(g => Array.isArray(g?.exames) && g.exames.length > 0).length > 1) return;
+
+  const snapshot = (await exameValor.lerPrestadorEValor(tx, item.id)).get(item.id);
+  if (snapshot?.valorCobrado == null) return;
+
+  const nomes = exameValor.itensDoPedido({ tipo: 'Imagem', descricao: descricaoAtual, qtdAmostra: 1 });
+  // Preço de UMA imagem de cada exame (qtd 1) — só os cobrados por imagem entram.
+  let porImagemUnit = 0;
+  let algumPorImagem = false;
+  for (const { nome } of nomes) {
+    const p = await exameValor.precoDoExame(tx, req.empresaId, nome, snapshot.prestadorId ?? null);
+    if (p.porImagem && p.valorCliente != null) { porImagemUnit += p.valorCliente; algumPorImagem = true; }
+  }
+  if (!algumPorImagem) return;
+
+  const qtdAntiga = Math.max(1, Math.floor(Number(item.qtdAmostra ?? 1)) || 1);
+  const qtd       = Math.max(1, Math.floor(qtdNova) || 1);
+  const cent      = (v) => Math.round(v * 100) / 100;
+  const novoTotal = cent(Math.max(0, snapshot.valorCobrado + porImagemUnit * (qtd - qtdAntiga)));
+
+  // Mesmo formato da criação: UM exame por imagem sai "valor da imagem × N".
+  const linha = nomes.length === 1 && qtd > 1
+    ? { valor: cent(novoTotal / qtd), quantidade: qtd }
+    : { valor: novoTotal, quantidade: 1 };
+
+  await reprecificarExameNaFatura(tx, item.id, linha);
+  // O snapshot acompanha a LINHA (valor × qtd), para os dois nunca divergirem por centavo.
+  await exameValor.gravarPrestadorEValor(tx, item.id, {
+    prestadorId: snapshot.prestadorId ?? null, valorCobrado: cent(linha.valor * linha.quantidade),
+  });
+}
+
 async function registrarPagamentoPrestadorDoExame(tx, req, exame, animalNome) {
   try {
     if (!req.empresaId) return;
@@ -217,9 +265,16 @@ async function registrarPagamentoPrestadorDoExame(tx, req, exame, animalNome) {
 
     // `valorPrestador` do vínculo — o que ELE cobra da clínica —, resolvido pelo nome
     // do exame, como no pedido. Sem vínculo (laboratorial), vem null.
+    // ⚠️ Com a QUANTIDADE de imagens de cada grupo: exame cobrado por imagem paga o
+    // prestador por imagem também — o mesmo serviço, multiplicado igual à fatura.
     const preco = await exameValor.precoDoPedido(
       tx, req.empresaId,
-      String(exame.descricao ?? '').split(',').map(x => x.trim()).filter(Boolean),
+      exameValor.itensDoPedido({
+        tipo:       exame.tipo,
+        grupos:     exameValor.gruposDaObservacao(exame.observacao),
+        descricao:  exame.descricao,
+        qtdAmostra: exame.qtdAmostra,
+      }),
       dados.prestadorId,
     );
 
@@ -461,14 +516,17 @@ const ExameClinicoController = {
         // devolve `false` e o exame segue sendo lançado com valor 0, como antes.
         let valorCobrado = null;
         const prestNum = Number(prestadorId) || null;
+        let linhaFatura = null;
         if (req.empresaId) {
-          const nomes = Array.isArray(examesNomes) && examesNomes.length > 0
-            ? examesNomes
-            // Sem a lista explícita, cai na descrição — que é a MESMA lista que a tela
-            // concatenou. Não é palpite: é o formato que `buildCurrentGroup` monta.
-            : String(descricao).split(',').map(x => x.trim()).filter(Boolean);
-          const preco = await exameValor.precoDoPedido(tx, req.empresaId, nomes, prestNum);
+          // Cada exame com a quantidade de imagens do SEU grupo (`itensDoPedido`).
+          // Sem `grupos`, cai na lista explícita e, na falta dela, na descrição — que é
+          // a MESMA lista que a tela concatenou (o formato que `buildCurrentGroup` monta).
+          const itens = exameValor.itensDoPedido({
+            tipo, grupos, nomes: examesNomes, descricao, qtdAmostra,
+          });
+          const preco = await exameValor.precoDoPedido(tx, req.empresaId, itens, prestNum);
           valorCobrado = preco.valorCliente;
+          linhaFatura  = preco.linha;
           await exameValor.gravarPrestadorEValor(tx, criado.id, {
             prestadorId: prestNum, valorCobrado,
           });
@@ -481,7 +539,7 @@ const ExameClinicoController = {
         // ⚠️ `valorCobrado` null mantém o comportamento antigo (linha zerada), que é o
         // que vale para todo exame laboratorial e para base sem preço cadastrado.
         await lancarExameNaFatura(
-          tx, { ...criado, valorCobrado }, animalDoExame?.userId ?? null, req.empresaId ?? null,
+          tx, { ...criado, valorCobrado, linhaFatura }, animalDoExame?.userId ?? null, req.empresaId ?? null,
         );
         return criado;
       });
@@ -861,6 +919,12 @@ const ExameClinicoController = {
           });
         }
 
+        // 🔴 QUANTIDADE DE IMAGENS MUDOU → o preço do exame cobrado POR IMAGEM muda junto.
+        // Sem isto, corrigir "3 imagens" para "2" deixaria a fatura cobrando 3.
+        if (item.tipo === 'Imagem' && qtdAmostra != null && Number(qtdAmostra) !== Number(item.qtdAmostra ?? 1)) {
+          await reprecificarQtdImagens(tx, req, item, Number(qtdAmostra), descricaoTrim ?? item.descricao);
+        }
+
         const upd = await tx.exameClinico.update({
           where: { id: item.id },
           data: {
@@ -896,6 +960,9 @@ const ExameClinicoController = {
       }
       if (err.code === 'FATURA_PAGA') {
         return res.status(400).json({ error: err.message, code: 'FATURA_PAGA' });
+      }
+      if (['FATURA_NAO_EDITAVEL', 'BLOCO_PACIENTE_FECHADO', 'BLOCO_PACIENTE_PAGO'].includes(err.code)) {
+        return res.status(400).json({ error: err.message, code: err.code });
       }
       console.error('Erro ao atualizar exame clínico:', err);
       res.status(500).json({ error: 'Erro ao atualizar exame' });
@@ -1144,7 +1211,8 @@ const ExameClinicoController = {
     }
   },
 
-  // PATCH /clinica/exames/:id/finalizar — transita status para CONCLUIDO
+  // PATCH /clinica/exames/:id/finalizar — transita status para REALIZADO
+  // (2026-09-30: REALIZADO é o status FINAL do exame; CONCLUIDO deixou de ser gravado)
   // GESTOR: qualquer exame (bypass via checkPermission)
   // FORNECEDOR: apenas exames que ele próprio criou (veterinarioId check)
   finalizar: async (req, res) => {
@@ -1165,13 +1233,13 @@ const ExameClinicoController = {
         return res.status(403).json({ error: 'Seu nível de permissão só permite finalizar exames criados por você.' });
       }
 
-      if (item.status === 'CONCLUIDO') {
-        return res.status(400).json({ error: 'Exame já está concluído.' });
+      if (item.status === 'REALIZADO' || item.status === 'CONCLUIDO') {
+        return res.status(400).json({ error: 'Exame já está realizado.' });
       }
 
       const atualizado = await prisma.exameClinico.update({
         where: { id: item.id },
-        data:  { status: 'CONCLUIDO' },
+        data:  { status: 'REALIZADO' },
         include: INCLUDE,
       });
 

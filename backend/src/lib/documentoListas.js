@@ -157,7 +157,7 @@ async function opcoesEmpresaVacinas(empresaId, fuso, animalId = null) {
       OR: [{ empresaId: null }, ...(empresaId ? [{ empresaId: Number(empresaId) }] : [])],
     },
     select: {
-      nome: true, apresentacao: true, fabricante: true,
+      nome: true, apresentacao: true, fabricante: true, empresaId: true,
       lotes: {
         // FEFO, como o resto do sistema: o frasco que vence primeiro é o que sai.
         // Sem empresa no contexto não existe lote a mostrar (estoque é sempre de
@@ -167,6 +167,13 @@ async function opcoesEmpresaVacinas(empresaId, fuso, animalId = null) {
         select:  { lote: true, validade: true },
         orderBy: { validade: 'asc' },
         take:    1,
+      },
+      // "CADASTRADA NO ESTOQUE" (2026-10-01): a vacina tem ALGUM lote desta empresa,
+      // com saldo ou não. É o que decide se a Data da Aplicação vem do histórico — o
+      // lote acima não serve para isso, porque ele exige saldo e o frasco aplicado
+      // pode ter sido justamente o último.
+      _count: {
+        select: { lotes: { where: { empresaId: empresaId ? Number(empresaId) : -1 } } },
       },
     },
     orderBy: { nome: 'asc' },
@@ -180,33 +187,56 @@ async function opcoesEmpresaVacinas(empresaId, fuso, animalId = null) {
 
   // DEDUPLICA POR NOME. O catálogo é MISTO (global + o da empresa) e o mesmo produto
   // costuma existir nos dois — sem isto a lista sai com "Abor-Vac" duas vezes e a
-  // pessoa escolhe no escuro. Vence a entrada que tem MAIS dado (lote em estoque,
-  // depois fabricante): é a que preenche as outras colunas sozinha.
+  // pessoa escolhe no escuro.
+  // 🔴 REGRA (2026-10-01, a pedido): havendo duplicidade, vence SEMPRE o cadastro DA
+  // EMPRESA. Só entre entradas da mesma origem o desempate é por dado (lote em estoque,
+  // depois fabricante) — é a que preenche as outras colunas sozinha.
+  // 🔴 A CHAVE É `chaveNome` (sem caixa e sem espaço repetido), NUNCA o nome cru
+  // (corrigido em 2026-10-01). Caso real: a Patyvet cadastrou "Aftobov - frasco 250 ml"
+  // e o catálogo global tem "Aftobov - frasco 250 mL" — por um "ml" × "mL" a mesma
+  // vacina saía DUAS vezes no atestado, e só uma delas tinha o lote da clínica.
   const porNome = new Map();
+  // Nomes que têm lote no estoque DESTA empresa. Por NOME, e não pela entrada que venceu
+  // a deduplicação: o lote pode estar pendurado na cópia global e o fabricante na da
+  // empresa, e a vacina continua sendo a mesma.
+  const noEstoque = new Set();
   for (const v of vacinas) {
     const nome = txt(v.nome);
     if (!nome) continue;
-    const atual = porNome.get(nome);
-    const peso  = ((v.lotes ?? []).length > 0 ? 2 : 0) + (txt(v.fabricante) ? 1 : 0);
-    if (!atual || peso > atual.peso) porNome.set(nome, { v, peso });
+    const chave = chaveNome(nome);
+    if ((v.lotes ?? []).length > 0 || (v._count?.lotes ?? 0) > 0) noEstoque.add(chave);
+    const atual = porNome.get(chave);
+    const peso  = (empresaId && Number(v.empresaId) === Number(empresaId) ? 4 : 0)
+      + ((v.lotes ?? []).length > 0 ? 2 : 0) + (txt(v.fabricante) ? 1 : 0);
+    if (!atual || peso > atual.peso) porNome.set(chave, { v, peso });
   }
 
-  const aplicadas = await vacinasAplicadasNoUltimoAno(animalId);
+  const { noUltimoAno: aplicadas, ultima } = await vacinasAplicadasNoPaciente(animalId);
 
   const opcoes = [...porNome.values()].map(({ v }) => {
     const lote = (v.lotes ?? [])[0];
     const aplicada = aplicadas.get(chaveNome(v.nome)) ?? null;
+    /**
+     * DATA DA APLICAÇÃO (2026-10-01, a pedido): a última aplicação EXECUTADA desta
+     * vacina neste paciente — mas SÓ quando a vacina está cadastrada no estoque da
+     * clínica. Fora do estoque ela foi trazida de fora, e o histórico do S2Vet não é a
+     * fonte de quando ela foi dada: o campo vem em branco para digitar.
+     * ⚠️ Sem a janela de 12 meses do ✅: aquela decide o que sobe ao TOPO; aqui a pergunta
+     * é "quando foi aplicada", e a resposta é a mesma com 11 ou com 13 meses.
+     */
+    const ultimaAplicacao = noEstoque.has(chaveNome(v.nome)) ? (ultima.get(chaveNome(v.nome)) ?? null) : null;
     return {
       rotulo: v.nome,
       // Marca de "já foi aplicada NESTE paciente nos últimos 12 meses" — a tela põe um
       // ✅ e ergue estas ao topo da lista.
       aplicada:   Boolean(aplicada),
-      aplicadaEm: aplicada ? formatarDataNaEmpresa(aplicada, fuso) : null,
+      aplicadaEm: aplicada ? dataDaAplicacao(aplicada, fuso) : null,
       valores: {
         'Nome comercial da vacina': v.nome,
         Fabricante:                 txt(v.fabricante),
         'Número da partida':        txt(lote?.lote),
         'Data de validade':         lote?.validade ? formatarDataNaEmpresa(lote.validade, fuso) : '',
+        'Data da Aplicação':        ultimaAplicacao ? dataDaAplicacao(ultimaAplicacao, fuso) : '',
       },
     };
   });
@@ -234,46 +264,72 @@ async function opcoesEmpresaVacinas(empresaId, fuso, animalId = null) {
   });
 }
 
-/** Chave de casamento por NOME — o registro de vacina guarda o nome, não FK garantida. */
-const chaveNome = (n) => String(n ?? '').trim().toLowerCase();
+/** Chave de casamento por NOME — o registro de vacina guarda o nome, não FK garantida.
+ *  Sem caixa e com os espaços colapsados: "frasco 250 mL" e "frasco  250 ml" são a
+ *  mesma vacina. */
+const chaveNome = (n) => String(n ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
 
 /**
- * VACINAS JÁ APLICADAS NESTE PACIENTE nos últimos 12 meses → Map(nome → data da mais
- * recente).
+ * `VacinaClinica.dataAplicacao` como DD/MM/AAAA.
  *
- * POR QUE 12 MESES: é o intervalo do reforço anual, que é o que interessa a quem está
- * atestando ("o que este animal já tomou neste ciclo?"). Sem janela, o atestado de um
- * paciente antigo subiria ao topo dezenas de vacinas de anos atrás e o atalho deixaria
- * de ser atalho.
+ * 🔴 Ela tem DUAS naturezas na base: a digitada no formulário chega como "AAAA-MM-DD" e
+ * é gravada como MEIA-NOITE UTC (data pura); a que não foi informada é `new Date()`
+ * (instante). Passar a data pura pelo fuso da clínica a joga para o DIA ANTERIOR —
+ * 30/09 00:00 UTC é 29/09 21:00 em Brasília (§6: nunca tratar data pura como instante).
+ * Meia-noite UTC exata = data pura, lida em UTC; o resto é instante, lido no fuso.
+ */
+function dataDaAplicacao(d, fuso) {
+  const dt = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(dt.getTime())) return '';
+  const meiaNoiteUtc = dt.getUTCHours() === 0 && dt.getUTCMinutes() === 0
+    && dt.getUTCSeconds() === 0 && dt.getUTCMilliseconds() === 0;
+  if (!meiaNoiteUtc) return formatarDataNaEmpresa(dt, fuso);
+  const [ano, mes, dia] = dt.toISOString().slice(0, 10).split('-');
+  return `${dia}/${mes}/${ano}`;
+}
+
+/**
+ * VACINAS JÁ APLICADAS NESTE PACIENTE → dois mapas por nome:
+ *   `noUltimoAno` — data da mais recente nos últimos 12 meses (o ✅ e a ordem da lista);
+ *   `ultima`      — data da mais recente de TODAS (a "Data da Aplicação" do atestado).
+ *
+ * POR QUE 12 MESES no primeiro: é o intervalo do reforço anual, que é o que interessa a
+ * quem está atestando ("o que este animal já tomou neste ciclo?"). Sem janela, o
+ * atestado de um paciente antigo subiria ao topo dezenas de vacinas de anos atrás e o
+ * atalho deixaria de ser atalho.
  *
  * ⚠️ Só `EXECUTADA`. `SALVA` é rascunho e `FINALIZADA` está na fila do plantão
- * aguardando aplicação — marcar as duas com ✅ afirmaria no atestado que o animal
- * recebeu uma dose que ninguém aplicou.
+ * aguardando aplicação — marcar as duas com ✅ (ou datar a aplicação por elas) afirmaria
+ * no atestado que o animal recebeu uma dose que ninguém aplicou.
  *
- * ⚠️ Sem `animalId` devolve Map vazio, e o catálogo sai na ordem alfabética de sempre:
- * é o caso do editor de modelos, onde não há paciente.
+ * ⚠️ Sem `animalId` devolve mapas vazios, e o catálogo sai na ordem alfabética de
+ * sempre: é o caso do editor de modelos, onde não há paciente.
  *
- * ⚠️ Falha aqui NÃO derruba nada — o pior caso é a lista sair sem o atalho.
+ * ⚠️ Falha aqui NÃO derruba nada — o pior caso é a lista sair sem o atalho e a data em
+ * branco para digitar.
  */
-async function vacinasAplicadasNoUltimoAno(animalId) {
-  const vazio = new Map();
+async function vacinasAplicadasNoPaciente(animalId) {
+  const vazio = { noUltimoAno: new Map(), ultima: new Map() };
   if (!animalId) return vazio;
   const desde = new Date();
   desde.setFullYear(desde.getFullYear() - 1);
   try {
     const linhas = await prisma.vacinaClinica.findMany({
-      where:   { animalId: Number(animalId), ativo: true, status: 'EXECUTADA', dataAplicacao: { gte: desde } },
+      where:   { animalId: Number(animalId), ativo: true, status: 'EXECUTADA' },
       select:  { nome: true, dataAplicacao: true },
       orderBy: { dataAplicacao: 'desc' },
     });
-    const mapa = new Map();
+    const noUltimoAno = new Map();
+    const ultima = new Map();
     // A lista vem da mais recente para a mais antiga: a PRIMEIRA de cada nome é a que
     // vale, e por isso o `if (!has)` — sobrescrever traria a dose mais velha.
     for (const l of linhas) {
       const k = chaveNome(l.nome);
-      if (k && !mapa.has(k)) mapa.set(k, l.dataAplicacao);
+      if (!k || !l.dataAplicacao) continue;
+      if (!ultima.has(k)) ultima.set(k, l.dataAplicacao);
+      if (l.dataAplicacao >= desde && !noUltimoAno.has(k)) noUltimoAno.set(k, l.dataAplicacao);
     }
-    return mapa;
+    return { noUltimoAno, ultima };
   } catch { return vazio; }
 }
 
@@ -322,10 +378,52 @@ function coletarListas(blocos) {
       // Diferente de `fonteDados`: aquela PREENCHE linhas sozinha, esta apenas OFERECE
       // o que existe no cadastro da empresa para a pessoa escolher.
       fonteOpcoes: normalizarFonteOpcoes(b?.conteudo?.fonteOpcoes),
+      colunasObrigatorias: colunasObrigatoriasDaLista(b),
       secao,
     });
   }
   return listas;
+}
+
+/**
+ * Colunas que TODO item preenchido da lista precisa trazer (`conteudo.colunasObrigatorias`).
+ *
+ * 🔴 Pedido em 2026-10-01 para o Atestado de Vacinação: "Data da Aplicação" é
+ * obrigatória. Desde que a declaração deixou de dizer "vacinado por mim NESTA data", é
+ * esta coluna que diz QUANDO a vacina foi dada — sem ela o atestado afirma a vacinação
+ * sem data nenhuma.
+ *
+ * ⚠️ Só valem as colunas que a lista REALMENTE tem: nome que não casa com coluna
+ * nenhuma travaria a emissão por um campo que a tela nem desenha.
+ */
+function colunasObrigatoriasDaLista(b) {
+  const pedidas = Array.isArray(b?.conteudo?.colunasObrigatorias) ? b.conteudo.colunasObrigatorias : [];
+  const colunas = colunasDaLista(b);
+  return pedidas.map(c => String(c ?? '').trim()).filter(c => colunas.includes(c));
+}
+
+/**
+ * O primeiro item PREENCHIDO (primeira coluna com conteúdo) a que falta uma coluna
+ * obrigatória → `{ lista, coluna, linha }` (linha começando em 1), ou `null`.
+ *
+ * ⚠️ Linha sem o item (primeira coluna vazia) não é cobrada: ela não vai ao papel, e
+ * exigir a data de uma vacina que não existe travaria quem só deixou uma linha a mais.
+ */
+function colunaObrigatoriaVazia(listas, linhasPorChave) {
+  for (const l of Array.isArray(listas) ? listas : []) {
+    const obrig = Array.isArray(l?.colunasObrigatorias) ? l.colunasObrigatorias : [];
+    if (obrig.length === 0) continue;
+    const linhas = Array.isArray(linhasPorChave?.[l.chave]) ? linhasPorChave[l.chave] : [];
+    for (let i = 0; i < linhas.length; i++) {
+      const linha = Array.isArray(linhas[i]) ? linhas[i] : [];
+      if (!String(linha[0] ?? '').trim()) continue;
+      for (const coluna of obrig) {
+        const j = l.colunas.indexOf(coluna);
+        if (j >= 0 && !String(linha[j] ?? '').trim()) return { lista: l, coluna, linha: i + 1 };
+      }
+    }
+  }
+  return null;
 }
 
 // ── Lista OBRIGATÓRIA ───────────────────────────────────────────────────────
@@ -456,7 +554,9 @@ async function linhasDaFonte(fonte, { animalId, evolucaoId = null, empresaId = n
       take:    12,
       select:  { nome: true, lote: true, dataAplicacao: true, dataReforco: true },
     }).catch(() => []);
-    return vacinas.map(v => [txt(v.nome), txt(v.lote), data(v.dataAplicacao), data(v.dataReforco)]);
+    return vacinas.map(v => [txt(v.nome), txt(v.lote),
+      v.dataAplicacao ? dataDaAplicacao(v.dataAplicacao, fuso) : '',
+      v.dataReforco ? dataDaAplicacao(v.dataReforco, fuso) : '']);
   }
 
   if (fonte === 'exames.resultados') {
@@ -579,6 +679,7 @@ module.exports = {
   listaObrigatoria,
   temLinhaPreenchida,
   listaObrigatoriaVazia,
+  colunaObrigatoriaVazia,
   linhasDaFonte,
   sugerirListas,
   sugerirOpcoes,

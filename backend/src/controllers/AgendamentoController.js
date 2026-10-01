@@ -36,6 +36,16 @@ const {
   assumirComLock, anexarControle, versaoDoBody, responderConflito,
 } = require('../lib/concorrenciaRegistro');
 const { publicar, EVENTOS } = require('../lib/eventosTempoReal');
+// PRESTADOR (cadastro) na agenda — com ou sem login (2026-09-30). A autorização do
+// paciente vem do "Gerenciar Acesso" (lib/designacaoPrestadorCadastro.js) e o
+// responsável é gravado em `prestador_cadastro_id` (lib/agendamentoPrestador.js).
+const designacaoCadastro = require('../lib/designacaoPrestadorCadastro');
+const {
+  temColuna: temColunaPrestador, gravarPrestador, anexarPrestadorEmLista, idsDosPrestadores,
+  loginsQueIntegramEquipe,
+} = require('../lib/agendamentoPrestador');
+// Tempo de consulta do prestador EXTERNO — a única régua da grade dele (2026-10-01).
+const { lerTemposConsulta } = require('../lib/prestadorTempoConsulta');
 
 const TIPOS_VALIDOS  = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'];
 // EM_ANDAMENTO/FINALIZADO são setados automaticamente pelo fluxo de evolução clínica
@@ -143,6 +153,17 @@ async function conflitoDeAgenda(vetId, inicio, duracaoMin, ignorarId = null) {
 // Gestor é cargo, não nível — `ehGestorNoContexto` cobre GESTOR, dono e ADMIN.
 function podeAgendarParaOutro(req) {
   return ehGestorNoContexto(req);
+}
+
+/**
+ * 🔴 Agendar o PRESTADOR EXTERNO (2026-10-01, a pedido): o veterinário também pode,
+ * não só o gestor. O externo não tem "agenda de colega" a proteger — ele é chamado
+ * pela clínica para o paciente — e é o veterinário quem decide chamá-lo.
+ * `userType` aqui é o do CONTEXTO (lib/tipoContexto.js): o cargo GESTOR também
+ * resolve para VETERINARIO, e estagiário/secretaria seguem de fora.
+ */
+function podeAgendarPrestadorExterno(req) {
+  return ehGestorNoContexto(req) || req.user?.userType === 'VETERINARIO';
 }
 
 // "Minha agenda" = sou o profissional responsável OU quem criou o agendamento.
@@ -318,6 +339,71 @@ async function dentroDoExpediente(vetId, quando, req) {
   return true;
 }
 
+/**
+ * Conflito do PRESTADOR (cadastro) — mesma regra por INTERVALO de `conflitoDeAgenda`.
+ * O SQL cru só resolve os ids do prestador; a janela de horário vai pelo client
+ * tipado (datas como parâmetro do raw descasariam da janela UTC).
+ */
+async function conflitoDoPrestador(prestadorId, inicio, duracaoMin, ignorarId = null) {
+  const ids = (await idsDosPrestadores(prisma, [prestadorId]))
+    .filter(id => !ignorarId || id !== Number(ignorarId));
+  if (ids.length === 0) return null;
+  const fim   = new Date(inicio.getTime() + duracaoMin * 60_000);
+  const desde = new Date(inicio.getTime() - 480 * 60_000);
+  const candidatos = await prisma.agendamentoClinico.findMany({
+    where: {
+      id:       { in: ids },
+      status:   { in: ['AGENDADO', 'EM_ANDAMENTO', 'ATRASADA'] },
+      dataHora: { gte: desde, lt: fim },
+    },
+    select: { id: true, dataHora: true, duracaoMin: true, animal: { select: { nome: true } } },
+  });
+  for (const c of candidatos) {
+    const cIni = new Date(c.dataHora).getTime();
+    const cFim = cIni + duracaoDe(c) * 60_000;
+    if (cIni < fim.getTime() && inicio.getTime() < cFim) return c;
+  }
+  return null;
+}
+
+/**
+ * Expediente do PRESTADOR no instante `quando`: os LOCAIS de trabalho do cadastro
+ * (`tb_prestador_locais_trabalho`) — basta um que cubra o dia e o horário. Sem local
+ * com dia/horário configurado, herda o expediente da empresa (mesma regra de
+ * `dentroDoExpediente` para o membro); sem nada em lugar nenhum, sem restrição.
+ */
+async function dentroDoExpedientePrestador(prestadorId, quando, req) {
+  const locais = await prisma.prestadorLocalTrabalho.findMany({
+    where:  { prestadorId: Number(prestadorId) },
+    select: { diasTrabalho: true, horaInicioTrabalho: true, horaFimTrabalho: true },
+  });
+  let janelas = locais.filter(l => l.diasTrabalho || l.horaInicioTrabalho);
+  if (janelas.length === 0 && req.empresaId) {
+    const config = await prisma.empresaConfiguracao.findFirst({
+      where: { empresaId: req.empresaId, ...(req.equipeId ? { equipeId: req.equipeId } : {}) },
+    });
+    if (config?.diasAtendimento || config?.horaInicioAtendimento) {
+      janelas = [{
+        diasTrabalho: config.diasAtendimento ?? null,
+        horaInicioTrabalho: config.horaInicioAtendimento ?? null,
+        horaFimTrabalho: config.horaFimAtendimento ?? null,
+      }];
+    }
+  }
+  if (janelas.length === 0) return true;
+
+  const fuso = await fusoDaEmpresa(req.empresaId);
+  const { diaSemana, hhmm } = diaEHoraNaEmpresa(quando, fuso);
+  return janelas.some(l => {
+    if (l.diasTrabalho) {
+      const permitidos = String(l.diasTrabalho).split(',').map(Number).filter(Number.isInteger);
+      if (permitidos.length > 0 && !permitidos.includes(diaSemana)) return false;
+    }
+    if (l.horaInicioTrabalho && l.horaFimTrabalho && (hhmm < l.horaInicioTrabalho || hhmm >= l.horaFimTrabalho)) return false;
+    return true;
+  });
+}
+
 const INCLUDE_GLOBAL = {
   veterinario:   { select: { id: true, fullName: true } },
   criadoPor:     { select: { id: true, fullName: true } },
@@ -437,6 +523,9 @@ const AgendamentoController = {
       await anexarAssumidoEmLista(itens);
       // `versao` acompanha toda leitura: é o que a tela devolve no próximo salvar.
       await anexarControle(prisma, 'AGENDAMENTO', itens);
+      // Prestador responsável — sem ele o agendamento do prestador SEM login
+      // apareceria como "Não atribuído".
+      await anexarPrestadorEmLista(itens);
 
       res.json({ dados: itens });
     } catch (err) {
@@ -453,15 +542,38 @@ const AgendamentoController = {
   // vetIds pedidos (os profissionais já visíveis na grade) — não vaza dados de outra empresa.
   ocupacaoDoDia: async (req, res) => {
     try {
-      const { data, vetIds } = req.query;
-      if (!data) return res.json({ dados: [] });
+      const { data, vetIds, prestadorIds } = req.query;
+      if (!data) return res.json({ dados: [], prestadores: [] });
       const inicio = new Date(data + 'T00:00:00');
       const fim    = new Date(data + 'T23:59:59.999');
-      if (isNaN(inicio.getTime())) return res.json({ dados: [] });
+      if (isNaN(inicio.getTime())) return res.json({ dados: [], prestadores: [] });
 
       const ids = String(vetIds ?? '')
         .split(',').map(n => Number(n)).filter(n => Number.isInteger(n) && n > 0);
-      if (ids.length === 0) return res.json({ dados: [] });
+
+      // Ocupação do PRESTADOR (cadastro) — a grade da Agenda também o lista. Só os
+      // prestadores da EMPRESA ATIVA (o id vem do cliente); resposta sem paciente.
+      const idsPrest = String(prestadorIds ?? '')
+        .split(',').map(n => Number(n)).filter(n => Number.isInteger(n) && n > 0);
+      let prestadores = [];
+      if (idsPrest.length > 0 && req.empresaId) {
+        const daEmpresa = await prisma.prestador.findMany({
+          where:  { id: { in: idsPrest }, empresaId: Number(req.empresaId) },
+          select: { id: true },
+        });
+        const agIds = await idsDosPrestadores(prisma, daEmpresa.map(x => x.id));
+        if (agIds.length > 0) {
+          const doDia = await prisma.agendamentoClinico.findMany({
+            where:  { id: { in: agIds }, dataHora: { gte: inicio, lte: fim }, status: { notIn: STATUS_LIVRES } },
+            select: { id: true, dataHora: true, duracaoMin: true },
+          });
+          await anexarPrestadorEmLista(doDia);
+          prestadores = doDia.map(a => ({
+            id: a.id, prestadorCadastroId: a.prestadorCadastro?.id ?? null, dataHora: a.dataHora, duracaoMin: a.duracaoMin,
+          }));
+        }
+      }
+      if (ids.length === 0) return res.json({ dados: [], prestadores });
 
       // Sem filtro de empresa/equipe: a ocupação do profissional é GLOBAL. Todo status
       // exceto CANCELADO conta como ocupado (AGENDADO/EM_ANDAMENTO/CONCLUIDO/FINALIZADO).
@@ -478,10 +590,87 @@ const AgendamentoController = {
         select: { id: true, veterinarioId: true, dataHora: true, duracaoMin: true },
       });
 
-      res.json({ dados: itens });
+      res.json({ dados: itens, prestadores });
     } catch (err) {
       console.error('Erro ao obter ocupação do dia:', err);
       res.status(500).json({ error: 'Erro ao obter ocupação' });
+    }
+  },
+
+  // GET /clinica/agendamentos/prestadores
+  // 🔴 (2026-10-01) PRESTADORES EXTERNOS que a Agenda pode oferecer: os do cadastro da
+  // EMPRESA ATIVA, ativos, com ou sem login — QUALQUER paciente, QUALQUER dia e
+  // horário, pela duração do `tempoConsultaMin` do cadastro.
+  // ⚠️ REVERTE o recorte de 2026-09-30 ("só com paciente autorizado no Gerenciar
+  // Acesso"): a pedido, o externo é agendado para qualquer animal. `animalIds` segue
+  // na resposta (é informação), mas não restringe mais nada.
+  // ⚠️ Fica FORA quem INTEGRA A EQUIPE (incluído como membro na tela Equipe): esse já
+  // vem de /equipes/membros e é agendado pelas regras da empresa. Listá-lo aqui
+  // também o faria aparecer duas vezes — e a segunda, sem expediente.
+  listarPrestadoresAgendaveis: async (req, res) => {
+    try {
+      if (!req.empresaId) return res.json({ dados: [] });
+      const prestadores = await prisma.prestador.findMany({
+        where:   { empresaId: Number(req.empresaId), ativo: true },
+        select: {
+          id: true, nome: true, userId: true, empresaId: true, tipoServico: true,
+          locaisTrabalho: {
+            select:  {
+              localizacaoId: true, diasTrabalho: true, horaInicioTrabalho: true, horaFimTrabalho: true,
+              localizacao: { select: { nome: true } },
+            },
+            orderBy: { id: 'asc' },
+          },
+        },
+        orderBy: { nome: 'asc' },
+      });
+      if (prestadores.length === 0) return res.json({ dados: [] });
+
+      const autorizados = await designacaoCadastro.autorizacoesEmLote(prisma, prestadores);
+      const integram = await loginsQueIntegramEquipe(prisma, prestadores.map(p => p.userId), req.empresaId);
+      const tempos   = await lerTemposConsulta(prestadores.map(p => p.id));
+
+      // Especialidades do catálogo (tb_prestador_especialidades) — SQL cru com
+      // tolerância: base sem a tabela cai no `tipoServico` (texto) do cadastro.
+      const espPorPrestador = new Map();
+      try {
+        const linhas = await prisma.$queryRawUnsafe(
+          `SELECT pe.prestador_id AS "prestadorId", e.id, e.nome
+             FROM schs2vet.tb_prestador_especialidades pe
+             JOIN schs2vet.tb_especialidades e ON e.id = pe.especialidade_id
+            WHERE pe.prestador_id = ANY($1::int[])`,
+          prestadores.map(p => p.id),
+        );
+        for (const l of linhas) {
+          const k = Number(l.prestadorId);
+          if (!espPorPrestador.has(k)) espPorPrestador.set(k, []);
+          espPorPrestador.get(k).push({ id: Number(l.id), nome: l.nome });
+        }
+      } catch { /* sem a tabela: sem especialidade do catálogo */ }
+
+      const dados = prestadores
+        .map(p => ({
+          id:             p.id,
+          nome:           p.nome,
+          userId:         p.userId ?? null,
+          tipoServico:    p.tipoServico ?? null,
+          tempoConsultaMin: tempos.get(p.id) ?? null,
+          especialidades: espPorPrestador.get(p.id) ?? [],
+          locais: p.locaisTrabalho.map(l => ({
+            localizacaoId:      l.localizacaoId,
+            localizacaoNome:    l.localizacao?.nome ?? null,
+            diasTrabalho:       l.diasTrabalho,
+            horaInicioTrabalho: l.horaInicioTrabalho,
+            horaFimTrabalho:    l.horaFimTrabalho,
+          })),
+          animalIds: [...(autorizados.get(p.id) ?? [])],
+        }))
+        .filter(p => !(p.userId && integram.has(Number(p.userId))));
+
+      res.json({ dados });
+    } catch (err) {
+      console.error('Erro ao listar prestadores agendáveis:', err);
+      res.status(500).json({ error: 'Erro ao listar prestadores' });
     }
   },
 
@@ -521,6 +710,7 @@ const AgendamentoController = {
       await anexarAssumidoEmLista(itens);
       // `versao` acompanha toda leitura: é o que a tela devolve no próximo salvar.
       await anexarControle(prisma, 'AGENDAMENTO', itens);
+      await anexarPrestadorEmLista(itens);
 
       res.json({ dados: itens });
     } catch (err) {
@@ -533,7 +723,10 @@ const AgendamentoController = {
   // body: { animalId, tipo, titulo, dataHora, observacao?, veterinarioId? }
   criar: async (req, res) => {
     try {
-      const { animalId, tipo = 'CONSULTA', titulo, dataHora, observacao, veterinarioId, especialidadeId } = req.body;
+      const { animalId, tipo = 'CONSULTA', titulo, dataHora, observacao, especialidadeId, prestadorCadastroId } = req.body;
+      // `let`: agendando para um PRESTADOR, o login dele (se houver) é quem responde
+      // em `veterinarioId` — o que veio no body é ignorado.
+      let { veterinarioId } = req.body;
 
       if (!animalId || !titulo?.trim() || !dataHora) {
         return res.status(400).json({ error: 'animalId, titulo e dataHora são obrigatórios' });
@@ -555,8 +748,46 @@ const AgendamentoController = {
         });
       }
 
+      // 🔴 PRESTADOR (cadastro) como responsável — com ou sem login (2026-09-30).
+      // (2026-10-01) Dois casos, decididos por `loginsQueIntegramEquipe`:
+      //   EXTERNO (não foi incluído como membro na tela Equipe) → gestor OU
+      //     veterinário agendam, para QUALQUER paciente, em QUALQUER dia e horário;
+      //     só valem o conflito de agenda e a duração (`tempo_consulta_min`).
+      //   INTEGRA A EQUIPE → regras de antes: só o gestor, paciente autorizado no
+      //     "Gerenciar Acesso" e os locais do cadastro como expediente. (A tela não
+      //     manda mais esse caso — ele é agendado como membro —, mas o contrato fica.)
+      let prestadorAg = null;
+      let prestadorExterno = false;
+      if (prestadorCadastroId) {
+        if (!(await temColunaPrestador(prisma))) {
+          return res.status(400).json({
+            error: 'Agendar prestador ainda não está disponível: a migration 20261028000000_prestador_designacao_agenda não foi aplicada.',
+            code:  'MIGRATION_PENDENTE',
+          });
+        }
+        prestadorAg = await prisma.prestador.findFirst({
+          where:  { id: Number(prestadorCadastroId), ativo: true, empresaId: Number(req.empresaId) },
+          select: { id: true, nome: true, userId: true, empresaId: true, email: true, telefone: true },
+        });
+        if (!prestadorAg) return res.status(404).json({ error: 'Prestador não encontrado nesta empresa.', code: 'PRESTADOR_NAO_ENCONTRADO' });
+        prestadorExterno = !(prestadorAg.userId
+          && (await loginsQueIntegramEquipe(prisma, [prestadorAg.userId], req.empresaId)).has(Number(prestadorAg.userId)));
+        // Agendar para um prestador é agendar para OUTRO profissional: o membro da
+        // equipe segue a regra basal (só o gestor); o EXTERNO aceita também o
+        // veterinário. Em ambos, o próprio prestador logado pode.
+        const podeAgendarEste = prestadorExterno ? podeAgendarPrestadorExterno(req) : podeAgendarParaOutro(req);
+        if (!podeAgendarEste && Number(prestadorAg.userId) !== Number(req.user.id)) {
+          return res.status(403).json({
+            error: prestadorExterno
+              ? 'Só o gestor ou o veterinário agendam o prestador externo.'
+              : 'Só o gestor agenda para outro profissional. Você pode agendar na sua própria agenda.',
+          });
+        }
+        veterinarioId = prestadorAg.userId ?? null;
+      }
+
       // Só o gestor agenda para OUTRO profissional; os demais só para si mesmos.
-      if (!podeAgendarParaOutro(req) && veterinarioId && Number(veterinarioId) !== Number(req.user.id)) {
+      if (!prestadorAg && !podeAgendarParaOutro(req) && veterinarioId && Number(veterinarioId) !== Number(req.user.id)) {
         return res.status(403).json({ error: 'Só o gestor agenda para outro profissional. Você pode agendar na sua própria agenda.' });
       }
 
@@ -568,6 +799,15 @@ const AgendamentoController = {
       }
       if (await animalEstaInativo(animalId)) {
         return res.status(400).json({ error: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
+      }
+
+      // O prestador DA EQUIPE só atende o paciente que a clínica AUTORIZOU para ele.
+      // O EXTERNO é agendado para qualquer paciente (2026-10-01, a pedido).
+      if (prestadorAg && !prestadorExterno && !(await designacaoCadastro.prestadorAutorizado(prisma, prestadorAg, animalId))) {
+        return res.status(403).json({
+          error: `${prestadorAg.nome} não tem autorização para este paciente. Conceda em Cadastro › Prestadores › Gerenciar Acesso.`,
+          code:  'PRESTADOR_SEM_AUTORIZACAO',
+        });
       }
 
       // Um animal pode ter vários agendamentos, mas NUNCA dois no mesmo horário
@@ -585,16 +825,42 @@ const AgendamentoController = {
       // empresa (Configurações). Sem especialidade informada (fluxos antigos), idem.
       const espIdNum = Number(especialidadeId);
       let duracaoMin = await tempoConsultaPadraoDaEmpresa(req);
-      if (Number.isInteger(espIdNum) && espIdNum > 0) {
+      // Prestador não tem tempo de consulta por especialidade (não é membro): o
+      // EXTERNO usa o tempo do próprio cadastro e, sem ele, o padrão da empresa; a
+      // especialidade fica só como rótulo do atendimento.
+      if (prestadorExterno) {
+        const proprio = (await lerTemposConsulta([prestadorAg.id])).get(prestadorAg.id);
+        if (proprio > 0) duracaoMin = proprio;
+      }
+      if (Number.isInteger(espIdNum) && espIdNum > 0 && !prestadorAg) {
         if (!veterinarioId) {
           return res.status(400).json({ error: 'Selecione o profissional para agendar por especialidade.' });
         }
         duracaoMin = await tempoConsultaDoProfissional(veterinarioId, espIdNum, req);
       }
 
+      // Disponibilidade do PRESTADOR: conflito na agenda dele (pelo cadastro) e — só
+      // para o da EQUIPE — os locais de trabalho do cadastro como expediente. O
+      // EXTERNO atende em qualquer dia e horário: o conflito é a única trava.
+      if (prestadorAg) {
+        const conflitoPrest = await conflitoDoPrestador(prestadorAg.id, quando, duracaoMin)
+          ?? (prestadorAg.userId ? await conflitoDeAgenda(prestadorAg.userId, quando, duracaoMin) : null);
+        if (conflitoPrest) {
+          return res.status(409).json({
+            error: `O prestador já tem um agendamento neste horário (${conflitoPrest.animal?.nome ?? 'outro paciente'}).`,
+            code:  'PROFISSIONAL_OCUPADO',
+          });
+        }
+        const fimPrevisto = new Date(quando.getTime() + (duracaoMin - 1) * 60_000);
+        if (!prestadorExterno && (!(await dentroDoExpedientePrestador(prestadorAg.id, quando, req))
+          || !(await dentroDoExpedientePrestador(prestadorAg.id, fimPrevisto, req)))) {
+          return res.status(409).json({ error: 'Horário fora dos dias/horários de trabalho do prestador.', code: 'FORA_EXPEDIENTE' });
+        }
+      }
+
       // Disponibilidade do profissional: sem conflito de horário e dentro do expediente
       // (próprio do vet ou herdado da empresa/equipe).
-      if (veterinarioId) {
+      if (veterinarioId && !prestadorAg) {
         const vetIdNum = Number(veterinarioId);
         // Conflito por INTERVALO — considera a duração dos dois atendimentos
         const conflitoVet = await conflitoDeAgenda(vetIdNum, quando, duracaoMin);
@@ -632,9 +898,11 @@ const AgendamentoController = {
             dataHora:      quando,
             observacao:    observacao?.trim() || null,
             numero:        proximoNumero,
-            veterinarioId: veterinarioId
-              ? Number(veterinarioId)
-              : (req.user.userType === 'VETERINARIO' ? req.user.id : null),
+            veterinarioId: prestadorAg
+              ? (prestadorAg.userId ?? null)
+              : veterinarioId
+                ? Number(veterinarioId)
+                : (req.user.userType === 'VETERINARIO' ? req.user.id : null),
             especialidadeId: Number.isInteger(espIdNum) && espIdNum > 0 ? espIdNum : null,
             duracaoMin,
             criadoPorId:   req.user.id,
@@ -642,6 +910,11 @@ const AgendamentoController = {
             equipeId:      req.equipeId ? Number(req.equipeId) : null,
           },
           include: INCLUDE,
+        }).then(async criado => {
+          // Prestador responsável — na MESMA transaction: ou o agendamento nasce com
+          // ele, ou não nasce (sem isto, o do prestador sem login viraria "sem ninguém").
+          if (prestadorAg) await gravarPrestador(tx, criado.id, prestadorAg.id);
+          return criado;
         });
       });
 
@@ -665,12 +938,13 @@ const AgendamentoController = {
         entidadeId: item.id,
         animalId:   item.animalId,
         detalhes:   `${item.tipo} — ${item.titulo ?? ''} | ${quando.toISOString()}`
-                  + ` | profissional: ${item.veterinario?.fullName ?? '—'}`,
+                  + ` | profissional: ${prestadorAg ? `${prestadorAg.nome} (prestador)` : (item.veterinario?.fullName ?? '—')}`,
       });
 
       res.status(201).json({
         dados: {
           ...item,
+          prestadorCadastro: prestadorAg ? { id: prestadorAg.id, nome: prestadorAg.nome } : null,
           atendimentoNumero: formatAtendimentoNum('AG', item.numero),
         },
       });
@@ -680,7 +954,9 @@ const AgendamentoController = {
         try {
           const vet = item.veterinarioId
             ? await prisma.user.findUnique({ where: { id: item.veterinarioId }, select: { email: true, fullName: true, phone: true } })
-            : null;
+            : prestadorAg
+              ? { email: prestadorAg.email ?? null, fullName: prestadorAg.nome, phone: prestadorAg.telefone ?? null }
+              : null;
 
           let animalNome = 'Paciente', proprietarioNome = '', proprietarioPhone = '', proprietarioEmail = '';
           if (item.animalId) {
@@ -732,7 +1008,7 @@ const AgendamentoController = {
               `🐴 *S2Vet — Consulta agendada!*`,
               `📅 ${dataFmt} às *${horaFmt}*`,
               `🐎 Paciente: *${animalNome}*`,
-              `🩺 Dr(a). ${vetNome}`,
+              prestadorAg ? `🩺 ${vetNome}` : `🩺 Dr(a). ${vetNome}`,
               ``,
               `Acompanhe em: ${appUrl}`,
             ].join('\n');

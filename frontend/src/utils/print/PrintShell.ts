@@ -2,8 +2,10 @@
 // Peças de impressão/PDF compartilhadas por TODOS os documentos da aplicação:
 // cabeçalho (marca + data de emissão), CSS base A4 e rodapé fixo que repete em
 // toda página impressa (marca do produto à esquerda, assinatura do
-// profissional responsável centralizada). Todo utilitário de impressão/PDF
-// novo usa isto — não duplicar cabeçalho/rodapé/CSS de página.
+// profissional responsável centralizada). Não duplicar cabeçalho/rodapé/CSS de página.
+// ⚠️ Documento de REGISTRO CLÍNICO (tem paciente e veterinário) NÃO usa o cabeçalho
+// daqui: usa `FolhaClinica.ts`, a folha única de 2026-09-29. `renderCabecalho` e os
+// rodapés seguem servindo aos documentos ADMINISTRATIVOS (fatura, contas, recibo).
 
 import { resolverUrlAbsoluta, carregarComoDataUri } from '../printUrl';
 
@@ -167,22 +169,8 @@ export function renderAssinaturas(blocos: BlocoAssinatura[]): string {
   </div>`;
 }
 
-// ── Rodapé com assinatura — documentos CLÍNICOS (evolução, prescrição, vacina,
-//    exame, encaminhamento, dieta...). Fixo: repete em toda página impressa.
-export function renderRodapeAssinatura(
-  user?: PrintShellUser | null,
-  rotulo = 'Assinatura do Veterinário Responsável',
-): string {
-  return `
-  <div class="ps-signature">
-    <div class="ps-sig-brand">S2Vet — Sistema Hospitalar Veterinário</div>
-    <div class="ps-sig-block">
-      <div class="ps-sig-line"></div>
-      <div class="ps-sig-label">${rotulo}</div>
-      ${user?.fullName ? `<div class="ps-sig-name">${user.fullName}</div>` : ''}
-    </div>
-  </div>`;
-}
+// (O antigo `renderRodapeAssinatura` — rodapé fixo dos documentos clínicos — saiu em
+//  2026-09-29: a assinatura do registro clínico agora fecha a FolhaClinica.)
 
 // ── Rodapé simples, sem assinatura — documentos ADMINISTRATIVOS/financeiros
 //    (fatura, orçamento) não têm assinatura de profissional.

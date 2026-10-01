@@ -67,9 +67,13 @@ const TELA = semComentarios(lerFront('pages/SubModuloEncaminhamento.tsx'));
 describe('a lista de destino vem dos CADASTROS de prestador', () => {
   const listar = corpoDoMetodo(CTRL, 'listarPrestadores');
 
-  test('le as DUAS tabelas de cadastro', () => {
+  // 🔴 (2026-09-29, parte 3) Fornecedor não tem mais especialidade (campo removido do
+  // cadastro) e o `tipo_servico` dele é categoria de PRODUTO — era esse texto que
+  // aparecia como Especialidade no Encaminhamento. Só o PRESTADOR é destino.
+  test('le SÓ o cadastro de PRESTADOR — fornecedor não é destino', () => {
     expect(listar).toMatch(/prisma\.prestador\.findMany/);
-    expect(listar).toMatch(/prisma\.fornecedor\.findMany/);
+    expect(listar).not.toMatch(/prisma\.fornecedor\.findMany/);
+    expect(listar).not.toMatch(/ORIGENS\.FORNECEDOR/);
   });
 
   test('nao varre mais a equipe nem o catalogo de especialidade do VETERINARIO', () => {
@@ -88,7 +92,7 @@ describe('a lista de destino vem dos CADASTROS de prestador', () => {
     expect(listar).toMatch(/ativo: true, tipoEntrada: 'CLIENTE', empresaId: req\.empresaId/);
   });
 
-  test('quem so vende (loja, laboratorio, farmacia) some da lista', () => {
+  test('servico legado que nao e clinico (loja, laboratorio, farmacia) e descartado', () => {
     expect(listar).toMatch(/EXCLUIR_SERVICOS/);
     expect(listar).toMatch(/if \(servicos\.length === 0\) continue;/);
   });
@@ -114,12 +118,24 @@ describe('o catálogo vence, tipoServico é o FALLBACK de transição (2026-09-2
     expect(listar).toMatch(/especPrestadorLinhas = prestadorIds\.length === 0 \? \[\] : await prisma\.\$queryRaw`[\s\S]*`\.catch\(\(\) => \[\]\)/);
   });
 
-  test('FORNECEDOR: especialidade vem da relação TIPADA fornecedorEspecialidade', () => {
-    expect(listar).toMatch(/especialidades:\s*\{\s*select:\s*\{\s*especialidade:\s*\{\s*select:\s*\{\s*nome:\s*true/);
-  });
-
   test('o catálogo VENCE quando existe; sem vínculo, cai no split de tipoServico', () => {
     expect(listar).toMatch(/const servicos = b\.especialidadesCatalogo\.length > 0\s*\n\s*\? b\.especialidadesCatalogo\s*\n\s*: String\(b\.tipoServico/);
+  });
+});
+
+describe('fornecedor não tem especialidade (2026-09-29, parte 3)', () => {
+  const FORN = semComentarios(ler('controllers/FornecedorController.js'));
+  const TELA_FORN = semComentarios(lerFront('pages/CadastroFornecedor.tsx'));
+
+  test('a API do fornecedor não lê nem grava o vínculo de especialidade', () => {
+    expect(FORN).not.toMatch(/especialidadeIds/);
+    expect(FORN).not.toMatch(/fornecedorEspecialidade/);
+    expect(FORN).not.toMatch(/especialidades:\s*\{/);
+  });
+
+  test('a tela de cadastro não oferece o campo', () => {
+    expect(TELA_FORN).not.toMatch(/EspecialidadeSelector/);
+    expect(TELA_FORN).not.toMatch(/especialidadeIds/);
   });
 });
 
@@ -153,6 +169,28 @@ describe('criar resolve o login a partir do cadastro', () => {
     const iGrava  = criar.indexOf('encPrestador.gravarCadastro');
     expect(iCreate).toBeGreaterThan(-1);
     expect(iGrava).toBeGreaterThan(iCreate);
+  });
+});
+
+describe('destino EXTERNO exige Telefone (WhatsApp) — 2026-09-29', () => {
+  test('a regra e >= 10 digitos (DDD + numero)', () => {
+    expect(CTRL).toMatch(/const telefoneDestinoInvalido = \(tel\) => String\(tel \?\? ''\)\.replace\(\/\\D\/g, ''\)\.length < 10;/);
+  });
+
+  test('criar recusa o externo sem telefone', () => {
+    const criar = corpoDoMetodo(CTRL, 'criar');
+    expect(criar).toMatch(/if \(!cadastroDestino && !prestadorId && telefoneDestinoInvalido\(telefoneDestino\)\)/);
+    expect(criar).toMatch(/TELEFONE_DESTINO_OBRIGATORIO/);
+  });
+
+  test('atualizar nao deixa apagar o telefone do externo', () => {
+    const atualizar = corpoDoMetodo(CTRL, 'atualizar');
+    expect(atualizar).toMatch(/ehExterno && telefoneDestino !== undefined && telefoneDestinoInvalido\(telefoneDestino\)/);
+  });
+
+  test('a tela marca o campo como obrigatorio e valida antes de enviar', () => {
+    expect(TELA).toMatch(/Telefone \(WhatsApp\) \*/);
+    expect(TELA).toMatch(/destinoTipo === 'EXTERNO' && telefoneDestino\.replace\(\/\\D\/g, ''\)\.length < 10/);
   });
 });
 

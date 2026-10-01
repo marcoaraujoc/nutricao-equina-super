@@ -88,6 +88,59 @@ export interface ResultadoCompartilhar {
    * continuação que ele acabou de recusar.
    */
   cancelado?: boolean;
+  /**
+   * O SERVIÇO de WhatsApp da clínica não está ativo — conferido ANTES de gerar
+   * qualquer PDF. Distinto de "falhou": nada é baixado e nenhum app é aberto; a tela
+   * só informa que é preciso ativar o serviço (frase pronta em `motivo`).
+   */
+  servicoInativo?: boolean;
+}
+
+// ─── Serviço de WhatsApp: ativo? ──────────────────────────────────────────────
+//
+// 🔴 (2026-09-30) ANTES DE MANDAR UM WHATSAPP, O SERVIÇO É CONFERIDO. Até aqui a tela
+// tentava o envio e, com o WhatsApp da clínica desativado, caía no plano B (baixa o
+// PDF + abre o app) — a pessoa não ficava sabendo que o problema era o serviço
+// desligado, e seguia mandando à mão sem ninguém ativá-lo.
+// ⚠️ A empresa consultada é a do contexto ativo (headers do `api`) — o backend nunca
+// aceita empresa vinda do cliente.
+
+export interface ProntidaoWhatsApp {
+  pronto:     boolean;
+  motivo:     string | null;
+  /** Frase pronta para a tela; `null` quando pronto. */
+  mensagem:   string | null;
+  /** Quem está logado é quem ATIVA (gestor/dono)? Senão, a tela manda pedir ao gestor. */
+  podeAtivar: boolean;
+}
+
+// Motivos em que "ativar" é a ação: nos outros (servidor fora do ar, sem empresa)
+// não há o que o gestor ative, e a frase do backend já basta.
+const MOTIVOS_DE_ATIVACAO = new Set(['NAO_PROVISIONADO', 'DESCONECTADO', 'AGUARDANDO_QR']);
+
+/** Consulta o serviço de WhatsApp da clínica. Nunca lança. */
+export async function verificarServicoWhatsApp(): Promise<ProntidaoWhatsApp> {
+  try {
+    const r = await api.get('/equipes/whatsapp/prontidao', { timeout: 15000 });
+    const d = r.data?.dados as Partial<ProntidaoWhatsApp> | undefined;
+    if (!d) {
+      return { pronto: false, motivo: 'SEM_PERMISSAO', podeAtivar: false,
+        mensagem: 'Não foi possível verificar o serviço de WhatsApp da clínica.' };
+    }
+    return {
+      pronto: !!d.pronto, motivo: d.motivo ?? null, mensagem: d.mensagem ?? null, podeAtivar: !!d.podeAtivar,
+    };
+  } catch {
+    return { pronto: false, motivo: 'SEM_RESPOSTA', podeAtivar: false,
+      mensagem: 'Não foi possível verificar o serviço de WhatsApp da clínica. Tente novamente.' };
+  }
+}
+
+/** Frase completa do serviço inativo — com o "peça ao gestor" para quem não ativa. */
+export function mensagemServicoInativo(p: ProntidaoWhatsApp): string {
+  const base = p.mensagem ?? 'O serviço de WhatsApp da clínica não está ativo. É necessário ativá-lo.';
+  if (p.podeAtivar || !MOTIVOS_DE_ATIVACAO.has(p.motivo ?? '')) return base;
+  return `${base} Peça ao gestor da clínica para ativar o serviço.`;
 }
 
 /**
@@ -248,6 +301,12 @@ export async function compartilharPdfWhatsApp(
   opts: CompartilharPdfOpcoes,
   telefone?: string | null,
 ): Promise<ResultadoCompartilhar> {
+  // Primeiro o SERVIÇO: inativo → informa e para aqui, sem PDF e sem plano B.
+  const servico = await verificarServicoWhatsApp();
+  if (!servico.pronto) {
+    return { enviado: false, servicoInativo: true, motivo: mensagemServicoInativo(servico) };
+  }
+
   let motivo = telefone ? undefined : 'o cliente está sem telefone cadastrado.';
   if (telefone) {
     try {
@@ -342,6 +401,10 @@ async function avisar(
     const r = await executar();
     if (r.cancelado) {
       mostrarResultado(canal, 'aviso', 'Envio cancelado');
+      return false;
+    }
+    if (r.servicoInativo) {
+      mostrarResultado(canal, 'aviso', 'É necessário ativar o serviço de WhatsApp', r.motivo);
       return false;
     }
     if (r.enviado) {

@@ -1,11 +1,6 @@
 const { PrismaClient } = require('@prisma/client');
 const { comTenantAutomatico, comEscopoPlataforma } = require('./src/lib/prismaTenant');
 const { MODULOS_SISTEMA, PERMISSOES_PADRAO } = require('./src/seeds/002_permissoes_padrao.seed');
-const seedMedicamentos = require('./src/seeds/003_medicamentos.seed');
-const seedProcedimentos = require('./src/seeds/004_procedimentos.seed');
-const { seedLaboratorios }   = require('./src/seeds/003_laboratorios.seed');
-const { seedImagemExames }  = require('./src/seeds/004_imagem_exames.seed');
-const { seedProcedimentosImagem } = require('./src/seeds/005_procedimentos_imagem.seed');
 const { seedDocumentosCfmv } = require('./src/seeds/006_documentos_cfmv.seed');
 
 // Catálogos globais (medicamentos, procedimentos, laboratórios, módulos do sistema)
@@ -149,17 +144,16 @@ async function main() {
   }
   console.log(`  ✓ PermissaoMembro backfill (${permCount} entradas verificadas em ${membros.length} membro(s))`);
 
-  // ── Medicamentos (catálogo) ───────────────────────────────────────────────────
-  await seedMedicamentos(prisma);
-
-  // ── Procedimentos veterinários (catálogo) ─────────────────────────────────────
-  await seedProcedimentos(prisma);
-  await seedLaboratorios();
-  await seedImagemExames(prisma);
-  // DEPOIS de seedImagemExames: este projeta o MESMO catálogo em tb_procedimentos_vet
-  // (onde o exame de imagem ganha preço e prestador) e inativa os genéricos de
-  // 'Diagnóstico por Imagem' que ele substitui. Ver o cabeçalho do arquivo.
-  await seedProcedimentosImagem(prisma);
+  // ── Catálogos (medicamentos, procedimentos, laboratórios, exames de imagem) ───
+  // 🔴 FORA DO SEED desde 2026-10-01 (a pedido): "nenhuma planilha deve ser usada,
+  // todas foram inputs iniciais — o que vale é o que está cadastrado no banco".
+  // Os seeds 003_medicamentos, 004_procedimentos, 003_laboratorios, 004_imagem_exames
+  // e 005_procedimentos_imagem eram CARGAS INICIAIS. Reaplicados a cada `node seed.js`,
+  // eles DESFAZIAM o que foi cadastrado depois: unidade/classificação de 4.700+
+  // medicamentos (inclusive cópias de clínica), valor de venda/custo e ativo de 301
+  // procedimentos, a reativação de exames de imagem e de itens de laboratório
+  // desativados. O catálogo agora é mantido pelas telas do sistema.
+  // NÃO reintroduzir as chamadas. Os arquivos ficam como registro da carga.
 
   // ── Modelos de documento do CFMV (Res. 1.321/2020) ────────────────────────────
   // Catálogo GLOBAL (empresa_id null) da Central de Documentos. Idempotente por

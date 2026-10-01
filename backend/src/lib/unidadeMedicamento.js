@@ -186,6 +186,29 @@ async function reapontarParaCopia(tx, deId, paraId, empresaId) {
     data: { medicamentoCatId: paraId },
   });
 
+  // 🔴 LOTE DE VACINA (2026-10-01) — faltava, e é o MESMO defeito descrito acima para a
+  // prescrição: editar uma vacina GLOBAL criava a cópia da clínica e deixava os lotes
+  // no item GLOBAL. A busca de lote (`listarLotesDisponiveisPorMed`, a FEFO da
+  // execução) procura pelo `medicamentoCatId` da cópia, não acha nada, e a dose sai sem
+  // baixa. Medido na base: 4 lotes ativos presos em item global com cópia na empresa.
+  // ⚠️ Só ATIVOS, pela mesma razão do estoque da farmácia: o inativo é histórico.
+  await tx.loteVacina.updateMany({
+    where: { medicamentoCatId: deId, empresaId: empresa, ativo: true },
+    data:  { medicamentoCatId: paraId },
+  });
+  // A vacina ainda NÃO EXECUTADA segue o lote: sem reserva (aplicada pelo proprietário,
+  // legado), a baixa procura o lote pelo `medicamentoCatId` da própria vacina.
+  // `VacinaClinica` não tem `empresaId` — o tenant vem do PACIENTE.
+  await tx.vacinaClinica.updateMany({
+    where: {
+      medicamentoCatId: deId,
+      ativo:            true,
+      status:           { in: ['SALVA', 'FINALIZADA'] },
+      animal:           { empresaId: empresa },
+    },
+    data: { medicamentoCatId: paraId },
+  });
+
   // PRODUTO DE FORNECEDOR (o item que a clínica não estoca e pede ao fornecedor) —
   // tabela da migration 20261006000000, que o client pode não conhecer (§11). O
   // `catch` mantém a troca de unidade funcionando numa base sem ela; o pior caso é o

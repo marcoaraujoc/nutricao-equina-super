@@ -18,6 +18,7 @@
 
 const prismaPadrao = require('./prisma').default;
 const { empilharResponsavel, anexarCadeiaEmLista } = require('./cadeiaResponsaveis');
+const { limparPrestador } = require('./agendamentoPrestador');
 
 const TABELA = 'schs2vet.tb_agendamentos_clinicos';
 
@@ -42,6 +43,11 @@ async function marcarAssumido(client, agendamentoId, deVetId) {
     Number(agendamentoId),
     deVetId == null ? null : Number(deVetId),
   );
+  // O PRESTADOR (cadastro) também deixa de responder pelo agendamento: quem assumiu
+  // passou a ser o responsável. Sem isto a linha seguiria exibindo o prestador —
+  // inclusive o SEM login, cujo agendamento não tem `veterinario_id` e pareceria de
+  // ninguém a não ser dele. Ver lib/agendamentoPrestador.js.
+  await limparPrestador(db, agendamentoId);
 }
 
 /**

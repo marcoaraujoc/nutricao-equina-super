@@ -56,6 +56,8 @@ router.put('/configuracoes', authenticate, uploadLogo.single('logo'), tenantRls,
 // WhatsApp da clínica (Evolution API) — GESTOR/dono do contexto ativo.
 // Antes de /:equipeId para o literal não virar parâmetro.
 const WhatsappController = require('../controllers/WhatsappController');
+// Prontidão para ENVIAR — qualquer membro; consultada antes de todo envio.
+router.get('/whatsapp/prontidao',    authenticate, WhatsappController.prontidao);
 router.get('/whatsapp/status',       authenticate, WhatsappController.status);
 router.post('/whatsapp/conectar',    authenticate, WhatsappController.conectar);
 router.post('/whatsapp/reconectar',  authenticate, WhatsappController.reconectar);

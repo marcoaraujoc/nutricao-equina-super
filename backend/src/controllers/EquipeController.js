@@ -1253,19 +1253,44 @@ const EquipeController = {
       // gestor-only), e o fuso precisa chegar à enfermeira que abre o plantão, não
       // só a quem administra a clínica. null = empresa não escolheu → o front usa o
       // fuso do dispositivo, como sempre fez.
-      const vazio = { logoUrl: null, empresaNome: null, fusoHorario: null };
+      //
+      // O ENDEREÇO da clínica também viaja aqui, pelo mesmo motivo: é o "local da
+      // empresa" que a folha clínica impressa (prescrição, vacina, evolução…) exibe
+      // junto do veterinário, e quem imprime é qualquer membro, não só o gestor.
+      // ⚠️ Endereço sim, CNPJ/IE não: aqueles são registro FISCAL e só saem no timbre
+      // da Central de Documentos, e só para pessoa jurídica (§12, 2026-09-08).
+      const vazio = {
+        logoUrl: null, empresaNome: null, fusoHorario: null,
+        empresaEndereco: null, empresaCidade: null, empresaEstado: null,
+      };
       if (!escopo) return res.json({ sucesso: true, dados: vazio });
       const [config, empresa, fuso] = await Promise.all([
         buscarConfiguracao(escopo),
-        prisma.empresa.findUnique({ where: { id: escopo.empresaId }, select: { nome: true } }),
+        prisma.empresa.findUnique({
+          where: { id: escopo.empresaId },
+          select: {
+            nome: true, endereco: true, numero: true,
+            complemento: true, bairro: true, cidade: true, estado: true,
+          },
+        }),
         fusoDaEmpresa(escopo.empresaId).catch(() => null),
       ]);
+      const txt = (v) => (typeof v === 'string' ? v.trim() : '');
+      // Uma linha, só com o que existe — nunca separador órfão do campo em branco.
+      const logradouro = [
+        [txt(empresa?.endereco), txt(empresa?.numero)].filter(Boolean).join(', '),
+        txt(empresa?.complemento),
+        txt(empresa?.bairro),
+      ].filter(Boolean).join(' - ');
       return res.json({
         sucesso: true,
         dados: {
-          logoUrl:     config?.logoUrl ?? null,
-          empresaNome: empresa?.nome ?? null,
-          fusoHorario: fuso ?? null,
+          logoUrl:         config?.logoUrl ?? null,
+          empresaNome:     empresa?.nome ?? null,
+          fusoHorario:     fuso ?? null,
+          empresaEndereco: logradouro || null,
+          empresaCidade:   txt(empresa?.cidade) || null,
+          empresaEstado:   txt(empresa?.estado) || null,
         },
       });
     } catch (err) {

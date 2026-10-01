@@ -23,6 +23,9 @@ const INCLUDE = {
 
 const STATUS_VALIDOS = ['PENDENTE', 'CONCLUIDO', 'CANCELADO'];
 
+/** Telefone (WhatsApp) do destino EXTERNO: obrigatório, com DDD (≥ 10 dígitos). */
+const telefoneDestinoInvalido = (tel) => String(tel ?? '').replace(/\D/g, '').length < 10;
+
 /**
  * Resolve as equipes do escopo do animal:
  *  - animal.equipeId definido → só ela
@@ -126,11 +129,13 @@ const EncaminhamentoController = {
   //     não é o que a aba se propõe a oferecer. Para ele, o caminho é o destino
   //     EXTERNO (ou assumir o atendimento).
   //
-  // Agora a fonte é o CADASTRO — `tb_prestadores` + `tb_fornecedores` — e o destino
-  // continua sendo escolhido por especialidade/serviço.
+  // Agora a fonte é o CADASTRO de PRESTADOR (`tb_prestadores`) e o destino continua
+  // sendo escolhido por especialidade/serviço.
   //
-  // ⚠️ FORNECEDOR entra junto de propósito: `PRESTADOR` nasceu em 2026-09-09 e NADA foi
-  // migrado (CLAUDE.md §4) — quem já estava cadastrado segue em `tb_fornecedores`.
+  // 🔴 (2026-09-29, parte 3) FORNECEDOR SAIU DA LISTA. Ele entrava junto porque o cargo
+  // `PRESTADOR` nasceu em 2026-09-09 sem migração (CLAUDE.md §4); mas o fornecedor não
+  // tem mais especialidade (campo removido do cadastro, a pedido) e o `tipo_servico`
+  // dele é categoria de produto — era esse texto que aparecia como Especialidade.
   //
   // ⚠️ `precisaDesignacao` virou "tem login": designação é ESCOPO DE ACESSO, e sem
   // usuário não há a quem dar acesso. O encaminhamento para prestador sem login é
@@ -143,19 +148,12 @@ const EncaminhamentoController = {
   // isso deixava a Especialidade do Encaminhamento presa a texto solto em vez do
   // catálogo `tb_especialidades` — e que `tb_fornecedor_especialidades` nunca chegava
   // a ser preenchida (a tela de cadastro nunca mandava `especialidadeIds`).
-  // Agora, POR CADASTRO (prestador ou fornecedor): se há especialidade vinculada no
-  // catálogo (`tb_prestador_especialidades` — nova — ou `tb_fornecedor_especialidades`
-  // — já existia, agora alimentada por `FornecedorController`), são os NOMES dela que
-  // viram `servicos`. SEM vínculo — fornecedor de produto puro (Farmácia/Laboratório/
-  // Loja, que nunca ganha especialidade) OU cadastro ainda não reaberto na tela nova
-  // — cai no comportamento ANTERIOR: split de `tipo_servico` + `EXCLUIR_SERVICOS`.
-  // ⚠️ Esse fallback NÃO é gambiarra temporária a remover: é o que faz o fornecedor
-  // de produto continuar FORA da lista (ele nunca vai ganhar especialidade) e o que
-  // evita que prestador/fornecedor de serviço já cadastrado suma do Encaminhamento
-  // enquanto ninguém reabre o cadastro dele para escolher a especialidade.
-  // Prestador (cadastro NOVO 2026-08-14, migração completa) passa a EXIGIR a escolha
-  // na próxima edição; Fornecedor (cadastro antigo, `tipoServico` com outro sentido —
-  // ver FornecedorController) continua com a especialidade OPCIONAL.
+  // Agora, por PRESTADOR: se há especialidade vinculada no catálogo
+  // (`tb_prestador_especialidades`), são os NOMES dela que viram `servicos`. SEM
+  // vínculo — prestador cujo cadastro ainda não foi reaberto na tela nova — cai no
+  // comportamento ANTERIOR: split de `tipo_servico` + `EXCLUIR_SERVICOS`. Esse fallback
+  // evita que prestador já cadastrado suma do Encaminhamento enquanto ninguém reabre o
+  // cadastro dele; o cadastro passa a EXIGIR a especialidade na próxima edição.
   listarPrestadores: async (req, res) => {
     try {
       const { animalId } = req.params;
@@ -172,10 +170,9 @@ const EncaminhamentoController = {
 
       const normalizar = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
-      // `tb_fornecedores` guarda também quem NÃO é prestador de serviço (a loja, o
-      // laboratório, a farmácia que vende o frasco). Encaminhar paciente para eles não
-      // faz sentido, então o serviço é descartado — e o cadastro que fica sem NENHUM
-      // serviço depois do corte sai da lista inteira.
+      // Texto legado de `tipo_servico` que não é serviço clínico (loja, laboratório,
+      // farmácia) é descartado — e o cadastro que fica sem NENHUM serviço depois do
+      // corte sai da lista inteira.
       const EXCLUIR_SERVICOS = new Set([
         'clinico', 'clinica', 'farmacia', 'loja', 'supermercado', 'laboratorio',
       ]);
@@ -184,26 +181,22 @@ const EncaminhamentoController = {
       // resposta ser a mesma com e sem o carimbo de tenant (ADMIN de plataforma).
       const escopoCadastro = { ativo: true, tipoEntrada: 'CLIENTE', empresaId: req.empresaId ?? null };
 
-      const [prestadores, fornecedores] = await Promise.all([
-        prisma.prestador.findMany({
-          where:  escopoCadastro,
-          select: { id: true, nome: true, email: true, telefone: true, tipoServico: true, userId: true },
-        }),
-        prisma.fornecedor.findMany({
-          where:  escopoCadastro,
-          select: {
-            id: true, nome: true, email: true, telefone: true, tipoServico: true, userId: true,
-            especialidades: { select: { especialidade: { select: { nome: true } } } },
-          },
-        }),
-      ]);
+      // 🔴 (2026-09-29, parte 3) SÓ `tb_prestadores`. O fornecedor deixou de ter
+      // especialidade (campo removido do cadastro, a pedido) e o `tipo_servico` dele é
+      // categoria de PRODUTO — logo não há como ele responder "que serviço presta".
+      // Quem é destino de encaminhamento se cadastra como PRESTADOR.
+      // ⚠️ Encaminhamento ANTIGO gravado com origem FORNECEDOR continua exibindo o nome:
+      // a leitura é por `lib/encaminhamentoPrestador.js`, que ainda faz o JOIN nas duas
+      // tabelas. O que mudou é só a lista de destinos oferecida para um NOVO.
+      const prestadores = await prisma.prestador.findMany({
+        where:  escopoCadastro,
+        select: { id: true, nome: true, email: true, telefone: true, tipoServico: true, userId: true },
+      });
 
       // Especialidade do catálogo vinculada a PRESTADOR — tabela NOVA
       // (`tb_prestador_especialidades`, migration 20261025000000), lida por SQL CRU:
       // pode não estar no client tipado ainda (§11) — sem o vínculo, cai no fallback
-      // do comentário acima, não derruba a listagem. Fornecedor já usa a relação
-      // TIPADA (`especialidades`, acima) — `tb_fornecedor_especialidades` está no
-      // client desde 2026-07-17.
+      // do comentário acima, não derruba a listagem.
       const prestadorIds = prestadores.map(p => p.id);
       const especPrestadorLinhas = prestadorIds.length === 0 ? [] : await prisma.$queryRaw`
         SELECT pe."prestador_id" AS "prestadorId", e."nome" AS "nome"
@@ -217,16 +210,10 @@ const EncaminhamentoController = {
         especPorPrestador.get(l.prestadorId).push(l.nome);
       }
 
-      const brutos = [
-        ...prestadores.map(p => ({
-          ...p, origem: encPrestador.ORIGENS.PRESTADOR,
-          especialidadesCatalogo: especPorPrestador.get(p.id) ?? [],
-        })),
-        ...fornecedores.map(f => ({
-          ...f, origem: encPrestador.ORIGENS.FORNECEDOR,
-          especialidadesCatalogo: f.especialidades.map(e => e.especialidade.nome),
-        })),
-      ];
+      const brutos = prestadores.map(p => ({
+        ...p, origem: encPrestador.ORIGENS.PRESTADOR,
+        especialidadesCatalogo: especPorPrestador.get(p.id) ?? [],
+      }));
 
       // Designações ativas DESTE animal — só alcançam quem tem login.
       const userIds = [...new Set(brutos.map(b => b.userId).filter(Boolean).map(Number))];
@@ -239,17 +226,20 @@ const EncaminhamentoController = {
       const servicosSet = new Set();
       const dados = [];
       for (const b of brutos) {
-        // Especialidade do catálogo VENCE quando existe. Sem vínculo, cai no split de
-        // `tipoServico` + `EXCLUIR_SERVICOS` de sempre — ver o comentário no topo do
-        // handler.
+        // Especialidade do catálogo VENCE quando existe. Sem vínculo (prestador ainda não
+        // reaberto na tela nova), cai no split de `tipoServico` + `EXCLUIR_SERVICOS` —
+        // ver o comentário no topo do handler.
+        // ⚠️ Esse fallback é SÓ do prestador: o `tipoServico` do FORNECEDOR é o "Tipo de
+        // fornecedor" (categoria de produto) e vazava para a Especialidade — inclusive no
+        // combo do Profissional externo, alimentado por `servicosDisponiveis`. Por isso o
+        // fornecedor saiu da lista (ver acima). Não reintroduzir.
         const servicos = b.especialidadesCatalogo.length > 0
           ? b.especialidadesCatalogo
           : String(b.tipoServico ?? '')
               .split(',')
               .map(x => x.trim())
               .filter(x => x && !EXCLUIR_SERVICOS.has(normalizar(x)));
-        // Fornecedor que só vende (loja, laboratório) some da lista — não é destino de
-        // paciente, e mantê-lo aqui obrigaria quem encaminha a filtrá-lo com o olho.
+        // Sem nenhum serviço, não é destino de paciente — some da lista.
         if (servicos.length === 0) continue;
         for (const x of servicos) servicosSet.add(x);
 
@@ -348,6 +338,16 @@ const EncaminhamentoController = {
         return res.status(400).json({
           error: 'Informe o profissional de destino',
           code:  'DESTINO_OBRIGATORIO',
+        });
+      }
+      // Destino EXTERNO exige o Telefone (WhatsApp) — 2026-09-29, a pedido. É para ele
+      // que o WhatsApp da tela manda o PDF; sem ele o envio caía no plano B. Mínimo de
+      // 10 dígitos (DDD + número). Destino do CADASTRO não passa por aqui: o telefone
+      // dele é lido ao vivo do cadastro.
+      if (!cadastroDestino && !prestadorId && telefoneDestinoInvalido(telefoneDestino)) {
+        return res.status(400).json({
+          error: 'Informe o telefone (WhatsApp) do profissional, com DDD',
+          code:  'TELEFONE_DESTINO_OBRIGATORIO',
         });
       }
       if (!evolucaoId) {
@@ -642,6 +642,18 @@ const EncaminhamentoController = {
       // PROPRIO → só registros próprios; EQUIPE/FULL → qualquer da equipe.
       if (!podeOperarRegistro(req, enc.veterinarioId)) {
         return res.status(403).json({ error: 'Seu nível de permissão só permite editar encaminhamentos criados por você.' });
+      }
+
+      // Mesma regra do `criar`: no destino EXTERNO (sem login de prestador e com o nome
+      // do profissional digitado) não se apaga o telefone. Só é conferido quando o
+      // campo VEIO no body — encaminhamento antigo sem telefone não é recusado por uma
+      // edição que nem mexe nele.
+      const ehExterno = !enc.prestadorId && !!String(veterinarioDestino ?? enc.veterinarioDestino ?? '').trim();
+      if (ehExterno && telefoneDestino !== undefined && telefoneDestinoInvalido(telefoneDestino)) {
+        return res.status(400).json({
+          error: 'Informe o telefone (WhatsApp) do profissional, com DDD',
+          code:  'TELEFONE_DESTINO_OBRIGATORIO',
+        });
       }
 
       const atualizado = await prisma.$transaction(async (tx) => {

@@ -29,7 +29,6 @@ import {
 } from '../utils/cadastroPorEmail';
 import InlineError from '../components/InlineError';
 import TipoServicoSelect from '../components/TipoServicoSelect';
-import EspecialidadeSelector from '../components/EspecialidadeSelector';
 import ModalJustificativa from '../components/ModalJustificativa';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
@@ -83,12 +82,9 @@ interface Fornecedor {
   telefone:    string | null;
   email:       string | null;
   /** Categoria de fornecedor de PRODUTO (Farmácia/Laboratório/Loja...) — texto
-   *  digitado/catálogo, INDEPENDENTE de `especialidadeIds` (2026-09-29). */
+   *  digitado/catálogo. Fornecedor NÃO tem especialidade (campo removido em
+   *  2026-09-29, parte 3). */
   tipoServico: string;
-  /** Especialidades do catálogo oficial (`tb_especialidades`) — OPCIONAL, só para o
-   *  fornecedor que também presta serviço clínico e deve aparecer no Encaminhamento
-   *  por especialidade. Não substitui `tipoServico`. */
-  especialidadeIds?: number[];
   tipoEntrada: string;
   cep:         string | null;
   endereco:    string | null;
@@ -123,8 +119,6 @@ interface FormForn {
   telefone:    string;
   email:       string;
   tipoServico: string;
-  /** Especialidades OPCIONAIS do catálogo oficial — ver o comentário em `Fornecedor`. */
-  especialidadeIds: number[];
   cep:         string;
   endereco:    string;
   complemento: string;
@@ -139,7 +133,6 @@ const FORM_INICIAL: FormForn = {
   nome: '', tipoVencimento: null, diaVencimento: null,
   tipoDoc: 'cnpj', cpf: '', cnpj: '', telefone: '', email: '',
   tipoServico: '',
-  especialidadeIds: [],
   cep: '', endereco: '', complemento: '', bairro: '', cidade: '', estado: '',
 };
 
@@ -177,7 +170,7 @@ function ModalDuplicataInativa({
 // ─── Modal ────────────────────────────────────────────────────────────────────
 
 function ModalFornecedor({
-  editando, form, saving, erro, aviso, especiesEmpresa,
+  editando, form, saving, erro, aviso,
   onFormChange, onSalvar, onClose, onEmailSaiu, onFecharAviso,
 }: {
   editando:    Fornecedor | null;
@@ -185,8 +178,6 @@ function ModalFornecedor({
   saving:      boolean;
   /** Erro da ação do MODAL — exibido abaixo do rodapé, junto do botão clicado. */
   erro:        string | null;
-  /** Espécies que a empresa atende — filtra o EspecialidadeSelector opcional. */
-  especiesEmpresa: number[];
   /** Preenchimento automático por e-mail: faixa que explica o que foi trazido. */
   aviso:       { mensagem: string; tom: 'carregado' | 'preenchido' } | null;
   onFormChange:(updates: Partial<FormForn>) => void;
@@ -345,26 +336,6 @@ function ModalFornecedor({
                   defaults={TIPOS_FORNECEDOR_PADRAO}
                   className={inputCls}
                 />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">
-                  Especialidades <span className="normal-case font-normal text-gray-400">(opcional)</span>
-                </label>
-                {/* 🔴 (2026-09-29) INDEPENDENTE do "Tipo de fornecedor" acima — este é
-                    o catálogo OFICIAL (`tb_especialidades`). Só preencha quando este
-                    fornecedor TAMBÉM presta serviço clínico: é o que faz ele aparecer
-                    como destino no Encaminhamento por especialidade. Fornecedor de
-                    produto puro (Farmácia/Laboratório/Loja) não precisa disto. */}
-                <EspecialidadeSelector
-                  variant="dropdown"
-                  value={form.especialidadeIds}
-                  onChange={especialidadeIds => onFormChange({ especialidadeIds })}
-                  especieIds={especiesEmpresa}
-                  emptyText="A empresa ainda não configurou as espécies atendidas (Configurações)."
-                />
-                <p className="text-[11px] text-gray-400 mt-1">
-                  Se este fornecedor também presta serviço clínico, escolha aqui para ele aparecer no Encaminhamento.
-                </p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -531,15 +502,6 @@ export default function CadastroFornecedor() {
   const [modalAcesso,     setModalAcesso]     = useState<{ equipeId: number; userId: number; nome: string } | null>(null);
   const [processandoToggle, setProcessandoToggle] = useState(false);
 
-  // Espécies que a empresa atende — filtra o EspecialidadeSelector opcional do
-  // formulário. Mesmo endpoint/critério de UsuarioFormModal e CadastroPessoal.
-  const [especiesEmpresa, setEspeciesEmpresa] = useState<number[]>([]);
-  useEffect(() => {
-    api.get('/equipes/especies-atendidas')
-      .then(res => setEspeciesEmpresa(res.data?.dados?.especiesAtendidas ?? []))
-      .catch(() => setEspeciesEmpresa([]));
-  }, []);
-
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
@@ -624,7 +586,6 @@ export default function CadastroFornecedor() {
       telefone:    f.telefone ? mascaraTelefone(f.telefone.replace(/\D/g,'')) : '',
       email:       f.email ?? '',
       tipoServico: f.tipoServico?.trim() ?? '',
-      especialidadeIds: f.especialidadeIds ?? [],
       cep:         f.cep         ? mascaraCEP(f.cep.replace(/\D/g,'')) : '',
       endereco:    f.endereco    ?? '',
       complemento: f.complemento ?? '',
@@ -713,7 +674,6 @@ export default function CadastroFornecedor() {
       telefone:    form.telefone,
       email:       form.email.trim() ? form.email.trim().toLowerCase() : null,
       tipoServico: form.tipoServico,
-      especialidadeIds: form.especialidadeIds,
       cep:         form.cep         || null,
       endereco:    form.endereco    || null,
       complemento: form.complemento || null,
@@ -1030,7 +990,6 @@ export default function CadastroFornecedor() {
           form={form}
           saving={saving}
           erro={erroModal}
-          especiesEmpresa={especiesEmpresa}
           onFormChange={handleFormChange}
           onSalvar={handleSalvar}
           onClose={fecharModal}

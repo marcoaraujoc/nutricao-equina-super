@@ -63,7 +63,7 @@ import type { ContextoDocumento } from '../modules/documentos/api';
 import { contarPreenchidos } from '../modules/documentos/campos';
 import type { CampoDocumento, Preenchimento } from '../modules/documentos/campos';
 import type { ListaDocumento, PreenchimentoListas } from '../modules/documentos/listas';
-import { listaObrigatoriaVazia } from '../modules/documentos/listas';
+import { listaObrigatoriaVazia, colunaObrigatoriaVazia } from '../modules/documentos/listas';
 import { categoriasDisponiveis } from '../modules/documentos/catalogo';
 import { blocosDeImagens, ehPdf, paginasDoArquivo, TIPOS_ACEITOS } from '../modules/documentos/upload';
 import type { Bloco, CategoriaId, DocumentoEmitido, Template } from '../modules/documentos/types';
@@ -536,8 +536,14 @@ export default function Documentos() {
    */
   const faltaListaObrigatoria = useCallback((): boolean => {
     const faltando = listaObrigatoriaVazia(listas, valListas);
-    if (!faltando) return false;
-    mostrarErro(`Preencha ao menos um item em "${faltando.rotulo}".`);
+    if (faltando) {
+      mostrarErro(`Preencha ao menos um item em "${faltando.rotulo}".`);
+      return true;
+    }
+    // Coluna obrigatória de cada item — a "Data da Aplicação" do Atestado de Vacinação.
+    const coluna = colunaObrigatoriaVazia(listas, valListas);
+    if (!coluna) return false;
+    mostrarErro(`Preencha "${coluna.coluna}" no item ${coluna.linha} de "${coluna.lista.rotulo}".`);
     return true;
   }, [listas, valListas, mostrarErro]);
 

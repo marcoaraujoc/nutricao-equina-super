@@ -28,6 +28,7 @@ function bancoFalso({ medicamentos = [], estoquesAtivos = 0, saidas = 0 }) {
     medicamentos: medicamentos.map((m) => ({ ...m })),
     criados: [], updates: [], viasCriadas: [], especiesCriadas: [],
     estoqueUpdateMany: [], prescricaoUpdateMany: [], raw: [],
+    loteVacinaUpdateMany: [], vacinaUpdateMany: [],
   };
   let proximoId = 900;
   const achar = (id) => estado.medicamentos.find((m) => m.id === Number(id)) ?? null;
@@ -65,6 +66,12 @@ function bancoFalso({ medicamentos = [], estoquesAtivos = 0, saidas = 0 }) {
     movimentoEstoque: { count: async () => saidas },
     prescricao: {
       updateMany: async (args) => { estado.prescricaoUpdateMany.push(args); return { count: 1 }; },
+    },
+    loteVacina: {
+      updateMany: async (args) => { estado.loteVacinaUpdateMany.push(args); return { count: 1 }; },
+    },
+    vacinaClinica: {
+      updateMany: async (args) => { estado.vacinaUpdateMany.push(args); return { count: 1 }; },
     },
     $executeRawUnsafe: async (...args) => { estado.raw.push(args); return 1; },
   };

@@ -16,9 +16,8 @@ import ModalJustificativa from '../components/ModalJustificativa';
 import ConfirmModal from '../components/ConfirmModal';
 import DateInput from '../components/DateInput';
 import type { AnimalInfo } from './SubModuloEvolucao';
-import { imprimirExame as imprimirExameUtil, gerarHtmlExame } from '../utils/ExamePrint';
+import { imprimirExame as imprimirExameUtil, gerarHtmlExame, prepararExame } from '../utils/ExamePrint';
 import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
-import { prepararImagensImpressao } from '../utils/print/PrintShell';
 import InlineError from '../components/InlineError';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
@@ -185,25 +184,26 @@ const TIPOS_META: Record<TipoExame, { badge: string }> = {
   Compra:       { badge: 'bg-amber-100 text-amber-700' },
 };
 
-// Ciclo do PEDIDO de exame: SALVA (solicitado) → FINALIZADA (concluído) /
-// REALIZADA (resultado carregado). CANCELADA = pedido cancelado (soft delete).
-type StatusExameUI    = 'SALVA' | 'FINALIZADA' | 'REALIZADA' | 'CANCELADA';
+// Ciclo do PEDIDO de exame: SALVA (solicitado) → REALIZADA (resultado carregado).
+// REALIZADO é o status FINAL. O CONCLUIDO legado (rota `finalizar`, sem tela) é
+// exibido como Realizado — não existe mais o estado "Finalizado" (2026-09-30).
+// CANCELADA = pedido cancelado (soft delete).
+type StatusExameUI    = 'SALVA' | 'REALIZADA' | 'CANCELADA';
 
 /** Colunas ordenáveis do histórico de exames. */
 type ColunaExame = 'numero' | 'dataInicio' | 'dataFim' | 'tipo' | 'exames'
                  | 'laboratorio' | 'amostra' | 'solicitante' | 'status' | 'justificativa';
-type FiltroStatusExame = 'todos' | 'SALVA' | 'FINALIZADA' | 'REALIZADA' | 'CANCELADA';
+type FiltroStatusExame = 'todos' | 'SALVA' | 'REALIZADA' | 'CANCELADA';
 
 function getStatusExame(ex: ExameClinico): StatusExameUI {
   if (!ex.ativo) return 'CANCELADA';
-  if (ex.status === 'REALIZADO') return 'REALIZADA';
-  return ex.status === 'CONCLUIDO' ? 'FINALIZADA' : 'SALVA';
+  if (ex.status === 'REALIZADO' || ex.status === 'CONCLUIDO') return 'REALIZADA';
+  return 'SALVA';
 }
 
 const FILTROS_EXAME: { key: FiltroStatusExame; label: string }[] = [
   { key: 'todos',      label: 'Todos'       },
   { key: 'SALVA',      label: 'Solicitados' },
-  { key: 'FINALIZADA', label: 'Finalizados' },
   { key: 'REALIZADA',  label: 'Realizados'  },
   { key: 'CANCELADA',  label: 'Cancelados'  },
 ];
@@ -220,13 +220,6 @@ function StatusExameBadge({ status }: { status: StatusExameUI }) {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-teal-100 text-teal-700">
         <CheckCircle2 size={9} /> REALIZADO
-      </span>
-    );
-  }
-  if (status === 'FINALIZADA') {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">
-        <CheckCircle2 size={9} /> FINALIZADO
       </span>
     );
   }
@@ -779,10 +772,6 @@ export default function SubModuloExames({
   });
   const totalPags     = Math.ceil(historicoOrdenado.length / limit);
   const historicoPage = historicoOrdenado.slice((page - 1) * limit, page * limit);
-  const counts = historico.reduce(
-    (acc, ex) => { acc[getStatusExame(ex)]++; return acc; },
-    { SALVA: 0, FINALIZADA: 0, REALIZADA: 0, CANCELADA: 0 } as Record<StatusExameUI, number>,
-  );
 
   // 🔴 PACIENTE INATIVO = SOMENTE LEITURA. O prontuário fica congelado na data
   // e hora da inativação: tudo continua visível, nada mais é criado, alterado,
@@ -1432,7 +1421,7 @@ export default function SubModuloExames({
 
   const imprimirExame = (ex: ExameClinico) => {
     if (!podeImprimir) { semPermissao('imprimir exame'); return; }
-    imprimirExameUtil(ex, animal);
+    void imprimirExameUtil(ex, animal);
   };
 
   // -- Compartilhar: vai o PDF da MESMA folha do Imprimir ---------------------
@@ -1468,11 +1457,9 @@ export default function SubModuloExames({
     try {
       // ANTES de montar o HTML: o PDF e gerado no SERVIDOR e o Puppeteer bloqueia
       // toda imagem que nao seja `data:` -- sem isto a logo da clinica e a foto do
-      // paciente nascem QUEBRADAS no arquivo que chega ao cliente.
-      await prepararImagensImpressao([
-        animal?.logoUrl,
-        typeof animal?.photoUrl === 'string' ? animal.photoUrl : null,
-      ]);
+      // paciente nascem QUEBRADAS no arquivo que chega ao cliente. Resolve tambem
+      // CRMV/assinatura e o endereco da clinica da folha (print/FolhaClinica.ts).
+      await prepararExame(ex, animal);
       const opts = {
         gerarHtml:   () => gerarHtmlExame(ex, animal),
         nomeArquivo: nomeArquivoExame(ex),
@@ -2267,8 +2254,7 @@ export default function SubModuloExames({
             const isActive = filtroStatus === f.key;
             let activeClass = 'bg-blue-600 text-white border-blue-600';
             // "Solicitados" ativa em VERDE (a pedido, 2026-09-05): é a aba PADRÃO da
-            // tela, e o emerald é a cor de "em curso" no módulo. O contador âmbar dela
-            // (quando NÃO está ativa) fica: ali o âmbar é o aviso de pendência.
+            // tela, e o emerald é a cor de "em curso" no módulo.
             if (f.key === 'SALVA'     && isActive) activeClass = 'bg-emerald-600 text-white border-emerald-600';
             if (f.key === 'CANCELADA' && isActive) activeClass = 'bg-red-600 text-white border-red-600';
             // "Realizados" em AMARELO com texto BRANCO (a pedido), como as demais abas.
@@ -2284,18 +2270,9 @@ export default function SubModuloExames({
                   isActive ? activeClass : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
                 }`}>
                 {f.label}
-                {f.key === 'SALVA' && !isActive && counts.SALVA > 0 && (
-                  <span className="w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold flex items-center justify-center">
-                    {counts.SALVA}
-                  </span>
-                )}
-                {f.key === 'CANCELADA' && !isActive && counts.CANCELADA > 0 && (
-                  <span className="w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
-                    {counts.CANCELADA}
-                  </span>
-                )}
-                {f.key === 'todos' && !isActive && (
-                  <span className="text-gray-400">({historico.length})</span>
+                {/* Quantidade SÓ no "Todos" (a pedido, 2026-09-30) — ativo ou não. */}
+                {f.key === 'todos' && (
+                  <span className={isActive ? 'text-white/80' : 'text-gray-400'}>({historico.length})</span>
                 )}
               </button>
             );

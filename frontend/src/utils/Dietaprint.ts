@@ -3,9 +3,11 @@
 // Seções independentes: Diário (por período do dia) | Semanal | Mensal
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Desde 2026-09-29 o papel é a FOLHA CLÍNICA (`print/FolhaClinica.ts`); aqui mora só
+// o CORPO — os blocos de alimentação por período.
 import {
-  PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura, srcImpressao, prepararImagensImpressao,
-} from './print/PrintShell';
+  gerarHtmlFolhaClinica, prepararFolhaClinica, escFolha as esc,
+} from './print/FolhaClinica';
 
 export interface PrintAnimal {
   nome: string;
@@ -31,6 +33,8 @@ export interface PrintItem {
 }
 
 export interface PrintUser {
+  /** `id` habilita CRMV e assinatura de quem emite a dieta. */
+  id?:       number | null;
   fullName?: string | null;
   email?: string | null;
 }
@@ -160,41 +164,6 @@ function buildGroupedHTML(itens: PrintItem[]): string {
 // ── CSS ───────────────────────────────────────────────────────────────────────
 
 const PRINT_CSS = `
-  ${PRINT_SHELL_CSS}
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #111;
-    padding: 5mm 5mm 17mm;
-  }
-
-  .sec-title {
-    font-size: 8pt; font-weight: 700; color: #059669;
-    text-transform: uppercase; letter-spacing: 1pt;
-    margin-bottom: 8pt; margin-top: 16pt;
-  }
-
-  .animal-card {
-    display: flex; gap: 14pt; align-items: stretch;
-    background: #f9fafb; border: 0.5pt solid #e5e7eb;
-    border-radius: 8pt; padding: 10pt; margin-bottom: 4pt;
-  }
-  .animal-photo {
-    width: 78pt; height: 78pt; border-radius: 6pt;
-    object-fit: cover; flex-shrink: 0; border: 0.5pt solid #e5e7eb;
-  }
-  .animal-photo-empty {
-    width: 78pt; height: 78pt; border-radius: 6pt; flex-shrink: 0;
-    border: 0.5pt solid #e5e7eb; background: #f3f4f6;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 26pt;
-  }
-  .animal-info { flex: 1; display: flex; flex-direction: column; justify-content: space-between; }
-  .animal-top    { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8pt; }
-  .animal-bottom { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8pt; margin-top: 8pt; padding-top: 8pt; border-top: 0.5pt solid #e5e7eb; }
-  .f-label { font-size: 8pt;   color: #6b7280; margin-bottom: 3pt; }
-  .f-val   { font-size: 10pt;  font-weight: 600; color: #111; }
-  .f-val-s { font-size: 9.5pt; font-weight: 500; color: #374151; }
-
   .plan-row {
     position: relative; display: flex; justify-content: center; align-items: center;
     margin-top: 12pt; margin-bottom: 12pt;
@@ -254,74 +223,41 @@ export function gerarHtmlDieta(
   itens: PrintItem[],
   user: PrintUser | null,
 ): string {
-  // `srcImpressao`, nao `resolverUrlAbsoluta`: o PDF sai do Puppeteer, que bloqueia
-  // toda requisicao que nao seja `data:` — com a URL http a foto nasce QUEBRADA no
-  // arquivo que chega ao cliente (ver prepararDieta).
-  const fotoUrl     = srcImpressao(animal?.photoUrl);
   const totalItens  = itens.length;
   const groupedHTML = buildGroupedHTML(itens);
+  const nascimento  = formatarDataBR(animal?.dataNascimento);
 
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8">
-  <title>Plano de Dieta · ${plano.nome}</title>
-  <style>${PRINT_CSS}</style>
-</head>
-<body>
-
-  ${renderCabecalho(animal?.logoUrl)}
-
-  <div class="sec-title">Dados do Animal</div>
-  <div class="animal-card">
-    ${fotoUrl
-      ? `<img class="animal-photo" src="${fotoUrl}" alt="${animal?.nome ?? 'Animal'}">`
-      : `<div class="animal-photo-empty">🐴</div>`}
-    <div class="animal-info">
-      <div class="animal-top">
-        <div>
-          <div class="f-label">Nome</div>
-          <div class="f-val">${animal?.nome ?? '—'}</div>
-        </div>
-        <div>
-          <div class="f-label">Raça</div>
-          <div class="f-val-s">${animal?.raca?.nome ?? 'Não informada'}</div>
-        </div>
-        <div>
-          <div class="f-label">Nascimento</div>
-          <div class="f-val-s">${formatarDataBR(animal?.dataNascimento)}</div>
-        </div>
-      </div>
-      <div class="animal-bottom">
-        <div>
-          <div class="f-label">Veterinário Responsável</div>
-          <div class="f-val-s">${user?.fullName ?? '—'}</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="sec-title">Plano de Dieta</div>
-  <div class="plan-row">
-    <span class="plan-name">${plano.nome}</span>
-  </div>
-
-  ${groupedHTML}
-
-  <div class="ps-footer">
-    <span>Total: ${totalItens} ${totalItens === 1 ? 'alimento' : 'alimentos'}</span>
-  </div>
-
-  ${renderRodapeAssinatura(user)}
-
-</body>
-</html>`;
+  return gerarHtmlFolhaClinica({
+    documento:    `Plano de Dieta · ${plano.nome}`,
+    logoUrl:      animal?.logoUrl,
+    // Quem assina a dieta é o veterinário que a emite (o usuário da tela), como antes.
+    profissional: user ? { id: user.id ?? null, nome: user.fullName ?? null } : null,
+    animal: animal ? {
+      nome:         animal.nome,
+      photoUrl:     animal.photoUrl ?? null,
+      raca:         animal.raca?.nome ?? null,
+      nascimento:   nascimento !== '—' ? nascimento : null,
+      proprietario: animal.user?.fullName ?? null,
+    } : null,
+    paginas: [{
+      titulo:    'Plano de Dieta',
+      subtitulo: esc(plano.nome),
+      corpoHtml: groupedHTML,
+    }],
+    cssModulo: PRINT_CSS,
+    rodape:    `Total: ${totalItens} ${totalItens === 1 ? 'alimento' : 'alimentos'}`,
+  });
 }
+
 /**
- * Resolve as imagens da folha (logo e foto do paciente) para `data:` ANTES de gerar
- * o HTML. Obrigatório em quem vai mandar a dieta por WhatsApp/e-mail — ver
- * `prepararImagensImpressao` em print/PrintShell.
+ * Resolve o que a folha precisa ANTES de gerar o HTML: CRMV/assinatura de quem
+ * emite, endereço da clínica e as imagens (logo e foto) em `data:`. Obrigatório em
+ * quem vai mandar a dieta por WhatsApp/e-mail — ver print/FolhaClinica.ts.
  */
-export async function prepararDieta(animal: PrintAnimal | null): Promise<void> {
-  await prepararImagensImpressao([animal?.logoUrl, animal?.photoUrl]);
+export async function prepararDieta(animal: PrintAnimal | null, user?: PrintUser | null): Promise<void> {
+  await prepararFolhaClinica({
+    profissionalId: user?.id ?? null,
+    logoUrl:        animal?.logoUrl,
+    imagens:        [animal?.photoUrl],
+  });
 }

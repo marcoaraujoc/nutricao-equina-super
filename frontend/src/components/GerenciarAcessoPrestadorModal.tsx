@@ -14,9 +14,14 @@
 // motivo de sempre: duas cópias divergiriam na primeira correção, e o que divergiria
 // seria justamente o alcance de um profissional externo aos prontuários.
 //
-// ⚠️ O `prestadorUserId` é o **login** (`Fornecedor.userId` / `Prestador.userId`), não
-// o id do cadastro: a designação é por USUÁRIO, porque é o usuário que abre a tela.
-// Cadastro sem login não tem o que designar — quem chama não deve oferecer o botão.
+// DOIS CAMINHOS, UM MODAL:
+//   • `equipeId` + `prestadorUserId` → designação pelo LOGIN
+//     (`/equipes/:equipeId/prestadores/:userId/designacoes`) — é o do Fornecedor.
+//   • `baseUrl` → rota pronta. O PRESTADOR usa `/cadastro/prestadores/:id/designacoes`,
+//     que autoriza pelo CADASTRO — com ou sem login (2026-09-30). É essa autorização
+//     que libera agendá-lo para o paciente na Agenda.
+// `semLogin` só muda o AVISO: sem login, a autorização vale para a Agenda, mas o
+// prestador não entra no sistema para ver o paciente.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, X, Check, ChevronDown, MapPin, PawPrint, Trash2, Wrench } from 'lucide-react';
@@ -70,13 +75,18 @@ function normalizarBusca(s: string): string {
 }
 
 export default function GerenciarAcessoPrestadorModal({
-  equipeId, prestadorUserId, prestadorNome, onClose,
+  equipeId, prestadorUserId, baseUrl, semLogin = false, prestadorNome, onClose,
 }: {
-  equipeId:        number;
-  prestadorUserId: number;
-  prestadorNome:   string;
-  onClose:         () => void;
+  equipeId?:        number;
+  prestadorUserId?: number;
+  /** Rota base das designações; vence o par equipeId/prestadorUserId. */
+  baseUrl?:         string;
+  /** Prestador sem acesso ao sistema — só troca o aviso do topo. */
+  semLogin?:        boolean;
+  prestadorNome:    string;
+  onClose:          () => void;
 }) {
+  const base = baseUrl ?? `/equipes/${equipeId}/prestadores/${prestadorUserId}/designacoes`;
   const [loading,  setLoading]  = useState(true);
   const [salvando, setSalvando] = useState(false);
 
@@ -104,12 +114,12 @@ export default function GerenciarAcessoPrestadorModal({
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.get(`/equipes/${equipeId}/prestadores/${prestadorUserId}/designacoes`);
+      const res = await api.get(base);
       setDesignacoes(res.data?.dados?.designacoes ?? []);
       setAnimaisDisponiveis(res.data?.dados?.animaisDisponiveis ?? []);
     } catch { setErroInline('Erro ao carregar designações'); }
     finally  { setLoading(false); }
-  }, [equipeId, prestadorUserId]);
+  }, [base]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
@@ -170,14 +180,16 @@ export default function GerenciarAcessoPrestadorModal({
     if (animaisSel.length === 0) { setErroInline('Marque ao menos um animal'); return; }
     setSalvando(true);
     try {
-      const res = await api.post(`/equipes/${equipeId}/prestadores/${prestadorUserId}/designacoes/lote`, {
+      const res = await api.post(`${base}/lote`, {
         animalIds: animaisSel, motivo,
       });
       const n = res.data?.dados?.concedidos ?? animaisSel.length;
       toast.success(`Acesso concedido a ${n} animal${n === 1 ? '' : 'is'}`);
       setAnimaisSel([]); setMotivo(''); setAnimalSearch(''); setShowAnimalDrop(false);
       carregar();
-    } catch { setErroInline('Erro ao conceder acesso'); }
+    } catch (err) {
+      setErroInline((err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem ?? 'Erro ao conceder acesso');
+    }
     finally  { setSalvando(false); }
   };
 
@@ -190,7 +202,7 @@ export default function GerenciarAcessoPrestadorModal({
     const { animalId } = confirmRemover;
     setConfirmRemover(null);
     try {
-      await api.delete(`/equipes/${equipeId}/prestadores/${prestadorUserId}/designacoes/${animalId}`);
+      await api.delete(`${base}/${animalId}`);
       toast.success('Acesso removido');
       carregar();
     } catch { setErroInline('Erro ao remover acesso'); }
@@ -203,7 +215,7 @@ export default function GerenciarAcessoPrestadorModal({
     setErroInline(null);
     setRemovendoTodos(true);
     try {
-      const res = await api.delete(`/equipes/${equipeId}/prestadores/${prestadorUserId}/designacoes`);
+      const res = await api.delete(base);
       const n = res.data?.dados?.removidos ?? ativas.length;
       toast.success(`Acesso removido de ${n} animal${n === 1 ? '' : 'is'}`);
       carregar();
@@ -243,6 +255,14 @@ export default function GerenciarAcessoPrestadorModal({
             <div className="flex justify-center py-10"><Loader2 size={20} className="animate-spin text-teal-500" /></div>
           ) : (
             <div className="space-y-5">
+
+              {semLogin && (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 text-xs text-amber-800">
+                  Este prestador não tem acesso ao sistema. Os pacientes autorizados aqui passam a poder ser
+                  agendados para ele na Agenda, mas ele não entra no sistema para vê-los. Para isso, marque
+                  "Terá acesso ao sistema" no cadastro dele.
+                </div>
+              )}
 
               {/* Conceder acesso */}
               <div className="bg-teal-50 border border-teal-200 rounded-2xl p-4">

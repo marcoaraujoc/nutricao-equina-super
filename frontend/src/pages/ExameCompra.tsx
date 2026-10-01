@@ -15,7 +15,7 @@ import SeletorAnimalInteligente from '../components/SeletorAnimalInteligente';
 import CompartilharPdfBotoes from '../components/CompartilharPdfBotoes';
 import JanelaLista from '../components/JanelaLista';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
-import { imprimirExameCompra, gerarHtmlExameCompra } from '../utils/ExameCompraPrint';
+import { imprimirExameCompra, gerarHtmlExameCompra, prepararExameCompra } from '../utils/ExameCompraPrint';
 import InlineError from '../components/InlineError';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -615,7 +615,7 @@ export default function ExameCompra() {
 
   // ── Imprimir ──────────────────────────────────────────────────────────────
   const imprimirLaudo = (ex: ExameCompraItem) => {
-    imprimirExameCompra(ex, selectedAnimal ?? undefined);
+    void imprimirExameCompra(ex, selectedAnimal ?? undefined);
   };
 
   // ── Compartilhar (WhatsApp/E-mail) ────────────────────────────────────────
@@ -1324,6 +1324,7 @@ export default function ExameCompra() {
                           onClick={() => imprimirLaudo(ex)} />
                         <CompartilharPdfBotoes
                           gerarHtml={() => gerarHtmlExameCompra(ex, selectedAnimal ?? undefined)}
+                          aoPreparar={() => prepararExameCompra(ex, selectedAnimal ?? undefined)}
                           nomeArquivo={nomeArquivoLaudo(ex)}
                           texto={textoCompartilhar(ex)}
                           documento="Laudo de Exame de Compra"

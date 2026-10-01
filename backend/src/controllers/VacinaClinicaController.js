@@ -20,6 +20,7 @@ const { animalEstaInativo, bloquearSeAnimalInativo, lerInativosEmLote } = requir
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const { garantirMedicamentoDaEmpresa } = require('../lib/catalogoManual');
 const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
+const { qtdNoLoteDaVacina } = require('../lib/vacinaDosagemLote');
 
 const INCLUDE_VACINA = {
   veterinario: { select: { id: true, fullName: true } },
@@ -129,7 +130,7 @@ async function formaDoProduto(client, medicamentoCatId) {
 // respeitando o que já está reservado por outras vacinas; se mesmo assim faltar, o
 // restante é reservado na ÚLTIMA entrada (mesma "finalização forçada" da prescrição —
 // nunca bloqueia o registro clínico por estoque insuficiente).
-async function criarReservaVacina(tx, { vacinaId, animalId, medicamentoCatId, quantidade, empresaId }) {
+async function criarReservaVacina(tx, { vacinaId, animalId, medicamentoCatId, quantidade, empresaId, produto = undefined }) {
   // Recalcula do zero: reenvio/edição antes da execução não pode duplicar reserva.
   await tx.$executeRawUnsafe(
     `DELETE FROM schs2vet.tb_reservas_estoque_vacina WHERE "vacinaClinicaId" = $1`, vacinaId
@@ -138,7 +139,11 @@ async function criarReservaVacina(tx, { vacinaId, animalId, medicamentoCatId, qu
   const lotes = await buscarLotesVacinaFEFO(tx, medicamentoCatId, empresaId, vacinaId);
   if (lotes.length === 0) return;
 
-  let restante = dosagemDaVacina(quantidade);
+  // 🔴 Na UNIDADE DO LOTE, não a dosagem crua (2026-10-01) — ver lib/vacinaDosagemLote.
+  // `produto` vem pronto quando quem chama é a reconversão do catálogo.
+  let restante = await qtdNoLoteDaVacina(tx, {
+    vacinaId, medicamentoCatId, dosagem: dosagemDaVacina(quantidade), produto,
+  });
   for (let i = 0; i < lotes.length && restante > 0; i++) {
     const l = lotes[i];
     const disponivel    = Math.max(Number(l.qtdDisponivel) - l.reservadoOutros, 0);
@@ -190,9 +195,13 @@ async function consumirReservaVacina(tx, vacinaId) {
     `DELETE FROM schs2vet.tb_reservas_estoque_vacina WHERE "vacinaClinicaId" = $1`, vacinaId
   );
 
-  // Preço MÉDIO por dose (pode ter vindo de lotes com preços diferentes) — o chamador
-  // multiplica de volta por `qtd` ao lançar na fatura, então precisa ser por-dose.
-  return { loteId: loteIdFinal, loteNome: loteNomeFinal, valorPorDose: qtdTotal > 0 ? valorTotal / qtdTotal : 0 };
+  // Preço MÉDIO por unidade do lote (pode ter vindo de lotes com preços diferentes) — o
+  // chamador multiplica por `qtdConsumida` ao lançar na fatura.
+  return {
+    loteId: loteIdFinal, loteNome: loteNomeFinal,
+    valorPorDose: qtdTotal > 0 ? valorTotal / qtdTotal : 0,
+    qtdConsumida: qtdTotal,
+  };
 }
 
 async function listarPorAnimal(req, res) {
@@ -1400,6 +1409,14 @@ async function entradasCobrancaVacina(tx, medicamentoCatId, empresaId) {
 async function darBaixaEFaturar(tx, { vacina, info, qtd, veterinarioId, empresaIdEfetivo, agora, animal }) {
   let loteIdFinal = vacina.loteId ?? null;
   let loteValor   = 0;
+  // 🔴 O QUE SAI DO LOTE é a dosagem NA UNIDADE DO LOTE (2026-10-01): a vacina
+  // registrada em "2 mL" enquanto o produto era multidose, aplicada depois que ele foi
+  // desmarcado, tira UM frasco — não dois. Ver lib/vacinaDosagemLote. A fatura cobra a
+  // mesma quantidade, ao preço da mesma unidade (`valor ÷ doses_por_frasco`).
+  const qtdLote = await qtdNoLoteDaVacina(tx, {
+    vacinaId: vacina.id, medicamentoCatId: info.medicamentoCatId, dosagem: qtd,
+  });
+  let qtdFaturada = qtdLote;
 
   // Forma de cobrança + retrato do estoque, os DOIS antes de qualquer baixa.
   const cfgCobranca = await formaCobranca.lerForma(tx, empresaIdEfetivo);
@@ -1414,20 +1431,22 @@ async function darBaixaEFaturar(tx, { vacina, info, qtd, veterinarioId, empresaI
   if (consumida) {
     loteIdFinal = consumida.loteId;
     loteValor   = consumida.valorPorDose;
+    // Cobra o que a reserva de fato tirou do lote — ela já está na unidade do lote.
+    if (consumida.qtdConsumida > 0) qtdFaturada = consumida.qtdConsumida;
     if (loteIdFinal != null && loteIdFinal !== vacina.loteId) {
       await tx.vacinaClinica.update({ where: { id: vacina.id }, data: { loteId: loteIdFinal, lote: consumida.loteNome ?? vacina.lote } });
     }
   } else {
     let loteData = loteIdFinal ? await tx.loteVacina.findUnique({ where: { id: loteIdFinal } }) : null;
     const loteInvalido = !loteData
-      || loteData.qtdDisponivel < qtd
+      || loteData.qtdDisponivel < qtdLote
       || (loteData.validade && new Date(loteData.validade) < agora);
 
     // Lote vinculado inválido/insuficiente → tenta FEFO pelo medicamento
     if (loteInvalido && info.medicamentoCatId) {
       const params = empresaIdEfetivo
-        ? [Number(info.medicamentoCatId), qtd, agora, empresaIdEfetivo]
-        : [Number(info.medicamentoCatId), qtd, agora];
+        ? [Number(info.medicamentoCatId), qtdLote, agora, empresaIdEfetivo]
+        : [Number(info.medicamentoCatId), qtdLote, agora];
       const empresaFilter = empresaIdEfetivo ? 'AND (empresa_id = $4 OR empresa_id IS NULL)' : '';
       const loteRows = await tx.$queryRawUnsafe(
         `SELECT id, lote, doses_por_frasco AS "dosesPorFrasco",
@@ -1450,7 +1469,7 @@ async function darBaixaEFaturar(tx, { vacina, info, qtd, veterinarioId, empresaI
       const valorFrasco = Number(loteData.valorUnitarioRepassado ?? loteData.valorUnitario ?? 0);
       const dosesFrasco = Number(loteData.dosesPorFrasco) || 1;
       loteValor = valorFrasco / dosesFrasco;
-      await tx.loteVacina.update({ where: { id: loteData.id }, data: { qtdDisponivel: { decrement: qtd } } });
+      await tx.loteVacina.update({ where: { id: loteData.id }, data: { qtdDisponivel: { decrement: qtdLote } } });
       if (loteIdFinal !== vacina.loteId) {
         await tx.vacinaClinica.update({ where: { id: vacina.id }, data: { loteId: loteIdFinal, lote: loteData.lote ?? vacina.lote } });
       }
@@ -1483,7 +1502,9 @@ async function darBaixaEFaturar(tx, { vacina, info, qtd, veterinarioId, empresaI
       tipo:            'VACINA',
       descricao,
       valor:           valorItem,
-      quantidade:      qtd,
+      // Valor de REFERÊNCIA (orçado) é por unidade da DOSAGEM; o do lote, por unidade
+      // do LOTE — cada um multiplica pela sua quantidade.
+      quantidade:      info.valor != null ? qtd : (loteIdFinal ? qtdFaturada : qtd),
       veterinarioId,
       vacinaClinicaId: vacina.id,
       ocorridoEm:      agora,
@@ -1640,4 +1661,7 @@ module.exports = {
   // Reusada pela cascata da finalização do ATENDIMENTO (`lib/finalizacaoEvolucao.js`):
   // empresa sem etapa de execução cobra ali também a vacina promovida de SALVA.
   executarNaFinalizacao,
+  // Reusada pela reconversão do lote quando o produto muda de conteúdo
+  // (`lib/catalogoEmpresa.js#reconverterLotesVacinaAtivos`).
+  criarReservaVacina,
 };

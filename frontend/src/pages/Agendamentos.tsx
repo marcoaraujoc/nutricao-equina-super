@@ -6,6 +6,8 @@ import toast from 'react-hot-toast';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
+import ComboBuscavel from '../components/ComboBuscavel';
+import type { OpcaoCombo } from '../components/ComboBuscavel';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { isSubespecialidadeValida } from '../utils/subespecialidades';
@@ -67,6 +69,9 @@ interface AgendamentoGlobal {
   versao?:     number | null;
   especialidade: { id: number; nome: string } | null;
   veterinario: { id: number; fullName: string } | null;
+  /** PRESTADOR (cadastro) responsável — com ou sem login (2026-09-30). Sem login,
+   *  `veterinario` vem nulo e é ESTE que diz de quem é o agendamento. */
+  prestadorCadastro?: { id: number; nome: string } | null;
   criadoPor:   { id: number; fullName: string } | null;
   /** Rastro da última TROCA de responsável (assumir, trocar profissional, transferir
    *  o dia): de quem o atendimento veio. RESERVA da cadeia abaixo, para a base sem a
@@ -97,6 +102,25 @@ const responsaveisAnterioresDoAg = (ag: AgendamentoGlobal): EloResponsavel[] => 
   if (cadeia.length > 0) return cadeia;
   return ag.assumidoDe?.fullName ? [ag.assumidoDe] : [];
 };
+
+// ── PRESTADOR NA AGENDA (2026-09-30; regra revista em 2026-10-01) ──────────────
+// Dois tipos:
+//   • INTEGRA A EQUIPE (incluído como membro na tela Equipe) → vem de /equipes/membros
+//     em `vets` e segue as regras da empresa, como qualquer membro.
+//   • EXTERNO (o resto do cadastro de Prestador) → entra pelo cadastro, para QUALQUER
+//     paciente, em QUALQUER dia e horário, só pela duração do cadastro; gestor ou
+//     veterinário agendam. Só aparece no Expediente Ativo quando escolhido no filtro.
+// ⚠️ Na grade a CHAVE dele é o id do cadastro NEGATIVO: o mesmo profissional pode ser
+// membro (userId) e prestador ao mesmo tempo, e a chave positiva colidiria.
+const chavePrestador = (prestadorId: number) => -prestadorId;
+/** Chave do responsável do agendamento na grade (prestador vence o login). */
+const chaveResponsavel = (ag: AgendamentoGlobal): number | null =>
+  ag.prestadorCadastro ? chavePrestador(ag.prestadorCadastro.id) : (ag.veterinario?.id ?? null);
+/** Nome de quem responde pelo agendamento — o prestador sem login não tem `veterinario`. */
+const nomeResponsavel = (ag: AgendamentoGlobal): string | null =>
+  ag.prestadorCadastro ? `${ag.prestadorCadastro.nome} (prestador)` : (ag.veterinario?.fullName ?? null);
+/** Ninguém responde pelo agendamento (nem membro, nem prestador). */
+const semResponsavel = (ag: AgendamentoGlobal): boolean => !ag.veterinario?.id && !ag.prestadorCadastro;
 
 interface AnimalOption {
   id:      number;
@@ -156,7 +180,56 @@ interface VetMembro {
   // Locais onde o profissional atende. Cada local tem dias, horário e as
   // especialidades (com tempo) exercidas ALI — é a base de uma linha da tabela.
   locais: LocalAtendimento[];
+  /** PRESTADOR (cadastro) — `userId` é então a chave NEGATIVA (`chavePrestador`). */
+  prestadorId?: number;
+  /** Login do prestador, quando houver. */
+  loginId?:     number | null;
+  /** Pacientes autorizados no "Gerenciar Acesso". Desde 2026-10-01 só INFORMA (selo
+   *  da linha): o prestador externo é agendado para qualquer paciente. */
+  animalIds?:   number[];
+  /** 🔴 PRESTADOR EXTERNO (2026-10-01): não foi incluído como membro na tela Equipe.
+   *  Agenda em QUALQUER dia e horário, só pela duração `tempoConsultaMin`, e fica
+   *  FORA do "Expediente Ativo" até ser escolhido no filtro (nome ou especialidade).
+   *  Quem integra a equipe não vem como prestador — vem em `vets`, como membro. */
+  externo?:     boolean;
+  /** Tempo de consulta do cadastro do prestador. null = padrão da empresa. */
+  tempoConsultaMin?: number | null;
 }
+
+/**
+ * ORDEM DOS PROFISSIONAIS na Agenda (2026-10-01, a pedido): dois grupos — primeiro os
+ * MEMBROS da equipe, depois os PRESTADORES —, cada um em ordem alfabética.
+ * Prestador = o externo do cadastro (`externo`) ou o membro com cargo de prestador
+ * (FORNECEDOR/PRESTADOR, §4 — os dois cargos são o mesmo comportamento).
+ * ⚠️ FONTE ÚNICA da ordem: `vets`, `prestadoresAg`, `todosProfissionais`, as linhas
+ * do Expediente Ativo e os seletores passam todos por aqui.
+ */
+const ehProfissionalPrestador = (v: { externo?: boolean; cargo: string }): boolean =>
+  !!v.externo || v.cargo === 'FORNECEDOR' || v.cargo === 'PRESTADOR';
+const GRUPO_EQUIPE = 'Equipe';
+const GRUPO_PRESTADORES = 'Prestadores';
+const grupoDoProfissional = (v: { externo?: boolean; cargo: string }): string =>
+  ehProfissionalPrestador(v) ? GRUPO_PRESTADORES : GRUPO_EQUIPE;
+const compararProfissionais = (
+  a: { externo?: boolean; cargo: string; fullName: string },
+  b: { externo?: boolean; cargo: string; fullName: string },
+): number =>
+  Number(ehProfissionalPrestador(a)) - Number(ehProfissionalPrestador(b))
+  || a.fullName.localeCompare(b.fullName, 'pt-BR', { sensitivity: 'base' });
+
+/** `<option>`s de um `<select>` nativo de profissional, já agrupados. Com um grupo
+ *  só não desenha `<optgroup>` — cabeçalho de um grupo único é ruído. */
+const opcoesProfissionaisAgrupadas = (lista: VetMembro[]) => {
+  const ordenada = [...lista].sort(compararProfissionais);
+  const equipe = ordenada.filter(v => !ehProfissionalPrestador(v));
+  const prest  = ordenada.filter(v => ehProfissionalPrestador(v));
+  const opt = (v: VetMembro) => <option key={v.userId} value={v.userId}>{v.fullName}</option>;
+  if (equipe.length === 0 || prest.length === 0) return ordenada.map(opt);
+  return [
+    <optgroup key="g-equipe" label={GRUPO_EQUIPE}>{equipe.map(opt)}</optgroup>,
+    <optgroup key="g-prest" label={GRUPO_PRESTADORES}>{prest.map(opt)}</optgroup>,
+  ];
+};
 
 interface LocalAtendimento {
   localizacaoId:  number;
@@ -165,6 +238,21 @@ interface LocalAtendimento {
   horaIni: string | null;
   horaFim: string | null;
   especialidades: EspecialidadeVet[];
+}
+
+/** Uma linha do Expediente Ativo — ver `linhasDoDia`. */
+interface LinhaAtendimento {
+  key: string;
+  vet: VetMembro;
+  localNome: string;
+  esp: EspecialidadeVet | null;
+  dias: number[] | null;
+  horaInicio: string | null;
+  horaFim: string | null;
+  /** Horários que o expediente oferece no dia/período (sem os que já passaram). */
+  grade: string[];
+  /** Os da `grade` ainda livres. */
+  livres: string[];
 }
 
 type VozEtapa = 'IDLE' | 'GRAVANDO' | 'PROCESSANDO' | 'DISPONIVEL' | 'INDISPONIVEL' | 'ERRO';
@@ -236,7 +324,20 @@ function statusCasaFiltro(status: StatusAgendamento, filtro: FiltroStatus): bool
   return status === filtro;
 }
 
-const HORARIOS = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`);
+
+/** Períodos do dia do filtro — faixa [de, ate) em minutos. */
+type Turno = 'MANHA' | 'TARDE' | 'NOITE';
+const FAIXA_TURNO: Record<Turno, [number, number]> = {
+  MANHA: [0, 12 * 60],
+  TARDE: [12 * 60, 18 * 60],
+  NOITE: [18 * 60, 24 * 60],
+};
+const ROTULO_TURNO: Record<Turno, string> = {
+  MANHA: 'Manhã (até 12:00)',
+  TARDE: 'Tarde (12:00 – 18:00)',
+  NOITE: 'Noite (a partir das 18:00)',
+};
+const turnoDoMinuto = (m: number): Turno => (m < 12 * 60 ? 'MANHA' : m < 18 * 60 ? 'TARDE' : 'NOITE');
 
 // Duração usada quando não há especialidade/tempo configurado — é a grade de 1h
 // que a agenda sempre teve, então nada muda para quem não configurar tempos.
@@ -621,6 +722,10 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // — com qualquer nível concedido no Controle de Acesso — só na própria coluna.
   // O Controle de Acesso decide SE a pessoa agenda; esta regra decide PARA QUEM.
   const podeAgendarParaOutro                        = isGestor;
+  // 🔴 O PRESTADOR EXTERNO aceita também o VETERINÁRIO (2026-10-01, a pedido) —
+  // espelho de `podeAgendarPrestadorExterno` no backend. `userType` vem do /users/me
+  // já resolvido para a EMPRESA ATIVA (o gestor também resolve para VETERINARIO).
+  const podeAgendarExterno                          = isGestor || user?.userType === 'VETERINARIO';
   const location                                    = useLocation();
   const navigate                                    = useNavigate();
   const nomeEquipe                                  = contextoAtivo?.label ?? 'sua equipe';
@@ -638,8 +743,8 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
    */
   const ehMinhaAgenda = (ag: AgendamentoGlobal) =>
     isGestor
-    || !ag.veterinario?.id
-    || ag.veterinario.id === meuUserId
+    || semResponsavel(ag)
+    || ag.veterinario?.id === meuUserId
     || ag.criadoPor?.id === meuUserId;
 
   /**
@@ -668,7 +773,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
    * sempre disponível), e só depois disso Iniciar aparece.
    */
   const podeIniciarAtendimento = (ag: AgendamentoGlobal) =>
-    podeGerenciar && (!ag.veterinario?.id || ag.veterinario.id === meuUserId);
+    podeGerenciar && (semResponsavel(ag) || ag.veterinario?.id === meuUserId);
 
   // Transferir o atendimento para OUTRO profissional é ação EXCLUSIVA DO GESTOR
   // (2026-08-04). Não é permissão da matriz e não se configura: passar o paciente para
@@ -729,12 +834,26 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
 
   // ── Vets ────────────────────────────────────────────────────────────────────
   const [vets, setVets]               = useState<VetMembro[]>([]);
+  // Prestadores com paciente autorizado (GET /clinica/agendamentos/prestadores).
+  // FICAM FORA de `vets` de propósito: `vets` também alimenta Transferir e o
+  // "Transferir dia inteiro", e o prestador não é destino de transferência.
+  const [prestadoresAg, setPrestadoresAg] = useState<VetMembro[]>([]);
+  // A GRADE (e o filtro de profissional) oferece os dois.
+  const todosProfissionais = useMemo(
+    () => [...vets, ...prestadoresAg].sort(compararProfissionais), [vets, prestadoresAg]);
+  const profissionalPorChave = (chave: number | null | undefined): VetMembro | undefined =>
+    chave == null ? undefined : todosProfissionais.find(v => v.userId === chave);
+  /** Quem responde no POST do agendamento: prestador pelo cadastro, membro pelo login. */
+  const responsavelPayload = (chave: number): { prestadorCadastroId: number } | { veterinarioId: number } => {
+    const prof = profissionalPorChave(chave);
+    return prof?.prestadorId ? { prestadorCadastroId: prof.prestadorId } : { veterinarioId: chave };
+  };
   const [filtroVetId, setFiltroVetId] = useState('');
   // Filtro por especialidade: restringe os profissionais listados E fixa a
   // especialidade de cada um, para a grade sair no tempo daquela especialidade.
   const [filtroEspId, setFiltroEspId] = useState('');
   const [filtroLocalId, setFiltroLocalId] = useState('');
-  const [filtroTurno, setFiltroTurno] = useState<'' | 'MANHA' | 'TARDE' | 'NOITE'>('');
+  const [filtroTurno, setFiltroTurno] = useState<'' | Turno>('');
   // Lista do dia: nasce mostrando só o que ainda vai acontecer (STATUS_ABERTOS).
   // "Todos os status" traz de volta cancelado, reagendado, concluído e finalizado.
   // `?status=` na URL pré-seleciona o filtro — é por aí que os Indicadores de
@@ -983,34 +1102,6 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     if (auto || animalQP || dateQP) navigate('/agendamentos', { replace: true });
   }, [location.search]);
 
-  // ── statusPorDia — bolinhas só com profissional selecionado ─────────────────
-  // Verde = livre (0 agend.), Amarelo = parcial, Vermelho = sem vagas
-  const statusPorDia = useMemo<Map<string, DiaStatus>>(() => {
-    if (!filtroVetId) return new Map();
-    const vetId = Number(filtroVetId);
-    const contagem = new Map<string, number>();
-    agendamentosMes.forEach(ag => {
-      if (STATUS_LIVRES.includes(ag.status) || ag.veterinario?.id !== vetId) return;
-      const d = ag.dataHora.slice(0, 10);
-      contagem.set(d, (contagem.get(d) ?? 0) + 1);
-    });
-    const [anoS, mesS] = selectedDate.split('-');
-    const mesN = Number(mesS);
-    const result = new Map<string, DiaStatus>();
-    const diasNoMes = new Date(Number(anoS), mesN, 0).getDate();
-    for (let d = 1; d <= diasNoMes; d++) {
-      const dStr  = `${anoS}-${pad(mesN)}-${pad(d)}`;
-      // Dia que já passou não ganha bolinha: verde ali anunciaria vaga onde a agenda
-      // não oferece mais nenhum horário.
-      if (dStr < hoje()) continue;
-      const count = contagem.get(dStr) ?? 0;
-      if (count === 0)              result.set(dStr, 'LIVRE');
-      else if (count < HORARIOS.length) result.set(dStr, 'PARCIAL');
-      else                          result.set(dStr, 'OCUPADO');
-    }
-    return result;
-  }, [agendamentosMes, filtroVetId, selectedDate]);
-
   // ── Fetches ─────────────────────────────────────────────────────────────────
   const fetchAnimais = useCallback(async () => {
     setLoadingAnimais(true);
@@ -1186,8 +1277,53 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
             }),
           };
         })
+        .sort(compararProfissionais)
       );
     } catch { /* silencioso */ }
+  }, []);
+
+  // Prestadores com paciente autorizado — entram na grade com a chave NEGATIVA.
+  const fetchPrestadores = useCallback(async () => {
+    try {
+      const res = await api.get('/clinica/agendamentos/prestadores');
+      if (!res.data) { setPrestadoresAg([]); return; }
+      const lista = (res.data.dados ?? []) as Array<{
+        id: number; nome: string; userId: number | null; tipoServico: string | null;
+        tempoConsultaMin?: number | null;
+        especialidades: { id: number; nome: string }[];
+        locais: Array<{
+          localizacaoId: number; localizacaoNome: string | null;
+          diasTrabalho: string | null; horaInicioTrabalho: string | null; horaFimTrabalho: string | null;
+        }>;
+        animalIds: number[];
+      }>;
+      setPrestadoresAg(lista.map(pr => {
+        // O tempo é do CADASTRO (um só, vale para toda especialidade dele). Sem ele,
+        // 0 = padrão da empresa na grade — o mesmo que o backend usa no `criar`.
+        const tempo = Number(pr.tempoConsultaMin) > 0 ? Number(pr.tempoConsultaMin) : 0;
+        const especialidadesCat: EspecialidadeVet[] = pr.especialidades
+          .map(e => ({ id: e.id, nome: e.nome, tempoMin: tempo }))
+          .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+        const doTexto = (pr.tipoServico ?? '').split(',').map(t => t.trim()).filter(Boolean);
+        return {
+          userId:   chavePrestador(pr.id),
+          prestadorId: pr.id,
+          loginId:  pr.userId,
+          animalIds: pr.animalIds,
+          // O backend já deixou de fora quem integra a equipe: todo prestador daqui é externo.
+          externo:  true,
+          tempoConsultaMin: tempo || null,
+          fullName: pr.nome,
+          cargo:    'PRESTADOR',
+          especialidades: especialidadesCat.length ? especialidadesCat.map(e => e.nome) : (doTexto.length ? doTexto : ['Prestador']),
+          especialidadesCat,
+          diasTrab: null, horaIni: null, horaFim: null,
+          // ⚠️ Os locais do cadastro NÃO viram expediente do externo: ele atende em
+          // qualquer dia e horário (é o pedido). Ficam vazios na grade de propósito.
+          locais: [],
+        };
+      }).sort(compararProfissionais));
+    } catch { setPrestadoresAg([]); /* silencioso — a grade segue com a equipe */ }
   }, []);
 
   const fetchAgendamentos = useCallback(async (date: string) => {
@@ -1203,18 +1339,38 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // Ocupação global dos profissionais visíveis no dia (todas as empresas). Só devolve
   // { veterinarioId, dataHora } — usado para marcar como ocupado o horário em que o
   // profissional já está agendado em outra empresa (evita duplo agendamento).
-  const fetchOcupacaoGlobal = useCallback(async (date: string, vetIds: number[]) => {
-    if (vetIds.length === 0) { setOcupacaoGlobal(new Map()); return; }
+  // Prestadores entram pelo CADASTRO (`prestadorIds`) e, com login, também pelo
+  // usuário — a ocupação dele como membro de OUTRA clínica bloqueia o horário aqui.
+  const fetchOcupacaoGlobal = useCallback(async (
+    date: string, vetIds: number[], prestadores: VetMembro[] = [],
+  ) => {
+    const loginParaChave = new Map<number, number>();
+    for (const pr of prestadores) if (pr.loginId && pr.prestadorId) loginParaChave.set(pr.loginId, chavePrestador(pr.prestadorId));
+    const idsUser  = [...new Set([...vetIds.filter(id => id > 0), ...loginParaChave.keys()])];
+    const idsPrest = prestadores.map(pr => pr.prestadorId).filter((id): id is number => !!id);
+    if (idsUser.length === 0 && idsPrest.length === 0) { setOcupacaoGlobal(new Map()); return; }
     try {
-      const res = await api.get('/clinica/agendamentos/ocupacao', { params: { data: date, vetIds: vetIds.join(',') } });
+      const res = await api.get('/clinica/agendamentos/ocupacao', {
+        params: { data: date, vetIds: idsUser.join(','), prestadorIds: idsPrest.join(',') },
+      });
       if (!res.data) { setOcupacaoGlobal(new Map()); return; }
       const map = new Map<number, Array<{ iniMin: number; fimMin: number }>>();
+      const push = (chave: number, dataHora: string, duracaoMin: number | null) => {
+        const ini = hhmmParaMin(formatarHora(dataHora));
+        if (!map.has(chave)) map.set(chave, []);
+        map.get(chave)!.push({ iniMin: ini, fimMin: ini + (duracaoMin ?? PASSO_PADRAO_MIN) });
+      };
       for (const o of (res.data.dados ?? []) as
            { veterinarioId: number | null; dataHora: string; duracaoMin: number | null }[]) {
         if (o.veterinarioId == null) continue;
-        const ini = hhmmParaMin(formatarHora(o.dataHora));
-        if (!map.has(o.veterinarioId)) map.set(o.veterinarioId, []);
-        map.get(o.veterinarioId)!.push({ iniMin: ini, fimMin: ini + (o.duracaoMin ?? PASSO_PADRAO_MIN) });
+        push(o.veterinarioId, o.dataHora, o.duracaoMin);
+        const chavePrest = loginParaChave.get(o.veterinarioId);
+        if (chavePrest != null) push(chavePrest, o.dataHora, o.duracaoMin);
+      }
+      for (const o of (res.data.prestadores ?? []) as
+           { prestadorCadastroId: number | null; dataHora: string; duracaoMin: number | null }[]) {
+        if (o.prestadorCadastroId == null) continue;
+        push(chavePrestador(o.prestadorCadastroId), o.dataHora, o.duracaoMin);
       }
       setOcupacaoGlobal(map);
     } catch { /* silencioso — cai no fallback do contexto ativo */ }
@@ -1232,7 +1388,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
 
   useEffect(() => {
     if (loadingPerms) return;
-    fetchAnimais(); fetchVets();
+    fetchAnimais(); fetchVets(); fetchPrestadores();
   }, [loadingPerms]);
 
   useEffect(() => {
@@ -1244,8 +1400,8 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // Recarrega a ocupação global sempre que o dia ou a lista de profissionais mudar.
   useEffect(() => {
     if (loadingPerms) return;
-    fetchOcupacaoGlobal(selectedDate, vets.map(v => v.userId));
-  }, [selectedDate, vets, loadingPerms, fetchOcupacaoGlobal]);
+    fetchOcupacaoGlobal(selectedDate, vets.map(v => v.userId), prestadoresAg);
+  }, [selectedDate, vets, prestadoresAg, loadingPerms, fetchOcupacaoGlobal]);
 
   // Fecha combo ao clicar fora
   useEffect(() => {
@@ -1288,7 +1444,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // Dias: interseção; horas: início = o mais TARDE, fim = o mais CEDO.
   // dias = null → todos os dias; dias = [] → nenhum dia.
   const expedienteDoVet = (vetId: number) => {
-    const v = vets.find(x => x.userId === vetId);
+    const v = profissionalPorChave(vetId);
     const cIni = expediente.horaInicio, cFim = expediente.horaFim, cDias = expediente.dias;
     const vIni = v?.horaIni ?? null, vFim = v?.horaFim ?? null, vDias = v?.diasTrab ?? null;
 
@@ -1309,7 +1465,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // dermatologista ter/qui na mesma Hípica" valer na grade: numa terça o padrão passa
   // a ser Dermatologia, sem o usuário precisar trocar o chip.
   const espsDoDia = (vetId: number): EspecialidadeVet[] => {
-    const v = vets.find(x => x.userId === vetId);
+    const v = profissionalPorChave(vetId);
     if (!v) return [];
     const wd = new Date(`${selectedDate}T00:00:00`).getDay();
     const out = new Map<number, EspecialidadeVet>();
@@ -1325,7 +1481,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // que ele exerce NO DIA selecionado (e só então a primeira do catálogo); sem catálogo
   // configurado, null (grade de 1h).
   const espDoVet = (vetId: number): EspecialidadeVet | null => {
-    const v = vets.find(x => x.userId === vetId);
+    const v = profissionalPorChave(vetId);
     const cat = v?.especialidadesCat ?? [];
     if (cat.length === 0) return null;
     // Filtro global vence a escolha por linha: filtrando por Ortopedia, todas as
@@ -1345,13 +1501,37 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   };
 
   // Passo da grade = tempo de consulta da especialidade selecionada (ou o padrão da empresa).
-  const passoDoVet = (vetId: number): number => passoDe(espDoVet(vetId)?.tempoMin);
+  // Sem especialidade, o tempo do PRÓPRIO profissional — é o caso do prestador externo
+  // sem especialidade no catálogo (membro não tem `tempoConsultaMin`: cai no padrão).
+  const passoDoVet = (vetId: number): number => {
+    const esp = espDoVet(vetId);
+    return passoDe(esp ? esp.tempoMin : profissionalPorChave(vetId)?.tempoConsultaMin);
+  };
 
   // Horários liberados para uma data conforme o expediente do PROFISSIONAL (dias + faixa)
   // e o tempo de consulta da especialidade selecionada.
   const horariosDoDia = (vetId: number, dateStr: string): string[] => {
-    const exp = expedienteDoVet(vetId);
     const wd = new Date(`${dateStr}T00:00:00`).getDay();
+    const prof = profissionalPorChave(vetId);
+    // 🔴 PRESTADOR EXTERNO: qualquer dia, qualquer horário — o dia inteiro no passo dele.
+    if (prof?.externo) {
+      const limiteE = limiteDeAgendamentoNoDia(dateStr);
+      return gerarSlots(null, null, passoDoVet(vetId))
+        .filter(h => limiteE === null || hhmmParaMin(h) > limiteE);
+    }
+    // PRESTADOR: o expediente são os LOCAIS do cadastro — une os que atendem no dia.
+    if (prof?.prestadorId && prof.locais.length > 0) {
+      const passoP  = passoDoVet(vetId);
+      const limiteP = limiteDeAgendamentoNoDia(dateStr);
+      const set = new Set<string>();
+      for (const local of prof.locais) {
+        const expL = expedienteDoLocal(local);
+        if (expL.dias && !expL.dias.includes(wd)) continue;
+        for (const h of gerarSlots(expL.horaInicio, expL.horaFim, passoP)) set.add(h);
+      }
+      return [...set].sort().filter(h => limiteP === null || hhmmParaMin(h) > limiteP);
+    }
+    const exp = expedienteDoVet(vetId);
     // dias null = todos; array (mesmo vazio) = só os listados (vazio → nenhum dia)
     if (exp.dias && !exp.dias.includes(wd)) return [];
     const passo  = passoDoVet(vetId);
@@ -1369,7 +1549,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   function ocupacoesDoVet(vetId: number): Array<{ iniMin: number; fimMin: number }> {
     const out: Array<{ iniMin: number; fimMin: number }> = [];
     for (const ag of agendamentos) {
-      if (ag.veterinario?.id !== vetId || STATUS_LIVRES.includes(ag.status)) continue;
+      if (chaveResponsavel(ag) !== vetId || STATUS_LIVRES.includes(ag.status)) continue;
       const ini = hhmmParaMin(formatarHora(ag.dataHora));
       out.push({ iniMin: ini, fimMin: ini + (ag.duracaoMin ?? PASSO_PADRAO_MIN) });
     }
@@ -1388,13 +1568,14 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     // Concluído, finalizado, cancelado e reagendado poluem a agenda operacional —
     // quem precisa deles escolhe no seletor de status.
     if (!statusCasaFiltro(ag.status, filtroStatus)) return false;
-    if (filtroVetId && ag.veterinario?.id !== Number(filtroVetId)) return false;
+    if (filtroVetId && chaveResponsavel(ag) !== Number(filtroVetId)) return false;
     if (!busca.trim()) return true;
     const q = busca.toLowerCase();
     return (
       ag.animal?.nome.toLowerCase().includes(q) ||
       ag.titulo.toLowerCase().includes(q) ||
       ag.veterinario?.fullName.toLowerCase().includes(q) ||
+      ag.prestadorCadastro?.nome.toLowerCase().includes(q) ||
       ag.animal?.user?.fullName.toLowerCase().includes(q)
     );
   }), [agendamentos, filtroVetId, busca, filtroStatus, modoMinhaAgenda, isGestor, meuUserId]);
@@ -1402,38 +1583,38 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // Especialidades oferecidas pela equipe — união do catálogo de todos os profissionais
   const especialidadesDisponiveis = useMemo(() => {
     const m = new Map<number, string>();
-    for (const v of vets) for (const e of v.especialidadesCat) m.set(e.id, e.nome);
+    for (const v of todosProfissionais) for (const e of v.especialidadesCat) m.set(e.id, e.nome);
     return [...m.entries()]
       .map(([id, nome]) => ({ id, nome }))
       .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
-  }, [vets]);
+  }, [todosProfissionais]);
 
   const vetsFiltrados = useMemo(() => {
-    let lista = filtroVetId ? vets.filter(v => String(v.userId) === filtroVetId) : vets;
-    if (filtroEspId) {
-      const id = Number(filtroEspId);
-      lista = lista.filter(v => v.especialidadesCat.some(e => e.id === id));
-    }
-    return lista;
-  }, [vets, filtroVetId, filtroEspId]);
+    const espId = filtroEspId ? Number(filtroEspId) : null;
+    return todosProfissionais.filter(v => {
+      if (filtroVetId && String(v.userId) !== filtroVetId) return false;
+      if (espId != null && !v.especialidadesCat.some(e => e.id === espId)) return false;
+      // 🔴 O PRESTADOR EXTERNO só entra no Expediente Ativo quando ESCOLHIDO — pelo
+      // nome ou pela especialidade (2026-10-01, a pedido). Sem filtro, a grade é
+      // só da equipe: com o externo de 24h dentro, ela viraria uma lista de gente
+      // que a clínica não está oferecendo agora.
+      if (v.externo && !filtroVetId && espId == null) return false;
+      return true;
+    });
+  }, [todosProfissionais, filtroVetId, filtroEspId]);
 
   // Locais oferecidos pela equipe — alimenta o filtro de local
   const locaisDisponiveis = useMemo(() => {
     const m = new Map<number, string>();
-    for (const v of vets) for (const l of v.locais) m.set(l.localizacaoId, l.localizacaoNome);
+    for (const v of todosProfissionais) for (const l of v.locais) m.set(l.localizacaoId, l.localizacaoNome);
     return [...m.entries()]
       .map(([id, nome]) => ({ id, nome }))
       .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
-  }, [vets]);
+  }, [todosProfissionais]);
 
   // Faixa de horário do filtro de período do dia
   const faixaHorarioFiltro = useMemo(() => {
-    const TURNOS: Record<string, [number, number]> = {
-      MANHA: [0, 12 * 60],
-      TARDE: [12 * 60, 18 * 60],
-      NOITE: [18 * 60, 24 * 60],
-    };
-    const [de, ate] = filtroTurno ? TURNOS[filtroTurno] : [0, 24 * 60];
+    const [de, ate] = filtroTurno ? FAIXA_TURNO[filtroTurno] : [0, 24 * 60];
     return { de, ate };
   }, [filtroTurno]);
 
@@ -1450,27 +1631,29 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   };
 
   /**
-   * Uma linha por PROFISSIONAL × LOCAL × ESPECIALIDADE para a data selecionada.
-   * Só entra a linha cujo local atende no dia escolhido E que tenha grade
-   * (expediente que produza horários) — clicar numa quinta não pode listar quem
-   * não trabalha na quinta.
+   * Uma linha por PROFISSIONAL × LOCAL × ESPECIALIDADE para `dateStr`, dentro da
+   * `faixa` de minutos (o período do dia). Só entra a linha cujo local atende no dia
+   * E que tenha grade dentro da faixa — clicar numa quinta não pode listar quem não
+   * trabalha na quinta.
+   *
+   * 🔴 FONTE ÚNICA de "o profissional tem horário neste dia?" (2026-10-01): a grade do
+   * Expediente Ativo, as BOLINHAS do calendário e as opções do PERÍODO DO DIA saem
+   * daqui. Três contas separadas dariam bolinha verde num dia em que a grade não
+   * oferece horário nenhum.
+   * `grade` = horários que o expediente oferece na faixa (já sem o que passou);
+   * `livres` = os que ainda não estão ocupados.
    */
-  const linhasAtendimento = useMemo(() => {
-    const wd = new Date(`${selectedDate}T00:00:00`).getDay();
-    const limiteMin = limiteDeAgendamentoNoDia(selectedDate);
+  const linhasDoDia = (
+    dateStr: string,
+    faixa: { de: number; ate: number },
+    ocupacoesDe: (vetId: number) => Array<{ iniMin: number; fimMin: number }>,
+  ): LinhaAtendimento[] => {
+    const wd = new Date(`${dateStr}T00:00:00`).getDay();
+    const limiteMin = limiteDeAgendamentoNoDia(dateStr);
     const espFiltro = filtroEspId ? Number(filtroEspId) : null;
     const localFiltro = filtroLocalId ? Number(filtroLocalId) : null;
 
-    const linhas: Array<{
-      key: string;
-      vet: VetMembro;
-      localNome: string;
-      esp: EspecialidadeVet | null;
-      dias: number[] | null;
-      horaInicio: string | null;
-      horaFim: string | null;
-      livres: string[];
-    }> = [];
+    const linhas: LinhaAtendimento[] = [];
 
     // `turno` = índice da linha de local no cadastro. O MESMO local aparece mais de uma
     // vez quando o profissional exerce especialidades diferentes ali em dias diferentes
@@ -1482,32 +1665,42 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
       esp: EspecialidadeVet | null, turno = 0,
     ) => {
       if (exp.dias && !exp.dias.includes(wd)) return;          // não é dia de trabalho
-      const passo = passoDe(esp?.tempoMin);
-      const grade = gerarSlots(exp.horaInicio, exp.horaFim, passo);
-      if (grade.length === 0) return;                           // sem agenda nesse dia
+      // Sem especialidade, o tempo do PRÓPRIO profissional (prestador externo).
+      const passo = passoDe(esp ? esp.tempoMin : vet.tempoConsultaMin);
+      const grade = gerarSlots(exp.horaInicio, exp.horaFim, passo).filter(h => {
+        const ini = hhmmParaMin(h);
+        if (ini < faixa.de || ini >= faixa.ate) return false;
+        return limiteMin === null || ini > limiteMin;            // já passou
+      });
+      if (grade.length === 0) return;                           // sem agenda nesse dia/período
 
-      const ocupados = ocupacoesDoVet(vet.userId);
+      const ocupados = ocupacoesDe(vet.userId);
       const livres = grade.filter(h => {
         const ini = hhmmParaMin(h), fim = ini + passo;
-        if (ini < faixaHorarioFiltro.de || ini >= faixaHorarioFiltro.ate) return false;
-        if (ocupados.some(o => o.iniMin < fim && ini < o.fimMin)) return false;
-        if (limiteMin !== null && ini <= limiteMin) return false;   // já passou
-        return true;
+        return !ocupados.some(o => o.iniMin < fim && ini < o.fimMin);
       });
-
-      // Sem horário livre a linha não entra: a agenda lista só quem pode receber
-      // agendamento agora. Profissional lotado some do "Expediente Ativo".
-      if (livres.length === 0) return;
 
       linhas.push({
         key: `${vet.userId}-${localId ?? 0}-${turno}-${esp?.id ?? 0}`,
         vet, localNome, esp,
         dias: exp.dias, horaInicio: exp.horaInicio, horaFim: exp.horaFim,
-        livres,
+        grade, livres,
       });
     };
 
     for (const vet of vetsFiltrados) {
+      // 🔴 PRESTADOR EXTERNO: qualquer dia e horário, sem local de trabalho — a grade
+      // é o dia inteiro no passo do cadastro. O filtro de LOCAL não o recorta: ele vai
+      // até onde o paciente está, e quem o escolheu pelo nome quer vê-lo.
+      if (vet.externo) {
+        const livre = { dias: null, horaInicio: null, horaFim: null };
+        const esps = espFiltro
+          ? vet.especialidadesCat.filter(e => e.id === espFiltro)
+          : vet.especialidadesCat;
+        if (esps.length === 0) { if (!espFiltro) montar(vet, null, 'Qualquer local', livre, null); }
+        else for (const esp of esps) montar(vet, null, 'Qualquer local', livre, esp);
+        continue;
+      }
       if (vet.locais.length === 0) {
         // Profissional sem local cadastrado herda o expediente da empresa — continua
         // aparecendo (senão sumiria da agenda sem explicação).
@@ -1544,11 +1737,96 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     }
 
     return linhas.sort((a, b) =>
-      a.vet.fullName.localeCompare(b.vet.fullName, 'pt-BR')
+      compararProfissionais(a.vet, b.vet)
       || a.localNome.localeCompare(b.localNome, 'pt-BR')
       || (a.esp?.nome ?? '').localeCompare(b.esp?.nome ?? '', 'pt-BR'));
-  }, [vetsFiltrados, selectedDate, filtroEspId, filtroLocalId, faixaHorarioFiltro,
-      agendamentos, ocupacaoGlobal, expediente, vets, tempoPadraoEmpresa]);
+  };
+
+  // Sem horário livre a linha não entra: a agenda lista só quem pode receber
+  // agendamento agora. Profissional lotado some do "Expediente Ativo".
+  const linhasAtendimento = useMemo(
+    () => linhasDoDia(selectedDate, faixaHorarioFiltro, ocupacoesDoVet).filter(l => l.livres.length > 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [vetsFiltrados, selectedDate, filtroEspId, filtroLocalId, faixaHorarioFiltro,
+     agendamentos, ocupacaoGlobal, expediente, todosProfissionais, tempoPadraoEmpresa]);
+
+  // Há profissional ou especialidade ESCOLHIDOS? É só com eles que o calendário e o
+  // período do dia passam a falar de disponibilidade — sem filtro, "a equipe inteira
+  // tem horário" seria verde todo dia e não ajudaria ninguém.
+  const temEscolhaDeProfissional = !!filtroVetId || !!filtroEspId;
+
+  // ── statusPorDia — as bolinhas do calendário (2026-10-01) ─────────────────────
+  // 🔴 Só com profissional ou especialidade escolhidos, e só nos dias em que ELE TEM
+  // HORÁRIO: antes a bolinha só contava agendamentos, e todo dia futuro sem consulta
+  // saía VERDE — inclusive o domingo em que ninguém da clínica trabalha.
+  //   sem grade no dia/período  → sem bolinha
+  //   todos os horários livres  → verde
+  //   parte ocupada             → amarelo
+  //   nenhum horário livre      → vermelho
+  // ⚠️ Respeita o PERÍODO DO DIA escolhido (a mesma `faixaHorarioFiltro` da grade).
+  // ⚠️ A ocupação dos outros dias vem do mês carregado (`agendamentosMes`, empresa
+  // ativa); a de OUTRAS empresas só é conhecida para o dia aberto — o backend é quem
+  // confere de verdade na hora de salvar.
+  const statusPorDia = useMemo<Map<string, DiaStatus>>(() => {
+    if (!temEscolhaDeProfissional) return new Map();
+    const ocupMes = new Map<string, Map<number, Array<{ iniMin: number; fimMin: number }>>>();
+    for (const ag of agendamentosMes) {
+      if (STATUS_LIVRES.includes(ag.status)) continue;
+      const chave = chaveResponsavel(ag);
+      if (chave == null) continue;
+      const dia = formatarDateInput(ag.dataHora).slice(0, 10);
+      const ini = hhmmParaMin(formatarHora(ag.dataHora));
+      if (!ocupMes.has(dia)) ocupMes.set(dia, new Map());
+      const doDia = ocupMes.get(dia)!;
+      if (!doDia.has(chave)) doDia.set(chave, []);
+      doDia.get(chave)!.push({ iniMin: ini, fimMin: ini + (ag.duracaoMin ?? PASSO_PADRAO_MIN) });
+    }
+    const [anoS, mesS] = selectedDate.split('-');
+    const mesN = Number(mesS);
+    const diasNoMes = new Date(Number(anoS), mesN, 0).getDate();
+    const hj = hoje();
+    const result = new Map<string, DiaStatus>();
+    for (let d = 1; d <= diasNoMes; d++) {
+      const dStr = `${anoS}-${pad(mesN)}-${pad(d)}`;
+      if (dStr < hj) continue;               // o que passou não tem vaga a anunciar
+      const ocup = dStr === selectedDate
+        ? ocupacoesDoVet
+        : (id: number) => ocupMes.get(dStr)?.get(id) ?? [];
+      let total = 0, livres = 0;
+      for (const l of linhasDoDia(dStr, faixaHorarioFiltro, ocup)) {
+        total += l.grade.length; livres += l.livres.length;
+      }
+      if (total === 0) continue;
+      result.set(dStr, livres === 0 ? 'OCUPADO' : livres < total ? 'PARCIAL' : 'LIVRE');
+    }
+    return result;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [temEscolhaDeProfissional, agendamentosMes, selectedDate, vetsFiltrados, filtroEspId, filtroLocalId,
+      faixaHorarioFiltro, agendamentos, ocupacaoGlobal, expediente, todosProfissionais, tempoPadraoEmpresa]);
+
+  // ── Períodos do dia com horário livre (2026-10-01) ────────────────────────────
+  // A MESMA regra das bolinhas, aplicada ao campo "Período do dia": com profissional
+  // ou especialidade escolhidos, só são oferecidos os períodos em que há horário livre
+  // no dia aberto. Sem escolha, os três (a equipe toda).
+  const turnosComHorario = useMemo<Set<Turno>>(() => {
+    if (!temEscolhaDeProfissional) return new Set<Turno>(['MANHA', 'TARDE', 'NOITE']);
+    const out = new Set<Turno>();
+    for (const l of linhasDoDia(selectedDate, { de: 0, ate: 24 * 60 }, ocupacoesDoVet)) {
+      for (const h of l.livres) out.add(turnoDoMinuto(hhmmParaMin(h)));
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [temEscolhaDeProfissional, selectedDate, vetsFiltrados, filtroEspId, filtroLocalId,
+      agendamentos, ocupacaoGlobal, expediente, todosProfissionais, tempoPadraoEmpresa]);
+
+  // ⚠️ O período JÁ escolhido continua na lista mesmo sem horário (marcado) — sumir
+  // com ele trocaria o filtro em silêncio ao escolher outro profissional.
+  const opcoesTurno: OpcaoCombo[] = (['MANHA', 'TARDE', 'NOITE'] as Turno[])
+    .filter(t => turnosComHorario.has(t) || t === filtroTurno)
+    .map(t => ({
+      value: t, label: ROTULO_TURNO[t],
+      detalhe: turnosComHorario.has(t) ? undefined : 'sem horário livre',
+    }));
 
   // Reaplica o scroll salvo depois que a lista recalcula (ex.: ao agendar um
   // horário, `agendamentos` muda e `linhasAtendimento` é recriada) — sem isso o
@@ -1591,6 +1869,9 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // é busca — é a exibição da escolha —, então a lista inteira continua disponível.
   const queryEhRotuloSelecionado =
     !!animalSelecionadoCombo && comboQuery === rotuloAnimalCombo(animalSelecionadoCombo);
+  // Horário de um PRESTADOR EXTERNO: qualquer paciente (2026-10-01 — antes, só os
+  // autorizados no "Gerenciar Acesso"). `bookingEhExterno` só muda o rótulo do modal.
+  const bookingEhExterno = !!(booking && profissionalPorChave(booking.vetId)?.externo);
   const animaisCombo = animaisAgendaveis.filter(a =>
     !comboQuery || queryEhRotuloSelecionado || a.nome.toLowerCase().includes(comboQuery.toLowerCase()));
 
@@ -1650,7 +1931,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     try {
       await api.post('/clinica/agendamentos', {
         animalId, tipo: 'CONSULTA', titulo: `Consulta - ${animalNome}`,
-        dataHora: new Date(`${selectedDate}T${hora}`).toISOString(), veterinarioId: vetId,
+        dataHora: new Date(`${selectedDate}T${hora}`).toISOString(), ...responsavelPayload(vetId),
         // Define a duração do atendimento no backend (tempo de consulta da especialidade)
         especialidadeId: espDoVet(vetId)?.id ?? undefined,
       });
@@ -1666,8 +1947,15 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     setErroGrade(null);
     // A linha clicada manda na duração: é ela que sabe a especialidade e o local.
     if (espId) setEspSelPorVet(prev => { const m = new Map(prev); m.set(vetId, espId); return m; });
-    // Só o gestor agenda para outro profissional; os demais só para a própria coluna.
-    if (!podeAgendarParaOutro && meuUserId != null && vetId !== meuUserId) {
+    // Só o gestor agenda para outro profissional da EQUIPE; os demais só para a
+    // própria coluna. O PRESTADOR EXTERNO aceita também o veterinário.
+    const profSlot = profissionalPorChave(vetId);
+    if (profSlot?.externo) {
+      if (!podeAgendarExterno) {
+        setErroGrade('Só o gestor ou o veterinário agendam o prestador externo.');
+        return;
+      }
+    } else if (!podeAgendarParaOutro && meuUserId != null && vetId !== meuUserId) {
       setErroGrade('Não é permitido o agendamento para outro profissional');
       return;
     }
@@ -1679,7 +1967,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
           animalNome: selectedAnimal.nome,
           quando:     dataRelativa(selectedDate),
           hora:       formatarHora(conflito.dataHora),
-          vetNome:    conflito.veterinario?.fullName ?? vetName,
+          vetNome:    nomeResponsavel(conflito) ?? vetName,
           onConfirm:  () => criarAgendamentoDireto(Number(selectedAnimalId), selectedAnimal.nome, vetId, hora),
         });
         return;
@@ -1819,7 +2107,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
         animalId: Number(bookingForm.animalId), tipo: 'CONSULTA',
         titulo: `Consulta - ${animal?.nome ?? 'Paciente'}`,
         dataHora: new Date(`${selectedDate}T${booking.hora}`).toISOString(),
-        veterinarioId: booking.vetId,
+        ...responsavelPayload(booking.vetId),
         especialidadeId: espDoVet(booking.vetId)?.id ?? undefined,
       });
       toast.success(`Consulta agendada às ${booking.hora} com ${booking.vetName}`);
@@ -1841,7 +2129,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
         animalNome: nomeAnimal,
         quando:     dataRelativa(selectedDate),
         hora:       formatarHora(conflito.dataHora),
-        vetNome:    conflito.veterinario?.fullName ?? booking.vetName,
+        vetNome:    nomeResponsavel(conflito) ?? booking.vetName,
         onConfirm:  () => executarConfirmarBooking(),
         onCancel:   () => setBooking(null),
       });
@@ -1999,7 +2287,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // resolvido no backend; aqui só valida quando o vet TEM expediente próprio,
   // para dar feedback imediato sem duplicar a lógica de herança).
   const expedienteReagendando = reagendando
-    ? vets.find(v => v.userId === reagendando.veterinario?.id)
+    ? profissionalPorChave(chaveResponsavel(reagendando))
     : undefined;
 
   function foraDoExpediente(dataHoraLocal: string, vet: VetMembro | undefined): string | null {
@@ -2044,25 +2332,32 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // descontado — o horário dele será liberado.
   useEffect(() => {
     if (!reagendando || !reagData) return;
-    const vetId = reagendando.veterinario?.id;
+    const vetId = chaveResponsavel(reagendando);
     if (!vetId) { setReagOcupados([]); return; }
+    // Prestador: a ocupação é pelo CADASTRO (e pelo login, quando houver).
+    const prestId = reagendando.prestadorCadastro?.id ?? null;
+    const loginId = reagendando.veterinario?.id ?? null;
     let cancelado = false;
     (async () => {
       setReagLoading(true);
       try {
         const [resDia, resOcup] = await Promise.all([
           api.get('/clinica/agendamentos', { params: { data: reagData } }),
-          api.get('/clinica/agendamentos/ocupacao', { params: { data: reagData, vetIds: String(vetId) } }),
+          api.get('/clinica/agendamentos/ocupacao', {
+            params: prestId
+              ? { data: reagData, prestadorIds: String(prestId), vetIds: loginId ? String(loginId) : '' }
+              : { data: reagData, vetIds: String(vetId) },
+          }),
         ]);
         if (cancelado) return;
         const intervalos: Array<{ iniMin: number; fimMin: number }> = [];
         for (const ag of (resDia.data?.dados ?? []) as AgendamentoGlobal[]) {
           if (ag.id === reagendando.id) continue;
-          if (ag.veterinario?.id !== vetId || STATUS_LIVRES.includes(ag.status)) continue;
+          if (chaveResponsavel(ag) !== vetId || STATUS_LIVRES.includes(ag.status)) continue;
           const ini = hhmmParaMin(formatarHora(ag.dataHora));
           intervalos.push({ iniMin: ini, fimMin: ini + (ag.duracaoMin ?? PASSO_PADRAO_MIN) });
         }
-        for (const o of (resOcup.data?.dados ?? []) as
+        for (const o of [...(resOcup.data?.dados ?? []), ...(resOcup.data?.prestadores ?? [])] as
              Array<{ id?: number; dataHora: string; duracaoMin: number | null }>) {
           if (o.id === reagendando.id) continue;
           const ini = hhmmParaMin(formatarHora(o.dataHora));
@@ -2079,7 +2374,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // ocupados e sem os que ficaram para trás quando o dia é hoje.
   const slotsReagendamento = useMemo(() => {
     if (!reagendando || !reagData) return [];
-    const vetId = reagendando.veterinario?.id;
+    const vetId = chaveResponsavel(reagendando);
     if (!vetId) return [];
     const passo = passoDoVet(vetId);
     // O que já passou (e o dia inteiro, quando a data ficou para trás) já sai em
@@ -2089,7 +2384,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
       return !reagOcupados.some(o => o.iniMin < fim && ini < o.fimMin);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reagendando, reagData, reagOcupados, vets, expediente, tempoPadraoEmpresa, espSelPorVet, filtroEspId]);
+  }, [reagendando, reagData, reagOcupados, todosProfissionais, expediente, tempoPadraoEmpresa, espSelPorVet, filtroEspId]);
 
   const novaDataHora = reagData && reagHora ? `${reagData}T${reagHora}` : '';
 
@@ -2129,7 +2424,11 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
       await api.post('/clinica/agendamentos', {
         animalId: reagendando.animal?.id, tipo: reagendando.tipo, titulo: reagendando.titulo,
         dataHora: novaData.toISOString(), observacao: reagendando.observacao ?? undefined,
-        veterinarioId: reagendando.veterinario?.id,
+        // O mesmo responsável do original — o prestador pelo CADASTRO (sem login ele
+        // não tem `veterinario`, e mandar `veterinarioId` perderia o dono).
+        ...(reagendando.prestadorCadastro
+          ? { prestadorCadastroId: reagendando.prestadorCadastro.id }
+          : { veterinarioId: reagendando.veterinario?.id }),
         // Reagendar mantém a especialidade (e portanto a duração) do original
         especialidadeId: reagendando.especialidade?.id ?? undefined,
       });
@@ -2211,27 +2510,26 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                 <Loader2 size={14} className="animate-spin" /> Carregando...
               </div>
             ) : (
-              <div className="relative">
-                <Search size={12} className="absolute left-3 top-2.5 text-gray-400 pointer-events-none" />
-                <select
-                  value={selectedAnimalId}
-                  onChange={e => {
-                    const val = e.target.value;
-                    setSelectedAnimalId(val);
-                    if (val) {
-                      const a = animais.find(x => String(x.id) === val);
-                      if (a?.user) setSelectedProprId(String(a.user.id));
-                    }
-                  }}
-                  className="w-full pl-8 pr-7 py-2 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-800 font-semibold outline-none cursor-pointer appearance-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                >
-                  <option value="">Todos os animais</option>
-                  {animaisFiltradosBar.map(a => (
-                    <option key={a.id} value={a.id}>{a.nome}{a.localizacaoNome ? ` (${a.localizacaoNome})` : ''}</option>
-                  ))}
-                </select>
-                <ChevronDown size={12} className="absolute right-3 top-3 text-gray-400 pointer-events-none" />
-              </div>
+              // Digita-se para buscar (2026-10-01): a lista de pacientes é longa demais
+              // para ser rolada à mão num <select>.
+              <ComboBuscavel
+                value={selectedAnimalId}
+                onChange={val => {
+                  setSelectedAnimalId(val);
+                  if (val) {
+                    const a = animais.find(x => String(x.id) === val);
+                    if (a?.user) setSelectedProprId(String(a.user.id));
+                  }
+                }}
+                opcoes={animaisFiltradosBar.map(a => ({
+                  value: String(a.id), label: a.nome, detalhe: a.localizacaoNome ?? undefined,
+                }))}
+                rotuloVazio="Todos os animais"
+                placeholder="Digite o nome do animal"
+                vazioTexto="Nenhum animal encontrado"
+                icone={<Search size={12} />}
+                className="w-full py-2 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-800 font-semibold outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+              />
             )}
           </div>
 
@@ -2245,33 +2543,28 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                 <span className="text-sm text-gray-400">—</span>
               </div>
             ) : (
-              <div className="relative">
-                <select
-                  value={selectedProprId}
-                  onChange={e => {
-                    const val = e.target.value;
-                    setSelectedProprId(val);
-                    if (val) {
-                      const deles = animais.filter(a => String(a.user?.id) === val);
-                      if (deles.length === 1) {
-                        setSelectedAnimalId(String(deles[0].id));
-                      } else if (selectedAnimalId) {
-                        const cur = animais.find(a => String(a.id) === selectedAnimalId);
-                        if (cur?.user && String(cur.user.id) !== val) setSelectedAnimalId('');
-                      }
-                    } else {
-                      setSelectedAnimalId('');
+              <ComboBuscavel
+                value={selectedProprId}
+                onChange={val => {
+                  setSelectedProprId(val);
+                  if (val) {
+                    const deles = animais.filter(a => String(a.user?.id) === val);
+                    if (deles.length === 1) {
+                      setSelectedAnimalId(String(deles[0].id));
+                    } else if (selectedAnimalId) {
+                      const cur = animais.find(a => String(a.id) === selectedAnimalId);
+                      if (cur?.user && String(cur.user.id) !== val) setSelectedAnimalId('');
                     }
-                  }}
-                  className="w-full pl-3 pr-7 py-2 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-800 font-semibold outline-none cursor-pointer appearance-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                >
-                  <option value="">Todos os proprietários</option>
-                  {proprietarios.map(p => (
-                    <option key={p.id} value={p.id}>{p.fullName}</option>
-                  ))}
-                </select>
-                <ChevronDown size={12} className="absolute right-3 top-3 text-gray-400 pointer-events-none" />
-              </div>
+                  } else {
+                    setSelectedAnimalId('');
+                  }
+                }}
+                opcoes={proprietarios.map(p => ({ value: String(p.id), label: p.fullName }))}
+                rotuloVazio="Todos os proprietários"
+                placeholder="Digite o nome do proprietário"
+                vazioTexto="Nenhum proprietário encontrado"
+                className="w-full pl-3 py-2 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-800 font-semibold outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+              />
             )}
           </div>
 
@@ -2320,61 +2613,64 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
               {/* Profissional */}
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-gray-500">Profissional</label>
-                <div className="relative">
-                  <select value={filtroVetId} onChange={e => setFiltroVetId(e.target.value)}
-                    className="w-full text-xs border border-gray-200 rounded-xl pl-3 pr-7 py-2 bg-gray-50 text-gray-700 font-semibold outline-none cursor-pointer appearance-none">
-                    <option value="">Todos</option>
-                    {vets.map(v => <option key={v.userId} value={v.userId}>{v.fullName}</option>)}
-                  </select>
-                  <ChevronDown size={11} className="absolute right-2.5 top-2.5 text-gray-400 pointer-events-none" />
-                </div>
+                {/* O prestador EXTERNO está na lista (é por aqui que ele entra no
+                    Expediente Ativo), marcado para não ser confundido com a equipe. */}
+                <ComboBuscavel
+                  value={filtroVetId}
+                  onChange={setFiltroVetId}
+                  opcoes={todosProfissionais.map(v => ({
+                    value: String(v.userId), label: v.fullName,
+                    detalhe: v.externo ? 'prestador externo' : undefined,
+                    grupo: grupoDoProfissional(v),
+                  }))}
+                  rotuloVazio="Todos"
+                  placeholder="Digite o nome"
+                  vazioTexto="Nenhum profissional encontrado"
+                  className="w-full text-xs border border-gray-200 rounded-xl pl-3 py-2 bg-gray-50 text-gray-700 font-semibold outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                />
               </div>
               {/* Especialidade — filtra os profissionais e define o tempo da grade */}
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-gray-500">Especialidade</label>
-                <div className="relative">
-                  <select value={filtroEspId} onChange={e => setFiltroEspId(e.target.value)}
-                    disabled={especialidadesDisponiveis.length === 0}
-                    className="w-full text-xs border border-gray-200 rounded-xl pl-3 pr-7 py-2 bg-gray-50 text-gray-700 font-semibold outline-none cursor-pointer appearance-none disabled:opacity-50 disabled:cursor-not-allowed">
-                    <option value="">
-                      {especialidadesDisponiveis.length === 0 ? 'Nenhuma configurada' : 'Todas'}
-                    </option>
-                    {especialidadesDisponiveis.map(e => (
-                      <option key={e.id} value={e.id}>{e.nome}</option>
-                    ))}
-                  </select>
-                  <ChevronDown size={11} className="absolute right-2.5 top-2.5 text-gray-400 pointer-events-none" />
-                </div>
+                <ComboBuscavel
+                  value={filtroEspId}
+                  onChange={setFiltroEspId}
+                  disabled={especialidadesDisponiveis.length === 0}
+                  opcoes={especialidadesDisponiveis.map(e => ({ value: String(e.id), label: e.nome }))}
+                  rotuloVazio={especialidadesDisponiveis.length === 0 ? 'Nenhuma configurada' : 'Todas'}
+                  placeholder="Digite a especialidade"
+                  vazioTexto="Nenhuma especialidade encontrada"
+                  className="w-full text-xs border border-gray-200 rounded-xl pl-3 py-2 bg-gray-50 text-gray-700 font-semibold outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                />
               </div>
               {/* Local de trabalho */}
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-gray-500">Local de trabalho</label>
-                <div className="relative">
-                  <select value={filtroLocalId} onChange={e => setFiltroLocalId(e.target.value)}
-                    disabled={locaisDisponiveis.length === 0}
-                    className="w-full text-xs border border-gray-200 rounded-xl pl-3 pr-7 py-2 bg-gray-50 text-gray-700 font-semibold outline-none cursor-pointer appearance-none disabled:opacity-50 disabled:cursor-not-allowed">
-                    <option value="">
-                      {locaisDisponiveis.length === 0 ? 'Nenhum cadastrado' : 'Todos'}
-                    </option>
-                    {locaisDisponiveis.map(l => <option key={l.id} value={l.id}>{l.nome}</option>)}
-                  </select>
-                  <ChevronDown size={11} className="absolute right-2.5 top-2.5 text-gray-400 pointer-events-none" />
-                </div>
+                <ComboBuscavel
+                  value={filtroLocalId}
+                  onChange={setFiltroLocalId}
+                  disabled={locaisDisponiveis.length === 0}
+                  opcoes={locaisDisponiveis.map(l => ({ value: String(l.id), label: l.nome }))}
+                  rotuloVazio={locaisDisponiveis.length === 0 ? 'Nenhum cadastrado' : 'Todos'}
+                  placeholder="Digite o local"
+                  vazioTexto="Nenhum local encontrado"
+                  className="w-full text-xs border border-gray-200 rounded-xl pl-3 py-2 bg-gray-50 text-gray-700 font-semibold outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                />
               </div>
               {/* Período do dia */}
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-gray-500">Período do dia</label>
-                <div className="relative">
-                  <select value={filtroTurno}
-                    onChange={e => setFiltroTurno(e.target.value as '' | 'MANHA' | 'TARDE' | 'NOITE')}
-                    className="w-full text-xs border border-gray-200 rounded-xl pl-3 pr-7 py-2 bg-gray-50 text-gray-700 font-semibold outline-none cursor-pointer appearance-none">
-                    <option value="">Dia inteiro</option>
-                    <option value="MANHA">Manhã (até 12:00)</option>
-                    <option value="TARDE">Tarde (12:00 – 18:00)</option>
-                    <option value="NOITE">Noite (a partir das 18:00)</option>
-                  </select>
-                  <ChevronDown size={11} className="absolute right-2.5 top-2.5 text-gray-400 pointer-events-none" />
-                </div>
+                {/* Com profissional/especialidade escolhidos, só os períodos em que ele
+                    tem horário livre no dia aberto — ver `turnosComHorario`. */}
+                <ComboBuscavel
+                  value={filtroTurno}
+                  onChange={v => setFiltroTurno(v as '' | Turno)}
+                  opcoes={opcoesTurno}
+                  rotuloVazio="Dia inteiro"
+                  placeholder="Digite o período"
+                  vazioTexto={temEscolhaDeProfissional ? 'Sem horário livre neste dia' : 'Nenhum período encontrado'}
+                  className="w-full text-xs border border-gray-200 rounded-xl pl-3 py-2 bg-gray-50 text-gray-700 font-semibold outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                />
               </div>
             </div>
           </div>
@@ -2441,6 +2737,12 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                           {/* Profissional */}
                           <td className="py-3 px-4">
                             <p className="text-xs font-bold text-gray-900 whitespace-nowrap">{vet.fullName}</p>
+                            {vet.externo && (
+                              <span className="inline-block mt-0.5 text-[9px] font-bold px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full"
+                                title="Prestador externo — qualquer paciente, qualquer dia e horário, pelo tempo de consulta do cadastro">
+                                Prestador externo · {passoDe(vet.tempoConsultaMin)} min
+                              </span>
+                            )}
                           </td>
                           {/* Local de trabalho */}
                           <td className="py-3 px-4">
@@ -2521,6 +2823,11 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                       <div className="flex items-center justify-between gap-2 mb-1.5">
                         <div className="min-w-0">
                           <p className="text-xs font-bold text-gray-900 truncate">{vet.fullName}</p>
+                          {vet.externo && (
+                            <span className="inline-block text-[9px] font-bold px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full">
+                              Prestador externo · {passoDe(vet.tempoConsultaMin)} min
+                            </span>
+                          )}
                         </div>
                         {podeGerenciar ? (
                           <div
@@ -2751,10 +3058,10 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                         )
                         : <p className="font-bold text-sm text-gray-900">{labelTipo(ag.tipo)}</p>}
                       {ag.animal?.user && <p className="text-xs text-gray-400">Tutor: {ag.animal.user.fullName}</p>}
-                      {(ag.veterinario || responsaveisAnterioresDoAg(ag).length > 0) && (
+                      {(nomeResponsavel(ag) || responsaveisAnterioresDoAg(ag).length > 0) && (
                         <p className="text-xs text-gray-400">
-                          Vet: <ResponsavelTrocado
-                            atual={ag.veterinario?.fullName}
+                          Profissional: <ResponsavelTrocado
+                            atual={nomeResponsavel(ag) ?? undefined}
                             anteriores={responsaveisAnterioresDoAg(ag)}
                             className="text-xs text-gray-400"
                             vazio="Não atribuído"
@@ -2792,7 +3099,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                         )}
                         {podeAssumir(ag) && (
                           <button onClick={() => handleAssumir(ag)} disabled={assumindoId === ag.id}
-                            title={ag.veterinario?.fullName ? `Assumir o atendimento de ${ag.veterinario.fullName}` : 'Assumir este atendimento (sem profissional definido)'}
+                            title={nomeResponsavel(ag) ? `Assumir o atendimento de ${nomeResponsavel(ag)}` : 'Assumir este atendimento (sem profissional definido)'}
                             className="flex items-center gap-1 px-2.5 py-1.5 bg-teal-50 hover:bg-teal-100 disabled:opacity-60 text-teal-700 rounded-xl text-xs font-semibold">
                             {assumindoId === ag.id ? <Loader2 size={11} className="animate-spin" /> : <UserCheck size={11} />}
                             Assumir
@@ -2820,7 +3127,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                     <th className="py-3 px-4">Horário</th>
                     <th className="py-3 px-4">Animal / Paciente</th>
                     <th className="py-3 px-4">Tipo</th>
-                    <th className="py-3 px-4">Veterinário</th>
+                    <th className="py-3 px-4">Profissional</th>
                     <th className="py-3 px-4">Status</th>
                     {podeGerenciar && <th className="py-3 px-4 text-center">Ações</th>}
                   </tr>
@@ -2871,7 +3178,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                           <span className="flex items-start gap-1.5">
                             <UserIcon size={12} className="text-gray-400 flex-shrink-0 mt-0.5" />
                             <ResponsavelTrocado
-                              atual={ag.veterinario?.fullName}
+                              atual={nomeResponsavel(ag) ?? undefined}
                               anteriores={responsaveisAnterioresDoAg(ag)}
                               className="text-xs text-gray-700"
                               vazio="Não atribuído"
@@ -2924,7 +3231,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                               )}
                               {podeAssumir(ag) && (
                                 <button onClick={() => handleAssumir(ag)} disabled={assumindoId === ag.id}
-                                  title={ag.veterinario?.fullName ? `Assumir o atendimento de ${ag.veterinario.fullName}` : 'Assumir este atendimento (sem profissional definido)'}
+                                  title={nomeResponsavel(ag) ? `Assumir o atendimento de ${nomeResponsavel(ag)}` : 'Assumir este atendimento (sem profissional definido)'}
                                   className="p-1.5 bg-teal-50 hover:bg-teal-100 disabled:opacity-60 text-teal-700 rounded-xl transition-colors">
                                   {assumindoId === ag.id ? <Loader2 size={13} className="animate-spin" /> : <UserCheck size={13} />}
                                 </button>
@@ -2969,7 +3276,9 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
               <h3 className="text-lg font-bold text-white mb-4">Confirmar Horário de Consulta</h3>
               <div className="bg-white/15 rounded-2xl px-4 py-3 flex items-center justify-between gap-4">
                 <div>
-                  <p className="text-[10px] font-semibold text-emerald-200">Médico Veterinário</p>
+                  <p className="text-[10px] font-semibold text-emerald-200">
+                    {bookingEhExterno ? 'Prestador externo' : 'Médico Veterinário'}
+                  </p>
                   <p className="text-sm font-bold text-white">{booking.vetName}</p>
                   <span className="inline-block mt-1 text-[10px] font-bold px-2 py-0.5 bg-white/20 text-emerald-100 rounded-full">Clínica Geral</span>
                 </div>
@@ -3102,7 +3411,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
             <div className="p-5 space-y-3">
               <p className="text-sm text-gray-600">
                 {decisaoCancelamento.animal?.nome ?? labelTipo(decisaoCancelamento.tipo)} · {formatarHora(decisaoCancelamento.dataHora)}
-                {decisaoCancelamento.veterinario?.fullName && <> · {decisaoCancelamento.veterinario.fullName}</>}
+                {nomeResponsavel(decisaoCancelamento) && <> · {nomeResponsavel(decisaoCancelamento)}</>}
               </p>
               <button onClick={() => escolherTipoCancelamento('REMARCAR')}
                 className="w-full flex items-center gap-3 p-3.5 border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 rounded-xl text-left transition-colors">
@@ -3178,9 +3487,9 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-bold text-gray-700">
                   Horário disponível <span className="text-red-500">*</span>
-                  {reagendando.veterinario?.fullName && (
+                  {nomeResponsavel(reagendando) && (
                     <span className="ml-1 font-medium text-gray-400">
-                      · {reagendando.veterinario.fullName}
+                      · {nomeResponsavel(reagendando)}
                     </span>
                   )}
                 </label>
@@ -3191,7 +3500,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                 ) : slotsReagendamento.length === 0 ? (
                   <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
                     Nenhum horário livre neste dia
-                    {reagendando.veterinario?.fullName ? ` para ${reagendando.veterinario.fullName}` : ''}.
+                    {nomeResponsavel(reagendando) ? ` para ${nomeResponsavel(reagendando)}` : ''}.
                     Escolha outro dia no calendário.
                   </p>
                 ) : (
@@ -3523,7 +3832,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">PROFISSIONAL ATUAL</label>
-                <p className="text-sm text-gray-700">{trocandoVetAg.veterinario?.fullName ?? 'Não atribuído'}</p>
+                <p className="text-sm text-gray-700">{nomeResponsavel(trocandoVetAg) ?? 'Não atribuído'}</p>
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">NOVO PROFISSIONAL *</label>
@@ -3531,7 +3840,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                   <select value={trocandoVetIdAg} onChange={e => setTrocandoVetIdAg(e.target.value)}
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-blue-500 appearance-none">
                     <option value="">Selecione...</option>
-                    {vets.map(v => <option key={v.userId} value={v.userId}>{v.fullName}</option>)}
+                    {opcoesProfissionaisAgrupadas(vets)}
                   </select>
                   <ChevronDown size={12} className="absolute right-3 top-3 text-gray-400 pointer-events-none" />
                 </div>
@@ -3581,8 +3890,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                       podeAgendarParaOutro ? '' : 'bg-gray-50 text-gray-500 cursor-not-allowed'
                     }`}>
                     <option value="">Selecione...</option>
-                    {(podeAgendarParaOutro ? vets : vets.filter(v => v.userId === meuUserId))
-                      .map(v => <option key={v.userId} value={v.userId}>{v.fullName}</option>)}
+                    {opcoesProfissionaisAgrupadas(podeAgendarParaOutro ? vets : vets.filter(v => v.userId === meuUserId))}
                   </select>
                   <ChevronDown size={12} className="absolute right-3 top-3 text-gray-400 pointer-events-none" />
                 </div>
@@ -3593,9 +3901,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                   <select value={transParaVetId} onChange={e => setTransParaVetId(e.target.value)}
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-blue-500 appearance-none">
                     <option value="">Selecione...</option>
-                    {vets.filter(v => String(v.userId) !== transDeVetId).map(v => (
-                      <option key={v.userId} value={v.userId}>{v.fullName}</option>
-                    ))}
+                    {opcoesProfissionaisAgrupadas(vets.filter(v => String(v.userId) !== transDeVetId))}
                   </select>
                   <ChevronDown size={12} className="absolute right-3 top-3 text-gray-400 pointer-events-none" />
                 </div>

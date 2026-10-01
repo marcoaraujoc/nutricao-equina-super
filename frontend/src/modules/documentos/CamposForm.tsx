@@ -7,7 +7,7 @@
 // controle, e a primeira correção de tipo (`date` × `time`) valeria para uma só.
 
 import { Plus, Trash2 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import DateInput from '../../components/DateInput';
 import { brParaISO, isoParaBR } from '../../utils/dateUtils';
@@ -63,6 +63,9 @@ export function preenchimentoPorCep(campos: CampoDocumento[], dados: EnderecoCep
 export const ehColunaDeData = (coluna: string): boolean =>
   PISTA_DATA.test(coluna) && !coluna.includes('/');
 
+/** Coluna de texto livre de uma lista (a "Observação" da vacina) — vira campo que cresce. */
+export const ehColunaDeObservacao = (coluna: string): boolean => /observa/i.test(coluna);
+
 export function tipoDoCampo(campo: CampoDocumento): 'text' | 'date' | 'time' {
   if (campo.multilinha) return 'text';
   if (PISTA_HORA.test(campo.rotulo)) return 'time';
@@ -81,6 +84,64 @@ export function tipoDoCampo(campo: CampoDocumento): 'text' | 'date' | 'time' {
  * caracteres sairia cortado na impressão sem nada avisar.
  */
 export const MAX_MULTILINHA = 800;
+
+/**
+ * Textarea que CRESCE com o texto enquanto está em edição e volta ao tamanho normal
+ * ao sair do campo (2026-10-01, a pedido — observação do Atestado de Vacinação).
+ *
+ * Em edição (focado) a altura acompanha o conteúdo inteiro: quem escreve tem noção
+ * do texto todo, e não de uma janela de duas linhas. Fora de edição — depois de
+ * Inserir/Salvar, ou ao passar para o campo seguinte — volta a `linhasRepouso`, para
+ * não empurrar o resto do formulário. Voltar ao campo (editar de novo) o abre inteiro.
+ *
+ * ⚠️ A altura é MEDIDA (`scrollHeight`) e não contada em linhas: o texto quebra por
+ * largura, e na célula estreita da tabela uma "linha" digitada vira três na tela.
+ * ⚠️ `useLayoutEffect`, não `useEffect`: medir depois da pintura faz o campo piscar
+ * no tamanho antigo a cada tecla.
+ */
+export function TextoExpansivel({
+  value, onChange, onFocus, inputRef, linhasRepouso = 1, maxLength, placeholder, className, ariaLabel,
+}: {
+  value:          string;
+  onChange:       (v: string) => void;
+  onFocus?:       () => void;
+  inputRef?:      (el: HTMLTextAreaElement | null) => void;
+  linhasRepouso?: number;
+  maxLength?:     number;
+  placeholder?:   string;
+  className?:     string;
+  ariaLabel?:     string;
+}) {
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  const [emEdicao, setEmEdicao] = useState(false);
+
+  const ajustar = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (!emEdicao) { el.style.height = ''; return; }   // volta ao `rows` de repouso
+    el.style.height = 'auto';
+    // `scrollHeight` não inclui a borda; com `box-sizing: border-box` ela tem de entrar.
+    const borda = el.offsetHeight - el.clientHeight;
+    el.style.height = `${el.scrollHeight + borda}px`;
+  }, [emEdicao]);
+
+  useLayoutEffect(() => { ajustar(); }, [ajustar, value]);
+
+  return (
+    <textarea
+      ref={el => { ref.current = el; inputRef?.(el); }}
+      value={value}
+      rows={linhasRepouso}
+      onChange={e => onChange(maxLength ? e.target.value.slice(0, maxLength) : e.target.value)}
+      onFocus={() => { setEmEdicao(true); onFocus?.(); }}
+      onBlur={() => setEmEdicao(false)}
+      maxLength={maxLength}
+      placeholder={placeholder}
+      aria-label={ariaLabel}
+      className={`resize-none overflow-hidden ${className ?? ''}`}
+    />
+  );
+}
 
 export const AJUDA_ORIGEM: Record<CampoDocumento['origem'], string> = {
   LACUNA:     'Campo do formulário oficial',
@@ -134,16 +195,18 @@ export default function CampoInput({
       </label>
       {campo.multilinha ? (
         <>
-          <textarea
-            ref={el => inputRef?.(el)}
-            value={valor} rows={3}
-            onChange={e => onChange(e.target.value.slice(0, MAX_MULTILINHA))}
+          {/* Cresce com o texto enquanto em edição; fora dela, as 3 linhas de sempre.
+              `maxLength` barra a digitação e o `slice` interno cobre o COLAR, que em
+              alguns navegadores passa por cima do atributo. */}
+          <TextoExpansivel
+            inputRef={el => inputRef?.(el)}
+            value={valor}
+            linhasRepouso={3}
+            onChange={onChange}
             onFocus={onFocus}
             placeholder={AJUDA_ORIGEM[campo.origem]}
-            // `maxLength` já barra a digitação; o `slice` acima cobre o COLAR, que em
-            // alguns navegadores passa por cima do atributo.
             maxLength={MAX_MULTILINHA}
-            className={`w-full border rounded-xl px-3 py-2 text-sm resize-none transition-colors focus:outline-none ${borda}`}
+            className={`block w-full border rounded-xl px-3 py-2 text-sm transition-colors focus:outline-none ${borda}`}
           />
           {/* O contador só aparece perto do teto: antes disso ele é ruído, e o que
               importa é avisar ANTES de a pessoa perder o que ainda ia escrever. */}
@@ -338,16 +401,23 @@ export function ListaCamposInput({
    * ao escolher o nome da vacina.
    * ⚠️ Casa pelo NOME da coluna, nunca pelo índice — o modelo pode reordenar as
    * colunas, e por índice a validade cairia na coluna do fabricante.
+   * ⚠️ TROCAR de item substitui o que o item ANTERIOR tinha trazido (2026-10-01): sem
+   * isso, trocar a vacina deixava na linha a Data da Aplicação da OUTRA vacina — uma
+   * data de aplicação falsa num atestado. Só é tocado o valor que é IGUAL ao que o
+   * catálogo trouxe; o que a pessoa digitou por cima continua lá.
    */
   const escolherOpcao = (i: number, valor: string, extras: OpcaoLista[] = []) => {
-    const opcao = [...extras, ...catalogo].find(o => o.rotulo === valor);
+    const todas = [...extras, ...catalogo];
+    const opcao = todas.find(o => o.rotulo === valor);
     const copia = visiveis.map(l => [...l]);
+    const anterior = copia[i][0] !== valor ? todas.find(o => o.rotulo === copia[i][0]) : undefined;
     copia[i][0] = valor;
     if (opcao) {
       lista.colunas.forEach((col, j) => {
         if (j === 0) return;
-        const doCatalogo = opcao.valores[col];
-        if (doCatalogo && !String(copia[i][j] ?? '').trim()) copia[i][j] = doCatalogo;
+        const atual = String(copia[i][j] ?? '').trim();
+        const veioDoAnterior = !!anterior && atual !== '' && atual === String(anterior.valores[col] ?? '').trim();
+        if (!atual || veioDoAnterior) copia[i][j] = opcao.valores[col] ?? '';
       });
     }
     onChange(copia);
@@ -420,6 +490,11 @@ const MAX_OPCOES_VISIVEIS = 200;
                 {lista.colunas.map(col => (
                   <th key={col} className="text-left text-[11px] font-semibold text-gray-500 px-2 py-1.5 whitespace-nowrap">
                     {col}
+                    {/* Obrigatória em todo item preenchido — a "Data da Aplicação" do
+                        atestado. Quem recusa é o Inserir/Salvar (e o backend). */}
+                    {lista.colunasObrigatorias?.includes(col) && (
+                      <span className="text-red-500 ml-0.5" title="Obrigatório">*</span>
+                    )}
                   </th>
                 ))}
                 <th className="w-9" />
@@ -429,7 +504,7 @@ const MAX_OPCOES_VISIVEIS = 200;
               {visiveis.map((linha, i) => (
                 <tr key={i} className="border-t border-gray-100">
                   {lista.colunas.map((col, j) => (
-                    <td key={col} className="p-1">
+                    <td key={col} className="p-1 align-top">
                       {/* PRIMEIRA coluna com catálogo = seletor. As demais seguem
                           texto livre, inclusive as que o catálogo preencheu — o
                           frasco na mão pode ter outra partida que a do estoque. */}
@@ -466,6 +541,18 @@ const MAX_OPCOES_VISIVEIS = 200;
                           aria-label={`${col} ${i + 1}`}
                           className="w-full min-w-[8rem] border border-transparent hover:border-gray-200 rounded-lg px-2 py-1.5 text-sm"
                         />
+                      ) : ehColunaDeObservacao(col) ? (
+                        /* OBSERVAÇÃO cresce enquanto se digita (2026-10-01): numa
+                           célula de uma linha só, quem escreve via só o começo do texto.
+                           Fora de edição volta a uma linha, e o resto da tabela não
+                           fica desalinhado por causa de um texto longo. */
+                        <TextoExpansivel
+                          value={linha[j] ?? ''}
+                          onChange={v => alterar(i, j, v)}
+                          maxLength={MAX_MULTILINHA}
+                          ariaLabel={`${col} ${i + 1}`}
+                          className="block w-full min-w-[14rem] border border-transparent hover:border-gray-200 focus:border-emerald-500 rounded-lg px-2 py-1.5 text-sm leading-5 transition-colors focus:outline-none"
+                        />
                       ) : (
                         <input
                           value={linha[j] ?? ''}
@@ -479,7 +566,7 @@ const MAX_OPCOES_VISIVEIS = 200;
                       )}
                     </td>
                   ))}
-                  <td className="p-1 align-middle">
+                  <td className="p-1 align-top">
                     {/* Vermelho e sempre visível: remover linha é ação do registro, e
                         cinza é reservado ao indisponível (§6). */}
                     <button

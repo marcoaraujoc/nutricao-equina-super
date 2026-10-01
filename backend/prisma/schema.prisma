@@ -269,6 +269,7 @@ model Animal {
   reservasEstoque       ReservaEstoque[]              @relation("AnimalReservas")
   reservasEstoqueVacina ReservaEstoqueVacina[]        @relation("AnimalReservasVacina")
   designacoes           DesignacaoPrestador[]         @relation("AnimalDesignacoes")
+  designacoesCadastro   DesignacaoPrestadorCadastro[] @relation("AnimalDesignacoesCadastro")
   agendamentos          AgendamentoClinico[]          @relation("AnimalAgendamentos")
   resenha               ResenhaEquino?                @relation("AnimalResenha")
   resenhasGraficas      ResenhaGrafica[]              @relation("ResenhaGraficaAnimal")
@@ -909,6 +910,10 @@ model ProcedimentoVeterinario {
   // empresa nasceu (ex.: ao inativar um item do sistema). null = linha global, ou
   // procedimento criado do zero pela própria clínica (sem origem a rastrear).
   origemId         Int?     @map("origem_id")
+  /// Exame de IMAGEM (migration 20261030000000): true = o valor é de UMA imagem e é
+  /// multiplicado pela "Quantidade de imagens" do pedido; false = valor único.
+  /// 🔴 Lida/gravada por SQL cru (`lib/cobrancaPorImagem.js`) — client pode estar defasado.
+  cobrancaPorImagem Boolean @default(false) @map("cobranca_por_imagem")
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -1238,9 +1243,14 @@ model AgendamentoClinico {
   responsaveisAnteriores   Int[]     @map("responsaveis_anteriores")
   // Trava otimista — mesma regra da evolução. Ver lib/concorrenciaRegistro.js.
   versao                   Int       @default(1)
+  // PRESTADOR (cadastro) responsável — migration 20261028000000. Prestador SEM login
+  // não tem `veterinarioId`; com login, grava os dois. Leitura/escrita por SQL cru em
+  // lib/agendamentoPrestador.js (funciona antes do `prisma generate`).
+  prestadorCadastroId      Int?      @map("prestador_cadastro_id")
   createdAt                DateTime  @default(now()) @map("created_at")
   updatedAt                DateTime  @updatedAt @map("updated_at")
 
+  prestadorCadastro Prestador?    @relation("AgendamentoPrestadorCadastro", fields: [prestadorCadastroId], references: [id], onDelete: SetNull)
   animal        Animal            @relation("AnimalAgendamentos", fields: [animalId], references: [id], onDelete: Cascade)
   especialidade Especialidade?    @relation("AgendamentoEspecialidade", fields: [especialidadeId], references: [id], onDelete: SetNull)
   veterinario   User?             @relation("AgendamentoVeterinario", fields: [veterinarioId], references: [id], onDelete: SetNull)
@@ -1334,6 +1344,37 @@ model DesignacaoPrestador {
   @@index([equipeId])
   @@index([encaminhamentoId])
   @@map("tb_designacoes_prestador")
+  @@schema("schs2vet")
+}
+
+/// Autorização de paciente pelo CADASTRO do prestador (tb_prestadores.id), e não
+/// pelo login — é o que permite o prestador SEM "Terá acesso ao sistema" receber
+/// pacientes pelo "Gerenciar Acesso" e ser agendado para eles (migration
+/// 20261028000000). A designação por LOGIN (`DesignacaoPrestador`) continua sendo a
+/// que dá ESCOPO DE ACESSO ao sistema; com login, a tela grava as duas.
+/// Leitura/escrita SEMPRE por lib/designacaoPrestadorCadastro.js (SQL cru).
+model DesignacaoPrestadorCadastro {
+  id          Int       @id @default(autoincrement())
+  empresaId   Int       @map("empresa_id")
+  prestadorId Int       @map("prestador_id")
+  animalId    Int       @map("animal_id")
+  motivo      String?   @db.VarChar(255)
+  ativo       Boolean   @default(true)
+  dataInicio  DateTime  @default(now()) @map("data_inicio")
+  dataFim     DateTime? @map("data_fim")
+  criadoPorId Int?      @map("criado_por_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  empresa   Empresa   @relation("EmpresaDesignacoesPrestadorCadastro", fields: [empresaId], references: [id], onDelete: Cascade)
+  prestador Prestador @relation("PrestadorDesignacoesCadastro", fields: [prestadorId], references: [id], onDelete: Cascade)
+  animal    Animal    @relation("AnimalDesignacoesCadastro", fields: [animalId], references: [id], onDelete: Cascade)
+
+  @@unique([prestadorId, animalId], map: "tb_designacoes_prestador_cadastro_unico")
+  @@index([empresaId])
+  @@index([animalId])
+  @@index([prestadorId, ativo], map: "tb_designacoes_prestador_cadastro_prestador_ativo_idx")
+  @@map("tb_designacoes_prestador_cadastro")
   @@schema("schs2vet")
 }
 
@@ -2241,6 +2282,7 @@ model Empresa {
   configuracoes               EmpresaConfiguracao[]
   procedimentoValores         ProcedimentoValorEmpresa[]    @relation("EmpresaProcedimentoValores")
   procedimentoPrestadores     ProcedimentoPrestador[]       @relation("EmpresaProcedimentoPrestadores")
+  designacoesPrestadorCad     DesignacaoPrestadorCadastro[] @relation("EmpresaDesignacoesPrestadorCadastro")
   execucoesPrestador          ExecucaoProcedimentoPrestador[] @relation("EmpresaExecucoesPrestador")
   procedimentoCombos          ProcedimentoCombo[]           @relation("EmpresaProcedimentoCombos")
   resumosIA                   ResumoAtendimentoIA[]         @relation("EmpresaResumosIA")
@@ -3178,11 +3220,18 @@ model Prestador {
   formaPagamento String?   @map("forma_pagamento") @db.VarChar(20)
   valorPagamento Float?    @map("valor_pagamento")
   acessoSistema  Boolean   @default(false) @map("acesso_sistema")
+  // ⚠️ Coluna `tempo_consulta_min` (Int?, migration 20261031000000) existe na tabela
+  // mas NÃO é declarada aqui, de propósito (mesmo caso de `restringir_por_local`):
+  // declarada, um `prisma generate` rodado ANTES da migration faria todo
+  // `prestador.findMany` sem `select` pedir uma coluna inexistente. Lida/gravada SÓ
+  // por `lib/prestadorTempoConsulta.js` (SQL cru). null = padrão da empresa.
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
   user           User?                    @relation("PrestadorUser", fields: [userId], references: [id], onDelete: SetNull)
   procedimentos  ProcedimentoPrestador[]  @relation("PrestadorProcedimentos")
+  designacoes    DesignacaoPrestadorCadastro[] @relation("PrestadorDesignacoesCadastro")
+  agendamentos   AgendamentoClinico[]     @relation("AgendamentoPrestadorCadastro")
   locaisTrabalho PrestadorLocalTrabalho[]
   especialidades PrestadorEspecialidade[]
 

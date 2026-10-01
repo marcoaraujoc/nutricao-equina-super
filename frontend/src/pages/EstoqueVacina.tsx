@@ -195,6 +195,8 @@ export default function EstoqueVacina() {
   // Erro do SALVAR do painel de formulário — no topo da página fica fora da vista
   const [erroAcao, setErroAcao] = useState<ErroAcaoDados | null>(null);
   const [ajusteQtd,            setAjusteQtd]            = useState<number | ''>('');
+  // Frascos ↔ total, sincronizados — a MESMA dupla do Ajuste da Farmácia.
+  const [ajusteFrascos,        setAjusteFrascos]        = useState<number | ''>('');
   const [ajusteMotivo,         setAjusteMotivo]         = useState('');
   const [ajustando,            setAjustando]            = useState(false);
 
@@ -712,11 +714,30 @@ export default function EstoqueVacina() {
   // ── Ajuste de estoque (doses disponíveis) ──────────────────────────────────
   const loteAjuste = ajusteLoteId != null ? (lotes.find(l => l.id === ajusteLoteId) ?? null) : null;
   const nomeLote = (l: LoteVacina) => l.medicamentoCat?.nome ?? l.vacina?.nome ?? '—';
+  // 🔴 O saldo do lote é o CONTEÚDO (frascos × `dosesPorFrasco`), igual à Farmácia
+  // multidose (2026-10-01). Só com o campo de total, quem contava "2 frascos" de 20 mL
+  // digitava 2 e o lote ia para 2 mL. Com conteúdo 1 (a embalagem é a própria
+  // unidade) frasco e total são o mesmo número e o campo extra não aparece.
+  // ⚠️ O conteúdo é o DO LOTE: é nele que o saldo está contado, e a reconversão do
+  // produto (`lib/catalogoEmpresa.js#reconverterLotesVacinaAtivos`) o mantém alinhado.
+  const arred2 = (n: number) => Math.round(n * 100) / 100;
+  const conteudoDoLote = (l: LoteVacina | null): number => {
+    const n = Number(l?.dosesPorFrasco);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  };
+  const unidadeDoLote = (l: LoteVacina | null): string => l?.medicamentoCat?.formaCalculo || 'doses';
+  const conteudoAjuste = conteudoDoLote(loteAjuste);
+  const usaFrascosAjuste = !!loteAjuste && conteudoAjuste !== 1;
+  const frascosDoTotal = (total: number, l: LoteVacina | null): number | '' => {
+    const c = conteudoDoLote(l);
+    return c !== 1 ? arred2(total / c) : '';
+  };
 
   const abrirAjuste = (lote?: LoteVacina) => {
     if (!podeAjustar) { semPermissao('ajustar estoque'); return; }
     setAjusteLoteId(lote?.id ?? null);
     setAjusteQtd(lote ? lote.qtdDisponivel : '');
+    setAjusteFrascos(lote ? frascosDoTotal(lote.qtdDisponivel, lote) : '');
     setAjusteMotivo('');
     setBuscaAjuste('');
     setDropdownAjusteAberto(false);
@@ -1552,7 +1573,7 @@ export default function EstoqueVacina() {
                       </span>
                       {loteAjuste ? (
                         <X size={14} className="text-gray-400 flex-shrink-0 ml-2 cursor-pointer"
-                          onClick={(e) => { e.stopPropagation(); setAjusteLoteId(null); setAjusteQtd(''); }} />
+                          onClick={(e) => { e.stopPropagation(); setAjusteLoteId(null); setAjusteQtd(''); setAjusteFrascos(''); }} />
                       ) : (
                         <ChevronDown size={14} className="text-gray-400 flex-shrink-0 ml-2" />
                       )}
@@ -1582,6 +1603,7 @@ export default function EstoqueVacina() {
                                     onMouseDown={() => {
                                       setAjusteLoteId(l.id);
                                       setAjusteQtd(l.qtdDisponivel);
+                                      setAjusteFrascos(frascosDoTotal(l.qtdDisponivel, l));
                                       setDropdownAjusteAberto(false);
                                       setBuscaAjuste('');
                                     }}
@@ -1610,8 +1632,14 @@ export default function EstoqueVacina() {
                 <div className="bg-teal-50 border border-teal-100 rounded-xl p-2.5 text-xs text-gray-600">
                   <p className="font-semibold text-teal-700 text-[11px] uppercase tracking-wider mb-1">Lote Selecionado</p>
                   <div className="grid grid-cols-2 gap-1">
-                    <p><span className="text-gray-400">Doses atuais:</span>{' '}
-                      <b className="text-teal-700">{loteAjuste.qtdDisponivel}/{loteAjuste.qtdTotal}</b></p>
+                    <p><span className="text-gray-400">{usaFrascosAjuste ? 'Saldo atual:' : 'Doses atuais:'}</span>{' '}
+                      <b className="text-teal-700">{loteAjuste.qtdDisponivel}/{loteAjuste.qtdTotal}</b>
+                      {usaFrascosAjuste && <span className="text-gray-400"> {unidadeDoLote(loteAjuste)}</span>}</p>
+                    {usaFrascosAjuste && (
+                      <p><span className="text-gray-400">Frascos:</span>{' '}
+                        <b className="text-teal-700">{frascosDoTotal(loteAjuste.qtdDisponivel, loteAjuste)}</b>
+                        <span className="text-gray-400"> ({conteudoAjuste} {unidadeDoLote(loteAjuste)}/frasco)</span></p>
+                    )}
                     <p><span className="text-gray-400">Lote:</span> {loteAjuste.lote || '—'}</p>
                     <p><span className="text-gray-400">Validade:</span> {loteAjuste.validade ? formatDate(loteAjuste.validade) : '—'}</p>
                   </div>
@@ -1621,15 +1649,43 @@ export default function EstoqueVacina() {
               {/* Quantidade final de doses — pré-preenchida com a atual */}
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Doses disponíveis <span className="text-red-500">*</span>
+                  {usaFrascosAjuste ? 'Quantidade em Estoque' : 'Doses disponíveis'} <span className="text-red-500">*</span>
                 </label>
-                <input type="number" min={0} value={ajusteQtd === '' ? '' : ajusteQtd}
-                  onChange={(e) => setAjusteQtd(e.target.value === '' ? '' : Number(e.target.value))}
-                  placeholder="0"
-                  className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500" />
+                <div className={usaFrascosAjuste ? 'grid grid-cols-2 gap-2' : ''}>
+                  {usaFrascosAjuste && (
+                    <div>
+                      <span className="block text-[10px] text-gray-400 mb-0.5">Frascos</span>
+                      <input type="number" min={0} step="any" value={ajusteFrascos === '' ? '' : ajusteFrascos}
+                        onChange={(e) => {
+                          if (e.target.value === '') { setAjusteFrascos(''); setAjusteQtd(''); return; }
+                          const f = Number(e.target.value);
+                          setAjusteFrascos(f);
+                          setAjusteQtd(arred2(f * conteudoAjuste));
+                        }}
+                        placeholder="0"
+                        className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500" />
+                    </div>
+                  )}
+                  <div>
+                    {usaFrascosAjuste && (
+                      <span className="block text-[10px] text-gray-400 mb-0.5">{unidadeDoLote(loteAjuste)}</span>
+                    )}
+                    <input type="number" min={0} step="any" value={ajusteQtd === '' ? '' : ajusteQtd}
+                      onChange={(e) => {
+                        if (e.target.value === '') { setAjusteQtd(''); setAjusteFrascos(''); return; }
+                        const v = arred2(Number(e.target.value));
+                        setAjusteQtd(v);
+                        setAjusteFrascos(frascosDoTotal(v, loteAjuste));
+                      }}
+                      placeholder="0"
+                      className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500" />
+                  </div>
+                </div>
                 {loteAjuste && (
                   <p className="text-[10px] text-gray-400 mt-1">
-                    Informe a contagem real de doses — a diferença será registrada como ajuste.
+                    {usaFrascosAjuste
+                      ? `Informe a quantidade real em estoque (frascos ou ${unidadeDoLote(loteAjuste)}) — a diferença será registrada como ajuste.`
+                      : 'Informe a contagem real de doses — a diferença será registrada como ajuste.'}
                   </p>
                 )}
               </div>
@@ -1655,9 +1711,14 @@ export default function EstoqueVacina() {
                   <p className="text-xs text-gray-600">
                     Diferença a registrar:{' '}
                     <b className={delta > 0 ? 'text-teal-700' : 'text-red-600'}>
-                      {delta > 0 ? '+' : '−'}{Math.abs(delta)} doses
+                      {delta > 0 ? '+' : '−'}{arred2(Math.abs(delta))} {usaFrascosAjuste ? unidadeDoLote(loteAjuste) : 'doses'}
                     </b>
                     {' '}({loteAjuste.qtdDisponivel} → {nova})
+                    {usaFrascosAjuste && (
+                      <span className="text-gray-400">
+                        {' '}· {frascosDoTotal(loteAjuste.qtdDisponivel, loteAjuste)} → {frascosDoTotal(nova, loteAjuste)} frascos
+                      </span>
+                    )}
                   </p>
                 );
               })()}

@@ -4,10 +4,12 @@
 //
 // O envio é SEMPRE o mesmo, seja fatura, prescrição, vacina ou exame: o HTML de
 // impressão do documento vira PDF no servidor (Puppeteer) e sai ANEXADO pela
-// instância de WhatsApp da clínica (`utils/compartilharPdf.ts`). Só quando isso não é
-// possível (cliente sem telefone, WhatsApp da clínica desconectado) a tela cai no
-// plano B: baixa o PDF e abre o WhatsApp para anexar à mão — e o card central diz o
-// MOTIVO.
+// instância de WhatsApp da clínica (`utils/compartilharPdf.ts`).
+// 🔴 (2026-09-30) ANTES de tudo o SERVIÇO é conferido (`verificarServicoWhatsApp`):
+// desativado/não configurado → o card central informa que é preciso ATIVÁ-LO, e nada
+// é gerado nem aberto. O plano B (baixa o PDF e abre o WhatsApp para anexar à mão)
+// ficou para o que não é o serviço — cliente sem telefone, falha no envio — e o card
+// diz o MOTIVO.
 //
 // POR QUÊ virou componente: a fatura tinha TRÊS botões de WhatsApp escritos à parte
 // (fechamento em lote, fatura aberta e fatura por paciente), cada um com o seu estado,

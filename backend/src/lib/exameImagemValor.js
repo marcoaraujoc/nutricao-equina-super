@@ -21,6 +21,7 @@
 
 const prisma = require('./prisma').default;
 const vinculoPrestador = require('./procedimentoPrestador');
+const { lerCobrancaPorImagem } = require('./cobrancaPorImagem');
 const { TIPO_IMAGEM } = require('../seeds/005_procedimentos_imagem.seed');
 
 /** As colunas da migration 20261005000000 existem nesta base? */
@@ -56,7 +57,8 @@ const num = (v) => {
  */
 async function precoDoExame(client, empresaId, nome, prestadorId = null) {
   const n = String(nome ?? '').trim();
-  if (!n || !empresaId) return { valorCliente: null, valorPrestador: null, procedimentoId: null };
+  const nenhum = { valorCliente: null, valorPrestador: null, procedimentoId: null, porImagem: false };
+  if (!n || !empresaId) return nenhum;
 
   // O procedimento de imagem com este nome — global ou da própria empresa.
   let proc = null;
@@ -74,7 +76,7 @@ async function precoDoExame(client, empresaId, nome, prestadorId = null) {
     proc = rows[0] ?? null;
   } catch { /* base sem o catálogo unificado */ }
 
-  if (!proc) return { valorCliente: null, valorPrestador: null, procedimentoId: null };
+  if (!proc) return nenhum;
 
   // Vínculo do prestador (o mais específico que existe).
   const doVinculo = prestadorId
@@ -92,16 +94,65 @@ async function precoDoExame(client, empresaId, nome, prestadorId = null) {
     padrao = num(rows[0]?.valor);
   } catch { /* segue sem o padrão */ }
 
+  // Valor ÚNICO × POR IMAGEM (migration 20261030000000). Base sem a coluna = único.
+  const porImagem = (await lerCobrancaPorImagem(client, proc.id)).get(Number(proc.id)) === true;
+
   return {
     procedimentoId: proc.id,
     valorCliente:   doVinculo.valorCliente ?? padrao ?? num(proc.valorVenda),
     valorPrestador: doVinculo.valorPrestador ?? null,
+    porImagem,
   };
 }
 
+const qtdValida = (v) => {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+};
+
 /**
- * Soma o preço dos exames de UM pedido. Os nomes chegam como a lista que a tela
- * montou (`descricao` é a mesma lista concatenada).
+ * Os exames de UM pedido, cada um com a SUA quantidade de imagens.
+ *
+ * 🔴 A quantidade é do GRUPO, não do pedido: a tela monta um grupo por "Inserir",
+ * cada um com os seus exames e a sua "Quantidade de imagens", e o pedido guarda a
+ * SOMA em `qtdAmostra`. Multiplicar cada exame pela soma cobraria 3 imagens de um
+ * raio-x em que foi pedida 1, só porque outro grupo do mesmo pedido tinha 2.
+ * Ordem de fonte: `grupos[]` (payload da criação, ou o JSON gravado em `observacao`)
+ * → lista de nomes + `qtdAmostra` do pedido (pedido de um grupo só).
+ * ⚠️ Fora de Imagem a quantidade é de AMOSTRAS e não entra no preço: qtd = 1.
+ *
+ * @returns {Array<{ nome: string, qtd: number }>}
+ */
+function itensDoPedido({ tipo, grupos, nomes, descricao, qtdAmostra } = {}) {
+  const ehImagem = tipo === 'Imagem';
+  const gs = Array.isArray(grupos) ? grupos.filter(g => Array.isArray(g?.exames) && g.exames.length > 0) : [];
+  if (gs.length > 0) {
+    return gs.flatMap(g => g.exames
+      .map(x => String(x ?? '').trim()).filter(Boolean)
+      .map(nome => ({ nome, qtd: ehImagem ? qtdValida(g.qtdAmostra) : 1 })));
+  }
+  const lista = Array.isArray(nomes) && nomes.length > 0
+    ? nomes
+    : String(descricao ?? '').split(',');
+  return lista.map(x => String(x ?? '').trim()).filter(Boolean)
+    .map(nome => ({ nome, qtd: ehImagem ? qtdValida(qtdAmostra) : 1 }));
+}
+
+/** Os grupos que a criação gravou no JSON de `observacao` (null se não houver). */
+function gruposDaObservacao(observacao) {
+  try {
+    const o = JSON.parse(observacao ?? '');
+    return Array.isArray(o?.grupos) ? o.grupos : null;
+  } catch { return null; }
+}
+
+/**
+ * Soma o preço dos exames de UM pedido. Cada item é o nome do exame (qtd 1) ou
+ * `{ nome, qtd }` — ver `itensDoPedido`.
+ *
+ * 🔴 VALOR POR IMAGEM (2026-09-30): exame cadastrado como "por imagem" tem o valor
+ * multiplicado pela quantidade de imagens — o do cliente E o do prestador, que é pago
+ * pelo mesmo serviço. "Valor único" ignora a quantidade, como sempre ignorou.
  *
  * ⚠️ Devolve `null` quando NENHUM dos nomes tem preço resolvível — e não 0. A
  * diferença importa: 0 seria uma afirmação ("este pedido é gratuito"), enquanto null
@@ -110,20 +161,42 @@ async function precoDoExame(client, empresaId, nome, prestadorId = null) {
  */
 async function precoDoPedido(client, empresaId, nomes, prestadorId = null) {
   const lista = (Array.isArray(nomes) ? nomes : [nomes])
-    .map(x => String(x ?? '').trim()).filter(Boolean);
-  if (lista.length === 0 || !empresaId) return { valorCliente: null, valorPrestador: null };
-
-  let cliente = null;
-  let prest   = null;
-  for (const nome of lista) {
-    const p = await precoDoExame(client, empresaId, nome, prestadorId);
-    if (p.valorCliente   != null) cliente = (cliente ?? 0) + p.valorCliente;
-    if (p.valorPrestador != null) prest   = (prest   ?? 0) + p.valorPrestador;
-  }
+    .map(x => (x && typeof x === 'object')
+      ? { nome: String(x.nome ?? '').trim(), qtd: qtdValida(x.qtd) }
+      : { nome: String(x ?? '').trim(), qtd: 1 })
+    .filter(x => x.nome);
   // Dinheiro arredondado ao CENTAVO: somas de percentual fecham em
   // 55.000000000000004 e o pedido sairia com um centavo que ninguém explica.
   const cent = (v) => (v == null ? null : Math.round(v * 100) / 100);
-  return { valorCliente: cent(cliente), valorPrestador: cent(prest) };
+  const vazio = { valorCliente: null, valorPrestador: null, linha: null, porImagem: false };
+  if (lista.length === 0 || !empresaId) return vazio;
+
+  let cliente = null;
+  let prest   = null;
+  const resolvidos = [];
+  for (const { nome, qtd } of lista) {
+    const p = await precoDoExame(client, empresaId, nome, prestadorId);
+    const mult = p.porImagem ? qtd : 1;
+    if (p.valorCliente   != null) cliente = (cliente ?? 0) + p.valorCliente * mult;
+    if (p.valorPrestador != null) prest   = (prest   ?? 0) + p.valorPrestador * mult;
+    if (p.valorCliente   != null) resolvidos.push({ ...p, qtd: mult });
+  }
+
+  // Como a linha aparece na FATURA: pedido de UM exame cobrado por imagem sai como
+  // "valor da imagem × N" — a quantidade fica legível para o cliente. Qualquer outro
+  // formato (vários exames, valor único) sai como o TOTAL × 1, como sempre saiu.
+  const unico = resolvidos.length === 1 && lista.length === 1 ? resolvidos[0] : null;
+  const linha = cliente == null ? null
+    : (unico && unico.porImagem && unico.qtd > 1)
+      ? { valor: cent(unico.valorCliente), quantidade: unico.qtd }
+      : { valor: cent(cliente), quantidade: 1 };
+
+  return {
+    valorCliente: cent(cliente),
+    valorPrestador: cent(prest),
+    linha,
+    porImagem:      resolvidos.some(r => r.porImagem),
+  };
 }
 
 /**
@@ -197,6 +270,8 @@ module.exports = {
   temColunas,
   precoDoExame,
   precoDoPedido,
+  itensDoPedido,
+  gruposDaObservacao,
   gravarPrestadorEValor,
   gravarPrestador,
   lerPrestadorEValor,

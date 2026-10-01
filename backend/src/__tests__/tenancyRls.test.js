@@ -138,6 +138,10 @@ const TENANT_PLANE = [
   // ⚠️ tb_fornecedor_especialidades CONTINUA em AGUARDANDO_RLS — dívida já
   // rastreada, fora do escopo desta correção.
   'tb_prestador_especialidades',
+  // 2026-09-30 — autorização de paciente pelo CADASTRO do prestador (com ou sem login).
+  // TENANT DIRETO, fail-closed desde a criação (20261028000000), com WITH CHECK que
+  // exige paciente e prestador da MESMA empresa da linha (a FK não passa por RLS).
+  'tb_designacoes_prestador_cadastro',
 ];
 
 // ─── AGUARDANDO RLS — são de tenant, ainda sem policy ─────────────────────────

@@ -35,6 +35,8 @@ router.post('/agendamentos/interpretar',      authenticate, checkPermission('ate
 router.get('/agendamentos',                   authenticate, checkPermission('atendimento.agendamentos.ler',   'LEITURA'), AgendamentoController.listarGlobal);
 // Ocupação GLOBAL do profissional no dia (todas as empresas) — antes de /animal/:id
 router.get('/agendamentos/ocupacao',          authenticate, checkPermission('atendimento.agendamentos.ler',   'LEITURA'), AgendamentoController.ocupacaoDoDia);
+// Prestadores (cadastro, com ou sem login) com paciente autorizado — literal antes de /:id
+router.get('/agendamentos/prestadores',       authenticate, checkPermission('atendimento.agendamentos.ler',   'LEITURA'), AgendamentoController.listarPrestadoresAgendaveis);
 router.get('/agendamentos/animal/:animalId',  authenticate, checkPermission('atendimento.agendamentos.ler',   'LEITURA'), AgendamentoController.listarPorAnimal);
 router.post('/agendamentos',                  authenticate, checkPermission('atendimento.agendamentos.criar',  'PROPRIO'), AgendamentoController.criar);
 router.patch('/agendamentos/transferir-dia',  authenticate, checkPermission('atendimento.agendamentos.editar', 'PROPRIO'), AgendamentoController.transferirDia);

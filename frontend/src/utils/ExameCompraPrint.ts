@@ -2,7 +2,9 @@
 // Gerador de HTML para impressão e PDF do Exame de Compra Equino.
 // Field definitions duplicadas intencionalmente para desacoplar da página.
 
-import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura } from './print/PrintShell';
+// Desde 2026-09-29 o papel é a FOLHA CLÍNICA (`print/FolhaClinica.ts`); aqui mora só
+// o CORPO do laudo.
+import { gerarHtmlFolhaClinica, prepararFolhaClinica } from './print/FolhaClinica';
 import { imprimirHtml } from './print/imprimirHtml';
 
 // ─── Field definitions ────────────────────────────────────────────────────────
@@ -133,11 +135,7 @@ export interface ExameCompraPrintAnimal {
 // ─── CSS ─────────────────────────────────────────────────────────────────────
 
 const CSS = `
-  ${PRINT_SHELL_CSS}
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; font-size: 13.7px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
   .page-break { page-break-before: always; break-before: page; }
-  .doc-info-row { display: flex; justify-content: flex-end; margin-bottom: 12px; }
   .card { border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; }
   .card-title { font-size: 12.3px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; border-bottom: 1px solid #f3f4f6; padding-bottom: 5px; }
   .section-h { font-size: 12.3px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: .05em; margin: 14px 0 8px; padding: 5px 8px; background: #f9fafb; border-left: 3px solid #d97706; border-radius: 0 4px 4px 0; }
@@ -152,8 +150,7 @@ const CSS = `
   .normal { color: #166534; }
   .anormal { color: #92400e; background: #fffbeb; font-weight: 700; }
   .obs-cell { color: #6b7280; font-style: italic; font-size: 12.3px; }
-  .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 13.7px; font-weight: 700; color: #92400e; background: #fef3c7; }
-  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 12px; font-weight: 700; color: #92400e; background: #fef3c7; }
 `;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -400,24 +397,6 @@ export function gerarHtmlExameCompra(
   const me  = laudo?.musculoEsqueletico ?? {};
   const img = laudo?.imagem ?? {};
 
-  // ── Animal card ─────────────────────────────────────────────────────────────
-  const animalBlock = animal ? `
-    <div class="card">
-      <div class="card-title">Animal</div>
-      <div style="display:flex;align-items:flex-start;gap:12px;">
-        ${typeof animal.photoUrl === 'string' && animal.photoUrl
-          ? `<img src="${esc(animal.photoUrl)}" alt="${esc(animal.nome)}" style="width:52px;height:52px;object-fit:cover;border-radius:6px;border:1px solid #e5e7eb;flex-shrink:0;" />`
-          : ''}
-        <div class="grid3" style="flex:1;">
-          <div><span class="lbl">Nome</span><span class="val">${esc(animal.nome)}</span></div>
-          ${animal.raca    ? `<div><span class="lbl">Raça</span><span class="val">${esc(animal.raca.nome)}</span></div>` : ''}
-          ${animal.especie ? `<div><span class="lbl">Espécie</span><span class="val">${esc(animal.especie.nome)}</span></div>` : ''}
-          ${animal.idadeAnos != null ? `<div><span class="lbl">Idade</span><span class="val">${animal.idadeAnos} ano${animal.idadeAnos !== 1 ? 's' : ''}</span></div>` : ''}
-          ${animal.user    ? `<div><span class="lbl">Proprietário</span><span class="val">${esc(animal.user.fullName)}</span></div>` : ''}
-        </div>
-      </div>
-    </div>` : '';
-
   // ── Info card ───────────────────────────────────────────────────────────────
   const infoBlock = `
     <div class="card">
@@ -439,16 +418,6 @@ export function gerarHtmlExameCompra(
 
   // ── Corpo ───────────────────────────────────────────────────────────────────
   const body = `
-  ${renderCabecalho(animal?.logoUrl)}
-
-  <div class="doc-info-row">
-    <div style="text-align:right;">
-      <p style="font-size:12.3px;color:#9ca3af;margin-bottom:4px;">LAUDO DE EXAME DE COMPRA</p>
-      <span class="badge">Compra Equina</span>
-    </div>
-  </div>
-
-  ${animalBlock}
   ${infoBlock}
   ${justificativaBlock}
 
@@ -497,31 +466,49 @@ export function gerarHtmlExameCompra(
   <div class="section-h">Conclusão / Parecer Final</div>
   <div class="card">
     <p style="font-size:14.3px;color:#111;line-height:1.6;white-space:pre-line;">${esc(laudo.conclusao)}</p>
-  </div>` : ''}
+  </div>` : ''}`;
 
-  <div class="ps-footer">
-    <span>Exame de Compra Equino ${fmtNumero(ex.numero)}</span>
-  </div>
+  return gerarHtmlFolhaClinica({
+    documento:    `Exame de Compra ${fmtNumero(ex.numero)}${animal ? ` — ${animal.nome}` : ''}`,
+    logoUrl:      animal?.logoUrl,
+    profissional: ex.veterinario ? { id: ex.veterinario.id, nome: ex.veterinario.fullName } : null,
+    animal: animal ? {
+      nome:         animal.nome,
+      photoUrl:     animal.photoUrl ?? null,
+      especie:      animal.especie?.nome ?? null,
+      raca:         animal.raca?.nome ?? null,
+      idade:        animal.idadeAnos != null ? `${animal.idadeAnos} ano${animal.idadeAnos !== 1 ? 's' : ''}` : null,
+      proprietario: animal.user?.fullName ?? null,
+    } : null,
+    paginas: [{
+      titulo:    'Laudo de Exame de Compra',
+      subtitulo: `<span class="badge">Compra Equina</span>${ex.numero != null ? ` · ${esc(fmtNumero(ex.numero))}` : ''}`,
+      corpoHtml: body,
+    }],
+    cssModulo: CSS,
+    rodape:    `Exame de Compra Equino ${fmtNumero(ex.numero)}`,
+  });
+}
 
-  ${renderRodapeAssinatura(ex.veterinario, 'Médico Veterinário Responsável')}`;
-
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <title>Exame de Compra ${fmtNumero(ex.numero)}${animal ? ` — ${animal.nome}` : ''} — S2Vet</title>
-  <style>${CSS}</style>
-</head>
-<body>${body}</body>
-</html>`;
+/** Resolve CRMV/assinatura, endereço da clínica e imagens — obrigatório antes de gerar PDF. */
+export async function prepararExameCompra(
+  ex:      ExameCompraPrintItem,
+  animal?: ExameCompraPrintAnimal | null,
+): Promise<void> {
+  await prepararFolhaClinica({
+    profissionalId: ex.veterinario?.id ?? null,
+    logoUrl:        animal?.logoUrl,
+    imagens:        [animal?.photoUrl],
+  });
 }
 
 // ─── Imprimir via iframe ──────────────────────────────────────────────────────
 
-export function imprimirExameCompra(
+export async function imprimirExameCompra(
   ex:      ExameCompraPrintItem,
   animal?: ExameCompraPrintAnimal | null,
-): void {
+): Promise<void> {
+  await prepararExameCompra(ex, animal);
   imprimirHtml(gerarHtmlExameCompra(ex, animal));
 }
 

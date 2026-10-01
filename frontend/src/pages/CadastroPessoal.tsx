@@ -641,6 +641,22 @@ export default function CadastroPessoal() {
           if (conflito) return conflito;
           // Especialidade no local é OPCIONAL — veterinário sem nenhuma assume Clínica
           // Médica (backend) e fornecedor pode ficar sem.
+          //
+          // 🔴 Checa TODAS as linhas contra o expediente ATUAL da empresa, não só a que
+          // está sendo editada agora. Sem isto, uma linha já salva ANTES da empresa
+          // estreitar os dias (ex.: empresa mudou de Seg-Sex para Seg/Qui/Sex) só era
+          // barrada pelo BACKEND no Salvar final — com uma mensagem genérica que não diz
+          // QUAL local está fora, e a pessoa que acabou de corrigir a linha que lembrava
+          // lia "Dias fora do expediente" e achava que a correção não tinha pegado,
+          // quando na verdade era OUTRA linha (o mesmo local com outro turno, ou um
+          // segundo local) que continuava com os dias antigos.
+          for (const l of form.locaisTrabalho) {
+            const foraDoExpediente = validarExpedienteEmpresa(l);
+            if (foraDoExpediente) {
+              const nomeLocal = l.localizacaoNome || `Local #${l.localizacaoId}`;
+              return `"${nomeLocal}": ${foraDoExpediente}`;
+            }
+          }
         }
         return '';
       default:

@@ -64,6 +64,14 @@ export default function Produtos() {
   const [tipo,   setTipo]   = useState<TipoProduto>('medicamento');
   const [form,   setForm]   = useState<FormProdutoDados>(FORM_PRODUTO_VAZIO);
   const [mostrarForm, setMostrarForm] = useState(false);
+  // "Alterar" fica no fim da lista e o formulário abre no TOPO da página: sem levar
+  // a tela até ele, no celular a pessoa clicava e não via nada acontecer.
+  const formRef = useRef<HTMLDivElement>(null);
+  const [rolarParaForm, setRolarParaForm] = useState(0);
+  useEffect(() => {
+    if (rolarParaForm === 0) return;
+    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [rolarParaForm]);
   const [salvando, setSalvando] = useState(false);
 
   const [itens,   setItens]   = useState<ItemCatalogo[]>([]);
@@ -288,6 +296,7 @@ export default function Produtos() {
     limparEncontrado();
     setForm(formDoItem(item));
     setMostrarForm(true);
+    setRolarParaForm(n => n + 1);
   };
 
   /** "Novo produto" abre o formulário JÁ com o nome que a pessoa digitou na busca. */
@@ -378,7 +387,7 @@ export default function Produtos() {
       </div>
 
       {mostrarForm && (
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-4">
+        <div ref={formRef} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-4 scroll-mt-4">
           <FormProduto
             tipo={tipo}
             form={form}

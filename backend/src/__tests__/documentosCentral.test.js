@@ -481,8 +481,16 @@ describe('modelos do CFMV (Res. 1.321/2020)', () => {
       'Nome comercial da vacina', 'Vacinação contra', 'Fabricante',
       // Fabricação e validade em colunas SEPARADAS (eram um campo só).
       'Número da partida', 'Data de fabricação', 'Data de validade',
+      // 🔴 2026-10-01: "Data da Aplicação" é quem diz QUANDO a vacina foi dada (a
+      // declaração deixou de dizer "nesta data") — e é OBRIGATÓRIA em todo item.
+      'Data da Aplicação',
       'Observação',
     ]);
+    expect(lista.conteudo.colunasObrigatorias).toEqual(['Data da Aplicação']);
+    expect(coletarListas(blocos)[0].colunasObrigatorias).toEqual(['Data da Aplicação']);
+    const declaracao = blocos.map(b => b.conteudo?.texto ?? '').join(' ');
+    expect(declaracao).toContain('foi vacinado por mim, conforme informações abaixo:');
+    expect(declaracao).not.toContain('nesta data');
     // Sai como os demais CARDS do documento, não como tabela: sete colunas numa A4
     // retrato espremem o nome comercial em tres linhas.
     expect(lista.conteudo.formato).toBe('campos');

@@ -228,6 +228,7 @@ function montarGrupoVacina(v: VacinaClinica, animal: AnimalInfo | null): PrintGr
   };
 
   const grupo: PrintGrupoPrescricao = {
+    titulo:          'Vacina',
     numero:          v.numero ?? 0,
     // O template já escreve o "#". Sem número (registro legado) sai "#—" — não se
     // inventa um número a partir do id (viraria "a vacina nº 812" do paciente).

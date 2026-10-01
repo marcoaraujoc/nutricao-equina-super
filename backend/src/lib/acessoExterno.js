@@ -163,16 +163,27 @@ async function anexarEquipeDoAcesso(client, lista) {
 
   const vinculos = await client.membroEquipe.findMany({
     where:   { userId: { in: userIds } },
-    select:  { userId: true, equipeId: true },
+    select:  { userId: true, equipeId: true, equipe: { select: { empresaId: true } } },
     orderBy: { createdAt: 'asc' },
   }).catch(() => []);
 
-  // Primeiro vínculo de cada um: o profissional externo tem um só por empresa, e o
-  // `orderBy` deixa a escolha determinística quando ele atende a mais de uma clínica.
-  const mapa = new Map();
-  for (const v of vinculos) if (!mapa.has(v.userId)) mapa.set(v.userId, v.equipeId);
+  // 🔴 O vínculo tem de ser da EMPRESA DO CADASTRO (2026-09-30). O mesmo profissional
+  // pode ser membro de outra clínica (veterinário lá, prestador aqui), e "o primeiro
+  // vínculo" sem esse filtro devolvia a equipe da OUTRA empresa — a designação iria
+  // para lá. Medido na base: prestador da empresa 64 resolvendo para a equipe 58 (59).
+  // Sem `empresaId` no item (legado), cai no primeiro vínculo, como antes.
+  const porUser = new Map();
+  for (const v of vinculos) {
+    if (!porUser.has(v.userId)) porUser.set(v.userId, []);
+    porUser.get(v.userId).push(v);
+  }
+  const equipeDe = (i) => {
+    const lista = porUser.get(Number(i.userId)) ?? [];
+    const daEmpresa = i.empresaId ? lista.find(v => v.equipe?.empresaId === Number(i.empresaId)) : null;
+    return (daEmpresa ?? (i.empresaId ? null : lista[0]))?.equipeId ?? null;
+  };
 
-  return itens.map(i => ({ ...i, acessoEquipeId: i?.userId ? (mapa.get(Number(i.userId)) ?? null) : null }));
+  return itens.map(i => ({ ...i, acessoEquipeId: i?.userId ? equipeDe(i) : null }));
 }
 
 module.exports = { emitirCartaoAcesso, aplicarPermissoes, revogarCartaoAcesso, resolverEquipeDoCartao, anexarEquipeDoAcesso };

@@ -16,6 +16,16 @@ const { garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
 // COPY-ON-WRITE do item GLOBAL — hoje só o toggle ativar/inativar o dispara
 // (nome/categoria seguem travados no item que não é da própria clínica).
 const { garantirCopiaProcedimento, origensJaForkadas } = require('../lib/catalogoProcedimento');
+
+/** Campos que `garantirCopiaProcedimento` copia para a linha da empresa. */
+const SELECT_BASE = {
+  id: true, codigo: true, nome: true, nomeAbreviado: true, descricao: true,
+  categoria: true, subcategoria: true, especialidade: true, tipoProcedimento: true,
+  duracao: true, requerAnestesia: true, requerInternacao: true, risco: true,
+  valorCusto: true, valorVenda: true, especie: true, empresaId: true, ativo: true,
+};
+// Exame de imagem: valor ÚNICO × POR IMAGEM (coluna nova, lida/gravada por SQL cru).
+const { lerCobrancaPorImagem, gravarCobrancaPorImagem } = require('../lib/cobrancaPorImagem');
 const {
   CATEGORIAS_IMAGEM, TIPO_IMAGEM, ESPECIALIDADE_IMAGEM,
 } = require('../seeds/005_procedimentos_imagem.seed');
@@ -256,6 +266,9 @@ const listarComValores = async (req, res) => {
       req.empresaId, procedimentos.map(p => p.id), { incluirInativos: true },
     );
 
+    // Forma de cobrança do exame de imagem — em bloco, pela mesma razão dos vínculos.
+    const porImagem = await lerCobrancaPorImagem(prisma, procedimentos.map(p => p.id));
+
     return res.json({
       dados: procedimentos.map(p => ({
         ...p,
@@ -269,6 +282,7 @@ const listarComValores = async (req, res) => {
         daEmpresa:    p.empresaId != null,
         valorEmpresa: valores.get(p.id) ?? null,
         prestadores:  vinculos.get(p.id) ?? [],
+        cobrancaPorImagem: porImagem.get(p.id) ?? false,
       })),
     });
   } catch (err) {
@@ -748,6 +762,45 @@ function procedimentoVisivel(empresaId, id) {
 }
 
 /**
+ * `cobrancaPorImagem` do corpo → boolean, ou `undefined` quando o campo não veio
+ * (PATCH parcial: não mexe no gravado).
+ * ⚠️ Só faz sentido em EXAME DE IMAGEM: procedimento clínico não tem "quantidade de
+ * imagens" no pedido, então nele a resposta é sempre `false` (valor único).
+ */
+function cobrancaPorImagemDoBody(body, tipoProcedimento) {
+  if (body?.cobrancaPorImagem === undefined) return undefined;
+  if (tipoProcedimento !== TIPO_IMAGEM) return false;
+  return body.cobrancaPorImagem === true || body.cobrancaPorImagem === 'true';
+}
+
+/**
+ * Grava a forma de cobrança (valor único × por imagem) no procedimento.
+ *
+ * 🔴 COPY-ON-WRITE: a flag mora na LINHA do procedimento, e a linha GLOBAL vale para
+ * TODAS as clínicas (o RLS recusaria a escrita de qualquer forma). Mudar a cobrança
+ * de um exame do sistema cria a CÓPIA DA EMPRESA — mesma regra do ativar/inativar —,
+ * e o valor da empresa e os vínculos de prestador migram junto (`garantirCopiaProcedimento`).
+ * ⚠️ Chamar ANTES de `gravarValorDaEmpresa`: o valor precisa ir para o id FINAL.
+ * ⚠️ Sem mudança real, nada é feito: abrir e salvar um exame do sistema não pode
+ * forkar o catálogo.
+ *
+ * @returns {Promise<{ id: number, copiado: boolean }>} o id que passa a valer
+ */
+async function aplicarCobrancaPorImagem(tx, empresaId, procedimentoId, quer) {
+  if (quer === undefined) return { id: procedimentoId, copiado: false };
+  const atual = (await lerCobrancaPorImagem(tx, procedimentoId)).get(procedimentoId) ?? false;
+  if (atual === quer) return { id: procedimentoId, copiado: false };
+
+  const base = await tx.procedimentoVeterinario.findFirst({
+    where: procedimentoVisivel(empresaId, procedimentoId), select: SELECT_BASE,
+  });
+  if (!base) throw Object.assign(new Error('Procedimento não encontrado.'), { status: 404 });
+  const { item, copiado } = await garantirCopiaProcedimento(tx, base, empresaId);
+  await gravarCobrancaPorImagem(tx, item.id, quer);
+  return { id: item.id, copiado };
+}
+
+/**
  * POST /api/procedimentos/cadastro/proprio  { nome, categoria?, valor? }
  *
  * 🔴 CRIA O PROCEDIMENTO DA CLÍNICA. Desde 2026-09-22 quem o chama é o botão
@@ -787,9 +840,14 @@ const criarProprio = async (req, res) => {
                   OR: [{ empresaId: null }, { empresaId: req.empresaId }] },
         select: { id: true },
       });
-      const novoId = await garantirProcedimentoDaEmpresa(tx, { nome, ...campos }, req.empresaId);
-      if (!novoId) return { id: null, criado: false, valorEmpresa: null };
+      const idNome = await garantirProcedimentoDaEmpresa(tx, { nome, ...campos }, req.empresaId);
+      if (!idNome) return { id: null, criado: false, valorEmpresa: null };
 
+      // O nome pode ter casado com um exame do SISTEMA: mudar a cobrança dele passa
+      // pela cópia da empresa, e é ELA que recebe o valor.
+      const { id: novoId } = await aplicarCobrancaPorImagem(
+        tx, req.empresaId, idNome, cobrancaPorImagemDoBody(req.body, campos.tipoProcedimento),
+      );
       const valor = await gravarValorDaEmpresa(tx, req.empresaId, novoId, req.body?.valor);
 
       await registrarAuditoria(tx, req, {
@@ -808,11 +866,13 @@ const criarProprio = async (req, res) => {
       select: { id: true, nome: true, categoria: true, especialidade: true, tipoProcedimento: true,
                 valorVenda: true, empresaId: true, ativo: true },
     });
+    const cobrancaPorImagem = (await lerCobrancaPorImagem(prisma, id)).get(id) ?? false;
     return res.status(criado ? 201 : 200).json({
-      dados: { ...dados, daEmpresa: dados?.empresaId != null, valorEmpresa }, criado,
+      dados: { ...dados, daEmpresa: dados?.empresaId != null, valorEmpresa, cobrancaPorImagem }, criado,
     });
   } catch (err) {
     if (err?.status === 400) return res.status(400).json({ error: err.message });
+    if (err?.status === 404) return res.status(404).json({ error: err.message });
     console.error('ProcedimentoCadastroController.criarProprio:', err);
     return res.status(500).json({ error: 'Erro ao cadastrar o procedimento.' });
   }
@@ -843,7 +903,8 @@ const atualizarProprio = async (req, res) => {
 
     const atual = await prisma.procedimentoVeterinario.findFirst({
       where:  procedimentoVisivel(req.empresaId, id),
-      select: { id: true, nome: true, empresaId: true, especialidade: true, categoria: true },
+      select: { id: true, nome: true, empresaId: true, especialidade: true, categoria: true,
+                tipoProcedimento: true },
     });
     // Procedimento privado de outra clínica responde 404 — não confirma que existe.
     if (!atual) return res.status(404).json({ error: 'Procedimento não encontrado.' });
@@ -868,7 +929,7 @@ const atualizarProprio = async (req, res) => {
       return res.status(400).json({ error: 'Informe o nome do procedimento.' });
     }
 
-    const valorEmpresa = await prisma.$transaction(async (tx) => {
+    const { valorEmpresa, idFinal, copiado } = await prisma.$transaction(async (tx) => {
       if (daEmpresa) {
         const data = {};
         if (nome !== null) data.nome = nome.slice(0, 255);
@@ -882,25 +943,38 @@ const atualizarProprio = async (req, res) => {
         if (Object.keys(data).length > 0) await tx.procedimentoVeterinario.update({ where: { id }, data });
       }
 
+      // Forma de cobrança do exame de imagem. No item do SISTEMA, mudá-la cria a cópia
+      // da empresa, e o valor passa a ser gravado nela (`idFinal`).
+      const tipoFinal = daEmpresa && campos !== null ? campos.tipoProcedimento : atual.tipoProcedimento;
+      const cob = await aplicarCobrancaPorImagem(
+        tx, req.empresaId, id, cobrancaPorImagemDoBody(req.body, tipoFinal),
+      );
+
       const v = req.body?.valor !== undefined
-        ? await gravarValorDaEmpresa(tx, req.empresaId, id, req.body.valor)
+        ? await gravarValorDaEmpresa(tx, req.empresaId, cob.id, req.body.valor)
         : undefined;
 
       await registrarAuditoria(tx, req, {
-        categoria: 'ALTERACAO', entidade: 'PROCEDIMENTO', entidadeId: id,
-        detalhes:  `Procedimento "${nome ?? atual.nome}" alterado${daEmpresa ? '' : ' (valor da clínica)'}`,
+        categoria: 'ALTERACAO', entidade: 'PROCEDIMENTO', entidadeId: cob.id,
+        detalhes:  `Procedimento "${nome ?? atual.nome}" alterado${daEmpresa ? '' : ' (valor da clínica)'}`
+                   + (cob.copiado ? ' — cópia própria da clínica criada a partir do catálogo do sistema' : ''),
       });
-      return v;
+      return { valorEmpresa: v, idFinal: cob.id, copiado: cob.copiado };
     });
 
     const dados = await prisma.procedimentoVeterinario.findUnique({
-      where:  { id },
+      where:  { id: idFinal },
       select: { id: true, nome: true, categoria: true, especialidade: true, tipoProcedimento: true,
                 valorVenda: true, empresaId: true, ativo: true },
     });
-    return res.json({ dados: { ...dados, daEmpresa, valorEmpresa } });
+    const cobrancaPorImagem = (await lerCobrancaPorImagem(prisma, idFinal)).get(idFinal) ?? false;
+    return res.json({
+      dados: { ...dados, daEmpresa: dados?.empresaId != null, valorEmpresa, cobrancaPorImagem },
+      copiado,
+    });
   } catch (err) {
     if (err?.status === 400) return res.status(400).json({ error: err.message });
+    if (err?.status === 404) return res.status(404).json({ error: err.message });
     console.error('ProcedimentoCadastroController.atualizarProprio:', err);
     return res.status(500).json({ error: 'Erro ao alterar o procedimento.' });
   }

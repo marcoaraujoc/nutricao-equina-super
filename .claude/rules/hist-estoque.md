@@ -28,6 +28,102 @@ paths:
 As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão em `CLAUDE.md`.
 
 ---
+# Atualizado em: 2026-10-01 (parte 2) (🔴 **PRODUTO QUE JÁ TEM SALDO E VIRA MULTIDOSE
+#   PASSOU A TER O SALDO RECONVERTIDO EM TODO CAMINHO — farmácia E vacina.** Relato:
+#   Patyvet, "Zoovit C - frasco 20 mL" multidose 20 mL; Ajuste de Estoque 0 → 10 frascos
+#   e o estoque mostrou **10 mL** em vez de 200 mL.
+#   CADEIA (medida na base): a entrada de 10 frascos foi feita às 16:56 no item GLOBAL
+#   (contado em 'Un.'); às 16:57 o produto foi marcado multidose, o que criou a CÓPIA da
+#   clínica. `gravarMultidose` reconverteu o estoque da CÓPIA — que não tinha saldo — e
+#   `reapontarParaCopia` moveu o saldo CRU: 10 'Un.' viraram "10 mL", com
+#   `precoUnitarioBase` R$ 50 (o frasco) passando a valer por mL. As execuções seguintes
+#   cobraram R$ 50 por 1 mL e R$ 450 por "40 mL" (fatura 133). E o Ajuste não oferecia
+#   "Frascos" porque lia `pesoPorEmbalagem` da LINHA (nulo), não o conteúdo do PRODUTO.
+#   1. **Copy-on-write** (`salvarItemDoCatalogo`, ramo GLOBAL): o saldo da empresa no
+#      item global é reconvertido do estado do GLOBAL para o da CÓPIA **antes** de
+#      `reapontarParaCopia`. ⚠️ Depois seria tarde: a reconversão filtra por
+#      `medicamentoId`, e o saldo já estaria na cópia sem ninguém saber de onde veio.
+#   2. **Reserva acompanha o saldo**: `reconverterEstoqueAtivo` agora reconverte
+#      `tb_reservas_estoque` pelo mesmo fator físico (10 frascos reservados não podem
+#      virar "10 mL" sobre 200 mL — o disponível saltaria de 0 para 190).
+#   3. **VACINA, mesma regra** — `reconverterLotesVacinaAtivos`: `qtd_total`,
+#      `qtd_disponivel`, mínimo/alarmante e a reserva (`tb_reservas_estoque_vacina`)
+#      × (conteúdo novo ÷ `doses_por_frasco` DO LOTE); `qtd_frascos` (o físico) não muda.
+#      ⚠️ O "antes" é o do LOTE, não o do produto — o lote é a fonte do que contém, e
+#      isso torna a função idempotente. ⚠️ Fonte única `reconverterSaldosDoProduto`
+#      (farmácia + vacina), chamada por `gravarMultidose` e pelo copy-on-write; a parte
+#      da vacina só roda quando unidade/conteúdo MUDAM — salvar o fabricante não pode
+#      reescrever lote legado divergente (há 2 na base: Linovac lote 21, Aftobov lote 32).
+#   4. 🔴 **O LOTE DE VACINA NÃO ACOMPANHAVA A CÓPIA**: `reapontarParaCopia` movia estoque
+#      da farmácia, prescrição e produto de fornecedor, e esquecia `tb_lotes_vacina`.
+#      Medido: **4 lotes ativos presos em item GLOBAL** com cópia na empresa (28, 30, 31,
+#      33). Agora move o lote ATIVO e a `VacinaClinica` SALVA/FINALIZADA (tenant pelo
+#      `animal.empresaId` — o model não tem `empresaId`).
+#   5. **Ajuste da Farmácia**: "Frascos" sai de `conteudoDaEmbalagem(item.medicamento)`,
+#      nunca de `pesoPorEmbalagem` (vale também para a EDIÇÃO de entrada não usada).
+#      **Ajuste do Estoque de Vacinas** ganhou a mesma dupla Frascos ↔ total quando o
+#      `doses_por_frasco` do lote ≠ 1, e a listagem de lotes passou a anexar a forma de
+#      cálculo ao `medicamentoCat` (rótulo "mL").
+#   ✅ VERIFICADO AO VIVO em transação REVERTIDA (0 linhas ao fim): item global com 10
+#   frascos + reserva 2 → marcado multidose 20 mL → cópia com **200 mL**, R$ 2,50/mL,
+#   reserva 40; lote de vacina 3 frascos → 30 mL na cópia; reedição sem mudança não
+#   reconverte; desmarcar volta a 10. Gate `__tests__/multidoseSaldoExistente.test.js`
+#   (12; cada sabotagem reprova). Suíte: só as 3 suítes que já falhavam.
+#   6. 🔴 **O INVERSO (multidose → desmarcado)** — o SALDO já era coberto pela mesma
+#      reconversão (200 mL → 10 frascos; lote 60 mL → 3 frascos). O que faltava era o
+#      DOCUMENTO PENDENTE: a vacina é SNAPSHOT (`quantidade` + `forma_calculo`) e a baixa
+#      descontava a dosagem CRUA do lote. Fonte única nova `lib/vacinaDosagemLote.js`
+#      (`dosagemNaUnidadeDoLote`): dose em conteúdo × lote em frascos → as embalagens
+#      que couberem (1, se o produto não declara conteúdo — a MESMA regra de
+#      `entregaPorEmbalagem` da prescrição); dose em embalagens × lote em conteúdo →
+#      × conteúdo. Usada em `criarReservaVacina`, `darBaixaEFaturar` (débito E
+#      quantidade da fatura; com reserva, cobra o que a reserva tirou) e na
+#      reconversão, que agora REFAZ a reserva de cada vacina pendente em vez de
+#      multiplicá-la (no inverso a fração cobraria 1/10 do frasco).
+#      ⚠️ LEGADO multidose SEM forma fica fora (a dose já está no conteúdo).
+#      ⚠️ Prescrição não precisou: `qtdDoEstoque` já trata receita em mL contra estoque
+#      em 'Un.' (embalagens). Reserva da farmácia segue PROPORCIONAL (só afeta o
+#      "disponível"; a baixa de verdade é recalculada na execução).
+#      ✅ Verificado ao vivo (revertido): vacina "2 mL" reservada → produto desmarcado →
+#      reserva refeita para 1 frasco.
+#   ⚠️ **DADOS**: a gravação direta no banco foi BLOQUEADA pela política da sessão. A
+#   correção está em `scripts/corrigirMultidose20261001.js` (Zoovit 59 → 200 mL a
+#   R$ 2,50/mL; fatura 133 itens 358/359 → R$ 2,50/R$ 100; lotes 28/30/31/33 → cópia da
+#   clínica em mL; lote 32 Aftobov → 2 frascos), com conferência do estado esperado e
+#   auditoria. Simulado com sucesso; aplicar com `--confirmar`.
+#   ⚠️ **Lote 21 (Linovac, Patyvet) NÃO entra**: entrada de 18/08, quando
+#   `doses_por_frasco = 100` significava "100 APLICAÇÕES"; o produto (global) não é
+#   multidose. Decidir: marcar Linovac como multidose (100 doses/mL) ou converter o
+#   lote para 0,9 frasco. SEM MIGRATION. ⚠️ NÃO verificado em navegador.)
+
+---
+# Atualizado em: 2026-10-01 (🔴 **O SEED DE MEDICAMENTOS FOI APOSENTADO** — a pedido:
+#   "a planilha foi só um input inicial e não deve mais ser usada".
+#   `003_medicamentos.seed.js` SAIU do `seed.js`. Ele relia
+#   `Downloads/Medicamento_Finalizado - Todos.csv` a cada `node seed.js` e regravava
+#   `unidade`/`classificacao`/`controlado` de 4.700+ produtos globais — desfazendo
+#   qualquer ajuste feito no catálogo depois da carga inicial.
+#   🔴 E o `findFirst` não filtrava `empresaId`: na execução de 2026-10-01 ele pegou e
+#   regravou **7 CÓPIAS DE CLÍNICA** com o mesmo nome do global (6 multidose da Patyvet e
+#   da empresa 64, cujos campos de embalagem o seed não toca, e a "Aftobov - frasco
+#   250 mL" da empresa 64, id 11760). A auditoria de PRODUTO não guarda o valor anterior,
+#   então não há como saber se a unidade dela era outra — ficou "mL".
+#   O arquivo FICA como registro da carga, com duas travas: rodar à mão exige
+#   `--confirmar-planilha`, e a busca passou a ser só `empresaId: null`.
+#   ⚠️ NÃO reintroduzir a chamada no `seed.js`: o catálogo é mantido pela tela de Produtos.
+#   🔴 **AMPLIADO no mesmo dia: NENHUMA PLANILHA vale mais** ("todas foram inputs
+#   iniciais; o que vale é o que está cadastrado no banco"). Saíram TAMBÉM do `seed.js`:
+#   `004_procedimentos` (relia `procedimentos_vet.csv` e regravava nome, valor de
+#   venda/custo e ATIVO de 301 procedimentos), `003_laboratorios` (reativava itens),
+#   `004_imagem_exames` e `005_procedimentos_imagem` (reativava os 119 exames e
+#   reinativava o genérico PR-0299 a cada execução). O `seed.js` roda agora SÓ permissões
+#   (002) e os modelos do CFMV (006). Execução avulsa dos de carga exige
+#   `--confirmar-planilha`; o 005 continua exportando as constantes usadas pelo código.
+#   ✅ Impacto da execução de 2026-10-01 apurado pela auditoria: nenhum procedimento,
+#   medicamento global ou item de laboratório tinha edição/ativação/inativação feita pelas
+#   telas que o seed tenha desfeito (os 4 eventos em procedimentos são "valor da
+#   clínica", em tabela separada). A única incerteza é a Aftobov 11760 acima.)
+
 # Atualizado em: 2026-09-23 (parte 2) (🔴 **A FATURA MOSTRAVA "QTD. 1 · R$ 200,00" PARA
 #   DUAS AMPOLAS DE R$ 100,00** — defeito relatado. O valor fechava, a QUANTIDADE mentia.
 #

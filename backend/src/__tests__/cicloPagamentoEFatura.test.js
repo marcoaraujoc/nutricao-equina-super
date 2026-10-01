@@ -150,11 +150,13 @@ describe('fechado é somente leitura — fatura, bloco do paciente e conta a pag
     expect(trecho).toMatch(/c\.status = 'ABERTA' OR c\.status = 'REABERTA'/);
   });
 
-  it('e a conta PAGA só é reaberta pelo GESTOR — como a fatura paga', () => {
+  it('e a conta PAGA nunca é reaberta, por ninguém — como a fatura paga (2026-09-29)', () => {
     const src = leia('controllers/ContaPagarController.js');
     expect(src).toMatch(/saindoDePaga/);
-    expect(src).toMatch(/ehGestorNoContexto/);
     expect(src).toMatch(/CONTA_PAGA/);
+    // Endurecido a pedido: a exceção do gestor foi REMOVIDA. Reintroduzir
+    // `ehGestorNoContexto` aqui reabriria a porta dos fundos do bloqueio inteiro.
+    expect(src).not.toMatch(/ehGestorNoContexto/);
   });
 });
 

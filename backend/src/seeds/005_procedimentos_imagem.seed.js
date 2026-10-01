@@ -1,5 +1,10 @@
 'use strict';
 /**
+ * 🔴 A FUNÇÃO DE CARGA ESTÁ APOSENTADA desde 2026-10-01 (saiu do `seed.js`): o
+ * catálogo já foi carregado e o que vale é o banco — reaplicar reativava os exames
+ * e reinativava genéricos. As CONSTANTES exportadas (CATEGORIAS_IMAGEM, TIPO_IMAGEM…)
+ * continuam em uso por controllers e libs.
+ *
  * Seed 005 — Exames de imagem COMO PROCEDIMENTOS (2026-09-09)
  *
  * 🔴 POR QUE ESTE SEED EXISTE: até aqui o exame de imagem vivia em um catálogo

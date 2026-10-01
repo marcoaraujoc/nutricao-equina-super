@@ -21,6 +21,8 @@ import {
 } from 'lucide-react';
 import { imprimirOrcamento, gerarPdfOrcamento, nomeArquivoOrcamento } from '../utils/OrcamentoPrint';
 import InlineError from '../components/InlineError';
+import { verificarServicoWhatsApp, mensagemServicoInativo } from '../utils/compartilharPdf';
+import { mostrarResultado } from '../components/ProgressoEnvio';
 import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 import { DOSES, VIAS_PADRAO, normalizeVia } from '../utils/vacina';
 
@@ -1706,6 +1708,13 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
   const enviarWhatsApp = async (o: OrcamentoResumo) => {
     setEnviandoId(o.id);
     try {
+      // 🔴 Serviço de WhatsApp da clínica conferido ANTES do envio (2026-09-30):
+      // inativo → informa que é preciso ativá-lo, sem cair no compartilhamento manual.
+      const servico = await verificarServicoWhatsApp();
+      if (!servico.pronto) {
+        mostrarResultado('whatsapp', 'aviso', 'É necessário ativar o serviço de WhatsApp', mensagemServicoInativo(servico));
+        return;
+      }
       const r = await api.post(`/orcamentos/${o.id}/enviar-whatsapp`);
       toast.success(r.data?.dados?.simulado
         ? 'Envio simulado (WhatsApp em modo de teste).'

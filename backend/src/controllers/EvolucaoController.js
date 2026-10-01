@@ -70,7 +70,7 @@ const {
 } = require('../lib/auditoria');
 // AUTORIA (2026-08-04): a ação concedida vale sobre o que é DE QUEM A EXECUTA — o
 // registro que ele criou ou assumiu. Só o GESTOR opera registro de outro profissional.
-const { podeOperarRegistro, ehGestorNoContexto } = require('../middlewares/permissao.middleware');
+const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 // Assumir a evolução arrasta prescrição, exame, encaminhamento e vacina do atendimento
 const { transferirFilhosDasEvolucoes } = require('../lib/transferenciaAtendimento');
 // Concorrencia de edicao: trava otimista + assuncao atomica. A garantia e do BANCO
@@ -98,6 +98,36 @@ const { cancelarPendenciasDaEvolucao } = require('../lib/cancelamentoPendencias'
 // modo 'PARALELA' → `paraVetId` segue com a evolução dele, e `deVetId` abriu uma
 //                   NOVA evolução para o mesmo paciente.
 // ─────────────────────────────────────────────────────────────────────────────
+
+// 🔴 EVOLUÇÃO FINALIZADA É DOCUMENTO FECHADO (2026-09-30). Nada nela se altera —
+// texto, título, anexos, relatório, aprovação, cancelamento ou exclusão —, nem pelo
+// gestor, nem pelo ADMIN. O que resta é LER: visualizar, imprimir e enviar por
+// WhatsApp/e-mail. Guarda ÚNICA, chamada por toda rota que escreve na evolução.
+// ⚠️ A exceção é `tituloIa`: ela só PREENCHE o título VAZIO logo após a
+// finalização (é o sistema concluindo o fechamento, não alguém alterando), e
+// nunca sobrescreve um título existente.
+function bloquearSeFinalizada(res, evolucao) {
+  if (evolucao?.status !== 'FINALIZADA') return false;
+  res.status(403).json({
+    sucesso:  false,
+    code:     'EVOLUCAO_FINALIZADA',
+    mensagem: 'Evolução finalizada não pode ser alterada.',
+  });
+  return true;
+}
+
+// Título gerado em segundo plano: só grava enquanto a evolução está EM ANDAMENTO
+// ou ainda sem título. Sem isso, a IA disparada por um "Salvar" que termina DEPOIS
+// do "Finalizar" reescreveria o título de uma evolução já fechada.
+async function gravarTituloAssincrono(evolucaoId, titulo) {
+  await prisma.evolucaoClinica.updateMany({
+    where: {
+      id: Number(evolucaoId),
+      OR: [{ status: 'EM_ANDAMENTO' }, { titulo: null }, { titulo: '' }],
+    },
+    data: { titulo },
+  });
+}
 
 function notificarEvolucao({ req, paraVetId, deVetId, evolucao, animalNome, modo = 'ASSUMIDA' }) {
   if (!paraVetId || Number(paraVetId) === Number(deVetId)) return;
@@ -334,7 +364,7 @@ const EvolucaoController = {
   // caso em que o outro profissional é comunicado por e-mail/WhatsApp.
 
   criar: async (req, res) => {
-    const { animalId, especialidade, texto, status = 'EM_ANDAMENTO', agendamentoId, confirmarConcorrente } = req.body;
+    const { animalId, especialidade, texto, status = 'EM_ANDAMENTO', agendamentoId, confirmarConcorrente, adiarTituloIa } = req.body;
     const userId = req.user.id;
 
     if (!animalId)      return res.status(400).json({ sucesso: false, mensagem: 'Animal é obrigatório' });
@@ -546,17 +576,17 @@ const EvolucaoController = {
       // é o front (`POST /:id/titulo-ia`, para receber também as ações de
       // encaminhamento), e disparar aqui faria DUAS chamadas ao Gemini pelo mesmo
       // texto — consumo de IA é medido e faturado por empresa (CLAUDE.md §7).
-      if (status !== 'FINALIZADA') {
+      // `adiarTituloIa`: a tela vai finalizar em seguida (nova evolução com anexos,
+      // que precisa nascer EM_ANDAMENTO para recebê-los) e pede o título pelo
+      // `titulo-ia` — sem a flag seriam DUAS chamadas ao Gemini pelo mesmo texto.
+      if (status !== 'FINALIZADA' && adiarTituloIa !== true) {
         const evolucaoId = evolucao.id;
         setImmediate(async () => {
           try {
             const resultadoIA = await interpretarEvolucao(texto.trim(), userId, Number(animalId), req.empresaId ?? null).catch(() => null);
             const tituloAssincrono = resultadoIA?.titulo?.trim()?.substring(0, 255) || null;
             if (tituloAssincrono) {
-              await prisma.evolucaoClinica.update({
-                where: { id: evolucaoId },
-                data:  { titulo: tituloAssincrono },
-              });
+              await gravarTituloAssincrono(evolucaoId, tituloAssincrono);
             }
           } catch { /* silencioso — título é conveniência, não bloqueia o atendimento */ }
         });
@@ -641,15 +671,11 @@ const EvolucaoController = {
         return res.status(403).json({ sucesso: false, mensagem: 'Seu nível de permissão só permite editar evoluções criadas por você.' });
       }
 
-      // Reabrir registro FINALIZADO é ato de GESTOR — não é nível de matriz. Antes a
-      // regra era "nível FULL no editar", que na prática só o gestor tem, mas deixava a
-      // porta aberta para a matriz conceder a reabertura de prontuário a um perfil comum.
-      if (existente.status === 'FINALIZADA' && !ehGestorNoContexto(req)) {
-        return res.status(403).json({
-          sucesso:  false,
-          mensagem: 'Somente o gestor pode editar uma evolução já finalizada.',
-        });
-      }
+      // 🔴 (2026-09-30) Evolução FINALIZADA NÃO é alterada por NINGUÉM — nem pelo
+      // gestor. REVERTE a regra "reabrir FINALIZADA é ato de GESTOR": o prontuário
+      // finalizado é documento fechado; o que resta a ele é visualizar, imprimir e
+      // cancelar (com justificativa).
+      if (bloquearSeFinalizada(res, existente)) return;
 
       if (existente.status === 'CANCELADA') {
         return res.status(403).json({
@@ -792,10 +818,7 @@ const EvolucaoController = {
             const resultadoIA = await interpretarEvolucao(textoEfetivo, userId, existente.animalId, req.empresaId ?? null).catch(() => null);
             const tituloAssincrono = resultadoIA?.titulo?.trim()?.substring(0, 255) || null;
             if (tituloAssincrono) {
-              await prisma.evolucaoClinica.update({
-                where: { id: Number(id) },
-                data:  { titulo: tituloAssincrono },
-              });
+              await gravarTituloAssincrono(id, tituloAssincrono);
             }
           } catch { /* silencioso — título é conveniência, não bloqueia o atendimento */ }
         });
@@ -878,13 +901,8 @@ const EvolucaoController = {
         return res.status(403).json({ sucesso: false, mensagem: 'Seu nível de permissão só permite excluir evoluções criadas por você.' });
       }
 
-      // Regra de ADMIN (única regra fixa permitida no backend)
-      if (existente.status === 'FINALIZADA' && req.user.userType !== 'ADMIN') {
-        return res.status(403).json({
-          sucesso:  false,
-          mensagem: 'Apenas administradores podem excluir evoluções finalizadas',
-        });
-      }
+      // FINALIZADA não é excluída por ninguém — nem pelo ADMIN (2026-09-30).
+      if (bloquearSeFinalizada(res, existente)) return;
 
       await prisma.$transaction(async (tx) => {
         // Tudo que estava atrelado a esta evolução (prescrição/procedimento, exame,
@@ -960,6 +978,8 @@ const EvolucaoController = {
       if (existente.status === 'CANCELADA') {
         return res.status(400).json({ sucesso: false, mensagem: 'Evolução já está cancelada' });
       }
+      // Só a evolução EM ANDAMENTO é cancelada: a FINALIZADA é documento fechado.
+      if (bloquearSeFinalizada(res, existente)) return;
 
       const cancelada = await prisma.$transaction(async (tx) => {
         // Tudo que está atrelado a esta evolução (prescrição/procedimento, exame,
@@ -1253,6 +1273,8 @@ const EvolucaoController = {
         return res.status(403).json({ sucesso: false, mensagem: 'Seu nível de permissão só permite finalizar evoluções criadas por você.' });
       }
 
+      if (bloquearSeFinalizada(res, existente)) return;
+
       if (existente.aprovado) {
         return res.status(400).json({ sucesso: false, mensagem: 'Evolução já está aprovada' });
       }
@@ -1363,7 +1385,7 @@ const EvolucaoController = {
     try {
       const evolucaoParaTitulo = await prisma.evolucaoClinica.findUnique({
         where:  { id: Number(id) },
-        select: { animalId: true, ativo: true },
+        select: { animalId: true, ativo: true, status: true },
       });
       if (!evolucaoParaTitulo || !evolucaoParaTitulo.ativo) {
         return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
@@ -1375,6 +1397,7 @@ const EvolucaoController = {
       // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
       // renomeado até o gestor reativar. Ver lib/animalInativo.js.
       if (await bloquearSeAnimalInativo(res, evolucaoParaTitulo.animalId, { sucessoMensagem: true })) return;
+      if (bloquearSeFinalizada(res, evolucaoParaTitulo)) return;
 
       await prisma.evolucaoClinica.update({
         where: { id: Number(id) },
@@ -1408,7 +1431,7 @@ const EvolucaoController = {
     try {
       const evolucao = await prisma.evolucaoClinica.findUnique({
         where:  { id: Number(id) },
-        select: { id: true, ativo: true, animalId: true },
+        select: { id: true, ativo: true, animalId: true, status: true },
       });
 
       if (!evolucao || !evolucao.ativo) {
@@ -1425,6 +1448,7 @@ const EvolucaoController = {
       // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
       // anexado até o gestor reativar. Ver lib/animalInativo.js.
       if (await bloquearSeAnimalInativo(res, evolucao.animalId, { sucessoMensagem: true })) return;
+      if (bloquearSeFinalizada(res, evolucao)) { fs.unlink(file.path, () => {}); return; }
 
       // Áudio em formato que o Safari/iOS não reproduz (Ogg/Opus/WebM — ex:
       // nota de voz do WhatsApp) → converte para MP3 no upload, garantindo
@@ -1503,7 +1527,7 @@ const EvolucaoController = {
 
       const evolucaoParaMidia = await prisma.evolucaoClinica.findUnique({
         where:  { id: midia.evolucaoId },
-        select: { animalId: true },
+        select: { animalId: true, status: true },
       });
       if (evolucaoParaMidia) {
         const acesso = await verificarAcessoAnimal({ animalId: evolucaoParaMidia.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
@@ -1512,6 +1536,7 @@ const EvolucaoController = {
         // SOMENTE LEITURA: paciente inativo congela o prontuário — nada mais é
         // removido até o gestor reativar. Ver lib/animalInativo.js.
         if (await bloquearSeAnimalInativo(res, evolucaoParaMidia.animalId, { sucessoMensagem: true })) return;
+        if (bloquearSeFinalizada(res, evolucaoParaMidia)) return;
       }
 
       // Mídia no banco: storage.delete apaga a linha de tb_midia_arquivos.
@@ -1644,6 +1669,7 @@ const EvolucaoController = {
       if (!podeOperarRegistro(req, existente.veterinarioId)) {
         return res.status(403).json({ sucesso: false, mensagem: 'Seu nível de permissão só permite editar relatórios de evoluções criadas por você.' });
       }
+      if (bloquearSeFinalizada(res, existente)) return;
 
       const base = (existente.resumoIaData && typeof existente.resumoIaData === 'object')
         ? existente.resumoIaData

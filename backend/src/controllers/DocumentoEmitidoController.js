@@ -21,7 +21,7 @@
 const prisma = require('../lib/prisma').default;
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { montarContexto, aplicarEmBlocos, removerVazios, coletarCampos, chaveDaLacuna } = require('../lib/documentoVariaveis');
-const { coletarListas, sugerirListas, sugerirOpcoes, listaObrigatoriaVazia } = require('../lib/documentoListas');
+const { coletarListas, sugerirListas, sugerirOpcoes, listaObrigatoriaVazia, colunaObrigatoriaVazia } = require('../lib/documentoListas');
 const { bloquearSeAnimalInativo } = require('../lib/animalInativo');
 const { fusoDaEmpresa } = require('../lib/fusoEmpresa');
 const { registrarAuditoria } = require('../lib/auditoria');
@@ -254,12 +254,24 @@ const DocumentoEmitidoController = {
       // sequer o rótulo — um atestado de vacinação assinado que não declara vacina
       // nenhuma. Ver `lib/documentoListas.js#listaObrigatoria` para QUAIS listas
       // entram nesta regra e por quê.
-      const faltando = listaObrigatoriaVazia(coletarListas(blocos), listas);
+      const listasDoDoc = coletarListas(blocos);
+      const faltando = listaObrigatoriaVazia(listasDoDoc, listas);
       if (faltando) {
         return res.status(400).json({
           sucesso: false,
           error:   `Preencha ao menos um item em "${faltando.rotulo}".`,
           code:    'LISTA_OBRIGATORIA',
+        });
+      }
+      // COLUNA OBRIGATÓRIA (2026-10-01): a "Data da Aplicação" do Atestado de Vacinação.
+      // Mesmo motivo da regra acima — `removerVazios` tira o campo em branco do papel, e
+      // o atestado sairia sem dizer quando a vacina foi dada.
+      const colunaFaltando = colunaObrigatoriaVazia(listasDoDoc, listas);
+      if (colunaFaltando) {
+        return res.status(400).json({
+          sucesso: false,
+          error:   `Preencha "${colunaFaltando.coluna}" no item ${colunaFaltando.linha} de "${colunaFaltando.lista.rotulo}".`,
+          code:    'COLUNA_OBRIGATORIA',
         });
       }
 

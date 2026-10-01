@@ -60,9 +60,10 @@ const campo = (rotulo, variavel, estilo = {}) =>
  * `fonteOpcoes` transforma a PRIMEIRA coluna num seletor do cadastro da empresa e traz
  * junto o que ela já sabe do item escolhido (ver `lib/documentoListas.js#OPCOES`).
  */
-const listaCampos = (rotulo, colunas, { fonteOpcoes, formato } = {}) =>
+const listaCampos = (rotulo, colunas, { fonteOpcoes, formato, colunasObrigatorias } = {}) =>
   bloco('listaCampos',
-    { rotulo, colunas, ...(fonteOpcoes ? { fonteOpcoes } : {}), ...(formato ? { formato } : {}) },
+    { rotulo, colunas, ...(fonteOpcoes ? { fonteOpcoes } : {}), ...(formato ? { formato } : {}),
+      ...(colunasObrigatorias?.length ? { colunasObrigatorias } : {}) },
     { tamanho: 11, borda: formato === 'campos' ? 'nenhuma' : 'completa',
       espacamentoTopo: 8, espacamentoBase: 10 });
 
@@ -380,7 +381,9 @@ const MODELOS = [
     categoria: 'sanidade',
     tags: ['atestado', 'vacinação', 'cfmv'],
     declaracao:
-      'Atesto para os devidos fins que o animal abaixo identificado foi vacinado por mim nesta data, '
+      // "nesta data" SAIU (2026-10-01, a pedido): o atestado pode ser emitido dias depois
+      // da aplicação, e quem diz QUANDO a vacina foi dada é a coluna "Data da Aplicação".
+      'Atesto para os devidos fins que o animal abaixo identificado foi vacinado por mim, '
       + 'conforme informações abaixo:',
     assinante: 'VETERINARIO',
     /**
@@ -421,11 +424,15 @@ const MODELOS = [
         //   Observação (linha inteira)
         [
           'Nome comercial da vacina', 'Vacinação contra', 'Fabricante',
-          'Número da partida', 'Data de fabricação', 'Data de validade', 'Observação',
+          'Número da partida', 'Data de fabricação', 'Data de validade',
+          'Data da Aplicação', 'Observação',
         ],
         // `campos`: sai como os demais cards do documento, e não como tabela — sete
         // colunas numa A4 retrato espremem o nome comercial em três linhas.
-        { fonteOpcoes: 'empresa.vacinas', formato: 'campos' },
+        // 🔴 "Data da Aplicação" (2026-10-01) é OBRIGATÓRIA em toda vacina: com a vacina
+        // no estoque ela vem da última aplicação do histórico do paciente; fora do
+        // estoque vem em branco. Editável nos dois casos.
+        { fonteOpcoes: 'empresa.vacinas', formato: 'campos', colunasObrigatorias: ['Data da Aplicação'] },
       ),
     ],
   },

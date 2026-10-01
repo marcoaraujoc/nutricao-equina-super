@@ -149,9 +149,20 @@ const ORIGEM_LABEL: Record<string, string> = {
 const dataDia = (iso: string | null) => (iso ? formatDate(iso.slice(0, 10)) : '—');
 
 export default function Pagamentos() {
-  const { podeExecutar, isGestor, loading: loadingPerms } = usePermissoes();
+  const { podeExecutar, loading: loadingPerms } = usePermissoes();
   const { loading: empresaLoading, marca } = useEmpresa();
-  const { granularidade, data: dataRef } = usePeriodo();
+  const { granularidade, data: dataRef, setData: setDataRef } = usePeriodo();
+
+  // A tela ABRE NA DATA DE HOJE (a pedido, 2026-09-29). O período é o do PeriodoContext,
+  // compartilhado com Relatórios e gravado em localStorage — sem isto, Pagamentos abria
+  // no último dia escolhido em qualquer relatório. A busca espera o ajuste
+  // (`periodoPronto`) para não disparar uma chamada com a data antiga antes da certa.
+  const [periodoPronto, setPeriodoPronto] = useState(false);
+  useEffect(() => {
+    setDataRef(new Date());
+    setPeriodoPronto(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const podeVer    = podeExecutar('financeiro.pagamentos.ler');
   const podeLancar = podeExecutar('financeiro.pagamentos.lancar');
@@ -211,10 +222,10 @@ export default function Pagamentos() {
   useEffect(() => {
     // ⚠️ Espera o contexto de empresa: chamada escopada antes disso cai no fallback
     // do backend e traz a conta de OUTRA clínica.
-    if (loadingPerms || empresaLoading || !podeVer) return;
+    if (loadingPerms || empresaLoading || !podeVer || !periodoPronto) return;
     setLoading(true);
     Promise.all([carregar(), carregarCredores()]).finally(() => setLoading(false));
-  }, [loadingPerms, empresaLoading, podeVer, carregar, carregarCredores]);
+  }, [loadingPerms, empresaLoading, podeVer, periodoPronto, carregar, carregarCredores]);
 
   // O TIMBRE do recibo (identificação da clínica). Best-effort: sem ele a folha sai sem
   // emitente, nunca quebrada.
@@ -482,7 +493,7 @@ export default function Pagamentos() {
              dizia o que nasce do clique, e a tela inteira fala em pagamentos. */
           <button onClick={() => setMostrarLancar(v => !v)}
             className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-sm font-semibold">
-            <Plus size={15} /> Novo Pagamento
+            Novo Pagamento
           </button>
         )}
       </div>
@@ -637,10 +648,8 @@ export default function Pagamentos() {
                   <p className="text-xs font-semibold text-emerald-900">Conta paga — somente leitura.</p>
                   <p className="text-[11px] text-emerald-800 mt-0.5">
                     Os lançamentos não podem ser alterados nem removidos. Imprimir, exportar
-                    e enviar por e-mail/WhatsApp continuam disponíveis.
-                    {isGestor
-                      ? ' Para voltar a lançar, use Reabrir — a reabertura fica registrada na auditoria.'
-                      : ' Reabrir uma conta paga é ação do gestor.'}
+                    e enviar por e-mail/WhatsApp continuam disponíveis. Conta paga não pode
+                    ser reaberta.
                   </p>
                 </div>
               )}
@@ -648,12 +657,12 @@ export default function Pagamentos() {
               {/* ── Barra de ações — a MESMA da fatura (rótulo visível, tom por
                   significado). Ação sem permissão NÃO é renderizada (28-d). */}
               <div className="flex flex-wrap items-center justify-end gap-2 px-4 py-2.5 border-b border-gray-50 bg-gray-50/40">
-                {/* 🔴 Reabrir existe para que um clique errado em "Marcar como Pago" não
-                    congele a dívida para sempre — e é o que torna REABERTA alcançável.
-                    ⚠️ **Da conta PAGA, só o GESTOR reabre** (2026-09-23) — a MESMA regra
-                    da fatura paga, e o backend recusa os demais. Por isso o botão nem
-                    aparece para quem não é: botão que só falha no clique é 28-d. */}
-                {podePagar && (st === 'FECHADA' || st === 'ATRASADA' || (st === 'PAGA' && isGestor)) && (
+                {/* 🔴 CONTA PAGA É SOMENTE LEITURA E NÃO TEM REABRIR — nem para o gestor
+                    (2026-09-29, a pedido, mesma regra da fatura paga). O backend recusa
+                    incondicionalmente qualquer saída do status PAGA; o botão só aparece
+                    para FECHADA/ATRASADA, senão seria a armadilha 28-d (botão que só
+                    falha depois do clique). */}
+                {podePagar && (st === 'FECHADA' || st === 'ATRASADA') && (
                   <button onClick={() => mudarStatus(conta, 'REABERTA')} disabled={emCurso}
                     className={`${BTN_ACAO} ${TOM_ACAO.alterar}`}>
                     {emCurso ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />} Reabrir

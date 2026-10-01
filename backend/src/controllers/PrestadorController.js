@@ -9,6 +9,8 @@ const { normalizarPagamento } = require('../lib/usuarioEmpresa');
 const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
 const { definirAtivoNaEmpresa } = require('../lib/usuarioEmpresa');
 const { emitirCartaoAcesso, aplicarPermissoes, revogarCartaoAcesso, anexarEquipeDoAcesso } = require('../lib/acessoExterno');
+// Autorização de paciente pelo CADASTRO (com ou sem login) — o "Gerenciar Acesso".
+const designacaoCadastro = require('../lib/designacaoPrestadorCadastro');
 const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 const emailService = require('../services/emailService');
 const { gerarSenhaInicial } = require('../lib/senhaInicial');
@@ -20,6 +22,10 @@ const { escopoDaEmpresa } = require('../lib/especialidadeEscopo');
 const {
   resolverVencimento, gravarVencimento, anexarVencimento, anexarVencimentoEmLista,
 } = require('../lib/vencimentoCredor');
+// Tempo de consulta do prestador EXTERNO na Agenda (2026-10-01) — SQL cru, ver a lib.
+const {
+  normalizarTempoConsulta, gravarTempoConsulta, lerTemposConsulta, anexarTempoConsulta,
+} = require('../lib/prestadorTempoConsulta');
 
 // 🔴 O TIPO DE SERVIÇO DEIXOU DE SER DIGITADO (2026-09-29) — vem do catálogo
 // OFICIAL `tb_especialidades` (multi-select, via `especialidadeIds`), não mais do
@@ -354,6 +360,43 @@ async function escopoVisivel(req) {
   };
 }
 
+// Animal como o modal "Gerenciar Acesso" precisa (mesmo formato de
+// EquipeController.ANIMAL_DESIGNACAO_SELECT — o modal é um só para os dois caminhos).
+const ANIMAL_DESIGNACAO_SELECT = {
+  id:            true,
+  nome:          true,
+  photoUrl:      true,
+  local:         true,
+  localizacaoId: true,
+  especie:       { select: { nome: true } },
+  localizacao:   { select: { id: true, nome: true } },
+};
+
+/**
+ * Carrega o prestador para as rotas de designação e responde o erro quando não pode.
+ * Devolve `null` quando já respondeu.
+ * ⚠️ Prestador do CATÁLOGO GLOBAL (sem empresa) não recebe autorização: ela é
+ * sempre da clínica, e não há empresa onde gravá-la.
+ */
+async function carregarPrestadorParaDesignar(req, res) {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) { res.status(400).json({ sucesso: false, mensagem: 'Prestador inválido' }); return null; }
+  const prestador = await prisma.prestador.findUnique({
+    where:  { id },
+    select: { id: true, nome: true, userId: true, empresaId: true, equipeId: true, tipoEntrada: true, acessoSistema: true, ativo: true },
+  });
+  if (!prestador) { res.status(404).json({ sucesso: false, mensagem: 'Prestador não encontrado' }); return null; }
+  if (!prestador.empresaId) {
+    res.status(400).json({ sucesso: false, mensagem: 'Prestador do catálogo global não recebe autorização de pacientes.' });
+    return null;
+  }
+  if (!podeAlterarRegistroEscopado(prestador, req)) {
+    res.status(403).json({ sucesso: false, mensagem: 'Você não tem acesso para alterar este prestador.' });
+    return null;
+  }
+  return prestador;
+}
+
 const PrestadorController = {
 
   // GET /api/cadastro/prestadores?busca=X&ativo=true|false|all
@@ -389,8 +432,8 @@ const PrestadorController = {
       // botão "Gerenciar Acesso" (designação de pacientes) nesta tela.
       // ⚠️ A listagem TEM de devolver o vencimento: a tela edita a partir do que ela
       // trouxe, e sem o campo o salvar o apagaria em silêncio.
-      const comAcesso = await anexarEquipeDoAcesso(prisma,
-        await anexarEspecialidadesPrestador(await anexarRestricaoPorLocal(await anexarTrilha(prestadores, 'prestador'))));
+      const comAcesso = await anexarEquipeDoAcesso(prisma, await anexarTempoConsulta(
+        await anexarEspecialidadesPrestador(await anexarRestricaoPorLocal(await anexarTrilha(prestadores, 'prestador')))));
       res.json({ sucesso: true, dados: await anexarVencimentoEmLista(prisma, 'PRESTADOR', comAcesso) });
     } catch (err) {
       console.error('Erro ao listar prestadores:', err);
@@ -439,7 +482,8 @@ const PrestadorController = {
       // habilita "Gerenciar Acesso".
       const [enriquecido] = await anexarEquipeDoAcesso(
         prisma,
-        await anexarEspecialidadesPrestador(await anexarRestricaoPorLocal(await anexarTrilha([registro], 'prestador'))),
+        await anexarTempoConsulta(
+          await anexarEspecialidadesPrestador(await anexarRestricaoPorLocal(await anexarTrilha([registro], 'prestador')))),
       );
       return res.json({ sucesso: true, dados: montarResposta({ registro: enriquecido, pessoa }) });
     } catch (err) {
@@ -463,7 +507,7 @@ const PrestadorController = {
         include: PRESTADOR_INCLUDE,
       });
       if (!prestador) return res.status(404).json({ sucesso: false, mensagem: 'Prestador não encontrado' });
-      const [comEspecialidades] = await anexarEspecialidadesPrestador([prestador]);
+      const [comEspecialidades] = await anexarTempoConsulta(await anexarEspecialidadesPrestador([prestador]));
       res.json({ sucesso: true, dados: await anexarVencimento(prisma, 'PRESTADOR', comEspecialidades) });
     } catch {
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar prestador' });
@@ -476,7 +520,7 @@ const PrestadorController = {
     const {
       nome, cpf, cnpj, telefone, email, especialidadeIds,
       cep, endereco, complemento, bairro, cidade, estado,
-      acessoSistema, locaisTrabalho, restringirPorLocal,
+      acessoSistema, locaisTrabalho, restringirPorLocal, tempoConsultaMin,
     } = req.body;
 
     if (!nome?.trim())
@@ -493,6 +537,9 @@ const PrestadorController = {
     // inteiro, em vez de gravá-lo e falhar calada no UPDATE seguinte.
     const { erro: erroVenc, dados: vencimento } = resolverVencimento(req.body);
     if (erroVenc) return res.status(400).json({ sucesso: false, mensagem: erroVenc });
+
+    const { erro: erroTempo, valor: tempoConsulta } = normalizarTempoConsulta(tempoConsultaMin);
+    if (erroTempo) return res.status(400).json({ sucesso: false, mensagem: erroTempo });
 
     const tipoEntrada = req.user?.role === 'ADMIN' ? 'SYSTEM' : 'CLIENTE';
     const empresaAlvo = tipoEntrada === 'CLIENTE' ? (req.empresaId ?? null) : null;
@@ -550,6 +597,7 @@ const PrestadorController = {
         // ⚠️ É um UPDATE (SQL cru): SEMPRE depois do `create`, senão acerta zero linhas
         // em silêncio.
         await gravarVencimento(tx, 'PRESTADOR', criado.id, vencimento);
+        await gravarTempoConsulta(tx, criado.id, tempoConsulta);
 
         if (acessoSistema === true) {
           const login = await provisionarLogin(tx, {
@@ -598,8 +646,8 @@ const PrestadorController = {
       // e reativar o registro.
       await registrarAtivacao(prisma, 'prestador', prestadorId, req.user.id);
 
-      const [comEspecialidades] = await anexarEspecialidadesPrestador(
-        [await prisma.prestador.findUnique({ where: { id: prestadorId }, include: PRESTADOR_INCLUDE })]);
+      const [comEspecialidades] = await anexarTempoConsulta(await anexarEspecialidadesPrestador(
+        [await prisma.prestador.findUnique({ where: { id: prestadorId }, include: PRESTADOR_INCLUDE })]));
       const prestador = await anexarVencimento(prisma, 'PRESTADOR', comEspecialidades);
       await registrarAuditoria(prisma, req, {
         categoria:  'CRIACAO',
@@ -625,7 +673,7 @@ const PrestadorController = {
     const {
       nome, cpf, cnpj, telefone, email, especialidadeIds,
       cep, endereco, complemento, bairro, cidade, estado,
-      acessoSistema, locaisTrabalho, restringirPorLocal,
+      acessoSistema, locaisTrabalho, restringirPorLocal, tempoConsultaMin,
     } = req.body;
 
     if (!nome?.trim())
@@ -641,8 +689,12 @@ const PrestadorController = {
     const { erro: erroVenc, dados: vencimento } = resolverVencimento(req.body);
     if (erroVenc) return res.status(400).json({ sucesso: false, mensagem: erroVenc });
 
+    const { erro: erroTempo, valor: tempoConsulta } = normalizarTempoConsulta(tempoConsultaMin);
+    if (erroTempo) return res.status(400).json({ sucesso: false, mensagem: erroTempo });
+
     try {
       const existe = await prisma.prestador.findUnique({ where: { id: Number(id) } });
+      const tempoAnterior = (await lerTemposConsulta([Number(id)])).get(Number(id)) ?? null;
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Prestador não encontrado' });
       if (!podeAlterarRegistroEscopado(existe, req))
         return res.status(403).json({ sucesso: false, mensagem: 'Você não tem acesso para alterar este prestador.' });
@@ -711,6 +763,7 @@ const PrestadorController = {
         await gravarLocaisTrabalho(tx, Number(id), locaisTrabalho, existe.empresaId, existe.equipeId);
         await gravarRestricaoPorLocal(tx, Number(id), restringirPorLocal);
         await gravarVencimento(tx, 'PRESTADOR', Number(id), vencimento);
+        await gravarTempoConsulta(tx, Number(id), tempoConsulta);
 
         // Provisiona o login só na transição false/nulo → true (userId ainda vazio).
         let userIdAcesso = existe.userId;
@@ -752,6 +805,11 @@ const PrestadorController = {
 
       if (cartao) {
         await aplicarPermissoes({ equipeId: cartao.equipeId, userId: cartao.userId, cargo: 'PRESTADOR', atualizadoPor: req.user.id });
+        // O prestador que já tinha pacientes autorizados pelo CADASTRO (sem login)
+        // passa a enxergá-los ao entrar — senão a autorização valeria só para a Agenda.
+        await prisma.$transaction(tx => designacaoCadastro.sincronizarComLogin(tx, {
+          prestadorId: Number(id), userId: cartao.userId, equipeId: cartao.equipeId,
+        })).catch(e => console.error('[PrestadorController] Falha ao sincronizar autorizações com o login:', e));
       }
 
       if (usuarioCriado) {
@@ -763,8 +821,8 @@ const PrestadorController = {
         }).catch(err => console.error('[emailService] Falha ao enviar boas-vindas do prestador:', err));
       }
 
-      const [comEspecialidades] = await anexarEspecialidadesPrestador(
-        [await prisma.prestador.findUnique({ where: { id: Number(id) }, include: PRESTADOR_INCLUDE })]);
+      const [comEspecialidades] = await anexarTempoConsulta(await anexarEspecialidadesPrestador(
+        [await prisma.prestador.findUnique({ where: { id: Number(id) }, include: PRESTADOR_INCLUDE })]));
       const prestador = await anexarVencimento(prisma, 'PRESTADOR', comEspecialidades);
 
       await registrarAlteracao(prisma, req, {
@@ -784,6 +842,7 @@ const PrestadorController = {
           'cidade':          { de: existe.cidade,        para: prestador.cidade },
           'estado':          { de: existe.estado,        para: prestador.estado },
           'acesso ao sistema': { de: existe.acessoSistema, para: prestador.acessoSistema },
+          'tempo de consulta (min)': { de: tempoAnterior, para: prestador.tempoConsultaMin },
         },
       });
 
@@ -801,6 +860,142 @@ const PrestadorController = {
     }
   },
 
+  // ─── "Gerenciar Acesso" — autorização de pacientes pelo CADASTRO ─────────────
+  //
+  // 🔴 (2026-09-30) O botão voltou para TODO prestador, com ou sem login. Até aqui a
+  // designação era gravada pelo LOGIN (`/equipes/:equipeId/prestadores/:userId/...`),
+  // e o prestador salvo SEM "Terá acesso ao sistema" não tinha login — o botão sumia
+  // para ele e não havia como autorizá-lo para um paciente nem agendá-lo.
+  // Estas rotas trabalham pelo CADASTRO (`/cadastro/prestadores/:id/designacoes`) e,
+  // quando há login, espelham na designação por login — é ela que dá acesso ao
+  // sistema. Ver lib/designacaoPrestadorCadastro.js.
+
+  // GET /api/cadastro/prestadores/:id/designacoes
+  listarDesignacoes: async (req, res) => {
+    try {
+      const prestador = await carregarPrestadorParaDesignar(req, res);
+      if (!prestador) return;
+
+      const autorizados = await designacaoCadastro.autorizacoesDoPrestador(prisma, prestador);
+      const idsAutorizados = [...autorizados.keys()];
+
+      const [animaisAutorizados, animaisDisponiveis] = await Promise.all([
+        idsAutorizados.length === 0 ? [] : prisma.animal.findMany({
+          where:   { id: { in: idsAutorizados } },
+          select:  ANIMAL_DESIGNACAO_SELECT,
+          orderBy: { nome: 'asc' },
+        }),
+        // Pacientes ATIVOS da empresa do prestador que ainda não estão autorizados.
+        // O RLS de tb_animais já recorta pela empresa do contexto; o `empresaId` do
+        // cadastro fecha o caso do ADMIN da plataforma.
+        prisma.animal.findMany({
+          where: {
+            ativo: true,
+            OR: [{ empresaId: Number(prestador.empresaId) }, { equipe: { empresaId: Number(prestador.empresaId) } }],
+            ...(idsAutorizados.length ? { id: { notIn: idsAutorizados } } : {}),
+          },
+          select:  ANIMAL_DESIGNACAO_SELECT,
+          orderBy: { nome: 'asc' },
+        }),
+      ]);
+
+      // Mesmo formato de `EquipeController.getDesignacoesPrestador` — o modal é um só.
+      const designacoes = animaisAutorizados.map(animal => ({
+        id:         animal.id,
+        ativo:      true,
+        dataInicio: autorizados.get(animal.id)?.dataInicio ?? null,
+        dataFim:    null,
+        motivo:     autorizados.get(animal.id)?.motivo ?? null,
+        animal,
+      }));
+
+      res.json({
+        sucesso: true,
+        dados: {
+          designacoes,
+          animaisDisponiveis,
+          // A tela avisa: sem login, a autorização vale para a AGENDA, mas o prestador
+          // não entra no sistema para ver o paciente.
+          temLogin:   !!prestador.userId && prestador.acessoSistema === true,
+          disponivel: await designacaoCadastro.temTabela(prisma),
+        },
+      });
+    } catch (err) {
+      console.error('[PrestadorController.listarDesignacoes]', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar os pacientes autorizados' });
+    }
+  },
+
+  // POST /api/cadastro/prestadores/:id/designacoes/lote — body: { animalIds[], motivo? }
+  concederDesignacoes: async (req, res) => {
+    try {
+      const prestador = await carregarPrestadorParaDesignar(req, res);
+      if (!prestador) return;
+
+      const ids = [...new Set((req.body?.animalIds ?? []).map(Number))].filter(Number.isInteger);
+      if (ids.length === 0)
+        return res.status(400).json({ sucesso: false, mensagem: 'Informe ao menos um animal', code: 'SEM_ANIMAIS' });
+
+      // Só autoriza paciente ATIVO da empresa do prestador — id forjado no body não
+      // vira autorização para animal de outra clínica.
+      const permitidos = await prisma.animal.findMany({
+        where: {
+          id: { in: ids }, ativo: true,
+          OR: [{ empresaId: Number(prestador.empresaId) }, { equipe: { empresaId: Number(prestador.empresaId) } }],
+        },
+        select: { id: true },
+      });
+      if (permitidos.length === 0)
+        return res.status(400).json({ sucesso: false, mensagem: 'Nenhum animal elegível na seleção', code: 'SEM_ANIMAIS_ELEGIVEIS' });
+
+      const concedidos = await prisma.$transaction(tx => designacaoCadastro.conceder(tx, {
+        prestador, animalIds: permitidos.map(a => a.id), motivo: req.body?.motivo, criadoPorId: req.user.id,
+      }));
+
+      await registrarAuditoria(prisma, req, {
+        categoria:  'ALTERACAO',
+        entidade:   'PRESTADOR',
+        entidadeId: prestador.id,
+        detalhes:   `Autorizou ${concedidos} paciente(s) para o prestador ${prestador.nome}`,
+      });
+
+      res.status(201).json({ sucesso: true, dados: { concedidos, ignorados: ids.length - permitidos.length } });
+    } catch (err) {
+      if (err?.code === 'MIGRATION_PENDENTE') return res.status(400).json({ sucesso: false, mensagem: err.message, code: err.code });
+      console.error('[PrestadorController.concederDesignacoes]', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao conceder o acesso' });
+    }
+  },
+
+  // DELETE /api/cadastro/prestadores/:id/designacoes/:animalId — revoga UM paciente
+  // DELETE /api/cadastro/prestadores/:id/designacoes          — revoga TODOS
+  revogarDesignacao: async (req, res) => {
+    try {
+      const prestador = await carregarPrestadorParaDesignar(req, res);
+      if (!prestador) return;
+
+      const animalId = req.params.animalId != null ? Number(req.params.animalId) : null;
+      if (animalId != null && !Number.isInteger(animalId))
+        return res.status(400).json({ sucesso: false, mensagem: 'Animal inválido' });
+
+      const removidos = await prisma.$transaction(tx => designacaoCadastro.revogar(tx, { prestador, animalId }));
+
+      await registrarAuditoria(prisma, req, {
+        categoria:  'ALTERACAO',
+        entidade:   'PRESTADOR',
+        entidadeId: prestador.id,
+        animalId,
+        detalhes:   animalId == null
+          ? `Revogou a autorização de todos os pacientes (${removidos}) do prestador ${prestador.nome}`
+          : `Revogou a autorização de um paciente do prestador ${prestador.nome}`,
+      });
+
+      res.json({ sucesso: true, dados: { removidos } });
+    } catch (err) {
+      console.error('[PrestadorController.revogarDesignacao]', err);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao remover o acesso' });
+    }
+  },
   // PATCH /api/cadastro/prestadores/:id/toggle — escopado por empresa/equipe (checkPermission na rota)
   toggleAtivo: async (req, res) => {
     try {
@@ -859,6 +1054,7 @@ const PrestadorController = {
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao alternar status' });
     }
   },
+
 };
 
 module.exports = PrestadorController;

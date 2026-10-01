@@ -3,21 +3,23 @@
 //
 // Nasceu em 2026-09-05: o encaminhamento era o último registro clínico que ainda
 // saía do sistema como TEXTO colado na conversa, porque não havia folha para
-// mandar. Segue o mesmo esqueleto dos demais (`PrintShell`): cabeçalho com a logo
-// da clínica, cards de conteúdo e o rodapé fixo com a assinatura do responsável.
+// mandar. Desde 2026-09-29 o papel é a FOLHA CLÍNICA (`print/FolhaClinica.ts`):
+// logo, veterinário, paciente, título, conteúdo, data e assinatura. Aqui mora só o
+// CORPO — os cards de destino e motivo.
 //
-// ⚠️ Toda imagem passa por `srcImpressao`, e quem vai gerar PDF chama
-// `prepararEncaminhamento` ANTES: o PDF sai do Puppeteer, que BLOQUEIA qualquer
-// requisição que não seja `data:` (anti-SSRF, ver printUrl.ts). Sem isso a logo
-// imprime bem na tela e nasce QUEBRADA no arquivo que chega ao cliente.
+// ⚠️ Quem vai gerar PDF chama `prepararEncaminhamento` ANTES: é ele que resolve a
+// assinatura/CRMV, o endereço da clínica e as imagens em `data:` (o Puppeteer
+// bloqueia qualquer outra origem — ver printUrl.ts).
 import {
-  PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura, prepararImagensImpressao,
-} from './print/PrintShell';
+  gerarHtmlFolhaClinica, prepararFolhaClinica, escFolha as esc, type AnimalFolha,
+} from './print/FolhaClinica';
 import { imprimirHtml } from './print/imprimirHtml';
 
 export interface PrintAnimalEncaminhamento {
   nome:       string;
+  photoUrl?:  string | null;
   raca?:      { nome: string } | null;
+  especie?:   { nome: string } | null;
   user?:      { fullName: string } | null;
   idadeAnos?: number | null;
   logoUrl?:   string | null;
@@ -36,11 +38,8 @@ export interface PrintEncaminhamento {
   statusLabel:        string;
   dataEncaminhamento: string;
   observacao:         string | null;
-  veterinario:        { fullName: string } | null;
+  veterinario:        { id?: number | null; fullName: string } | null;
 }
-
-const esc = (v: string): string =>
-  v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 const linhas = (v: string): string => esc(v).replace(/\n/g, '<br>');
 
@@ -57,48 +56,36 @@ function campo(rotulo: string, valor?: string | null): string {
   return `<div class="campo"><span class="lbl">${esc(rotulo)}</span><span class="val">${linhas(String(valor))}</span></div>`;
 }
 
+function animalFolha(animal: PrintAnimalEncaminhamento | null): AnimalFolha | null {
+  if (!animal) return null;
+  return {
+    nome:         animal.nome,
+    photoUrl:     animal.photoUrl ?? null,
+    especie:      animal.especie?.nome ?? null,
+    raca:         animal.raca?.nome ?? null,
+    idade:        animal.idadeAnos != null ? `${animal.idadeAnos} ano(s)` : null,
+    proprietario: animal.user?.fullName ?? null,
+  };
+}
+
+const CSS_MODULO = `
+  .card       { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
+  .card-title { font-size: 12px; font-weight: 700; color: #374151; text-transform: uppercase;
+                letter-spacing: 0.05em; margin-bottom: 10px; border-bottom: 1px solid #f3f4f6; padding-bottom: 6px; }
+  .grid  { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 20px; }
+  .campo { display: flex; flex-direction: column; }
+  .lbl   { font-size: 10.5px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
+  .val   { font-size: 13px; font-weight: 600; color: #111; }
+  .largo { grid-column: 1 / -1; }
+  .selo  { display: inline-block; padding: 1px 8px; border-radius: 999px;
+           font-size: 11px; font-weight: 700; border: 1px solid #e5e7eb; color: #374151; }
+`;
+
 export function gerarHtmlEncaminhamento(
   enc:    PrintEncaminhamento,
   animal: PrintAnimalEncaminhamento | null,
 ): string {
-  const idade = animal?.idadeAnos != null ? `${animal.idadeAnos} ano(s)` : null;
-
-  return `<!DOCTYPE html>
-<html lang="pt-BR"><head><meta charset="utf-8"><title>Encaminhamento</title><style>
-  ${PRINT_SHELL_CSS}
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; font-size: 14.3px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
-  .titulo { font-size: 20.8px; font-weight: 800; color: #059669; margin-bottom: 4px; }
-  .sub    { font-size: 13px; color: #6b7280; margin-bottom: 14px; }
-  .card       { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
-  .card-title { font-size: 13px; font-weight: 700; color: #374151; text-transform: uppercase;
-                letter-spacing: 0.05em; margin-bottom: 10px; border-bottom: 1px solid #f3f4f6; padding-bottom: 6px; }
-  .grid  { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 20px; }
-  .campo { display: flex; flex-direction: column; }
-  .lbl   { font-size: 11.7px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
-  .val   { font-size: 14.3px; font-weight: 600; color: #111; }
-  .largo { grid-column: 1 / -1; }
-  .selo  { display: inline-block; padding: 2px 10px; border-radius: 999px;
-           font-size: 13px; font-weight: 700; border: 1px solid #e5e7eb; color: #374151; }
-  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
-</style></head><body>
-  ${renderCabecalho(animal?.logoUrl)}
-
-  <div class="titulo">Encaminhamento</div>
-  <div class="sub">${esc(enc.especialidade)} · ${esc(dataBR(enc.dataEncaminhamento))}
-    ${enc.urgencia !== 'NORMAL' ? ` · <span class="selo">${esc(enc.urgenciaLabel)}</span>` : ''}</div>
-
-  ${animal ? `
-  <div class="card">
-    <div class="card-title">Paciente</div>
-    <div class="grid">
-      ${campo('Nome', animal.nome)}
-      ${campo('Raça', animal.raca?.nome)}
-      ${campo('Idade', idade)}
-      ${campo('Proprietário', animal.user?.fullName)}
-    </div>
-  </div>` : ''}
-
+  const corpo = `
   <div class="card">
     <div class="card-title">Destino</div>
     <div class="grid">
@@ -115,25 +102,40 @@ export function gerarHtmlEncaminhamento(
       ${campo('Motivo', enc.motivo) || '<div class="campo largo"><span class="val">—</span></div>'}
       ${enc.observacao ? `<div class="largo">${campo('Observações', enc.observacao)}</div>` : ''}
     </div>
-  </div>
+  </div>`;
 
-  ${renderRodapeAssinatura(
-    enc.veterinario ? { fullName: enc.veterinario.fullName } : null,
-    'Assinatura do Veterinário Responsável',
-  )}
-</body></html>`;
+  const subtitulo = [
+    esc(enc.especialidade),
+    esc(dataBR(enc.dataEncaminhamento)),
+    enc.urgencia !== 'NORMAL' ? `<span class="selo">${esc(enc.urgenciaLabel)}</span>` : '',
+  ].filter(Boolean).join(' · ');
+
+  return gerarHtmlFolhaClinica({
+    documento:    `Encaminhamento${animal ? ` — ${animal.nome}` : ''}`,
+    logoUrl:      animal?.logoUrl,
+    profissional: enc.veterinario ? { id: enc.veterinario.id, nome: enc.veterinario.fullName } : null,
+    animal:       animalFolha(animal),
+    paginas:      [{ titulo: 'Encaminhamento', subtitulo, corpoHtml: corpo }],
+    cssModulo:    CSS_MODULO,
+  });
 }
 
-/** Resolve as imagens da folha para `data:` — obrigatório antes de gerar PDF. */
+/** Resolve assinatura, endereço da clínica e imagens — obrigatório antes de gerar PDF. */
 export async function prepararEncaminhamento(
   animal: PrintAnimalEncaminhamento | null,
+  enc?:   PrintEncaminhamento | null,
 ): Promise<void> {
-  await prepararImagensImpressao([animal?.logoUrl]);
+  await prepararFolhaClinica({
+    profissionalId: enc?.veterinario?.id ?? null,
+    logoUrl:        animal?.logoUrl,
+    imagens:        [animal?.photoUrl],
+  });
 }
 
-export function imprimirEncaminhamento(
+export async function imprimirEncaminhamento(
   enc:    PrintEncaminhamento,
   animal: PrintAnimalEncaminhamento | null,
-): void {
+): Promise<void> {
+  await prepararEncaminhamento(animal, enc);
   imprimirHtml(gerarHtmlEncaminhamento(enc, animal));
 }

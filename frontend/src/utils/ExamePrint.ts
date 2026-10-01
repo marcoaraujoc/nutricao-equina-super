@@ -1,6 +1,8 @@
 // frontend/src/utils/ExamePrint.ts
 
-import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura, srcImpressao } from './print/PrintShell';
+// Desde 2026-09-29 o papel é a FOLHA CLÍNICA (`print/FolhaClinica.ts`); aqui mora só
+// o CORPO de cada página — dados do pedido e a lista de exames.
+import { gerarHtmlFolhaClinica, prepararFolhaClinica, type PaginaFolha } from './print/FolhaClinica';
 import { imprimirHtml } from './print/imprimirHtml';
 
 export interface LaudoCompra {
@@ -101,19 +103,12 @@ const TIPO_BADGE: Record<string, { color: string; bg: string }> = {
 // ─── CSS compartilhado ────────────────────────────────────────────────────────
 
 const CSS = `
-  ${PRINT_SHELL_CSS}
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; font-size: 14.3px; color: #111; background: #fff; padding: 5mm 5mm 17mm; }
-  .exam-page { }
-  .page-break { page-break-before: always; break-before: page; }
-  .doc-info-row { display: flex; justify-content: flex-end; margin-bottom: 12px; }
   .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
   .card-title { font-size: 13px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; border-bottom: 1px solid #f3f4f6; padding-bottom: 6px; }
   .card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 16px; }
   .lbl { display: block; font-size: 11.7px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
   .val { font-size: 14.3px; font-weight: 600; color: #111; }
   .section-title { font-size: 13px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 8px; }
-  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 `;
 
 // ─── Render helpers ───────────────────────────────────────────────────────────
@@ -208,9 +203,8 @@ interface PaginaOpts {
 
 function gerarPaginaExame(
   ex:      PrintExameClinico,
-  animal?: PrintAnimalExame | null,
   opts?:   PaginaOpts,
-): string {
+): PaginaFolha {
   const extra      = parseExtra(ex.observacao);
   const tipo       = opts?.tipo ?? ex.tipo;
   const badge      = TIPO_BADGE[tipo] ?? { color: '#374151', bg: '#f3f4f6' };
@@ -228,28 +222,6 @@ function gerarPaginaExame(
   // Grupos desta página (opts ou todos do extra)
   const gruposPage = opts?.gruposPage ?? extra.grupos ?? null;
   const laudo      = extra.laudoCompra ?? null;
-
-  // ── Bloco animal ──────────────────────────────────────────────────────────
-  const animalBlock = animal ? `
-    <div class="card">
-      <div class="card-title">Animal</div>
-      <div style="display:flex;align-items:flex-start;gap:14px;">
-        ${(() => {
-          // `srcImpressao`: `data:` quando pré-resolvida (PDF do servidor bloqueia
-          // qualquer outra origem), URL absoluta na impressão do navegador.
-          const foto = typeof animal.photoUrl === 'string' ? srcImpressao(animal.photoUrl) : null;
-          return foto
-            ? `<img src="${esc(foto)}" alt="${esc(animal.nome)}" style="width:56px;height:56px;object-fit:cover;border-radius:8px;border:1px solid #e5e7eb;flex-shrink:0;" />`
-            : '';
-        })()}
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px 16px;flex:1;">
-          <div><span class="lbl">Nome</span><span class="val">${esc(animal.nome)}</span></div>
-          ${animal.raca      ? `<div><span class="lbl">Raça</span><span class="val">${esc(animal.raca.nome)}</span></div>` : ''}
-          ${animal.idadeAnos != null ? `<div><span class="lbl">Idade</span><span class="val">${animal.idadeAnos} ano${animal.idadeAnos !== 1 ? 's' : ''}</span></div>` : ''}
-          ${animal.user      ? `<div><span class="lbl">Proprietário</span><span class="val">${esc(animal.user.fullName)}</span></div>` : ''}
-        </div>
-      </div>
-    </div>` : '';
 
   // ── Info card ─────────────────────────────────────────────────────────────
   const infoRows = [
@@ -366,18 +338,11 @@ function gerarPaginaExame(
         </div>` : ''}
     </div>` : '';
 
-  return `
-  ${renderCabecalho(animal?.logoUrl)}
+  const subtitulo =
+    `<span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:700;color:${badge.color};background:${badge.bg};">${esc(tipo)}</span>`
+    + (laboratorio ? ` · ${esc(laboratorio)}` : '');
 
-  <div class="doc-info-row">
-    <div style="text-align:right;">
-      <p style="font-size:13px;color:#9ca3af;margin-bottom:4px;">REQUISIÇÃO DE EXAME</p>
-      <span style="display:inline-block;padding:3px 12px;border-radius:20px;font-size:14.3px;font-weight:700;color:${badge.color};background:${badge.bg};">${esc(tipo)}</span>
-    </div>
-  </div>
-
-  ${animalBlock}
-
+  const corpoHtml = `
   <div class="card">
     <div class="card-title">Informações do Exame</div>
     <div class="card-grid">
@@ -391,6 +356,12 @@ function gerarPaginaExame(
   ${examListBlock}
   ${camposFormBlock}
   ${laudoBlock}`;
+
+  return {
+    titulo:    isCompra ? 'Laudo de Exame de Compra' : 'Requisição de Exame',
+    subtitulo,
+    corpoHtml,
+  };
 }
 
 // ─── Gerador HTML principal ───────────────────────────────────────────────────
@@ -402,14 +373,15 @@ export function gerarHtmlExame(ex: PrintExameClinico, animal?: PrintAnimalExame 
   const extra  = parseExtra(ex.observacao);
   const grupos = extra.grupos;
 
-  let bodyContent: string;
+  let paginasFolha: PaginaFolha[];
 
   if (grupos && grupos.length > 0) {
     const paginas = agruparParaPaginas(grupos, ex.tipo);
 
     if (paginas.length > 1) {
-      // Multi-página: uma por (tipo + laboratório)
-      bodyContent = paginas.map((pg, i) => {
+      // Multi-página: uma por (tipo + laboratório) — cada uma é uma folha completa,
+      // com cabeçalho, paciente e assinatura: é o papel que vai para AQUELE laboratório.
+      paginasFolha = paginas.map((pg) => {
         const dataColeta    = pg.grupos.find(g => g.dataHoraColeta)?.dataHoraColeta ?? null;
         const tipoAmostra   = pg.grupos.length === 1 ? pg.grupos[0].tipoAmostra : null;
         const qtdTotal      = pg.grupos.reduce((s, g) => g.qtdAmostra != null ? (s ?? 0) + g.qtdAmostra : s, null as number | null);
@@ -422,8 +394,8 @@ export function gerarHtmlExame(ex: PrintExameClinico, animal?: PrintAnimalExame 
           indicacaoClinica: indicacao, obs: obsLocal,
           gruposPage: pg.grupos,
         };
-        return `<div class="exam-page${i > 0 ? ' page-break' : ''}">${gerarPaginaExame(ex, animal, opts)}</div>`;
-      }).join('\n');
+        return gerarPaginaExame(ex, opts);
+      });
     } else {
       // Página única com grupos (mesmo lab/tipo)
       const pg = paginas[0];
@@ -439,31 +411,42 @@ export function gerarHtmlExame(ex: PrintExameClinico, animal?: PrintAnimalExame 
         indicacaoClinica: indicacao, obs: obsLocal,
         gruposPage: pg.grupos,
       };
-      bodyContent = `<div class="exam-page">${gerarPaginaExame(ex, animal, opts)}</div>`;
+      paginasFolha = [gerarPaginaExame(ex, opts)];
     }
   } else {
     // Registro simples sem grupos
-    bodyContent = `<div class="exam-page">${gerarPaginaExame(ex, animal)}</div>`;
+    paginasFolha = [gerarPaginaExame(ex)];
   }
 
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <title>Requisição de Exame — S2Vet</title>
-  <style>${CSS}</style>
-</head>
-<body>
-${bodyContent}
-
-${renderRodapeAssinatura(ex.veterinario, 'Médico Veterinário Responsável')}
-
-</body>
-</html>`;
+  const foto = typeof animal?.photoUrl === 'string' ? animal.photoUrl : null;
+  return gerarHtmlFolhaClinica({
+    documento:    `Requisição de Exame${animal ? ` — ${animal.nome}` : ''}`,
+    logoUrl:      animal?.logoUrl,
+    profissional: ex.veterinario ? { id: ex.veterinario.id, nome: ex.veterinario.fullName } : null,
+    animal: animal ? {
+      nome:         animal.nome,
+      photoUrl:     foto,
+      raca:         animal.raca?.nome ?? null,
+      idade:        animal.idadeAnos != null ? `${animal.idadeAnos} ano${animal.idadeAnos !== 1 ? 's' : ''}` : null,
+      proprietario: animal.user?.fullName ?? null,
+    } : null,
+    paginas:   paginasFolha,
+    cssModulo: CSS,
+  });
 }
 
 // ─── Função principal ─────────────────────────────────────────────────────────
 
-export function imprimirExame(ex: PrintExameClinico, animal?: PrintAnimalExame | null): void {
+/** Resolve CRMV/assinatura, endereço da clínica e imagens — obrigatório antes de gerar PDF. */
+export async function prepararExame(ex: PrintExameClinico, animal?: PrintAnimalExame | null): Promise<void> {
+  await prepararFolhaClinica({
+    profissionalId: ex.veterinario?.id ?? null,
+    logoUrl:        animal?.logoUrl,
+    imagens:        [typeof animal?.photoUrl === 'string' ? animal.photoUrl : null],
+  });
+}
+
+export async function imprimirExame(ex: PrintExameClinico, animal?: PrintAnimalExame | null): Promise<void> {
+  await prepararExame(ex, animal);
   imprimirHtml(gerarHtmlExame(ex, animal));
 }

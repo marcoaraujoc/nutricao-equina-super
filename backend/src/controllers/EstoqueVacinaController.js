@@ -118,8 +118,20 @@ const listar = async (req, res) => {
     // tela abriria a EDIÇÃO com o fornecedor em branco e o salvar o APAGARIA, em
     // silêncio (a mesma lição do `temposConsulta` em 2026-07-28 parte 4).
     const forns = await produtoFornecedor.fornecedoresDeLotes(prisma, comTrilha.map(l => l.id));
+    // Forma de cálculo do PRODUTO no `medicamentoCat` de cada lote — é com ela que o
+    // Ajuste rotula o saldo (mL) ao lado dos frascos. Em BLOCO, como na Farmácia.
+    const formas = await catalogoEmpresa.multidosePorItem(
+      prisma, comTrilha.map(l => l.medicamentoCatId).filter(Boolean));
     const lotes = comTrilha.map(l => ({
       ...l,
+      ...(l.medicamentoCat ? {
+        medicamentoCat: {
+          ...l.medicamentoCat,
+          multidose:         formas.get(l.medicamentoCatId)?.multidose ?? false,
+          dosesPorEmbalagem: formas.get(l.medicamentoCatId)?.dosesPorEmbalagem ?? null,
+          formaCalculo:      formas.get(l.medicamentoCatId)?.formaCalculo ?? null,
+        },
+      } : {}),
       fornecedorId:   forns.get(l.id)?.fornecedorId   ?? null,
       fornecedorNome: forns.get(l.id)?.fornecedorNome ?? null,
       notaFiscal:     forns.get(l.id)?.notaFiscal     ?? null,

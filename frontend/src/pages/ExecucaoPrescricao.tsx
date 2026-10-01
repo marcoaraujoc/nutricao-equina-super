@@ -2470,6 +2470,7 @@ export default function ExecucaoPrescricao() {
     };
 
     const grupo: PrintGrupoPrescricao = {
+      titulo:          'Vacina',
       numero:          v.numero ?? 0,
       numeroFormatado: vcNum,
       status:          'FINALIZADO',

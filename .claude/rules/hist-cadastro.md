@@ -37,6 +37,91 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-09-30 (parte 2) (🔴 **"GERENCIAR ACESSO" VOLTOU PARA TODO
+#   PRESTADOR — COM OU SEM LOGIN — E A AUTORIZAÇÃO PASSOU A LIBERAR A AGENDA.**
+#   Relato: "o botão Gerenciar Acesso não está mais disponível depois de cadastrar um
+#   novo prestador". MOTIVO (não foi removido): desde 2026-09-09 ele só era renderizado
+#   com `p.userId && p.acessoEquipeId` — a designação era gravada pelo LOGIN
+#   (`tb_designacoes_prestador.prestador_id → users`), e prestador salvo SEM "Terá
+#   acesso ao sistema" não tem login. Conferido na base: os 4 cadastrados por último
+#   (TesteFisio, Barreto, Costa, Christian) sem `user_id`.
+#   Decisão (a pedido, perguntada): **permitir SEM login**.
+#   1. **Autorização pelo CADASTRO** — tabela NOVA `tb_designacoes_prestador_cadastro`
+#      (tenant direto, RLS fail-closed), rotas `/cadastro/prestadores/:id/designacoes`
+#      (GET, POST `/lote`, DELETE `/:animalId`, DELETE sem id), slug
+#      `cadastro.prestador.editar`. Fonte única `lib/designacaoPrestadorCadastro.js`.
+#      ⚠️ TABELA NOVA e não coluna em `tb_designacoes_prestador`: aquela é `NOT NULL`
+#      para `users`, lida por ~10 pontos TIPADOS e governa o ESCOPO DE ACESSO do
+#      login — nulá-la quebraria os leitores com o client defasado.
+#      ⚠️ A autorização é a UNIÃO das duas tabelas, só da EMPRESA do cadastro: a por
+#      login (inclusive a do encaminhamento) continua valendo, sem backfill.
+#      ⚠️ COM login a tela grava AS DUAS (espelho — a por login é a que o faz VER o
+#      paciente ao entrar). Login que nasce depois recebe as do cadastro
+#      (`sincronizarComLogin`, no `atualizar`).
+#      ⚠️ Sem login a faixa âmbar do modal diz: vale para a Agenda, mas ele não entra
+#      no sistema. `GerenciarAcessoPrestadorModal` ganhou `baseUrl`/`semLogin`; o
+#      FORNECEDOR segue pelo login (`equipeId`/`prestadorUserId`), sem mudança.
+#   2. **AGENDA** — prestador (com ou sem login) com paciente autorizado entra na grade
+#      (`GET /clinica/agendamentos/prestadores`), com selo "Prestador · N paciente(s)",
+#      e o combo do agendamento só oferece os pacientes autorizados. O `criar` aceita
+#      `prestadorCadastroId`, recusa 403 `PRESTADOR_SEM_AUTORIZACAO` fora da
+#      autorização, confere conflito pelo cadastro (e pelo login) e o expediente pelos
+#      LOCAIS do cadastro. Coluna nova `tb_agendamentos_clinicos.prestador_cadastro_id`
+#      (`lib/agendamentoPrestador.js`, SQL cru com guarda de coluna); com login, grava
+#      também `veterinario_id`.
+#      ⚠️ Na grade a CHAVE do prestador é o id do cadastro NEGATIVO (`chavePrestador`):
+#      o mesmo profissional pode ser membro e prestador, e a positiva colidiria.
+#      ⚠️ Agendar prestador é "agendar para outro" — só GESTOR (ou o próprio logado).
+#      ⚠️ Prestador NÃO entra em `vets`: Transferir/"Transferir dia" continuam só equipe.
+#      ⚠️ Assumir/trocar/transferir LIMPA o prestador (`marcarAssumido`, o funil).
+#      ⚠️ `semResponsavel(ag)` substituiu `!ag.veterinario?.id` nas regras de autoria da
+#      tela — o agendamento do prestador sem login NÃO é "de ninguém".
+#   3. 🔴 **DEFEITO ACHADO NO DIAGNÓSTICO**: `anexarEquipeDoAcesso` escolhia "o primeiro
+#      vínculo" do login sem olhar a empresa — a prestadora Marina (empresa 64)
+#      resolvia para a equipe 58 da empresa 59, onde é VETERINÁRIA. Agora o vínculo é o
+#      da empresa do cadastro (vale para o Fornecedor, que ainda usa esse caminho).
+#   ✅ **MIGRATION APLICADA em 2026-09-30** (autorizada), com o `WITH CHECK` reforçado
+#   na revisão multi-tenant: paciente e prestador precisam ser da MESMA empresa da linha
+#   (FK não passa por RLS). A tabela já entrou em `TENANT_PLANE`. Texto original abaixo.
+#   🔴 **MIGRATION GERADA, NÃO APLICADA** — `20261028000000_prestador_designacao_agenda`.
+#   Sem ela: prestador COM login já aparece na agenda (a designação por login é lida);
+#   o SEM login não, e conceder responde 400 `MIGRATION_PENDENTE` com o nome dela.
+#   Aplicar com `DATABASE_URL=$DATABASE_URL_MIGRATIONS npx prisma migrate deploy` +
+#   `npx prisma generate`; DEPOIS, pôr `tb_designacoes_prestador_cadastro` em
+#   `TENANT_PLANE` de `__tests__/tenancyRls.test.js`.
+#   Gate: `__tests__/prestadorSemLoginAgenda.test.js` (15; verificado que reprova) e
+#   `externoNaoEhEquipe.test.js` atualizado (o prestador NÃO exige mais login).
+#   ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-09-30 (**CADASTRO DE PRESTADOR — duas travas no pagamento**, a
+#   pedido. Só FRONT (`CadastroPrestador.tsx`); sem migration, backend intocado.
+#   1. **O VALOR SÓ É PREENCHÍVEL DEPOIS DO TIPO** (salário/comissão): o campo Valor
+#      e o seletor R$/% ficam DESABILITADOS enquanto o tipo é "Selecionar…", e voltar
+#      o tipo para vazio LIMPA o valor — senão o campo desabilitado guardaria um
+#      número invisível. `handleSalvar` ainda recusa valor > 0 sem tipo (defesa para
+#      cadastro legado já gravado assim). A seção segue "(opcional)": deixar tudo em
+#      branco continua permitido.
+#   2. 🔴 **DATA DE VENCIMENTO OBRIGATÓRIA**: `handleSalvar` recusa com "Selecione a
+#      data de vencimento" quando `tipoVencimento` é nulo. ⚠️ A opção "Não informar"
+#      CONTINUA no `SeletorVencimentoCredor` — o componente é compartilhado com o
+#      FORNECEDOR, onde o vencimento segue opcional. A obrigatoriedade é da TELA do
+#      prestador. ⚠️ Prestador já cadastrado sem vencimento passa a exigir a escolha
+#      na próxima edição. ⚠️ O backend NÃO valida — POST direto na API ainda aceita
+#      sem vencimento.)
+
+---
+
+# Atualizado em: 2026-09-29 (parte 3) (🔴 **O CAMPO "ESPECIALIDADES" SAIU DO CADASTRO DE
+#   FORNECEDOR** — a pedido. REVERTE o item 2 da sessão abaixo (campo aditivo e opcional).
+#   Tela, `FornecedorController` (ignora `especialidadeIds`) e Encaminhamento (fornecedor
+#   saiu da lista de destinos) — detalhe em `hist-atendimento.md`, mesma data.
+#   ⚠️ `tb_fornecedor_especialidades` FICA no schema: estava VAZIA; removê-la exige
+#   migration própria. O "Tipo de fornecedor" (`tipoServico`) não mudou.)
+
+---
+
 # Atualizado em: 2026-09-29 (🔴 **A ESPECIALIDADE DO PRESTADOR PASSOU A VIR DO
 #   CATÁLOGO OFICIAL `tb_especialidades`** — relatado que o Encaminhamento (aba
 #   Prestador/Profissional Externo) mostrava "Especialidade" tirada do texto livre de

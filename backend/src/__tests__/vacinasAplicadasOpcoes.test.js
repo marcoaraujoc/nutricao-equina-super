@@ -31,8 +31,12 @@ jest.mock('../lib/prisma', () => ({
       }),
     },
     vacinaClinica: {
+      // A janela de 12 meses do ✅ é aplicada em memória (a mesma consulta também dá a
+      // última aplicação de TODAS, para a "Data da Aplicação"); o filtro de data só é
+      // respeitado aqui se um dia voltar a ser pedido ao banco.
       findMany: jest.fn(async ({ where }) => registrosFake
-        .filter(r => r.status === where.status && r.dataAplicacao >= where.dataAplicacao.gte)
+        .filter(r => r.status === where.status
+          && (!where.dataAplicacao?.gte || r.dataAplicacao >= where.dataAplicacao.gte))
         .sort((a, b) => b.dataAplicacao - a.dataAplicacao)),
     },
   },
@@ -157,6 +161,108 @@ describe('APLICADAS no último ano vêm no topo, com a marca', () => {
     const opcoes = await pedir(null);
     expect(opcoes[0].aplicada).toBe(false);
     expect(opcoes[0].aplicadaEm).toBeNull();
+  });
+});
+
+describe('DATA DA APLICAÇÃO (2026-10-01)', () => {
+  const comLote = (nome) => vac(nome, { lotes: [{ lote: 'L1', validade: new Date('2027-08-16') }] });
+  const iso = (d) => new Date(d).toISOString().slice(0, 10);
+
+  it('vacina NO ESTOQUE → a última aplicação do histórico do paciente', async () => {
+    vacinasFake.push(comLote('Abor-Vac'));
+    registrosFake.push(
+      { nome: 'Abor-Vac', status: 'EXECUTADA', dataAplicacao: diasAtras(40) },
+      { nome: 'Abor-Vac', status: 'EXECUTADA', dataAplicacao: diasAtras(4) },
+    );
+    const [o] = await pedir(55);
+    expect(o.valores['Data da Aplicação']).toBe(iso(diasAtras(4)));
+  });
+
+  it('vale também com o lote SEM saldo — o frasco aplicado pode ter sido o último', async () => {
+    vacinasFake.push(vac('Abor-Vac', { _count: { lotes: 1 } }));
+    registrosFake.push({ nome: 'Abor-Vac', status: 'EXECUTADA', dataAplicacao: diasAtras(4) });
+    const [o] = await pedir(55);
+    expect(o.valores['Data da Aplicação']).toBe(iso(diasAtras(4)));
+  });
+
+  it('não tem a janela de 12 meses do ✅ — aplicação antiga também data o atestado', async () => {
+    vacinasFake.push(comLote('Abor-Vac'));
+    registrosFake.push({ nome: 'Abor-Vac', status: 'EXECUTADA', dataAplicacao: diasAtras(500) });
+    const [o] = await pedir(55);
+    expect(o.aplicada).toBe(false);
+    expect(o.valores['Data da Aplicação']).toBe(iso(diasAtras(500)));
+  });
+
+  it('🔴 vacina FORA do estoque → em branco, mesmo aplicada no paciente', async () => {
+    vacinasFake.push(vac('Abor-Vac'));
+    registrosFake.push({ nome: 'Abor-Vac', status: 'EXECUTADA', dataAplicacao: diasAtras(4) });
+    const [o] = await pedir(55);
+    expect(o.valores['Data da Aplicação']).toBe('');
+  });
+
+  it('no estoque mas nunca aplicada (ou só SALVA/FINALIZADA) → em branco', async () => {
+    vacinasFake.push(comLote('Abor-Vac'), comLote('Marbo'));
+    registrosFake.push({ nome: 'Marbo', status: 'FINALIZADA', dataAplicacao: diasAtras(2) });
+    const opcoes = await pedir(55);
+    expect(opcoes.every(o => o.valores['Data da Aplicação'] === '')).toBe(true);
+  });
+});
+
+describe('casos reais (Patyvet · Sarabi · Aftobov 250 ml)', () => {
+  it('🔴 "ml" × "mL" é a MESMA vacina — sai UMA vez, a da empresa (com o lote)', async () => {
+    vacinasFake.push(
+      vac('Aftobov - frasco 250 mL', { empresaId: null }),
+      vac('Aftobov - frasco 250 mL', { empresaId: null }),
+      vac('Aftobov - frasco 250 ml', { empresaId: 7, lotes: [{ lote: '001', validade: new Date('2027-02-01') }] }),
+    );
+    const opcoes = await pedir(null);
+    expect(opcoes).toHaveLength(1);
+    expect(opcoes[0].rotulo).toBe('Aftobov - frasco 250 ml');
+    expect(opcoes[0].valores['Número da partida']).toBe('001');
+  });
+
+  it('🔴 a da EMPRESA vence SEMPRE — mesmo com o global tendo lote e fabricante', async () => {
+    vacinasFake.push(
+      vac('Aftobov - frasco 250 mL', { empresaId: null, fabricante: 'Ourofino',
+        lotes: [{ lote: 'G1', validade: new Date('2027-01-01') }] }),
+      vac('Aftobov - frasco 250 ml', { empresaId: 7 }),
+    );
+    const [o] = await pedir(null);
+    expect(o.rotulo).toBe('Aftobov - frasco 250 ml');
+  });
+
+  it('empate de dado → vence o cadastro DA EMPRESA', async () => {
+    vacinasFake.push(vac('Abor-Vac', { empresaId: null }), vac('abor-vac', { empresaId: 7 }));
+    const [o] = await pedir(null);
+    expect(o.rotulo).toBe('abor-vac');
+  });
+
+  it('🔴 data digitada (meia-noite UTC) NÃO recua um dia no fuso de Brasília', async () => {
+    vacinasFake.push(vac('Aftobov - frasco 250 ml', { lotes: [{ lote: '001', validade: new Date('2027-02-01') }] }));
+    registrosFake.push({ nome: 'Aftobov - frasco 250 ml', status: 'EXECUTADA', dataAplicacao: new Date('2026-09-30T00:00:00.000Z') });
+    const [o] = await pedir(111);
+    expect(o.valores['Data da Aplicação']).toBe('30/09/2026');
+  });
+});
+
+describe('COLUNA OBRIGATÓRIA', () => {
+  const lista = { chave: 'vac', rotulo: 'Vacinas aplicadas', colunas: ['Nome', 'Data da Aplicação', 'Obs'],
+    colunasObrigatorias: ['Data da Aplicação'] };
+
+  it('item preenchido sem a coluna obrigatória é recusado, com a linha', () => {
+    const r = listas.colunaObrigatoriaVazia([lista], { vac: [['A', '01/09/2026', ''], ['B', '', 'x']] });
+    expect(r).toMatchObject({ coluna: 'Data da Aplicação', linha: 2 });
+  });
+
+  it('linha sem o item (primeira coluna vazia) não é cobrada', () => {
+    expect(listas.colunaObrigatoriaVazia([lista], { vac: [['A', '01/09/2026', ''], ['', '', '']] })).toBeNull();
+  });
+
+  it('coletarListas só aceita obrigatória que existe entre as colunas', () => {
+    const [l] = listas.coletarListas([{ tipo: 'listaCampos', conteudo: {
+      rotulo: 'Vacinas', colunas: ['Nome', 'Data da Aplicação'], colunasObrigatorias: ['Data da Aplicação', 'Inexistente'],
+    } }]);
+    expect(l.colunasObrigatorias).toEqual(['Data da Aplicação']);
   });
 });
 

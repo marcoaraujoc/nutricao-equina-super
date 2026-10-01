@@ -142,6 +142,8 @@ describe('SALDO não recusa o registro da vacina', () => {
 
   test('a BAIXA continua acontecendo — o que saiu foi o bloqueio, não o débito', () => {
     const baixa = corpoDaFuncao(CTRL, 'async function darBaixaEFaturar');
-    expect(baixa).toMatch(/qtdDisponivel: \{ decrement: qtd \}/);
+    // Desde 2026-10-01 a baixa desconta a dosagem NA UNIDADE DO LOTE (`qtdLote`,
+    // lib/vacinaDosagemLote) — o débito continua acontecendo, só que convertido.
+    expect(baixa).toMatch(/qtdDisponivel: \{ decrement: qtdLote \}/);
   });
 });

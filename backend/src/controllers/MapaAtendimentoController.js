@@ -384,7 +384,8 @@ const MapaAtendimentoController = {
         localizacao:   e.animal.localizacao ?? null,
         procedimento:  'EXAME',
         descricao:     e.descricao ?? e.tipo,
-        status:        e.status === 'CONCLUIDO' ? 'CONCLUIDO' : e.status === 'CANCELADO' ? 'CANCELADO' : 'AGENDADO',
+        // REALIZADO (resultado carregado) é o status final do exame; CONCLUIDO é legado.
+        status:        (e.status === 'REALIZADO' || e.status === 'CONCLUIDO') ? 'CONCLUIDO' : e.status === 'CANCELADO' ? 'CANCELADO' : 'AGENDADO',
         dataHora:      e.dataSolicitacao,
         responsavel:   e.veterinario?.fullName ?? null,
         responsavelId: e.veterinario?.id ?? null,

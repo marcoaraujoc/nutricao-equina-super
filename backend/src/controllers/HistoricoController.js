@@ -83,7 +83,7 @@ const HistoricoController = {
           orderBy: { dataAplicacao: 'desc' }, take: limit,
         }),
         prisma.exameClinico.findMany({
-          where: { ...whereAtivo, status: { in: ['SOLICITADO', 'CONCLUIDO'] }, AND: [escopoFilho], ...(corte ? { dataSolicitacao: { gte: corte } } : {}), ...(buscando ? { OR: [{ descricao: like }, { resultado: like }, { tipo: like }, { observacao: like }] } : {}) },
+          where: { ...whereAtivo, status: { in: ['SOLICITADO', 'REALIZADO', 'CONCLUIDO'] }, AND: [escopoFilho], ...(corte ? { dataSolicitacao: { gte: corte } } : {}), ...(buscando ? { OR: [{ descricao: like }, { resultado: like }, { tipo: like }, { observacao: like }] } : {}) },
           select: { id: true, tipo: true, descricao: true, status: true, resultado: true, dataSolicitacao: true, numero: true, observacao: true, evolucaoId: true, veterinario: VET_SELECT },
           orderBy: { dataSolicitacao: 'desc' }, take: limit,
         }),
@@ -280,7 +280,7 @@ const HistoricoController = {
           orderBy: { dataAplicacao: 'desc' }, take: limit,
         }),
         prisma.exameClinico.findMany({
-          where: { ...whereAtivo, status: { in: ['SOLICITADO', 'CONCLUIDO'] }, AND: [escopoFilho] },
+          where: { ...whereAtivo, status: { in: ['SOLICITADO', 'REALIZADO', 'CONCLUIDO'] }, AND: [escopoFilho] },
           select: { id: true, tipo: true, descricao: true, status: true, resultado: true, dataSolicitacao: true, numero: true, observacao: true, veterinario: VET_SELECT },
           orderBy: { dataSolicitacao: 'desc' }, take: limit,
         }),

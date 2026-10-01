@@ -97,6 +97,8 @@ export interface ListaDocumento {
    * CADASTRAR um item novo.
    */
   fonteOpcoes?: string | null;
+  /** Colunas que todo item preenchido precisa trazer (ex.: "Data da Aplicação"). */
+  colunasObrigatorias?: string[];
   secao:      string | null;
   /** Linhas vindas do que o PACIENTE tem registrado — o "já vem preenchido". */
   sugestao:   string[][];
@@ -160,6 +162,32 @@ export function listaObrigatoriaVazia(
   valores: PreenchimentoListas,
 ): ListaDocumento | null {
   return listas.find(l => listaObrigatoria(l) && !temLinhaPreenchida(valores[l.chave])) ?? null;
+}
+
+/**
+ * O primeiro item PREENCHIDO a que falta uma coluna obrigatória (linha começando em 1),
+ * ou `null`. ESPELHO de `colunaObrigatoriaVazia` do backend, que é a autoridade
+ * (`COLUNA_OBRIGATORIA`). Linha sem o item (primeira coluna vazia) não é cobrada: ela
+ * não vai ao papel.
+ */
+export function colunaObrigatoriaVazia(
+  listas: ListaDocumento[],
+  valores: PreenchimentoListas,
+): { lista: ListaDocumento; coluna: string; linha: number } | null {
+  for (const l of listas) {
+    const obrig = l.colunasObrigatorias ?? [];
+    if (obrig.length === 0) continue;
+    const linhas = valores[l.chave] ?? [];
+    for (let i = 0; i < linhas.length; i++) {
+      const linha = linhas[i] ?? [];
+      if (!String(linha[0] ?? '').trim()) continue;
+      for (const coluna of obrig) {
+        const j = l.colunas.indexOf(coluna);
+        if (j >= 0 && !String(linha[j] ?? '').trim()) return { lista: l, coluna, linha: i + 1 };
+      }
+    }
+  }
+  return null;
 }
 
 /**

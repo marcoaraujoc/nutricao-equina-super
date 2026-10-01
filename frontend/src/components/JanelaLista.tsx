@@ -104,13 +104,25 @@ export default function JanelaLista({
       // e semibold cinza-600). `normal-case` declarado no próprio `th` vence o
       // `uppercase` herdado do `<tr>`, então nenhuma tela precisou perder a
       // classe antiga para o novo padrão valer.
-      className={`overflow-auto overscroll-contain
+      //
+      // 🔴 NO TOQUE A ROLAGEM PASSA PARA A PÁGINA (2026-09-30). Com
+      // `overscroll-contain` em todo tamanho, a janela chegava ao topo e o gesto
+      // MORRIA ali, em vez de seguir para a página. No celular a janela de 12 cards
+      // passa da altura da tela — não sobra área fora dela onde apoiar o dedo —, e a
+      // página só rolava para BAIXO: quem clicava em "Alterar" no fim da lista de
+      // Produtos não conseguia voltar ao formulário aberto no topo. A contenção fica
+      // só a partir de `md` (roda do mouse), onde ela evita a página pular ao fim
+      // da lista.
+      className={`overflow-auto overscroll-auto md:overscroll-contain
                   [&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-10
                   [&_thead_th]:bg-gray-50 [&_thead_th]:shadow-[inset_0_-1px_0_rgb(229_231_235)]
                   [&_thead_th]:font-bold [&_thead_th]:normal-case [&_thead_th]:tracking-normal
                   [&_thead_th]:text-gray-700 [&_thead_th]:text-xs
                   ${className}`}
-      style={altura ? { maxHeight: altura } : undefined}
+      // ⚠️ Teto de 75% da tela: uma janela MAIS ALTA que a tela não é janela, é uma
+      // segunda página por cima da primeira — e cobre a área onde o dedo arrastaria
+      // a página de verdade.
+      style={altura ? { maxHeight: `min(${altura}px, 75vh)` } : undefined}
     >
       {children}
     </div>

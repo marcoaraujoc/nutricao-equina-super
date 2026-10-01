@@ -16,4 +16,11 @@ router.get   ('/:id',         authenticate, checkPermission('cadastro.prestador.
 router.put   ('/:id',         authenticate, checkPermission('cadastro.prestador.editar',  'PROPRIO'), PrestadorController.atualizar);
 router.patch ('/:id/toggle',  authenticate, checkPermission('cadastro.prestador.ativar',  'PROPRIO'), PrestadorController.toggleAtivo);
 
+// "Gerenciar Acesso" — autorização de pacientes pelo CADASTRO (com ou sem login).
+// Mesmo slug de alterar o prestador: quem mantém o cadastro decide quem ele atende.
+router.get   ('/:id/designacoes',           authenticate, checkPermission('cadastro.prestador.editar', 'PROPRIO'), PrestadorController.listarDesignacoes);
+router.post  ('/:id/designacoes/lote',      authenticate, checkPermission('cadastro.prestador.editar', 'PROPRIO'), PrestadorController.concederDesignacoes);
+router.delete('/:id/designacoes/:animalId', authenticate, checkPermission('cadastro.prestador.editar', 'PROPRIO'), PrestadorController.revogarDesignacao);
+router.delete('/:id/designacoes',           authenticate, checkPermission('cadastro.prestador.editar', 'PROPRIO'), PrestadorController.revogarDesignacao);
+
 module.exports = router;

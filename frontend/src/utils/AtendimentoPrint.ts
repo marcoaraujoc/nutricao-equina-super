@@ -3,8 +3,9 @@
 // registros vinculados (prescrição, exame, vacina, encaminhamento) em uma única página.
 // Segue o mesmo padrão visual de Dietaprint.ts (referência de layout do sistema).
 
-import { resolverUrlAbsoluta } from './printUrl';
-import { PRINT_SHELL_CSS, renderCabecalho, renderRodapeAssinatura } from './print/PrintShell';
+// Desde 2026-09-29 o papel é a FOLHA CLÍNICA (`print/FolhaClinica.ts`); aqui mora só
+// o CORPO — o resumo e os blocos de cada registro.
+import { gerarHtmlFolhaClinica, prepararFolhaClinica, type AnimalFolha } from './print/FolhaClinica';
 import { imprimirHtml } from './print/imprimirHtml';
 import { DOSES_POR_DIA } from './posologia';
 
@@ -12,6 +13,7 @@ export interface PrintAnimal {
   nome:      string;
   photoUrl?: string | null;
   raca?:     { nome: string } | null;
+  especie?:  { nome: string } | null;
   user?:     { fullName: string } | null;
   idadeAnos?: number | null;
   logoUrl?:  string | null;
@@ -40,6 +42,8 @@ export interface PrintAtendimentoItem {
 
 export interface PrintAtendimento {
   atendimentoNumero: string;
+  /** Quem conduziu — habilita CRMV e assinatura na folha. */
+  responsavelId?:    number | null;
   itens:             PrintAtendimentoItem[]; // primeiro item = evolução
 }
 
@@ -115,43 +119,15 @@ function gerarResumoTexto(numero: string, dataAtendimento: string, itens: PrintA
   return frase;
 }
 
-// ─── CSS — mesmo padrão visual de Dietaprint.ts ───────────────────────────────
-// Exportado para reuso por outros relatórios (RelatorioAtendimento.ts).
+// ─── CSS do CORPO — cabeçalho, paciente, data e assinatura são da FOLHA CLÍNICA ─
+// Exportado para reuso pelo relatório de evolução (RelatorioAtendimento.ts).
 
-export const PRINT_CSS = `
-  ${PRINT_SHELL_CSS}
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #111;
-    padding: 5mm 5mm 17mm;
-  }
-
-  .sys-sub-line { font-size: 9pt; color: #6b7280; margin-bottom: 12pt; }
-
+export const CSS_REGISTROS = `
   .sec-title {
     font-size: 8pt; font-weight: 700; color: #059669;
     text-transform: uppercase; letter-spacing: 1pt;
     margin-bottom: 8pt; margin-top: 16pt;
   }
-
-  .animal-card {
-    display: flex; gap: 14pt; align-items: stretch;
-    background: #f9fafb; border: 0.5pt solid #e5e7eb;
-    border-radius: 8pt; padding: 10pt; margin-bottom: 4pt;
-  }
-  .animal-photo {
-    width: 62pt; height: 62pt; border-radius: 6pt;
-    object-fit: cover; flex-shrink: 0; border: 0.5pt solid #e5e7eb;
-  }
-  .animal-photo-empty {
-    width: 62pt; height: 62pt; border-radius: 6pt; flex-shrink: 0;
-    border: 0.5pt solid #e5e7eb; background: #f3f4f6;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 20pt;
-  }
-  .animal-info { flex: 1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8pt; align-items: center; }
-  .f-label { font-size: 8pt;   color: #6b7280; margin-bottom: 3pt; }
-  .f-val   { font-size: 10pt;  font-weight: 600; color: #111; }
 
   .plan-row {
     position: relative; display: flex; justify-content: flex-start; align-items: center; gap: 10pt;
@@ -195,42 +171,19 @@ export const PRINT_CSS = `
   .med-nome { font-weight: 600; }
   .med-obs  { font-size: 8.5pt; color: #9ca3af; margin-top: 2pt; }
 
-  .footer {
-    margin-top: 20pt; padding-top: 8pt;
-    border-top: 0.5pt solid #e5e7eb;
-    font-size: 8pt; color: #9ca3af;
-    display: flex; justify-content: space-between;
-  }
-
-  @media print {
-    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  }
 `;
 
-// ─── Peças padrão de impressão (reutilizadas por outros relatórios) ──────────
-
-/** Cabeçalho padrão do sistema: logo da empresa (ou marca S2Vet) + subtítulo + data de emissão. */
-export function renderSysHeader(logoUrl: string | null | undefined, subtitulo: string): string {
-  return `
-  ${renderCabecalho(logoUrl)}
-  <div class="sys-sub-line">Sistema Hospitalar Veterinário · ${escaparHtml(subtitulo)}</div>`;
-}
-
-/** Card padrão "Dados do Animal": foto + nome, raça, idade e proprietário. */
-export function renderAnimalCard(animal: PrintAnimal | null): string {
-  const fotoUrl = resolverUrlAbsoluta(animal?.photoUrl);
-  return `
-  <div class="animal-card">
-    ${fotoUrl
-      ? `<img class="animal-photo" src="${fotoUrl}" alt="${escaparHtml(animal?.nome ?? '')}">`
-      : `<div class="animal-photo-empty">🐾</div>`}
-    <div class="animal-info">
-      <div><div class="f-label">Animal</div><div class="f-val">${escaparHtml(animal?.nome ?? '—')}</div></div>
-      <div><div class="f-label">Raça</div><div class="f-val">${escaparHtml(animal?.raca?.nome ?? '—')}</div></div>
-      <div><div class="f-label">Idade</div><div class="f-val">${animal?.idadeAnos != null ? `${animal.idadeAnos} anos` : '—'}</div></div>
-      <div><div class="f-label">Proprietário</div><div class="f-val">${escaparHtml(animal?.user?.fullName ?? '—')}</div></div>
-    </div>
-  </div>`;
+/** Paciente no formato da folha clínica — reusado pelo relatório de evolução. */
+export function animalParaFolha(animal: PrintAnimal | null): AnimalFolha | null {
+  if (!animal) return null;
+  return {
+    nome:         animal.nome,
+    photoUrl:     animal.photoUrl ?? null,
+    especie:      animal.especie?.nome ?? null,
+    raca:         animal.raca?.nome ?? null,
+    idade:        animal.idadeAnos != null ? `${animal.idadeAnos} anos` : null,
+    proprietario: animal.user?.fullName ?? null,
+  };
 }
 
 // ─── Registro individual ──────────────────────────────────────────────────────
@@ -297,46 +250,46 @@ export function gerarHtmlAtendimento(
   const primeiro = at.itens[0] ?? null;
   const resumo   = gerarResumoTexto(at.atendimentoNumero, primeiro?.data ?? new Date().toISOString(), at.itens);
 
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <title>Atendimento ${escaparHtml(at.atendimentoNumero)} — S2Vet</title>
-  <style>${PRINT_CSS}</style>
-</head>
-<body>
-
-  ${renderSysHeader(animal?.logoUrl, 'Resumo de Atendimento')}
-
-  <div class="sec-title">Dados do Animal</div>
-  ${renderAnimalCard(animal)}
-
-  <div class="plan-row">
-    <span class="plan-name">${escaparHtml(at.atendimentoNumero)}</span>
-    <span class="badge">${fmtData(primeiro?.data)}</span>
-  </div>
-
+  const corpo = `
   <div class="sec-title">Resumo do Atendimento</div>
   <div class="resumo-box"><p class="resumo-text">${escaparHtml(resumo)}</p></div>
 
   <div class="sec-title">Registros do Atendimento</div>
-  ${at.itens.map(buildRegistroHtml).join('')}
+  ${at.itens.map(buildRegistroHtml).join('')}`;
 
-  <div class="ps-footer">
-    <span>Atendimento ${escaparHtml(at.atendimentoNumero)}</span>
-  </div>
-
-  ${renderRodapeAssinatura({ fullName: primeiro?.responsavel ?? null })}
-
-</body>
-</html>`;
+  return gerarHtmlFolhaClinica({
+    documento:    `Atendimento ${at.atendimentoNumero}${animal ? ` — ${animal.nome}` : ''}`,
+    logoUrl:      animal?.logoUrl,
+    profissional: { id: at.responsavelId ?? null, nome: primeiro?.responsavel ?? null },
+    animal:       animalParaFolha(animal),
+    paginas: [{
+      titulo:    'Resumo de Atendimento',
+      subtitulo: `${escaparHtml(at.atendimentoNumero)} · ${fmtData(primeiro?.data)}`,
+      corpoHtml: corpo,
+    }],
+    cssModulo: CSS_REGISTROS,
+    rodape:    `Atendimento ${at.atendimentoNumero}`,
+  });
 }
 
 // ─── Função principal — imprimir ──────────────────────────────────────────────
 
-export function imprimirAtendimento(
+/** Resolve CRMV/assinatura, endereço da clínica e imagens — obrigatório antes de gerar PDF. */
+export async function prepararAtendimento(
   at:     PrintAtendimento,
   animal: PrintAnimal | null,
-): void {
+): Promise<void> {
+  await prepararFolhaClinica({
+    profissionalId: at.responsavelId ?? null,
+    logoUrl:        animal?.logoUrl,
+    imagens:        [animal?.photoUrl],
+  });
+}
+
+export async function imprimirAtendimento(
+  at:     PrintAtendimento,
+  animal: PrintAnimal | null,
+): Promise<void> {
+  await prepararAtendimento(at, animal);
   imprimirHtml(gerarHtmlAtendimento(at, animal));
 }

@@ -179,7 +179,7 @@ async function gravarMultidose(client, medicamentoId, { multidose, dosesPorEmbal
   // depender só da disciplina de quem chama. Reconverter um item global bagunçaria o
   // estoque de TODAS as clínicas que o têm em estoque de uma vez só.
   if (antes && antes.empresaId != null) {
-    await reconverterEstoqueAtivo(
+    await reconverterSaldosDoProduto(
       client,
       medicamentoId,
       {
@@ -192,6 +192,24 @@ async function gravarMultidose(client, medicamentoId, { multidose, dosesPorEmbal
       antes.empresaId,
     );
   }
+}
+
+/**
+ * 🔴 TODO SALDO DO PRODUTO acompanha a mudança de unidade operativa (2026-10-01):
+ * a entrada da FARMÁCIA (`reconverterEstoqueAtivo`) E o lote de VACINA
+ * (`reconverterLotesVacinaAtivos`). Até aqui só a farmácia era reconvertida — o lote
+ * de vacina, que também guarda o saldo no CONTEÚDO (`qtd_disponivel` = frascos ×
+ * `doses_por_frasco`), ficava na unidade antiga, e a dose de 2 mL debitava 2 FRASCOS.
+ * A mesma regra para os dois estoques, numa chamada só: o chamador não escolhe um.
+ */
+async function reconverterSaldosDoProduto(tx, medicamentoId, produtoAntes, produtoDepois, empresaId) {
+  await reconverterEstoqueAtivo(tx, medicamentoId, produtoAntes, produtoDepois, empresaId);
+  // ⚠️ Mesmo gate da farmácia: só quando a unidade operativa ou o conteúdo MUDAM.
+  // Sem ele, salvar o produto por outro motivo (fabricante, via) reescreveria um lote
+  // legado cujo `doses_por_frasco` já divergia do cadastro — decisão que ninguém tomou.
+  if (unidadeOperativa(produtoAntes) === unidadeOperativa(produtoDepois)
+      && qtdPorEmbalagemDe(produtoAntes) === qtdPorEmbalagemDe(produtoDepois)) return;
+  await reconverterLotesVacinaAtivos(tx, medicamentoId, produtoDepois, empresaId);
 }
 
 /**
@@ -274,6 +292,100 @@ async function reconverterEstoqueAtivo(tx, medicamentoId, produtoAntes, produtoD
         pesoPorEmbalagem: numeroPositivo(conteudoDepois),
         ...(novoPreco !== null ? { precoUnitarioBase: novoPreco } : {}),
       },
+    });
+  }
+
+  // 🔴 A RESERVA está na MESMA unidade do saldo que ela segura (2026-10-01). Sem
+  // reconvertê-la junto, 10 frascos reservados viravam "10 mL" sobre um saldo de
+  // 200 mL — o disponível (saldo − reservado) saltava de 0 para 190 e outra prescrição
+  // levaria frascos que já estão prometidos. Mesmo fator físico da entrada.
+  const reservas = await tx.reservaEstoque.findMany({
+    where:  { estoqueId: { in: entradas.map((e) => e.id) } },
+    select: { id: true, quantidade: true },
+  });
+  for (const r of reservas) {
+    await tx.reservaEstoque.update({
+      where: { id: r.id },
+      data:  { quantidade: (Number(r.quantidade) / renderAntes) * renderDepois },
+    });
+  }
+}
+
+/**
+ * 🔴 O LOTE DE VACINA também é reconvertido quando o produto muda de conteúdo
+ * (2026-10-01) — a MESMA regra da farmácia, aplicada ao estoque da vacina.
+ *
+ * O lote guarda o saldo no CONTEÚDO: `qtd_disponivel = qtd_frascos × doses_por_frasco`,
+ * e `doses_por_frasco` é o conteúdo que o produto declarava NA ENTRADA
+ * (`EstoqueVacinaController.dosesDoCatalogo`). Marcar o produto como multidose de
+ * 20 mL depois da entrada deixava o lote com `doses_por_frasco = 1` e o saldo contado
+ * em frascos — e a aplicação de 2 mL debitava 2 frascos e cobrava 2 frascos.
+ *
+ * ⚠️ O "antes" é o `doses_por_frasco` DO PRÓPRIO LOTE, não o do produto: o lote é a
+ * fonte do que ele mesmo contém (entrada antiga pode ter vindo com o número informado
+ * à mão). Por isso a função é IDEMPOTENTE — lote já no conteúdo novo não muda.
+ * ⚠️ O "depois" é o conteúdo que a ENTRADA usaria hoje: `qtdPorEmbalagemDe` (multidose
+ * com quantidade), senão 1 — a embalagem é a própria unidade, como na farmácia.
+ * ⚠️ `qtd_frascos` não muda: é a contagem física, e é ela que a conversão preserva.
+ * ⚠️ A reserva (`tb_reservas_estoque_vacina`) acompanha o lote, pela mesma razão da
+ * reserva da farmácia. SQL cru: o model pode não estar no client gerado (§11).
+ * ⚠️ `empresaId` OBRIGATÓRIO e no filtro — mesmo motivo de `reconverterEstoqueAtivo`.
+ */
+async function reconverterLotesVacinaAtivos(tx, medicamentoId, produtoDepois, empresaId) {
+  if (empresaId == null) {
+    throw new Error('reconverterLotesVacinaAtivos: empresaId é obrigatório (nunca reconverte item global).');
+  }
+  const renderDepois = numeroPositivo(qtdPorEmbalagemDe(produtoDepois)) ?? 1;
+  const lotes = await tx.loteVacina.findMany({
+    where:  { medicamentoCatId: Number(medicamentoId), empresaId: Number(empresaId), ativo: true },
+    select: {
+      id: true, qtdTotal: true, qtdDisponivel: true, dosesPorFrasco: true,
+      estoqueMinimo: true, estoqueAlarmante: true,
+    },
+  });
+  const convertidos = [];
+  for (const l of lotes) {
+    const renderAntes = numeroPositivo(l.dosesPorFrasco) ?? 1;
+    if (renderAntes === renderDepois) continue;
+    const fator = renderDepois / renderAntes;
+    await tx.loteVacina.update({
+      where: { id: l.id },
+      data: {
+        qtdTotal:         Number(l.qtdTotal)         * fator,
+        qtdDisponivel:    Number(l.qtdDisponivel)    * fator,
+        estoqueMinimo:    Number(l.estoqueMinimo)    * fator,
+        estoqueAlarmante: Number(l.estoqueAlarmante) * fator,
+        dosesPorFrasco:   renderDepois,
+      },
+    });
+    convertidos.push(l.id);
+  }
+  if (convertidos.length === 0) return;
+
+  // 🔴 A RESERVA É REFEITA, não multiplicada. Ela é a dosagem de UMA vacina pendente na
+  // unidade do lote, e a regra dessa conversão mora em `lib/vacinaDosagemLote`: no
+  // inverso, "2 mL" reservados viram UM frasco (a embalagem que será aberta), não 0,1 —
+  // multiplicar pelo fator daria a fração, e a fatura cobraria 1/10 do frasco.
+  // `criarReservaVacina` apaga e redistribui por FEFO; `produto` vai explícito porque,
+  // no copy-on-write, o lote ainda aponta para o GLOBAL, que não tem o estado novo.
+  const pendentes = await tx.$queryRawUnsafe(
+    `SELECT DISTINCT v.id, v."animalId", v.quantidade, v.medicamento_cat_id AS "medicamentoCatId"
+       FROM schs2vet.tb_reservas_estoque_vacina r
+       JOIN schs2vet.tb_vacinas_clinicas v ON v.id = r."vacinaClinicaId"
+      WHERE r."loteVacinaId" = ANY($1::int[])`,
+    convertidos,
+  );
+  if (pendentes.length === 0) return;
+  // require TARDIO: o controller importa este módulo no topo.
+  const { criarReservaVacina } = require('../controllers/VacinaClinicaController');
+  for (const v of pendentes) {
+    await criarReservaVacina(tx, {
+      vacinaId:         Number(v.id),
+      animalId:         Number(v.animalId),
+      medicamentoCatId: Number(v.medicamentoCatId ?? medicamentoId),
+      quantidade:       v.quantidade,
+      empresaId:        Number(empresaId),
+      produto:          produtoDepois,
     });
   }
 }
@@ -428,6 +540,10 @@ async function salvarItemDoCatalogo(tx, { medicamentoId, empresaId, vacina = fal
   }
 
   // GLOBAL: copy-on-write.
+  // 🔴 Estado do GLOBAL antes da cópia — é nessa unidade que o saldo da empresa está
+  // gravado enquanto ainda aponta para ele (ver a reconversão logo abaixo).
+  const estadoGlobal = (await multidosePorItem(tx, [med.id])).get(med.id)
+    ?? { multidose: false, dosesPorEmbalagem: null, formaCalculo: null, unidade: med.unidade };
   const ja = await copiaExistente(tx, med.nome, empresa);
   let novoId;
   if (ja) {
@@ -442,6 +558,18 @@ async function salvarItemDoCatalogo(tx, { medicamentoId, empresaId, vacina = fal
   }
   await sincronizarVias(tx, novoId, dados.vias);
   await garantirEspecies(tx, novoId, especieIds);
+  // 🔴 RECONVERTE O SALDO QUE AINDA ESTÁ NO GLOBAL, ANTES de reapontá-lo (2026-10-01).
+  // `aplicarCampos` → `gravarMultidose` reconverte o estoque da CÓPIA — mas, quando o
+  // item era global, a entrada da clínica ainda aponta para o GLOBAL nesse momento: a
+  // cópia não tem saldo nenhum, nada é convertido, e o reapontamento seguinte move o
+  // saldo CRU. Caso real (Zoovit C, Patyvet, 30/09): 10 frascos em 'Un.' viraram
+  // "10 mL" quando o produto passou a ser multidose de 20 mL.
+  // ⚠️ A conversão é da linha do GLOBAL, filtrada pela EMPRESA — o estoque de outra
+  // clínica no mesmo item global nunca é tocado.
+  const estadoCopia = (await multidosePorItem(tx, [novoId])).get(novoId);
+  if (estadoCopia) {
+    await reconverterSaldosDoProduto(tx, med.id, estadoGlobal, estadoCopia, empresa);
+  }
   // Reaponta o que a EMPRESA tem no item antigo — estoque ativo, prescrição pendente
   // e produto de fornecedor. Sem isso a baixa da dose procuraria o estoque pelo
   // medicamento antigo, não acharia, e a dose sairia SEM baixa e SEM linha na fatura.
@@ -505,4 +633,6 @@ module.exports = {
   CLASSIFICACAO_VACINA,
   gravarMultidose,
   reconverterEstoqueAtivo,
+  reconverterLotesVacinaAtivos,
+  reconverterSaldosDoProduto,
 };

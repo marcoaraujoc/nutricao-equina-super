@@ -21,7 +21,6 @@
 const prisma = require('../lib/prisma').default;
 const contasPagar = require('../lib/contasPagar');
 const { registrarAuditoria } = require('../lib/auditoria');
-const { ehGestorNoContexto } = require('../middlewares/permissao.middleware');
 const { resolverPeriodo } = require('./RelatorioGerencialController');
 
 /** Fornecedores e prestadores da empresa, para o seletor do lançamento manual. */
@@ -125,16 +124,17 @@ const alterarStatus = async (req, res) => {
       return res.status(400).json({ error: 'Informe o motivo do cancelamento.' });
     }
 
-    // 🔴 CONTA PAGA É SOMENTE LEITURA, E SÓ O GESTOR A REABRE (2026-09-23) — a MESMA
-    // regra da fatura paga (`FaturaController.atualizarStatus`). Reabrir continua
-    // existindo, senão um clique errado em "Marcar como Pago" congelaria a dívida para
-    // sempre; o que muda é quem pode, e que a reabertura deixa rastro na auditoria.
+    // 🔴 CONTA PAGA É SOMENTE LEITURA E NUNCA É REABERTA (2026-09-29, endurecido a
+    // pedido) — a MESMA regra da fatura paga (`FaturaController.atualizarStatus`).
+    // Havia exceção para o GESTOR (2026-09-23) e ela foi REMOVIDA: quem lançou uma
+    // cobrança já quitada corrige por outro caminho (lançamento de ajuste, nova
+    // conta), nunca reabrindo o documento pago. NÃO HÁ MAIS EXCEÇÃO PARA NINGUÉM.
     const atual = await contasPagar.lerConta(prisma, req.empresaId, req.params.id);
     if (!atual) return res.status(404).json({ error: 'Conta não encontrada.' });
     const saindoDePaga = atual.status === 'PAGA' && status !== 'PAGA';
-    if (saindoDePaga && !ehGestorNoContexto(req)) {
+    if (saindoDePaga) {
       return res.status(400).json({
-        error: 'Conta paga fica em SOMENTE LEITURA. Só o gestor pode reabri-la.',
+        error: 'Conta paga fica em SOMENTE LEITURA e não pode ser reaberta.',
         code:  'CONTA_PAGA',
       });
     }
@@ -151,7 +151,6 @@ const alterarStatus = async (req, res) => {
         // A DATA do pagamento entra no rastro: ela é informada por quem registra e pode
         // ser anterior a hoje — sem isso a auditoria só saberia quando alguém digitou.
         detalhes:   `Conta de ${r.dados.tipo.toLowerCase()} "${r.dados.credorNome}" → ${r.dados.status}`
-                    + (saindoDePaga ? ' (conta PAGA reaberta)' : '')
                     + (r.dados.pagoEm ? ` (pago em ${new Date(r.dados.pagoEm).toLocaleDateString('pt-BR')})` : ''),
       });
       return r;

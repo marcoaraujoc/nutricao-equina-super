@@ -1,4 +1,8 @@
 'use strict';
+// 🔴 APOSENTADO em 2026-10-01 — NÃO RODAR. Carga INICIAL do catálogo, vinda de
+// planilha: "o que vale é o que está cadastrado no banco". Saiu do `seed.js` e a
+// execução avulsa exige `--confirmar-planilha`. Reaplicar desfaz o que foi cadastrado
+// depois pelas telas do sistema.
 // Seed: catálogo de laboratórios e exames clínicos com correlação de tipo de amostra
 // Fontes: Paddock (SP), Genesi (RJ), LACVET/Jockey Club (RJ)
 
@@ -469,6 +473,11 @@ async function seedLaboratorios() {
 module.exports = { seedLaboratorios };
 
 if (require.main === module) {
+  if (!process.argv.includes('--confirmar-planilha')) {
+    console.error('Seed aposentado: carga inicial de planilha. O que vale é o banco. '
+      + 'Para rodar mesmo assim, passe --confirmar-planilha.');
+    process.exit(1);
+  }
   seedLaboratorios()
     .catch(console.error)
     .finally(() => _prisma.$disconnect());

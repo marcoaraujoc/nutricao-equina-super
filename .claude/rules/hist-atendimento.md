@@ -32,6 +32,217 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-01 (parte 3) (**AGENDA: PROFISSIONAIS EM ORDEM ALFABÉTICA, EM
+#   DOIS GRUPOS** — a pedido: primeiro os MEMBROS da equipe, depois os PRESTADORES.
+#   Fonte única em `Agendamentos.tsx#compararProfissionais` (prestador =
+#   `externo` OU cargo FORNECEDOR/PRESTADOR, §4). Aplicada a `vets`, `prestadoresAg`,
+#   `todosProfissionais`, às linhas do Expediente Ativo e aos `<select>` nativos de
+#   Trocar profissional / Transferir dia (`opcoesProfissionaisAgrupadas`, com
+#   `<optgroup>` só quando os DOIS grupos existem).
+#   `ComboBuscavel` ganhou `OpcaoCombo.grupo`: opções CONSECUTIVAS do mesmo grupo
+#   ficam sob um cabeçalho ("Equipe" / "Prestadores"). O combo NÃO reordena — quem
+#   chama entrega a lista já agrupada.
+#   Sem backend, sem migration. ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-10-01 (parte 2) (🔴 **AGENDA: PRESTADOR EXTERNO AGENDA LIVRE,
+#   CALENDÁRIO SÓ MOSTRA VERDE ONDE HÁ HORÁRIO, SELETORES COM DIGITAÇÃO.** A pedido.
+#   1. **DOIS TIPOS DE PRESTADOR** (decisão perguntada ao usuário): *integra a equipe* =
+#      foi incluído como MEMBRO na tela Equipe (`MembroEquipe` na empresa com cargo que
+#      NÃO é PRESTADOR/FORNECEDOR — o cartão de acesso do cadastro NÃO conta). Esse vem
+#      de `/equipes/membros` e segue as regras da empresa, como sempre. *Externo* = todo
+#      o resto do cadastro de Prestador. Fonte única:
+#      `lib/agendamentoPrestador.js#loginsQueIntegramEquipe`.
+#   2. **O EXTERNO AGENDA EM QUALQUER DIA E HORÁRIO, PARA QUALQUER PACIENTE**, só pelo
+#      conflito de agenda e pela duração do campo NOVO "Tempo de consulta" do cadastro
+#      (`tb_prestadores.tempo_consulta_min`, vazio = padrão da empresa). Gestor OU
+#      VETERINÁRIO agendam (`podeAgendarPrestadorExterno`, `userType` do CONTEXTO).
+#      🔴 REVERTE de 2026-09-30: o "Gerenciar Acesso" deixou de recortar a Agenda do
+#      externo (a listagem `/clinica/agendamentos/prestadores` não filtra mais por
+#      `animalIds`, e o `criar` não confere `prestadorAutorizado` para ele). A
+#      autorização CONTINUA valendo para o que ela sempre foi: o prestador com login
+#      VER o paciente. ⚠️ Consequência: agendar o externo com login para um paciente
+#      não autorizado NÃO o faz enxergar o prontuário — nada concede acesso sozinho.
+#      ⚠️ O prestador DA EQUIPE não é mais listado como prestador (aparecia duas vezes,
+#      a segunda sem expediente). O caminho dele pelo `prestadorCadastroId` ficou no
+#      backend com as regras antigas (gestor, autorização, locais).
+#   3. **EXPEDIENTE ATIVO só lista a equipe**; o externo entra quando ESCOLHIDO no
+#      filtro (nome ou especialidade), com grade de 24h, local "Qualquer local", selo
+#      "Prestador externo · N min". O filtro de local não o recorta.
+#   4. 🔴 **BOLINHAS DO CALENDÁRIO = DISPONIBILIDADE.** Antes só contavam agendamentos
+#      e todo dia futuro saía verde (inclusive o domingo em que ninguém trabalha).
+#      Agora, com profissional ou especialidade escolhidos, sai da MESMA conta da grade
+#      (`linhasDoDia` — fonte única): sem grade no dia/período = sem bolinha; tudo
+#      livre = verde; parte = amarelo; nada = vermelho. Respeita o período do dia. A
+#      ocupação dos outros dias vem de `agendamentosMes` (só a empresa ativa).
+#      ⚠️ `statusPorDia` foi movido para DEPOIS de `linhasDoDia`: useMemo executa na
+#      hora, e antes da declaração seria TDZ.
+#   5. **PERÍODO DO DIA** segue a mesma regra: com escolha, só os períodos com horário
+#      livre no dia aberto (`turnosComHorario`). O já escolhido continua na lista,
+#      marcado "sem horário livre" — sumir com ele trocaria o filtro em silêncio.
+#   6. **SELETORES COM DIGITAÇÃO** — Animal, Proprietário, Profissional, Especialidade,
+#      Local e Período viraram `components/ComboBuscavel.tsx` (valor = ID, rótulo só
+#      exibição; não dá para reusar `DropdownSelect`, que casa pelo NOME e o mesmo nome
+#      pode ser membro e prestador). Sair do campo completa o digitado sem ambiguidade;
+#      apagar e sair volta ao "Todos".
+#   🔴 **MIGRATION GERADA, NÃO APLICADA** — `20261031000000_prestador_tempo_consulta`.
+#   Sem ela tudo funciona: o tempo não persiste e vale o padrão da empresa. A coluna
+#   NÃO foi declarada no `schema.prisma` de propósito (generate antes da migration
+#   derrubaria todo `prestador.findMany`); lida/gravada só por
+#   `lib/prestadorTempoConsulta.js`.
+#   Gate: `__tests__/prestadorExternoAgenda.test.js` (novo) e
+#   `prestadorSemLoginAgenda.test.js` atualizado. ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-10-01 (🔴 **EXAME DE IMAGEM: VALOR ÚNICO × POR IMAGEM.** Relato: pedido
+#   de "Raio-X de Coluna Torácica/Lombar" (EX 124) com Quantidade de imagens = 3 e o
+#   procedimento a R$ 80 — a fatura cobrou R$ 80. A quantidade NUNCA entrava no preço.
+#   1. **Cadastro de Procedimentos**: no formulário de um exame de IMAGEM aparece
+#      "Cobrança do exame: Valor único | Por imagem". Lista mostra "por imagem" sob o valor.
+#      Coluna nova `tb_procedimentos_vet.cobranca_por_imagem` (default false = como antes).
+#      ✅ **MIGRATION APLICADA** (autorizada) — `20261030000000_procedimento_cobranca_por_imagem`.
+#      `prisma generate` falhou com EPERM (backend no ar) e não faz falta: a coluna é
+#      lida/gravada SÓ por `lib/cobrancaPorImagem.js` (SQL cru com guarda de coluna).
+#      🔴 A flag mora na LINHA: mudar a de um exame DO SISTEMA passa pelo copy-on-write
+#      (`aplicarCobrancaPorImagem` → `garantirCopiaProcedimento`), e a cópia HERDA a flag
+#      do global (`copiarCobrancaPorImagem`). ⚠️ Chamado ANTES de `gravarValorDaEmpresa`
+#      — o valor vai para o id FINAL. ⚠️ Sem mudança real, não forka.
+#   2. **Preço do pedido** (`exameImagemValor.precoDoPedido`): item por imagem multiplica
+#      o valor do CLIENTE e o do PRESTADOR pela quantidade.
+#      🔴 **A QUANTIDADE É DO GRUPO, não do pedido** (`itensDoPedido`): cada "Inserir" da
+#      tela é um grupo com os seus exames e a sua quantidade, e o pedido grava a SOMA em
+#      `qtdAmostra`. Multiplicar pela soma cobraria imagens de outro grupo. Fonte:
+#      `grupos[]` do payload / do JSON em `observacao` → nomes + `qtdAmostra`.
+#      ⚠️ Fora de Imagem a quantidade é de AMOSTRAS: qtd 1 sempre.
+#   3. **Fatura**: pedido de UM exame por imagem sai como "R$ 80 × 3" (`linhaFatura`);
+#      o resto sai TOTAL × 1, como antes. O recibo do prestador também multiplica.
+#   4. **Editar a quantidade no pedido repreça** (`reprecificarQtdImagens` →
+#      `faturaUtils.reprecificarExameNaFatura`): novo total = snapshot + valor da imagem ×
+#      diferença (o resto do snapshot não é recalculado a preço de hoje). ⚠️ Fatura
+#      fechada/paga ou bloco do paciente fechado/pago → 400 (fechado é fechado). ⚠️
+#      Atualiza junto a contribuição em `tb_fatura_item_origens` (invariante da linha).
+#      ⚠️ Pedido com mais de um grupo NÃO é repreçado — a edição tem um campo só e não
+#      há como saber de qual grupo saíram as imagens.
+#   ⚠️ **NÃO retroage**: o EX 124 continua com R$ 80 × 1 na fatura (ABERTA). Corrigir é
+#   marcar o procedimento "Por imagem" e ajustar a linha na fatura (reeditar a mesma
+#   quantidade não repreça — só a MUDANÇA dispara).
+#   Gate: `__tests__/exameCobrancaPorImagem.test.js` (18; verificado que reprova).
+#   ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-09-30 (parte 3) (🔴 **EVOLUÇÃO FINALIZADA É DOCUMENTO FECHADO**
+#   — a pedido, ampliando a parte 2: "nada pode ser alterado, nem título, nem anexo,
+#   e nenhuma ação habilitada a não ser e-mail, WhatsApp e impressão".
+#   Back: guarda única `bloquearSeFinalizada` (403 `EVOLUCAO_FINALIZADA`) em
+#   atualizar · excluir (REVERTE a exceção do ADMIN) · cancelar (REVERTE o cancelamento
+#   da finalizada) · aprovar · salvarTitulo · adicionarMidia · removerMidia ·
+#   salvarResumoIa. Título assíncrono do "Salvar" via `gravarTituloAssincrono`
+#   (updateMany só em EM_ANDAMENTO ou título vazio) — sem isso a IA que termina depois
+#   do Finalizar reescreveria o título. `titulo-ia` FICA: só preenche título vazio.
+#   Front: Aprovar/Alterar/Cancelar só em EM_ANDAMENTO; "Editar relatório" some na
+#   finalizada; botão Adicionar anexo e lixeira da mídia só com escrita liberada.
+#   🔴 **Anexos sobem ANTES de finalizar**: o `handleFinalizar` subia a mídia DEPOIS do
+#   PUT FINALIZADA e passaria a levar 403. Nova evolução COM anexo nasce EM_ANDAMENTO
+#   (`adiarTituloIa: true`, para não disparar duas chamadas ao Gemini), recebe os
+#   anexos e é finalizada pelo PUT — que roda a cascata normal.
+#   🔴 O banner "Finalizar Atendimento" (`Atendimento.tsx`) gravava o título por
+#   `/interpretar` + `PATCH /titulo` DEPOIS de finalizar — trocado por `titulo-ia`.
+#   ⚠️ Evolução FINALIZADA antiga com `aprovado = false` fica assim para sempre.
+#   Gate: `__tests__/evolucaoFinalizadaFechada.test.js` (19). SEM MIGRATION.
+#   ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-09-30 (parte 2) (🔴 **EVOLUÇÃO FINALIZADA NÃO SE ALTERA — NEM
+#   PELO GESTOR** — a pedido. REVERTE "reabrir FINALIZADA é ato de GESTOR".
+#   Back: `EvolucaoController.atualizar` recusa FINALIZADA para todos com 403
+#   `EVOLUCAO_FINALIZADA` (saiu o `ehGestorNoContexto` do controller).
+#   Front (`SubModuloEvolucao`): "Alterar" só em EM_ANDAMENTO (saiu o ramo
+#   `isGestor && FINALIZADA` da lista e do relatório); `abrirEdicao` abre FINALIZADA/
+#   CANCELADA em somente leitura mesmo vindo por `editItemId` da URL.
+#   ⚠️ `salvarTitulo` e mídias NÃO foram travados: o título é gerado pela IA DEPOIS da
+#   finalização, e travar quebraria esse fluxo. Cancelar a finalizada segue igual.
+#   SEM MIGRATION (`migrate status`: 217, em dia). ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-09-30 (**EXAMES: O STATUS FINAL É "REALIZADO" — o filtro
+#   "Finalizados" saiu** — a pedido. `SubModuloExames`: `FINALIZADA` deixou de existir
+#   (tipo, pílula e selo); `CONCLUIDO` legado é exibido como Realizado. Quantidade só
+#   ao lado de "Todos" (ativo ou não) — os contadores de Solicitados/Cancelados saíram.
+#   Backend: `ExameClinicoController.finalizar` (sem tela) grava REALIZADO; o
+#   HISTÓRICO do paciente passou a incluir REALIZADO (🔴 antes filtrava
+#   `SOLICITADO|CONCLUIDO` e os exames com resultado SUMIAM do histórico) e o Mapa conta
+#   REALIZADO como exame concluído. Migration `20261029000000_exame_concluido_para_realizado`
+#   (✅ APLICADA, com `set_config('app.plataforma')` — armadilha 42): 1 exame
+#   CONCLUIDO → REALIZADO. ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-09-29 (parte 4) (**ENCAMINHAMENTO EXTERNO: TELEFONE (WHATSAPP)
+#   PASSOU A SER OBRIGATÓRIO** — a pedido. Era opcional (sem ele o WhatsApp da tela caía
+#   no plano B). Regra: ≥ 10 dígitos (DDD + número).
+#   Front (`SubModuloEncaminhamento`): asterisco, validação na ordem dos campos (depois
+#   de Profissional, antes de Motivo), destaque e foco no campo (`CampoForm` ganhou
+#   'telefone'). Mensagem distingue vazio de incompleto.
+#   Back (`EncaminhamentoController`): `telefoneDestinoInvalido` +
+#   400 `TELEFONE_DESTINO_OBRIGATORIO` no `criar` (só destino EXTERNO — o do cadastro tem
+#   o telefone lido ao vivo) e no `atualizar` quando o campo VEM no body de um externo.
+#   ⚠️ Encaminhamento ANTIGO sem telefone não é recusado por edição que não mexe nele.
+#   Gate: `encaminhamentoPrestadorCadastro.test.js` (30 verdes). SEM MIGRATION (coluna
+#   `telefone_destino` já existia). ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-09-29 (parte 3) (🔴 **FORNECEDOR NÃO TEM ESPECIALIDADE, E SAIU DA
+#   LISTA DE DESTINOS DO ENCAMINHAMENTO** — a pedido ("remova o campo especialidade do
+#   fornecedor"), logo depois da parte 2.
+#   1. `CadastroFornecedor.tsx`: saiu o campo opcional "Especialidades"
+#      (`EspecialidadeSelector`), o `especialidadeIds` do formulário/payload e a busca de
+#      `/equipes/especies-atendidas` que só servia a ele.
+#   2. `FornecedorController`: saiu `resolverEspecialidadesFornecedor` e toda
+#      leitura/gravação de `tb_fornecedor_especialidades`. `especialidadeIds` no body é
+#      IGNORADO. ⚠️ A tabela FICA no schema — estava VAZIA (conferido por leitura) e
+#      removê-la exige migration.
+#   3. `EncaminhamentoController.listarPrestadores` lê SÓ `tb_prestadores`. Sem
+#      especialidade, o fornecedor nunca teria `servicos` — manter a consulta seria
+#      código que não produz nada, e o fallback por `tipo_servico` foi o defeito da
+#      parte 2. ⚠️ Encaminhamento ANTIGO com origem FORNECEDOR continua exibindo o nome
+#      (`lib/encaminhamentoPrestador.js` segue com JOIN nas duas tabelas) e `criar` ainda
+#      aceita a origem — só a LISTA de destinos para um novo mudou.
+#   ⚠️ **REVERTE a regra de 2026-09-23 (parte 3) "FORNECEDOR entra junto de PRESTADOR"**.
+#   Quem presta serviço clínico e está cadastrado como fornecedor precisa ser cadastrado
+#   como PRESTADOR para voltar a ser destino.
+#   Gate: `encaminhamentoPrestadorCadastro.test.js` (describe "fornecedor não tem
+#   especialidade"). SEM MIGRATION. ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-09-29 (parte 2) (🔴 **O "TIPO DE FORNECEDOR" DEIXOU DE VIRAR
+#   ESPECIALIDADE NO ENCAMINHAMENTO.** Relatado: em `/clinica/encaminhamento/:id`, aba
+#   Profissional externo, o campo Especialidade * sugeria o texto digitado em "Tipo de
+#   fornecedor *" no cadastro de fornecedor. Causa: `listarPrestadores` fazia fallback
+#   para o split de `tipo_servico` quando o cadastro não tinha especialidade vinculada, e
+#   aplicava isso ao FORNECEDOR também. O `tipo_servico` do fornecedor é categoria de
+#   PRODUTO (CLAUDE.md §5); tudo o que escapava de `EXCLUIR_SERVICOS` ia parar em
+#   `servicosDisponiveis`, que alimenta os DOIS combos da tela (Prestador e Profissional
+#   externo).
+#   Agora **o fornecedor sem especialidade vinculada não tem fallback** (`servicos = []`,
+#   e ele sai da lista). O PRESTADOR mantém o fallback: o `tipo_servico` dele é DERIVADO
+#   das especialidades, e o legado é texto de serviço.
+#   ⚠️ **REVERTE, só para o fornecedor, a manutenção do fallback de 2026-09-29**
+#   (`hist-cadastro.md`). Consequência aceita: o fornecedor que presta serviço clínico e
+#   ainda não tem especialidade escolhida some da aba Prestador até alguém abrir o
+#   cadastro dele e preencher "Especialidades" (opcional). É o que o §5 já previa.
+#   Só backend (`EncaminhamentoController.listarPrestadores`). SEM MIGRATION.
+#   Gate: `encaminhamentoPrestadorCadastro.test.js` (26 verdes).
+#   ⚠️ NÃO verificado em navegador.)
+
+---
+
 # Atualizado em: 2026-09-26 (parte 3) (**EXECUÇÃO DE PRESCRIÇÃO: ITEM EXECUTADO DESLIGA
 #   OS DOIS ÍCONES** — a pedido. No modal de execução, o item SEM histórico de doses
 #   (dose única, SOS, se necessário) ficava com o card verde depois de executado, mas o

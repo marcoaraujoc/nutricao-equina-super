@@ -25,6 +25,8 @@ export interface ImagemExameProc {
   /** Valor cobrado do cliente já resolvido (padrão da empresa). */
   valorCliente:   number | null;
   empresaId:      number | null;
+  /** true = o valor é de UMA imagem e é multiplicado pela "Quantidade de imagens". */
+  cobrancaPorImagem?: boolean;
 }
 
 /** R$ para a tela do pedido. `null` vira "—": valor não informado não é zero. */
@@ -184,6 +186,9 @@ export default function ImagemSeletorUnificado({
                           ele. "—" = ainda sem valor cadastrado. */}
                       <span className={`text-[11px] font-semibold flex-shrink-0 ${ex.valorCliente != null ? 'text-emerald-700' : 'text-gray-300'}`}>
                         {brlExame(ex.valorCliente)}
+                        {ex.valorCliente != null && ex.cobrancaPorImagem && (
+                          <span className="font-normal text-gray-500"> / imagem</span>
+                        )}
                       </span>
                     </label>
                   );

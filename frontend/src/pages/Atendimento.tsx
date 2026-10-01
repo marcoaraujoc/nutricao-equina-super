@@ -25,7 +25,10 @@ import SubModuloPrescricao from './SubModuloPrescricao';
 import SubModuloExames from './SubModuloExames';
 import SubModuloEncaminhamento from './SubModuloEncaminhamento';
 import Agendamentos from './Agendamentos';
-import { imprimirAtendimento, gerarHtmlAtendimento, type PrintAtendimento, type PrintAnimal, type PrintAtendimentoItem } from '../utils/AtendimentoPrint';
+import {
+  imprimirAtendimento, gerarHtmlAtendimento, prepararAtendimento,
+  type PrintAtendimento, type PrintAnimal, type PrintAtendimentoItem,
+} from '../utils/AtendimentoPrint';
 import InlineError from '../components/InlineError';
 import FaixaPacienteInativo from '../components/FaixaPacienteInativo';
 import { formatDataHora } from '../utils/dateUtils';
@@ -345,14 +348,19 @@ function HistoricoResumidoPanel({
       }),
     );
 
-    return { atendimentoNumero: grupo.evolucao.atendimentoNumero ?? 'EV-', itens: itensPrint };
+    return {
+      atendimentoNumero: grupo.evolucao.atendimentoNumero ?? 'EV-',
+      // Quem conduziu a evolução assina a folha (CRMV e assinatura do vínculo dele).
+      responsavelId:     grupo.evolucao.veterinarioId ?? null,
+      itens:             itensPrint,
+    };
   };
 
   const handleImprimir = async (grupo: GrupoResumoHistorico) => {
     setGerandoRelatorio(true);
     try {
       const at = await montarPrintAtendimento(grupo);
-      if (at) imprimirAtendimento(at, printAnimal);
+      if (at) await imprimirAtendimento(at, printAnimal);
     } finally { setGerandoRelatorio(false); }
   };
 
@@ -360,7 +368,9 @@ function HistoricoResumidoPanel({
     setGerandoRelatorio(true);
     try {
       const at = await montarPrintAtendimento(grupo);
-      if (at) setPreviewAtendimento(at);
+      // A pré-visualização é o MESMO HTML do Imprimir (síncrono, no `srcDoc`): sem o
+      // preparo ela mostraria a folha sem CRMV, assinatura e endereço da clínica.
+      if (at) { await prepararAtendimento(at, printAnimal); setPreviewAtendimento(at); }
     } finally { setGerandoRelatorio(false); }
   };
 
@@ -473,7 +483,7 @@ function HistoricoResumidoPanel({
               </span>
               <div className="flex items-center gap-2">
                 {podeImprimir && (
-                  <button onClick={() => imprimirAtendimento(previewAtendimento, printAnimal)}
+                  <button onClick={() => void imprimirAtendimento(previewAtendimento, printAnimal)}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors">
                     <Printer size={13} /> Imprimir
                   </button>
@@ -728,14 +738,11 @@ const Atendimento = () => {
       refreshHistorico();
       setEvolucaoTabKey(k => k + 1);
 
-      // Título sugerido pela LLM — mesmo best-effort do Finalizar da aba Evolução
-      api.post('/clinica/evolucoes/interpretar', { texto: ev.texto })
-        .then(llmRes => {
-          const titulo = (llmRes.data?.dados as { titulo?: string } | undefined)?.titulo;
-          if (!titulo) return;
-          return api.patch(`/clinica/evolucoes/${evolucaoId}/titulo`, { titulo })
-            .then(() => refreshHistorico());
-        })
+      // Título pela IA — MESMA rota do Finalizar da aba Evolução. ⚠️ Não usar
+      // `PATCH /titulo`: a evolução já está FINALIZADA e o backend recusa qualquer
+      // alteração nela (2026-09-30); `titulo-ia` só PREENCHE o título vazio.
+      api.post(`/clinica/evolucoes/${evolucaoId}/titulo-ia`)
+        .then(r => { if (r.data?.dados?.titulo) refreshHistorico(); })
         .catch(() => { /* não-crítico */ });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;

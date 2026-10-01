@@ -45,6 +45,11 @@ interface Procedimento {
   valorVenda:    number | null;
   descricao:     string | null;
   valorEmpresa:  number | null;
+  /**
+   * Exame de IMAGEM: true = o valor é de UMA imagem e o pedido o multiplica pela
+   * "Quantidade de imagens"; false = valor único, qualquer que seja a quantidade.
+   */
+  cobrancaPorImagem?: boolean;
   /** false = linha GLOBAL do catálogo (de todas as clínicas) — ver o cabeçalho. */
   daEmpresa:     boolean;
   ativo:         boolean;
@@ -215,6 +220,7 @@ function LinhaProcedimento({
         <span className={p.valorEmpresa !== null ? 'font-semibold text-emerald-700' : 'text-gray-400'}>
           {brl(p.valorEmpresa)}
         </span>
+        {p.cobrancaPorImagem && <span className="block text-[10px] text-gray-500">por imagem</span>}
       </td>
       <td className="px-5 py-3 text-right whitespace-nowrap">
         <AcoesProcedimento p={p} podeEditar={podeEditar} podeExcluir={podeExcluir}
@@ -248,6 +254,7 @@ function CardProcedimento({
         <span className="text-gray-500">Valor</span>
         <span className={p.valorEmpresa !== null ? 'font-semibold text-emerald-700' : 'text-gray-400'}>
           {brl(p.valorEmpresa)}
+          {p.cobrancaPorImagem && <span className="font-normal text-gray-500"> / imagem</span>}
         </span>
       </div>
 
@@ -290,7 +297,7 @@ function ProcedimentoModal({
   categoriaInicial: string;
   salvando: boolean;
   erro: string | null;
-  onSalvar: (dados: { nome: string; categoria: string; valor: number | null }) => void;
+  onSalvar: (dados: { nome: string; categoria: string; valor: number | null; cobrancaPorImagem: boolean }) => void;
   onFechar: () => void;
 }) {
   const ehEdicao = !!item;
@@ -307,6 +314,10 @@ function ProcedimentoModal({
       : categoriaInicial,
   );
   const [valor, setValor] = useState(numToMask(item?.valorEmpresa));
+  const [porImagem, setPorImagem] = useState(item?.cobrancaPorImagem ?? false);
+  // A forma de cobrança só existe em EXAME DE IMAGEM: é o único pedido com
+  // "Quantidade de imagens". Procedimento clínico é sempre valor único.
+  const ehImagem = imagemCategorias.includes(categoria);
 
   const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:border-emerald-500 disabled:bg-gray-50 disabled:text-gray-400';
 
@@ -323,7 +334,9 @@ function ProcedimentoModal({
             <p className="text-[11px] text-gray-500 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 flex items-start gap-1.5">
               <Globe size={12} className="mt-0.5 flex-shrink-0" />
               Procedimento do catálogo do sistema — vale para todas as clínicas. Aqui só o
-              valor cobrado por esta clínica pode ser alterado.
+              {ehImagem
+                ? 'valor cobrado por esta clínica e a forma de cobrança podem ser alterados.'
+                : 'valor cobrado por esta clínica pode ser alterado.'}
             </p>
           )}
           <div>
@@ -355,6 +368,30 @@ function ProcedimentoModal({
               Valor cobrado do cliente por esta clínica. Em branco = sem valor definido.
             </p>
           </div>
+          {ehImagem && (
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Cobrança do exame</label>
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  { v: false, rotulo: 'Valor único' },
+                  { v: true,  rotulo: 'Por imagem' },
+                ] as const).map(op => (
+                  <label key={op.rotulo}
+                    className={`flex items-center gap-2 border rounded-xl px-3 py-2 text-sm cursor-pointer ${
+                      porImagem === op.v ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-gray-200 text-gray-700'}`}>
+                    <input type="radio" name="cobrancaPorImagem" checked={porImagem === op.v}
+                      onChange={() => setPorImagem(op.v)} className="accent-emerald-600" />
+                    {op.rotulo}
+                  </label>
+                ))}
+              </div>
+              <p className="text-[10px] text-gray-400 mt-1">
+                {porImagem
+                  ? 'O valor é de UMA imagem e é multiplicado pela "Quantidade de imagens" do pedido.'
+                  : 'O valor é o do exame inteiro, qualquer que seja a quantidade de imagens.'}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Erro da AÇÃO fica ABAIXO do botão que a disparou (§6). */}
@@ -368,6 +405,7 @@ function ProcedimentoModal({
               nome: nome.trim(),
               categoria: categoria.trim(),
               valor: valor.trim() === '' ? null : parseBRL(valor),
+              cobrancaPorImagem: ehImagem && porImagem,
             })}
             disabled={salvando}
             className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-2">
@@ -590,7 +628,7 @@ export default function CadastroProcedimento() {
    * efeito nenhum — a pessoa salvaria e veria o número antigo de volta.
    */
   const salvarProcedimento = async (
-    dados: { nome: string; categoria: string; valor: number | null },
+    dados: { nome: string; categoria: string; valor: number | null; cobrancaPorImagem: boolean },
   ) => {
     setErroProc(null);
     if (!dados.categoria) { setErroProc('Selecione a categoria.'); return; }
@@ -599,8 +637,12 @@ export default function CadastroProcedimento() {
     setSalvandoProc(true);
     try {
       if (procEditando) {
-        await api.put(`/procedimentos/cadastro/proprio/${procEditando.id}`, dados);
-        toast.success('Procedimento alterado.');
+        const res = await api.put(`/procedimentos/cadastro/proprio/${procEditando.id}`, dados);
+        // Mudar a cobrança de um exame DO SISTEMA cria a cópia desta clínica — dizer
+        // isso evita a leitura de que a alteração valeu para todas as clínicas.
+        toast.success(res.data?.copiado
+          ? 'Procedimento alterado — cópia própria desta clínica criada a partir do catálogo do sistema.'
+          : 'Procedimento alterado.');
       } else {
         const res = await api.post('/procedimentos/cadastro/proprio', dados);
         toast.success(res.data?.criado

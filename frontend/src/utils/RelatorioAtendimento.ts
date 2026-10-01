@@ -5,21 +5,17 @@
 // da sessão atual + da evolução imediatamente anterior do animal (independente da
 // especialidade — a tag da coluna anterior informa qual foi), já com o body-map
 // pintado (`pintarLaudoEquino`, camada backend) e os scores clínicos extraídos por
-// IA (`resumoClinico`), e monta o HTML impresso com o COMPONENTE DE IMPRESSÃO
-// PADRÃO do sistema (PRINT_CSS + renderSysHeader + renderAnimalCard de
-// AtendimentoPrint.ts — mesmo padrão visual de Dietaprint.ts).
+// IA (`resumoClinico`), e monta o HTML impresso com a FOLHA CLÍNICA padrão
+// (`print/FolhaClinica.ts`: logo, veterinário, paciente, título, conteúdo, data e
+// assinatura). Aqui mora só o CORPO — scores, mapa corporal e registros.
 //
 // Diferente dos demais utilitários de impressão (`EvolucaoPrint.ts`, etc.), este
 // é ASSÍNCRONO: a primeira impressão de uma evolução roda a extração por IA no
 // servidor (pode levar alguns segundos); chamadas seguintes usam o cache
 // (`EvolucaoClinica.resumoIaData`) e respondem quase instantaneamente.
 import api from '../services/api';
-import { resolverUrlAbsoluta } from './printUrl';
-import {
-  PRINT_CSS,
-  renderAnimalCard,
-  type PrintAnimal,
-} from './AtendimentoPrint';
+import { CSS_REGISTROS, animalParaFolha } from './AtendimentoPrint';
+import { gerarHtmlFolhaClinica, prepararFolhaClinica } from './print/FolhaClinica';
 import { imprimirHtml } from './print/imprimirHtml';
 
 // ─── Tipos (espelham o payload de EvolucaoController.relatorioAtendimento) ───
@@ -68,7 +64,7 @@ export interface AnimalRelatorio {
 export interface RelatorioAtendimentoDados {
   animal: AnimalRelatorio;
   logoUrl: string | null;
-  atual: SessaoRelatorio & { especialidade: string; veterinario: { fullName: string } };
+  atual: SessaoRelatorio & { especialidade: string; veterinario: { id?: number | null; fullName: string } };
   anterior: (SessaoRelatorio & { especialidade?: string }) | null;
 }
 
@@ -77,7 +73,12 @@ export interface RelatorioAtendimentoDados {
 export async function buscarRelatorioAtendimento(evolucaoId: number): Promise<RelatorioAtendimentoDados> {
   const res = await api.get(`/clinica/evolucoes/${evolucaoId}/relatorio-atendimento`);
   if (!res.data?.dados) throw new Error('Relatório indisponível.');
-  return res.data.dados as RelatorioAtendimentoDados;
+  const dados = res.data.dados as RelatorioAtendimentoDados;
+  // A pré-visualização (`RelatorioAtendimentoModal`, `srcDoc`) e o Imprimir geram o
+  // HTML de forma SÍNCRONA a partir destes dados — preparar AQUI é o que garante
+  // CRMV, assinatura e endereço da clínica na folha em TODO consumidor.
+  await prepararRelatorioAtendimento(dados);
+  return dados;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -144,49 +145,14 @@ function scorePill(
 
 const TREINO_LED: Record<TreinoItem['status'], string> = { liberado: 'g', restrito: 'y', suspenso: 'r' };
 
-// ─── Peças reutilizáveis (para futura adoção por Prescrição/Vacina/Exame) ────
-
-export function renderCabecalhoAtendimento(dados: RelatorioAtendimentoDados): string {
-  const { animal, atual, logoUrl } = dados;
-  const logo  = resolverUrlAbsoluta(logoUrl);
-  const agora = new Date();
-  const printAnimal: PrintAnimal = {
-    nome:      animal.nome,
-    photoUrl:  animal.photoUrl,
-    raca:      animal.raca,
-    user:      animal.user,
-    idadeAnos: animal.idadeAnos,
-  };
-
+/** Pontos que a IA não conseguiu extrair com segurança — vão no fim do corpo. */
+function renderAvisos(dados: RelatorioAtendimentoDados): string {
+  const avisos = dados.atual.avisos ?? [];
+  if (avisos.length === 0) return '';
   return `
-  <div class="cab">
-    <div>${logo ? `<img src="${logo}" alt="Logo">` : `<div class="cab-marca">S2Vet</div>`}</div>
-    <div class="cab-emissao">Emitido em ${agora.toLocaleDateString('pt-BR')}<br>às ${agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</div>
-  </div>
-
-  <div class="sec-title">Dados do Animal</div>
-  ${renderAnimalCard(printAnimal)}
-
-  <div class="plan-row">
-    <span class="plan-name">${esc(atual.atendimentoNumero) || 'Evolução'}</span>
-    <span class="plan-meta">${[esc(atual.especialidade), fmtData(atual.dataInicio)].filter(Boolean).join(' · ')}</span>
-    <span class="plan-vet">Vet.: ${esc(atual.veterinario.fullName)}</span>
-  </div>`;
-}
-
-export function renderRodapeAtendimento(dados: RelatorioAtendimentoDados): string {
-  const { atual } = dados;
-  const avisos = atual.avisos ?? [];
-  return `
-  ${avisos.length > 0 ? `
   <div class="avisos-card">
     <div class="avisos-title">Pontos para revisão manual</div>
     <ul>${avisos.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>
-  </div>` : ''}
-  <div class="assinatura">${esc(atual.veterinario.fullName)}</div>
-  <div class="footer">
-    <span>S2Vet · Sistema Hospitalar Veterinário</span>
-    <span>Relatório de Evolução${atual.atendimentoNumero ? ` · ${esc(atual.atendimentoNumero)}` : ''}</span>
   </div>`;
 }
 
@@ -196,16 +162,6 @@ export { imprimirHtml };
 // ─── CSS específico do relatório (complementa o PRINT_CSS padrão) ────────────
 
 const RELATORIO_CSS = `
-  /* Aproveita a folha A4 inteira: margens de página justas e sem padding duplo */
-  @page { size: A4; margin: 10mm 12mm; }
-  body { padding: 10px 12px; }
-
-  /* Cabeçalho: logo da equipe à esquerda, emissão à direita */
-  .cab{ display:flex; justify-content:space-between; align-items:flex-start; padding-bottom:8pt; margin-bottom:10pt; }
-  .cab img{ max-height:36pt; max-width:220pt; object-fit:contain; }
-  .cab-marca{ font-size:20pt; font-weight:700; color:#059669; }
-  .cab-emissao{ font-size:8.5pt; color:#0e9f6e; text-align:right; line-height:1.7; }
-
   .rep-card{ background:#fff; border:0.5pt solid #e5e7eb; border-radius:10pt; padding:9pt 11pt; margin-bottom:9pt; page-break-inside:avoid; }
   .rep-sub{ font-size:8.5pt; color:#6b7280; line-height:1.5; margin-bottom:6pt; }
 
@@ -266,18 +222,6 @@ const RELATORIO_CSS = `
   .avisos-card{ background:#fffbeb; border:0.5pt solid #fde68a; border-radius:10pt; padding:10pt 12pt; margin-bottom:9pt; page-break-inside:avoid; }
   .avisos-title{ font-size:8pt; font-weight:700; color:#92400e; text-transform:uppercase; letter-spacing:1pt; }
   .avisos-card ul{ margin:4pt 0 0 14pt; font-size:8.5pt; color:#92400e; line-height:1.6; }
-  .assinatura{ text-align:center; font-size:11pt; color:#065f46; margin-top:14pt; font-family:Georgia,serif; }
-
-  /* Overrides deste relatório comparativo (vencem o PRINT_CSS por virem depois):
-     dados do animal sem negrito e ID do atendimento (EV/AG/VC) menor. */
-  .f-val{ font-weight:400; }
-  .plan-name{ font-size:10pt; }
-  /* Especialidade · data à esquerda; veterinário alinhado à direita — texto simples, sem "frame" */
-  .plan-meta{ font-size:9pt; color:#4b5563; }
-  .plan-vet{ margin-left:auto; font-size:9pt; color:#4b5563; }
-  /* Remove a Raça do card do animal (2ª coluna) e reequilibra em 3 colunas */
-  .animal-info{ grid-template-columns: repeat(3, 1fr); }
-  .animal-info > div:nth-child(2){ display:none; }
 `;
 
 // ─── Blocos do relatório ──────────────────────────────────────────────────────
@@ -409,15 +353,7 @@ export function gerarHtmlRelatorioAtendimento(dados: RelatorioAtendimentoDados):
   ${anterior?.texto ? renderRegistroSessao('Anterior', anterior, '#6b7280') : ''}
   ${renderRegistroSessao(anterior ? 'Atual' : 'Primeira avaliação registrada', atual, '#059669')}`;
 
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<title>Relatório de Evolução — ${esc(dados.animal.nome)} — S2Vet</title>
-<style>${PRINT_CSS}${RELATORIO_CSS}</style>
-</head>
-<body>
-${renderCabecalhoAtendimento(dados)}
+  const corpo = `
 ${scoresSection}
 ${mapaSection}
 ${textosSection}
@@ -425,12 +361,42 @@ ${tensaoSection}
 ${romSection}
 ${treinoSection}
 ${quoteSection}
-${renderRodapeAtendimento(dados)}
-</body>
-</html>`;
+${renderAvisos(dados)}`;
+
+  const { animal } = dados;
+  return gerarHtmlFolhaClinica({
+    documento:    `Relatório de Evolução — ${animal.nome}`,
+    logoUrl:      dados.logoUrl,
+    profissional: { id: atual.veterinario.id ?? null, nome: atual.veterinario.fullName },
+    animal: {
+      ...animalParaFolha({
+        nome: animal.nome, photoUrl: animal.photoUrl, raca: animal.raca, especie: animal.especie,
+        user: animal.user, idadeAnos: animal.idadeAnos,
+      })!,
+      sexo: animal.sexo ?? null,
+      peso: animal.peso ?? null,
+    },
+    paginas: [{
+      titulo:    'Relatório de Evolução',
+      subtitulo: [esc(atual.atendimentoNumero) || 'Evolução', esc(atual.especialidade), fmtData(atual.dataInicio)]
+        .filter(Boolean).join(' · '),
+      corpoHtml: corpo,
+    }],
+    cssModulo: `${CSS_REGISTROS}${RELATORIO_CSS}`,
+    rodape:    `Relatório de Evolução${atual.atendimentoNumero ? ` · ${atual.atendimentoNumero}` : ''}`,
+  });
 }
 
 // ─── Função principal (busca + imprime) ──────────────────────────────────────
+
+/** Resolve CRMV/assinatura, endereço da clínica e imagens — obrigatório antes de gerar PDF. */
+export async function prepararRelatorioAtendimento(dados: RelatorioAtendimentoDados): Promise<void> {
+  await prepararFolhaClinica({
+    profissionalId: dados.atual.veterinario.id ?? null,
+    logoUrl:        dados.logoUrl,
+    imagens:        [dados.animal.photoUrl],
+  });
+}
 
 export async function imprimirRelatorioAtendimento(evolucaoId: number): Promise<void> {
   const dados = await buscarRelatorioAtendimento(evolucaoId);

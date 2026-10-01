@@ -202,8 +202,22 @@ describe('🔴 GATE do FRONT — a equipe não os oferece nem os gerencia', () =
     for (const tela of ['pages/CadastroPrestador.tsx', 'pages/CadastroFornecedor.tsx']) {
       const src = semComentarios(lerFront(tela));
       expect(src).toMatch(/GerenciarAcessoPrestadorModal/);
-      // Sem login ou sem cartão, o botão NÃO é renderizado (armadilha 28-d).
-      expect(src).toMatch(/!!\w+\.userId && !!\w+\.acessoEquipeId/);
     }
+    // FORNECEDOR: a designação é pelo LOGIN — sem login ou sem cartão, o botão NÃO é
+    // renderizado (armadilha 28-d).
+    expect(semComentarios(lerFront('pages/CadastroFornecedor.tsx')))
+      .toMatch(/!!\w+\.userId && !!\w+\.acessoEquipeId/);
+  });
+
+  // 🔴 (2026-09-30) PRESTADOR: a autorização passou a ser pelo CADASTRO, com ou sem
+  // login — o botão aparece para TODO prestador. Voltar a exigir login faria o
+  // prestador salvo sem "Terá acesso ao sistema" perder o botão de novo, em silêncio.
+  it('no PRESTADOR o "Gerenciar Acesso" vale com ou sem login, pela rota do cadastro', () => {
+    const src = semComentarios(lerFront('pages/CadastroPrestador.tsx'));
+    expect(src).not.toMatch(/!!\w+\.userId && !!\w+\.acessoEquipeId/);
+    expect(src).toMatch(/\/cadastro\/prestadores\/\$\{[^}]+\}\/designacoes/);
+    const rotas = fs.readFileSync(path.join(__dirname, '../routes/prestadores.js'), 'utf8');
+    expect(rotas).toMatch(/'\/:id\/designacoes'/);
+    expect(rotas).toMatch(/'\/:id\/designacoes\/lote'/);
   });
 });

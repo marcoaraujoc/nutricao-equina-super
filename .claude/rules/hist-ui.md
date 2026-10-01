@@ -32,6 +32,20 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-09-30 (🔴 **A JANELA DA LISTA PRENDIA A PÁGINA NO CELULAR** —
+#   relato: "em Produtos, pelo mobile, ao alterar um medicamento a tela só rola para
+#   baixo". A `JanelaLista` tinha `overscroll-contain` em todo tamanho, e a de Produtos
+#   mostra 12 cards (~130px cada) — mais alta que a tela. Com a janela no topo, o gesto
+#   para cima morria nela em vez de passar para a página, e não sobrava área fora da
+#   janela onde apoiar o dedo: o formulário aberto no topo ficava inalcançável.
+#   Correção na `JanelaLista` (vale para as ~25 telas que a usam):
+#   · `overscroll-auto md:overscroll-contain` — no TOQUE a rolagem encadeia para a
+#     página; a contenção fica só na roda do mouse, onde evita a página pular.
+#   · teto `min(altura medida, 75vh)` — janela mais alta que a tela não é janela.
+#   ⚠️ Não voltar a `overscroll-contain` sem o prefixo `md:`.
+#   Em `Produtos.tsx`, "Alterar" passou a levar a tela até o formulário
+#   (`scrollIntoView`) — ele abre no topo e o botão fica no fim da lista.)
+
 # Atualizado em: 2026-09-25 (🔴 **PACIENTE POR MÓDULO** — a pedido: "a regra do modo
 #   busca vale ENTRE módulos; DENTRO de cada módulo o paciente continua selecionado".
 #   Até aqui só a URL escolhia o paciente, e a aba Agenda do Atendimento, os sub-itens do

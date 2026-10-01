@@ -102,6 +102,12 @@ export interface ConteudoBloco {
    * e espelhada aqui para a pré-visualização mostrar o que vai sair.
    */
   formato?: 'campos';
+  /**
+   * Colunas da LISTA que todo item preenchido precisa trazer — hoje a "Data da
+   * Aplicação" do Atestado de Vacinação (2026-10-01). Regra no backend
+   * (`lib/documentoListas.js#colunaObrigatoriaVazia`), espelhada em `listas.ts`.
+   */
+  colunasObrigatorias?: string[];
   url?:        string;        // imagem / QR
   variavel?:   string;        // campo automático: {{animal.nome}}
   rotulo?:     string;        // legenda do campo automático, papel da assinatura…

@@ -10,7 +10,6 @@ const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 const { definirAtivoNaEmpresa } = require('../lib/usuarioEmpresa');
 const { normalizeEmail, whereEmailInsensitive } = require('../lib/email');
 const { cadastroDaPessoaNaEmpresa, montarResposta } = require('../lib/cadastroPorEmail');
-const { escopoDaEmpresa } = require('../lib/especialidadeEscopo');
 // Vencimento da conta a pagar deste fornecedor — a MESMA forma do fechamento da fatura
 // no cadastro da empresa. Lido/gravado por SQL cru (ver o cabeçalho da lib).
 const {
@@ -26,38 +25,15 @@ const normalizarDigitos = v => (v ?? '').replace(/\D/g, '');
 const normalizarTexto   = v => (v ?? '').trim().toLowerCase();
 const normalizarTipos   = v => (v ?? '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean).sort().join('|');
 
-// 🔴 (2026-09-29) `especialidadeIds` DEIXOU DE SOBRESCREVER `tipoServico` — os dois
-// campos são INDEPENDENTES agora. `tipoServico` (Farmácia/Laboratório/Loja...) é a
-// categoria de fornecedor de PRODUTO, digitada/escolhida no catálogo de texto livre
-// (`TipoServicoSelect`), e continua sendo usada por `fornecedorDeProduto()`
-// (Farmácia/Estoque de Vacinas) — nunca mais derivada de especialidade.
-// `especialidadeIds` (opcional) é o vínculo com o catálogo OFICIAL `tb_especialidades`,
-// só para o fornecedor que TAMBÉM presta serviço clínico e precisa aparecer no
-// Encaminhamento por especialidade (ver EncaminhamentoController.listarPrestadores).
-//
-// Devolve `undefined` quando o campo não veio no body (PRESERVA o vínculo atual —
-// PATCH parcial), `[]` quando veio uma lista vazia de propósito (LIMPA o vínculo), ou
-// os ids válidos do catálogo (GRAVA).
-//
-// 🔴 `empresaId` é OBRIGATÓRIO no filtro — mesmo `escopoDaEmpresa` do
-// `PrestadorController.resolverEspecialidadesPrestador` (global + o próprio da
-// empresa). Sem ele, qualquer id `ativo: true` era aceito — inclusive o de uma
-// especialidade PRIVADA de OUTRA empresa (ids são sequenciais e fáceis de
-// adivinhar). O RLS de `tb_especialidades` impede o vazamento do NOME, mas o vínculo
-// cross-tenant gravado em `tb_fornecedor_especialidades` fazia o Prisma LANÇAR
-// ("Field especialidade is required to return data, got null instead") sempre que
-// `EncaminhamentoController.listarPrestadores` tentasse ler aquele fornecedor — um
-// 500 persistente na tela de Encaminhamento da empresa dona da especialidade.
-async function resolverEspecialidadesFornecedor(especialidadeIds, empresaId) {
-  if (!Array.isArray(especialidadeIds)) return undefined;
-  const ids = [...new Set(especialidadeIds.map(Number))].filter(Number.isInteger);
-  if (ids.length === 0) return [];
-  const especialidades = await prisma.especialidade.findMany({
-    where: { id: { in: ids }, ativo: true, ...escopoDaEmpresa(empresaId) },
-    select: { id: true },
-  });
-  return especialidades.map(e => e.id);
-}
+// 🔴 (2026-09-29, parte 3) FORNECEDOR NÃO TEM ESPECIALIDADE. O campo opcional
+// "Especialidades" (vínculo com `tb_especialidades` via `tb_fornecedor_especialidades`)
+// foi REMOVIDO da tela e desta API, a pedido. `tipoServico` ("Tipo de fornecedor" —
+// Farmácia/Laboratório/Loja...) é a categoria de PRODUTO, usada por
+// `fornecedorDeProduto()` (Farmácia/Estoque de Vacinas). `especialidadeIds` no body é
+// IGNORADO. Quem presta serviço clínico e deve aparecer no Encaminhamento se cadastra
+// como PRESTADOR (`PrestadorController`, especialidade obrigatória).
+// ⚠️ A tabela `tb_fornecedor_especialidades` continua no schema (estava VAZIA quando o
+// campo saiu) — removê-la exige migration própria.
 
 // ─── Helper: verifica duplicidade por CPF ou por nome+tipoServico+telefone ────
 // Escopo: mesma visibilidade da listagem (empresaId null = global/SYSTEM, OU empresa alvo)
@@ -159,15 +135,8 @@ const FornecedorController = {
 
       const fornecedores = await prisma.fornecedor.findMany({
         where,
-        include: { especialidades: { select: { especialidadeId: true } } },
         orderBy: [{ ativo: 'desc' }, { nome: 'asc' }],
       });
-      // A tela de edição parte dos dados da LISTAGEM (não busca `obterPorId` antes de
-      // abrir o modal) — sem `especialidadeIds` aqui, o campo novo abriria sempre
-      // vazio na edição, mesmo com vínculos já gravados.
-      const semRelacao = fornecedores.map(({ especialidades, ...f }) => ({
-        ...f, especialidadeIds: especialidades.map(e => e.especialidadeId),
-      }));
 
       // `acessoEquipeId`: onde o cartão de acesso do fornecedor com login foi emitido.
       // É o que habilita "Gerenciar Acesso" (designação de pacientes) nesta tela —
@@ -175,7 +144,7 @@ const FornecedorController = {
       // fornecedor não é equipe.
       // ⚠️ A listagem TEM de devolver o vencimento: a tela edita a partir do que ela
       // trouxe, e sem o campo o salvar o apagaria em silêncio.
-      const comAcesso = await anexarEquipeDoAcesso(prisma, await anexarTrilha(semRelacao, 'fornecedor'));
+      const comAcesso = await anexarEquipeDoAcesso(prisma, await anexarTrilha(fornecedores, 'fornecedor'));
       res.json({ sucesso: true, dados: await anexarVencimentoEmLista(prisma, 'FORNECEDOR', comAcesso) });
     } catch (err) {
       console.error('Erro ao listar fornecedores:', err);
@@ -200,7 +169,6 @@ const FornecedorController = {
           ...whereEmailInsensitive(email),
           ...(escopo ? { AND: [escopo] } : {}),
         },
-        include: { especialidades: { select: { especialidadeId: true } } },
         orderBy: [{ ativo: 'desc' }, { id: 'asc' }],
       });
 
@@ -208,15 +176,8 @@ const FornecedorController = {
 
       if (!registro) return res.json({ sucesso: true, dados: montarResposta({ pessoa }) });
 
-      const { especialidades, ...dados } = registro;
-      const [enriquecido] = await anexarEquipeDoAcesso(prisma, await anexarTrilha([dados], 'fornecedor'));
-      return res.json({
-        sucesso: true,
-        dados: montarResposta({
-          registro: { ...enriquecido, especialidadeIds: especialidades.map(e => e.especialidadeId) },
-          pessoa,
-        }),
-      });
+      const [enriquecido] = await anexarEquipeDoAcesso(prisma, await anexarTrilha([registro], 'fornecedor'));
+      return res.json({ sucesso: true, dados: montarResposta({ registro: enriquecido, pessoa }) });
     } catch (err) {
       console.error('[FornecedorController.buscarPorEmail]', err);
       return res.status(500).json({ sucesso: false, mensagem: 'Erro ao consultar o e-mail' });
@@ -233,14 +194,9 @@ const FornecedorController = {
   // GET /api/cadastro/fornecedores/:id
   obterPorId: async (req, res) => {
     try {
-      const fornecedor = await prisma.fornecedor.findUnique({
-        where: { id: Number(req.params.id) },
-        include: { especialidades: { select: { especialidadeId: true } } },
-      });
+      const fornecedor = await prisma.fornecedor.findUnique({ where: { id: Number(req.params.id) } });
       if (!fornecedor) return res.status(404).json({ sucesso: false, mensagem: 'Fornecedor não encontrado' });
-      const { especialidades, ...dados } = fornecedor;
-      const comVencimento = await anexarVencimento(prisma, 'FORNECEDOR', dados);
-      res.json({ sucesso: true, dados: { ...comVencimento, especialidadeIds: especialidades.map(e => e.especialidadeId) } });
+      res.json({ sucesso: true, dados: await anexarVencimento(prisma, 'FORNECEDOR', fornecedor) });
     } catch {
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao buscar fornecedor' });
     }
@@ -250,7 +206,7 @@ const FornecedorController = {
   // ADMIN → tipoEntrada=SYSTEM; demais → tipoEntrada=CLIENTE
   criar: async (req, res) => {
     const {
-      nome, cpf, cnpj, telefone, email, tipoServico, especialidadeIds,
+      nome, cpf, cnpj, telefone, email, tipoServico,
       cep, endereco, complemento, bairro, cidade, estado,
     } = req.body;
 
@@ -273,10 +229,6 @@ const FornecedorController = {
     const tipoEntrada = req.user?.role === 'ADMIN' ? 'SYSTEM' : 'CLIENTE';
     const empresaAlvo = tipoEntrada === 'CLIENTE' ? (req.empresaId ?? null) : null;
     const equipeAlvo  = tipoEntrada === 'CLIENTE' ? (req.equipeId ?? null)  : null;
-
-    // Independente de `tipoServico` — ver o comentário de `resolverEspecialidadesFornecedor`.
-    // Escopado a `empresaAlvo`: precisa vir DEPOIS dela ser resolvida.
-    const especialidadeIdsResolvidos = await resolverEspecialidadesFornecedor(especialidadeIds, empresaAlvo);
 
     try {
       const dup = await verificarDuplicidade({ cpf, nome, tipoServico: tipoServicoFinal, telefone, empresaId: empresaAlvo });
@@ -310,13 +262,6 @@ const FornecedorController = {
         },
       });
 
-      if (especialidadeIdsResolvidos && especialidadeIdsResolvidos.length > 0) {
-        await prisma.fornecedorEspecialidade.createMany({
-          data: especialidadeIdsResolvidos.map(especialidadeId => ({ fornecedorId: fornecedor.id, especialidadeId })),
-          skipDuplicates: true,
-        });
-      }
-
       // ⚠️ É um UPDATE (SQL cru), então vai SEMPRE depois do `create` — antes dele
       // acertaria zero linhas, em silêncio.
       await gravarVencimento(prisma, 'FORNECEDOR', fornecedor.id, vencimento);
@@ -344,7 +289,7 @@ const FornecedorController = {
   atualizar: async (req, res) => {
     const { id } = req.params;
     const {
-      nome, cpf, cnpj, telefone, email, tipoServico, especialidadeIds,
+      nome, cpf, cnpj, telefone, email, tipoServico,
       cep, endereco, complemento, bairro, cidade, estado,
     } = req.body;
 
@@ -365,11 +310,6 @@ const FornecedorController = {
       if (!existe) return res.status(404).json({ sucesso: false, mensagem: 'Fornecedor não encontrado' });
       if (!podeAlterarRegistroEscopado(existe, req))
         return res.status(403).json({ sucesso: false, mensagem: 'Você não tem acesso para alterar este fornecedor.' });
-
-      // Independente de `tipoServico` — ver o comentário de `resolverEspecialidadesFornecedor`.
-      // Escopado à empresa DO REGISTRO (`existe.empresaId`), não à do request: é ela
-      // que decide o que é "o próprio catálogo" deste fornecedor.
-      const especialidadeIdsResolvidos = await resolverEspecialidadesFornecedor(especialidadeIds, existe.empresaId);
 
       const tipoServicoFinal = tipoServico?.trim() || existe.tipoServico;
 
@@ -407,18 +347,6 @@ const FornecedorController = {
       });
 
       await gravarVencimento(prisma, 'FORNECEDOR', fornecedor.id, vencimento);
-
-      // Recria os vínculos de especialidade quando `especialidadeIds` veio no body
-      // (delete + insert). `undefined` (chave ausente) PRESERVA o vínculo gravado.
-      if (especialidadeIdsResolvidos !== undefined) {
-        await prisma.fornecedorEspecialidade.deleteMany({ where: { fornecedorId: fornecedor.id } });
-        if (especialidadeIdsResolvidos.length > 0) {
-          await prisma.fornecedorEspecialidade.createMany({
-            data: especialidadeIdsResolvidos.map(especialidadeId => ({ fornecedorId: fornecedor.id, especialidadeId })),
-            skipDuplicates: true,
-          });
-        }
-      }
 
       await registrarAlteracao(prisma, req, {
         entidade:   'FORNECEDOR',

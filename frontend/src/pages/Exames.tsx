@@ -24,9 +24,10 @@ import ConfirmModal from '../components/ConfirmModal';
 import ExamesSolicitadosPanel, { ResultadoModal, type ExameSolicitado, type ItemManual } from '../components/ExamesSolicitadosPanel';
 import LaudoTexto from '../components/LaudoTexto';
 import { temResultadoExame } from '../utils/exameClinico';
-import { imprimirResultadoExame, gerarHtmlResultado, textoResultadoExame } from '../utils/ResultadoExamePrint';
+import {
+  imprimirResultadoExame, gerarHtmlResultado, textoResultadoExame, prepararResultadoExame,
+} from '../utils/ResultadoExamePrint';
 import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
-import { prepararImagensImpressao } from '../utils/print/PrintShell';
 
 interface ArquivoNavegavel { nome: string; arquivoUrl: string }
 
@@ -649,7 +650,7 @@ const Exames = () => {
   // REQUISIÇÃO (tela de Pedido de Exames, utils/ExamePrint.ts).
   const imprimirResultado = (ex: ExameSolicitado) => {
     if (!podeImprimirResultado) { semPermissao('imprimir resultado'); return; }
-    imprimirResultadoExame(ex, currentAnimal);
+    void imprimirResultadoExame(ex, currentAnimal);
   };
 
   // WhatsApp / E-mail mandam o PDF do MESMO laudo do Imprimir, anexado de verdade
@@ -660,11 +661,9 @@ const Exames = () => {
     setEnviandoPdf({ id: ex.id, canal });
     try {
       // O PDF é gerado no SERVIDOR e o Puppeteer bloqueia toda imagem que não seja
-      // `data:` — a logo E as imagens do laudo precisam ser resolvidas ANTES.
-      await prepararImagensImpressao([
-        currentAnimal?.logoUrl,
-        ...(ex.imagens ?? []).map((i: { arquivoUrl: string }) => i.arquivoUrl),
-      ]);
+      // `data:` — logo, foto e imagens do laudo, mais CRMV/assinatura e endereço da
+      // clínica da folha, precisam ser resolvidos ANTES (ver print/FolhaClinica.ts).
+      await prepararResultadoExame(ex, currentAnimal);
       const opts = {
         gerarHtml:   () => gerarHtmlResultado(ex, currentAnimal),
         nomeArquivo: `resultado-exame-${ex.id}.pdf`,

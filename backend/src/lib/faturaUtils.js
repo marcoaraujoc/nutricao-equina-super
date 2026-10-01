@@ -225,7 +225,13 @@ async function adicionarOuSomarFaturaItem(tx, opts) {
  * (com `||`, um exame legitimamente gratuito viraria... também 0, mas por acidente).
  *
  * @param {object} tx
- * @param {object} exame               - { id, animalId, veterinarioId, tipo, descricao, numero, valorCobrado? }
+ * 🔴 VALOR POR IMAGEM (2026-09-30): quem cria o pedido pode mandar `linhaFatura`
+ * (`{ valor, quantidade }`, de `precoDoPedido`) — é o que faz o exame de UM item
+ * cobrado por imagem sair como "valor da imagem × N" em vez de um total opaco × 1.
+ * Sem ela (os outros gatilhos, que leem o exame do banco), a linha sai como
+ * `valorCobrado × 1` — o MESMO total.
+ *
+ * @param {object} exame               - { id, animalId, veterinarioId, tipo, descricao, numero, valorCobrado?, linhaFatura? }
  * @param {number|null} proprietarioUserId - Animal.userId (dono do animal)
  * @param {number|null} empresaId          - empresa do contexto (`req.empresaId`) — Fatura é POR EMPRESA
  * @returns {Promise<boolean>} true se lançou; false se já estava faturado ou sem proprietário
@@ -253,13 +259,19 @@ async function lancarExameNaFatura(tx, exame, proprietarioUserId, empresaId = nu
   const exNum     = `EX-${String(exame.numero).padStart(4, '0')}`;
   const descricao = `[${exNum}] ${exame.tipo}: ${exame.descricao}`;
   const fatura    = await getOrCreateFatura(tx, proprietarioUserId, empresaId);
+  // A linha "valor × N" só vale se o total bater com o snapshot — senão, o total × 1.
+  const linha = exame.linhaFatura
+    && valorCobrado != null
+    && Math.abs(exame.linhaFatura.valor * exame.linhaFatura.quantidade - valorCobrado) < 0.005
+    ? exame.linhaFatura
+    : { valor: valorCobrado ?? 0, quantidade: 1 };
   await adicionarFaturaItem(tx, {
     faturaId:       fatura.id,
     animalId:       exame.animalId,
     tipo:           'EXAME',
     descricao,
-    valor:          valorCobrado ?? 0,
-    quantidade:     1,
+    valor:          linha.valor,
+    quantidade:     linha.quantidade,
     veterinarioId:  exame.veterinarioId,
     exameClinicoId: exame.id,
   });
@@ -490,6 +502,59 @@ async function atualizarFaturaItensDaOrigem(tx, campo, origemId, { descricao, va
   const faturaIds = [...new Set(itens.map(i => i.faturaId))];
   for (const faturaId of faturaIds) await recalcularTotal(tx, faturaId);
   await registrarCorrecaoFatura(tx, faturaIds);
+}
+
+/**
+ * Reescreve o VALOR e a QUANTIDADE da linha de fatura de um exame — usado quando a
+ * "Quantidade de imagens" do pedido muda e o exame é cobrado por imagem.
+ *
+ * 🔴 FECHADO É FECHADO: fatura fora de ABERTA/REABERTA, ou bloco do paciente fechado/
+ * pago, RECUSA (400) — a mesma regra de `bloqueioDeEscritaNaFatura`. A saída é
+ * reabrir, que deixa rastro; reescrever em silêncio um documento entregue, nunca.
+ * ⚠️ Mantém o INVARIANTE da linha (`quantidade` = soma das contribuições): a
+ * contribuição do exame em `tb_fatura_item_origens` é atualizada junto.
+ * ⚠️ Linha COMPARTILHADA com outra origem não é tocada (exame não consolida hoje,
+ * mas a pergunta tem de vir do mesmo lugar em todos os caminhos).
+ *
+ * @returns {Promise<boolean>} true se alguma linha foi reescrita
+ */
+async function reprecificarExameNaFatura(tx, exameId, { valor, quantidade }) {
+  const todos = await buscarFaturaItensDaOrigem(tx, 'exameClinicoId', exameId);
+  const itens = [];
+  for (const item of todos) {
+    if ((await itemOrigens.temOutraOrigem(tx, item.id, 'exameClinicoId', exameId)) === true) continue;
+    itens.push(item);
+  }
+  if (itens.length === 0) return false;
+
+  for (const item of itens) {
+    if (item.fatura.status === 'PAGA') throw new FaturaPagaError();
+    if (!faturaEditavel(item.fatura.status)) {
+      throw Object.assign(new Error(
+        `A fatura deste exame está ${String(item.fatura.status).toLowerCase()} — reabra-a para alterar a quantidade de imagens.`),
+      { code: 'FATURA_NAO_EDITAVEL' });
+    }
+    const { fechadoEm, pagoEm } = await fechamentoAnimal.estadoDoItem(tx, item.id);
+    if (pagoEm || fechadoEm) {
+      throw Object.assign(new Error(
+        'O lançamento deste exame está no bloco fechado/pago do paciente — reabra o paciente para alterar a quantidade de imagens.'),
+      { code: pagoEm ? 'BLOCO_PACIENTE_PAGO' : 'BLOCO_PACIENTE_FECHADO' });
+    }
+  }
+
+  for (const item of itens) {
+    await tx.faturaItem.update({ where: { id: item.id }, data: { valor, quantidade } });
+    try {
+      await tx.$executeRawUnsafe(
+        `UPDATE schs2vet.tb_fatura_item_origens SET quantidade = $1
+          WHERE fatura_item_id = $2 AND exame_clinico_id = $3`,
+        Number(quantidade), item.id, Number(exameId));
+    } catch { /* base sem a tabela de origens — a linha já foi reescrita */ }
+  }
+  const faturaIds = [...new Set(itens.map(i => i.faturaId))];
+  for (const faturaId of faturaIds) await recalcularTotal(tx, faturaId);
+  await registrarCorrecaoFatura(tx, faturaIds);
+  return true;
 }
 
 // ─── Regras de fechamento de fatura (dia fixo | dia útil | último dia do mês) ─────────────
@@ -754,6 +819,7 @@ module.exports = {
   registrarCorrecaoFatura,
   removerFaturaItensDaOrigem,
   atualizarFaturaItensDaOrigem,
+  reprecificarExameNaFatura,
   FaturaPagaError,
   TIPOS_FECHAMENTO_VALIDOS,
   deveFecharHoje,

@@ -554,7 +554,9 @@ export default function Farmacia() {
     setEditandoEmUso(!!item.emUso);
     // Pré-preenche a calculadora com o que foi informado na entrada
     setFrascos(item.qtdEmbalagens ?? '');
-    setPesoPorEmbalagem(item.pesoPorEmbalagem ?? '');
+    // O conteúdo vem do PRODUTO, como na entrada nova e no Ajuste — a linha pode estar
+    // sem ele (entrada anterior ao multidose), e a Qtd Total sairia em embalagens.
+    setPesoPorEmbalagem(conteudoDaEmbalagem(item.medicamento) ?? '');
     setModalFormAberto(true);
   };
 
@@ -767,16 +769,23 @@ export default function Farmacia() {
   // Item selecionado no modal de ajuste (resolvido a partir da lista carregada)
   const itemAjuste = ajusteItemId != null ? (itens.find((i) => i.id === ajusteItemId) ?? null) : null;
 
-  // ml (ou unidade base) por frasco/embalagem — 0 quando o item não tem embalagem.
+  // Quanto UMA embalagem contém, na unidade do saldo — 0 quando o produto não declara.
+  // 🔴 SAI DO PRODUTO, nunca de `pesoPorEmbalagem` da linha (2026-10-01). A linha só o
+  // tem quando a ENTRADA foi feita com o produto já multidose; entrada feita antes (ou
+  // pelo copy-on-write) fica com ele NULO, o campo "Frascos" sumia, e quem digitava
+  // "10" querendo dizer 10 frascos gravava 10 mL — o saldo ia para 10 mL em vez de 200,
+  // e a prescrição e a fatura passavam a ler o estoque errado. É a MESMA fonte da
+  // entrada de estoque (`conteudoDaEmbalagem`, a regra de 2026-09-17).
   const arred2 = (n: number) => Math.round(n * 100) / 100;
-  const mlPorFrasco = itemAjuste?.pesoPorEmbalagem && itemAjuste.pesoPorEmbalagem > 0 ? itemAjuste.pesoPorEmbalagem : 0;
+  const conteudoDoItem = (item: EstoqueItem | null): number => conteudoDaEmbalagem(item?.medicamento ?? null) ?? 0;
+  const mlPorFrasco = conteudoDoItem(itemAjuste);
   const frascosDe = (ml: number): number | '' => (mlPorFrasco > 0 ? arred2(ml / mlPorFrasco) : '');
 
   const abrirAjuste = (item?: EstoqueItem) => {
     if (!podeAjustar) { semPermissao('ajustar estoque'); return; }
     setAjusteItemId(item?.id ?? null);
     setAjusteQtd(item ? item.qtdEstoque : '');
-    const mpf = item?.pesoPorEmbalagem && item.pesoPorEmbalagem > 0 ? item.pesoPorEmbalagem : 0;
+    const mpf = conteudoDoItem(item ?? null);
     setAjusteFrascos(item && mpf > 0 ? arred2(item.qtdEstoque / mpf) : '');
     setAjusteMotivo('');
     setBuscaAjuste('');
@@ -1681,8 +1690,8 @@ export default function Farmacia() {
                                     onMouseDown={() => {
                                       setAjusteItemId(i.id);
                                       setAjusteQtd(i.qtdEstoque);
-                                      const mpf = i.pesoPorEmbalagem && i.pesoPorEmbalagem > 0 ? i.pesoPorEmbalagem : 0;
-                                      setAjusteFrascos(mpf > 0 ? Math.round((i.qtdEstoque / mpf) * 100) / 100 : '');
+                                      const mpf = conteudoDoItem(i);
+                                      setAjusteFrascos(mpf > 0 ? arred2(i.qtdEstoque / mpf) : '');
                                       setDropdownAjusteAberto(false);
                                       setBuscaAjuste('');
                                       setErroAjuste(null);

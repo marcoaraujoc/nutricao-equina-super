@@ -433,13 +433,15 @@ Especialidade     → catálogo de especialidades POR espécie (tb_especialidade
                     Seed: backend/scripts/seedEspecialidades.js (72 itens: Equino/Canino/Felino/Bovino/Réptil).
                     Rota GET /api/especialidades?especieIds=1,2 (EspecialidadeController). Migration 20260717000000.
 UsuarioEspecialidade    → especialidades do usuário (VET/FORNECEDOR c/ login). unique(userId, especialidadeId).
-FornecedorEspecialidade → especialidades OPCIONAIS do cadastro Fornecedor. unique(fornecedorId, especialidadeId).
-                    🔴 (2026-09-29) INDEPENDENTE de `Fornecedor.tipoServico` — aquele é a
-                    categoria de fornecedor de PRODUTO (Farmácia/Laboratório/Loja...), texto
-                    livre/catálogo, usado por `fornecedorDeProduto()` (Farmácia, Estoque de
-                    Vacinas); NÃO é mais derivado da especialidade. Preencher especialidade é
-                    só para o fornecedor que TAMBÉM presta serviço clínico e deve aparecer no
-                    Encaminhamento por especialidade.
+FornecedorEspecialidade → 🔴 **SEM USO desde 2026-09-29 (parte 3): FORNECEDOR NÃO TEM
+                    ESPECIALIDADE.** O campo foi removido da tela e da API
+                    (`FornecedorController` ignora `especialidadeIds`). A tabela segue no
+                    schema (estava VAZIA) — removê-la exige migration própria.
+                    `Fornecedor.tipoServico` ("Tipo de fornecedor") é a categoria de PRODUTO
+                    (Farmácia/Laboratório/Loja...), usada por `fornecedorDeProduto()`
+                    (Farmácia, Estoque de Vacinas), e NUNCA vira especialidade.
+                    Quem presta serviço clínico e deve ser destino de encaminhamento se
+                    cadastra como PRESTADOR.
 PrestadorEspecialidade  → especialidades do cadastro Prestador (migration 20261025000000,
                     GERADA/NÃO APLICADA). unique(prestadorId, especialidadeId). Ao contrário do
                     Fornecedor, aqui é OBRIGATÓRIA: `Prestador.tipoServico` (VARCHAR 255) DEIXOU
@@ -448,9 +450,9 @@ PrestadorEspecialidade  → especialidades do cadastro Prestador (migration 2026
                     compatibilidade de quem ainda exibe o texto (recibo, seletor de executante,
                     agenda). Ver `.claude/rules/hist-cadastro.md`, sessão 2026-09-29.
                     Multi-especialidade em: Cadastro Pessoal (UsuarioEspecialidade — VET e FORNECEDOR),
-                    Cadastro de Fornecedor (FornecedorEspecialidade, opcional), Cadastro de
-                    Prestador (PrestadorEspecialidade, obrigatório), Novo Membro (UsuarioFormModal
-                    → incluir-membro).
+                    Cadastro de Prestador (PrestadorEspecialidade, obrigatório), Novo Membro
+                    (UsuarioFormModal → incluir-membro). O Cadastro de Fornecedor NÃO tem
+                    (removido em 2026-09-29, parte 3).
                     Filtro por "espécies que a empresa atende" (EmpresaConfiguracao.especiesAtendidas, CSV de
                     IDs, configurado em /configuracoes) via GET /api/equipes/especies-atendidas (qualquer membro).
                     No Cadastro Pessoal do convidado o filtro usa as espécies da empresa; no cadastro direto
@@ -540,17 +542,30 @@ EncaminhamentoClinico → encaminhamentos (status PENDENTE|CONCLUIDO|CANCELADO;
                     login grava o registro clínico e **NÃO libera o paciente**; a tela
                     diz isso antes de salvar, e o selo "Prestador com acesso a este
                     paciente" olha `enc.prestadorId`, nunca "destino interno".
-                    ⚠️ A especialidade da aba sai do `tipo_servico` do CADASTRO —
-                    `UsuarioEspecialidade`/`FornecedorEspecialidade` saíram da conta,
-                    era por elas que o veterinário entrava na lista.
-                    ⚠️ FORNECEDOR entra junto de PRESTADOR: o cargo novo nasceu em
-                    2026-09-09 e nada foi migrado. Quem só VENDE (loja, laboratório,
-                    farmácia) sai da lista inteira.
+                    ⚠️ A especialidade da aba sai de `PrestadorEspecialidade` (catálogo);
+                    sem vínculo, do `tipo_servico` do cadastro de PRESTADOR (legado).
+                    `UsuarioEspecialidade` não entra — era por ela que o veterinário
+                    entrava na lista.
+                    🔴 (2026-09-29, parte 3) **FORNECEDOR SAIU DA LISTA de destinos**: não
+                    tem mais especialidade, e o `tipo_servico` dele ("Tipo de fornecedor",
+                    categoria de produto) aparecia como Especialidade — inclusive no combo
+                    do Profissional externo (`servicosDisponiveis`). Encaminhamento ANTIGO
+                    com origem FORNECEDOR continua exibindo o nome (a leitura em
+                    `lib/encaminhamentoPrestador.js` ainda faz JOIN nas duas tabelas).
                     Gate: `__tests__/encaminhamentoPrestadorCadastro.test.js`.
 AgendamentoClinico → agendamentos do animal (tb_agendamentos_clinicos) — tipo CONSULTA|VACINA|
                     RETORNO|EXAME|PROCEDIMENTO, status AGENDADO|CONCLUIDO|CANCELADO, dataHora,
                     veterinarioId?, criadoPorId?. Gerenciado por ADMIN/VETERINARIO/ESTAGIARIO;
                     PROPRIETARIO/FORNECEDOR só visualizam. Migration 20260611190000.
+DesignacaoPrestadorCadastro → 🔴 (2026-09-30, migration 20261028000000, ✅ APLICADA
+                    em 2026-09-30; o WITH CHECK exige paciente e prestador da MESMA empresa
+                    da linha — FK não passa por RLS) autorização de paciente pelo CADASTRO do prestador, COM OU SEM
+                    login — é o "Gerenciar Acesso" de `/cadastro/prestadores`. 🔴 (2026-10-01)
+                    NÃO recorta mais a AGENDA do prestador EXTERNO (qualquer paciente, dia e
+                    horário — ver `hist-atendimento.md`, 2026-10-01 parte 2). A autorização é a
+                    UNIÃO desta com a `DesignacaoPrestador` (login) da mesma empresa; com login
+                    a tela grava as duas. SEMPRE por `lib/designacaoPrestadorCadastro.js` e
+                    `lib/agendamentoPrestador.js`. Ver `hist-cadastro.md`, 2026-09-30 (parte 2).
 DesignacaoPrestador → escopo de acesso do prestador por animal (tb_designacoes_prestador)
                     unique(animalId, prestadorId, equipeId); criada/reativada ao encaminhar para
                     prestador da equipe; inativada (ativo=false, dataFim) ao concluir/cancelar/excluir
@@ -1340,6 +1355,20 @@ FICAM de fora, de propósito:
   botão primário + menu de overflow no desktop e um fluxo MOBILE dedicado
   (`Mobile.tsx`), que não é o desktop encolhido.
 
+#### PAPEL CLÍNICO — `utils/print/FolhaClinica.ts` é FONTE ÚNICA (2026-09-29)
+```
+Imprimir · PDF WhatsApp · PDF e-mail  → o MESMO HTML, montado pela folha clínica
+1 logo · 2 veterinário (nome, CRMV, clínica+endereço) · 3 animal · 4 título
+5 corpo do módulo (a ÚNICA parte que o gerador escreve) · 6 local e data · 7 assinatura
+```
+Gerador de registro clínico novo escreve só o corpo e chama `gerarHtmlFolhaClinica`;
+NUNCA `renderCabecalho`/`renderRodapeAssinatura`/`<!DOCTYPE>` próprio.
+⚠️ O HTML é SÍNCRONO. Antes de gerar (imprimir OU PDF) chame `prepararFolhaClinica`
+(via o `prepararX` do módulo): é ele que traz CRMV/assinatura, endereço e imagens `data:`.
+⚠️ Quem assina é o profissional DO REGISTRO — passe o `id` dele, nunca o do usuário logado.
+⚠️ Fatura/orçamento/recibo (administrativos) e a Central de Documentos ficam fora.
+Gate: `__tests__/folhaClinicaUnica.test.js`. Histórico: `hist-documentos.md`, 2026-09-29.
+
 #### DATA E HORA — `utils/dateUtils.ts` é FONTE ÚNICA (2026-08-23)
 ```
 DATA PURA (dia do calendário, sem hora)  → formatDate / formatDateShort
@@ -1499,6 +1528,9 @@ célula `sticky` não acompanha a célula quando ela descola da tabela.
 ⚠️ **Não dá para trocar a janela por `sticky` na página**: o card da lista é
 `overflow-hidden`, e ancestral com overflow vira o contexto de rolagem — o elemento
 nunca gruda. É a janela que cria o scroll em que o cabeçalho se ancora.
+🔴 **No toque a rolagem PASSA para a página** (`overscroll-auto md:overscroll-contain`)
+e a janela nunca passa de `75vh` (2026-09-30). Com `overscroll-contain` em todo tamanho,
+uma janela mais alta que a tela do celular PRENDIA a página: ela só rolava para baixo.
 ⚠️ `normal-case` no seletor da janela VENCE o `uppercase` escrito no `th` (seletor
 descendente tem especificidade maior), então converter uma tela não exige limpar as
 classes antigas.
@@ -2869,12 +2901,13 @@ POST   /lancar-na-fatura                 → { faturaId, itemIds } cria FaturaIt
 | `PainelSemPaciente.tsx` | O que a tela mostra ENQUANTO nenhum paciente foi escolhido — abaixo do cabeçalho e do seletor, nunca no lugar deles. Props: `icone` (LucideIcon do módulo), `carregando`, `vazio`, `acao`. Separa os três estados (*carregando* · *a base não tem paciente* · *há pacientes, falta escolher*) que a mensagem antiga colapsava num só. Usado por Atendimento, Vacina, Resultado de Exame, Dieta e Relatório Nutricional. Ver §6 |
 | `SeletorPrestadorExecutante.tsx` | **"Quem executou" — o campo que liga um serviço ao PAGAMENTO AO PRESTADOR** (ledger do recibo + conta a pagar do mês). Em branco = serviço da própria equipe, e NUNCA é obrigatório. Traz junto o aviso de prestador sem forma de pagamento, que é o que evita a dívida aparecer zerada em Pagamentos sem explicação. `prestadores` é opcional: informado, o chamador já tem a lista (é o caso da Execução de Prescrição, que a busca UMA vez para o plantão inteiro); omitido, o componente busca a sua. Usado pelos dois modais de resultado de exame e por `ExecucaoPrescricao` |
 | `AcaoRegistro.tsx` | **Ação de um registro (Alterar/Ver/Imprimir/WhatsApp/E-mail/Executar/Cancelar…) — FONTE ÚNICA da forma.** Uma declaração, duas apresentações decididas por CSS: ícone pintado no desktop (≥md), botão com rótulo no mobile. Props: `rotulo` (obrigatório — vira o texto da pílula e o `aria-label` do ícone), `icone` (o COMPONENTE lucide, não o elemento), `tom` (escolhe a cor pela §6), `visivel` (false = não renderiza), `desabilitado`, `carregando`, `titulo`. Exporta também `AcoesRegistro`, o contêiner que envolve a lista — `flex-wrap md:flex-nowrap`: quebra no mobile (pílulas com rótulo), TUDO NA MESMA LINHA no desktop. Ver a regra completa, e por que a quebra no desktop empilhava as ações da tabela, na §6. |
-| `EnviarWhatsApp.tsx` | **Envio de QUALQUER documento por WhatsApp — FONTE ÚNICA** (2026-09-26). HTML de impressão → PDF no servidor, anexado pela instância da clínica; sem destino/provider cai no plano B (baixa + abre o app) com o motivo no card central. Props: `tipo` (Fatura, Prescrição, Vacina, Exame… — **só SAÍDA**: frase do resultado e rótulo, nenhuma regra depende dele), `telefone`, `gerarHtml`/`nomeArquivo`/`texto`, `aoPreparar`, `indisponivel` (desabilita com motivo), `aparencia` (`registro` = `AcaoRegistro` · `barra`/`compacto` = barra de documento). `CompartilharPdfBotoes` usa ele para o WhatsApp; a fatura (painel, bloco do paciente e lote) também. ⚠️ Prescrição, Vacina e Exames ainda chamam `enviarPdfWhatsAppComAviso` direto (preparo assíncrono + receituário controlado) |
+| `EnviarWhatsApp.tsx` | **Envio de QUALQUER documento por WhatsApp — FONTE ÚNICA** (2026-09-26). HTML de impressão → PDF no servidor, anexado pela instância da clínica. 🔴 (2026-09-30) **ANTES de todo envio o SERVIÇO é conferido** (`verificarServicoWhatsApp` → `GET /equipes/whatsapp/prontidao`, qualquer membro, empresa SEMPRE a do contexto): desativado/não configurado → card "É necessário ativar o serviço de WhatsApp" (ou "peça ao gestor"), sem PDF e sem plano B. Vale também para o Orçamento, que tem envio próprio. Gate: `__tests__/whatsappProntidao.test.js`. Sem destino (ou falha no envio) cai no plano B (baixa + abre o app) com o motivo no card central. Props: `tipo` (Fatura, Prescrição, Vacina, Exame… — **só SAÍDA**: frase do resultado e rótulo, nenhuma regra depende dele), `telefone`, `gerarHtml`/`nomeArquivo`/`texto`, `aoPreparar`, `indisponivel` (desabilita com motivo), `aparencia` (`registro` = `AcaoRegistro` · `barra`/`compacto` = barra de documento). `CompartilharPdfBotoes` usa ele para o WhatsApp; a fatura (painel, bloco do paciente e lote) também. ⚠️ Prescrição, Vacina e Exames ainda chamam `enviarPdfWhatsAppComAviso` direto (preparo assíncrono + receituário controlado) |
 | `modules/documentos/Emitidos.tsx` | **FONTE ÚNICA do documento JÁ EMITIDO**: `ListaDocumentosEmitidos` (cards mobile / tabela desktop; prop `compacto` para coluna estreita), `VisualizarDocumentoModal` (folha A4 pelo MESMO `BlocoView` do editor) e `AcoesDocumento` (Visualizar · Imprimir · WhatsApp · E-mail · Cancelar). Usado pelo histórico de `/documentos` E pelo card "Documentos" de `/animal/:id` — duas listas divergiriam (28-g). Exporta `useImagensDocumento`, que converte logo/assinatura em `data:` URI (sem isso o PDF do backend nasce sem imagem) |
 | `modules/documentos/cabecalho.ts` | **A REGRA do cabeçalho padrão da folha** (logo → título → Veterinário → Proprietário → Paciente): quais campos entram, em que ordem, o que some vazio, e a ABSORÇÃO do primeiro bloco `titulo`. `prepararFolha` devolve `{ cabecalho, corpo }` — todo renderizador consome `corpo`, nunca `blocos` cru. Consumida pelos DOIS desenhos: `CabecalhoFolha.tsx` e `utils/DocumentoPrint.ts` |
 | `modules/documentos/CabecalhoFolha.tsx` | O cabeçalho padrão desenhado em JSX (preview A4, emissão, mobile, visualização do emitido). Estilo INLINE: o PDF do editor é html2canvas fotografando este DOM |
 | `modules/documentos/CamposForm.tsx` | `CampoInput` + `tipoDoCampo` + `AJUDA_ORIGEM` — FONTE ÚNICA do campo a preencher de um documento, usada pela tela de emissão e pelo `ModalPreencher` do editor |
 | `modules/documentos/upload.ts` | Documento ENVIADO pela clínica → blocos do modelo. **O que sobe é sempre IMAGEM**: PDF é convertido no navegador (`pdfjs-dist`, `import()` dinâmico), uma imagem por página. É o que faz o documento enviado seguir as MESMAS regras dos outros — sem desvio no preview, na impressão, no PDF do Puppeteer nem no snapshot. Ver a sessão 2026-08-30 na §12 |
+| `utils/print/FolhaClinica.ts` | **Papel de TODO registro clínico** (prescrição, vacina, evolução, exames, encaminhamento, dieta, atendimento): logo → veterinário (nome/CRMV/local) → animal → título → corpo → local e data → assinatura. `gerarHtmlFolhaClinica` (síncrono) + `prepararFolhaClinica` (CRMV, assinatura, endereço via `/equipes/logo`, imagens `data:`). Ver §6 |
 | `utils/DocumentoPrint.ts` | HTML do documento EMITIDO para impressão e PDF (`gerarHtmlDocumento`/`imprimirDocumento`/`nomeArquivoDocumento`). Espelho em STRING de `BlocoView.tsx` — mexeu no visual de um bloco, mexa nos dois. Não resolve variável: os blocos do emitido já vêm resolvidos, e `{{`/`[[` que sobrar é apagado |
 | `ModalJustificativa.tsx` | Modal padrão de exclusão/cancelamento com justificativa OBRIGATÓRIA (textarea ≥3 chars, header vermelho). Props: `aberto`, `titulo`, `descricao?`, `acaoLabel?`, `onConfirmar(motivo)`, `onFechar`. Usar em toda ação destrutiva — o motivo é exigido pelo backend e vai para a Auditoria. |
 | `FormularioNovaSenha.tsx` | Formulário de definição de senha — fonte ÚNICA de aparência e regras (`REGRAS_SENHA`, checklist ao vivo, indicador de coincidência, `InlineError`). Usado por `AlterarSenhaObrigatoria` (sessão) e `ResetPassword` (token do e-mail). Só COLETA e valida — quem submete é a tela, com a credencial que tiver. Ver §14. |
@@ -3208,8 +3241,20 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     registro — ver 28-c para a regra completa e a assinatura. "Só o gestor finaliza uma
     evolução" continua sendo CONFIGURAÇÃO da matriz (seed dá VET/EST NENHUM em
     `*.finalizar`); "ninguém finaliza a evolução de outro" é código.
-    Reabrir evolução FINALIZADA é ato de GESTOR (`ehGestorNoContexto`), não nível de matriz.
-    Exclusão de evolução FINALIZADA por não-ADMIN segue bloqueada.
+    🔴 (2026-09-30) **Evolução FINALIZADA é DOCUMENTO FECHADO** — nada se altera,
+    nem pelo gestor, nem pelo ADMIN: texto, título, anexos, relatório, aprovação,
+    CANCELAMENTO e exclusão. Guarda única `bloquearSeFinalizada` (403
+    `EVOLUCAO_FINALIZADA`) em `atualizar`, `excluir`, `cancelar`, `aprovar`,
+    `salvarTitulo`, `adicionarMidia`, `removerMidia` e `salvarResumoIa`. A tela só
+    oferece Visualizar, Imprimir, WhatsApp e E-mail. REVERTE "reabrir FINALIZADA é
+    ato de GESTOR" e "cancelar FINALIZADA com justificativa".
+    ⚠️ Única escrita pós-finalização: `titulo-ia`, que só PREENCHE título VAZIO (é o
+    sistema concluindo o fechamento). O título assíncrono do "Salvar" passa por
+    `gravarTituloAssincrono`, que não toca evolução fechada com título.
+    ⚠️ Anexos sobem ANTES do PUT FINALIZADA (nova evolução com anexo nasce
+    EM_ANDAMENTO com `adiarTituloIa`, recebe os anexos e é finalizada em seguida).
+    Gate: `__tests__/evolucaoFinalizadaFechada.test.js`.
+    Exclusão de evolução FINALIZADA é bloqueada para TODOS, inclusive ADMIN (2026-09-30).
     VacinaClinica: ciclo `status` SALVA→FINALIZADA→EXECUTADA (fatura/estoque só na execução,
     no plantão via `enfermagem.prescricao.executar` — ver seção do fluxo da vacina).
     EXCEÇÃO deliberada — "assumir": `AgendamentoController.assumir` e
@@ -3730,7 +3775,8 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     Gate: `__tests__/plantaoSemExpediente.test.js` (verificado que reprova).
 
 45. 🔴 **QUEM CONCLUI O EXAME É `salvarResultado`, NUNCA `finalizar` (2026-09-22).**
-    `PATCH /clinica/exames/:id/finalizar` (status CONCLUIDO) **não é chamada por tela
+    `PATCH /clinica/exames/:id/finalizar` (status REALIZADO desde 2026-09-30; antes
+    CONCLUIDO, que não é mais gravado) **não é chamada por tela
     nenhuma** — a conclusão de verdade é `PATCH /clinica/exames/:id/resultado`
     (`salvarResultado`, status REALIZADO), que é o que os modais de resultado usam.
     Foi assim que o recibo do prestador do exame (escrito em 2026-09-09) ficou TRÊS

@@ -25,6 +25,94 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-01 (parte 2) (**OBSERVAÇÃO QUE CRESCE ENQUANTO SE DIGITA** —
+#   a pedido, no Atestado de Vacinação. Novo `CamposForm.tsx#TextoExpansivel`: em
+#   EDIÇÃO (focado) a altura acompanha o texto inteiro (`scrollHeight` + borda, em
+#   `useLayoutEffect` para não piscar); fora de edição — depois de Inserir/Salvar ou
+#   ao sair do campo — volta ao tamanho normal; voltar ao campo o reabre inteiro.
+#   Aplicado (1) à coluna "Observação" das LISTAS (`ehColunaDeObservacao`, /observa/i)
+#   — no Anexo XI a observação é célula da lista de vacinas, não campo solto — com
+#   repouso de 1 linha e `min-w-[14rem]`; e (2) ao campo multilinha solto
+#   (`CampoInput`), com repouso de 3 linhas.
+#   ⚠️ As células da lista passaram a `align-top`: com a observação crescendo, as
+#   outras colunas ficariam centralizadas no meio da linha alta.
+#   ⚠️ Em repouso o texto além do tamanho normal fica oculto (`overflow-hidden`), de
+#   propósito — é o "volta ao tamanho normal". O conteúdo continua inteiro no valor.
+#   Sem backend, sem migration. ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-10-01 (**ATESTADO DE VACINAÇÃO: "DATA DA APLICAÇÃO" + VACINA
+#   DUPLICADA NO SELETOR** — a pedido.
+#   1. Coluna nova **"Data da Aplicação"** na lista de vacinas do Anexo XI (antes de
+#      Observação), **OBRIGATÓRIA** em todo item preenchido. Vacina **no estoque** da
+#      clínica (qualquer lote da empresa, com saldo ou não — `_count.lotes`) vem com a
+#      última aplicação EXECUTADA do histórico do paciente (sem a janela de 12 meses do
+#      ✅); **fora do estoque** vem em branco. Editável nos dois casos.
+#      Gancho genérico `conteudo.colunasObrigatorias` → `coletarListas` →
+#      `colunaObrigatoriaVazia` (backend: 400 `COLUNA_OBRIGATORIA`; espelho em
+#      `listas.ts`, checado no Inserir/Salvar de `/documentos`; asterisco no cabeçalho).
+#      ⚠️ Item sem a 1ª coluna não é cobrado (não vai ao papel).
+#      ⚠️ TROCAR de vacina na linha agora substitui o que a vacina ANTERIOR trouxe
+#      (`escolherOpcao`): antes a data da outra vacina ficava na linha.
+#   2. Declaração sem "nesta data": "…foi vacinado por mim, conforme informações abaixo:".
+#   3. 🔴 **VACINA EM DUPLICIDADE NO SELETOR** — a deduplicação comparava o nome CRU.
+#      Caso real: Patyvet tem "Aftobov - frasco 250 ml" (id 11743, com lote) e o global
+#      "Aftobov - frasco 250 mL" (9412/6598) → duas opções. Chave agora é `chaveNome`
+#      (sem caixa, espaços colapsados). 🔴 REGRA (a pedido): na duplicidade vence
+#      SEMPRE o cadastro DA EMPRESA; lote e fabricante só desempatam entre iguais.
+#      ⚠️ A duplicidade é do CADASTRO DE PRODUTOS (`tb_medicamentos`, catálogo misto),
+#      não do estoque — o lote só aponta para um deles.
+#   4. 🔴 **`dataAplicacao` digitada é DATA PURA** (meia-noite UTC) e
+#      `formatarDataNaEmpresa` a recuava um dia (30/09 → 29/09). `dataDaAplicacao`:
+#      meia-noite UTC exata = data pura; resto = instante no fuso. Corrige também o
+#      "✅ data" do seletor e a fonte `vacinas.aplicadas`.
+#   🔴 **RE-SEED NECESSÁRIO** (`node backend/seed.js`) para o modelo global ganhar a
+#   coluna e a frase — só existe o global (nenhuma cópia de clínica). SEM MIGRATION.
+#   Testes: `vacinasAplicadasOpcoes.test.js` (+11) e `documentosCentral.test.js`.
+#   ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-09-29 (🔴 **FOLHA CLÍNICA ÚNICA** — `utils/print/FolhaClinica.ts`
+#   passou a ser o papel de TODO registro clínico, nos três caminhos (Imprimir, PDF por
+#   WhatsApp, PDF por e-mail — que já usavam o MESMO HTML). Ordem pedida: **1** logo da
+#   empresa · **2** veterinário (nome, CRMV, clínica + endereço) · **3** dados do animal ·
+#   **4** título (Prescrição, Vacina, Evolução Clínica…) · **5** conteúdo do módulo ·
+#   **6** local e data da emissão · **7** assinatura. O gerador de cada módulo passou a
+#   escrever SÓ o corpo (item 5) e chama `gerarHtmlFolhaClinica`.
+#   Migrados os 9 geradores clínicos: Prescrição (e Vacina, que o reaproveita e agora sai
+#   titulada "Vacina"), Evolução, Relatório de Evolução (o Imprimir real da evolução),
+#   Resumo de Atendimento, Pedido de Exame (uma folha COMPLETA por laboratório),
+#   Resultado de Exame, Exame de Compra, Encaminhamento e Dieta.
+#   ⚠️ **SÍNCRONO + PREPARO**: `gerarHtmlFolhaClinica` não faz rede (o `gerarHtml` do
+#   compartilhamento roda na janela de "user activation"). CRMV/assinatura
+#   (`/users/:id/assinatura-profissional`), endereço da clínica (`/equipes/logo`) e imagens
+#   em `data:` são resolvidos antes por `prepararFolhaClinica` e ficam em cache de módulo.
+#   Sem o preparo a folha sai do mesmo jeito, só sem CRMV/assinatura/endereço. Todo
+#   `imprimirX` virou `async` (prepara e imprime), todo `prepararX` chama o preparo da
+#   folha, e o Relatório de Evolução prepara dentro de `buscarRelatorioAtendimento` —
+#   porque o modal de pré-visualização usa o HTML síncrono num `srcDoc`.
+#   ⚠️ **QUEM ASSINA é o profissional DO REGISTRO** (id passado por cada tela), nunca o
+#   usuário logado — mesma regra de 2026-09-02/05. A Dieta segue assinada por quem a emite.
+#   Linhas extras (executor da prescrição/vacina) saem EM BRANCO para assinar à mão.
+#   ⚠️ **Local da empresa**: `GET /equipes/logo` (legível por QUALQUER membro) passou a
+#   devolver `empresaEndereco`/`empresaCidade`/`empresaEstado`. Só endereço — CNPJ/IE são
+#   registro fiscal e continuam só no timbre da Central, só para PJ.
+#   ⚠️ A data de emissão sai no FUSO DA CLÍNICA (`formatDiaMesAno`/`formatHora`), por
+#   extenso: "Campinas/SP, 29 de setembro de 2026 às 14:32".
+#   ⚠️ A assinatura deixou de ser rodapé `position: fixed` que repetia em toda página: ela
+#   fecha o documento, depois da data, com `page-break-inside: avoid`.
+#   ⚠️ FICAM DE FORA, de propósito: Fatura, Orçamento, Contas a Pagar e Recibo de
+#   Prestador (administrativos — sem paciente nem assinatura de veterinário) e a Central
+#   de Documentos (tem cabeçalho normativo próprio, `CabecalhoFolha`/`DocumentoPrint`).
+#   Gate: `backend/src/__tests__/folhaClinicaUnica.test.js` (20 casos; verificado que
+#   reprova). `vite build` limpo; `tsc -b` limpo nos arquivos tocados (os 3 erros de
+#   `Animal.tsx` são anteriores e não relacionados). SEM MIGRATION.
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.)
+
+---
+
 # Atualizado em: 2026-09-08 (parte 2) (DOCUMENTOS: e-mail do veterinário, TIMBRE do
 #   estabelecimento e a redação da norma nos termos de consentimento.
 #   1. **E-mail do responsável nos 12 modelos** — `{{veterinario.email}}`, novo, no
