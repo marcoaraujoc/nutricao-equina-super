@@ -46,6 +46,9 @@ const {
 } = require('../lib/agendamentoPrestador');
 // Tempo de consulta do prestador EXTERNO — a única régua da grade dele (2026-10-01).
 const { lerTemposConsulta } = require('../lib/prestadorTempoConsulta');
+const {
+  contatoDoResponsavel, avisosDeContato, localDoAnimal, descricaoAtividade, mensagemWhatsAppProfissional,
+} = require('../lib/notificacaoAgendamento');
 
 const TIPOS_VALIDOS  = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'];
 // EM_ANDAMENTO/FINALIZADO são setados automaticamente pelo fluxo de evolução clínica
@@ -941,33 +944,43 @@ const AgendamentoController = {
                   + ` | profissional: ${prestadorAg ? `${prestadorAg.nome} (prestador)` : (item.veterinario?.fullName ?? '—')}`,
       });
 
+      // Quem EXECUTA o agendamento é avisado por e-mail e WhatsApp (abaixo). O que
+      // faltar no cadastro dele volta AGORA na resposta, para a tela avisar quem
+      // agendou — o agendamento já está salvo e não é desfeito por isso.
+      let contatoProf = null;
+      try {
+        contatoProf = await contatoDoResponsavel(prisma, {
+          veterinarioId: item.veterinarioId, prestador: prestadorAg, empresaId: req.empresaId,
+        });
+      } catch (e) { console.error('Erro ao ler contato do profissional do agendamento:', e); }
+
       res.status(201).json({
         dados: {
           ...item,
           prestadorCadastro: prestadorAg ? { id: prestadorAg.id, nome: prestadorAg.nome } : null,
           atendimentoNumero: formatAtendimentoNum('AG', item.numero),
         },
+        avisosNotificacao: avisosDeContato(contatoProf),
       });
 
       // Fire-and-forget: notifica via email + WhatsApp
       setImmediate(async () => {
         try {
-          const vet = item.veterinarioId
-            ? await prisma.user.findUnique({ where: { id: item.veterinarioId }, select: { email: true, fullName: true, phone: true } })
-            : prestadorAg
-              ? { email: prestadorAg.email ?? null, fullName: prestadorAg.nome, phone: prestadorAg.telefone ?? null }
-              : null;
+          const vet = contatoProf;
 
-          let animalNome = 'Paciente', proprietarioNome = '', proprietarioPhone = '', proprietarioEmail = '';
+          let animalNome = 'Paciente', proprietarioNome = '', proprietarioPhone = '', local = null;
           if (item.animalId) {
             const animal = await prisma.animal.findUnique({
               where:   { id: item.animalId },
-              include: { user: { select: { fullName: true, phone: true, email: true } } },
+              include: {
+                user:        { select: { fullName: true, phone: true, email: true } },
+                localizacao: { select: { nome: true } },
+              },
             });
             animalNome        = animal?.nome           ?? 'Paciente';
             proprietarioNome  = animal?.user?.fullName ?? '';
             proprietarioPhone = animal?.user?.phone    ?? '';
-            proprietarioEmail = animal?.user?.email    ?? '';
+            local             = localDoAnimal(animal);
           }
 
           const d        = new Date(item.dataHora);
@@ -977,32 +990,34 @@ const AgendamentoController = {
           const fusoAg   = await fusoDaEmpresa(req.empresaId).catch(() => FUSO_PADRAO);
           const dataFmt  = d.toLocaleDateString('pt-BR',  { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: fusoAg });
           const horaFmt  = d.toLocaleTimeString('pt-BR',  { hour: '2-digit', minute: '2-digit', timeZone: fusoAg });
-          const tipoLabel = { CONSULTA: 'Consulta', VACINA: 'Vacina', RETORNO: 'Retorno', EXAME: 'Exame', PROCEDIMENTO: 'Procedimento' }[item.tipo] ?? item.tipo;
+          const atividade = descricaoAtividade({
+            tipo: item.tipo, titulo: item.titulo, especialidade: item.especialidade?.nome, animalNome,
+          });
 
-          // E-mail ao veterinário
+          // E-mail ao profissional
           if (vet?.email) {
             await emailService.enviarNotificacaoAgendamentoProfissional({
-              vetEmail: vet.email, vetNome: vet.fullName,
+              vetEmail: vet.email, vetNome: vet.nome,
               animalNome, proprietarioNome, proprietarioPhone,
-              dataHora: item.dataHora, tipo: item.tipo, fuso: fusoAg,
+              dataHora: item.dataHora, tipo: item.tipo, atividade, local, fuso: fusoAg,
             }).catch(() => {});
           }
 
-          // WhatsApp ao veterinário
+          // WhatsApp ao profissional — instância da clínica; sem instância
+          // conectada, cai no provider legado (mesmo padrão da transferência).
           if (vet?.phone) {
-            const msgVet = [
-              `🐴 *S2Vet — Novo agendamento*`,
-              `📋 ${tipoLabel} · ${horaFmt} · ${dataFmt}`,
-              `🐎 Paciente: *${animalNome}*`,
-              proprietarioNome  ? `👤 Proprietário: ${proprietarioNome}` : '',
-              proprietarioPhone ? `📱 Contato: ${proprietarioPhone}`     : '',
-            ].filter(Boolean).join('\n');
-            await whatsappService.sendWhatsApp(vet.phone, msgVet).catch(() => {});
+            const msgVet = mensagemWhatsAppProfissional({
+              animalNome, atividade, dataFmt, horaFmt, local, proprietarioNome, proprietarioPhone,
+            });
+            const envio = await whatsappService.sendMessage(
+              { empresaId: req.empresaId, equipeId: req.equipeId }, vet.phone, msgVet,
+            ).catch(() => ({ sucesso: false }));
+            if (!envio?.sucesso) await whatsappService.sendWhatsApp(vet.phone, msgVet).catch(() => {});
           }
 
           // WhatsApp ao proprietário
           if (proprietarioPhone) {
-            const vetNome  = vet?.fullName ?? 'Veterinário';
+            const vetNome  = vet?.nome ?? 'Veterinário';
             const appUrl   = process.env.APP_URL || 'http://localhost:5173';
             const msgPropr = [
               `🐴 *S2Vet — Consulta agendada!*`,

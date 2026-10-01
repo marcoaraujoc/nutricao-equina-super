@@ -1911,6 +1911,16 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback;
 
   /**
+   * O backend avisa o profissional que vai executar o agendamento por e-mail e
+   * WhatsApp. Faltando e-mail e/ou telefone no cadastro dele, a resposta traz
+   * `avisosNotificacao` — o agendamento JÁ foi salvo; só quem agendou precisa saber
+   * que o aviso não chegou por aquele canal.
+   */
+  const avisarContatoProfissional = (res: { data?: { avisosNotificacao?: string[] } | null } | undefined) => {
+    for (const aviso of res?.data?.avisosNotificacao ?? []) toast.error(aviso, { duration: 3000 });
+  };
+
+  /**
    * 🔴 Conflito de concorrência (409): outro profissional assumiu ou remarcou este
    * atendimento enquanto esta tela estava aberta. Recarrega a agenda para mostrar
    * o estado REAL — insistir sobre a linha velha só produziria o mesmo 409.
@@ -1929,13 +1939,14 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   async function criarAgendamentoDireto(animalId: number, animalNome: string, vetId: number, hora: string) {
     setSalvando(true);
     try {
-      await api.post('/clinica/agendamentos', {
+      const res = await api.post('/clinica/agendamentos', {
         animalId, tipo: 'CONSULTA', titulo: `Consulta - ${animalNome}`,
         dataHora: new Date(`${selectedDate}T${hora}`).toISOString(), ...responsavelPayload(vetId),
         // Define a duração do atendimento no backend (tempo de consulta da especialidade)
         especialidadeId: espDoVet(vetId)?.id ?? undefined,
       });
       toast.success(`Consulta agendada às ${hora}`);
+      avisarContatoProfissional(res);
       fetchAgendamentos(selectedDate);
       setMesCarregado('');
     } catch (err) { setErroGrade(msgErroAgenda(err, 'Erro ao criar agendamento')); }
@@ -2085,7 +2096,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
 
     setSalvando(true);
     try {
-      await api.post('/clinica/agendamentos', {
+      const res = await api.post('/clinica/agendamentos', {
         animalId, tipo: 'CONSULTA',
         titulo: `Consulta - ${animalNome}`,
         dataHora,
@@ -2093,6 +2104,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
         especialidadeId: vetId ? (espDoVet(vetId)?.id ?? undefined) : undefined,
       });
       toast.success('Agendamento confirmado!');
+      avisarContatoProfissional(res);
       resetVoz(); fetchAgendamentos(selectedDate); setMesCarregado('');
     } catch (err) { setErroModal(msgErroAgenda(err, 'Erro ao confirmar agendamento')); }
     finally { setSalvando(false); }
@@ -2103,7 +2115,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     const animal = animais.find(a => String(a.id) === bookingForm.animalId);
     setSalvando(true);
     try {
-      await api.post('/clinica/agendamentos', {
+      const res = await api.post('/clinica/agendamentos', {
         animalId: Number(bookingForm.animalId), tipo: 'CONSULTA',
         titulo: `Consulta - ${animal?.nome ?? 'Paciente'}`,
         dataHora: new Date(`${selectedDate}T${booking.hora}`).toISOString(),
@@ -2111,6 +2123,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
         especialidadeId: espDoVet(booking.vetId)?.id ?? undefined,
       });
       toast.success(`Consulta agendada às ${booking.hora} com ${booking.vetName}`);
+      avisarContatoProfissional(res);
       setBooking(null); fetchAgendamentos(selectedDate); setMesCarregado('');
     } catch (err) { setErroGrade(msgErroAgenda(err, 'Erro ao criar agendamento')); }
     finally { setSalvando(false); }
@@ -2421,7 +2434,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
         motivo: reagMotivoUsuario ? `${reagMotivoUsuario} — ${motivoInformativo}` : motivoInformativo,
       });
       cancelado = true;
-      await api.post('/clinica/agendamentos', {
+      const resNovo = await api.post('/clinica/agendamentos', {
         animalId: reagendando.animal?.id, tipo: reagendando.tipo, titulo: reagendando.titulo,
         dataHora: novaData.toISOString(), observacao: reagendando.observacao ?? undefined,
         // O mesmo responsável do original — o prestador pelo CADASTRO (sem login ele
@@ -2433,6 +2446,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
         especialidadeId: reagendando.especialidade?.id ?? undefined,
       });
       toast.success('Reagendado');
+      avisarContatoProfissional(resNovo);
       setReagendando(null); setReagMotivoUsuario(null); fetchAgendamentos(selectedDate); setMesCarregado('');
     } catch (err) {
       if (cancelado) {

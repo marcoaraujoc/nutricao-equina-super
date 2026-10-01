@@ -765,13 +765,14 @@ const emailService = {
   // histórico: quem não passa continua exibindo em Brasília, exatamente como
   // antes. Quem sabe de que empresa é o e-mail passa e o horário sai no relógio
   // de quem vai ler.
-  async enviarNotificacaoAgendamentoProfissional({ vetEmail, vetNome, animalNome, proprietarioNome, proprietarioPhone, dataHora, tipo, fuso = FUSO_PADRAO }) {
+  async enviarNotificacaoAgendamentoProfissional({ vetEmail, vetNome, animalNome, proprietarioNome, proprietarioPhone, dataHora, tipo, atividade = null, local = null, fuso = FUSO_PADRAO }) {
     if (!podeEnviar()) return;
     const appUrl = process.env.APP_URL || 'http://localhost:5173';
     const d      = new Date(dataHora);
     const dataFmt = d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: fuso });
     const horaFmt = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: fuso });
-    const tipoLabel = { CONSULTA: 'Consulta', VACINA: 'Vacina', RETORNO: 'Retorno', EXAME: 'Exame', PROCEDIMENTO: 'Procedimento' }[tipo] ?? tipo;
+    const tipoLabel = atividade
+      ?? ({ CONSULTA: 'Consulta', VACINA: 'Vacina', RETORNO: 'Retorno', EXAME: 'Exame', PROCEDIMENTO: 'Procedimento' }[tipo] ?? tipo);
 
     const waLink = proprietarioPhone
       ? `https://wa.me/55${proprietarioPhone.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá! Confirmo meu agendamento com você no dia ${dataFmt} às ${horaFmt} para ${animalNome}.`)}`
@@ -793,10 +794,11 @@ const emailService = {
 
             <div style="background:white;border:2px solid #a7f3d0;border-radius:12px;padding:20px;margin:24px 0;">
               <table style="width:100%;border-collapse:collapse;">
-                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;width:130px;">📋 Tipo</td><td style="font-weight:700;color:#111827;">${tipoLabel}</td></tr>
+                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;width:130px;">🐎 Paciente</td><td style="font-weight:700;color:#111827;">${animalNome}</td></tr>
+                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">📋 Atividade</td><td style="font-weight:700;color:#111827;">${tipoLabel}</td></tr>
                 <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">📅 Data</td><td style="font-weight:700;color:#111827;">${dataFmt}</td></tr>
                 <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">🕐 Horário</td><td style="font-weight:700;color:#111827;font-size:18px;">${horaFmt}</td></tr>
-                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">🐎 Paciente</td><td style="font-weight:700;color:#111827;">${animalNome}</td></tr>
+                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">📍 Local</td><td style="font-weight:700;color:#111827;">${local ?? 'Não informado'}</td></tr>
                 ${proprietarioNome ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">👤 Proprietário</td><td style="font-weight:700;color:#111827;">${proprietarioNome}</td></tr>` : ''}
                 ${proprietarioPhone ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">📱 Telefone</td><td style="font-weight:700;color:#111827;">${proprietarioPhone}</td></tr>` : ''}
               </table>

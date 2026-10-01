@@ -32,6 +32,26 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-01 (parte 4) (**AGENDAMENTO AVISA QUEM VAI EXECUTAR, COM
+#   LOCAL — e quem agendou fica sabendo quando o aviso não chega.** A pedido.
+#   O `criar` já mandava e-mail + WhatsApp ao responsável, mas sem LOCAL, com o
+#   telefone GLOBAL do `users` e o WhatsApp só pelo provider legado.
+#   Fonte única nova: `lib/notificacaoAgendamento.js` — contato (telefone do VÍNCULO
+#   da empresa via `aplicarVinculo`; prestador pelo CADASTRO, o login só completa),
+#   local (catálogo → legado + baia), atividade (tipo · especialidade; o título só
+#   quando difere do padrão "Consulta - <paciente>") e o texto do WhatsApp.
+#   WhatsApp ao profissional agora sai pela instância da clínica (`sendMessage`) com
+#   fallback no legado; e-mail ganhou as linhas Atividade e Local.
+#   🔴 A resposta do POST traz `avisosNotificacao` quando falta e-mail e/ou telefone;
+#   `Agendamentos.tsx#avisarContatoProfissional` exibe em `toast.error` por **3s**
+#   nas 4 criações (slot, booking, voz, reagendar). ⚠️ O agendamento NUNCA é
+#   recusado por isso — já está salvo; o contato é resolvido ANTES do 201 e o envio
+#   segue fire-and-forget. Sem responsável → sem aviso (não há a quem avisar).
+#   Gate: `__tests__/notificacaoAgendamento.test.js` (14). SEM MIGRATION.
+#   ⚠️ NÃO verificado em navegador.)
+
+---
+
 # Atualizado em: 2026-10-01 (parte 3) (**AGENDA: PROFISSIONAIS EM ORDEM ALFABÉTICA, EM
 #   DOIS GRUPOS** — a pedido: primeiro os MEMBROS da equipe, depois os PRESTADORES.
 #   Fonte única em `Agendamentos.tsx#compararProfissionais` (prestador =
