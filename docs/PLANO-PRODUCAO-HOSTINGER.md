@@ -5,6 +5,13 @@
 >
 > **Data:** 2026-10-01 · **Branch de referência:** `feature/mvp-v1.0` (commit `546385d`)
 >
+> **Revisão 2 (2026-10-01):** decisões D1–D7 tomadas e aplicadas no texto —
+> acesso administrativo por **Tailscale** (IP de casa é DHCP), e-mail pelo **Brevo** (o mesmo do desenvolvimento),
+> WhatsApp pela **Evolution** desde o dia 1. Ordem dos passos corrigida (o primeiro
+> deploy dependia do Frontend e do backup, que vinham depois). Quem for executar,
+> siga o **[Roteiro](#roteiro--da-criação-da-vps-ao-primeiro-login)**: ele é a
+> sequência; as seções numeradas são o detalhe de cada passo.
+>
 > **Complementa** `docs/DEPLOY-PRODUCAO.md` — aquele explica o PORQUÊ de cada exigência
 > do código (same-origin, dois usuários de banco, RLS, cookie). Este diz COMO montar
 > isso na Hostinger, em duas VPS, com WAF e firewall, passo a passo.
@@ -17,7 +24,8 @@
 ## Sumário
 
 0. [Resumo executivo — respostas diretas](#0-resumo-executivo--respostas-diretas)
-1. [Decisões que só você pode tomar (antes de começar)](#1-decisões-que-só-você-pode-tomar)
+1. [Decisões tomadas](#1-decisões-tomadas) · [Evolution API em produção — o que muda](#11-evolution-api-em-produção--o-que-muda)
+- 👉 **[Roteiro — da criação da VPS ao primeiro login](#roteiro--da-criação-da-vps-ao-primeiro-login)**
 2. [Particularidades da Hostinger (verificadas)](#2-particularidades-da-hostinger-verificadas)
 3. [Arquitetura alvo](#3-arquitetura-alvo)
 4. [Domínios e DNS](#4-domínios-e-dns)
@@ -48,6 +56,9 @@
 | **Duas VPS (Frontend / Backend+Banco) faz sentido?** | Faz, e é o que este plano monta. O ganho real: a VPS de Backend **não tem nenhuma porta web aberta para a internet** — só aceita o túnel vindo da VPS de Frontend. Comprometer o Frontend não dá acesso direto ao banco. |
 | **WAF?** | **Cloudflare** na frente (plano Free para começar; **Pro recomendado** em produção pelo conjunto de regras OWASP). A Hostinger não oferece WAF para VPS — o "DDoS protection" dela é de rede (camada 3/4), não de aplicação. |
 | **Firewall?** | Três camadas: **firewall gerenciado do hPanel** (antes do pacote chegar à VPS) + **UFW** em cada VPS + **Cloudflare Tunnel**, que elimina a porta 443 pública da VPS de Frontend. Não existe "appliance" de firewall (pfSense) na Hostinger sem rede privada. |
+| **SSH com IP de casa por DHCP?** | **Tailscale** (D6 = B). O SSH escuta só na rede do Tailscale; **nenhuma porta SSH pública**, então o IP de casa mudar não importa. Resultado: **zero portas abertas** na VPS Frontend e **uma só** (UDP 51820, aceita apenas do IP do Frontend) na Backend. Durante a instalação, o SSH fica aberto por minutos só para o seu IP do momento. |
+| **E-mail?** | **Brevo** (D7) — o mesmo relay SMTP do desenvolvimento (`smtp-relay.brevo.com:587`). Muda só o **remetente**: hoje é `marcoaraujoc@gmail.com`; em produção passa a ser `noreply@s2vet.com.br`, com o domínio autenticado no Brevo (SPF+DKIM+DMARC). Remetente `@gmail.com` saindo por servidor que não é do Google falha no alinhamento DMARC e tende a cair no spam — inclusive o código do 2FA. |
+| **Evolution API muda algo?** | Não muda a topologia (ela não precisa de domínio nem de porta pública), mas traz 5 cuidados — ver [§1.1](#11-evolution-api-em-produção--o-que-muda). |
 | **`s2vet.com.br` e `s2vet.com`?** | Registre **os dois**. **`.com.br` é o domínio canônico** (público brasileiro, exige CPF/CNPJ — passa confiança). `.com` só redireciona (301) para o `.com.br` e protege a marca contra terceiros. **Nunca rode a aplicação nos dois** (cookie, login Google, links de e-mail e CORS assumem UMA origem). Recomendação: aplicação em **`app.s2vet.com.br`** — ver decisão D2. |
 
 ### A sequência inteira em uma tela
@@ -61,19 +72,148 @@ Semana 4  Fase 7 (backup + monitoração) · Fase 8 (aceite) · piloto com 1 cl�
 
 ---
 
-## 1. Decisões que só você pode tomar
+## 1. Decisões tomadas
 
-O plano assume a opção **recomendada** em cada uma. Mudar qualquer uma muda passos
-específicos (indicados).
-
-| # | Decisão | Opções | Recomendação | Afeta |
+| # | Decisão | Escolha | Por quê | Afeta |
 |---|---|---|---|---|
-| **D1** | **Com que dados a produção nasce?** | **A)** "Imagem dourada": dump do banco de desenvolvimento → produção, depois limpeza das empresas/usuários de teste. **B)** Banco vazio: 220 migrations do zero + seeds. | **A.** Os catálogos (medicamentos, procedimentos, especialidades, modelos de documento, planos, regiões anatômicas…) foram mantidos **pelas telas**, no banco — as planilhas foram só carga inicial e **não devem ser reaplicadas**. A opção B nasce com catálogo vazio ou desatualizado. ⚠️ A limpeza de dados de teste precisa de um script revisado por você antes de rodar. | §7, §10.3 |
-| **D2** | **Endereço da aplicação** | **A)** `app.s2vet.com.br` (apex `s2vet.com.br` redireciona para ele). **B)** `s2vet.com.br` direto (é o que o `DEPLOY-PRODUCAO.md` assumia). | **A.** Deixa o apex livre para um site institucional no futuro sem trocar o `APP_URL` — que fica gravado em todo link de e-mail já enviado (reset de senha, convite, fatura). Trocar depois quebra esses links. Funciona igual tecnicamente (cookie é host-only). | §4, §11, §12 |
-| **D3** | **Plano do Cloudflare** | Free · Pro (~US$ 20–25/mês) | **Free para o ensaio, Pro no go-live.** O Pro adiciona o *Cloudflare Managed Ruleset* + *OWASP Core Ruleset*, 20 regras customizadas e *Super Bot Fight Mode* com exceções. | §12 |
-| **D4** | **Limite de upload** | Manter 150 MB (exige Cloudflare Business ~US$ 200/mês) · Baixar para ~95 MB | **95 MB.** Cloudflare Free/Pro corta qualquer requisição acima de **100 MB** com um 413 próprio, antes de chegar à aplicação. Vídeo de prontuário maior que isso precisa ser comprimido. | §10.6, §12 |
-| **D5** | **WhatsApp em produção no dia 1?** | Sim (Evolution API) · Não (`WHATSAPP_PROVIDER=noop`) | Sim, mas ciente do risco: a Evolution usa o protocolo **não oficial** do WhatsApp Web (Baileys). A Meta pode banir o número. Plano de longo prazo: WhatsApp Cloud API oficial. | §10.8, §17.2 |
-| **D6** | **Acesso administrativo (SSH)** | **A)** SSH aberto só para o seu IP fixo. **B)** Tailscale (VPN de administração) e nenhuma porta SSH pública. | **B** se seu IP de casa/escritório muda (quase sempre muda). **A** se você tem IP fixo. O plano mostra as duas. | §8.4, §12.3 |
+| **D1** | Com que dados a produção nasce? | ⚠️ **A) "Imagem dourada"** — dump do banco de desenvolvimento → produção, depois limpeza das empresas/usuários de teste. **Assumida** (a resposta repetiu as duas opções sem escolher): **confirme antes da Fase 0.** | Os catálogos (medicamentos, procedimentos, especialidades, modelos de documento, planos, regiões anatômicas…) foram mantidos **pelas telas**, no banco — as planilhas foram só carga inicial e **não devem ser reaplicadas**. A opção B nasce com catálogo vazio ou desatualizado. ⚠️ A limpeza de dados de teste precisa de um script revisado por você antes de rodar. | §7, §10.3 |
+| **D2** | Endereço da aplicação | **`app.s2vet.com.br`**; o apex `s2vet.com.br` redireciona para ele. | Deixa o apex livre para um site institucional no futuro sem trocar o `APP_URL` — que fica gravado em todo link de e-mail já enviado (reset de senha, convite, fatura). Trocar depois quebra esses links. Cookie é host-only, então funciona igual. | §4, §11, §12 |
+| **D3** | Plano do Cloudflare | **Free no ensaio, Pro no go-live.** | O Pro adiciona o *Cloudflare Managed Ruleset* + *OWASP Core Ruleset*, 20 regras customizadas e *Super Bot Fight Mode* com exceções. | §12 |
+| **D4** | Limite de upload | **95 MB.** | Cloudflare Free/Pro corta qualquer requisição acima de **100 MB** com um 413 próprio, antes de chegar à aplicação. Vídeo de prontuário maior que isso precisa ser comprimido. | §10.6, §12 |
+| **D5** | WhatsApp no dia 1 | **Sim, pela Evolution API**, ciente do risco. | A Evolution usa o protocolo **não oficial** do WhatsApp Web (Baileys); a Meta pode banir o número. Longo prazo: WhatsApp Cloud API oficial. O que isso muda na subida está na [§1.1](#11-evolution-api-em-produção--o-que-muda). | §1.1, §10.8, §17.2 |
+| **D6** | Acesso administrativo (SSH) | **B) Tailscale** — nenhuma porta SSH pública. | O IP de casa vem por DHCP e muda; com regra "SSH só do meu IP" você se trancaria fora a cada troca. O Tailscale identifica o **aparelho**, não o IP. Você já usa Tailscale no desenvolvimento (`docs/TAILSCALE_FUNNEL.md`) — é a mesma conta. | §8, §12.2, §12.3 |
+| **D7** | Envio de e-mail | **Brevo**, o mesmo do desenvolvimento (SMTP 587). | Já funciona e não exige mudança de código. Em produção: **conta/chave SMTP própria**, domínio `s2vet.com.br` autenticado e remetente `noreply@s2vet.com.br`. Plano B, se a porta 587 der problema na Hostinger (H4): Resend por HTTPS — exige antes adicionar o pacote `resend` ao `package.json` (C9). | §4, §10.6, §13 |
+
+### 1.1 Evolution API em produção — o que muda
+
+A Evolution **não precisa de domínio, certificado nem porta aberta**: ela só faz conexão
+de **saída** para os servidores do WhatsApp, e o S2Vet fala com ela por
+`http://127.0.0.1:8080`, dentro da VPS Backend. O QR Code que a clínica escaneia é
+buscado pelo backend e mostrado na tela do S2Vet — ninguém de fora acessa a Evolution.
+Então a arquitetura da [§3](#3-arquitetura-alvo) **não muda**. O que muda são estes
+cinco cuidados:
+
+| # | O que muda | Por quê | Onde está tratado |
+|---|---|---|---|
+| E1 | **Não siga o comentário do `infra/evolution/docker-compose.yml`** que manda publicar a Evolution em `https://evo.seudominio.com.br` atrás de proxy. Em produção ela fica **só em `127.0.0.1:8080`**, com `SERVER_URL=http://127.0.0.1:8080` e imagem com versão fixa. | Com `"8080:8080"` o Docker passa por cima do UFW e expõe na internet a API que controla o WhatsApp de todas as clínicas. | §10.8, C4 |
+| E2 | **O webhook dá a volta pela internet.** A URL que o S2Vet registra na Evolution é montada a partir do `APP_URL` (`EvolutionService.webhookUrl`): sai do BE, passa pelo Cloudflare e volta pelo túnel. Por isso o WAF precisa da regra que **deixa passar** o webhook vindo do IP do BE e **bloqueia** de qualquer outro lugar. Sem ela, o status "conectado/desconectado" da clínica para de atualizar sem erro na tela. | O token do webhook vai na *query string*, então também não pode ir parar no log de acesso do Nginx. | §11.2 (`access_log off`), §12.1 regras 1–2, C10 |
+| E3 | **A sessão do WhatsApp entra no backup.** As credenciais de cada número conectado moram no Postgres e no volume da Evolution — perdê-los obriga **todas** as clínicas a escanear o QR Code de novo. | O backup do banco do S2Vet não inclui o banco da Evolution (são contêineres separados). | §14.1 |
+| E4 | **O ambiente de desenvolvimento não pode continuar mandando mensagem.** Com a imagem dourada (D1), o banco de dev tem os mesmos clientes e telefones da produção. Se o backend de dev continuar com a Evolution de dev conectada e os crons ligados, o cliente recebe **lembrete duplicado** — um da produção e outro do seu PC. E o WhatsApp aceita até 4 aparelhos vinculados: o mesmo número pode estar conectado nos dois ambientes ao mesmo tempo. | No go-live: desconecte as instâncias de dev, ponha `WHATSAPP_PROVIDER=noop` no `.env` de dev e use um remetente de teste no e-mail de dev. | Roteiro passo 52, R14 |
+| E5 | **Cada clínica reconecta o número em produção** (QR Code na tela de Configurações). Os nomes de instância que vêm no dump apontam para a Evolution de dev. | A limpeza de dados (D1) zera essas instâncias. | §10.3, §13 |
+
+Custo extra na VPS Backend: ~0,7–1 GB de RAM (Node da Evolution + Postgres + Redis) — já
+considerado no dimensionamento de 16 GB (§6).
+
+---
+
+## Roteiro — da criação da VPS ao primeiro login
+
+Esta é a **ordem de execução**. Cada passo aponta para a seção com os comandos. Não pule
+os ✅ — eles são o ponto em que um erro ainda é barato.
+
+Convenções: `[FE]` = VPS Frontend · `[BE]` = VPS Backend · `[PC]` = seu computador ·
+`[WEB]` = painel de algum serviço no navegador.
+
+### Etapa A — Antes de contratar a VPS (no seu PC e nos painéis)
+
+| # | Onde | Passo | Detalhe |
+|---|---|---|---|
+| 1 | — | Confirmar D1 (imagem dourada) | §1 |
+| 2 | `[PC]` | Escolher a branch/tag que vai para produção e garantir que está commitada e com os testes passando (`cd backend && npm test`) | §16.1 |
+| 3 | `[WEB]` | Registrar `s2vet.com.br` (Registro.br, no CNPJ) e `s2vet.com` | §4.1 |
+| 4 | `[WEB]` | Criar conta Cloudflare, adicionar os dois domínios, trocar os *nameservers* no registrador, ligar DNSSEC | §4.2 |
+| 5 | `[WEB]` | Brevo: *Senders & Domains* → autenticar o domínio `s2vet.com.br` (registros no Cloudflare), criar o remetente `noreply@s2vet.com.br`, gerar uma **chave SMTP nova** só para produção | §13 |
+| 6 | `[WEB]` | Google Cloud de produção: billing, chave Gemini (a restrição por IP fica para o passo 24), OAuth Client com a origem `https://app.s2vet.com.br` | §13 |
+| 7 | `[WEB]` | Bucket de backup (Backblaze B2 ou Cloudflare R2) com versionamento; monitor (UptimeRobot/Better Stack) | §5.1 |
+| 8 | `[PC]` | Gerar os segredos (§5.2) e a chave do backup `age-keygen`; guardar tudo no gerenciador de senhas | §5.2 |
+| 9 | `[WEB]` | Tailscale: na mesma conta que você já usa, ativar **MagicDNS**, criar a tag `tag:s2vet-server` e a ACL; gerar **duas** *auth keys* (uma por servidor), não reutilizáveis, com a tag | §8.3.1 |
+| 10 | `[PC]` | **Fase 0 completa** — ensaio local com o dump real, script de limpeza testado | §7 |
+
+### Etapa B — Criar as VPS
+
+| # | Onde | Passo | Detalhe |
+|---|---|---|---|
+| 11 | `[WEB]` | hPanel: contratar KVM 1 (FE) e KVM 4 (BE), **mesmo datacenter, Brasil**, Ubuntu 24.04 limpo, com sua chave SSH pública | §8.1 |
+| 12 | `[WEB]` | Anotar `<IP_FE>` e `<IP_BE>`; descobrir o seu IP do momento (`https://ifconfig.me`) | §8.1 |
+| 13 | `[WEB]` | Firewall do hPanel: grupo **provisório** com UMA regra — TCP 22 do seu IP do momento — aplicado às duas VPS | §8.1 |
+| 14 | `[WEB]` | Abrir o **terminal do navegador** do hPanel em cada VPS e confirmar que funciona | §8.1, H9 |
+
+### Etapa C — Base das duas VPS (repita em cada uma)
+
+| # | Onde | Passo | Detalhe |
+|---|---|---|---|
+| 15 | `[FE][BE]` | `ssh root@<IP>` → atualizar, fuso, hostname, pacotes base, reboot | §8.2 |
+| 16 | `[FE][BE]` | Criar o usuário `marco` com sudo; ✅ entrar como `marco` em outro terminal | §8.3 |
+| 17 | `[FE][BE]` | **Instalar o Tailscale** e entrar na rede com a auth key; ✅ `ssh marco@s2vet-be-01` (pelo nome do Tailscale) funciona do seu PC | §8.3.1 |
+| 18 | `[FE][BE]` | Endurecer o SSH (sem senha, sem root) e ✅ testar novo login pelo Tailscale **antes** de fechar a sessão | §8.4 |
+| 19 | `[FE][BE]` | UFW: SSH só pela interface `tailscale0`; ligar o UFW | §8.5 |
+| 20 | `[WEB]` | 🔴 Remover a regra de SSH do firewall do hPanel. ✅ `ssh` pelo IP público **falha** e pelo Tailscale **funciona**; o terminal do navegador do hPanel **ainda funciona** (se não funcionar, aprenda agora a usar o Modo de Recuperação) | §8.5 |
+| 21 | `[FE][BE]` | fail2ban, atualizações automáticas, swap, journald, sysctl | §8.6–8.8, §12.4 |
+
+A partir daqui **todo acesso é pelo Tailscale**: `ssh marco@s2vet-fe-01` e
+`ssh marco@s2vet-be-01`. Trocar de IP em casa não muda nada.
+
+### Etapa D — Túnel entre as VPS
+
+| # | Onde | Passo | Detalhe |
+|---|---|---|---|
+| 22 | `[FE][BE]` | WireGuard: chaves, `wg0.conf`, UFW do túnel, subir | §9 |
+| 23 | `[WEB]` | Firewall do hPanel: substituir o grupo provisório pelos grupos definitivos `s2vet-fe` (vazio) e `s2vet-be` (só UDP 51820 do `<IP_FE>`). ✅ `[FE]` `ping 10.50.0.2` responde; `sudo wg show` com *handshake* recente | §12.2 |
+
+### Etapa E — Banco e backend (VPS Backend)
+
+| # | Onde | Passo | Detalhe |
+|---|---|---|---|
+| 24 | `[WEB]` | Gemini: restringir a chave ao `<IP_BE>` | §13 |
+| 25 | `[BE]` | Usuário de serviço `s2vet` e diretórios | §10.1 |
+| 26 | `[BE]` | PostgreSQL 16: configuração, `pg_hba`, roles `nutriadmin`/`zls2vetp1`, banco | §10.2 |
+| 27 | `[PC]→[BE]` | Gerar o dump (como `postgres`), copiar pelo Tailscale, restaurar, **rodar o script de limpeza**, apagar o dump | §7.2, §10.3 |
+| 28 | `[BE]` | ✅ Conferências de segurança das roles e do RLS | §10.3 |
+| 29 | `[BE]` | 🔴 **Backup já agora** (a partir do restore há dado real no servidor): `age`, `rclone`, script, cron; ✅ rodar uma vez e ver os arquivos no bucket | §14.1 |
+| 30 | `[BE]` | Node 22, bibliotecas do Chrome, LibreOffice | §10.4, §10.5 |
+| 31 | `[BE]` | Chave de leitura do GitHub (*deploy key*) | §10.5 |
+| 32 | `[BE]` | `shared/backend.env` e `shared/frontend.env` | §10.6 |
+| 33 | `[BE]` | Serviço systemd `s2vet-api` (habilitado, ainda não iniciado) e sudoers | §10.7 |
+| 34 | `[BE]` | Docker + Evolution em `127.0.0.1:8080`; ✅ `ss -tlpn` mostra `127.0.0.1:8080` | §10.8 |
+| 35 | `[BE]` | Gravar o `deploy.sh` | §16.1 |
+
+### Etapa F — Frontend (VPS Frontend)
+
+| # | Onde | Passo | Detalhe |
+|---|---|---|---|
+| 36 | `[FE]` | Usuário `deploy`, diretórios, chave do `s2vet` do BE restrita ao túnel; ✅ `[BE]` `sudo -u s2vet ssh deploy@10.50.0.1 'echo ok'` (aceite a fingerprint aqui — o deploy não é interativo) | §11.1 |
+| 37 | `[FE]` | Nginx com a página provisória "Em implantação" | §11.2 |
+| 38 | `[FE]` | `cloudflared` + túnel `app.s2vet.com.br → 127.0.0.1:8080`; ✅ `https://app.s2vet.com.br` mostra "Em implantação" | §11.4 |
+
+### Etapa G — Primeiro deploy
+
+| # | Onde | Passo | Detalhe |
+|---|---|---|---|
+| 39 | `[BE]` | `sudo -u s2vet /opt/s2vet/bin/deploy.sh feature/mvp-v1.0` (ou a tag de release) | §16.1 |
+| 40 | `[BE]` | ✅ `/health`, Chrome, `doc:check`, `email:testar`, portas | §10.9 |
+| 41 | `[PC]` | ✅ **Abrir `https://app.s2vet.com.br` e fazer login** (e-mail/senha com 2FA, e Google) | §15.2 F2–F3 |
+
+### Etapa H — Proteções de borda, integrações e aceite
+
+| # | Onde | Passo | Detalhe |
+|---|---|---|---|
+| 42 | `[WEB]` | Cloudflare: SSL/TLS, cache da API desligado, regras do WAF (inclusive as do webhook), rate limit, notificações | §12.1 |
+| 43 | `[BE]` | Conectar o WhatsApp da clínica piloto (QR Code); ✅ status muda sozinho para "conectado" (prova do webhook) | §13 |
+| 44 | `[WEB]` | Monitores: site, `/api/marca`, *heartbeat* do backup, disco | §14.3 |
+| 45 | `[PC]` | Testes de segurança S1–S11 | §15.1 |
+| 46 | `[PC]` | Testes funcionais F1–F13 (inclui restaurar o primeiro backup) | §15.2 |
+| 47 | — | Go/no-go | §15.3 |
+
+### Etapa I — Go-live
+
+| # | Onde | Passo | Detalhe |
+|---|---|---|---|
+| 48 | `[WEB]` | Cloudflare → plano **Pro**; OWASP em *Log* por 1 semana | §12.1 |
+| 49 | `[WEB]` | Snapshot das duas VPS no hPanel | H3 |
+| 50 | — | Piloto com uma clínica (1–2 semanas) | §15.4 |
+| 51 | `[PC]` | Trocar a senha do ADMIN pela tela | §10.3 |
+| 52 | `[PC]` | 🔴 **Desligar mensagens do ambiente de desenvolvimento** (desconectar a Evolution de dev, `WHATSAPP_PROVIDER=noop`, e-mail de teste) | §1.1 E4 |
+| 53 | `[WEB]` | Depois de validado: WAF para *Block*, CSP valendo, HSTS | §12.1, §11.2 |
 
 ---
 
@@ -86,7 +226,7 @@ Conferidas na documentação oficial da Hostinger em 2026-10-01 (links na [§19]
 | H1 | 🔴 **Não há rede privada / VPC entre VPS.** Cada VPS recebe um IP público dedicado; não existe segunda interface com IP privado. | O "isolamento de VPCs" é feito com **WireGuard** (túnel cifrado) + **firewall**. O tráfego Frontend → Backend passa cifrado pela internet entre os dois datacenters. Coloque **as duas VPS no MESMO datacenter** (Brasil) para latência mínima. |
 | H2 | **Firewall gerenciado no hPanel** (VPS → Segurança → Firewall): filtra **antes** do pacote chegar à VPS, padrão **DROP**, suporta IPv4 e IPv6, TCP/UDP/ICMP/GRE, origem "qualquer lugar" ou personalizada, um grupo pode ser aplicado a vários servidores, e a mudança leva **até 2 minutos**. Filtra **só entrada**. | É a 1ª barreira de rede. Como roda fora da VPS, protege inclusive quando o Docker fura o UFW. Saída (egress) é controlada no UFW. Crie **dois grupos** (Frontend e Backend) — as regras são diferentes. |
 | H3 | **Backup automático semanal gratuito**; diário é pago. Até 4 retidos (2 diários + 2 semanais). **Snapshot manual: um por vez**, apagado ao reinstalar o SO ou restaurar backup, e com validade curta. | 🔴 **O backup da Hostinger NÃO substitui o backup do banco.** Uma semana de prontuário perdida é inaceitável. O plano faz `pg_dump` diário, cifrado, **fora da Hostinger** ([§14](#14-fase-7--backup-monitoração-e-logs)). Snapshot só antes de mudança grande. |
-| H4 | **Porta 25 não é bloqueada**, mas a Hostinger documenta limite de **5 e-mails/minuto por servidor**. | A aplicação já usa **Brevo pela porta 587** (relay autenticado). Teste no servidor (`npm run email:testar`). Se houver bloqueio/limitação, trocar para **Resend via HTTPS (443)** — é só variável de ambiente, já previsto no código. |
+| H4 | **Porta 25 não é bloqueada**, mas a Hostinger documenta limite de **5 e-mails/minuto por servidor**. | A aplicação já usa **Brevo pela porta 587** (relay autenticado). Teste no servidor (`npm run email:testar`). Se houver bloqueio/limitação, o plano B é **Resend via HTTPS (443)** — previsto no código, mas exige antes adicionar o pacote `resend` ao `package.json` (C9). |
 | H5 | **DDoS protection** de rede incluída. | Não cobre camada 7 (aplicação). Isso é papel do **Cloudflare**. |
 | H6 | **Datacenter no Brasil** disponível. | Escolha Brasil: latência para as clínicas e conveniência de LGPD (a lei não exige dado no Brasil, mas simplifica). |
 | H7 | **Monarx** (scanner de malware) pode vir instalado no template. | Pode manter — é leve. Não substitui as outras camadas. |
@@ -162,14 +302,14 @@ casos ([§12.2](#122-firewall-do-hpanel-1ª-barreira-de-rede)).
 
 | Origem | Destino | Porta | Caminho | Permitido? |
 |---|---|---|---|---|
-| Internet | VPS Frontend | qualquer | público | ❌ (só SSH do admin, se D6=A) |
+| Internet | VPS Frontend | qualquer | público | ❌ nenhuma porta (SSH só pelo Tailscale) |
 | Cloudflare | VPS Frontend | — | túnel iniciado pela VPS | ✅ (saída da VPS) |
 | VPS Frontend | VPS Backend | UDP 51820 | público | ✅ só do `<IP_FE>` |
 | Frontend (wg0) | Backend (wg0) | TCP 3001 | túnel | ✅ |
 | Backend (wg0) | Frontend (wg0) | TCP 22 | túnel | ✅ (deploy do estático) |
 | Internet | VPS Backend | 3001 / 5432 / 8080 | público | ❌ **nunca** |
 | VPS Backend | Internet | 443, 587, 7844 | saída | ✅ |
-| Seu PC | as duas VPS | TCP 22 | público ou Tailscale | ✅ só você |
+| Seu PC | as duas VPS | TCP 22 | **só pelo Tailscale** (`tailscale0`) | ✅ só os seus aparelhos |
 
 ---
 
@@ -238,7 +378,7 @@ Redirects (Cloudflare → *Rules* → *Redirect Rules*):
 | P1 | Hostinger — 2 VPS KVM no **datacenter Brasil** | Frontend e Backend | ☐ |
 | P2 | Registro.br (`s2vet.com.br`) + registrador do `.com` | Domínios | ☐ |
 | P3 | Cloudflare (conta + Zero Trust para o Tunnel) | DNS, WAF, Tunnel | ☐ |
-| P4 | **Brevo** (ou Resend) com o domínio **verificado** (SPF+DKIM) | 2FA, reset de senha, convite, PDF por e-mail | ☐ |
+| P4 | **Brevo** (o mesmo do desenvolvimento) com o domínio `s2vet.com.br` **autenticado** (SPF+DKIM) e chave SMTP própria de produção | 2FA, reset de senha, convite, PDF por e-mail | ☐ |
 | P5 | Caixa postal do domínio (`contato@`, `dmarc@`) | Receber e-mail | ☐ |
 | P6 | Google Cloud — projeto de **produção** com **billing** | Gemini API (o *free tier* devolve 429 `limit: 0` — já aconteceu) e OAuth | ☐ |
 | P7 | Google Cloud — **OAuth Client ID** (Web) | Login com Google (`VITE_GOOGLE_CLIENT_ID`) | ☐ |
@@ -247,7 +387,7 @@ Redirects (Cloudflare → *Rules* → *Redirect Rules*):
 | P10 | Gerenciador de senhas (Bitwarden/1Password) | Guardar TODOS os segredos abaixo | ☐ |
 | P11 | Chip/número dedicado de WhatsApp por clínica (se D5 = sim) | Evolution API | ☐ |
 | P12 | GitHub: *deploy key* **somente leitura** no repositório | A VPS baixa o código | ☐ |
-| P13 | Tailscale (se D6 = B) | Acesso administrativo | ☐ |
+| P13 | **Tailscale** — a mesma conta que você já usa no desenvolvimento (plano Personal, gratuito) | Acesso administrativo (D6) | ☐ |
 
 ### 5.2 Segredos a gerar (todos NOVOS — nenhum reaproveitado do desenvolvimento)
 
@@ -267,6 +407,7 @@ Produção nasce com valores próprios.
 | `GEMINI_API_KEY` (produção, restrita por IP) | Google Cloud | `.env` backend |
 | Chave de cifragem de backup (`age`) | `age-keygen` **no seu PC** | 🔴 chave PRIVADA **fora** do servidor; pública no servidor |
 | Token do Cloudflare Tunnel | painel Zero Trust | só no comando de instalação |
+| *Auth keys* do Tailscale (uma por VPS) | Tailscale → *Settings → Keys* → *Generate auth key*: **não reutilizável**, validade de 1 dia, com a tag `tag:s2vet-server` | só no `tailscale up` de cada VPS (§8.3.1) — depois de usada, perde a utilidade |
 
 ⚠️ O `tr -d '/+='` evita caracteres que precisariam de *URL-encoding* dentro da
 `DATABASE_URL` — senha com `/` ou `@` quebra a conexão com erro confuso.
@@ -366,10 +507,13 @@ Execute esta fase **igual nas duas VPS**. Onde diferir, está marcado `[FE]` / `
    `ssh-keygen -t ed25519 -C "marco@s2vet"`).
 4. Hostname: `s2vet-fe-01` / `s2vet-be-01`.
 5. Anote `<IP_FE>` e `<IP_BE>` (IPv4 e IPv6).
-6. hPanel → **ative o firewall gerenciado já agora**, com UMA regra: aceitar TCP 22 do
-   seu IP. (As regras completas vêm na §12.2.)
-7. 🔴 **Teste o terminal do navegador do hPanel** (H9) com o firewall ativo. Ele é sua
-   saída se você se trancar fora.
+6. Descubra o seu IP **do momento** (`https://ifconfig.me` no navegador de casa).
+7. hPanel → **ative o firewall gerenciado já agora**, num grupo **provisório**
+   (`s2vet-instalacao`) com UMA regra: aceitar TCP 22 do seu IP do momento. Ele só
+   precisa durar até o Tailscale funcionar (§8.3.1) — minutos, não dias. Se o seu IP
+   mudar nesse meio-tempo, é só editar a regra. (As regras definitivas vêm na §12.2.)
+8. 🔴 **Teste o terminal do navegador do hPanel** (H9) com o firewall ativo. Ele é sua
+   saída se você se trancar fora. Teste de novo depois da §8.4 (ver lá).
 
 ### 8.2 Primeiro acesso e atualização
 
@@ -397,6 +541,60 @@ chown marco:marco /home/marco/.ssh/authorized_keys && chmod 600 /home/marco/.ssh
 ```
 
 ✅ Em **outro** terminal: `ssh marco@<IP>` e `sudo -v` funcionam. Só então siga.
+
+### 8.3.1 Tailscale — o acesso administrativo (D6 = B)
+
+**Por que resolve o DHCP:** o Tailscale cria uma rede privada entre os SEUS aparelhos
+(PC, notebook, celular) e as VPS. Quem entra é o aparelho autenticado na sua conta, não
+um IP — então a VPS não precisa de porta SSH pública e o IP de casa pode mudar quantas
+vezes quiser. Por baixo é WireGuard; a conexão é ponta a ponta e cifrada.
+
+**Uma vez, no painel do Tailscale** (`login.tailscale.com/admin`):
+
+1. *DNS* → ligue **MagicDNS** (permite `ssh marco@s2vet-be-01` pelo nome).
+2. *Access controls* → acrescente ao arquivo de política (ajuste o e-mail):
+   ```jsonc
+   {
+     "tagOwners": {
+       "tag:s2vet-server": ["marcoaraujoc@gmail.com"]
+     },
+     "acls": [
+       // Os seus aparelhos falam com tudo, como antes.
+       { "action": "accept", "src": ["marcoaraujoc@gmail.com"], "dst": ["*:*"] }
+       // NENHUMA regra tem "tag:s2vet-server" como ORIGEM: um servidor comprometido
+       // não consegue abrir conexão para o seu PC nem para outro aparelho da rede.
+     ]
+   }
+   ```
+   ⚠️ Se a sua política hoje é a padrão ("tudo fala com tudo"), troque-a por esta. A
+   padrão deixaria a VPS alcançar o seu PC de desenvolvimento.
+3. *Settings → Keys* → gere **duas auth keys**, uma para cada VPS: não reutilizáveis,
+   validade 1 dia, *Tags*: `tag:s2vet-server`. Nó com tag **não expira** a cada 180
+   dias (a chave de nó de usuário expira e derrubaria seu acesso sem aviso).
+
+**Em cada VPS** (ainda pelo SSH público provisório):
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+# --ssh=false: o SSH continua sendo o OpenSSH com a SUA chave (o Tailscale só transporta).
+sudo tailscale up --auth-key=<AUTH_KEY_DESTA_VPS> --hostname=s2vet-be-01 --ssh=false   # [FE]: s2vet-fe-01
+tailscale ip -4          # anote o 100.x.y.z
+```
+
+**No seu PC** (Windows, onde o Tailscale já está instalado):
+```powershell
+tailscale status                 # as duas VPS aparecem
+ssh marco@s2vet-be-01            # ✅ entra pelo Tailscale
+```
+
+✅ Só continue quando os dois `ssh marco@s2vet-xx-01` funcionarem **pelo nome do
+Tailscale**. A partir da §8.5 o SSH público deixa de existir.
+
+⚠️ Instale o Tailscale também no **celular** (e no notebook, se houver): é o seu acesso
+de reserva se o PC quebrar.
+⚠️ O Tailscale **não** substitui o túnel WireGuard entre as VPS (§9): aquele carrega o
+tráfego da aplicação e não deve depender de um serviço de terceiros; o Tailscale fica só
+para administração.
 
 ### 8.4 SSH endurecido
 
@@ -426,7 +624,13 @@ sudo sshd -T | grep -Ei '^(passwordauthentication|permitrootlogin|allowusers)'
 ```
 
 ✅ Esperado: `passwordauthentication no`, `permitrootlogin no`. Teste um novo login
-**antes** de fechar a sessão atual.
+**pelo Tailscale** (`ssh marco@s2vet-be-01`) **antes** de fechar a sessão atual.
+
+🔴 **Teste de novo o terminal do navegador do hPanel agora.** Dependendo de como a
+Hostinger o implementa, ele pode deixar de entrar depois que o root e a senha foram
+desligados. Se deixar, o seu acesso de emergência passa a ser o **Modo de Recuperação**
+do hPanel (inicia a VPS num sistema de resgate com acesso ao disco) — confirme agora que
+sabe onde ele fica, não no dia em que precisar.
 
 ### 8.5 UFW (firewall do host — 2ª barreira)
 
@@ -436,10 +640,25 @@ Regras base agora; as específicas de cada VPS entram nas §9 e §12.3.
 sudo sed -i 's/^IPV6=.*/IPV6=yes/' /etc/default/ufw
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
-sudo ufw allow from <IP_ADMIN> to any port 22 proto tcp comment 'SSH admin'   # D6=A
+# SSH só pela rede do Tailscale (D6 = B) — vale para qualquer IP de casa
+sudo ufw allow in on tailscale0 to any port 22 proto tcp comment 'SSH via Tailscale'
+# Provisória: mantém a sessão atual viva enquanto você confere. Removida logo abaixo.
+sudo ufw allow from <SEU_IP_DO_MOMENTO> to any port 22 proto tcp comment 'SSH provisorio'
 sudo ufw enable
 sudo ufw status verbose
 ```
+
+Em **outro** terminal, confirme `ssh marco@s2vet-be-01` (Tailscale). Então feche o SSH
+público, nas duas barreiras:
+
+```bash
+sudo ufw delete allow from <SEU_IP_DO_MOMENTO> to any port 22 proto tcp
+```
+e, no hPanel, **remova a regra de SSH** do grupo provisório (a VPS fica sem nenhuma
+regra de entrada até a §9/§12.2).
+
+✅ Do seu PC: `ssh marco@<IP_PÚBLICO>` **não conecta** (timeout) e
+`ssh marco@s2vet-be-01` **conecta**.
 
 ### 8.6 fail2ban
 
@@ -570,6 +789,7 @@ Tudo nesta seção é `[BE]`.
 ```bash
 sudo adduser --system --group --home /opt/s2vet --shell /bin/bash s2vet
 sudo install -d -o s2vet -g s2vet -m 750 /opt/s2vet/{releases,shared,home,bin,.cache}
+sudo install -d -o s2vet -g s2vet -m 700 /opt/s2vet/.ssh
 sudo install -d -o root  -g root  -m 700 /var/backups/s2vet
 ```
 
@@ -760,7 +980,11 @@ TRUST_PROXY_HOPS=1
 UPLOAD_MAX_BYTES=99614720
 STORAGE_DRIVER=db
 
-# ── E-mail (Brevo) ──
+# ── E-mail (Brevo — o mesmo do desenvolvimento, D7) ──
+# 🔴 Chave SMTP NOVA, só de produção. E o remetente muda: no dev é marcoaraujoc@gmail.com;
+# aqui é o domínio autenticado no Brevo. Gmail como remetente saindo pelo Brevo falha no
+# alinhamento DMARC e manda o código do 2FA para o spam.
+EMAIL_PROVIDER=nodemailer
 EMAIL_HOST=smtp-relay.brevo.com
 EMAIL_PORT=587
 EMAIL_SECURE=false
@@ -848,7 +1072,7 @@ sudo systemctl enable s2vet-api      # sobe de verdade no primeiro deploy (§10.
 
 Permita ao usuário `s2vet` reiniciar **só** este serviço:
 ```bash
-echo 's2vet ALL=(root) NOPASSWD: /usr/bin/systemctl restart s2vet-api, /usr/bin/systemctl status s2vet-api' \
+echo 's2vet ALL=(root) NOPASSWD: /usr/bin/systemctl restart s2vet-api, /usr/bin/systemctl status s2vet-api, /usr/local/sbin/s2vet-backup.sh' \
  | sudo tee /etc/sudoers.d/s2vet && sudo chmod 440 /etc/sudoers.d/s2vet && sudo visudo -c
 ```
 
@@ -860,8 +1084,8 @@ sudo systemctl enable --now docker
 sudo install -d -o root -g root -m 750 /opt/evolution
 ```
 
-Copie `infra/evolution/docker-compose.yml` para `/opt/evolution/` com **dois ajustes
-obrigatórios para produção**:
+Copie `infra/evolution/docker-compose.yml` para `/opt/evolution/` com **três ajustes
+obrigatórios para produção** (ver [§1.1](#11-evolution-api-em-produção--o-que-muda), E1):
 
 ```yaml
 services:
@@ -870,9 +1094,13 @@ services:
     ports:
       - "127.0.0.1:8080:8080"                                 # 🔴 só localhost
     environment:
-      SERVER_URL: http://127.0.0.1:8080
+      SERVER_URL: http://127.0.0.1:8080                       # 🔴 não use EVOLUTION_PUBLIC_URL
       # ... resto igual ao arquivo do repositório
 ```
+
+🔴 **Ignore o comentário do topo do arquivo** que manda publicar a Evolution num
+`https://evo.seudominio.com.br` atrás de proxy. Em produção ela não tem nome público:
+quem fala com ela é só o backend, na mesma máquina.
 
 🔴 **Por que o `127.0.0.1:`:** o Docker escreve regras de iptables próprias que
 **passam por cima do UFW**. Com `"8080:8080"` a Evolution (que controla o WhatsApp de
@@ -891,12 +1119,21 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/      # 200
 sudo ss -tlpn | grep 8080        # tem de mostrar 127.0.0.1:8080, NUNCA 0.0.0.0:8080
 ```
 
-⚠️ O webhook da Evolution para o S2Vet é montado a partir do `APP_URL`, então ele sai da
-VPS, passa pelo Cloudflare e volta pelo túnel. A §12.1 tem a regra que impede o WAF de
-bloqueá-lo. As instâncias de cada clínica são recriadas pelo S2Vet
-(`docs/INTEGRACAO_EVOLUTION_API.md §8.2`).
+⚠️ O webhook da Evolution para o S2Vet é montado a partir do `APP_URL`
+(`EvolutionService.webhookUrl`), então ele sai da VPS, passa pelo Cloudflare e volta
+pelo túnel. A §12.1 tem as regras que deixam passar o webhook vindo do `<IP_BE>` e
+bloqueiam de qualquer outro lugar; a §11.2 tira o token dele do log do Nginx. As
+instâncias de cada clínica são recriadas pelo S2Vet (`docs/INTEGRACAO_EVOLUTION_API.md
+§8.2`) — cada clínica escaneia o QR Code de novo em produção (§1.1 E5).
+⚠️ O banco e o volume da Evolution guardam a sessão do WhatsApp de cada clínica: eles
+entram no backup diário (§14.1, E3).
 
 ### 10.9 Primeiro deploy
+
+🔴 **Só depois de** a VPS Frontend estar pronta (§11.1–11.4: o deploy copia o estático
+para lá) **e** de o backup estar funcionando (§14.1: o deploy faz backup antes de
+migrar e aborta se ele falhar). No [Roteiro](#roteiro--da-criação-da-vps-ao-primeiro-login)
+é o passo 39. Grave o `deploy.sh` (§16.1) agora; execute-o lá.
 
 Use o script da [§16.1](#161-script-de-deploy). O primeiro deploy faz, nesta ordem:
 clone → `.env` → `npm ci` (baixa o Chrome) → `prisma generate` → `build` → backup →
@@ -1040,6 +1277,19 @@ server {
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 1h;
+    }
+
+    # Webhook da Evolution: o token vai na query string — fora do log de acesso.
+    # (Quem pode chamar isto de fora é decidido no Cloudflare, §12.1 regras 1–2.)
+    location = /api/webhooks/evolution {
+        access_log off;
+        proxy_pass http://s2vet_api;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Request-Id $request_id;
     }
 
     # Login, 2FA, refresh, esqueci a senha: limite mais apertado por IP.
@@ -1226,44 +1476,47 @@ veterinário viajando (que só precisa resolver um desafio). Recomendação: lig
 
 hPanel → VPS → **Segurança → Firewall** → crie **dois** grupos.
 
+Estes grupos **substituem** o grupo provisório da instalação (§8.1). Com o Tailscale
+(D6 = B) **não há regra de SSH** em nenhum deles.
+
 **Grupo `s2vet-fe`** → aplique à VPS Frontend:
 | Ação | Protocolo | Porta | Origem | Por quê |
 |---|---|---|---|---|
-| Accept | TCP | 22 | `<IP_ADMIN>` | SSH (D6 = A). Com Tailscale (D6 = B): **nenhuma** regra de SSH. |
 | Accept | UDP | 51820 | `<IP_BE>` | Retorno do WireGuard caso o firewall não seja *stateful* (redundante se for) |
-| *(padrão)* | | | | **Drop** em todo o resto — inclusive 80/443: o Tunnel não precisa |
+| *(padrão)* | | | | **Drop** em todo o resto — inclusive 22, 80 e 443: o SSH vem pelo Tailscale e o site pelo Tunnel, as duas conexões que a própria VPS INICIA |
 
 **Grupo `s2vet-be`** → aplique à VPS Backend:
 | Ação | Protocolo | Porta | Origem | Por quê |
 |---|---|---|---|---|
-| Accept | TCP | 22 | `<IP_ADMIN>` | SSH (D6 = A) |
 | Accept | UDP | 51820 | `<IP_FE>` | Túnel WireGuard |
-| *(padrão)* | | | | **Drop** — 3001, 5432, 8080 **nunca** |
+| *(padrão)* | | | | **Drop** — 22, 3001, 5432, 8080 **nunca** |
+
+⚠️ O Tailscale funciona com tudo isso fechado: ele atravessa o firewall pelas conexões
+de saída (e, se não conseguir ligação direta, por um *relay* — mais lento, mas é só
+SSH). Não abra a UDP 41641 para "melhorar" a conexão.
 
 Crie as regras também para IPv6 se as VPS tiverem IPv6 e a origem tiver IPv6.
 Mudanças levam até 2 minutos (H2). ✅ Depois de aplicar: `sudo apt update` funciona nas
-duas VPS (prova que a saída não foi afetada) e `sudo wg show` continua com handshake.
+duas VPS (prova que a saída não foi afetada), `sudo wg show` continua com handshake e
+`ssh marco@s2vet-be-01` (Tailscale) continua entrando.
 
 ### 12.3 UFW — estado final esperado
 
 `[FE]` `sudo ufw status numbered`:
 ```
-22/tcp                ALLOW IN   <IP_ADMIN>        # SSH admin (D6=A)
-10.50.0.1 22/tcp on wg0  ALLOW IN   10.50.0.2      # deploy via túnel
+22/tcp on tailscale0      ALLOW IN   Anywhere      # SSH via Tailscale
+10.50.0.1 22/tcp on wg0   ALLOW IN   10.50.0.2     # deploy via túnel
 ```
 `[BE]`:
 ```
-22/tcp                ALLOW IN   <IP_ADMIN>        # SSH admin (D6=A)
-51820/udp             ALLOW IN   <IP_FE>           # WireGuard
-10.50.0.2 3001/tcp on wg0 ALLOW IN 10.50.0.1       # API só pelo túnel
+22/tcp on tailscale0      ALLOW IN   Anywhere      # SSH via Tailscale
+51820/udp                 ALLOW IN   <IP_FE>       # WireGuard
+10.50.0.2 3001/tcp on wg0 ALLOW IN   10.50.0.1     # API só pelo túnel
 ```
 
-**D6 = B (Tailscale):** instale nas duas VPS e no seu PC
-(`curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up --ssh=false`),
-troque as regras de SSH por `sudo ufw allow in on tailscale0 to any port 22 proto tcp`,
-remova a regra de `<IP_ADMIN>` do UFW e do hPanel. Resultado: **zero portas públicas**
-na VPS Frontend e só a UDP 51820 (para um único IP) na Backend. Mantenha o terminal do
-hPanel (H9) como acesso de emergência.
+Resultado: **zero portas públicas** na VPS Frontend e só a UDP 51820 (aceita de um único
+IP) na Backend. Nenhuma regra cita o IP da sua casa — ele pode mudar à vontade. Acesso de
+emergência: terminal do navegador ou Modo de Recuperação do hPanel (§8.4).
 
 ### 12.4 Hardening de kernel (as duas VPS)
 
@@ -1304,10 +1557,10 @@ fica no histórico de DNS. Por isso o Tunnel é a recomendação.
 
 | Integração | Passos | ✅ Verificação |
 |---|---|---|
-| **Brevo** | *Senders & Domains* → adicionar `s2vet.com.br` → publicar SPF/DKIM no Cloudflare → criar remetente `noreply@s2vet.com.br` → *SMTP & API* → nova chave SMTP para produção | `npm run email:testar -- marcoaraujoc@gmail.com` no BE: chega na caixa de entrada (não no spam) e o cabeçalho mostra `spf=pass dkim=pass dmarc=pass` |
+| **Brevo** (o mesmo do dev) | *Senders & Domains* → **autenticar o domínio** `s2vet.com.br` → publicar SPF/DKIM no Cloudflare → criar remetente `noreply@s2vet.com.br` → *SMTP & API* → **nova** chave SMTP só para produção (a de dev não vai para o servidor). Hoje o dev envia como `marcoaraujoc@gmail.com`; em produção o `EMAIL_FROM` passa a ser o do domínio | `npm run email:testar -- marcoaraujoc@gmail.com` no BE: chega na caixa de entrada (não no spam) e o cabeçalho mostra `spf=pass dkim=pass dmarc=pass` |
 | **Google OAuth** | Google Cloud (projeto de produção) → *APIs & Services → Credentials* → OAuth Client (Web) → **Authorized JavaScript origins**: `https://app.s2vet.com.br` → *OAuth consent screen*: publicar ("In production"), escopos só `email`/`profile`/`openid`, logo, links de política de privacidade e termos | Login com Google em aba anônima |
 | **Gemini** | Mesmo projeto → *Generative Language API* → nova chave → **Restrições: endereço IP = `<IP_BE>`** → *Billing → Budgets*: alerta em 50/90/100% | Memória clínica de um paciente gera; `/ai-usage` registra a chamada com a empresa |
-| **Evolution** | §10.8 → tela de Configurações da clínica → conectar (QR Code) | Lembrete/PDF chega no WhatsApp; status da conexão atualiza sozinho (prova do webhook) |
+| **Evolution** | §10.8 → tela de Configurações da clínica → conectar (QR Code) — cada clínica reconecta em produção (§1.1 E5) | Lembrete/PDF chega no WhatsApp; status da conexão atualiza sozinho (prova do webhook e das regras do WAF) |
 | **SISCAD/CFMV (CRMV)** | Nada a configurar — job diário com Chrome headless | Tela de Monitoração mostra a execução da "Sincronização CRMV" |
 
 ⚠️ O CRMV é raspagem de site público. Se o CFMV bloquear o IP do datacenter, o job falha
@@ -1348,12 +1601,25 @@ runuser -u postgres -- pg_dump -Fc -Z 6 dbs2vet           | age -r "$PUB" > "$DI
 runuser -u postgres -- pg_dumpall --globals-only         | age -r "$PUB" > "$DIR/globals_$TS.sql.age"
 tar -C /opt -cz evolution/.env s2vet/shared              | age -r "$PUB" > "$DIR/config_$TS.tgz.age"
 
+# Evolution (§1.1 E3): sessão do WhatsApp de cada clínica. Sem isto, perder a VPS
+# obriga TODAS as clínicas a escanear o QR Code de novo.
+docker compose -f /opt/evolution/docker-compose.yml exec -T evolution-db \
+  pg_dump -U evolution -Fc evolution                    | age -r "$PUB" > "$DIR/evolution_db_$TS.dump.age"
+docker run --rm -v evolution_evolution_instances:/d:ro alpine tar -cz -C /d . \
+                                                        | age -r "$PUB" > "$DIR/evolution_inst_$TS.tgz.age"
+
 rclone copy "$DIR" offsite:s2vet-backups/$(hostname)/ --include "*_$TS.*"
 find "$DIR" -type f -mtime +3 -delete     # 3 dias locais; o histórico fica no bucket
 
 # "Dead man's switch": se este ping não chegar, o monitor avisa (§14.3)
 curl -fsS -m 10 "<URL_HEARTBEAT_BACKUP>" >/dev/null || true
 ```
+
+⚠️ O nome do volume (`evolution_evolution_instances`) é *projeto*_*volume*: confira com
+`sudo docker volume ls` — muda se a pasta do compose não se chamar `evolution`.
+
+🔴 Configure o backup **antes do primeiro deploy** (Roteiro, passo 29): a partir do
+restore já existe dado real no servidor, e o `deploy.sh` aborta se o backup falhar.
 
 Agendamento (`sudo crontab -e`) — fora da janela dos jobs da aplicação (23:30–00:00):
 ```
@@ -1423,8 +1689,9 @@ ORDER BY pg_total_relation_size(oid) DESC LIMIT 10;
 
 | # | Teste | Comando / ferramenta | Esperado |
 |---|---|---|---|
-| S1 | Portas do Backend | `nmap -Pn -p 22,80,443,3001,5432,8080 <IP_BE>` | tudo `filtered` (22 `open` só a partir do seu IP) |
+| S1 | Portas do Backend | `nmap -Pn -p 22,80,443,3001,5432,8080 <IP_BE>` | tudo `filtered` — **inclusive a 22** (SSH só pelo Tailscale) |
 | S2 | Portas do Frontend | `nmap -Pn -p 22,80,443,8080 <IP_FE>` | tudo `filtered` |
+| S2b | SSH pelo Tailscale | `ssh marco@s2vet-be-01` e `ssh marco@s2vet-fe-01`, de casa **e** pelo 4G do celular | entra nos dois casos — prova de que o IP de origem não importa |
 | S3 | UDP do túnel | `nmap -sU -Pn -p 51820 <IP_BE>` de outro IP | `open\|filtered` sem resposta (WireGuard não responde a quem não tem a chave) |
 | S4 | WAF | `curl -s -o /dev/null -w '%{http_code}' https://app.s2vet.com.br/.env` | `403` (bloqueio do Cloudflare) |
 | S5 | Webhook de fora | `curl -X POST https://app.s2vet.com.br/api/webhooks/evolution` | `403` |
@@ -1599,10 +1866,11 @@ verificação do domínio no Brevo (sem ela não há 2FA nem reset de senha) →
 | R7 | Crons duplicados (2 instâncias) | Baixa | Médio | uma instância (§3.2); nunca PM2 cluster |
 | R8 | Restart na janela de jobs | Média | Médio | janela de manutenção (§16.4) |
 | R9 | WAF bloqueando uso legítimo | Média | Médio | OWASP em *Log* por 1 semana; webhook com Skip |
-| R10 | Trancar-se fora do servidor | Média | Alto | testar terminal do hPanel antes; nunca fechar a sessão SSH antes de testar a nova |
-| R11 | Limite de e-mail da Hostinger (5/min) | Baixa | Médio | relay Brevo na 587; plano B Resend via HTTPS |
+| R10 | Trancar-se fora do servidor (Tailscale fora do ar, PC perdido, chave SSH perdida) | Baixa | Alto | Tailscale em 2+ aparelhos (PC e celular); chave SSH com cópia no gerenciador de senhas; terminal do navegador / Modo de Recuperação do hPanel testados (§8.4); nunca fechar a sessão SSH antes de testar a nova |
+| R11 | Limite de e-mail da Hostinger (5/min) | Baixa | Médio | relay Brevo na 587; plano B Resend via HTTPS (exige C9) |
 | R12 | Chave do Gemini vazada / custo | Baixa | Médio | restrição por IP + orçamento com alerta + quota por empresa (já existe na aplicação) |
 | R13 | Dependência de uma pessoa (você) | Alta | Alto | este documento + runbook + segredos no gerenciador com acesso de emergência para uma 2ª pessoa |
+| R14 | Ambiente de desenvolvimento mandando mensagem/e-mail a cliente real (o banco de dev é a mesma "imagem dourada") | Média | Alto | no go-live: Evolution de dev desconectada, `WHATSAPP_PROVIDER=noop` e remetente de teste no `.env` de dev (§1.1 E4) |
 
 ### 17.3 LGPD e obrigações (não é infraestrutura, mas bloqueia o lançamento)
 
@@ -1637,6 +1905,8 @@ autorização. Nenhum bloqueia o go-live com este plano (as mitigações estão 
 | C6 | Atualizar `docs/DEPLOY-PRODUCAO.md` com a topologia escolhida (D2) e o link para este plano | Hoje diz `https://s2vet.com.br` e "um provedor" | Baixa |
 | C7 | Pipeline de CI que gera os artefatos (build) e roda os testes antes do deploy | Hoje o build acontece no servidor de produção | Média (pós go-live) |
 | C8 | Checar se o frontend informa o limite de upload ao usuário (antes de enviar) | Com D4, um vídeo de 120 MB deve ser recusado na tela, não após subir 100 MB | Média |
+| C9 | Adicionar o pacote `resend` ao `package.json` do backend | Só se o plano B de e-mail for acionado (D7/H4). O código já tem o provider Resend, mas carrega o pacote sob demanda e ele **não está** nas dependências: com `EMAIL_PROVIDER=resend` e sem isso, nenhum e-mail sai — nem o código do 2FA | Baixa (vira Alta se trocar de provedor) |
+| C10 | Variável própria para a URL do webhook da Evolution (ex.: `EVOLUTION_WEBHOOK_BASE_URL`), apontando para o backend pela rede interna do Docker | Hoje o webhook usa o `APP_URL` e dá a volta pela internet (§1.1 E2): depende do Cloudflare estar no ar e do WAF deixar passar, e o token atravessa a borda. Interno, nada disso existe. Exige liberar a rede do Docker para a porta 3001 no UFW | Média |
 
 ---
 
@@ -1656,6 +1926,11 @@ Referências do próprio repositório:
 - `docs/INTEGRACAO_EVOLUTION_API.md` — WhatsApp
 - `backend/.env.example` — todas as variáveis, com o porquê
 - `backend/prisma/migrations/20260806160000_fase6_grants_zls2vetp1` — privilégios da role da aplicação
+
+Tailscale: [Instalação no Linux](https://tailscale.com/kb/1031/install-linux) ·
+[Auth keys](https://tailscale.com/kb/1085/auth-keys) ·
+[Tags](https://tailscale.com/kb/1068/tags) ·
+[Políticas de acesso (ACL)](https://tailscale.com/kb/1018/acls)
 
 Outras: [Faixas de IP do Cloudflare](https://www.cloudflare.com/ips/) ·
 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) ·
