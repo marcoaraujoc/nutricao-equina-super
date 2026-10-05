@@ -13,6 +13,8 @@ const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib
 // estoque de vacinas gravava o lote e a dívida não existia em lugar nenhum.
 const contasPagar     = require('../lib/contasPagar');
 const produtoFornecedor = require('../lib/produtoFornecedor');
+const { preferirCopiaDaEmpresa } = require('../lib/catalogoManual');
+const { copiaExistente } = require('../lib/unidadeMedicamento');
 
 const INCLUDE_LOTE = {
   vacina:         { select: { id: true, nome: true, fabricante: true, via: true, ativo: true } },
@@ -296,7 +298,7 @@ const listarVacinasPorFabricante = async (req, res) => {
       rows = await prisma.$queryRawUnsafe(
         `SELECT DISTINCT ON (m.id)
                 m.id, m.nome, m.fabricante, m."formaFarmaceutica",
-                m.apresentacao, m.unidade
+                m.apresentacao, m.unidade, m.empresa_id AS "empresaId"
          FROM schs2vet.tb_medicamentos m
          INNER JOIN schs2vet.tb_medicamento_especies me ON me."medicamentoId" = m.id
          WHERE m.ativo = true
@@ -314,7 +316,7 @@ const listarVacinasPorFabricante = async (req, res) => {
       rows = await prisma.$queryRawUnsafe(
         `SELECT id, nome, fabricante,
                 "formaFarmaceutica",
-                apresentacao, unidade
+                apresentacao, unidade, empresa_id AS "empresaId"
          FROM schs2vet.tb_medicamentos
          WHERE ativo = true
            AND lower(classificacao) LIKE '%vacin%'
@@ -323,6 +325,14 @@ const listarVacinasPorFabricante = async (req, res) => {
         ...params
       );
     }
+
+    // 🔴 ITEM GLOBAL NUNCA É ALTERADO; HAVENDO A CÓPIA DA EMPRESA, SÓ ELA APARECE
+    // (2026-10-02). Editar uma vacina GLOBAL em /cadastro/produtos cria a CÓPIA da
+    // clínica (copy-on-write) com o mesmo nome — e este seletor listava as DUAS. A
+    // pessoa escolhia a global, o lote nascia nela (sem o multidose/forma da cópia) e a
+    // Prescrição, que só mostra a cópia, ficava sem estoque. Caso real: Patyvet,
+    // "Ourovac® Raiva - frasco 50 mL" (lote 37 no global 1582, cópia 11769).
+    rows = preferirCopiaDaEmpresa(rows);
 
     // Busca vias de cada medicamento
     if (rows.length > 0) {
@@ -374,7 +384,7 @@ const listarCatalogoComEstoque = async (req, res) => {
       `SELECT DISTINCT ON (m.id)
               m.id, m.nome, m.fabricante,
               m."formaFarmaceutica",
-              m.apresentacao, m.unidade,
+              m.apresentacao, m.unidade, m.empresa_id AS "empresaId",
               CASE WHEN COALESCE(lv.doses_por_frasco, 1) > 0
                    THEN COALESCE(lv.valor_unitario_repassado, lv.valor_unitario, 0) / NULLIF(lv.doses_por_frasco, 0)
                    ELSE 0
@@ -387,7 +397,7 @@ const listarCatalogoComEstoque = async (req, res) => {
          ${empFilter}
          ${espFilter}
        ORDER BY m.id, lv.validade ASC NULLS LAST`
-    );
+    ).then(preferirCopiaDaEmpresa);
 
     if (rows.length > 0) {
       const ids  = rows.map(r => r.id);
@@ -492,7 +502,6 @@ const criar = async (req, res) => {
   try {
     const {
       vacinaId,
-      medicamentoCatId,
       empresaId,
       lote,
       validade,
@@ -516,9 +525,32 @@ const criar = async (req, res) => {
       fornecedorId,
       notaFiscal,
     } = req.body;
+    // `let`: pode ser trocado pela CÓPIA DA EMPRESA logo abaixo.
+    let { medicamentoCatId } = req.body;
 
     if (!vacinaId && !medicamentoCatId)
       return res.status(400).json({ error: 'vacinaId ou medicamentoCatId é obrigatório.' });
+
+    // 🔴 O LOTE VAI PARA A CÓPIA DA EMPRESA, NUNCA PARA O GLOBAL QUE ELA SUBSTITUI
+    // (2026-10-02). O seletor já esconde o global homônimo (`preferirCopiaDaEmpresa`),
+    // mas uma tela aberta ANTES de a cópia nascer ainda manda o id do global — e o lote
+    // ficaria num item que a Prescrição não mostra, com o conteúdo do frasco do global
+    // (sem o multidose da cópia). Resolvido ANTES de `dosesDoCatalogo`, para o lote
+    // nascer com o conteúdo declarado pela CÓPIA.
+    // ⚠️ Só a cópia ATIVA: a inativa foi tirada de uso pela clínica.
+    {
+      const empresaCtx = empresaId ? Number(empresaId) : (req.empresaId ?? null);
+      if (medicamentoCatId && empresaCtx) {
+        const med = await prisma.medicamento.findUnique({
+          where:  { id: Number(medicamentoCatId) },
+          select: { nome: true, empresaId: true },
+        });
+        if (med && med.empresaId == null) {
+          const copia = await copiaExistente(prisma, med.nome, empresaCtx);
+          if (copia?.ativo) medicamentoCatId = copia.id;
+        }
+      }
+    }
     if (!validade) return res.status(400).json({ error: 'Validade é obrigatória.' });
     if (Number(estoqueMinimo) < 0 || Number(estoqueAlarmante) < 0)
       return res.status(400).json({ error: 'Quantidades não podem ser negativas.' });

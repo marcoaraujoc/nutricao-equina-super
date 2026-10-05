@@ -41,7 +41,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { isMobile } from '../services/whisperService';
 import { comprimirImagensAteLimite } from '../utils/imageCompress';
 import { temResultadoExame } from '../utils/exameClinico';
-import { conferirExame } from '../utils/exameConferencia';
+import { conferirExame, conferirQtdImagens, ehArquivoDeImagem } from '../utils/exameConferencia';
 import AcaoRegistro, { AcoesRegistro } from './AcaoRegistro';
 
 type TipoExame = 'Laboratorial' | 'Bioquímico' | 'Imagem' | 'Compra';
@@ -81,6 +81,10 @@ export interface ExameSolicitado {
    *  recibo e a conta a pagar (tela de Pagamentos). `null` = própria equipe, e é o
    *  estado de todo exame anterior a 2026-09-22. */
   prestadorId?:    number | null;
+  /** Quantidade do PEDIDO: nº de IMAGENS no exame de Imagem (nº de amostras no
+   *  laboratorial). `null`/0 = o pedido não informou. É contra ela que a tela confere
+   *  quantas imagens foram anexadas (`conferirQtdImagens`). */
+  qtdAmostra?:     number | null;
 }
 
 export interface ItemManual {
@@ -424,6 +428,19 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
   const isImagem = tipo === 'Imagem';
   const preenchidos = itens.filter(i => i.parametro.trim());
 
+  // CONFERÊNCIA DA QUANTIDADE DE IMAGENS — irmã da conferência do exame. Só existe com
+  // PEDIDO de Imagem que informou a quantidade (`qtdAmostra`). Conta o que o exame terá
+  // ao salvar: as imagens já gravadas (edição) + as anexadas agora. O laudo em
+  // PDF/DOCX/TXT não conta — ver `conferirQtdImagens`.
+  const qtdImagensPedida = isImagem && ex && (ex.qtdAmostra ?? 0) > 0 ? Number(ex.qtdAmostra) : null;
+  const qtdImagensAnexadas =
+    arquivos.filter(f => ehArquivoDeImagem(f.name, f.type)).length
+    + (arquivosSalvos ?? []).filter(a => ehArquivoDeImagem(a.nome)).length;
+  // Divergência de quantidade à espera da decisão (modal), e a contagem que a pessoa já
+  // aceitou salvar assim — mudou a contagem, pergunta de novo.
+  const [divergenciaQtd, setDivergenciaQtd] = useState<string | null>(null);
+  const [qtdImagensAceita, setQtdImagensAceita] = useState<number | null>(null);
+
   // Lê os arquivos com a IA e pré-preenche laboratório + tabela (ou o laudo
   // transcrito, em Imagem) — tudo continua editável logo abaixo. `exameId`
   // (só quando `ex` existe) exclui o PRÓPRIO pedido da checagem de duplicidade lá
@@ -633,6 +650,14 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
     if (ex) setTipo(ex.tipo);
   };
 
+  const gravar = () => {
+    setErro(null);
+    onSalvar({
+      tipo, descricao: descricao.trim(), laboratorio: laboratorio.trim(), dataExame,
+      laudo: laudo.trim(), itens: preenchidos, arquivos, prestadorId,
+    });
+  };
+
   const confirmar = () => {
     if (!descricao.trim()) { setErro('Informe a descrição do exame'); return; }
     if (isImagem) {
@@ -641,11 +666,14 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
       setErro('Informe ao menos um parâmetro do resultado');
       return;
     }
-    setErro(null);
-    onSalvar({
-      tipo, descricao: descricao.trim(), laboratorio: laboratorio.trim(), dataExame,
-      laudo: laudo.trim(), itens: preenchidos, arquivos, prestadorId,
-    });
+    // Conferida no SALVAR, e não a cada lote anexado: as imagens costumam chegar em
+    // vários anexos (laudo primeiro, fotos depois), e avisar no meio do caminho seria
+    // alarme sobre um conjunto que ainda não está completo.
+    if (qtdImagensPedida != null && qtdImagensAceita !== qtdImagensAnexadas) {
+      const conf = conferirQtdImagens(qtdImagensPedida, qtdImagensAnexadas);
+      if (!conf.combina) { setErro(null); setDivergenciaQtd(conf.motivo); return; }
+    }
+    gravar();
   };
 
   return (
@@ -808,6 +836,13 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
               {arquivos.length > 0 && (
                 <p className="text-[11px] text-gray-500 mt-1">
                   {arquivos.length === 1 ? arquivos[0].name : `${arquivos.length} arquivo(s) selecionado(s)`}
+                </p>
+              )}
+              {/* Contagem À VISTA contra o pedido — a conferência de verdade é no salvar,
+                  mas quem está anexando foto a foto precisa saber quantas faltam. */}
+              {qtdImagensPedida != null && (
+                <p className={`text-[11px] font-medium mt-1 ${qtdImagensAnexadas === qtdImagensPedida ? 'text-emerald-700' : 'text-amber-700'}`}>
+                  Imagens anexadas: {qtdImagensAnexadas} de {qtdImagensPedida} {qtdImagensPedida === 1 ? 'pedida' : 'pedidas'}
                 </p>
               )}
               {/* Pergunta ANTES de tocar no formulário — é o que permite o "adicionar"
@@ -979,6 +1014,51 @@ export function ResultadoModal({ ex, tipoAba, animalId, saving, erroSalvar, some
               <button onClick={() => { setDivergenciaAceita(divergencia); setDivergencia(null); }}
                 className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm font-semibold transition-colors">
                 Continuar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONFERÊNCIA DA QUANTIDADE DE IMAGENS — mesmo molde da conferência do exame, e
+          pelo mesmo motivo NUNCA bloqueia: as imagens podem ter vindo dentro do PDF do
+          laudo, que a contagem não enxerga. Quem decide é quem está com o documento.
+          ⚠️ "Anexar imagens" chama o seletor no MESMO gesto do clique (síncrono) —
+          adiado, o navegador perde a ativação e ignora a abertura. */}
+      {divergenciaQtd && ex && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md border border-gray-100">
+            <div className="flex items-center gap-2 px-5 py-4 border-b border-gray-100">
+              <AlertTriangle size={18} className="text-amber-500 flex-shrink-0" />
+              <h3 className="font-bold text-gray-900">A quantidade de imagens não confere com o pedido</h3>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <p className="text-sm text-gray-700">{divergenciaQtd}</p>
+              <div className="text-xs bg-gray-50 border border-gray-100 rounded-xl px-3 py-2.5 space-y-1">
+                <p><span className="text-gray-400">Pedido:</span>{' '}
+                  <span className="font-semibold text-gray-800">{ex.tipo} · {ex.descricao}</span></p>
+                <p><span className="text-gray-400">Imagens pedidas:</span>{' '}
+                  <span className="font-semibold text-gray-800">{qtdImagensPedida}</span></p>
+                <p><span className="text-gray-400">Imagens anexadas:</span>{' '}
+                  <span className="font-semibold text-gray-800">{qtdImagensAnexadas}</span></p>
+              </div>
+              <p className="text-xs text-gray-500">
+                Conta só arquivos de imagem — se as imagens estão dentro do PDF do laudo, confirme para salvar.
+                Deseja salvar mesmo assim?
+              </p>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 px-5 pb-5 pt-1">
+              <button onClick={() => setDivergenciaQtd(null)}
+                className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+                Voltar
+              </button>
+              <button onClick={() => { setDivergenciaQtd(null); abrirSeletorRef.current?.(); }}
+                className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+                Anexar imagens
+              </button>
+              <button onClick={() => { setQtdImagensAceita(qtdImagensAnexadas); setDivergenciaQtd(null); gravar(); }}
+                className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm font-semibold transition-colors">
+                Salvar mesmo assim
               </button>
             </div>
           </div>

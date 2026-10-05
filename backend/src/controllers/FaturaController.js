@@ -18,9 +18,11 @@ const { origensPorItem } = require('../lib/faturaItemOrigens');
 // Fechamento POR ANIMAL: quais itens da fatura já foram encerrados à parte.
 // Colunas novas lidas/gravadas por SQL cru (o client Prisma pode não conhecê-las).
 const fechamentoAnimal = require('../lib/faturaFechamentoAnimal');
+const itemUnidade = require('../lib/faturaItemUnidade');
 const { resolverLogoPorProprietario } = require('../lib/logoEmpresaUtils');
 const { ehClienteDaEmpresa } = require('../lib/clienteEmpresa');
 const { lerDadosRecebimento } = require('../lib/dadosRecebimento');
+const { animaisComAssistencia } = require('../lib/animalAssistencia');
 const { registrarAuditoria } = require('../lib/auditoria');
 const { ehGestorNoContexto } = require('../middlewares/permissao.middleware');
 const { escopoCatalogoEmpresa } = require('../middlewares/empresaAtiva.middleware');
@@ -50,7 +52,11 @@ async function comPerfilDaEmpresa(fatura, empresaId) {
   // Prisma ainda não conhece — e sem ela a tela mostraria como ABERTO um bloco de
   // paciente já encerrado (com o botão "Fechar" de volta e o valor contando duas vezes).
   const comFechamento = await fechamentoAnimal.anexarFechamento(fatura);
-  const comOrigem = await comOrigensDetalhadas(comOrigemDosItens(comFechamento));
+  // `unidade` ('mL' no multidose) vem à parte pelo mesmo motivo de `fechadoEm`: a
+  // coluna é lida por SQL cru (lib/faturaItemUnidade.js).
+  const comOrigem = await itemUnidade.anexarUnidadeNosItens(
+    prisma, await comOrigensDetalhadas(comOrigemDosItens(comFechamento)),
+  );
   return comOrigem.proprietario && empresaId
     ? { ...comOrigem, proprietario: await aplicarPerfilProprietario(comOrigem.proprietario, empresaId) }
     : comOrigem;
@@ -84,8 +90,10 @@ async function comOrigensDoItem(item) {
   // a parecer aberta logo depois de ser editada.
   const fechados = await fechamentoAnimal.fechadosDaFatura(prisma, item.faturaId);
   const f = fechados.get(Number(item.id));
+  const unidades = await itemUnidade.unidadesDosItens(prisma, [item.id]);
   return {
     ...item,
+    unidade:      unidades.get(Number(item.id)) ?? null,
     origens:      mapa.get(item.id) ?? [],
     fechadoEm:    f?.fechadoEm ?? null,
     fechadoPorId: f?.fechadoPorId ?? null,
@@ -330,35 +338,85 @@ async function diaVencimentoDoProprietario(proprietarioId, empresaId = null, db 
 }
 
 /**
- * Adiciona o item de assistência veterinária mensal à fatura. Idempotente DENTRO da
- * fatura — como há uma fatura por `mesReferencia`, o efeito é a cobrança recorrente:
- * exatamente um item por mês.
+ * Adiciona a assistência veterinária mensal à fatura — UMA LINHA POR ANIMAL.
  *
- * O gatilho é o VALOR (> 0), não o flag `mensalista`: na tela, desmarcar "mensalista"
- * limpa o campo e envia `valorAssistencia: null`, então valor > 0 já implica mensalista.
- * Depender do flag só acrescentaria uma segunda fonte de verdade capaz de divergir.
+ * 🔴 A assistência é do ANIMAL (`tb_animais.valor_assistencia`, `lib/animalAssistencia.js`),
+ * não mais do proprietário: o cliente com três cavalos combina um valor por cavalo, e só
+ * os que têm assistência entram. A linha nasce com `animalId`, então cai no bloco do
+ * paciente certo (fechar/pagar por animal funcionam sobre ela sem nenhum caso especial).
+ *
+ * Idempotente DENTRO da fatura (por animal) — como há uma fatura por `mesReferencia`, o
+ * efeito é a cobrança recorrente: exatamente um item por animal por mês.
+ *
+ * O gatilho é o VALOR (> 0), não um flag: um segundo campo "tem assistência?" seria uma
+ * segunda fonte de verdade capaz de divergir.
+ *
+ * ⚠️ TRANSIÇÃO: cliente que era mensalista pelo cadastro do PROPRIETÁRIO (valor legado em
+ * `ProprietarioPerfil`) segue cobrado por esse valor, em UMA linha sem animal, **enquanto
+ * nenhum animal dele tiver assistência**. Assim que um animal receber valor, o legado
+ * deixa de valer — senão o mesmo serviço seria cobrado duas vezes. Sem esse fallback,
+ * toda a base mensalista deixaria de ser cobrada em silêncio ao aplicar a mudança. Se a
+ * fatura JÁ tem a linha legada, não se acrescentam linhas por animal nela (mesma razão).
  *
  * @param proprietario id do proprietário (aceita também o objeto, por compatibilidade)
  * @param empresaId    empresa da FATURA (`Fatura.empresaId`); null só em fatura legada
  * @param db           🔴 OBRIGATÓRIO no CRON: o `tx` da empresa da vez. Com o `prisma`
- *   global, o cron não achava o `ProprietarioPerfil` (RLS sem tenant) e o mensalista
- *   simplesmente deixava de ser cobrado no fechamento — sem erro nenhum, porque "não
- *   achei perfil" e "não é mensalista" produzem o mesmo `return false`.
+ *   global o RLS esconde animais e perfis e o mensalista simplesmente deixa de ser
+ *   cobrado no fechamento — sem erro nenhum, porque "não achei" e "não é mensalista"
+ *   produzem o mesmo `return false`.
  */
+const DESCRICAO_ASSISTENCIA = 'Assistência Veterinária Mensal';
+
 async function adicionarAssistenciaMensal(faturaId, proprietario, veterinarioId = null, empresaId = null, db = prisma) {
   const proprietarioId = typeof proprietario === 'object' ? proprietario?.id : proprietario;
+
+  const animais = await animaisComAssistencia(proprietarioId, empresaId, db);
+
+  if (animais.length > 0) {
+    // Linha legada (sem animal) já lançada nesta fatura: não duplica o serviço.
+    const legada = await db.faturaItem.findFirst({
+      where: { faturaId, tipo: 'ASSISTENCIA', animalId: null, descricao: DESCRICAO_ASSISTENCIA },
+      select: { id: true },
+    });
+    if (legada) return false;
+
+    let criou = false;
+    for (const animal of animais) {
+      const existe = await db.faturaItem.findFirst({
+        where: { faturaId, tipo: 'ASSISTENCIA', animalId: animal.id, descricao: DESCRICAO_ASSISTENCIA },
+        select: { id: true },
+      });
+      if (existe) continue;
+      await db.faturaItem.create({
+        data: {
+          faturaId,
+          tipo:          'ASSISTENCIA',
+          descricao:     DESCRICAO_ASSISTENCIA,
+          valor:         animal.valor,
+          quantidade:    1,
+          animalId:      animal.id,
+          veterinarioId: veterinarioId ?? null,
+        },
+      });
+      criou = true;
+    }
+    if (criou) await recalcularTotal(faturaId, db);
+    return criou;
+  }
+
+  // Sem animal com assistência: valor legado do proprietário (transição).
   const valor = await resolverAssistencia(proprietarioId, empresaId, db);
   if (!valor || valor <= 0) return false;
 
   const existeAssistencia = await db.faturaItem.findFirst({
-    where: { faturaId, tipo: 'ASSISTENCIA', descricao: 'Assistência Veterinária Mensal' },
+    where: { faturaId, tipo: 'ASSISTENCIA', descricao: DESCRICAO_ASSISTENCIA },
   });
   if (existeAssistencia) return false;
   await db.faturaItem.create({
     data: {
       faturaId,
       tipo:         'ASSISTENCIA',
-      descricao:    'Assistência Veterinária Mensal',
+      descricao:    DESCRICAO_ASSISTENCIA,
       valor,
       quantidade:   1,
       veterinarioId: veterinarioId ?? null,

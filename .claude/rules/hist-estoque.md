@@ -28,6 +28,37 @@ paths:
 As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão em `CLAUDE.md`.
 
 ---
+# Atualizado em: 2026-10-02 (🔴 **GLOBAL SUBSTITUÍDO PELA CÓPIA DA CLÍNICA SÓ MOSTRA A
+#   CÓPIA — em TODA listagem.** Regra do usuário: "item global nunca é alterado; se
+#   existirem dois, um global e outro da empresa, só deve aparecer o da empresa".
+#   Relato: Patyvet editou "Ourovac® Raiva - frasco 50 mL" (forma "doses", 2/frasco) →
+#   nasceu a cópia 11769; 2 min depois deu entrada no Estoque de Vacinas escolhendo o
+#   GLOBAL 1582 (o seletor listava os dois): lote 37 com 4 × 1 = 4 no global. A
+#   Prescrição (`paraAtendimento`, que já prefere a cópia) não via estoque nenhum.
+#   1. `EstoqueVacinaController.listarVacinasPorFabricante` e `listarCatalogoComEstoque`
+#      passaram por `preferirCopiaDaEmpresa` (trazem `empresa_id AS "empresaId"`).
+#   2. `criar` (lote): id GLOBAL com cópia ATIVA da empresa é DESVIADO para a cópia
+#      (`copiaExistente`) ANTES de `dosesDoCatalogo` — o lote nasce com o conteúdo da
+#      cópia. Cobre tela aberta antes de a cópia nascer.
+#   3. `/cadastro/produtos` (`ProdutoController.listar`) escondia nada: listava o global
+#      com selo "do sistema" ao lado da cópia. Agora `idsGlobaisSubstituidos` (nova, em
+#      `lib/catalogoManual.js`) filtra NO BANCO (`notIn`) — a lista é paginada, filtrar
+#      depois do `take` furaria página e total. Vale com a cópia inativa também.
+#   4. `MedicamentoController.listarVacinas` também prefere a cópia.
+#   **DADO**: `scripts/corrigirLoteOurovac20261002.js` (simula por padrão), EXECUTADO com
+#   `--confirmar`: lote 37 → 11769, 4 frascos × 2 = **8 doses**, auditoria
+#   `ALTERACAO/ESTOQUE_VACINA`. ⚠️ Lotes 28/30/31/33 (mesmo estado) ficam com o
+#   `corrigirMultidose20261001.js`, ainda NÃO executado.
+#   ⚠️ A vacina clínica 55 (cópia 11769, EXECUTADA, `lote_id` nulo) foi aplicada SEM
+#   baixa de estoque — não foi tocada.
+#   ⚠️ A Farmácia (`EstoqueController.criar`) NÃO ganhou o desvio: o seletor dela já usa
+#   `MedicamentoController.listar` com `preferirCopiaDaEmpresa`; só tela aberta antes da
+#   cópia mandaria o global. Hoje nenhuma entrada de farmácia está presa em global.
+#   SEM MIGRATION (`migrate status`: 219, em dia). Gate
+#   `__tests__/globalSubstituidoPelaCopia.test.js` (7; verificado que reprova).
+#   ⚠️ NÃO verificado em navegador.)
+
+---
 # Atualizado em: 2026-10-01 (parte 2) (🔴 **PRODUTO QUE JÁ TEM SALDO E VIRA MULTIDOSE
 #   PASSOU A TER O SALDO RECONVERTIDO EM TODO CAMINHO — farmácia E vacina.** Relato:
 #   Patyvet, "Zoovit C - frasco 20 mL" multidose 20 mL; Ajuste de Estoque 0 → 10 frascos

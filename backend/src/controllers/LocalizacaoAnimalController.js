@@ -2,6 +2,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { querContagens, contarAtivosInativos } = require('../lib/contagemAtivos');
 const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
 const { registrarAuditoria, registrarAlteracao } = require('../lib/auditoria');
 
@@ -159,7 +160,11 @@ const LocalizacaoAnimalController = {
       const deduped = [...melhorPorChave.values()].sort((a, b) =>
         a.ativo === b.ativo ? a.nome.localeCompare(b.nome) : (a.ativo ? -1 : 1));
 
-      res.json({ sucesso: true, dados: limitNum ? deduped.slice(0, limitNum) : deduped });
+      // Quantidade de cada aba Todos/Ativos/Inativos — só quando a TELA pede (esta rota
+      // é também o autocomplete de local em várias telas). ⚠️ Conta LINHAS do catálogo,
+      // antes do corte de `limit`: é quantas existem, não quantas cabem na página.
+      const contagens = querContagens(req.query) ? await contarAtivosInativos(prisma.localizacaoAnimal, where) : undefined;
+      res.json({ sucesso: true, dados: limitNum ? deduped.slice(0, limitNum) : deduped, contagens });
     } catch (err) {
       console.error('Erro ao listar localizações:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar localizações' });

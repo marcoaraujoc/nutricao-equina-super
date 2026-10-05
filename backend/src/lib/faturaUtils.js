@@ -6,6 +6,7 @@ const itemOrigens = require('./faturaItemOrigens');
 // Fechamento POR ANIMAL — quais itens da fatura já foram encerrados à parte.
 // É ele que separa `total` (o que esta fatura cobra) de `totalFechado`.
 const fechamentoAnimal = require('./faturaFechamentoAnimal');
+const itemUnidade = require('./faturaItemUnidade');
 
 /**
  * Formata o número do atendimento: 'AG', 3 → 'AG-0003'
@@ -83,7 +84,7 @@ async function getOrCreateFatura(tx, proprietarioId, empresaId = null) {
 async function adicionarFaturaItem(tx, {
   faturaId, animalId, tipo, descricao, valor, quantidade, veterinarioId,
   exameClinicoId, prescricaoId, vacinaClinicaId, encaminhamentoClinicoId,
-  ocorridoEm,
+  ocorridoEm, unidade,
 }) {
   const criado = await tx.faturaItem.create({
     data: {
@@ -95,6 +96,9 @@ async function adicionarFaturaItem(tx, {
       encaminhamentoClinicoId: encaminhamentoClinicoId ?? null,
     },
   });
+  // Em QUÊ a quantidade está contada ('mL' no multidose; null = dose/unidade, o de
+  // sempre). SQL cru à parte — ver lib/faturaItemUnidade.js.
+  if (unidade) await itemUnidade.gravarUnidade(tx, criado.id, unidade);
   // A 1ª contribuição da linha. É ela que faz `quantidade` continuar sendo a SOMA das
   // origens mesmo quando a linha nasce por aqui — sem isso, um item lançado por
   // `adicionarFaturaItem` e depois somado por `adicionarOuSomarFaturaItem` teria
@@ -189,7 +193,13 @@ async function adicionarOuSomarFaturaItem(tx, opts) {
   // (o preço da dose sai de regra de 3 sobre o preço do lote e pode variar no último
   // dígito entre duas execuções do MESMO lote). Preço unitário DIFERENTE é outra
   // coisa e vira linha própria — não dá para somar quantidades com valores distintos.
-  const alvo = candidatos.find(c => Math.abs((c.valor ?? 0) - valorNovo) < 0.005);
+  // 🔴 A UNIDADE ENTRA NA CHAVE (2026-10-02): a linha do multidose conta mL, a legada
+  // conta doses. Somar 5 mL numa linha de doses faria "Quant.: 8" de coisa nenhuma.
+  const unidadeNova = itemUnidade.normalizarUnidade(opts.unidade);
+  const unidades = await itemUnidade.unidadesDosItens(tx, candidatos.map(c => c.id));
+  const alvo = candidatos.find(c =>
+    Math.abs((c.valor ?? 0) - valorNovo) < 0.005
+    && (unidades.get(Number(c.id)) ?? null) === unidadeNova);
   if (!alvo) return adicionarFaturaItem(tx, opts);
 
   // O CONTADOR da linha sobe de `qtdNova` (1 por execução) — o curso inteiro nunca é

@@ -302,8 +302,11 @@ export default function CadastroPessoal() {
 
   // Especialidade EFETIVA que será enviada. Ler só `form.especialidadeIds` para quem
   // tem locais deixaria a pessoa escolher especialidade no local e nunca ver o CRMV.
-  const especialidadesEscolhidas = especialidadeViaLocal
-    ? uniaoEspecialidadesLocais(form.locaisTrabalho)
+  // Sem nenhuma especialidade nos locais (ex.: gestor recém-criado pelo admin, que já
+  // vem com especialidades gravadas e ainda não cadastrou local), vale o seletor avulso.
+  const espDosLocais = uniaoEspecialidadesLocais(form.locaisTrabalho);
+  const especialidadesEscolhidas = especialidadeViaLocal && espDosLocais.length > 0
+    ? espDosLocais
     : form.especialidadeIds;
 
   // DECLAROU ESPECIALIDADE ⇒ ATUA COMO VETERINÁRIO ⇒ PRECISA DE CRMV.
@@ -759,11 +762,9 @@ export default function CadastroPessoal() {
       ...(perfilComEspecialidade && {
         // Com locais: união deles. Vazia (legado sem especialidade por local) →
         // undefined para não apagar as especialidades já cadastradas.
-        especialidadeIds: especialidadeViaLocal
-          ? (uniaoEspecialidadesLocais(form.locaisTrabalho).length > 0
-              ? uniaoEspecialidadesLocais(form.locaisTrabalho)
-              : undefined)
-          : form.especialidadeIds,
+        especialidadeIds: especialidadeViaLocal && espDosLocais.length > 0
+          ? espDosLocais
+          : (form.especialidadeIds.length > 0 || !especialidadeViaLocal ? form.especialidadeIds : undefined),
       }),
       // Expediente do profissional = LOCAIS de trabalho (o backend deriva o agregado
       // para a Agenda). Não há mais expediente geral avulso no cadastro pessoal.
@@ -1225,7 +1226,7 @@ export default function CadastroPessoal() {
               (profissional sem equipe, cadastro direto). Com equipe — qualquer cargo,
               GESTOR incluído — a especialidade é definida POR LOCAL (seção abaixo).
               Sempre OPCIONAL — escolher aqui passa a exigir o CRMV acima. ── */}
-          {perfilComEspecialidade && !especialidadeViaLocal && (
+          {perfilComEspecialidade && (!especialidadeViaLocal || espDosLocais.length === 0) && (
             <div className="pt-2 border-t border-gray-100" id="campo-especialidadeIds">
               <Label text="Especialidade" optional />
               {atuaComoVet && (

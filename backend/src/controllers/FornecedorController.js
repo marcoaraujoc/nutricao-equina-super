@@ -2,6 +2,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { querContagens, contarAtivosInativos } = require('../lib/contagemAtivos');
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
 const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
@@ -145,7 +146,9 @@ const FornecedorController = {
       // ⚠️ A listagem TEM de devolver o vencimento: a tela edita a partir do que ela
       // trouxe, e sem o campo o salvar o apagaria em silêncio.
       const comAcesso = await anexarEquipeDoAcesso(prisma, await anexarTrilha(fornecedores, 'fornecedor'));
-      res.json({ sucesso: true, dados: await anexarVencimentoEmLista(prisma, 'FORNECEDOR', comAcesso) });
+      // Quantidade de cada aba Todos/Ativos/Inativos — só quando a TELA pede.
+      const contagens = querContagens(req.query) ? await contarAtivosInativos(prisma.fornecedor, where) : undefined;
+      res.json({ sucesso: true, dados: await anexarVencimentoEmLista(prisma, 'FORNECEDOR', comAcesso), contagens });
     } catch (err) {
       console.error('Erro ao listar fornecedores:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar fornecedores' });

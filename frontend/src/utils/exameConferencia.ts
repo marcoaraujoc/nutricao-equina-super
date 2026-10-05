@@ -131,3 +131,45 @@ export function conferirExame(
     motivo: `O exame pedido ("${pedido.descricao}") não aparece nos resultados do arquivo carregado.`,
   };
 }
+
+// ─── QUANTIDADE DE IMAGENS (só exame de IMAGEM) ───────────────────────────────────
+// O pedido de exame de imagem informa a "Quantidade de imagens" (`qtdAmostra` — a
+// mesma coluna guarda o nº de AMOSTRAS no laboratorial, por isso a regra só vale para
+// Imagem). Pediu 3 incidências e chegaram 2: ou falta imagem, ou o arquivo é de outro
+// pedido — e a cobrança por imagem (2026-10-01) já foi feita pela quantidade PEDIDA.
+//
+// 🔴 CONTA ARQUIVO DE IMAGEM, não página de PDF. O laudo (PDF/DOCX/TXT) é o texto
+// transcrito; as imagens do exame chegam como arquivos de imagem. Quando a clínica
+// entrega as imagens DENTRO do PDF, a contagem não as enxerga — por isso, como a
+// conferência do exame, isto NUNCA BLOQUEIA: a tela pergunta e quem vê o documento
+// decide.
+
+const EXT_IMAGEM = /\.(jpe?g|png|gif|webp|bmp|heic|heif|tiff?|avif)$/i;
+
+/** O arquivo é uma IMAGEM do exame (e não o laudo)? Pelo MIME, quando o navegador o
+ *  informa; senão pela extensão do nome (anexo já salvo só tem o nome). */
+export function ehArquivoDeImagem(nome?: string | null, mime?: string | null): boolean {
+  if ((mime ?? '').toLowerCase().startsWith('image/')) return true;
+  return EXT_IMAGEM.test((nome ?? '').trim());
+}
+
+const qtdImagensTexto = (n: number) => `${n} ${n === 1 ? 'imagem' : 'imagens'}`;
+
+/**
+ * A quantidade de imagens anexadas confere com a PEDIDA?
+ *
+ * @param pedidas  `qtdAmostra` do pedido de imagem. Ausente/0 = o pedido não informou
+ *                 quantidade — não há o que conferir, e não se afirma divergência.
+ * @param anexadas imagens que o exame terá ao salvar (já salvas + anexadas agora).
+ */
+export function conferirQtdImagens(pedidas: number | null | undefined, anexadas: number): ConferenciaExame {
+  const p = Math.floor(Number(pedidas));
+  if (!Number.isFinite(p) || p <= 0) return COMBINA;
+  if (anexadas === p) return COMBINA;
+  return {
+    combina: false,
+    motivo: anexadas === 0
+      ? `O pedido informa ${qtdImagensTexto(p)} e nenhuma imagem foi anexada.`
+      : `O pedido informa ${qtdImagensTexto(p)} e ${anexadas === 1 ? 'foi anexada' : 'foram anexadas'} ${qtdImagensTexto(anexadas)}.`,
+  };
+}

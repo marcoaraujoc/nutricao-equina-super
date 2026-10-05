@@ -20,12 +20,14 @@ const {
   UNIDADE_AVULSA, unidadeOperativa, conteudoDaEmbalagem, embalagensPara,
 } = require('../lib/formaCalculo');
 const { mesmaUnidade } = require('../lib/unidadeMedicamento');
+const itemUnidade = require('../lib/faturaItemUnidade');
 const formaCobranca     = require('../lib/formaCobrancaEstoque');
 const { garantirMedicamentoDaEmpresa, garantirProcedimentoDaEmpresa } = require('../lib/catalogoManual');
 const vinculoPrestador = require('../lib/procedimentoPrestador');
 // Etapa de Execução de Prescrição OPCIONAL por empresa (2026-09-24) — ver
 // `encerrarGrupoSemExecucao`.
 const etapaExecucao = require('../lib/etapaExecucaoPrescricao');
+const dispensaEvolucao = require('../lib/dispensaEvolucaoPrescricao');
 const { registrarAuditoria, registrarAlteracao, registrarTransferencia, resumoTexto } = require('../lib/auditoria');
 const { podeOperarRegistro } = require('../middlewares/permissao.middleware');
 // Concorrência de edição: a versão do DOCUMENTO (grupo) é a trava — ver §12.
@@ -600,10 +602,18 @@ async function debitarEstoqueDia(
   // precisa sair `2 × R$ 100,00` — não `1 × R$ 200,00`, que era o que aparecia (o valor
   // fechava, a quantidade mentia e não havia como conferir o unitário contra a nota).
   //
-  // ⚠️ Produto MULTIDOSE (mL/g) fica FORA de propósito: lá a linha conta DOSES
-  // ("5 mL × 3x ao dia (1 dose)"), e trocar a quantidade para 5 passaria a exibir um
-  // R$/mL onde a tela sempre mostrou o preço da dose. Nada muda para ele.
+  // 🔴 E O MULTIDOSE EM mL TAMBÉM ENTRA (2026-10-02, a pedido — REVERTE a decisão de
+  // 2026-09-23, que o deixava contando DOSES). A linha passa a sair em mL: a dose de
+  // 5 mL entrega 5, e a fatura mostra "Quant.: 5 mL · Unitário: R$/mL" em vez de
+  // "Quant.: 1 · Unitário: preço da dose". O TOTAL não muda — `valorDaDose` continua
+  // sendo o mesmo, só dividido pela quantidade em mL em vez de por 1.
+  // ⚠️ Quem diz que a quantidade está em mL é `unidadesDaLinha` — sem ela, "Quant.: 5"
+  // seria lido como cinco doses.
+  // ⚠️ Multidose em g/doses/etc. segue contando DOSES, como sempre: só o mL foi pedido.
   const unidadesFaturadas = new Map();
+  // `Map<item.id, 'mL'>` — em QUÊ a quantidade de `unidadesFaturadas` está, quando não
+  // é a unidade avulsa. Vai para `FaturaItem.unidade` (lib/faturaItemUnidade.js).
+  const unidadesDaLinha = new Map();
   // 🔴 A unidade em que cada item é contado. Com a FORMA DE CÁLCULO declarada, a
   // dosagem da receita já está na unidade do estoque — não há conversão nem divisão,
   // e a fatura sai por `qtd × preço da embalagem ÷ conteúdo` sozinha.
@@ -734,10 +744,19 @@ async function debitarEstoqueDia(
     if (!entregaUnica && ehAvulsa(unidadeEstoque) && debitadoTotal > 0) {
       unidadesFaturadas.set(item.id, debitadoTotal);
     }
+    // Multidose em mL: a quantidade da linha é o que saiu do frasco, EM mL. É o
+    // DEBITADO (não o prescrito): com estoque curto o valor só cobre o que saiu, e a
+    // quantidade tem de acompanhar, senão o unitário (valor ÷ qtd) sai errado.
+    // `unidadeEstoque` só é 'mL' com a forma de cálculo declarada — produto sem
+    // multidose é sempre 'Un.' (ver `unidadeOperativa`).
+    if (!entregaUnica && itemUnidade.normalizarUnidade(unidadeEstoque) && debitadoTotal > 0) {
+      unidadesFaturadas.set(item.id, debitadoTotal);
+      unidadesDaLinha.set(item.id, itemUnidade.UNIDADE_ML);
+    }
 
     precos.set(item.medicamentoCatId, valorDaDose);
   }
-  return { precos, unidades, jaEntregues, porEmbalagem, entregas, unidadesFaturadas };
+  return { precos, unidades, jaEntregues, porEmbalagem, entregas, unidadesFaturadas, unidadesDaLinha };
 }
 
 // ─── Insumos de aplicação injetável (seringa + agulha) ───────────────────────
@@ -1188,6 +1207,20 @@ async function resolverCatalogoDoItem(tx, { tipo, medicamento, medicamentoCatId,
   }, empresaId);
 }
 
+// GET /clinica/prescricoes/dispensa-evolucao — o que a empresa ATIVA liberou para ser
+// prescrito sem evolução. Lido pela aba Prescrição (qualquer perfil que prescreve) —
+// `GET /equipes/configuracoes` é só do gestor. A tela usa para OFERECER; quem decide
+// é `criar`/`adicionarItem`/`atualizarItem`.
+const regrasSemEvolucao = async (req, res) => {
+  try {
+    const regras = await dispensaEvolucao.regrasDaEmpresa(prisma, req.empresaId ?? null);
+    return res.json({ dados: regras });
+  } catch (err) {
+    console.error('PrescricaoGrupoController.regrasSemEvolucao:', err);
+    return res.status(500).json({ error: 'Erro ao carregar a configuração de prescrição.' });
+  }
+};
+
 const criar = async (req, res) => {
   try {
     const { animalId, empresaId, evolucaoId, itens = [] } = req.body;
@@ -1200,9 +1233,21 @@ const criar = async (req, res) => {
     if (await animalEstaInativo(animalId)) {
       return res.status(400).json({ error: MSG_PACIENTE_INATIVO, code: 'PACIENTE_INATIVO' });
     }
-    if (!evolucaoId) return res.status(400).json({ error: 'evolucaoId é obrigatório.', code: 'EVOLUCAO_REQUIRED' });
     if (!Array.isArray(itens) || itens.length === 0)
       return res.status(400).json({ error: 'Inclua ao menos um item na prescrição.' });
+
+    // 🔴 SEM EVOLUÇÃO (2026-10-03): só passa se TODOS os itens estiverem liberados em
+    // Cadastro da Empresa › Funcionamento (lib/dispensaEvolucaoPrescricao.js). Padrão:
+    // nada liberado → toda prescrição exige evolução, como sempre foi.
+    const empresaDaRegra = empresaId ? Number(empresaId) : (req.empresaId ?? null);
+    if (!evolucaoId) {
+      const conf = await dispensaEvolucao.verificarItensSemEvolucao(prisma, empresaDaRegra, itens);
+      if (!conf.ok) {
+        return res.status(400).json({
+          error: dispensaEvolucao.mensagemExigeEvolucao(conf.item), code: 'EVOLUCAO_REQUIRED',
+        });
+      }
+    }
 
     // Medicamento sem dosagem não pode ser prescrito (o item importado do orçamento
     // chega sem dosagem — a regra vale para qualquer origem).
@@ -1222,11 +1267,14 @@ const criar = async (req, res) => {
     // `HORA_INICIO_OBRIGATORIA` que existia aqui: sem hora o item continua no
     // rolling schedule, apenas sem horário previsto até a 1ª dose ser dada.
 
-    // Valida que a evolução existe e pertence ao animal
-    const evolucao = await prisma.evolucaoClinica.findFirst({
-      where:  { id: Number(evolucaoId), animalId: Number(animalId), ativo: true },
-      select: { id: true, veterinarioId: true },
-    });
+    // Valida que a evolução existe e pertence ao animal. Sem evolução (itens liberados,
+    // acima) não há atendimento de outro a respeitar — quem prescreve é o autor.
+    const evolucao = evolucaoId
+      ? await prisma.evolucaoClinica.findFirst({
+          where:  { id: Number(evolucaoId), animalId: Number(animalId), ativo: true },
+          select: { id: true, veterinarioId: true },
+        })
+      : { id: null, veterinarioId };
     if (!evolucao) return res.status(400).json({ error: 'Evolução não encontrada para este animal.', code: 'EVOLUCAO_NOT_FOUND' });
 
     // Autoria: prescrever dentro do atendimento de outro profissional é operar um
@@ -1280,7 +1328,7 @@ const criar = async (req, res) => {
             numero,
             animalId:     Number(animalId),
             veterinarioId,
-            evolucaoId:   Number(evolucaoId),
+            evolucaoId:   evolucaoId ? Number(evolucaoId) : null,
             empresaId:    empresaId ? Number(empresaId) : (req.empresaId ?? null),
             status:       'SALVO',
           },
@@ -1437,6 +1485,17 @@ const adicionarItem = async (req, res) => {
 
     if (!medicamento) return res.status(400).json({ error: 'Campo medicamento é obrigatório.' });
     // Hora Início opcional — ver a nota em `finalizar`.
+
+    // Prescrição SEM evolução só aceita item liberado (lib/dispensaEvolucaoPrescricao.js) —
+    // senão incluir um item depois seria o atalho para o que a criação recusa.
+    if (!grupo.evolucaoId) {
+      const conf = await dispensaEvolucao.verificarItensSemEvolucao(
+        prisma, grupo.empresaId ?? req.empresaId, [{ tipo, medicamento, medicamentoCatId }],
+      );
+      if (!conf.ok) {
+        return res.status(400).json({ error: dispensaEvolucao.mensagemExigeEvolucao(conf.item), code: 'EVOLUCAO_REQUIRED' });
+      }
+    }
 
     // Split na edição: se o item é de categoria diferente de um grupo homogêneo,
     // vai para uma prescrição irmã (ou nova) da categoria correta.
@@ -1600,6 +1659,19 @@ const atualizarItem = async (req, res) => {
     // altera no lugar (o grupo só acompanha a nova categoria).
     const tipoFinal  = tipo             !== undefined ? tipo             : item.tipo;
     const catIdFinal = medicamentoCatId !== undefined ? medicamentoCatId : item.medicamentoCatId;
+
+    // Prescrição SEM evolução: o item alterado continua precisando estar liberado
+    // (lib/dispensaEvolucaoPrescricao.js) — trocar o medicamento é a outra porta.
+    if (!item.grupo?.evolucaoId && (tipo !== undefined || medicamento !== undefined || medicamentoCatId !== undefined)) {
+      const conf = await dispensaEvolucao.verificarItensSemEvolucao(
+        prisma, item.grupo?.empresaId ?? req.empresaId,
+        [{ tipo: tipoFinal, medicamento: medicamento !== undefined ? medicamento : item.medicamento, medicamentoCatId: catIdFinal }],
+      );
+      if (!conf.ok) {
+        return res.status(400).json({ error: dispensaEvolucao.mensagemExigeEvolucao(conf.item), code: 'EVOLUCAO_REQUIRED' });
+      }
+    }
+
     const catItem    = await categoriaDoItem(prisma, { tipo: tipoFinal, medicamentoCatId: catIdFinal });
 
     const outros = await prisma.prescricao.findMany({
@@ -2032,12 +2104,13 @@ const finalizar = async (req, res) => {
         precos: precosDaEntrega,
         entregas: entregasDaEntrega,
         unidadesFaturadas: unidadesDaEntrega,
+        unidadesDaLinha: unidadesLinhaDaEntrega,
       } = itensParaFaturarAgora.length > 0
         ? await debitarEstoqueDia(
             tx, itensParaFaturarAgora, empresaIdEfetivo, grupoId, calcularQuantidadeTotal,
             { incluirDoProprietario: true },
           )
-        : { precos: new Map(), entregas: new Map(), unidadesFaturadas: new Map() };
+        : { precos: new Map(), entregas: new Map(), unidadesFaturadas: new Map(), unidadesDaLinha: new Map() };
 
       // Sem nada a cobrar agora, nem abre fatura: senão a finalização criaria uma
       // fatura vazia para o cliente todo mês.
@@ -2076,6 +2149,11 @@ const finalizar = async (req, res) => {
           const embalagensDaEntrega = entregasDaEntrega.get(item.id)
             ?? unidadesDaEntrega.get(item.id)
             ?? 1;
+          // 'mL' só quando a quantidade acima veio do multidose em mL (embalagem e
+          // unidade avulsa nunca a têm) — ver `unidadesDaLinha` em debitarEstoqueDia.
+          const unidadeDaEntrega = entregasDaEntrega.has(item.id)
+            ? null
+            : (unidadesLinhaDaEntrega.get(item.id) ?? null);
           await adicionarOuSomarFaturaItem(tx, {
             faturaId:     fatura.id,
             animalId:     grupo.animalId,
@@ -2083,6 +2161,7 @@ const finalizar = async (req, res) => {
             descricao:    descricaoItemFatura(item),
             valor:        valorDaEntrega / embalagensDaEntrega,
             quantidade:   embalagensDaEntrega,
+            unidade:      unidadeDaEntrega,
             veterinarioId,
             prescricaoId: item.id,
             ocorridoEm:   new Date(),
@@ -2190,7 +2269,7 @@ async function encerrarGrupoSemExecucao(tx, grupoId, { empresaId = null, porUsua
     // O CURSO INTEIRO sai do estoque agora (`calcularQuantidadeTotal`), pelas mesmas
     // regras de sempre: embalagem por embalagem no produto sem multidose, o
     // proporcional no multidose, unidades avulsas no 'Un.'.
-    const { precos, porEmbalagem, entregas, unidadesFaturadas } =
+    const { precos, porEmbalagem, entregas, unidadesFaturadas, unidadesDaLinha } =
       await debitarEstoqueDia(tx, itens, empresaIdEfetivo, grupo.id, calcularQuantidadeTotal);
 
     if (proprietarioId) fatura = await getOrCreateFatura(tx, proprietarioId, empresaIdEfetivo);
@@ -2207,6 +2286,8 @@ async function encerrarGrupoSemExecucao(tx, grupoId, { empresaId = null, porUsua
       //                  unidades avulsas ou, no multidose, as doses do curso.
       let valorTotal;
       let quantidade;
+      // 'mL' só no ramo do medicamento cuja quantidade saiu do multidose em mL.
+      let unidadeLinha = null;
       if (item.valorOrcado != null) {
         quantidade = vezes;
         valorTotal = Number(item.valorOrcado) * vezes;
@@ -2218,8 +2299,13 @@ async function encerrarGrupoSemExecucao(tx, grupoId, { empresaId = null, porUsua
         quantidade = porEmbalagem.has(item.id)
           ? (entregas.get(item.id) ?? 1)
           : (unidadesFaturadas.get(item.id) ?? vezes);
+        unidadeLinha = porEmbalagem.has(item.id) ? null : (unidadesDaLinha.get(item.id) ?? null);
       }
-      quantidade = Math.max(Number(quantidade) || 1, 1);
+      // ⚠️ O piso de 1 vale para doses/embalagens/unidades. Em mL a quantidade é o que
+      // saiu do frasco e pode ser 0,5 — arredondar para 1 mudaria o unitário (valor ÷ qtd).
+      quantidade = unidadeLinha
+        ? (Number(quantidade) > 0 ? Number(quantidade) : 1)
+        : Math.max(Number(quantidade) || 1, 1);
 
       // Fornecido pelo cliente NÃO é cobrado — igual à execução.
       if (fatura && !item.medicamentoCliente
@@ -2231,6 +2317,7 @@ async function encerrarGrupoSemExecucao(tx, grupoId, { empresaId = null, porUsua
           descricao:    descricaoItemFatura(item),
           valor:        valorTotal / quantidade,
           quantidade,
+          unidade:      unidadeLinha,
           veterinarioId: porUsuarioId ?? null,
           prescricaoId: item.id,
           ocorridoEm:   agora,
@@ -2909,7 +2996,7 @@ const executar = async (req, res) => {
       // Debita a quantidade resolvida por item (multi-lote FEFO) e retorna
       // preços/unidades por medicamento. Passa o grupoId para abater as reservas
       // deste grupo junto com a baixa.
-      const { precos, jaEntregues, porEmbalagem, entregas, unidadesFaturadas } =
+      const { precos, jaEntregues, porEmbalagem, entregas, unidadesFaturadas, unidadesDaLinha } =
         await debitarEstoqueDia(tx, itensHoje, empresaIdEfetivo, grupoId, resolverQtdExecucao);
 
       // Lança na fatura ABERTA do proprietário NESTA empresa
@@ -2980,6 +3067,11 @@ const executar = async (req, res) => {
         const qtdFaturada = porEmbalagem.has(item.id)
           ? embalagensEntregues
           : (unidadesFaturadas.get(item.id) ?? 1);
+        // 'mL' quando a quantidade acima é o que saiu do frasco do multidose em mL
+        // (2026-10-02). Embalagem e unidade avulsa seguem sem unidade, como sempre.
+        const unidadeFaturada = porEmbalagem.has(item.id)
+          ? null
+          : (unidadesDaLinha.get(item.id) ?? null);
 
         if (!item.medicamentoCliente && !entregaJaFeita) {
           // Prescrição finalizada ANTES da mudança já tem uma linha zerada criada na
@@ -3020,6 +3112,7 @@ const executar = async (req, res) => {
               // guarda o preço de UMA unidade/embalagem/dose. Ver `qtdFaturada`.
               valor:        valorDaDose / qtdFaturada,
               quantidade:   qtdFaturada,
+              unidade:      unidadeFaturada,
               veterinarioId,
               prescricaoId: item.id,
               // Data da CONTRIBUIÇÃO, que é o que a observação da linha mostra — a
@@ -3668,6 +3761,7 @@ const listarParaExecucao = async (req, res) => {
 };
 
 module.exports = {
+  regrasSemEvolucao,
   listarPorAnimal,
   obterPorId,
   criar,

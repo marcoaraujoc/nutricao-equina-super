@@ -71,6 +71,21 @@ export const FORMAS_COBRANCA: { v: FormaCobranca; l: string; ajuda: string }[] =
   { v: 'CUSTO_MEDIO',     l: 'Custo médio',       ajuda: 'Média dos valores repassados, ponderada pela quantidade em estoque.' },
 ];
 
+/**
+ * O que pode ser PRESCRITO sem evolução aberta (Cadastro da Empresa › Funcionamento).
+ * Listas vazias = padrão: toda prescrição exige evolução (a vacina já não exige, e não
+ * passa por aqui). Regra em `backend/src/lib/dispensaEvolucaoPrescricao.js`.
+ */
+export interface DispensaEvolucao {
+  especialidades: string[];
+  procedimentos:  string[];
+  classificacoes: string[];
+}
+
+export const DISPENSA_EVOLUCAO_VAZIA: DispensaEvolucao = {
+  especialidades: [], procedimentos: [], classificacoes: [],
+};
+
 export const PERC_COBRANCA_MIN = 0;
 export const PERC_COBRANCA_MAX = 1000;
 
@@ -143,14 +158,24 @@ export function useConfiguracaoOperacional() {
     if (waTimeoutRef.current) { clearTimeout(waTimeoutRef.current); waTimeoutRef.current = null; }
   }, []);
 
+  // Conectado, o backend devolve o número PAREADO (e o grava se a configuração não
+  // tinha nenhum). Só preenche o campo VAZIO — nunca atropela o que foi digitado.
+  // Sem isto o número sumia ao trocar de tela: conectar não gravava nada, só o
+  // "Salvar" geral (ver whatsappService.preencherNumeroPareado).
+  const preencherNumeroPareado = useCallback((numero: unknown) => {
+    if (typeof numero !== 'string' || !numero) return;
+    setWhatsapp(atual => (atual.replace(/\D/g, '') ? atual : maskWhatsapp(numero)));
+  }, []);
+
   const carregarWaStatus = useCallback(async () => {
     try {
       const res = await api.get('/equipes/whatsapp/status');
       if (!res.data) return;
       setWaStatus(res.data?.dados?.status ?? 'DESCONECTADO');
       setWaDisponivel(Boolean(res.data?.dados?.disponivel));
+      preencherNumeroPareado(res.data?.dados?.numero);
     } catch { setWaDisponivel(false); setWaStatus('DESCONECTADO'); }
-  }, []);
+  }, [preencherNumeroPareado]);
 
   useEffect(() => {
     carregarWaStatus();
@@ -201,6 +226,7 @@ export function useConfiguracaoOperacional() {
             const st = s.data?.dados?.status;
             if (st) setWaStatus(st);
             if (st === 'CONECTADO') {
+              preencherNumeroPareado(s.data?.dados?.numero);
               pararPollWa(); pararTimeoutWa(); setWaQr(null); toast.success('WhatsApp conectado');
             }
           } catch { /* silencioso */ }
@@ -218,7 +244,7 @@ export function useConfiguracaoOperacional() {
     } finally {
       if (waTokenRef.current === meuToken) setWaAcao(false);
     }
-  }, [pararPollWa, pararTimeoutWa]);
+  }, [pararPollWa, pararTimeoutWa, preencherNumeroPareado]);
 
   const handleWaDesconectar = useCallback(async () => {
     pararPollWa();
@@ -256,6 +282,8 @@ export function useConfiguracaoOperacional() {
   // comportamento de sempre (fatura na execução). Regra em
   // `backend/src/lib/etapaExecucaoPrescricao.js`.
   const [dispensarExecucao, setDispensarExecucao] = useState(false);
+  // Prescrição sem evolução — nasce VAZIA (tudo exige evolução).
+  const [dispensaEvolucao, setDispensaEvolucao] = useState<DispensaEvolucao>(DISPENSA_EVOLUCAO_VAZIA);
   // ⚠️ O `fusoLabel` que este hook expunha foi REMOVIDO em 2026-08-24, junto com o
   // campo só-leitura "Fuso Horário" da tela de Configurações — sem consumidor, ele
   // seria estado morto. O backend CONTINUA devolvendo `fusoLabel` em
@@ -274,7 +302,9 @@ export function useConfiguracaoOperacional() {
       const dados = res.data?.dados;
       if (dados) {
         setLogoPreview(dados.logoUrl ?? null);
-        setWhatsapp(maskWhatsapp(dados.whatsapp ?? ''));
+        // Sem número na configuração, mantém o que o status do WhatsApp já preencheu
+        // (as duas cargas correm em paralelo e a ordem de chegada não é garantida).
+        setWhatsapp(atual => (dados.whatsapp ? maskWhatsapp(dados.whatsapp) : atual));
         setDiasAtend(dados.diasAtendimento
           ? String(dados.diasAtendimento).split(',').map(Number).filter((n: number) => n >= 0 && n <= 6)
           : []);
@@ -288,6 +318,7 @@ export function useConfiguracaoOperacional() {
           dados.percentualCobrancaEstoque != null ? String(dados.percentualCobrancaEstoque) : '',
         );
         setDispensarExecucao(dados.dispensarExecucaoPrescricao === true);
+        setDispensaEvolucao({ ...DISPENSA_EVOLUCAO_VAZIA, ...(dados.dispensaEvolucaoPrescricao ?? {}) });
 
         if (dados.tipoFechamento === 'DIA_UTIL') {
           setTipoSelecao('DIA_UTIL');
@@ -448,6 +479,7 @@ export function useConfiguracaoOperacional() {
       fd.append('percentualCobrancaEstoque',
         formaCobranca === 'PERCENTUAL' ? percentualCobranca.trim().replace(',', '.') : '');
       fd.append('dispensarExecucaoPrescricao', dispensarExecucao ? 'true' : 'false');
+      fd.append('dispensaEvolucaoPrescricao', JSON.stringify(dispensaEvolucao));
       if (logoFile) fd.append('logo', logoFile);
       if (logoRemovido) fd.append('removerLogo', 'true');
 
@@ -462,6 +494,9 @@ export function useConfiguracaoOperacional() {
         if (typeof dados.dispensarExecucaoPrescricao === 'boolean') {
           setDispensarExecucao(dados.dispensarExecucaoPrescricao);
         }
+        if (dados.dispensaEvolucaoPrescricao) {
+          setDispensaEvolucao({ ...DISPENSA_EVOLUCAO_VAZIA, ...dados.dispensaEvolucaoPrescricao });
+        }
       }
       setLogoFile(null);
       setLogoRemovido(false);
@@ -475,7 +510,7 @@ export function useConfiguracaoOperacional() {
       setErroAcao({ mensagem: motivo ?? 'Erro ao salvar as configurações operacionais.' });
       return false;
     }
-  }, [tipoSelecao, diaEspecifico, nDiaUtil, whatsapp, especiesAtendidas, diasAtend, horaInicio, horaFim, tempoConsultaPadrao, validadeOrcamento, formaCobranca, percentualCobranca, dispensarExecucao, logoFile, logoRemovido]);
+  }, [tipoSelecao, diaEspecifico, nDiaUtil, whatsapp, especiesAtendidas, diasAtend, horaInicio, horaFim, tempoConsultaPadrao, validadeOrcamento, formaCobranca, percentualCobranca, dispensarExecucao, dispensaEvolucao, logoFile, logoRemovido]);
 
   return {
     loading, erroAcao,
@@ -499,6 +534,7 @@ export function useConfiguracaoOperacional() {
     formaCobranca, setFormaCobranca,
     percentualCobranca, setPercentualCobranca,
     dispensarExecucao, setDispensarExecucao,
+    dispensaEvolucao, setDispensaEvolucao,
 
     especies, especiesAtendidas, setEspeciesAtendidas,
 

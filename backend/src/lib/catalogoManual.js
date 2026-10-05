@@ -355,9 +355,39 @@ function preferirCopiaDaEmpresa(itens) {
   return lista.filter((m) => m?.empresaId != null || !proprios.has(chave(m?.nome)));
 }
 
+/**
+ * Ids dos itens GLOBAIS que a empresa SUBSTITUIU pela própria cópia (mesmo nome, sem
+ * caixa nem espaço em volta) — a mesma regra de `preferirCopiaDaEmpresa`, só que para
+ * listagem PAGINADA no banco, onde filtrar depois do `take` furaria a página e o total.
+ *
+ * 🔴 REGRA (2026-10-02, reafirmada pelo usuário): item global NUNCA é alterado; havendo
+ * o global e o da empresa, SÓ O DA EMPRESA aparece. Vale com a cópia ativa ou inativa:
+ * inativa, ela continua aparecendo na aba Inativos, e o global ao lado seria o mesmo
+ * produto duas vezes.
+ *
+ * O conjunto é pequeno (só o que a clínica copiou), então vira `NOT id IN (...)`.
+ * ⚠️ SQL cru com `empresaId` explícito: não depende do carimbo de RLS para recortar.
+ */
+async function idsGlobaisSubstituidos(client, empresaId) {
+  if (!empresaId) return [];
+  const rows = await client.$queryRawUnsafe(
+    `SELECT g.id
+       FROM schs2vet.tb_medicamentos g
+      WHERE g.empresa_id IS NULL
+        AND EXISTS (
+          SELECT 1 FROM schs2vet.tb_medicamentos c
+           WHERE c.empresa_id = $1
+             AND lower(btrim(c.nome)) = lower(btrim(g.nome))
+        )`,
+    Number(empresaId),
+  );
+  return rows.map((r) => Number(r.id));
+}
+
 module.exports = {
   dedupPorCaixa,
   preferirCopiaDaEmpresa,
+  idsGlobaisSubstituidos,
   viaExcluidaDoSeletor,
   garantirMedicamentoDaEmpresa,
   garantirProcedimentoDaEmpresa,

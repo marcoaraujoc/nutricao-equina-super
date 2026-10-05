@@ -129,8 +129,6 @@ export interface Proprietario {
   phone:            string | null;
   cpf:              string | null;
   cnpj:             string | null;
-  mensalista:       boolean;
-  valorAssistencia: number | null;
   frequenciaVisitas: number | null;
   localidades:      LocalidadeProp[];
   diaVencimentoFatura: number | null;
@@ -161,8 +159,6 @@ export interface FormProp {
   tipoDoc:           TipoDoc;
   cpf:               string;
   cnpj:              string;
-  mensalista:        boolean;
-  valorAssistencia:  string;
   // A frequência é POR LOCALIDADE — o campo único saiu do formulário e passou a ser
   // derivado (o maior valor) no backend, só para as leituras legadas.
   localidades:       LocalidadeProp[];
@@ -181,7 +177,7 @@ export interface FormProp {
 export const FORM_INICIAL: FormProp = {
   fullName: '', email: '', phone: '',
   tipoDoc: 'cpf', cpf: '', cnpj: '',
-  mensalista: false, valorAssistencia: '', localidades: [], diaVencimentoFatura: '5',
+  localidades: [], diaVencimentoFatura: '5',
   // ⚠️ AS TRÊS MARCADAS por padrão: é o que a tela de Faturamento oferece hoje para
   // qualquer cliente. Nascer com uma só TIRARIA um botão de envio sem ninguém decidir.
   formasRecebimentoFatura: [...TODAS_FORMAS_RECEBIMENTO],
@@ -216,10 +212,6 @@ export function formDeProprietario(p: Proprietario, localidades = p.localidades 
     tipoDoc:           p.cnpj ? 'cnpj' : 'cpf',
     cpf:               p.cpf  ? mascaraCPF(p.cpf.replace(/\D/g, ''))   : '',
     cnpj:              p.cnpj ? mascaraCNPJ(p.cnpj.replace(/\D/g, '')) : '',
-    mensalista:        p.mensalista,
-    valorAssistencia:  p.valorAssistencia
-      ? formatarMoeda(String(Math.round(p.valorAssistencia * 100)))
-      : '',
     localidades,
     diaVencimentoFatura: p.diaVencimentoFatura ? String(p.diaVencimentoFatura) : '5',
     // Cliente legado (sem preferência declarada) abre com TODAS — que é o que ele
@@ -279,8 +271,6 @@ function montarNovoProprietario(form: FormProp) {
     phone:    form.phone || null,
     cpf:      form.tipoDoc === 'cpf'  && form.cpf.trim()  ? form.cpf  : null,
     cnpj:     form.tipoDoc === 'cnpj' && form.cnpj.trim() ? form.cnpj : null,
-    mensalista:       form.mensalista,
-    valorAssistencia: form.mensalista && form.valorAssistencia ? parseMoeda(form.valorAssistencia) : null,
     localidades: form.localidades.map(l => ({
       localizacaoId:     l.localizacaoId,
       frequenciaVisitas: l.frequenciaVisitas,
@@ -303,17 +293,11 @@ function validarFormProprietario(form: FormProp): ErroAcaoDados | null {
   if (form.localidades.length === 0) {
     return { mensagem: 'Informe ao menos uma localidade com a frequência de visitas', campos: ['localidades'] };
   }
-  // ⚠️ Só no MENSALISTA: fora dele o campo está DESABILITADO, e validar o que não se
-  // pode editar trava o salvar sem dar como corrigir (o cliente legado com um valor
-  // fora da faixa ficaria impossível de salvar).
-  if (form.mensalista && validarDiaVencimento(form.diaVencimentoFatura)) {
+  if (validarDiaVencimento(form.diaVencimentoFatura)) {
     return { mensagem: validarDiaVencimento(form.diaVencimentoFatura) };
   }
   if (form.tipoDoc === 'cpf'  && form.cpf.trim()  && !validarCPF(form.cpf))   return { mensagem: 'CPF inválido', campos: ['cpf'] };
   if (form.tipoDoc === 'cnpj' && form.cnpj.trim() && !validarCNPJ(form.cnpj)) return { mensagem: 'CNPJ inválido', campos: ['cnpj'] };
-  if (form.mensalista && !form.valorAssistencia) {
-    return { mensagem: 'Informe o valor da assistência veterinária', campos: ['valorAssistencia'] };
-  }
   if (form.formasRecebimentoFatura.length === 0) {
     return {
       mensagem: 'Informe ao menos uma forma de recebimento da fatura',
@@ -560,12 +544,6 @@ export default function ProprietarioFormModal({
     finally { setBuscandoCEP(false); }
   };
 
-  const handleValorChange = (v: string) => {
-    // Remove tudo que não for dígito
-    const digits = v.replace(/\D/g, '');
-    onFormChange({ valorAssistencia: digits ? formatarMoeda(digits) : '' });
-  };
-
   // Mesmo padrão da tela de Tratador/Localização: rounded-2xl + anel emerald no foco.
   const inputCls = 'w-full border border-gray-200 rounded-2xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-400 transition-colors';
   // Vazio => aviso suave (rosa claro). Apontado pelo erro do Salvar => destaque forte.
@@ -773,64 +751,20 @@ export default function ProprietarioFormModal({
 
           {/* ── Configuração ── */}
           <section>
-            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Contrato / Visitas</h4>
+            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Cobrança / Visitas</h4>
 
-            <div className="flex items-center justify-between p-3 border border-gray-200 rounded-xl mb-3">
-              <div>
-                <p className="text-sm font-semibold text-gray-900">Mensalista</p>
-                <p className="text-xs text-gray-500">Possui plano mensal de assistência veterinária</p>
-              </div>
-              <button
-                onClick={() => onFormChange({ mensalista: !form.mensalista, valorAssistencia: '' })}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${form.mensalista ? 'bg-emerald-600' : 'bg-gray-200'}`}>
-                <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transform transition-transform ${form.mensalista ? 'translate-x-6' : 'translate-x-1'}`} />
-              </button>
-            </div>
-
-            {/* 🔴 OS DOIS CAMPOS SÓ SÃO EDITÁVEIS NO MENSALISTA (a pedido, 2026-09-18).
-                Eles descrevem o CONTRATO de assistência mensal: quanto custa e em que
-                dia vence. Sem plano mensal não há o que cobrar nem quando vencer, e
-                deixá-los abertos convidava a preencher um acordo que não existe — o
-                valor era descartado no salvar (o payload já o zerava fora do
-                mensalista) e o dia de vencimento ficava governando uma fatura que
-                ninguém contratou.
-                ⚠️ DESABILITADOS, não escondidos: sumindo, quem marca "Mensalista" não
-                descobre que precisa preenchê-los; cinza e visíveis, a dependência
-                entre o interruptor e os dois campos fica à vista. */}
+            {/* 🔴 A ASSISTÊNCIA MENSAL SAIU DO PROPRIETÁRIO (a pedido): é de cada ANIMAL,
+                informada no cadastro do paciente. Aqui fica só o que é do CLIENTE — o dia
+                em que a fatura dele vence. */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
               <div>
-                <label className={`block text-xs mb-1 ${form.mensalista ? 'text-gray-500' : 'text-gray-300'}`}>
-                  Valor da Assistência Veterinária {form.mensalista && '*'}
-                </label>
-                <div className="relative">
-                  <span className={`absolute left-3 top-1/2 -translate-y-1/2 text-sm ${form.mensalista ? 'text-gray-500' : 'text-gray-300'}`}>R$</span>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    disabled={!form.mensalista}
-                    value={form.valorAssistencia}
-                    onChange={e => handleValorChange(e.target.value)}
-                    placeholder="0,00"
-                    className={`${inputCls} pl-9 ${!form.mensalista ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
-                  />
-                </div>
-                {!form.mensalista && (
-                  <p className="text-[10px] text-gray-400 mt-1">Disponível apenas para cliente Mensalista.</p>
-                )}
-              </div>
-              <div>
-                <label className={`block text-xs mb-1 ${form.mensalista ? 'text-gray-500' : 'text-gray-300'}`}>
-                  Dia de vencimento da fatura {form.mensalista && '*'}
-                </label>
+                <label className="block text-xs text-gray-500 mb-1">Dia de vencimento da fatura *</label>
                 <input type="number" min={1} max={25}
-                  disabled={!form.mensalista}
                   value={form.diaVencimentoFatura}
                   onChange={e => onFormChange({ diaVencimentoFatura: e.target.value })}
                   placeholder="Ex.: 5"
-                  className={`${inputCls} ${!form.mensalista ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''} ${form.mensalista && diaVencimentoErro ? 'border-red-300 focus:border-red-400' : ''}`} />
-                {!form.mensalista ? (
-                  <p className="text-[10px] text-gray-400 mt-1">Disponível apenas para cliente Mensalista.</p>
-                ) : diaVencimentoErro ? (
+                  className={`${inputCls} ${diaVencimentoErro ? 'border-red-300 focus:border-red-400' : ''}`} />
+                {diaVencimentoErro ? (
                   <p className="text-[11px] text-red-500 mt-1 flex items-center gap-1">
                     <AlertCircle size={11} /> {diaVencimentoErro}
                   </p>
@@ -849,7 +783,7 @@ export default function ProprietarioFormModal({
                 tooltip (§6 — cinza é o indisponível).
                 ⚠️ DESABILITAR, e não esconder, é deliberado: o botão que some é lido
                 como perda de permissão, e ninguém descobre que a decisão está neste
-                cadastro. Mesma escolha dos dois campos do mensalista acima.
+                cadastro. 
                 ⚠️ Ao menos UMA é obrigatória. Nenhuma marcada deixaria a fatura sem
                 saída e o financeiro sem entender por quê — NÃO é a mesma coisa que o
                 cliente legado, que nunca declarou nada e segue com as três.

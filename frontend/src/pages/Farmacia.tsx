@@ -347,6 +347,10 @@ export default function Farmacia() {
 
   // ── Carregar ──────────────────────────────────────────────────────────────
 
+  // Quantidade de cada aba (Todos, Ativos, Inativos, Crítico, Alarmante, Controlados) —
+  // vem do backend: a lista chega recortada pela aba e não tem como contar as outras.
+  const [contagensAbas, setContagensAbas] = useState<Partial<Record<FiltroTab, number>> | null>(null);
+
   const carregarEstoque = useCallback(async () => {
     setLoading(true);
     try {
@@ -355,6 +359,7 @@ export default function Farmacia() {
       if (filtroTab === 'inativos')    params.ativo = 'false';
       else if (filtroTab !== 'todos')  params.ativo = 'true';
       if (filtroTab === 'controlados') params.controlado = 'true';
+      params.contagens = '1';
 
       const [estoqueRes, medRes, fornRes] = await Promise.all([
         api.get('/farmacia/estoque', { params }),
@@ -363,6 +368,7 @@ export default function Farmacia() {
       ]);
 
       setItens(estoqueRes.data.dados ?? []);
+      setContagensAbas(estoqueRes.data.contagens ?? null);
       setMeta(estoqueRes.data.meta ?? { total:0, totalControlados:0, totalAbaixoMinimo:0, totalAbaixoAlarmante:0 });
       setMedicamentos(medRes.data.dados ?? []);
       setFornecedores(
@@ -943,6 +949,9 @@ export default function Farmacia() {
                     : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
                 }`}>
                 {label}
+                {contagensAbas && contagensAbas[key] !== undefined && (
+                  <span className={filtroTab === key ? 'text-white/80' : 'text-gray-400'}> ({contagensAbas[key]})</span>
+                )}
               </button>
             ))}
           </div>

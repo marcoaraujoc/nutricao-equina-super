@@ -1,6 +1,7 @@
 // backend/src/controllers/MedicamentoController.js
 'use strict';
 
+const { querContagens, contarAtivosInativos } = require('../lib/contagemAtivos');
 const prisma = require('../lib/prisma').default;
 // PRODUTO DE FORNECEDOR — o item que a clínica NÃO estoca mas consegue pedir.
 // Lido por SQL cru: a tabela é da migration 20261006000000 e o client pode não
@@ -209,11 +210,14 @@ const opcoesCatalogo = async (req, res) => {
     // caixa: com 'kg' e 'Kg' no catálogo, o seletor mostrava as duas como se fossem
     // unidades diferentes. Fica a grafia MAIS USADA — escolher a primeira alfabética
     // faria 'Kg' vencer 'kg' por acidente de ordenação.
-    const [formas, unidades, apresentacoes, vias] = await Promise.all([
+    const [formas, unidades, apresentacoes, vias, classificacoes] = await Promise.all([
       prisma.medicamento.groupBy({ by: ['formaFarmaceutica'], where, _count: { _all: true } }),
       prisma.medicamento.groupBy({ by: ['unidade'],           where, _count: { _all: true } }),
       prisma.medicamento.groupBy({ by: ['apresentacao'],      where, _count: { _all: true } }),
       prisma.medicamentoVia.groupBy({ by: ['via'], where: { medicamento: where }, _count: { _all: true } }),
+      // Classificações do catálogo — opções da liberação "prescrever sem evolução"
+      // (Cadastro da Empresa › Funcionamento, lib/dispensaEvolucaoPrescricao.js).
+      prisma.medicamento.groupBy({ by: ['classificacao'], where, _count: { _all: true } }),
     ]);
 
     const limpar = dedupPorCaixa;
@@ -230,6 +234,7 @@ const opcoesCatalogo = async (req, res) => {
         unidades:      garantirUnidadeAvulsa(limpar(unidades, 'unidade')),
         apresentacoes: limpar(apresentacoes, 'apresentacao'),
         vias:          viasLimpas,
+        classificacoes: limpar(classificacoes, 'classificacao'),
       },
     });
   } catch (err) {
@@ -307,6 +312,9 @@ const listar = async (req, res) => {
       prisma.medicamento.count({ where: { ativo: true, controlado: true, ...escopo } }),
       prisma.medicamento.count({ where }),
     ]);
+    // Quantidade das abas Ativos/Todos do catálogo — só quando a TELA pede (esta rota
+    // também alimenta seletores que carregam milhares de itens).
+    const contagens = querContagens(req.query) ? await contarAtivosInativos(prisma.medicamento, where) : undefined;
 
     return res.json({
       // Medicamento GLOBAL cuja cópia a empresa já tem (troca de unidade) sai da lista —
@@ -320,6 +328,7 @@ const listar = async (req, res) => {
         limit: take,
         hasMore: skip + medicamentos.length < totalFiltrado,
       },
+      contagens,
     });
   } catch (err) {
     console.error('MedicamentoController.listar:', err);
@@ -360,7 +369,8 @@ const listarVacinas = async (req, res) => {
       orderBy: { nome: 'asc' },
     });
 
-    return res.json({ dados: vacinas });
+    // Global substituído pela cópia da clínica não aparece — ver preferirCopiaDaEmpresa.
+    return res.json({ dados: preferirCopiaDaEmpresa(vacinas) });
   } catch (err) {
     console.error('MedicamentoController.listarVacinas:', err);
     return res.status(500).json({ error: 'Erro ao listar vacinas.' });
@@ -840,6 +850,9 @@ const paraAtendimento = async (req, res) => {
       return {
         id: m.id, nome: m.nome, formaFarmaceutica: m.formaFarmaceutica,
         unidade: m.unidade, vias: m.vias,
+        // Classificação do catálogo — a aba Prescrição SEM evolução só oferece as
+        // liberadas em Funcionamento (lib/dispensaEvolucaoPrescricao.js decide).
+        classificacao: m.classificacao ?? null,
         emEstoque,
         qtdEstoque:  emEstoque ? qtdTotal : null,
         precoUnitarioBase,

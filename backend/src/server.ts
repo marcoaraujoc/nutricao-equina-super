@@ -553,8 +553,11 @@ app.use((err: Error & { status?: number; statusCode?: number; code?: string; det
 // (conflito com o backend em execução) e ligar TODAS as tarefas em segundo plano, que
 // é o oposto de "rodar só esta, agora, e sair".
 if (process.env.CRON_CLI !== '1') {
-  app.listen(PORT, () => {
-    logger.info('Servidor iniciado', { port: PORT, env: process.env.NODE_ENV ?? 'development' });
+  // HOST restringe a interface de escuta (produção: 127.0.0.1, atrás do Nginx). Sem ele
+  // o Node escuta em todas as interfaces — comportamento de desenvolvimento, preservado.
+  const HOST = process.env.HOST?.trim() || undefined;
+  const aoSubir = () => {
+    logger.info('Servidor iniciado', { host: HOST ?? '0.0.0.0', port: PORT, env: process.env.NODE_ENV ?? 'development' });
     // Agenda todas as tarefas com base em CronAgenda (banco), aplicando os padrões
     // quando não configurado. Reagendamento posterior é ao vivo (cronManager.reagendar).
     // Agenda primeiro; SÓ ENTÃO recupera o que foi perdido — a recuperação lê o estado
@@ -564,7 +567,9 @@ if (process.env.CRON_CLI !== '1') {
     iniciarJobs()
       .then(() => recuperarJobsPerdidos())
       .catch((e: unknown) => logger.error(`[CronManager] Falha ao iniciar jobs: ${e instanceof Error ? e.message : e}`));
-  });
+  };
+  if (HOST) app.listen(PORT, HOST, aoSubir);
+  else app.listen(PORT, aoSubir);
 }
 
 // ===================== CRON — TAREFAS AGENDADAS (agenda dinâmica no banco) =====================

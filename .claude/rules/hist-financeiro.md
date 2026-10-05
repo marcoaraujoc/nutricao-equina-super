@@ -34,6 +34,44 @@ paths:
 As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão em `CLAUDE.md`.
 
 ---
+# Atualizado em: 2026-10-02 (🔴 **A LINHA DO MEDICAMENTO MULTIDOSE EM mL SAI EM mL NA
+#   FATURA** — a pedido. ⚠️ **REVERTE** o item 6 de 2026-09-23 ("o multidose fica FORA
+#   de propósito: lá a linha conta DOSES").
+#   Antes: `Quant.: 3 · Unitário: R$ 25,00` (preço da dose de 5 mL). Agora:
+#   `Quant.: 15 mL · Unitário: R$ 5,00/mL`. O TOTAL é o mesmo — muda a leitura.
+#   1. **`debitarEstoqueDia` anota o mL DEBITADO** em `unidadesFaturadas` + o mapa novo
+#      `unidadesDaLinha` (item → 'mL') quando a unidade operativa do estoque é mL (só o
+#      multidose com forma de cálculo declarada chega lá; o não-multidose é sempre
+#      'Un.'). É o DEBITADO, não o prescrito: com estoque curto o valor só cobre o que
+#      saiu, e o unitário (valor ÷ qtd) tem de acompanhar.
+#      ⚠️ Multidose em g/doses/etc. SEGUE contando doses — só o mL foi pedido.
+#      ⚠️ Sem estoque nenhum a linha continua "1 dose" com valor 0, como sempre.
+#   2. **Os TRÊS lançamentos de medicamento passam a `unidade`**: execução no plantão
+#      (`unidadeFaturada`), entrega ao proprietário na finalização (`unidadeDaEntrega`) e
+#      execução dispensada (`unidadeLinha`). Na dispensada o piso `Math.max(qtd, 1)`
+#      NÃO vale para mL — 0,5 mL viraria 1 e o unitário sairia pela metade.
+#   3. 🔴 **Coluna `tb_fatura_itens.unidade` VARCHAR(20)** (migration
+#      `20261101000000_fatura_item_unidade`, ✅ **APLICADA**, ADITIVA e **SEM
+#      BACKFILL**: NULL = dose/unidade/embalagem, o significado de toda linha anterior;
+#      marcar as antigas como mL afirmaria o falso). Lida/gravada SEMPRE por
+#      `lib/faturaItemUnidade.js` (SQL cru com guarda de coluna — §11).
+#   4. 🔴 **A UNIDADE ENTRA NA CHAVE DA CONSOLIDAÇÃO** (`adicionarOuSomarFaturaItem`):
+#      linha em mL só soma em linha em mL. Somar 5 mL numa linha legada de doses daria
+#      "Quant.: 8" de coisa nenhuma. Conferido AO VIVO (transação revertida): 5 mL +
+#      2,5 mL → uma linha 7,5 mL; a dose legada ficou em linha própria.
+#   5. **Leitura**: `comPerfilDaEmpresa` e `comOrigensDoItem` anexam `unidade` (uma
+#      consulta por fatura). **Tela** (`Faturamento.tsx`): "Quant.: 7,5 mL · Unitário:
+#      R$ 5,00/mL", observação das origens em mL, e a edição da linha em mL aceita FRAÇÃO
+#      (`parseInt` truncaria 2,5 mL para 2). **Folha/PDF/WhatsApp/e-mail e CSV**
+#      (`FaturaExport.ts`) com a mesma escrita, por `utils/faturaQuantidade.ts` (fonte
+#      única dos dois lados).
+#   Gate: `__tests__/faturaItemUnidadeMl.test.js` (✅ verificado que REPROVA sem a
+#   unidade na chave). Suíte: **1775** + as 3 suítes vermelhas herdadas
+#   (`pacienteInativo`, `produtoPorNome`, `tenancyRls`/`tb_medicamentos_bkp2709`).
+#   ⚠️ `prisma generate` falhou com EPERM (§11, backend rodando) — não bloqueia, tudo é
+#   SQL cru. ⚠️ NÃO verificado em navegador.)
+
+---
 # Atualizado em: 2026-09-26 (parte 3) (**A LOGO DA CLÍNICA ABRE A FATURA** — a pedido.
 #   1. Na folha (`gerarHtmlFatura` → impressão, PDF, WhatsApp, e-mail, lote) a logo
 #      saiu de dentro da faixa verde (selo de 32px no canto direito) e foi para o TOPO,

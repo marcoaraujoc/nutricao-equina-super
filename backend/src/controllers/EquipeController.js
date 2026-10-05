@@ -19,6 +19,7 @@ const { normalizarValidade, lerValidade, salvarValidade } = require('../lib/vali
 const formaCobranca = require('../lib/formaCobrancaEstoque');
 // Etapa de Execução de Prescrição OPCIONAL por empresa (2026-09-24).
 const etapaExecucao = require('../lib/etapaExecucaoPrescricao');
+const dispensaEvolucao = require('../lib/dispensaEvolucaoPrescricao');
 // Fuso horário da clínica — a aplicação roda nos 4 fusos do Brasil (ver lib/fusoEmpresa.js).
 const { normalizarFuso, salvarFuso, fusoDaEmpresa, rotuloFuso } = require('../lib/fusoEmpresa');
 const { senhaReutilizada, registrarTrocaSenha, MENSAGEM_REUSO: MENSAGEM_SENHA_REUTILIZADA } = require('../services/passwordHistoryService');
@@ -760,7 +761,7 @@ const EquipeController = {
       if (req.user?.role !== 'ADMIN' && req.user?.userTypeGlobal !== 'ADMIN' && req.user?.userType !== 'ADMIN') {
         return res.status(403).json({ sucesso: false, mensagem: 'Apenas o administrador da plataforma cria gestores.' });
       }
-      const { fullName, email, telefone, cep, endereco, complemento, bairro, cidade, estado, planoId } = req.body;
+      const { fullName, email, telefone, cep, endereco, complemento, bairro, cidade, estado, planoId, especialidadeIds } = req.body;
 
       const fullNameTrim = String(fullName ?? '').trim();
       if (!fullNameTrim) return res.status(400).json({ sucesso: false, mensagem: 'Nome é obrigatório' });
@@ -794,7 +795,9 @@ const EquipeController = {
       const emailNorm = normalizeEmail(emailTrim);
       const SENHA_INICIAL = gerarSenhaInicial({ email: emailNorm, nome: fullNameTrim, telefone });
       let usuario = await findUserByEmail(prisma, emailNorm);
-      let usuarioNovo = false;
+      // Senha que o e-mail informa. Só existe para conta em PRIMEIRO ACESSO; quem já
+      // escolheu a própria senha continua com ela (ninguém a troca por ela — §14).
+      let senhaParaEnviar = null;
       if (!usuario) {
         usuario = await prisma.user.create({
           data: {
@@ -813,14 +816,25 @@ const EquipeController = {
             mustChangePassword: true,
           },
         });
-        usuarioNovo = true;
+        senhaParaEnviar = SENHA_INICIAL;
       }
       const donoId = usuario.id;
+
+      // Especialidades escolhidas pelo admin — gravadas POR EMPRESA (a nova), já que o
+      // cadastro profissional é isolado por empresa. Só ids ativos do catálogo.
+      const idsEspec = Array.isArray(especialidadeIds)
+        ? [...new Set(especialidadeIds.map(Number))].filter(Number.isInteger) : [];
+      const especValidas = idsEspec.length
+        ? await prisma.especialidade.findMany({ where: { id: { in: idsEspec }, ativo: true }, select: { id: true } })
+        : [];
 
       // Nome da empresa nasce PLACEHOLDER — o gestor troca isso na primeira visita a
       // Cadastro da Empresa (obrigatório pelo gate de onboarding, ver ProtectedRoute).
       // Equipe herda o mesmo nome por ora (regra 36-d).
-      const nomePlaceholder = `Empresa de ${usuario.fullName}`;
+      // ⚠️ Sai do NOME COMPLETO digitado nesta tela, nunca da conta achada pelo e-mail:
+      // com o e-mail já cadastrado, `usuario.fullName` é o nome que OUTRA tela gravou
+      // (às vezes o próprio e-mail), e a empresa nascia batizada com ele.
+      const nomePlaceholder = `Empresa de ${fullNameTrim}`;
 
       const fimEm = plano.validadeDias ? new Date(Date.now() + plano.validadeDias * 86400000) : null;
 
@@ -849,20 +863,39 @@ const EquipeController = {
         await tx.empresaConfiguracao.create({
           data: { empresaId: emp.id, equipeId: equipe.id },
         });
+        if (especValidas.length) {
+          await tx.usuarioEspecialidade.createMany({
+            data: especValidas.map(e => ({ userId: donoId, especialidadeId: e.id, empresaId: emp.id })),
+            skipDuplicates: true,
+          });
+        }
         return emp;
       }));
       // Instância de WhatsApp exclusiva da clínica (Evolution API) — best-effort.
       require('../services/whatsappService').provisionarPorEmpresa(empresa.id).catch(() => {});
 
-      // O gestor precisa SABER que tem acesso — e, se a conta nasceu agora, com qual
-      // senha. Fire-and-forget: falha de e-mail não desfaz o gestor já criado.
+      // Conta que JÁ existia mas nunca fez o primeiro acesso (`mustChangePassword`): a
+      // senha dela é temporária, gerada pelo sistema, e não há como reenviá-la (só o hash
+      // existe). Ela passa a ser a senha inicial deste cadastro, derivada pela MESMA
+      // regra (`gerarSenhaInicial`), e sai no e-mail — senão o gestor receberia "você já
+      // pode fazer login" sem ter com que entrar. Só DEPOIS de a empresa existir: falhar
+      // antes não pode deixar a senha trocada sem gestor criado.
+      // ⚠️ Quem já trocou a senha (`mustChangePassword = false`) NÃO é tocado.
+      if (!senhaParaEnviar && usuario.mustChangePassword) {
+        await prisma.user.update({
+          where: { id: usuario.id },
+          data:  { passwordHash: await bcrypt.hash(SENHA_INICIAL, 10) },
+        });
+        senhaParaEnviar = SENHA_INICIAL;
+      }
+
+      // O gestor precisa SABER que tem acesso — e, no primeiro acesso, com qual senha.
+      // Fire-and-forget: falha de e-mail não desfaz o gestor já criado.
       emailService.enviarAcessoGestor({
         email:        usuario.email,
-        nomeGestor:   usuario.fullName || usuario.email,
+        nomeGestor:   fullNameTrim,
         empresaNome:  empresa.nome,
-        equipeName:   nomePlaceholder,
-        usuarioCriado: usuarioNovo,
-        senhaInicial:  usuarioNovo ? SENHA_INICIAL : null,
+        senhaInicial: senhaParaEnviar,
       }).catch(err => console.error('[emailService] Falha ao enviar acesso de gestor:', err?.message));
 
       res.status(201).json({ sucesso: true, dados: empresa });
@@ -891,6 +924,10 @@ const EquipeController = {
       if (!STATUS_VALIDOS.includes(status)) {
         return res.status(400).json({ sucesso: false, mensagem: 'Status inválido (ATIVA | SUSPENSA | CANCELADA).' });
       }
+      const motivo = String(req.body?.motivo || '').trim();
+      if (status !== 'ATIVA' && motivo.length < 3) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Informe o motivo da inativação.' });
+      }
       const empresa = await prisma.empresa.findUnique({ where: { id }, select: { id: true } });
       if (!empresa) return res.status(404).json({ sucesso: false, mensagem: 'Empresa não encontrada' });
 
@@ -899,10 +936,123 @@ const EquipeController = {
         data:  { status, canceladoEm: status === 'ATIVA' ? null : new Date() },
         select: { id: true, nome: true, status: true, canceladoEm: true },
       });
+      // ADMIN não tem tenant: `tb_audit_logs` está sob RLS e a escrita sem empresa
+      // carimbada é recusada (42501). O alvo da ação é a empresa do parâmetro.
+      await comEscopoPlataforma(() => registrarAuditoria(prisma, { ...req, empresaId: id }, {
+        categoria:  status === 'ATIVA' ? 'ATIVACAO' : 'INATIVACAO',
+        entidade:   'EMPRESA',
+        entidadeId: id,
+        motivo:     status === 'ATIVA' ? null : motivo,
+        detalhes:   `${req.user.fullName ?? req.user.email} alterou o status da empresa "${atualizada.nome}" para ${status}`,
+      }));
       res.json({ sucesso: true, dados: atualizada });
     } catch (err) {
       console.error('[EquipeController.alterarStatusEmpresa]', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao alterar o status da empresa' });
+    }
+  },
+
+  // DELETE /equipes/empresas/:id { motivo } — ADMIN exclui a empresa, SÓ se ela nunca teve
+  // movimento. Empresa com paciente ou fatura carrega prontuário e cobrança: apagá-la
+  // levaria o histórico junto, então a saída é inativar (ou transferir a gestão).
+  excluirEmpresa: async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const motivo = String(req.body?.motivo || '').trim();
+      if (motivo.length < 3) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Informe o motivo da exclusão.' });
+      }
+      const empresa = await prisma.empresa.findUnique({ where: { id }, select: { id: true, nome: true, documento: true } });
+      if (!empresa) return res.status(404).json({ sucesso: false, mensagem: 'Empresa não encontrada' });
+
+      // Tabelas do tenant plane estão sob RLS FORÇADO: sem o escopo de plataforma a
+      // contagem devolveria 0 e a empresa pareceria vazia (armadilha 42).
+      const uso = await comEscopoPlataforma(async () => ({
+        animais: await prisma.animal.count({ where: { empresaId: id } }),
+        faturas: await prisma.fatura.count({ where: { empresaId: id } }),
+      }));
+      if (uso.animais > 0 || uso.faturas > 0) {
+        return res.status(409).json({
+          sucesso:  false,
+          code:     'EMPRESA_COM_DADOS',
+          mensagem: `Esta empresa já tem movimento (${uso.animais} paciente(s), ${uso.faturas} fatura(s)) e não pode ser excluída. `
+                    + 'Inative a empresa ou transfira a gestão para outro usuário.',
+        });
+      }
+
+      await comEscopoPlataforma(() => prisma.$transaction(async (tx) => {
+        // `tb_audit_logs.empresaId` tem FK RESTRICT para a empresa: os logs da própria
+        // empresa (ex.: inativações anteriores) travariam o delete. Eles são preservados
+        // — só perdem o vínculo; a empresa excluída fica identificada em `entidadeId`.
+        await tx.$executeRawUnsafe(`UPDATE schs2vet.tb_audit_logs SET "empresaId" = NULL WHERE "empresaId" = $1`, id);
+        await registrarAuditoria(tx, { ...req, empresaId: null }, {
+          categoria:  'EXCLUSAO',
+          entidade:   'EMPRESA',
+          entidadeId: id,
+          motivo,
+          detalhes:   `${req.user.fullName ?? req.user.email} excluiu a empresa "${empresa.nome}"`,
+        });
+        await tx.empresa.delete({ where: { id } });
+      }));
+      res.json({ sucesso: true, mensagem: 'Empresa excluída' });
+    } catch (err) {
+      console.error('[EquipeController.excluirEmpresa]', err);
+      responderErro(res, err, 'Erro ao excluir a empresa');
+    }
+  },
+
+  // PATCH /equipes/empresas/:id/dono { email, motivo } — ADMIN passa a empresa para outro
+  // gestor. O novo dono vira GESTOR de todas as equipes da empresa; o dono anterior
+  // continua com o vínculo que já tem (a tela Equipe/Controle de Acesso o rebaixa se
+  // for o caso) — assim a empresa nunca fica sem gestor no meio da troca.
+  transferirDonoEmpresa: async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const motivo = String(req.body?.motivo || '').trim();
+      const email  = normalizeEmail(req.body?.email);
+      if (!email) return res.status(400).json({ sucesso: false, mensagem: 'Informe o e-mail do novo gestor.' });
+      if (motivo.length < 3) return res.status(400).json({ sucesso: false, mensagem: 'Informe o motivo da transferência.' });
+
+      const empresa = await prisma.empresa.findUnique({
+        where: { id }, select: { id: true, nome: true, ownerId: true, equipes: { select: { id: true } } },
+      });
+      if (!empresa) return res.status(404).json({ sucesso: false, mensagem: 'Empresa não encontrada' });
+
+      const novo = await findUserByEmail(email);
+      if (!novo) {
+        return res.status(404).json({ sucesso: false, code: 'USUARIO_NAO_ENCONTRADO', mensagem: 'Nenhum usuário com este e-mail. Crie o gestor antes (Criação de Gestor) e tente de novo.' });
+      }
+      if (!novo.ativo || ['PROPRIETARIO', 'FORNECEDOR'].includes(novo.userType)) {
+        return res.status(400).json({ sucesso: false, mensagem: 'O novo gestor precisa ser um profissional ativo (não cliente nem externo).' });
+      }
+      if (novo.id === empresa.ownerId) {
+        return res.status(400).json({ sucesso: false, mensagem: 'Este usuário já é o gestor responsável pela empresa.' });
+      }
+
+      await comEscopoPlataforma(() => prisma.$transaction(async (tx) => {
+        await tx.empresa.update({ where: { id }, data: { ownerId: novo.id } });
+        for (const eq of empresa.equipes) {
+          await tx.membroEquipe.upsert({
+            where:  { equipeId_userId: { equipeId: eq.id, userId: novo.id } },
+            update: { cargo: 'GESTOR' },
+            create: { equipeId: eq.id, userId: novo.id, cargo: 'GESTOR', cargos: ['GESTOR'] },
+          });
+        }
+        await registrarAuditoria(tx, req, {
+          categoria:  'TRANSFERENCIA',
+          entidade:   'EMPRESA',
+          entidadeId: id,
+          motivo,
+          detalhes:   `Gestão da empresa "${empresa.nome}" transferida (usuário ${empresa.ownerId ?? '—'} → ${novo.id})`,
+        });
+      }));
+      res.json({ sucesso: true, mensagem: `Gestão transferida para ${novo.fullName}` });
+    } catch (err) {
+      console.error('[EquipeController.transferirDonoEmpresa]', err);
+      if (err.code === 'P2002') {
+        return res.status(409).json({ sucesso: false, mensagem: 'O novo gestor já tem uma empresa com este nome e documento.' });
+      }
+      responderErro(res, err, 'Erro ao transferir a gestão da empresa');
     }
   },
 
@@ -1141,6 +1291,7 @@ const EquipeController = {
 
       const cobranca = await formaCobranca.lerFormaDoEscopo(prisma, escopo.empresaId, escopo.equipeId);
       const dispensaExecucao = await etapaExecucao.lerDoEscopo(prisma, escopo.empresaId, escopo.equipeId);
+      const regrasSemEvolucao = await dispensaEvolucao.lerDoEscopo(prisma, escopo.empresaId, escopo.equipeId);
 
       // Mesma resolução de compat que deveFecharHoje (faturaUtils.js): nunca retorna
       // tipoFechamento null pro frontend — sempre o efetivamente aplicado hoje.
@@ -1177,6 +1328,9 @@ const EquipeController = {
           // true = a clínica NÃO tem a etapa de Execução de Prescrição: fatura, estoque e
           // pagamento do prestador saem na FINALIZAÇÃO. Ver lib/etapaExecucaoPrescricao.js.
           dispensarExecucaoPrescricao: dispensaExecucao,
+          // O que pode ser PRESCRITO sem evolução aberta — nunca null (listas vazias =
+          // tudo exige evolução). Ver lib/dispensaEvolucaoPrescricao.js.
+          dispensaEvolucaoPrescricao: regrasSemEvolucao,
           // Fuso EFETIVO da clínica — DEDUZIDO do endereço (CEP/UF) que o cadastro
           // já coletou. O gestor não escolhe fuso: a tela só EXIBE qual foi detectado,
           // para ele conferir. Ver lib/fusoEmpresa.js#fusoPorEndereco.
@@ -1309,7 +1463,12 @@ const EquipeController = {
         diasAtendimento, horaInicioAtendimento, horaFimAtendimento,
         especiesAtendidas, tempoConsultaPadraoMin, validadeOrcamentoDias, fusoHorario,
         formaCobrancaEstoque, percentualCobrancaEstoque, dispensarExecucaoPrescricao,
+        dispensaEvolucaoPrescricao,
       } = req.body;
+
+      // Prescrição sem evolução. undefined = não altera — ver lib/dispensaEvolucaoPrescricao.js.
+      const regrasEvol = dispensaEvolucao.normalizarRegras(dispensaEvolucaoPrescricao);
+      if (regrasEvol.erro) return res.status(400).json({ sucesso: false, mensagem: regrasEvol.erro });
 
       // Etapa de Execução de Prescrição. undefined = não altera. NÃO nasce marcada —
       // ver lib/etapaExecucaoPrescricao.js.
@@ -1507,6 +1666,8 @@ const EquipeController = {
       // Etapa de execução: mesmo caminho (SQL cru, depois do upsert). Devolve o EFETIVO.
       await etapaExecucao.salvarDispensa(prisma, escopo.empresaId, escopo.equipeId, dispensa.valor);
       const dispensaAtual = await etapaExecucao.lerDoEscopo(prisma, escopo.empresaId, escopo.equipeId);
+      await dispensaEvolucao.salvarRegras(prisma, escopo.empresaId, escopo.equipeId, regrasEvol.valor);
+      const regrasEvolAtual = await dispensaEvolucao.lerDoEscopo(prisma, escopo.empresaId, escopo.equipeId);
 
       // Fuso: o gestor NÃO envia este campo (a tela só exibe o detectado), então
       // `fusoFinal` é `undefined` no fluxo normal e nada é gravado. O caminho de
@@ -1532,6 +1693,7 @@ const EquipeController = {
           formaCobrancaEstoque:      cobrancaAtual.forma,
           percentualCobrancaEstoque: cobrancaAtual.percentual,
           dispensarExecucaoPrescricao: dispensaAtual,
+          dispensaEvolucaoPrescricao:  regrasEvolAtual,
           fusoHorario:            fusoAtual,
           fusoLabel:              rotuloFuso(fusoAtual),
         },

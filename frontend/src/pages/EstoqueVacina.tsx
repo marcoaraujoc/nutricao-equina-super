@@ -374,19 +374,25 @@ export default function EstoqueVacina() {
   const hojeDate = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
   const em7Date  = (() => { const d = new Date(hojeDate); d.setDate(d.getDate() + 7); return d; })();
 
-  const lotesDaAba = (() => {
-    if (filtroTab === 'ativos')   return lotes.filter(l => l.ativo && new Date(l.validade) >= hojeDate);
-    if (filtroTab === 'inativos') return lotes.filter(l => !l.ativo);
-    if (filtroTab === 'critico')  return lotes.filter(l => l.ativo && l.qtdDisponivel <= l.estoqueMinimo);
-    if (filtroTab === 'alarmante') return lotes.filter(l => l.ativo && l.qtdDisponivel <= l.estoqueAlarmante && l.qtdDisponivel > l.estoqueMinimo);
-    if (filtroTab === 'vencido')  return lotes.filter(l => l.ativo && new Date(l.validade) < hojeDate);
-    if (filtroTab === 'vencendo') return lotes.filter(l => {
-      if (!l.ativo) return false;
-      const v = new Date(l.validade); v.setHours(0, 0, 0, 0);
-      return v >= hojeDate && v <= em7Date;
-    });
-    return lotes; // todos
-  })();
+  // O lote entra na aba? — FONTE ÚNICA do filtro E da contagem de cada aba: contar por
+  // outra regra faria a pílula prometer um número e a lista mostrar outro.
+  const loteNaAba = (l: typeof lotes[number], tab: FiltroTab): boolean => {
+    switch (tab) {
+      case 'ativos':    return l.ativo && new Date(l.validade) >= hojeDate;
+      case 'inativos':  return !l.ativo;
+      case 'critico':   return l.ativo && l.qtdDisponivel <= l.estoqueMinimo;
+      case 'alarmante': return l.ativo && l.qtdDisponivel <= l.estoqueAlarmante && l.qtdDisponivel > l.estoqueMinimo;
+      case 'vencido':   return l.ativo && new Date(l.validade) < hojeDate;
+      case 'vencendo': {
+        if (!l.ativo) return false;
+        const v = new Date(l.validade); v.setHours(0, 0, 0, 0);
+        return v >= hojeDate && v <= em7Date;
+      }
+      default:          return true; // todos
+    }
+  };
+  const lotesDaAba = lotes.filter(l => loteNaAba(l, filtroTab));
+  const contarAba  = (tab: FiltroTab) => lotes.filter(l => loteNaAba(l, tab)).length;
 
   /**
    * Ordenação por coluna — vale para a lista INTEIRA da aba (esta tela não pagina).
@@ -890,6 +896,7 @@ export default function EstoqueVacina() {
                       : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
                   }`}>
                   {label}
+                  <span className={filtroTab === key ? 'text-white/80' : 'text-gray-400'}> ({contarAba(key)})</span>
                 </button>
               );
             })}

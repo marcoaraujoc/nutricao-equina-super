@@ -40,6 +40,24 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-02 (🔴 **O NÚMERO DO WHATSAPP SUMIA DE CONFIGURAÇÕES AO TROCAR
+#   DE TELA.**)
+
+Conectar (ler o QR) NÃO gravava o número: ele só ia ao banco no "Salvar" GERAL do
+Cadastro da Empresa. Quem conectava e saía da tela voltava com o campo vazio, embora o
+WhatsApp seguisse conectado (caso real: Patyvet, `EmpresaConfiguracao.whatsapp` NULL com
+`wa_status = CONECTADO`).
+- `EvolutionService.getNumeroConectado` lê o `ownerJid` de `/instance/fetchInstances`.
+- `whatsappService.obterStatus`, quando CONECTADO e sem número na configuração, grava o
+  número PAREADO (`preencherNumeroPareado` → `salvarNumeroSeVazio`) e devolve `numero`.
+  ⚠️ Grava SÓ se o campo estiver vazio (guarda no próprio `WHERE`): nunca sobrescreve o
+  que o gestor salvou. Formato NACIONAL (tira o DDI 55) — é o que `maskWhatsapp` exibe.
+  Best-effort: falha ao ler o número não muda o status.
+- Front (`useConfiguracaoOperacional`): o status preenche o campo VAZIO, e o `carregar`
+  não apaga mais o que o status já preencheu (as duas cargas correm em paralelo).
+⚠️ CONHECIDO, NÃO TRATADO: o número salvo pode DIVERGIR do pareado (Gestorvet:
+cadastrado 21994634063, pareado 21994328820). Decidir se a tela deve avisar.
+
 # Atualizado em: 2026-09-30 (🔴 **REVISÃO MULTI-TENANT/RLS DAS MUDANÇAS DO DIA + WHATSAPP
 #   SÓ SAI COM O SERVIÇO ATIVO.**
 #   1. **Revisão** (prestador sem login na agenda, "Gerenciar Acesso" por cadastro,

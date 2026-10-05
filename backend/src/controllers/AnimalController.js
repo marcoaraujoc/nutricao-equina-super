@@ -35,6 +35,8 @@ const { garantirDonoAtivo } = require('../lib/donoAtivoDoPaciente');
 // (§11: no Windows o `generate` falha com o backend rodando, e um campo desconhecido
 // no `animal.create` derrubaria o cadastro inteiro do paciente).
 const { salvarFei, anexarFei } = require('../lib/animalFei');
+const { salvarAvulso, anexarAvulso, erroPacienteAvulso } = require('../lib/animalAvulso');
+const { salvarAssistencia, anexarAssistencia } = require('../lib/animalAssistencia');
 
 const prisma = require('../lib/prisma').default;
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
@@ -435,6 +437,8 @@ class AnimalController {
       // reatribuir aqui, a trilha era calculada e descartada, e a coluna "Ativado
       // em/por" e "Inativado em/por" da tela de Pacientes nunca recebia dado nenhum.
       animais = await anexarTrilhaAtivacaoEmLista(animais);
+      // Paciente AVULSO — selo e filtro da tela de Pacientes (coluna lida por SQL cru).
+      animais = await anexarAvulso(animais);
       // O que a consulta deixou de filtrar, a LINHA precisa declarar (ver acima).
       if (abaDePacientes) await marcarProprietarioInativo(animais, req.empresaId);
       res.json({
@@ -480,7 +484,7 @@ class AnimalController {
       // `registradoFei` vem por fora do `include` (coluna lida por SQL cru) — sem
       // isto o formulário de edição abriria com a marcação SEMPRE desmarcada e a
       // primeira gravação apagaria o que estava lá.
-      const comFei = await anexarFei(animal);
+      const comFei = await anexarAvulso(await anexarAssistencia(await anexarFei(animal)));
       res.json({
         sucesso: true,
         dados:   comFei?.user
@@ -530,13 +534,27 @@ class AnimalController {
       categoriaAnimal, tipoExercicio, veterinarioNome, veterinarioClinica,
       proprietarioId, veterinarioUserId, local, baia, localizacaoId, tratadorId,
       pelagem, altura, registroPassaporte, numeroChip, finalidade, seguradora,
-      registradoFei,
+      registradoFei, valorAssistencia, avulso,
     } = req.body;
 
     if (!nome?.trim())                    return res.status(400).json({ sucesso: false, mensagem: 'Nome do animal é obrigatório' });
     if (!especieId)                       return res.status(400).json({ sucesso: false, mensagem: 'Espécie é obrigatória' });
     if (!racaId || isNaN(Number(racaId))) return res.status(400).json({ sucesso: false, mensagem: 'Raça é obrigatória' });
     if (!dataNascimento && !idadeAnos)    return res.status(400).json({ sucesso: false, mensagem: 'Informe a data de nascimento ou a idade' });
+
+    // Paciente AVULSO: localização e e-mail/telefone do proprietário obrigatórios.
+    {
+      let propAvulso = null;
+      try {
+        propAvulso = typeof req.body.proprietario === 'string'
+          ? JSON.parse(req.body.proprietario)
+          : (req.body.proprietario ?? null);
+      } catch { propAvulso = null; }
+      const erroAvulso = erroPacienteAvulso({
+        avulso, localizacaoId, proprietario: propAvulso, exigirEmail: true,
+      });
+      if (erroAvulso) return res.status(400).json({ sucesso: false, mensagem: erroAvulso, code: 'PACIENTE_AVULSO_INCOMPLETO' });
+    }
 
     try {
       const { userType, role } = await obterUserType(req.user.id);
@@ -914,6 +932,10 @@ class AnimalController {
       // (§11), e um campo desconhecido ali derrubaria o cadastro inteiro do paciente
       // — não só o registro na FEI. `salvarFei` é silenciosa nesse caso.
       await salvarFei(prisma, animal.id, registradoFei);
+      await salvarAvulso(prisma, animal.id, avulso);
+      // Assistência mensal é do ANIMAL (não mais do proprietário) — mesma razão: fora do
+      // `create` tipado. `undefined` não apaga o que já está gravado.
+      await salvarAssistencia(prisma, animal.id, valorAssistencia);
 
       // A reativação do CLIENTE é auditada à parte, com o motivo que a tela pediu:
       // quem abrir a trilha do cadastro dele precisa achar lá por que ele voltou.
@@ -1046,7 +1068,7 @@ class AnimalController {
       categoriaAnimal, tipoExercicio, veterinarioNome, veterinarioClinica,
       veterinarioUserId, local, baia, localizacaoId, tratadorId,
       pelagem, altura, registroPassaporte, numeroChip, finalidade, seguradora,
-      registradoFei, removerFoto,
+      registradoFei, removerFoto, valorAssistencia, avulso,
     } = req.body;
 
     if (!nome?.trim())                    return res.status(400).json({ sucesso: false, mensagem: 'Nome do animal é obrigatório' });
@@ -1093,6 +1115,25 @@ class AnimalController {
           user: { select: { fullName: true, email: true, phone: true } },
         },
       });
+
+      // Paciente AVULSO: localização e telefone do proprietário obrigatórios. Na edição
+      // o dono já existe (o e-mail é a identidade dele), então só o contato é conferido;
+      // e `localizacaoId` ausente no body significa "não mexe" — vale o gravado.
+      {
+        let propAvulso = null;
+        try {
+          propAvulso = typeof req.body.proprietario === 'string'
+            ? JSON.parse(req.body.proprietario)
+            : (req.body.proprietario ?? null);
+        } catch { propAvulso = null; }
+        const erroAvulso = erroPacienteAvulso({
+          avulso,
+          localizacaoId: localizacaoId !== undefined ? localizacaoId : animalAtual?.localizacaoId,
+          proprietario:  propAvulso,
+          exigirEmail:   false,
+        });
+        if (erroAvulso) return res.status(400).json({ sucesso: false, mensagem: erroAvulso, code: 'PACIENTE_AVULSO_INCOMPLETO' });
+      }
 
       // Validação de baia: única por LOCAL dentro do escopo visível — ver acharOcupanteDaBaia.
       if (baia?.trim()) {
@@ -1207,12 +1248,14 @@ class AnimalController {
       // Mesma razão do `criar`: fora do `update` tipado. `undefined` (campo não
       // enviado) não apaga o que já está gravado.
       await salvarFei(prisma, animalId, registradoFei);
+      await salvarAvulso(prisma, animalId, avulso);
+      await salvarAssistencia(prisma, animalId, valorAssistencia);
 
       const animalAtualizado = await prisma.animal.findUnique({
         where:   { id: animalId },
         include: ANIMAL_INCLUDE,
       });
-      res.json({ sucesso: true, dados: await anexarFei(animalAtualizado) });
+      res.json({ sucesso: true, dados: await anexarAvulso(await anexarAssistencia(await anexarFei(animalAtualizado))) });
     } catch (error) {
       console.error('[AnimalController.atualizar]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno ao atualizar animal' });

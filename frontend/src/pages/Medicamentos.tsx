@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
+import { sufixoContagem, type ContagemAtivos } from '../utils/contagemAtivos';
 import PageContainer from '../components/PageContainer';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -376,6 +377,8 @@ export default function Medicamentos() {
   const [busca,          setBusca]          = useState('');
   const [debouncedBusca, setDebouncedBusca] = useState('');
   const [filtroAtivo,    setFiltroAtivo]    = useState<'ativos' | 'todos'>('ativos');
+  // Quantidade das abas Ativos/Todos — do backend (o catálogo inteiro do recorte).
+  const [contagens,      setContagens]      = useState<ContagemAtivos | null>(null);
   const loadVersion = useRef(0);
 
   useEffect(() => {
@@ -398,6 +401,7 @@ export default function Medicamentos() {
       const p = new URLSearchParams({ limit: String(limit), offset: String(offset) });
       if (debouncedBusca.trim()) p.set('busca', debouncedBusca.trim());
       if (filtroAtivo === 'ativos') p.set('ativo', 'true');
+      if (offset === 0) p.set('contagens', '1');   // só a 1ª página conta as abas
       return p;
     };
 
@@ -410,6 +414,7 @@ export default function Medicamentos() {
       setMedicamentos(dados);
       setTotal(res.data.meta?.total ?? 0);
       setTotalControl(res.data.meta?.totalControlados ?? 0);
+      setContagens(res.data.contagens ?? null);
       setLoading(false);
 
       // Background: carrega o restante sem bloquear a UI
@@ -533,7 +538,7 @@ export default function Medicamentos() {
                 className={`px-3 py-1.5 text-xs font-medium rounded-xl transition-colors ${
                   filtroAtivo === f ? 'bg-emerald-700 text-white' : 'text-gray-500 hover:bg-gray-100'
                 }`}>
-                {f === 'ativos' ? 'Ativos' : 'Todos'}
+                {(f === 'ativos' ? 'Ativos' : 'Todos') + sufixoContagem(contagens, f === 'ativos' ? 'ativo' : 'all')}
               </button>
             ))}
           </div>

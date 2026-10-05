@@ -19,6 +19,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useSearchParams } from 'react-router-dom';
 import api from '../services/api';
+import { sufixoContagem, type ContagemAtivos } from '../utils/contagemAtivos';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
 import JanelaLista from '../components/JanelaLista';
@@ -440,6 +441,9 @@ export default function CadastroProcedimento() {
   const [combos,         setCombos]         = useState<Combo[]>([]);
   const [buscaCombos,    setBuscaCombos]    = useState('');
   const [filtroAtivoCombos, setFiltroAtivoCombos] = useState<'ativo' | 'inativo' | 'all'>('ativo');
+  // Quantidade de cada aba Todos/Ativos/Inativos (procedimentos e combos) — do backend.
+  const [contagensProcs,  setContagensProcs]  = useState<ContagemAtivos | null>(null);
+  const [contagensCombos, setContagensCombos] = useState<ContagemAtivos | null>(null);
   const [busca,          setBusca]          = useState('');
   const [aba,            setAba]            = useState<'procedimentos' | 'combos'>('procedimentos');
   const [loading,        setLoading]        = useState(true);
@@ -535,7 +539,7 @@ export default function CadastroProcedimento() {
   const carregarProcedimentos = useCallback(async (
     sel: string, ehImagem: boolean, situacao: 'all' | 'ativo' | 'inativo',
   ) => {
-    if (!sel) { setProcedimentos([]); return; }
+    if (!sel) { setProcedimentos([]); setContagensProcs(null); return; }
     setLoadingProcs(true);
     try {
       // ⚠️ O `ativo` é MANDADO por esta tela, e só por ela: o mesmo endpoint alimenta
@@ -544,20 +548,26 @@ export default function CadastroProcedimento() {
       const params = {
         ...(ehImagem ? { imagemCategoria: sel } : { especialidade: sel }),
         ativo: situacao === 'all' ? 'all' : situacao === 'inativo' ? 'false' : 'true',
+        contagens: 1,
       };
       const res = await api.get('/procedimentos/cadastro/lista', { params });
-      if (!res.data) { setProcedimentos([]); return; }
+      if (!res.data) { setProcedimentos([]); setContagensProcs(null); return; }
       setProcedimentos(res.data?.dados ?? []);
+      setContagensProcs(res.data?.contagens ?? null);
     } catch { /* silencioso */ }
     finally { setLoadingProcs(false); }
   }, []);
 
   const carregarCombos = useCallback(async (ativo: 'ativo' | 'inativo' | 'all') => {
     try {
-      const params = ativo === 'all' ? { ativo: 'all' } : { ativo: ativo === 'ativo' ? 'true' : 'false' };
+      const params = {
+        ativo: ativo === 'all' ? 'all' : ativo === 'ativo' ? 'true' : 'false',
+        contagens: 1,
+      };
       const res = await api.get('/procedimentos/cadastro/combos', { params });
       if (!res.data) return;
       setCombos(res.data?.dados ?? []);
+      setContagensCombos(res.data?.contagens ?? null);
     } catch { /* silencioso */ }
   }, []);
 
@@ -945,7 +955,7 @@ export default function CadastroProcedimento() {
                     className={`px-4 py-2 font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
                       filtroAtivoProcs === v ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
                     }`}>
-                    {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
+                    {(v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos') + sufixoContagem(contagensProcs, v)}
                   </button>
                 ))}
               </div>
@@ -1046,7 +1056,7 @@ export default function CadastroProcedimento() {
                     className={`px-3 py-2 font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
                       filtroAtivoCombos === v ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
                     }`}>
-                    {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
+                    {(v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos') + sufixoContagem(contagensCombos, v)}
                   </button>
                 ))}
               </div>

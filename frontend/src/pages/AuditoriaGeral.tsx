@@ -74,6 +74,7 @@ const ENTIDADE_LABEL: Record<string, string> = {
   VACINA_CATALOGO:   'Vacina (catálogo)',
   PROCEDIMENTO_COMBO:'Combo de procedimento',
   PLANO:             'Plano (assinatura)',
+  EMPRESA:           'Empresa',
   ENCAMINHAMENTO:    'Encaminhamento',
   AGENDAMENTO:       'Agendamento',
   ESTOQUE_FARMACIA:  'Estoque — Farmácia',

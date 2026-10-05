@@ -22,6 +22,7 @@ const { aplicarVinculo } = require('./usuarioEmpresa');
 
 const TIPO_LABEL = {
   CONSULTA: 'Consulta', VACINA: 'Vacina', RETORNO: 'Retorno', EXAME: 'Exame', PROCEDIMENTO: 'Procedimento',
+  VERMIFUGACAO: 'Vermifugação',
 };
 
 const texto = (v) => (typeof v === 'string' ? v.trim() : '');

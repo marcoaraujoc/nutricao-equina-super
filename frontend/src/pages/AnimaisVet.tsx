@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import api from '../services/api';
+import { contarAtivos, sufixoContagem } from '../utils/contagemAtivos';
 import { Pencil, Search, ShieldOff, ClipboardList, Zap, ToggleLeft, ToggleRight, MapPin, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PageContainer from '../components/PageContainer';
@@ -67,6 +68,8 @@ interface Animal {
    * em lugar nenhum do sistema.
    */
   proprietarioInativo?: boolean;
+  /** Paciente AVULSO (atendimento pontual) — selo "Avulso" e filtro da lista. */
+  avulso?:          boolean;
   inativoEm?:       string | null;
   inativoMotivo?:   string | null;
   inativoPor?:      { fullName?: string | null } | null;
@@ -232,6 +235,21 @@ function rastroInativacao(a: Animal): { em: string | null; por: string | null; m
   };
 }
 
+/** Filtro de tela por paciente avulso. Independe das abas de status. */
+type FiltroAvulso = 'todos' | 'avulso' | 'carteira';
+
+/** Selo "Avulso" ao lado do nome — mesmo formato dos selos de status da lista. */
+function SeloAvulso({ animal, compacto = false }: { animal: Animal; compacto?: boolean }) {
+  if (!animal.avulso) return null;
+  return (
+    <span title="Paciente avulso — atendimento pontual"
+      className={`inline-flex items-center rounded-full bg-sky-100 text-sky-700 font-bold flex-shrink-0 ${
+        compacto ? 'text-[10px] px-1.5 py-0.5' : 'text-xs px-2 py-0.5'}`}>
+      Avulso
+    </span>
+  );
+}
+
 function AnimalCardMobile({
   animal, filtroAtivo, isGestor, onDashboard, onEditar, podeEditar,
   podeInativar, podeAtivar, podeReativarExcluido, onInativar, onAtivar, onReativarExcluido,
@@ -269,6 +287,7 @@ function AnimalCardMobile({
             className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${selo.classe}`}>
             {selo.texto}
           </span>
+          <SeloAvulso animal={animal} compacto />
         </div>
         {animal.user?.fullName && (
           <p className="text-xs text-gray-400 truncate">Prop.: {animal.user.fullName}</p>
@@ -362,6 +381,7 @@ const AnimaisVet = () => {
   // Abas Todos/Ativos/Inativos (congelado OU `ativo=false`) — só o gestor enxerga; para
   // qualquer outro perfil a lista é sempre só os ativos (backend também trava isso).
   const [filtroAtivo,    setFiltroAtivo]    = useState<FiltroAtivo>('ativo');
+  const [filtroAvulso,   setFiltroAvulso]   = useState<FiltroAvulso>('todos');
   // Erro de ação exibido inline (substitui o toast de erro)
   const [erroInline, setErroInline] = useState<string | null>(null);
   // ⚠️ O botão "Desvincular" saiu na fase 3 do multi-tenancy: não há mais vínculo entre
@@ -481,20 +501,29 @@ const AnimaisVet = () => {
    *  precisam concordar sobre o nome do local, senão o link não acha nada. */
   const localDoAnimal = (a: Animal) => a.localizacao?.nome ?? a.local ?? SEM_LOCALIZACAO;
 
-  const animaisFiltrados = animais.filter(a => {
-    // Abas Todos/Ativos/Inativos — ver `pacienteInativo`. Só o gestor as vê; para os
-    // demais o backend já devolve só os ativos.
-    if (isGestor && filtroAtivo !== 'all' && (filtroAtivo === 'inativo') !== pacienteInativo(a)) return false;
+  // Local e busca PRIMEIRO; a aba de status por último — é assim que a quantidade de
+  // cada aba diz o que ela traria com o recorte já aplicado.
+  const animaisDoRecorte = animais.filter(a => {
     // Casa com o nome que o relatório agrupa: catálogo → texto legado → "Sem
     // localização". Comparação EXATA (e não `includes`), senão "Haras H." traria
     // junto o "Haras H. P." e a contagem da tela nunca bateria com a do relatório.
     if (filtroLocal && localDoAnimal(a) !== filtroLocal) return false;
+    // Avulso entra no RECORTE (antes das abas): a quantidade de cada aba passa a dizer
+    // quantos avulsos ativos/inativos existem, em vez de contar a base inteira.
+    if (filtroAvulso === 'avulso'   && !a.avulso) return false;
+    if (filtroAvulso === 'carteira' &&  a.avulso) return false;
     const termo = busca.toLowerCase().trim();
     if (!termo) return true;
     return filtroCampo === 'animal'
       ? a.nome.toLowerCase().includes(termo)
       : (a.user?.fullName ?? '').toLowerCase().includes(termo);
   });
+  // Contada pela MESMA `pacienteInativo` que a aba usa para filtrar.
+  const contagensAbas = contarAtivos(animaisDoRecorte, pacienteInativo);
+  // Abas Todos/Ativos/Inativos — ver `pacienteInativo`. Só o gestor as vê; para os
+  // demais o backend já devolve só os ativos.
+  const animaisFiltrados = animaisDoRecorte.filter(a =>
+    !(isGestor && filtroAtivo !== 'all' && (filtroAtivo === 'inativo') !== pacienteInativo(a)));
 
   const irParaAnimal = (animal: Animal) => {
     setSelectedAnimal({
@@ -626,6 +655,17 @@ const AnimaisVet = () => {
             <option value="animal">Por animal</option>
             <option value="proprietario">Por proprietário</option>
           </select>
+          <select
+            value={filtroAvulso}
+            onChange={e => setFiltroAvulso(e.target.value as FiltroAvulso)}
+            aria-label="Filtrar por paciente avulso"
+            className={`border rounded-2xl px-3 py-2.5 text-sm focus:outline-none focus:border-emerald-600 bg-white flex-shrink-0 ${
+              filtroAvulso === 'todos' ? 'border-gray-200 text-gray-700' : 'border-sky-300 text-sky-700 font-semibold'}`}
+          >
+            <option value="todos">Todos os pacientes</option>
+            <option value="avulso">Somente avulsos</option>
+            <option value="carteira">Sem avulsos</option>
+          </select>
           <div className="relative flex-1">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input
@@ -649,7 +689,7 @@ const AnimaisVet = () => {
                       "Inativar" produz) e o `ativo = false` legado. É filtro de TELA,
                       não o `?ativo=` do backend: eles moram em colunas diferentes.
                       Ver `pacienteInativo`. */}
-                  {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
+                  {(v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos') + sufixoContagem(contagensAbas, v)}
                 </button>
               ))}
             </div>
@@ -667,7 +707,13 @@ const AnimaisVet = () => {
           <div className="text-center py-16">
             <p className="text-3xl mb-3">🔍</p>
             <p className="text-gray-400 text-sm">
-              {busca ? `Nenhum resultado para "${busca}"` : 'Nenhum paciente cadastrado'}
+              {busca
+                ? `Nenhum resultado para "${busca}"`
+                : filtroAvulso === 'avulso'
+                  ? 'Nenhum paciente avulso'
+                  : filtroAvulso === 'carteira'
+                    ? 'Nenhum paciente fora os avulsos'
+                    : 'Nenhum paciente cadastrado'}
             </p>
           </div>
         ) : (
@@ -741,9 +787,12 @@ const AnimaisVet = () => {
                           </div>
                         </td>
                         <td className="px-3 py-3.5 max-w-0">
-                          <p className="font-semibold text-gray-900 truncate group-hover:text-emerald-700 transition-colors">
-                            {animal.nome}
-                          </p>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <p className="font-semibold text-gray-900 truncate group-hover:text-emerald-700 transition-colors">
+                              {animal.nome}
+                            </p>
+                            <SeloAvulso animal={animal} compacto />
+                          </div>
                           {animal.user?.fullName && (
                             <p className="text-xs text-gray-400 truncate">{animal.user.fullName}</p>
                           )}

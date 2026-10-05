@@ -20,6 +20,7 @@ import { UserPlus, Check, Loader2 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import ErroAcao, { classeErro, type ErroAcaoDados } from '../components/ErroAcao';
+import EspecialidadeSelector from '../components/EspecialidadeSelector';
 import Campo, { INPUT_CLS } from '../components/CampoForm';
 import { isValidEmail } from '../utils/validators';
 import { mascaraTelefone, mascaraCep, soDigitos } from '../utils/mascaras';
@@ -40,6 +41,7 @@ export default function CriacaoGestor() {
   const navigate = useNavigate();
   const [form, setForm] = useState<Form>(FORM_VAZIO);
   const [planos, setPlanos] = useState<{ id: number; nome: string; precoMensal: number | null }[]>([]);
+  const [especialidadeIds, setEspecialidadeIds] = useState<number[]>([]);
   const [buscandoCEP, setBuscandoCEP] = useState(false);
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<ErroAcaoDados | null>(null);
@@ -101,9 +103,11 @@ export default function CriacaoGestor() {
         cidade:      form.cidade.trim(),
         estado:      form.estado.trim().toUpperCase(),
         planoId:     Number(form.planoId),
+        especialidadeIds,
       });
       toast.success('Gestor criado com sucesso!');
       setForm(FORM_VAZIO);
+      setEspecialidadeIds([]);
       navigate('/admin/empresas');
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem;
@@ -177,6 +181,10 @@ export default function CriacaoGestor() {
                 </option>
               ))}
             </select>
+          </Campo>
+
+          <Campo label="ESPECIALIDADES" className="sm:col-span-6">
+            <EspecialidadeSelector variant="dropdown" value={especialidadeIds} onChange={setEspecialidadeIds} />
           </Campo>
         </div>
 

@@ -86,7 +86,7 @@ const SELECT_PROPRIETARIO = {
   id: true, fullName: true, email: true, phone: true, phone2: true,
   role: true, userType: true, ativo: true, createdAt: true,
   cep: true, endereco: true, complemento: true, bairro: true, cidade: true, estado: true,
-  cpf: true, cnpj: true, mensalista: true, valorAssistencia: true, frequenciaVisitas: true, diaVencimentoFatura: true,
+  cpf: true, cnpj: true, frequenciaVisitas: true, diaVencimentoFatura: true,
 };
 
 // Proprietário pertence ao escopo (empresa + equipes do contexto):
@@ -226,6 +226,14 @@ const ProprietarioController = {
       // 'all' = sem filtro; 'true'/'false' = só aquele estado; ausente = só ativos.
       // `ativo` só existe no objeto DEPOIS do merge com o perfil (perfilProp.mesclar),
       // por isso o filtro é em memória, não no `where` do Prisma.
+      // Quantidade de cada aba Todos/Ativos/Inativos — contada ANTES do filtro de
+      // status e pela MESMA regra dele (`ativo !== false` = ativo).
+      const inativosNaLista = proprietarios.filter(p => p.ativo === false).length;
+      const contagens = {
+        all:     proprietarios.length,
+        ativo:   proprietarios.length - inativosNaLista,
+        inativo: inativosNaLista,
+      };
       if (ativo === 'all') { /* sem filtro */ }
       else if (ativo !== undefined) proprietarios = proprietarios.filter(p => p.ativo === (ativo === 'true'));
       else proprietarios = proprietarios.filter(p => p.ativo !== false);
@@ -243,7 +251,7 @@ const ProprietarioController = {
       // salvar devolveria canais que a clinica tinha desligado.
       proprietarios = await formasFatura.anexarFormas(proprietarios, req.empresaId);
 
-      res.json({ sucesso: true, dados: proprietarios });
+      res.json({ sucesso: true, dados: proprietarios, contagens });
     } catch (err) {
       console.error('Erro ao listar proprietários:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar proprietários' });
@@ -346,7 +354,7 @@ const ProprietarioController = {
     const {
       fullName, email, phone, phone2, senha,
       cep, endereco, complemento, bairro, cidade, estado,
-      cpf, cnpj, mensalista, valorAssistencia, frequenciaVisitas, diaVencimentoFatura,
+      cpf, cnpj, frequenciaVisitas, diaVencimentoFatura,
       formasRecebimentoFatura, localidades,
     } = req.body;
 
@@ -385,8 +393,6 @@ const ProprietarioController = {
       estado:            estado?.trim()      || null,
       cpf:               cpf?.trim()         || null,
       cnpj:              cnpj?.trim()        || null,
-      mensalista:        Boolean(mensalista),
-      valorAssistencia:  valorAssistencia ? Number(valorAssistencia) : null,
       frequenciaVisitas: freqEfetiva,
       diaVencimentoFatura: Number(diaVencimentoFatura),
     };
@@ -537,7 +543,7 @@ const ProprietarioController = {
     const {
       fullName, email, phone, phone2, senha, ativo,
       cep, endereco, complemento, bairro, cidade, estado,
-      cpf, cnpj, mensalista, valorAssistencia, frequenciaVisitas, diaVencimentoFatura,
+      cpf, cnpj, frequenciaVisitas, diaVencimentoFatura,
       formasRecebimentoFatura, localidades,
     } = req.body;
 
@@ -602,8 +608,8 @@ const ProprietarioController = {
         estado:           estado?.trim()      || null,
         cpf:              cpf?.trim()         || null,
         cnpj:             cnpj?.trim()        || null,
-        ...(mensalista        !== undefined ? { mensalista: Boolean(mensalista) } : {}),
-        ...(valorAssistencia  !== undefined ? { valorAssistencia:  valorAssistencia  ? Number(valorAssistencia)  : null } : {}),
+        // 🔴 A assistência mensal NÃO é mais do proprietário: é de cada ANIMAL
+        // (`lib/animalAssistencia.js`). Mensalista/valor legados ficam intocados aqui.
         // Com localidades informadas, o campo único é o AGREGADO delas (a maior
         // frequência); sem elas, mantém o comportamento antigo do campo avulso.
         ...(locParsed.localidades !== undefined
@@ -648,10 +654,6 @@ const ProprietarioController = {
         'estado':      { de: antes.estado,      para: dadosDaEmpresa.estado },
         'CPF':         { de: antes.cpf,         para: dadosDaEmpresa.cpf },
         'CNPJ':        { de: antes.cnpj,        para: dadosDaEmpresa.cnpj },
-        ...('mensalista' in dadosDaEmpresa
-          ? { 'mensalista': { de: antes.mensalista, para: dadosDaEmpresa.mensalista } } : {}),
-        ...('valorAssistencia' in dadosDaEmpresa
-          ? { 'valor da assistência': { de: antes.valorAssistencia, para: dadosDaEmpresa.valorAssistencia } } : {}),
         ...('frequenciaVisitas' in dadosDaEmpresa
           ? { 'frequência de visitas': { de: antes.frequenciaVisitas, para: dadosDaEmpresa.frequenciaVisitas } } : {}),
         ...('diaVencimentoFatura' in dadosDaEmpresa

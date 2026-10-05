@@ -225,7 +225,15 @@ const OrcamentoController = {
       const orcamentos = await prisma.orcamento.findMany({
         where, include: ORC_INCLUDE, orderBy: { numero: 'desc' },
       });
-      return res.json({ dados: await listaWithTotaisEPerfil(orcamentos, req.empresaId) });
+      // Quantos orçamentos há em cada status — o mesmo recorte da lista MENOS o
+      // próprio filtro de status, senão as opções do seletor diriam 0 para todo
+      // status que não é o escolhido.
+      const { status: _semStatus, ...whereContagem } = where;
+      const contagensRaw = await prisma.orcamento.groupBy({
+        by: ['status'], where: whereContagem, _count: { _all: true },
+      });
+      const contagens = Object.fromEntries(contagensRaw.map(c => [c.status, c._count._all]));
+      return res.json({ dados: await listaWithTotaisEPerfil(orcamentos, req.empresaId), contagens });
     } catch (err) {
       console.error('OrcamentoController.listar:', err);
       return res.status(500).json({ error: 'Erro ao listar orçamentos.' });

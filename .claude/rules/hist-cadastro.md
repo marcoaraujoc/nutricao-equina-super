@@ -37,6 +37,118 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-04 (parte 2) (**PACIENTE AVULSO** — checkbox no topo do
+#   cadastro do paciente (`/animais`), a pedido.
+#   1. `tb_animais.avulso BOOLEAN NOT NULL DEFAULT false` (migration
+#      `20261104000000_animal_avulso`, ✅ **APLICADA em 2026-10-04** junto com a
+#      `20261103000000_animal_assistencia`; `prisma generate` falhou com EPERM, sem
+#      impacto). Leitura/escrita SEMPRE por `lib/animalAvulso.js` (SQL cru com guarda
+#      de coluna, padrão de `animalFei`).
+#   2. Regra (confirmada com o usuário): no AVULSO, localização e e-mail/telefone do
+#      proprietário são OBRIGATÓRIOS; no NÃO avulso NADA muda (já eram exigidos na tela).
+#      O backend confere em `criar` (e-mail + telefone do dono novo + local) e em
+#      `atualizar` (local efetivo + telefone; o e-mail é a identidade do dono, que já
+#      existe) → 400 `PACIENTE_AVULSO_INCOMPLETO` (`erroPacienteAvulso`).
+#      ⚠️ Avulso SEM e-mail não é possível: `User.email` é NOT NULL e é a identidade do
+#      cliente — decidido com o usuário manter o e-mail obrigatório.
+#   3. **Lista de Pacientes** (`AnimaisVet.tsx`): selo azul "Avulso" ao lado do nome
+#      (card e tabela) e filtro "Todos os pacientes / Somente avulsos / Sem avulsos",
+#      visível a todo perfil. ⚠️ O filtro entra no RECORTE, antes das abas
+#      Ativos/Inativos — as quantidades das abas passam a contar só o recorte.
+#      `AnimalController.listar` anexa `avulso` (`anexarAvulso`).
+#   Gate: `__tests__/pacienteAvulso.test.js` (11). ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-10-04 (🔴 **A ASSISTÊNCIA VETERINÁRIA MENSAL SAIU DO PROPRIETÁRIO E
+#   FOI PARA CADA ANIMAL** — a pedido ("só a assistência": Dia de vencimento e frequência de
+#   visitas continuam no cliente).
+#   1. `tb_animais.valor_assistencia` (migration `20261103000000_animal_assistencia`,
+#      🔴 **GERADA, NÃO APLICADA**, aditiva, sem backfill). Campo "Assistência Veterinária
+#      Mensal (R$)" no cadastro do paciente. Leitura/escrita SEMPRE por
+#      `lib/animalAssistencia.js` (SQL cru com guarda de coluna, padrão de `animalFei`).
+#      O gatilho é o VALOR (> 0); vazio = sem assistência.
+#   2. **A fatura cobra UMA LINHA POR ANIMAL**, com `animalId` (`adicionarAssistenciaMensal`,
+#      FaturaController) — cai no bloco do paciente certo e fechar/pagar por animal valem.
+#   3. 🔴 **TRANSIÇÃO sem backfill de propósito**: copiar o valor do dono para cada animal
+#      multiplicaria a cobrança de quem tem vários. O mensalista LEGADO (valor em
+#      `ProprietarioPerfil`) segue cobrado em 1 linha até algum animal dele ter valor; a
+#      partir daí o legado para (senão cobraria duas vezes). Sem o fallback, a base
+#      mensalista inteira deixaria de ser cobrada em silêncio ao aplicar a mudança.
+#   4. Saíram do formulário/lista/API do proprietário: toggle Mensalista, Valor da
+#      Assistência, selo "Mensalista", e a gravação em `ProprietarioController` e na
+#      transferência de propriedade. ⚠️ Dia de vencimento passou a ser SEMPRE editável
+#      (só era no mensalista). ⚠️ Sem a tela, o valor legado do dono não tem mais como ser
+#      editado/zerado — some do cálculo quando um animal ganha valor.
+#   Gate: `__tests__/assistenciaPorAnimal.test.js` (10). ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-10-03 (parte 2) (**CRIAÇÃO DE GESTOR: nome da empresa e senha no
+#   e-mail** — `EquipeController.criarGestor` + `emailService.enviarAcessoGestor`.
+#   1. 🔴 O placeholder "Empresa de X" sai do **NOME COMPLETO digitado** na tela
+#      (`fullNameTrim`), nunca de `usuario.fullName`: com o e-mail já cadastrado, aquele
+#      é o nome gravado por OUTRA tela, e a empresa nascia batizada com ele. O "Olá, X"
+#      do e-mail segue a mesma fonte.
+#   2. Texto do e-mail: "foi **criado** com o perfil de Gestor na organização X." — o
+#      "(equipe: X)" saiu (repetia o nome da empresa).
+#   3. 🔴 **SENHA NO E-MAIL**: conta nova → senha inicial (`gerarSenhaInicial`, como
+#      antes). Conta que JÁ existia mas está em primeiro acesso (`mustChangePassword`)
+#      → a senha temporária é REGERADA pela mesma regra e enviada (só o hash existia; sem
+#      isso o gestor recebia "já pode fazer login" sem ter com que entrar). Conta com
+#      senha PRÓPRIA → NÃO é tocada (§14); o e-mail diz "a mesma que você já utiliza" +
+#      "Esqueci minha senha". A troca só acontece DEPOIS de a empresa ser criada.
+#      ⚠️ Consequência aceita: o link/e-mail de boas-vindas ANTERIOR dessa conta (de outra
+#      tela) deixa de valer — vale a senha do e-mail mais recente.
+#   SEM MIGRATION. ⚠️ NÃO verificado com envio real de e-mail.)
+
+---
+
+# Atualizado em: 2026-10-03 (**CADASTRO DA EMPRESA EM ABAS** — `/cadastro/empresa`,
+#   SÓ LAYOUT, a pedido. Três abas: **Configurações de Empresa** (logomarca,
+#   Identificação, Endereço, Gestor Responsável e Tipo de Plano, Outros Gestores +
+#   Incluir gestor) · **Funcionamento** (Espécies, Dias, Abre/Fecha, Tempo de Consulta) ·
+#   **Financeiro** (Dados para Recebimento, Dados para Fatura — Fechamento, Data,
+#   Validade, Forma de Cobrança, Percentual — e o checkbox "Não utilizar a etapa de
+#   Execução de Prescrição").
+#   ⚠️ Lógica, validações e os DOIS endpoints intactos; o **Salvar fica FORA das abas**
+#   e grava tudo de uma vez, como antes.
+#   ⚠️ Erro de validação em campo de OUTRA aba **leva para ela** e marca a aba com ponto
+#   vermelho (`ABA_DO_CAMPO`). Campo novo com validação precisa entrar nesse mapa —
+#   senão o Salvar recusa por um campo que não está na tela.
+#   🔴 **BACKUP do layout anterior: `pages/CadastroEmpresaLegado.tsx`** (cópia fiel, só o
+#   nome do componente muda). Fallback = trocar o import de `CadastroEmpresa` em
+#   `App.tsx`. Não tem rota própria. Remover quando o layout novo estiver aprovado.
+#   SEM MIGRATION. `vite build` limpo. ⚠️ NÃO verificado em navegador.
+#   Ajuste da mesma data (a pedido): em **Funcionamento**, Espécies Atendidas virou card
+#   centralizado com checkboxes (padrão do "Como recebe a fatura *" do proprietário);
+#   Dias · Abre · Fecha · Tempo de Consulta na MESMA linha a partir de `lg`, empilhados no
+#   celular/tablet. E entrou o combo **Prescrição sem Evolução** — regra em
+#   `hist-atendimento.md`, 2026-10-03 (migration `20261102000000` ✅ APLICADA em 2026-10-03).)
+
+---
+
+# Atualizado em: 2026-10-02 (**ABAS TODOS / ATIVOS / INATIVOS COM QUANTIDADE** em todo
+#   cadastro — Fornecedor, Prestador, Tratador, Localização, Proprietário, Procedimentos
+#   (e Combos), Produtos, Medicamentos (ADMIN), Equipe e Pacientes — e nas abas da
+#   Farmácia e do Estoque de Vacinas. Ver `hist-atendimento.md`, mesma data.
+#   Fonte única `lib/contagemAtivos.js` (`contarAtivosInativos` = o MESMO `where` da
+#   lista, sem o `ativo`) e `utils/contagemAtivos.ts` (`sufixoContagem`, `contarAtivos`).
+#   ⚠️ **OPT-IN por `?contagens=1`**: as mesmas rotas alimentam autocompletes/seletores, e
+#   duas consultas a mais por tecla não se pagam lá. Só as telas de cadastro pedem.
+#   ⚠️ Procedimentos e Proprietários filtram parte EM MEMÓRIA: a contagem é feita depois
+#   desses filtros e só então a situação é recortada. Localização conta LINHAS do
+#   catálogo antes do `limit` (e do dedup).
+#   ⚠️ Equipe e Pacientes contam no CLIENTE, sobre o recorte da busca/local, pela mesma
+#   regra da aba (`pacienteInativo` em Pacientes).
+#   🔴 **A aba "Controlados" da Farmácia não filtrava**: a tela mandava `controlado=true`
+#   e `EstoqueController.listar` IGNORAVA — listava todos os ativos. Passou a recortar
+#   (senão a contagem da aba diria um número e a lista outro).
+#   Estoque de Vacinas: `loteNaAba` virou a fonte única do filtro E da contagem.
+#   SEM MIGRATION. ⚠️ NÃO verificado em navegador.)
+
+---
+
 # Atualizado em: 2026-09-30 (parte 2) (🔴 **"GERENCIAR ACESSO" VOLTOU PARA TODO
 #   PRESTADOR — COM OU SEM LOGIN — E A AUTORIZAÇÃO PASSOU A LIBERAR A AGENDA.**
 #   Relato: "o botão Gerenciar Acesso não está mais disponível depois de cadastrar um

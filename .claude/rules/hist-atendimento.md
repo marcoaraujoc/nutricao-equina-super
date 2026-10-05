@@ -32,6 +32,141 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-04 (**AGENDA: AGENDAR POR LOCALIDADE, EM LOTE, E "REFERE-SE A"**
+#   — a pedido. No modal "Confirmar Horário" (clique no slot da grade):
+#   1. **"Refere-se a *"** — combo com Consulta · Vacina · Retorno · Exame · Procedimento ·
+#      **Vermifugação** (tipo NOVO `VERMIFUGACAO`). Antes todo agendamento pelo modal
+#      nascia CONSULTA fixo. Sem migration: `tipo` é VarChar(20) e o valor cabe.
+#      Rótulo "Vermifugação" em `TIPO_LABEL` (aviso), nos dois mapas do `emailService`,
+#      em `MapaAtendimento` e no card do paciente (`AnimalDetail` exibia `ag.tipo` cru).
+#   2. **Localidade** (`components/SeletorPacientesLocalidade.tsx`): "Todas (paciente
+#      avulso)" mantém o combo de sempre; escolhida uma localidade, vira checklist com
+#      TODOS os pacientes dela, "Selecionar todos"/"Desmarcar todos" (sobre o que está
+#      VISÍVEL na busca) e contador. A localidade é `localizacaoNome` (catálogo → texto
+#      legado), a mesma que a Agenda já mostra. Paciente sem localidade só pelo avulso.
+#   3. 🔴 **LOTE = UMA VISITA** (decisão do usuário): todos no MESMO horário do MESMO
+#      profissional. `POST /clinica/agendamentos` aceita `animalIds[]` (teto 100): um
+#      agendamento por animal, numa transaction só — tudo-ou-nada. Todas as conferências
+#      por paciente (acesso, excluído, inativo, autorização do prestador da equipe,
+#      `HORARIO_OCUPADO`) rodam ANTES de gravar, e a mensagem nomeia o paciente.
+#      ⚠️ O conflito do PROFISSIONAL é conferido UMA vez, contra o que já existe — os
+#      irmãos do lote não colidem entre si (senão o lote nunca passaria de um).
+#      ⚠️ No lote o `titulo` é o PREFIXO ("Vacina") e cada linha ganha " - <paciente>".
+#      ⚠️ Avulso segue o contrato antigo (`dados` objeto); lote devolve `dados` lista.
+#      ⚠️ Aviso: o profissional recebe UM e-mail/WhatsApp com todos os pacientes;
+#      cada PROPRIETÁRIO recebe UM WhatsApp com os animais DELE. Proprietário/local no
+#      aviso do profissional só quando são os mesmos para todos.
+#      ⚠️ A "ciência de agendamento existente" lista todos os pacientes do lote que já
+#      têm agendamento no dia (`multiplos`), sem citar hora/profissional de um só.
+#   Gate `__tests__/agendamentoLote.test.js` (10). SEM MIGRATION.
+#   ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-10-03 (🔴 **PRESCRIÇÃO SEM EVOLUÇÃO, CONFIGURÁVEL POR EMPRESA** —
+#   a pedido. Padrão INALTERADO: toda prescrição exige evolução (a vacina já não exige).
+#   Em Cadastro da Empresa › Funcionamento, o combo "Prescrição sem Evolução"
+#   (`components/DispensaEvolucaoCombo.tsx`) libera ESPECIALIDADES (todos os
+#   procedimentos/combos dela), PROCEDIMENTOS (por nome) e TIPOS DE MEDICAMENTO
+#   (= `tb_medicamentos.classificacao`, decisão do usuário). Vale SÓ na Prescrição —
+#   pedido de exame e encaminhamento continuam exigindo evolução (decisão do usuário).
+#   Fonte única `lib/dispensaEvolucaoPrescricao.js`. Back: `criar` só aceita sem
+#   `evolucaoId` se TODOS os itens estiverem liberados (400 `EVOLUCAO_REQUIRED` nomeando
+#   o item); `adicionarItem`/`atualizarItem` conferem o item em grupo sem evolução (senão
+#   seriam o atalho). ⚠️ A especialidade é resolvida no CATÁLOGO pelo nome
+#   (procedimento e combo), nunca a do corpo. ⚠️ Medicamento digitado à mão (sem
+#   `medicamentoCatId`) nunca é liberado. Grupo nasce com `evolucaoId` null (coluna já
+#   era nullable; listagem/plantão escopam por empresa, não por evolução).
+#   Front: sem evolução e com algo liberado, a aba Prescrição mostra o formulário (não o
+#   bloqueio "Evolução necessária") com faixa azul explicando, só os itens liberados nas
+#   listas, sem "Cadastrar novo" de medicamento, e só os tipos com liberação. Regras
+#   lidas por `GET /clinica/prescricoes/dispensa-evolucao` (`atendimento.prescricoes.ler`
+#   — `/equipes/configuracoes` é só do gestor). `para-atendimento` passou a devolver
+#   `classificacao`; `opcoes-catalogo` devolve `classificacoes`.
+#   ✅ **MIGRATION APLICADA em 2026-10-03** (autorizada) —
+#   `20261102000000_dispensa_evolucao_prescricao` (JSONB `dispensa_evolucao_prescricao`
+#   em `tb_empresa_configuracoes`, NULL = nada; conferida no `information_schema`).
+#   `prisma generate` falhou com EPERM (backend no ar, §11) e não faz falta: o campo é
+#   declarado no schema (`Json?`) mas lido/gravado só por SQL cru. Base sem a coluna:
+#   tudo exige evolução; gravar alguma liberação devolve 400 dizendo que falta a migration.
+#   Gate `__tests__/dispensaEvolucaoPrescricao.test.js` (17; verificado que reprova).
+#   Ajustes no combo (relatados em uso, mesma data): (a) a lista abre em PORTAL com
+#   `position: fixed` (abria DENTRO do card); campo no fim da tela é trazido ao centro
+#   antes de abrir, para a lista caber para baixo (§6). (b) 🔴 opções "não
+#   selecionáveis": o dedup era por texto EXATO e a marcação SEM acento/caixa — duas
+#   grafias da mesma especialidade viravam duas opções que marcavam a mesma coisa (clicar
+#   na segunda desmarcava a primeira). Dedup agora usa a MESMA chave da marcação. (c)
+#   saiu o teto de 150 por grupo — os procedimentos depois do 150º não apareciam.
+#   (d) 🔴 **ESTE COMBO ABRE PARA CIMA — exceção consciente à regra "sempre para baixo"
+#   do §6, a pedido**: fica no fim da aba e para baixo a lista nascia fora da tela.
+#   Direção FIXA (âncora por `bottom`), só a altura se ajusta. (e) Fecha em `click`, NÃO
+#   em `mousedown`: arrastar a barra de rolagem da página dispara mousedown e o combo
+#   sumia; a barra não gera `click`. A roda do mouse sobre a lista encaminha para o
+#   `<main>` quando a lista chega ao fim/topo (portal não encadeia a rolagem).
+#   ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-10-02 (parte 3) (🔴 **EVOLUÇÃO: AS PÍLULAS DE STATUS ZERAM O
+#   FORMULÁRIO E ELE NÃO SOME MAIS** — a pedido. `SubModuloEvolucao`.
+#   Causa: "há evolução aberta?" saía da lista do HISTÓRICO, que é recortada pela
+#   pílula. Em Finalizada/Cancelada a aberta sumia da lista → formulário aparecia e o
+#   "Nova Evolução" destravava; em Todas/Em andamento ela voltava → formulário sumia.
+#   1. As abertas vêm de uma consulta PRÓPRIA (`?status=EM_ANDAMENTO&limit=20`, a mesma
+#      do shell), estado `abertas`. Trava do botão, decisão do "Iniciar" e o reporte
+#      ao shell (`onEvolucoesAbertasChange`) saem dela — o `retratoConfiavel` saiu.
+#   2. 🔴 **Os cards "Evolução clínica" e "Anexos" ficam SEMPRE na tela** (decisão do
+#      usuário), mesmo com atendimento em andamento: `formularioVisivel = showModal &&
+#      (editingEv || podeCriar)`. Quem recusa a segunda evolução é o backend (própria →
+#      400 com a mensagem; de outro → 409 e a decisão assumir × paralela).
+#   3. **Trocar a pílula ZERA os cards** (`trocarFiltroStatus`): registro em
+#      visualização/edição, texto e anexos. Mantém agendamento vinculado e a decisão
+#      "em paralelo". ⚠️ O card Anexos tem estado PRÓPRIO — zerar exige REMONTAR
+#      (`key={formKey}`), também em fechar/abrir outro registro (o anexo ficava na tela
+#      sem estar na lista enviada). ⚠️ Ditado em curso é descartado no unmount.
+#   SEM MIGRATION (`migrate status`: 219, em dia). ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-10-02 (parte 2) (**RESULTADO DE IMAGEM CONFERE A QUANTIDADE DE
+#   IMAGENS DO PEDIDO** — a pedido, irmã da conferência "é o mesmo exame?".
+#   `ResultadoModal` (`ExamesSolicitadosPanel`): com PEDIDO de Imagem que informou
+#   `qtdAmostra`, conta as imagens que o exame terá ao salvar (anexos já salvos + os
+#   anexados agora) e: (1) mostra "Imagens anexadas: X de Y pedidas" (verde/âmbar) sob
+#   o upload; (2) no **Salvar**, se divergir, abre "A quantidade de imagens não confere
+#   com o pedido" com Voltar · Anexar imagens · **Salvar mesmo assim**.
+#   ⚠️ **NUNCA bloqueia**: conta ARQUIVO de imagem (MIME `image/*` ou extensão), e o
+#   laudo PDF/DOCX/TXT não conta — imagem embutida no PDF não é enxergada, por isso a
+#   decisão fica com quem vê o documento. ⚠️ Conferida no SALVAR, não por lote: as
+#   imagens chegam em vários anexos e avisar no meio seria alarme sobre conjunto
+#   incompleto. ⚠️ Aceita uma vez, só pergunta de novo se a contagem mudar.
+#   Laboratorial/Bioquímico e o exame sem pedido ficam fora (lá `qtdAmostra` é amostra).
+#   Regra em `utils/exameConferencia.ts` (`conferirQtdImagens`, `ehArquivoDeImagem`).
+#   SEM MIGRATION e sem backend: `qtd_amostra` já existia e a listagem já a devolvia.
+#   Gate `__tests__/exameQtdImagens.test.js` (13). ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-10-02 (**TODA PÍLULA DE STATUS MOSTRA A SUA QUANTIDADE** — a
+#   pedido ("todos os status de cada módulo deverão ser contabilizados; o histórico de
+#   exames não está contabilizando os filtros").
+#   🔴 **REVERTE o "quantidade SÓ no Todos" de 2026-09-30** nos Exames: Solicitados /
+#   Realizados / Cancelados voltaram a ter número, contado por `getStatusExame` — a MESMA
+#   regra do filtro (`contagemExames`).
+#   **Evolução** não contava nada: a lista é paginada no SERVIDOR, então
+#   `listarPorAnimal` passou a devolver `contagens` (groupBy por status sobre o MESMO
+#   `where`, MENOS o próprio filtro de status — com ele, as outras pílulas sairiam 0).
+#   **Orçamento** (mesma técnica no `listar`) e **Agenda** (`contagemStatus`, pela mesma
+#   `statusCasaFiltro`) numeram as opções do `<select>`. Vacina, Prescrição, Execução de
+#   Prescrição, Agenda do paciente, Faturamento, Pagamentos e Relatório Nutricional JÁ
+#   contavam. Cadastros, Farmácia e Estoque de Vacinas: ver `hist-cadastro.md`, mesma data.
+#   ⚠️ Regra: a quantidade sai SEMPRE da mesma função/`where` que filtra a lista — contar
+#   por outra faz a pílula prometer um número que a lista não confirma.
+#   Gate `__tests__/contagemStatus.test.js` (30; verificado que reprova). SEM MIGRATION
+#   (`migrate status`: 219, em dia). ⚠️ NÃO verificado em navegador.)
+
+---
+
 # Atualizado em: 2026-10-01 (parte 4) (**AGENDAMENTO AVISA QUEM VAI EXECUTAR, COM
 #   LOCAL — e quem agendou fica sabendo quando o aviso não chega.** A pedido.
 #   O `criar` já mandava e-mail + WhatsApp ao responsável, mas sem LOCAL, com o

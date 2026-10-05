@@ -685,6 +685,27 @@ function NovaEvolucaoModal({
     }
   }, []);
 
+  // O formulário é REMONTADO para zerar (troca de pílula de status, fechar,
+  // abrir outro registro). Ditado em curso nessa hora é DESCARTADO: sem isto o
+  // microfone seguia aberto e a transcrição escrevia no formulário já zerado.
+  useEffect(() => () => {
+    shouldRestartRef.current = false;
+    const rec = recognitionRef.current;
+    if (rec) {
+      rec.onresult = () => {};
+      rec.onend    = () => {};
+      rec.onerror  = () => {};
+      try { rec.stop(); } catch { /* já parado */ }
+      recognitionRef.current = null;
+    }
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state === 'recording') {
+      recorder.onstop = () => { recorder.stream.getTracks().forEach(t => t.stop()); };
+      recorder.stop();
+      mediaRecorderRef.current = null;
+    }
+  }, []);
+
   const adicionarArquivos = (files: FileList | null) => {
     if (!files) return;
     const novos = Array.from(files);
@@ -1202,6 +1223,14 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [evolucoes,      setEvolucoes]      = useState<EvolucaoItem[]>([]);
   const [loading,        setLoading]        = useState(true);
   const [total,          setTotal]          = useState(0);
+  // Quantos registros cada status tem no histórico do paciente — vem do backend,
+  // que pagina (a tela não enxerga as outras páginas para contar sozinha).
+  const [contagens,      setContagens]      = useState<Record<string, number>>({});
+  // 🔴 As evoluções EM ANDAMENTO do paciente, SEM filtro e SEM paginação da tela.
+  // "Há atendimento aberto?" não pode sair da lista do histórico: ela é recortada
+  // pelas pílulas de status, e em "Finalizada"/"Cancelada" a aberta sumia — o
+  // botão "Nova Evolução" destravava e o formulário mudava de forma a cada clique.
+  const [abertas,        setAbertas]        = useState<EvolucaoItem[]>([]);
   const [page,           setPage]           = useState(1);
 
   const [filterStatus,      setFilterStatus]      = useState<string>(FILTRO_STATUS_PADRAO);
@@ -1239,6 +1268,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [showLLM,        setShowLLM]        = useState(false);
   const [savingFatura,   setSavingFatura]   = useState(false);
   const [arquivosModal,  setArquivosModal]  = useState<File[]>([]);
+  // Remonta o formulário: o card "Anexos" guarda a lista de arquivos NOVOS em
+  // estado PRÓPRIO, que `setArquivosModal([])` não alcança — sem remontar, o
+  // anexo continuava na tela sem estar mais na lista que é enviada ao salvar.
+  const [formKey,        setFormKey]        = useState(0);
   const [imprimindoId,   setImprimindoId]   = useState<number | null>(null);
   const [relatorioModal, setRelatorioModal] = useState<{ ev: EvolucaoItem; dados: RelatorioAtendimentoDados } | null>(null);
   // Erro de ação exibido inline (substitui o toast de erro)
@@ -1268,21 +1301,20 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     setTimeout(() => formTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
 
   const totalPaginas       = Math.ceil(total / LIMIT_HISTORICO);
-  const temEvolucaoAberta  = !loading && evolucoes.some(e => e.status === 'EM_ANDAMENTO');
-  // O status tem padrão próprio, então "filtro ativo" é DIVERGIR dele — senão o botão
-  // "Limpar" nasceria aceso em toda abertura da tela, sem nada a limpar.
+  // Sai de `abertas` (consulta própria, sem filtro), NUNCA de `evolucoes` — ver o
+  // comentário do estado.
+  const temEvolucaoAberta  = abertas.length > 0;
   // Evolução aberta PELO PRÓPRIO usuário × por OUTRO profissional — os dois casos
   // seguem caminhos opostos: a própria BLOQUEIA abrir outra (finalize/cancele antes)
   // e não é assumível; a do outro abre a decisão (assumir × nova em paralelo).
-  const minhaEvolucaoAberta   = !loading
-    ? evolucoes.find(e => e.status === 'EM_ANDAMENTO' && e.veterinarioId === (user?.id ?? 0))
-    : undefined;
-  const evolucaoAbertaDeOutro = !loading
-    ? evolucoes.find(e => e.status === 'EM_ANDAMENTO' && e.veterinarioId !== (user?.id ?? 0))
-    : undefined;
-  // Formulário e botão "Nova Evolução" são mutuamente exclusivos: um só existe
-  // quando o outro não está na tela (senão a tela ficava sem os dois — o form
-  // escondido pela evolução aberta e o botão escondido pelo showModal).
+  const minhaEvolucaoAberta   = abertas.find(e => e.veterinarioId === (user?.id ?? 0));
+  const evolucaoAbertaDeOutro = abertas.find(e => e.veterinarioId !== (user?.id ?? 0));
+  // 🔴 Os cards "Evolução clínica" e "Anexos" ficam SEMPRE na tela (2026-10-02, a
+  // pedido) — inclusive com atendimento em andamento. Esconder o formulário quando
+  // havia evolução aberta fazia ele sumir e reaparecer conforme a pílula de status.
+  // Quem decide se uma evolução NOVA pode nascer é o backend: a própria aberta
+  // recusa com 400 (a mensagem vai para a tela) e a de outro abre a decisão
+  // assumir × nova em paralelo (409) — o texto digitado é preservado nos dois.
   // 🔴 PACIENTE INATIVO → SÓ O HISTÓRICO, como em Prescrição/Exames/Encaminhamento
   // (onde o formulário inteiro é gateado por `podeCriar`). Aqui o gate não podia ser
   // só o botão: o RASCUNHO salvo em localStorage também abre o formulário sozinho, e
@@ -1290,9 +1322,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   // seja, um formulário que não salva.
   // ⚠️ `editingEv` fica FORA da trava: abrir um registro do histórico É consultar o
   // histórico, e nesse caso o formulário já vem em somente leitura (`formLeitura`).
-  const formularioVisivel  = showModal
-    && (!temEvolucaoAberta || !!editingEv || criandoConcorrente)
-    && (!!editingEv || podeCriar);
+  const formularioVisivel  = showModal && (!!editingEv || podeCriar);
 
   // ── Loaders ────────────────────────────────────────────────────────────────
 
@@ -1302,52 +1332,51 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       const params = new URLSearchParams({ page: String(page), limit: String(LIMIT_HISTORICO) });
       if (filterStatus) params.set('status', filterStatus);
       if (ordenacao) { params.set('ordenarPor', ordenacao.campo); params.set('ordem', ordenacao.direcao); }
-      const res = await api.get(`/clinica/evolucoes/animal/${animalId}?${params}`);
+      // A lista do histórico é FILTRADA e PAGINADA pelos controles da tela; as
+      // abertas vêm de uma consulta própria, sem recorte — é ela que decide trava do
+      // "Nova Evolução" e o que se reporta ao shell, em QUALQUER pílula de status.
+      // (Mesma consulta que `Atendimento.carregarEvolucoesAbertas` faz.)
+      const [res, resAbertas] = await Promise.all([
+        api.get(`/clinica/evolucoes/animal/${animalId}?${params}`),
+        api.get(`/clinica/evolucoes/animal/${animalId}?status=EM_ANDAMENTO&page=1&limit=20`),
+      ]);
       // GET 403 → o interceptor resolve com data null (armadilha #23 do CLAUDE.md).
       // Sem este guard, `res.data.dados` estourava TypeError e caía no catch,
       // exibindo "Erro ao carregar evoluções" para um caso de permissão/contexto.
-      // ⚠️ Esta lista é FILTRADA e PAGINADA pelos controles da tela — só serve como
-      // retrato das evoluções abertas quando nenhum filtro pode estar escondendo uma
-      // delas. Reportar um recorte ao shell APAGARIA do banner o atendimento em
-      // paralelo que o usuário está conduzindo (e desvincularia a prescrição
-      // seguinte). Filtrou algo? O shell segue com a lista da consulta própria dele.
-      // ⚠️ A ORDENAÇÃO não entra nesta conta: ela reordena a MESMA lista, não a
-      // recorta — a página 1 continua tendo todas as abertas quando o filtro de
-      // status não esconde nenhuma. Só o RECORTE (página, status) ameaça o retrato.
-      const retratoConfiavel =
-        page === 1 &&
-        (!filterStatus || filterStatus === 'EM_ANDAMENTO');
+      const abertasDados: EvolucaoItem[] = (resAbertas.data?.dados ?? [])
+        .filter((e: EvolucaoItem) => e.status === 'EM_ANDAMENTO');
+      setAbertas(abertasDados);
 
       if (!res.data) {
-        setEvolucoes([]); setTotal(0);
-        if (retratoConfiavel) onEvolucoesAbertasChange?.([]);
+        setEvolucoes([]); setTotal(0); setContagens({});
+        onEvolucoesAbertasChange?.([]);
         return;
       }
       const dados: EvolucaoItem[] = res.data.dados ?? [];
       setEvolucoes(dados);
       setTotal(res.data.total ?? 0);
+      setContagens(res.data.contagens ?? {});
       // Reporta TODAS as evoluções em andamento — nunca "a escolhida". O mesmo
       // paciente pode ter várias abertas (consultas distintas no mesmo dia, ex.:
       // Clínica e Dermatologia); escolher entre elas é do USUÁRIO (banner do shell),
       // e `escolherEvolucaoAtiva` só decide quando ele não escolheu.
       // ⚠️ Este submódulo NÃO decide mais qual é a ativa: um segundo lugar decidindo
       // fazia as telas discordarem sobre qual atendimento estava em curso.
-      if (retratoConfiavel) {
-        const abertas = dados.filter(e => e.status === 'EM_ANDAMENTO');
-        onEvolucoesAbertasChange?.(abertas.map(e => ({
-          id:               e.id,
-          numero:           e.numero ?? null,
-          tipoAtendimento:  e.tipoAtendimento ?? null,
-          atendimentoNumero: e.atendimentoNumero ?? null,
-          veterinarioId:    e.veterinarioId ?? null,
-          agendamentoId:    e.agendamentoId ?? null,
-          dataInicio:       e.dataInicio ?? null,
-          titulo:           e.titulo ?? null,
-          especialidade:    e.especialidade ?? null,
-          autorId:          e.autorId ?? null,
-          veterinarioNome:  e.veterinario?.fullName ?? null,
-        })));
-      }
+      // A consulta das abertas não tem recorte, então o retrato é confiável em
+      // qualquer filtro/página — antes só era reportado na página 1 sem filtro.
+      onEvolucoesAbertasChange?.(abertasDados.map(e => ({
+        id:               e.id,
+        numero:           e.numero ?? null,
+        tipoAtendimento:  e.tipoAtendimento ?? null,
+        atendimentoNumero: e.atendimentoNumero ?? null,
+        veterinarioId:    e.veterinarioId ?? null,
+        agendamentoId:    e.agendamentoId ?? null,
+        dataInicio:       e.dataInicio ?? null,
+        titulo:           e.titulo ?? null,
+        especialidade:    e.especialidade ?? null,
+        autorId:          e.autorId ?? null,
+        veterinarioNome:  e.veterinario?.fullName ?? null,
+      })));
     } catch { setErroInline('Erro ao carregar evoluções'); }
     finally { setLoading(false); }
   }, [animalId, page, filterStatus, ordenacao, onEvolucoesAbertasChange]);
@@ -1614,6 +1643,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     setEditingEv(null);
     setForm(FORM_INICIAL);
     setArquivosModal([]);
+    setFormKey(k => k + 1);
     setAgendamentoSelecionadoId(null);
     setFormLeitura(false);
     // A decisão "abrir em paralelo" vale para UMA evolução: fechado o formulário,
@@ -1621,11 +1651,30 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     setCriandoConcorrente(false);
   };
 
+  // Trocar a pílula de status ZERA os cards "Evolução clínica" e "Anexos" (2026-10-02,
+  // a pedido): o que estava aberto (visualização/edição de um registro, ou o texto
+  // digitado) não pertence ao novo recorte do histórico. O formulário continua na
+  // tela, vazio, pronto para uma evolução nova.
+  // ⚠️ Mantém o agendamento vinculado e a decisão "em paralelo": não são valores dos
+  // cards, e perdê-los desvincularia a evolução do "Iniciar" da agenda.
+  const trocarFiltroStatus = (status: string) => {
+    setFilterStatus(status);
+    setPage(1);
+    setConflito(null);
+    setEditingEv(null);
+    setForm(FORM_INICIAL);
+    setArquivosModal([]);
+    setFormKey(k => k + 1);
+    setFormLeitura(false);
+    setShowModal(true);
+  };
+
   const abrirEdicao = (ev: EvolucaoItem) => {
     // Abrir OUTRO registro zera o aviso: ele fala do que estava aberto antes.
     setConflito(null);
     setForm({ especialidade: ev.especialidade, texto: ev.texto, status: ev.status });
     setEditingEv(ev);
+    setFormKey(k => k + 1);
     setArquivosModal([]);
     // Sem permissão de alterar (ex: entrada pelo `editItemId` do Histórico do
     // Paciente), o formulário abre em SOMENTE LEITURA — nunca editável.
@@ -1645,6 +1694,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     setConflito(null);
     setForm({ especialidade: ev.especialidade, texto: ev.texto, status: ev.status });
     setEditingEv(ev);
+    setFormKey(k => k + 1);
     setArquivosModal([]);
     setFormLeitura(true);
     setShowModal(true);
@@ -2167,6 +2217,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
       {formularioVisivel && (
         <NovaEvolucaoModal
+          key={formKey}
           form={form}
           editingId={editingEv?.id ?? null}
           midias={editingEv?.midias ?? []}
@@ -2217,12 +2268,18 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
             <button
               key={f.value || 'todas'}
               type="button"
-              onClick={() => { setFilterStatus(f.value); setPage(1); }}
+              onClick={() => trocarFiltroStatus(f.value)}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${
                 ativo ? f.tomAtivo
                       : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
               }`}>
               {f.label}
+              {/* Quantidade em TODA pílula (a pedido): "Todas" é a soma dos status. */}
+              <span className={ativo ? 'text-white/80' : 'text-gray-400'}>
+                ({f.value
+                  ? (contagens[f.value] ?? 0)
+                  : Object.values(contagens).reduce((a, b) => a + b, 0)})
+              </span>
             </button>
           );
         })}

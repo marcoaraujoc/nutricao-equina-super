@@ -264,6 +264,18 @@ const EvolucaoController = {
         prisma.evolucaoClinica.count({ where }),
       ]);
 
+      // Contagem POR STATUS — sobre o MESMO recorte da lista, MENOS o próprio filtro
+      // de status: é o que cada pílula do histórico mostra entre parênteses. Com o
+      // filtro incluído, a pílula ativa contaria tudo e as outras sairiam zeradas.
+      // ⚠️ A paginação é do SERVIDOR: a tela não tem como contar sozinha.
+      const { status: _semStatus, ...whereContagem } = where;
+      const contagensRaw = await prisma.evolucaoClinica.groupBy({
+        by:     ['status'],
+        where:  whereContagem,
+        _count: { _all: true },
+      });
+      const contagens = Object.fromEntries(contagensRaw.map(c => [c.status, c._count._all]));
+
       const dados = evolucoes.map(e => ({
         ...e,
         atendimentoNumero: formatAtendimentoNum(e.tipoAtendimento, e.numero),
@@ -276,7 +288,7 @@ const EvolucaoController = {
       // Cadeia de responsáveis — é ela que a coluna "Responsável" risca.
       await anexarCadeiaEmLista('EVOLUCAO', dados, prisma);
 
-      res.json({ sucesso: true, dados, total });
+      res.json({ sucesso: true, dados, total, contagens });
     } catch (error) {
       console.error('Erro ao listar evoluções:', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });

@@ -36,6 +36,7 @@ import { ordenarComInsumos } from '../utils/faturaInsumos';
 import InlineError from '../components/InlineError';
 import JanelaLista from '../components/JanelaLista';
 import FotoAnimal from '../components/FotoAnimal';
+import { formatarQtdItem, qtdFracionaria } from '../utils/faturaQuantidade';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -113,6 +114,9 @@ interface FaturaItem {
    *  total e fora do "fechado à parte" — que é o que ele AINDA deve.
    *  Quem marca é `PATCH /clinica/faturas/:id/animais/:animalId/pagar`. */
   pagoEm?: string | null;
+  /** Em QUÊ `quantidade` está contada — 'mL' no medicamento multidose (2026-10-02).
+   *  `null` = doses/unidades/embalagens, o de sempre. Ver utils/faturaQuantidade.ts. */
+  unidade?: string | null;
 }
 
 interface Fatura {
@@ -408,7 +412,7 @@ function descricaoSemNumero(descricao: string, numero?: string | null): string {
 // ⚠️ Contribuição sem destino resolvido (registro excluído, evolução avulsa antiga)
 // ainda APARECE, só não vira link: sumir com ela faria a soma da observação não bater
 // com a quantidade da linha, que é pior que um número sem clique.
-function ObservacaoOrigens({ origens }: { origens: OrigemContribuicao[] }) {
+function ObservacaoOrigens({ origens, unidade }: { origens: OrigemContribuicao[]; unidade?: string | null }) {
   const navigate = useNavigate();
   if (origens.length === 0) return null;
 
@@ -450,7 +454,7 @@ function ObservacaoOrigens({ origens }: { origens: OrigemContribuicao[] }) {
             <span className="text-gray-300">·</span>
             <span>{fmtData(o.data)}</span>
             <span className="text-gray-300">·</span>
-            <span>Quant.: {o.quantidade}</span>
+            <span>Quant.: {formatarQtdItem(o.quantidade, unidade)}</span>
           </li>
         );
       })}
@@ -538,10 +542,20 @@ function ItemRow({
   const [aberto,        setAberto]        = useState(false);
 
   const descontoAtual = descontoDoItem(item);
+  // 🔴 Linha em mL (multidose) aceita FRAÇÃO — `parseInt` transformaria 2,5 mL em 2 e
+  // o total da prévia (e o salvo) sairia errado. Nas demais o piso de 1 inteiro fica.
+  const fracionaria = qtdFracionaria(item.unidade);
+  const lerQtd = (raw: string) => {
+    if (fracionaria) {
+      const n = Number(String(raw).replace(',', '.'));
+      return Number.isFinite(n) && n > 0 ? n : 1;
+    }
+    return Math.max(1, parseInt(raw) || 1);
+  };
   // Prévia do abatimento com o que está sendo editado (antes de salvar)
-  const previaBruto    = valorUnit * Math.max(1, parseInt(qty) || 1);
+  const previaBruto    = valorUnit * lerQtd(qty);
   const previaDesconto = descontoDoItem({
-    valor: valorUnit, quantidade: Math.max(1, parseInt(qty) || 1),
+    valor: valorUnit, quantidade: lerQtd(qty),
     descontoTipo: descTipo || null, descontoValor: descValor,
   });
 
@@ -565,7 +579,7 @@ function ItemRow({
     const unit = parseCents(raw);
     setValorUnit(unit);
     setValorUnitStr(unit === 0 ? '' : fmtNum(unit));
-    const q = Math.max(1, parseInt(qty) || 1);
+    const q = lerQtd(qty);
     const final = unit * q;
     setValorFinal(final);
     setValorFinalStr(final === 0 ? '' : fmtNum(final));
@@ -575,7 +589,7 @@ function ItemRow({
     const final = parseCents(raw);
     setValorFinal(final);
     setValorFinalStr(final === 0 ? '' : fmtNum(final));
-    const q = Math.max(1, parseInt(qty) || 1);
+    const q = lerQtd(qty);
     const unit = final / q;
     setValorUnit(unit);
     setValorUnitStr(unit === 0 ? '' : fmtNum(unit));
@@ -583,7 +597,7 @@ function ItemRow({
 
   const handleQtyChange = (raw: string) => {
     setQty(raw);
-    const q = Math.max(1, parseInt(raw) || 1);
+    const q = lerQtd(raw);
     const final = valorUnit * q;
     setValorFinal(final);
     setValorFinalStr(final === 0 ? '' : fmtNum(final));
@@ -592,7 +606,7 @@ function ItemRow({
   const handleSave = async () => {
     setSaving(true);
     await onSave(item.id, {
-      descricao: desc, valor: valorUnit, quantidade: Number(qty), tipo,
+      descricao: desc, valor: valorUnit, quantidade: fracionaria ? lerQtd(qty) : Number(qty), tipo,
       descontoTipo:  descTipo || null,
       descontoValor: descTipo ? descValor : 0,
     });
@@ -636,9 +650,10 @@ function ItemRow({
             placeholder="Descrição" />
         </div>
         <div className="flex gap-2 items-center flex-wrap">
-          <label className="text-xs text-gray-500">Qtd.</label>
-          <input type="number" min="1" value={qty} onChange={e => handleQtyChange(e.target.value)}
-            className="w-16 border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          <label className="text-xs text-gray-500">Qtd.{item.unidade ? ` (${item.unidade})` : ''}</label>
+          <input type="number" min={fracionaria ? '0.01' : '1'} step={fracionaria ? '0.01' : '1'}
+            value={qty} onChange={e => handleQtyChange(e.target.value)}
+            className={`${fracionaria ? 'w-20' : 'w-16'} border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-indigo-400`} />
 
           <label className="text-xs text-gray-500">Val. unit.</label>
           <div className="flex items-center border border-gray-300 rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-indigo-400 bg-white">
@@ -754,7 +769,7 @@ function ItemRow({
                   {new Date(item.criadoEm).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
                 </span>
               )}
-              Quant.: {item.quantidade} · Unitário: {formatBRL(item.valor)}
+              Quant.: {formatarQtdItem(item.quantidade, item.unidade)} · Unitário: {formatBRL(item.valor)}{item.unidade ? `/${item.unidade}` : ''}
               {descontoAtual > 0 && (
                 <span className="ml-2 text-red-500 font-medium">
                   Desconto: {item.descontoTipo === 'PERCENTUAL' ? `${item.descontoValor}%` : formatBRL(item.descontoValor ?? 0)}
@@ -762,7 +777,7 @@ function ItemRow({
                 </span>
               )}
             </p>
-            {consolidada && <ObservacaoOrigens origens={origens} />}
+            {consolidada && <ObservacaoOrigens origens={origens} unidade={item.unidade} />}
           </>
         )}
       </div>
@@ -1179,6 +1194,12 @@ export type AcaoAnimal = 'fechar' | 'reabrir' | 'pagar' | 'estornar';
  * fatura total" é uma faixa própria, e mantê-la ancorada à direita do nome no desktop
  * deixaria duas gramáticas para a mesma barra — a divergência que a §6 fecha com o
  * `AcaoRegistro`.
+ *
+ * 🔴 (2026-10-02, a pedido) A faixa SUBIU para a linha do rótulo "Informação do
+ * Cavalo", alinhada à direita — logo ACIMA do subtotal do paciente, e não mais no
+ * rodapé do card. Continua sendo uma faixa própria (não divide a linha com a foto e o
+ * nome), então o motivo acima segue valendo: no celular ela quebra (`flex-wrap`) para
+ * baixo do rótulo, sem espremer o nome do paciente.
  */
 interface PropsDoBloco {
   animalId: number; nome: string;
@@ -1217,7 +1238,7 @@ function ResumoDoBloco({ subtotal, subtotalFechado, subtotalPago }: PropsDoBloco
 }
 
 /** A faixa de ações do bloco do paciente — ver o porquê acima de `ResumoDoBloco`. */
-function AcoesDoBloco({ separador = 'border-gray-200/70', ...props }: PropsDoBloco & { separador?: string }) {
+function AcoesDoBloco(props: PropsDoBloco) {
   const {
     animalId, nome, abertos, fechados, pagos, naoPagos,
     podeFechar, podePagar, isGestor, faturaEditavel, ocupado, envio, onAlterar,
@@ -1231,7 +1252,7 @@ function AcoesDoBloco({ separador = 'border-gray-200/70', ...props }: PropsDoBlo
   if (!temLancamento) return null;
 
   return (
-    <div className={`mt-2.5 pt-2.5 border-t ${separador} flex flex-wrap items-center justify-end gap-1.5`}>
+    <div className="flex flex-wrap items-center justify-end gap-1.5 ml-auto">
       {podeFecharAgir && abertos > 0 && (
         <AcaoBloco tom="finalizar" icone={Check} rotulo="Fechar paciente" carregando={ocupado}
           titulo="Fecha a cobrança deste paciente e tira o valor dele do total da fatura"
@@ -2061,9 +2082,14 @@ function PainelFatura({
 
               {/* ── Informação do cavalo ── */}
               <div className="px-4 pt-3 pb-2.5 border-b border-gray-100 bg-indigo-50/40">
-                <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-2">
-                  Informação do Cavalo
-                </p>
+                {/* As ações ficam na linha do rótulo, à direita — logo ACIMA do
+                    subtotal do paciente. Ver `AcoesDoBloco`. */}
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 mb-2">
+                  <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest">
+                    Informação do Cavalo
+                  </p>
+                  <AcoesDoBloco {...propsDoBloco} />
+                </div>
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <FotoAnimal url={animal.photoUrl} nome={animal.nome} animalId={animal.id}
@@ -2078,9 +2104,6 @@ function PainelFatura({
                   </div>
                   <ResumoDoBloco {...propsDoBloco} />
                 </div>
-                {/* A barra na PRÓPRIA linha — ver `AcoesDoBloco`. É o que impede as
-                    seis ações de espremerem o nome do paciente no celular. */}
-                <AcoesDoBloco {...propsDoBloco} separador="border-indigo-100/70" />
               </div>
 
               {/* ── Assistência & Serviços Gerais ── */}
@@ -2193,9 +2216,12 @@ function PainelFatura({
           return (
           <div key={`fora-${grupo.id}`} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
             <div className="px-4 pt-3 pb-2.5 border-b border-gray-100 bg-gray-50">
-              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">
-                Informação do Cavalo
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 mb-2">
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                  Informação do Cavalo
+                </p>
+                <AcoesDoBloco {...propsDoBloco} />
+              </div>
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-bold text-gray-900">{grupo.nome}</p>
@@ -2203,7 +2229,6 @@ function PainelFatura({
                 </div>
                 <ResumoDoBloco {...propsDoBloco} />
               </div>
-              <AcoesDoBloco {...propsDoBloco} />
             </div>
             <JanelaLista className="divide-y divide-gray-50">
               {ordenarComInsumos(abertos).map(item => (

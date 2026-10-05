@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import api from '../services/api';
+import { sufixoContagem, type ContagemAtivos } from '../utils/contagemAtivos';
 import toast from 'react-hot-toast';
 import {
   Pencil, Search, Loader2, X, Truck,
@@ -501,6 +502,8 @@ export default function CadastroFornecedor() {
   // de Acesso enquanto o fornecedor com login ainda era tratado como equipe.
   const [modalAcesso,     setModalAcesso]     = useState<{ equipeId: number; userId: number; nome: string } | null>(null);
   const [processandoToggle, setProcessandoToggle] = useState(false);
+  // Quantidade de cada aba Todos/Ativos/Inativos (vem do backend com `contagens=1`).
+  const [contagens, setContagens] = useState<ContagemAtivos | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -508,9 +511,11 @@ export default function CadastroFornecedor() {
       const params = new URLSearchParams();
       if (busca.trim()) params.set('busca', busca.trim());
       params.set('ativo', filtroAtivo === 'all' ? 'all' : filtroAtivo === 'ativo' ? 'true' : 'false');
+      params.set('contagens', '1');
       const res = await api.get(`/cadastro/fornecedores?${params}`);
       if (!res.data) return;
       setFornecedores(res.data.dados ?? []);
+      setContagens(res.data.contagens ?? null);
     } catch { setErroInline('Erro ao carregar fornecedores'); }
     finally { setLoading(false); }
   }, [busca, filtroAtivo]);
@@ -819,7 +824,7 @@ export default function CadastroFornecedor() {
               className={`px-4 py-2.5 font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
                 filtroAtivo === v ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
               }`}>
-              {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
+              {(v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos') + sufixoContagem(contagens, v)}
             </button>
           ))}
         </div>

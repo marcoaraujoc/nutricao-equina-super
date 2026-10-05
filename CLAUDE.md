@@ -640,6 +640,11 @@ Fatura / FaturaItem → financeiro básico
                     `financeiro.faturas.editar` — o MESMO slug de marcar a fatura como paga.
                     Gate: `__tests__/faturaPagamentoPorAnimal.test.js`.
                     FaturaItem: animalId? (adicionado migration 20260605), tipo VARCHAR(50), veterinarioId?
+                    FaturaItem.unidade (migration 20261101000000): em QUÊ `quantidade` está
+                    contada — 'mL' no medicamento MULTIDOSE em mL (quantidade = mL que saiu
+                    do frasco, valor = R$/mL); NULL = dose/unidade/embalagem. Entra na CHAVE
+                    da consolidação. SEMPRE por `lib/faturaItemUnidade.js`; exibição por
+                    `utils/faturaQuantidade.ts`. Ver `hist-financeiro.md`, 2026-10-02.
                     FaturaItem.pagoEm/pagoPorId (migration 20261021000000): preenchido = o
                     bloco deste paciente já foi ACERTADO — fora do `total` e fora do
                     `totalFechado`. Item pago é SEMPRE item fechado.
@@ -879,6 +884,14 @@ EmpresaConfiguracao → configuração única por empresa (CNPJ) ou por equipe (
                     (`lib/finalizacaoEvolucao.js`). Lida/gravada SEMPRE por
                     `lib/etapaExecucaoPrescricao.js`. Gate:
                     `__tests__/execucaoPrescricaoDispensada.test.js`.
+                    🔴 dispensaEvolucaoPrescricao (JSONB, migration 20261102000000, ✅ APLICADA
+                    em 2026-10-03; NULL = nada): especialidades/procedimentos/classificações
+                    de medicamento que podem ser PRESCRITOS SEM EVOLUÇÃO (Funcionamento).
+                    Padrão = toda prescrição exige evolução. A prescrição INTEIRA precisa
+                    estar liberada, conferida em `criar`, `adicionarItem` e `atualizarItem`.
+                    Só Prescrição (exame/encaminhamento seguem exigindo). SEMPRE por
+                    `lib/dispensaEvolucaoPrescricao.js`. Gate:
+                    `__tests__/dispensaEvolucaoPrescricao.test.js`.
 AgendamentoClinico → (+ migration 20260713010000) lembreteWa1DiaEnviadoEm / lembreteWa2hEnviadoEm
                     (DateTime?) — idempotência dos lembretes de WhatsApp (D-1 e 2h antes).
 CronAlertaConfig  → config global dos alertas de cron (linha única): emails (CSV, null=ADMINs),

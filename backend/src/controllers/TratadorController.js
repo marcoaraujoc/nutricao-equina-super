@@ -2,6 +2,7 @@
 'use strict';
 
 const prisma = require('../lib/prisma').default;
+const { querContagens, contarAtivosInativos } = require('../lib/contagemAtivos');
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
 const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
@@ -94,7 +95,9 @@ const TratadorController = {
         orderBy: [{ ativo: 'desc' }, { nome: 'asc' }],
       });
 
-      res.json({ sucesso: true, dados: await anexarTrilha(tratadores, 'tratador') });
+      // Quantidade de cada aba Todos/Ativos/Inativos — só quando a TELA pede.
+      const contagens = querContagens(req.query) ? await contarAtivosInativos(prisma.tratador, where) : undefined;
+      res.json({ sucesso: true, dados: await anexarTrilha(tratadores, 'tratador'), contagens });
     } catch (err) {
       console.error('Erro ao listar tratadores:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar tratadores' });

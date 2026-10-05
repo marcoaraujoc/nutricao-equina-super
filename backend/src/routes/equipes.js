@@ -39,6 +39,8 @@ router.get  ('/empresas',             authenticate, EquipeController.listarEmpre
 // identidade da empresa (nome/documento/endereço/espécies) é ato do GESTOR — ver
 // EmpresaCadastroController.salvar (`PUT /empresas/cadastro`).
 router.patch('/empresas/:id/status',  authenticate, authorize('ADMIN'), EquipeController.alterarStatusEmpresa);
+router.patch('/empresas/:id/dono',    authenticate, authorize('ADMIN'), EquipeController.transferirDonoEmpresa);
+router.delete('/empresas/:id',        authenticate, authorize('ADMIN'), EquipeController.excluirEmpresa);
 
 // ─── Contextos ativos do usuário (seletor de perfil/empresa do Sidebar) ───────
 router.get('/meus-contextos', authenticate, EquipeController.meusContextos);

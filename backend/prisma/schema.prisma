@@ -223,6 +223,16 @@ model Animal {
   /// rodando, e um campo desconhecido no `animal.create` derrubaria o CADASTRO
   /// INTEIRO do paciente, não só o campo novo.
   registradoFei      Boolean   @default(false) @map("registrado_fei")
+  /// Paciente AVULSO (atendimento pontual) — migration 20261104000000. No avulso,
+  /// localização e e-mail/telefone do proprietário são obrigatórios.
+  /// ⚠️ Leitura/escrita SEMPRE por `lib/animalAvulso.js` — mesmo motivo de `registradoFei`.
+  avulso             Boolean   @default(false)
+  /// Assistência veterinária MENSAL deste animal, em R$ — migration 20261103000000.
+  /// Antes era do proprietário (`ProprietarioPerfil.valorAssistencia`); agora cada cavalo
+  /// tem o seu. NULL/0 = sem assistência; o gatilho da cobrança é o valor (> 0).
+  /// ⚠️ Leitura/escrita SEMPRE por `lib/animalAssistencia.js` (SQL cru com guarda de
+  /// coluna) — mesmo motivo de `registradoFei`.
+  valorAssistencia   Float?    @map("valor_assistencia")
 
   // TRANSFERÊNCIA DE PROPRIEDADE — `propriedadeDesde` é uma CÓPIA RÁPIDA da
   // `dataInicio` da janela ABERTA (dataFim=null) em `AnimalProprietarioHistorico`,
@@ -1527,6 +1537,11 @@ model FaturaItem {
   pagoEm                  DateTime? @map("pago_em")
   // Quem deu a baixa. SEM FK de propósito (registro histórico — ver a migration).
   pagoPorId               Int?      @map("pago_por_id")
+  // Em QUÊ `quantidade` está contada (migration 20261101000000): 'mL' na linha do
+  // medicamento MULTIDOSE (quantidade = mL aplicados, valor = R$/mL). NULL = dose/
+  // unidade/embalagem, o significado de toda linha anterior. Lida/gravada SEMPRE por
+  // `lib/faturaItemUnidade.js` (SQL cru).
+  unidade                 String?   @db.VarChar(20)
 
   fatura                Fatura                 @relation(fields: [faturaId], references: [id])
   origens               FaturaItemOrigem[]     @relation("FaturaItemOrigens")
@@ -2584,6 +2599,9 @@ model EmpresaConfiguracao {
   // tudo acontece na execução, no plantão.
   // 🔴 LEITURA/ESCRITA por SQL cru (`lib/etapaExecucaoPrescricao.js`) — §11.
   dispensarExecucaoPrescricao Boolean @default(false) @map("dispensar_execucao_prescricao")
+  // O que pode ser PRESCRITO sem evolução aberta (null = nada; toda prescrição exige
+  // evolução). Lida/gravada SÓ por lib/dispensaEvolucaoPrescricao.js (SQL cru).
+  dispensaEvolucaoPrescricao Json? @map("dispensa_evolucao_prescricao")
   // Fuso horário da clínica (IANA, ex.: "America/Manaus") — migration 20260823000000.
   // A aplicação roda nos 4 fusos do Brasil (UTC−2 a UTC−5); sem isto o backend
   // assumia America/Sao_Paulo fixo e a fila do plantão / e-mail / WhatsApp saíam

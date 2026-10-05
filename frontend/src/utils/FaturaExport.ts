@@ -19,6 +19,7 @@ function brl(v: number) {
 // ─── Tipos locais (reutilizados de Faturamento) ───────────────────────────────
 
 import { ordenarComInsumos } from './faturaInsumos';
+import { formatarQtdItem } from './faturaQuantidade';
 
 interface AnimalMin { id: number; nome: string; especie?: { nome: string } | null }
 interface ItemMin   {
@@ -36,6 +37,8 @@ interface ItemMin   {
    *  cliente precisa ver o que pagou —, fora do total e marcada como PAGA. Item pago
    *  é sempre item fechado, por isso a folha o tira do "a acertar à parte". */
   pagoEm?: string | null;
+  /** 'mL' na linha do medicamento multidose (2026-10-02); `null` = dose/unidade. */
+  unidade?: string | null;
 }
 
 /**
@@ -57,7 +60,9 @@ function observacaoOrigens(i: ItemMin): string {
     const data = o.data
       ? new Date(o.data).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
       : '—';
-    return `${o.numero ?? 'Sem número'} &middot; ${data} &middot; ${o.quantidade} un.`;
+    // Em mL (multidose) a contribuição é o volume aplicado, não "un.".
+    const qtd = i.unidade ? formatarQtdItem(o.quantidade, i.unidade) : `${o.quantidade} un.`;
+    return `${o.numero ?? 'Sem número'} &middot; ${data} &middot; ${qtd}`;
   });
   return `<br/><small style="color:#6b7280">${linhas.join('<br/>')}</small>`;
 }
@@ -176,8 +181,8 @@ export function gerarHtmlFatura(
       <tr>
         <td><span class="badge ${i.tipo.toLowerCase()}">${i.tipo}</span></td>
         <td${i.insumoDe != null ? ' style="padding-left:22px;color:#4b5563;font-size:11px"' : ''}>${i.descricao}${observacaoOrigens(i)}${labelDesconto(i) ? `<br/><small style="color:#dc2626">Desconto ${labelDesconto(i)} (−${brl(descontoItem(i))})</small>` : ''}</td>
-        <td class="center">${i.quantidade}</td>
-        <td class="right">${brl(i.valor)}</td>
+        <td class="center">${formatarQtdItem(i.quantidade, i.unidade)}</td>
+        <td class="right">${brl(i.valor)}${i.unidade ? `/${i.unidade}` : ''}</td>
         <td class="right">${brl(totalItem(i))}</td>
       </tr>`;
 
@@ -354,7 +359,8 @@ export function exportarFaturaCSV(fatura: FaturaMin, animais: AnimalMin[]) {
       nomeAnimal,
       item.tipo,
       item.descricao,
-      String(item.quantidade),
+      // Em mL vai com a unidade ("15 mL"): sem ela o número seria lido como doses.
+      formatarQtdItem(item.quantidade, item.unidade),
       item.valor.toFixed(2).replace('.', ','),
       descontoItem(item).toFixed(2).replace('.', ','),
       totalItem(item).toFixed(2).replace('.', ','),

@@ -50,7 +50,11 @@ const {
   contatoDoResponsavel, avisosDeContato, localDoAnimal, descricaoAtividade, mensagemWhatsAppProfissional,
 } = require('../lib/notificacaoAgendamento');
 
-const TIPOS_VALIDOS  = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO'];
+// VERMIFUGACAO (2026-10-04, a pedido) — cabe no VarChar(20) da coluna, sem migration.
+const TIPOS_VALIDOS  = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO', 'VERMIFUGACAO'];
+// Teto do agendamento em LOTE (uma visita a um local): protege a transaction e a
+// agenda de um clique que selecione a base inteira.
+const LOTE_MAX_ANIMAIS = 100;
 // EM_ANDAMENTO/FINALIZADO são setados automaticamente pelo fluxo de evolução clínica
 // (EvolucaoController.criar/atualizar/cancelar) — CONCLUIDO permanece disponível para o
 // "Concluir" manual (confirmação de comparecimento sem abrir uma evolução).
@@ -724,14 +728,34 @@ const AgendamentoController = {
 
   // POST /clinica/agendamentos
   // body: { animalId, tipo, titulo, dataHora, observacao?, veterinarioId? }
+  //   ou  { animalIds: number[], ... } — LOTE (2026-10-04)
+  //
+  // 🔴 LOTE = UMA VISITA: os pacientes escolhidos (em geral os de uma LOCALIDADE —
+  // vacinar/vermifugar o haras inteiro) ficam TODOS no MESMO horário do MESMO
+  // profissional. É um agendamento por animal (cada um tem prontuário, evolução e
+  // fatura próprios), criados numa transaction só: ou nascem todos, ou nenhum.
+  // ⚠️ O conflito do profissional é conferido UMA vez contra o que JÁ está na agenda
+  // — os irmãos do lote não colidem entre si, é exatamente o que o lote pede.
+  // ⚠️ No lote o `titulo` é o PREFIXO ("Vacina") e cada linha ganha " - <paciente>",
+  // o mesmo formato que o agendamento avulso já grava.
   criar: async (req, res) => {
     try {
-      const { animalId, tipo = 'CONSULTA', titulo, dataHora, observacao, especialidadeId, prestadorCadastroId } = req.body;
+      const { animalId, animalIds, tipo = 'CONSULTA', titulo, dataHora, observacao, especialidadeId, prestadorCadastroId } = req.body;
       // `let`: agendando para um PRESTADOR, o login dele (se houver) é quem responde
       // em `veterinarioId` — o que veio no body é ignorado.
       let { veterinarioId } = req.body;
 
-      if (!animalId || !titulo?.trim() || !dataHora) {
+      const emLote = Array.isArray(animalIds);
+      const ids = emLote
+        ? [...new Set(animalIds.map(Number).filter(n => Number.isInteger(n) && n > 0))]
+        : (Number(animalId) > 0 ? [Number(animalId)] : []);
+      if (emLote && ids.length === 0) {
+        return res.status(400).json({ error: 'Selecione ao menos um paciente.' });
+      }
+      if (ids.length > LOTE_MAX_ANIMAIS) {
+        return res.status(400).json({ error: `Agende no máximo ${LOTE_MAX_ANIMAIS} pacientes por vez.` });
+      }
+      if (ids.length === 0 || !titulo?.trim() || !dataHora) {
         return res.status(400).json({ error: 'animalId, titulo e dataHora são obrigatórios' });
       }
       if (!TIPOS_VALIDOS.includes(tipo)) {
@@ -794,33 +818,49 @@ const AgendamentoController = {
         return res.status(403).json({ error: 'Só o gestor agenda para outro profissional. Você pode agendar na sua própria agenda.' });
       }
 
-      const acesso = await verificarAcessoAnimal({ animalId: Number(animalId), userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
-      if (acesso === null) return res.status(404).json({ error: 'Animal não encontrado' });
-      if (!acesso)         return res.status(403).json({ error: 'Acesso não autorizado a este animal' });
-      if (await animalFoiExcluido(animalId)) {
-        return res.status(400).json({ error: 'Paciente inativado — reative-o na tela de Pacientes antes de registrar algo novo.', code: 'PACIENTE_EXCLUIDO' });
-      }
-      if (await animalEstaInativo(animalId)) {
-        return res.status(400).json({ error: 'Paciente inativo — reative com o gestor antes de registrar algo novo.', code: 'PACIENTE_INATIVO' });
-      }
+      // Conferências POR PACIENTE — todas antes de gravar qualquer coisa: no lote, um
+      // paciente recusado recusa o lote inteiro (tudo-ou-nada), e a mensagem nomeia
+      // QUAL paciente travou, senão a pessoa fica sem saber o que tirar da seleção.
+      const nomes = new Map();
+      for (const idAnimal of ids) {
+        const acesso = await verificarAcessoAnimal({ animalId: idAnimal, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
+        // Sem acesso, o nome NÃO é lido: não se confirma o paciente a quem não pode vê-lo.
+        const quem = emLote ? `Paciente #${idAnimal}: ` : '';
+        if (acesso === null) return res.status(404).json({ error: `${quem}Animal não encontrado` });
+        if (!acesso)         return res.status(403).json({ error: `${quem}Acesso não autorizado a este animal` });
 
-      // O prestador DA EQUIPE só atende o paciente que a clínica AUTORIZOU para ele.
-      // O EXTERNO é agendado para qualquer paciente (2026-10-01, a pedido).
-      if (prestadorAg && !prestadorExterno && !(await designacaoCadastro.prestadorAutorizado(prisma, prestadorAg, animalId))) {
-        return res.status(403).json({
-          error: `${prestadorAg.nome} não tem autorização para este paciente. Conceda em Cadastro › Prestadores › Gerenciar Acesso.`,
-          code:  'PRESTADOR_SEM_AUTORIZACAO',
+        const animalRow = await prisma.animal.findUnique({ where: { id: idAnimal }, select: { nome: true } });
+        nomes.set(idAnimal, animalRow?.nome ?? `Paciente #${idAnimal}`);
+        const deQuem = emLote ? `${nomes.get(idAnimal)}: ` : '';
+
+        if (await animalFoiExcluido(idAnimal)) {
+          return res.status(400).json({ error: `${deQuem}Paciente inativado — reative-o na tela de Pacientes antes de registrar algo novo.`, code: 'PACIENTE_EXCLUIDO' });
+        }
+        if (await animalEstaInativo(idAnimal)) {
+          return res.status(400).json({ error: `${deQuem}Paciente inativo — reative com o gestor antes de registrar algo novo.`, code: 'PACIENTE_INATIVO' });
+        }
+
+        // O prestador DA EQUIPE só atende o paciente que a clínica AUTORIZOU para ele.
+        // O EXTERNO é agendado para qualquer paciente (2026-10-01, a pedido).
+        if (prestadorAg && !prestadorExterno && !(await designacaoCadastro.prestadorAutorizado(prisma, prestadorAg, idAnimal))) {
+          return res.status(403).json({
+            error: `${deQuem}${prestadorAg.nome} não tem autorização para este paciente. Conceda em Cadastro › Prestadores › Gerenciar Acesso.`,
+            code:  'PRESTADOR_SEM_AUTORIZACAO',
+          });
+        }
+
+        // Um animal pode ter vários agendamentos, mas NUNCA dois no mesmo horário
+        // (independe de vet/equipe). Bloqueia duplicidade no mesmo dataHora.
+        const mesmoHorario = await prisma.agendamentoClinico.findFirst({
+          where: { animalId: idAnimal, dataHora: quando, ativo: true, status: { notIn: STATUS_LIVRES } },
+          select: { id: true },
         });
-      }
-
-      // Um animal pode ter vários agendamentos, mas NUNCA dois no mesmo horário
-      // (independe de vet/equipe). Bloqueia duplicidade no mesmo dataHora.
-      const mesmoHorario = await prisma.agendamentoClinico.findFirst({
-        where: { animalId: Number(animalId), dataHora: quando, ativo: true, status: { notIn: STATUS_LIVRES } },
-        select: { id: true },
-      });
-      if (mesmoHorario) {
-        return res.status(409).json({ error: 'Este animal já tem um agendamento neste horário.', code: 'HORARIO_OCUPADO' });
+        if (mesmoHorario) {
+          return res.status(409).json({
+            error: emLote ? `${nomes.get(idAnimal)} já tem um agendamento neste horário.` : 'Este animal já tem um agendamento neste horário.',
+            code:  'HORARIO_OCUPADO',
+          });
+        }
       }
 
       // Duração do atendimento: vem do tempo de consulta que o profissional pratica
@@ -886,18 +926,21 @@ const AgendamentoController = {
         }
       }
 
-      const item = await prisma.$transaction(async (tx) => {
+      // Um agendamento por paciente, numa transaction só (lote = tudo-ou-nada).
+      const itens = await prisma.$transaction(async (tx) => {
+        const criados = [];
+        for (const idAnimal of ids) {
         const maxResult = await tx.agendamentoClinico.aggregate({
-          where:   { animalId: Number(animalId), ativo: true },
+          where:   { animalId: idAnimal, ativo: true },
           _max:    { numero: true },
         });
         const proximoNumero = (maxResult._max.numero ?? 0) + 1;
 
-        return tx.agendamentoClinico.create({
+        criados.push(await tx.agendamentoClinico.create({
           data: {
-            animalId:      Number(animalId),
+            animalId:      idAnimal,
             tipo,
-            titulo:        titulo.trim(),
+            titulo:        emLote ? `${titulo.trim()} - ${nomes.get(idAnimal)}`.slice(0, 255) : titulo.trim(),
             dataHora:      quando,
             observacao:    observacao?.trim() || null,
             numero:        proximoNumero,
@@ -918,31 +961,37 @@ const AgendamentoController = {
           // ele, ou não nasce (sem isto, o do prestador sem login viraria "sem ninguém").
           if (prestadorAg) await gravarPrestador(tx, criado.id, prestadorAg.id);
           return criado;
+        }));
+        }
+        return criados;
+      });
+      const item = itens[0];
+
+      for (const criado of itens) {
+        // Contexto (empresa/equipe) em que o agendamento foi criado — agendas independentes
+        // por equipe. Usa o contexto ativo; se ausente, herda o do animal. (SQL raw — colunas novas.)
+        await prisma.$executeRawUnsafe(
+          `UPDATE schs2vet.tb_agendamentos_clinicos ag
+              SET empresa_id = COALESCE($1::int, a."empresaId"), equipe_id = COALESCE($2::int, a."equipeId")
+             FROM schs2vet.tb_animais a
+            WHERE ag.id = $3::int AND ag.animal_id = a.id`,
+          req.empresaId ? Number(req.empresaId) : null,
+          req.equipeId  ? Number(req.equipeId)  : null,
+          criado.id,
+        );
+
+        // Marcar um agendamento é uma alteração da agenda e entra na trilha: sem isso a
+        // auditoria mostraria o cancelamento de um atendimento que, para ela, nunca existiu.
+        await registrarAuditoria(null, req, {
+          categoria:  'CRIACAO',
+          entidade:   'AGENDAMENTO',
+          entidadeId: criado.id,
+          animalId:   criado.animalId,
+          detalhes:   `${criado.tipo} — ${criado.titulo ?? ''} | ${quando.toISOString()}`
+                    + ` | profissional: ${prestadorAg ? `${prestadorAg.nome} (prestador)` : (criado.veterinario?.fullName ?? '—')}`
+                    + (emLote ? ` | lote de ${itens.length} pacientes` : ''),
         });
-      });
-
-      // Contexto (empresa/equipe) em que o agendamento foi criado — agendas independentes
-      // por equipe. Usa o contexto ativo; se ausente, herda o do animal. (SQL raw — colunas novas.)
-      await prisma.$executeRawUnsafe(
-        `UPDATE schs2vet.tb_agendamentos_clinicos ag
-            SET empresa_id = COALESCE($1::int, a."empresaId"), equipe_id = COALESCE($2::int, a."equipeId")
-           FROM schs2vet.tb_animais a
-          WHERE ag.id = $3::int AND ag.animal_id = a.id`,
-        req.empresaId ? Number(req.empresaId) : null,
-        req.equipeId  ? Number(req.equipeId)  : null,
-        item.id,
-      );
-
-      // Marcar um agendamento é uma alteração da agenda e entra na trilha: sem isso a
-      // auditoria mostraria o cancelamento de um atendimento que, para ela, nunca existiu.
-      await registrarAuditoria(null, req, {
-        categoria:  'CRIACAO',
-        entidade:   'AGENDAMENTO',
-        entidadeId: item.id,
-        animalId:   item.animalId,
-        detalhes:   `${item.tipo} — ${item.titulo ?? ''} | ${quando.toISOString()}`
-                  + ` | profissional: ${prestadorAg ? `${prestadorAg.nome} (prestador)` : (item.veterinario?.fullName ?? '—')}`,
-      });
+      }
 
       // Quem EXECUTA o agendamento é avisado por e-mail e WhatsApp (abaixo). O que
       // faltar no cadastro dele volta AGORA na resposta, para a tela avisar quem
@@ -954,34 +1003,45 @@ const AgendamentoController = {
         });
       } catch (e) { console.error('Erro ao ler contato do profissional do agendamento:', e); }
 
+      const comPrestador = (ag) => ({
+        ...ag,
+        prestadorCadastro: prestadorAg ? { id: prestadorAg.id, nome: prestadorAg.nome } : null,
+        atendimentoNumero: formatAtendimentoNum('AG', ag.numero),
+      });
       res.status(201).json({
-        dados: {
-          ...item,
-          prestadorCadastro: prestadorAg ? { id: prestadorAg.id, nome: prestadorAg.nome } : null,
-          atendimentoNumero: formatAtendimentoNum('AG', item.numero),
-        },
+        // Avulso devolve o objeto, como sempre; lote devolve a lista.
+        dados: emLote ? itens.map(comPrestador) : comPrestador(item),
         avisosNotificacao: avisosDeContato(contatoProf),
       });
 
-      // Fire-and-forget: notifica via email + WhatsApp
+      // Fire-and-forget: notifica via email + WhatsApp.
+      // ⚠️ No LOTE o profissional recebe UM aviso com todos os pacientes (são uma
+      // visita só — dez e-mails iguais seriam ruído), e cada PROPRIETÁRIO recebe UM
+      // com os animais DELE.
       setImmediate(async () => {
         try {
           const vet = contatoProf;
 
-          let animalNome = 'Paciente', proprietarioNome = '', proprietarioPhone = '', local = null;
-          if (item.animalId) {
-            const animal = await prisma.animal.findUnique({
-              where:   { id: item.animalId },
-              include: {
-                user:        { select: { fullName: true, phone: true, email: true } },
-                localizacao: { select: { nome: true } },
-              },
-            });
-            animalNome        = animal?.nome           ?? 'Paciente';
-            proprietarioNome  = animal?.user?.fullName ?? '';
-            proprietarioPhone = animal?.user?.phone    ?? '';
-            local             = localDoAnimal(animal);
-          }
+          const animais = await prisma.animal.findMany({
+            where:   { id: { in: itens.map(i => i.animalId) } },
+            include: {
+              user:        { select: { fullName: true, phone: true, email: true } },
+              localizacao: { select: { nome: true } },
+            },
+          });
+          const porId = new Map(animais.map(a => [a.id, a]));
+          const linhas = itens.map(i => porId.get(i.animalId)).filter(Boolean);
+          const nomesAnimais = linhas.map(a => a.nome ?? 'Paciente');
+          const unico = (vals) => { const u = [...new Set(vals.filter(Boolean))]; return u.length === 1 ? u[0] : null; };
+
+          const animalNome = nomesAnimais.length === 0 ? 'Paciente'
+            : nomesAnimais.length <= 6 ? nomesAnimais.join(', ')
+            : `${nomesAnimais.slice(0, 6).join(', ')} e mais ${nomesAnimais.length - 6}`;
+          // Proprietário/local só quando são OS MESMOS para todos — misturar os de
+          // pacientes diferentes numa linha só informaria errado.
+          const proprietarioNome  = unico(linhas.map(a => a.user?.fullName)) ?? '';
+          const proprietarioPhone = unico(linhas.map(a => a.user?.phone)) ?? '';
+          const local             = unico(linhas.map(a => localDoAnimal(a)));
 
           const d        = new Date(item.dataHora);
           // Fuso da CLÍNICA: a mensagem anuncia o horário para o profissional e para
@@ -991,7 +1051,10 @@ const AgendamentoController = {
           const dataFmt  = d.toLocaleDateString('pt-BR',  { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: fusoAg });
           const horaFmt  = d.toLocaleTimeString('pt-BR',  { hour: '2-digit', minute: '2-digit', timeZone: fusoAg });
           const atividade = descricaoAtividade({
-            tipo: item.tipo, titulo: item.titulo, especialidade: item.especialidade?.nome, animalNome,
+            // No lote o título de cada linha leva o nome do paciente: o padrão
+            // "<Tipo> - <paciente>" não se aplica ao conjunto, então vai o prefixo.
+            tipo: item.tipo, titulo: emLote ? titulo.trim() : item.titulo,
+            especialidade: item.especialidade?.nome, animalNome: emLote ? '' : animalNome,
           });
 
           // E-mail ao profissional
@@ -1015,19 +1078,27 @@ const AgendamentoController = {
             if (!envio?.sucesso) await whatsappService.sendWhatsApp(vet.phone, msgVet).catch(() => {});
           }
 
-          // WhatsApp ao proprietário
-          if (proprietarioPhone) {
-            const vetNome  = vet?.nome ?? 'Veterinário';
-            const appUrl   = process.env.APP_URL || 'http://localhost:5173';
+          // WhatsApp ao proprietário — um por telefone, com os animais dele
+          const porTelefone = new Map();
+          for (const a of linhas) {
+            const fone = a.user?.phone;
+            if (!fone) continue;
+            if (!porTelefone.has(fone)) porTelefone.set(fone, []);
+            porTelefone.get(fone).push(a.nome ?? 'Paciente');
+          }
+          const vetNome = vet?.nome ?? 'Veterinário';
+          const appUrl  = process.env.APP_URL || 'http://localhost:5173';
+          for (const [fone, seus] of porTelefone) {
             const msgPropr = [
-              `🐴 *S2Vet — Consulta agendada!*`,
+              item.tipo === 'CONSULTA' ? `🐴 *S2Vet — Consulta agendada!*` : `🐴 *S2Vet — Agendamento confirmado!*`,
+              ...(item.tipo === 'CONSULTA' ? [] : [`📋 ${atividade}`]),
               `📅 ${dataFmt} às *${horaFmt}*`,
-              `🐎 Paciente: *${animalNome}*`,
+              seus.length > 1 ? `🐎 Pacientes: *${seus.join(', ')}*` : `🐎 Paciente: *${seus[0]}*`,
               prestadorAg ? `🩺 ${vetNome}` : `🩺 Dr(a). ${vetNome}`,
               ``,
               `Acompanhe em: ${appUrl}`,
             ].join('\n');
-            await whatsappService.sendWhatsApp(proprietarioPhone, msgPropr).catch(() => {});
+            await whatsappService.sendWhatsApp(fone, msgPropr).catch(() => {});
           }
         } catch { /* silencioso — notificações não bloqueiam o fluxo */ }
       });

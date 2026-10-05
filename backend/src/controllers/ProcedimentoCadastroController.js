@@ -7,6 +7,7 @@
 //     e cria combos com valor próprio (ProcedimentoCombo/Item).
 'use strict';
 
+const { querContagens } = require('../lib/contagemAtivos');
 const prisma = require('../lib/prisma').default;
 const { registrarAuditoria } = require('../lib/auditoria');
 const vinculoPrestador = require('../lib/procedimentoPrestador');
@@ -162,9 +163,12 @@ const listarComValores = async (req, res) => {
      * clínica inativou. Quem manda 'all'/'false' é só a tela de Cadastro, que precisa
      * alcançar o inativo para poder reativá-lo — sem isso, inativar vira caminho sem volta.
      */
-    if (ativo === 'all')        { /* sem recorte por situação */ }
-    else if (ativo === 'false') { where.ativo = false; }
-    else                        { where.ativo = true; }
+    const situacao = ativo === 'all' ? null : ativo === 'false' ? false : true;
+    // Com `contagens=1` (só a tela de Cadastro) a situação é recortada DEPOIS dos
+    // filtros em memória abaixo — é o único jeito de as abas Todos/Ativos/Inativos
+    // contarem exatamente o que cada uma traria.
+    const pedirContagens = querContagens(req.query);
+    if (!pedirContagens && situacao !== null) where.ativo = situacao;
 
     /**
      * 🔴 RECORTE POR CÓDIGO (2026-09-11) — a tela de exames manda para cá os exames
@@ -248,6 +252,15 @@ const listarComValores = async (req, res) => {
       );
     }
 
+    // Quantidade de cada aba Todos/Ativos/Inativos — contada sobre o recorte INTEIRO e
+    // só então recortada pela situação pedida.
+    let contagens;
+    if (pedirContagens) {
+      const inativos = procedimentos.filter(p => p.ativo === false).length;
+      contagens = { all: procedimentos.length, ativo: procedimentos.length - inativos, inativo: inativos };
+      if (situacao !== null) procedimentos = procedimentos.filter(p => p.ativo === situacao);
+    }
+
     let valores = new Map();
     if (req.empresaId && procedimentos.length > 0) {
       const rows = await prisma.procedimentoValorEmpresa.findMany({
@@ -284,6 +297,7 @@ const listarComValores = async (req, res) => {
         prestadores:  vinculos.get(p.id) ?? [],
         cobrancaPorImagem: porImagem.get(p.id) ?? false,
       })),
+      contagens,
     });
   } catch (err) {
     console.error('ProcedimentoCadastroController.listarComValores:', err);
@@ -342,9 +356,11 @@ const listarCombos = async (req, res) => {
     if (!req.empresaId) return res.json({ dados: [] });
     const { ativo } = req.query;
     const where = { empresaId: req.empresaId };
-    if (ativo === 'all') { /* sem filtro */ }
-    else if (ativo !== undefined) where.ativo = ativo === 'true';
-    else where.ativo = true;
+    const situacao = ativo === 'all' ? null : ativo !== undefined ? ativo === 'true' : true;
+    // Mesma lógica de `listarComValores`: com `contagens=1` a situação é recortada
+    // DEPOIS do filtro de especialidades, para a contagem bater com o que a aba traz.
+    const pedirContagens = querContagens(req.query);
+    if (!pedirContagens && situacao !== null) where.ativo = situacao;
 
     let combos = await prisma.procedimentoCombo.findMany({
       where,
@@ -358,6 +374,13 @@ const listarCombos = async (req, res) => {
       combos = combos.filter(c => c.itens.every(it => permitidas.has(it.procedimento.especialidade)));
     }
 
+    let contagens;
+    if (pedirContagens) {
+      const inativos = combos.filter(c => c.ativo === false).length;
+      contagens = { all: combos.length, ativo: combos.length - inativos, inativo: inativos };
+      if (situacao !== null) combos = combos.filter(c => c.ativo === situacao);
+    }
+
     // Prestador e valor do prestador do PACOTE (colunas novas → SQL cru).
     //
     // 🔴 `recursos.comboPrestador` diz se as colunas EXISTEM nesta base. Sem ele, a tela
@@ -367,6 +390,7 @@ const listarCombos = async (req, res) => {
     return res.json({
       dados:    await vinculoPrestador.anexarPrestadorEmCombos(prisma, combos),
       recursos: { comboPrestador: await vinculoPrestador.temColunasCombo() },
+      contagens,
     });
   } catch (err) {
     console.error('ProcedimentoCadastroController.listarCombos:', err);

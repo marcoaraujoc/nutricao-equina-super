@@ -24,12 +24,14 @@
  * (ENABLE + FORCE, `WITH CHECK` só do próprio) é a rede por baixo disso.
  */
 
+const { querContagens, contarAtivosInativos } = require('../lib/contagemAtivos');
 const prisma = require('../lib/prisma').default;
 const catalogoEmpresa = require('../lib/catalogoEmpresa');
 const { registrarAuditoria } = require('../lib/auditoria');
 // Fonte Única de "erro que chega à tela": repassa regra de negócio, engole o resto.
 const { responderErro } = require('../lib/erroResposta');
 const { normalizarFormaCalculo, numeroPositivo } = require('../lib/formaCalculo');
+const { idsGlobaisSubstituidos } = require('../lib/catalogoManual');
 
 /** Filtro "é vacina?" — MESMO critério de `MedicamentoController.paraAtendimento`. */
 function filtroTipo(tipo) {
@@ -87,9 +89,16 @@ const listar = async (req, res) => {
     const tipo  = req.query.tipo === 'vacina' ? 'vacina' : 'medicamento';
     const busca = String(req.query.busca ?? '').trim();
 
+    // 🔴 Global substituído pela cópia da clínica NÃO aparece (2026-10-02): os dois têm
+    // o mesmo nome, e a pessoa escolhia o global — cuja edição só reabre a cópia, e
+    // cujo estoque a Prescrição nunca enxerga. Filtrado NO BANCO, por causa da paginação.
+    const substituidos = await idsGlobaisSubstituidos(prisma, req.empresaId);
     const where = {
       ...filtroTipo(tipo),
-      AND: [escopoDaEmpresa(req.empresaId)],
+      AND: [
+        escopoDaEmpresa(req.empresaId),
+        ...(substituidos.length ? [{ id: { notIn: substituidos } }] : []),
+      ],
       ...(req.query.ativo === 'all' ? {} : { ativo: req.query.ativo !== 'false' }),
       ...(busca ? { OR: [
         { nome:              { contains: busca, mode: 'insensitive' } },
@@ -128,6 +137,9 @@ const listar = async (req, res) => {
 
     // Multidose vem por SQL cru (coluna nova — §11) e EM BLOCO, nunca um por item.
     const multi = await catalogoEmpresa.multidosePorItem(prisma, itens.map(i => i.id));
+    // Quantidade de cada aba Todos/Ativos/Inativos — só quando a TELA pede. É o
+    // catálogo inteiro do recorte (tipo + busca), não a página.
+    const contagens = querContagens(req.query) ? await contarAtivosInativos(prisma.medicamento, where) : undefined;
 
     return res.json({
       dados: itens.map(i => ({
@@ -148,6 +160,7 @@ const listar = async (req, res) => {
       totalPaginas,
       // Mantido por compatibilidade com o contrato anterior desta rota.
       limite: porPagina,
+      contagens,
       recursos: { disponivel: true, multidose: await catalogoEmpresa.temColunasMultidose(prisma) },
     });
   } catch (err) {

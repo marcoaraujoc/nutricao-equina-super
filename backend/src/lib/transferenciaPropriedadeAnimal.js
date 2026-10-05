@@ -79,8 +79,6 @@ async function resolverOuCriarProprietario(tx, req, { empresaId, equipeId, dados
     estado:            dados.estado            || null,
     cpf:               dados.cpf               || null,
     cnpj:              dados.cnpj              || null,
-    mensalista:        !!dados.mensalista,
-    valorAssistencia:  dados.mensalista ? Number(dados.valorAssistencia) || 0 : null,
     frequenciaVisitas: dados.frequenciaVisitas != null ? Number(dados.frequenciaVisitas) : null,
     diaVencimentoFatura: Number(dados.diaVencimentoFatura),
     ativo: true,

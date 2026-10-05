@@ -37,6 +37,7 @@ import {
 // de doses ja usa. Recopiar a tabela aqui faria a tela contar aplicacoes de um jeito
 // e o backend de outro.
 import { DOSES_POR_DIA } from '../utils/posologia';
+import type { DispensaEvolucao } from '../hooks/useConfiguracaoOperacional';
 
 
 
@@ -70,6 +71,8 @@ interface MedicamentoCat {
   id: number; nome: string; formaFarmaceutica: string;
   /** Unidade da EMBALAGEM ("Frasco", "Un."). Ver `formaCalculo` para o conteúdo. */
   unidade: string; vias: { via: string }[];
+  /** Classificação do catálogo — decide o que pode ser prescrito SEM evolução. */
+  classificacao?: string | null;
   emEstoque:  boolean;
   qtdEstoque: number | null;
   /** O produto declara conteúdo medido — ver /cadastro/produtos. */
@@ -750,9 +753,21 @@ interface GrupoModalProps {
   onClose:              () => void;
   onSaved:              () => void;
   isInline?:            boolean;
+  /**
+   * Prescrição SEM evolução (2026-10-03): o que a empresa liberou em Cadastro da
+   * Empresa › Funcionamento. Presente = só esses itens são OFERECIDOS. Quem decide é
+   * o backend (`lib/dispensaEvolucaoPrescricao.js`); aqui é só não oferecer o que
+   * seria recusado no salvar.
+   */
+  semEvolucao?:         DispensaEvolucao | null;
 }
 
-function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, podeImprimir = false, evolucaoId, onClose, onSaved, isInline = false }: GrupoModalProps) {
+// Comparação de nomes da liberação — sem acento, caixa e espaço nas pontas (mesma
+// regra do backend, `normalizarNome`).
+const normLib = (s: string | null | undefined) =>
+  String(s ?? '').normalize('NFD').replace(/\p{Diacritic}/gu, '').trim().toLowerCase();
+
+function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, podeImprimir = false, evolucaoId, onClose, onSaved, isInline = false, semEvolucao = null }: GrupoModalProps) {
   const navigate = useNavigate();
   const isCreate   = !grupo;
   // Impede inserir item novo fora de SALVO (edição/exclusão de itens já existentes,
@@ -1062,21 +1077,57 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   useEffect(() => () => { searchAbortRef.current?.abort(); }, []);
 
   // Especialidades presentes no catálogo de procedimentos (filtro do form PROCEDIMENTO)
+  // ── Prescrição SEM evolução: só o que foi liberado em Funcionamento ──────────
+  const liberacao = useMemo(() => semEvolucao ? {
+    esp:   new Set(semEvolucao.especialidades.map(normLib)),
+    proc:  new Set(semEvolucao.procedimentos.map(normLib)),
+    class: new Set(semEvolucao.classificacoes.map(normLib)),
+  } : null, [semEvolucao]);
+  const procLiberado = useCallback((p: { nome: string; especialidade: string | null }) =>
+    !liberacao || liberacao.proc.has(normLib(p.nome))
+      || (!!p.especialidade && liberacao.esp.has(normLib(p.especialidade))),
+  [liberacao]);
+  const medLiberado = useCallback((m: MedicamentoCat) =>
+    !liberacao || (!!m.classificacao && liberacao.class.has(normLib(m.classificacao))),
+  [liberacao]);
+  // Tipos oferecidos: sem nada liberado de um lado, a aba dele some.
+  const tiposPermitidos = useMemo<TipoItem[]>(() => {
+    if (!liberacao) return ['MEDICAMENTO', 'PROCEDIMENTO'];
+    const t: TipoItem[] = [];
+    if (liberacao.class.size > 0) t.push('MEDICAMENTO');
+    if (liberacao.proc.size > 0 || liberacao.esp.size > 0) t.push('PROCEDIMENTO');
+    return t;
+  }, [liberacao]);
+  const procedimentosVisiveis = useMemo(
+    () => (liberacao ? procedimentos.filter(procLiberado) : procedimentos),
+    [procedimentos, liberacao, procLiberado]);
+  const combosVisiveis = useMemo(
+    () => (liberacao ? combosProc.filter(procLiberado) : combosProc),
+    [combosProc, liberacao, procLiberado]);
+
   const especialidadesProc = useMemo(() =>
-    [...new Set(procedimentos.map(p => p.especialidade).filter((e): e is string => Boolean(e)))]
+    [...new Set(procedimentosVisiveis.map(p => p.especialidade).filter((e): e is string => Boolean(e)))]
       .sort((a, b) => a.localeCompare(b, 'pt-BR')),
-  [procedimentos]);
+  [procedimentosVisiveis]);
   const procsPorEspecialidade = useMemo(() => {
     const procs = procEspecialidade
-      ? procedimentos.filter(p => p.especialidade === procEspecialidade)
-      : procedimentos;
+      ? procedimentosVisiveis.filter(p => p.especialidade === procEspecialidade)
+      : procedimentosVisiveis;
     // Combos filtrados pela especialidade selecionada (combo legado sem
     // especialidade continua sempre visível). Ficam no topo da lista.
-    const combos = combosProc
+    const combos = combosVisiveis
       .filter(c => !procEspecialidade || !c.especialidade || c.especialidade === procEspecialidade)
       .map(c => ({ id: -c.id, nome: c.nome, especialidade: c.especialidade ?? null, valor: c.valor, combo: true }));
     return [...combos, ...procs];
-  }, [procedimentos, combosProc, procEspecialidade]);
+  }, [procedimentosVisiveis, combosVisiveis, procEspecialidade]);
+
+  // Sem evolução e o tipo atual não tem nada liberado → abre no tipo que tem.
+  useEffect(() => {
+    if (liberacao && tiposPermitidos.length > 0 && !tiposPermitidos.includes(form.tipo)) {
+      switchTipo(tiposPermitidos[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liberacao, tiposPermitidos, form.tipo]);
 
   // Filtro híbrido:
   //   - Lista completa carregada → filtra client-side (rápido, sem request)
@@ -1552,16 +1603,19 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
   // Conteúdo reutilizável do dropdown de medicamentos (usado em 2 layouts distintos)
   const renderMedList = () => {
     const termo = medBusca.trim();
+    // Sem evolução: só as classificações liberadas — e nada de "Cadastrar novo" (item
+    // digitado à mão não tem classificação e seria recusado no salvar).
+    const medsLista = liberacao ? medicamentos.filter(medLiberado) : medicamentos;
     // "Cadastrar novo" só aparece quando o texto digitado não bate EXATAMENTE com
     // nenhum item já existente — evita convidar a criar duplicata de algo que já
     // está na lista (a pessoa clica no item de verdade, não recadastra).
     const temCorrespondenciaExata = termo !== '' &&
-      medicamentos.some(m => m.nome.toLowerCase() === termo.toLowerCase());
-    const mostraCriarNovo = termo !== '' && !temCorrespondenciaExata;
+      medsLista.some(m => m.nome.toLowerCase() === termo.toLowerCase());
+    const mostraCriarNovo = !liberacao && termo !== '' && !temCorrespondenciaExata;
 
-    if (loadingMeds && !backgroundSearching && medicamentos.length === 0 && !mostraCriarNovo)
+    if (loadingMeds && !backgroundSearching && medsLista.length === 0 && !mostraCriarNovo)
       return <div className="flex justify-center py-3"><Loader2 size={14} className="animate-spin text-emerald-500" /></div>;
-    if (medicamentos.length === 0 && !backgroundSearching && !mostraCriarNovo)
+    if (medsLista.length === 0 && !backgroundSearching && !mostraCriarNovo)
       return <p className="px-3 py-2 text-xs text-gray-400 italic">Nenhum medicamento encontrado</p>;
     const onSelect = (m: MedicamentoCat) => {
       selecionarMedicamento(m);
@@ -1576,7 +1630,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
             <span className="text-[10px] text-gray-400">Buscando...</span>
           </div>
         )}
-        {medicamentos.map(m => (
+        {medsLista.map(m => (
           <button key={m.id} type="button" onMouseDown={() => onSelect(m)}
             className="w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 hover:text-emerald-700 transition-colors border-b border-gray-50 last:border-0">
             <span className="font-medium">{m.nome}</span>
@@ -1761,6 +1815,18 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                   </div>
                 )}
 
+                {/* Prescrição SEM evolução — diz por que a lista está recortada. */}
+                {liberacao && isCreate && (
+                  <div className="flex items-start gap-2 px-3 py-2 rounded-xl bg-sky-50 border border-sky-200 text-xs text-sky-800">
+                    <FileText size={14} className="flex-shrink-0 mt-0.5" />
+                    <span>
+                      <b>Prescrição sem evolução.</b> Só aparecem os procedimentos e medicamentos
+                      liberados em Cadastro da Empresa › Funcionamento. Para prescrever outros itens,
+                      inicie uma evolução na aba Evolução.
+                    </span>
+                  </div>
+                )}
+
                 {/* Tipo do item à ESQUERDA, "Importar orçamento" à DIREITA (mesma linha).
                     `justify-between` + `mr-auto` no grupo da esquerda: com o Importar
                     escondido (edição / já salvo), as abas continuam à esquerda em vez de
@@ -1778,7 +1844,7 @@ function GrupoModal({ animalId, animal, grupo, canEdit, canFinalizarCancelar, po
                       <span className="text-[10px] text-gray-400 italic">tipo travado na edição</span>
                     </>
                   ) : (
-                    (['MEDICAMENTO', 'PROCEDIMENTO'] as TipoItem[]).map(t => (
+                    tiposPermitidos.map(t => (
                       <button key={t} onClick={() => switchTipo(t)}
                         className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl transition-colors ${
                           form.tipo === t ? 'bg-emerald-700 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
@@ -2954,6 +3020,24 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   // prescrições já existentes (e os modais de visualização/edição, abaixo)
   // ficam sempre visíveis, do mesmo jeito que Evolução e Exames já fazem.
   const semEvolucaoAtiva = !evolucaoId;
+
+  // ── Prescrição SEM evolução (2026-10-03) ─────────────────────────────────────
+  // A empresa pode liberar procedimentos/especialidades/tipos de medicamento para
+  // serem prescritos sem evolução aberta (Cadastro da Empresa › Funcionamento). Sem
+  // nada liberado (padrão) a tela segue pedindo a evolução, como sempre.
+  const [regrasSemEvolucao, setRegrasSemEvolucao] = useState<DispensaEvolucao | null>(null);
+  useEffect(() => {
+    if (loadingPerms || evolucaoId) return;
+    let vivo = true;
+    api.get('/clinica/prescricoes/dispensa-evolucao').then(r => {
+      if (!vivo) return;
+      const d = r.data?.dados as DispensaEvolucao | undefined;   // GET 403 → null
+      const tem = !!d && (d.especialidades.length + d.procedimentos.length + d.classificacoes.length) > 0;
+      setRegrasSemEvolucao(tem ? d : null);
+    }).catch(() => { if (vivo) setRegrasSemEvolucao(null); });
+    return () => { vivo = false; };
+  }, [loadingPerms, evolucaoId]);
+  const prescreveSemEvolucao = semEvolucaoAtiva && !!regrasSemEvolucao;
   // Evolução existe, mas é de OUTRO profissional (não assumida) — mesma regra
   // que o backend já aplica em PrescricaoGrupoController.criar; aqui só evita o
   // formulário inteiro preenchido pra falhar com 403 no fim.
@@ -3040,7 +3124,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
 
       {/* Formulário inline de criação */}
       {!editingGrupo && !viewingGrupo && canEdit && (
-        semEvolucaoAtiva ? (
+        semEvolucaoAtiva && !prescreveSemEvolucao ? (
           <div className="flex flex-col items-center justify-center py-12 text-gray-400 px-4 border-b border-gray-100">
             <FileText size={28} className="mb-2 text-gray-200" />
             <p className="font-medium text-sm text-gray-500">Evolução necessária</p>
@@ -3066,6 +3150,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
             canFinalizarCancelar={canFinalizarCancelar}
             podeImprimir={podeImprimir}
             evolucaoId={evolucaoId}
+            semEvolucao={prescreveSemEvolucao ? regrasSemEvolucao : null}
             onClose={() => setInlineFormKey(k => k + 1)}
             onSaved={onSaved}
             isInline

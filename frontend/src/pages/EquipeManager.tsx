@@ -15,11 +15,12 @@
 import { useState, useEffect } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Building2, Power, Users, Check, X, Loader2, ChevronDown, ChevronUp, Layers } from 'lucide-react';
+import { Building2, Power, Users, Check, X, Loader2, ChevronDown, ChevronUp, Layers, Trash2, UserCog } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
+import ModalJustificativa from '../components/ModalJustificativa';
 import { INPUT_CLS } from '../components/CampoForm';
 import { mascaraDocumento } from '../utils/mascaras';
 
@@ -164,7 +165,6 @@ export default function EquipeManager() {
   const [erroPlano,        setErroPlano]        = useState<ErroAcaoDados | null>(null);
 
   const [erroInline, setErroInline] = useState<string | null>(null);
-  const [erroLista,  setErroLista]  = useState<ErroAcaoDados | null>(null);
 
   const carregar = async () => {
     setLoading(true);
@@ -186,19 +186,51 @@ export default function EquipeManager() {
       .catch(() => { /* silencioso: não-admin não vê planos */ });
   }, []);
 
-  const handleAlterarStatus = async (empresaId: number, statusAtual: string) => {
-    const novo = statusAtual === 'ATIVA' ? 'SUSPENSA' : 'ATIVA';
-    const acao = novo === 'SUSPENSA' ? 'inativar' : 'reativar';
-    if (!window.confirm(`Deseja ${acao} esta empresa? ${novo === 'SUSPENSA' ? 'Ninguém conseguirá acessá-la enquanto estiver inativa.' : ''}`)) return;
-    setErroLista(null);
+  // Ação pendente de confirmação (inativar/reativar, excluir ou transferir a gestão).
+  // Tudo passa por ModalJustificativa — o `window.confirm` nativo abria a janela do
+  // navegador, fora do padrão da aplicação e sem coletar o motivo que a auditoria exige.
+  const [acao, setAcao] = useState<{ tipo: 'status' | 'excluir' | 'dono'; emp: Empresa } | null>(null);
+  const [emailNovoDono, setEmailNovoDono] = useState('');
+  const [processando, setProcessando] = useState(false);
+  const [erroModal, setErroModal] = useState<ErroAcaoDados | null>(null);
+
+  const abrirAcao = (tipo: 'status' | 'excluir' | 'dono', emp: Empresa) => {
+    setErroModal(null);
+    setEmailNovoDono('');
+    setAcao({ tipo, emp });
+  };
+
+  const mensagemDoErro = (err: unknown, padrao: string): ErroAcaoDados => {
+    const d = (err as { response?: { data?: { mensagem?: string } } }).response?.data;
+    return { mensagem: d?.mensagem ?? padrao };
+  };
+
+  const handleConfirmarAcao = async (motivo: string) => {
+    if (!acao) return;
+    const { tipo, emp } = acao;
+    if (tipo === 'dono' && !emailNovoDono.trim()) {
+      setErroModal({ mensagem: 'Informe o e-mail do novo gestor.' });
+      return;
+    }
+    setProcessando(true);
+    setErroModal(null);
     try {
-      await api.patch(`/equipes/empresas/${empresaId}/status`, { status: novo });
-      toast.success(novo === 'SUSPENSA' ? 'Empresa inativada' : 'Empresa reativada');
+      if (tipo === 'status') {
+        const novo = (emp.status ?? 'ATIVA') === 'ATIVA' ? 'SUSPENSA' : 'ATIVA';
+        await api.patch(`/equipes/empresas/${emp.id}/status`, { status: novo, motivo });
+        toast.success(novo === 'SUSPENSA' ? 'Empresa inativada' : 'Empresa reativada');
+      } else if (tipo === 'excluir') {
+        await api.delete(`/equipes/empresas/${emp.id}`, { data: { motivo } });
+        toast.success('Empresa excluída');
+      } else {
+        await api.patch(`/equipes/empresas/${emp.id}/dono`, { email: emailNovoDono.trim(), motivo });
+        toast.success('Gestão transferida');
+      }
+      setAcao(null);
       carregar();
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem;
-      setErroLista({ mensagem: msg ?? 'Erro ao alterar o status' });
-    }
+      setErroModal(mensagemDoErro(err, 'Erro ao executar a ação'));
+    } finally { setProcessando(false); }
   };
 
   const abrirAlterarPlano = (emp: Empresa) => {
@@ -243,7 +275,6 @@ export default function EquipeManager() {
       </div>
 
       {/* ── Empresas cadastradas ─────────────────────────────────────────── */}
-      <ErroAcao erro={erroLista} className="mb-3" />
 
       {loading ? (
         <div className="flex items-center justify-center py-16">
@@ -287,7 +318,7 @@ export default function EquipeManager() {
                     <Layers size={13} /> Alterar plano
                   </button>
                   {/* ADMIN inativa/reativa a empresa (Empresa.status governa o acesso). */}
-                  <button onClick={() => handleAlterarStatus(emp.id, emp.status ?? 'ATIVA')}
+                  <button onClick={() => abrirAcao('status', emp)}
                     title={(emp.status ?? 'ATIVA') === 'ATIVA' ? 'Inativar empresa' : 'Reativar empresa'}
                     className={`flex items-center gap-1 px-3 py-1.5 border text-xs font-semibold rounded-xl transition-colors ${
                       (emp.status ?? 'ATIVA') === 'ATIVA'
@@ -295,6 +326,16 @@ export default function EquipeManager() {
                         : 'border-gray-200 text-emerald-700 hover:border-emerald-400 hover:bg-emerald-50'
                     }`}>
                     <Power size={13} /> {(emp.status ?? 'ATIVA') === 'ATIVA' ? 'Inativar' : 'Reativar'}
+                  </button>
+                  <button onClick={() => abrirAcao('dono', emp)}
+                    title="Passar a empresa para outro gestor"
+                    className="flex items-center gap-1 px-3 py-1.5 border border-gray-200 text-orange-600 text-xs font-semibold rounded-xl hover:border-orange-300 hover:bg-orange-50 transition-colors">
+                    <UserCog size={13} /> Transferir
+                  </button>
+                  <button onClick={() => abrirAcao('excluir', emp)}
+                    title="Excluir empresa (só sem movimento)"
+                    className="flex items-center gap-1 px-3 py-1.5 border border-gray-200 text-red-600 text-xs font-semibold rounded-xl hover:border-red-300 hover:bg-red-50 transition-colors">
+                    <Trash2 size={13} /> Excluir
                   </button>
                 </div>
               </div>
@@ -339,6 +380,40 @@ export default function EquipeManager() {
           ))}
         </div>
       )}
+
+      <ModalJustificativa
+        aberto={!!acao}
+        tom={acao?.tipo === 'status' && (acao.emp.status ?? 'ATIVA') !== 'ATIVA' ? 'neutro' : acao?.tipo === 'dono' ? 'neutro' : 'perigo'}
+        titulo={
+          acao?.tipo === 'excluir' ? 'Excluir empresa?'
+          : acao?.tipo === 'dono' ? 'Transferir a gestão da empresa?'
+          : (acao?.emp.status ?? 'ATIVA') === 'ATIVA' ? 'Inativar empresa?' : 'Reativar empresa?'
+        }
+        descricao={
+          !acao ? undefined
+          : acao.tipo === 'excluir'
+            ? `"${acao.emp.nome}" será removida. Só é possível se a empresa nunca teve pacientes nem faturas; do contrário, inative-a.`
+          : acao.tipo === 'dono'
+            ? `"${acao.emp.nome}" passará a ter outro gestor responsável. Informe o e-mail de um profissional já cadastrado.`
+          : (acao.emp.status ?? 'ATIVA') === 'ATIVA'
+            ? `Ninguém conseguirá acessar "${acao.emp.nome}" enquanto ela estiver inativa.`
+            : `"${acao.emp.nome}" voltará a ficar acessível.`
+        }
+        acaoLabel={acao?.tipo === 'excluir' ? 'Excluir' : acao?.tipo === 'dono' ? 'Transferir' : (acao?.emp.status ?? 'ATIVA') === 'ATIVA' ? 'Inativar' : 'Reativar'}
+        extra={acao?.tipo === 'dono' ? (
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">
+              E-mail do novo gestor <span className="text-red-500">*</span>
+            </label>
+            <input type="email" value={emailNovoDono} onChange={e => setEmailNovoDono(e.target.value)}
+              className={INPUT_CLS} placeholder="gestor@exemplo.com" autoComplete="off" />
+          </div>
+        ) : undefined}
+        processando={processando}
+        erro={erroModal}
+        onConfirmar={handleConfirmarAcao}
+        onFechar={() => { if (!processando) setAcao(null); }}
+      />
     </PageContainer>
   );
 }

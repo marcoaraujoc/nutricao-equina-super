@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../services/api';
+import { sufixoContagem, type ContagemAtivos } from '../utils/contagemAtivos';
 import toast from 'react-hot-toast';
 import {
   Search, Loader2, X, User2, Pencil,
@@ -83,6 +84,8 @@ export default function CadastroTratador() {
   const [loading,     setLoading]     = useState(false);
   const [busca,       setBusca]       = useState('');
   const [filtroAtivo, setFiltroAtivo] = useState<'ativo' | 'inativo' | 'all'>('ativo');
+  // Quantidade de cada aba Todos/Ativos/Inativos (vem do backend com `contagens=1`).
+  const [contagens, setContagens] = useState<ContagemAtivos | null>(null);
 
   const [modalAberto, setModalAberto] = useState(false);
   const [editando,    setEditando]    = useState<Tratador | null>(null);
@@ -121,10 +124,12 @@ export default function CadastroTratador() {
         params: {
           busca: busca || undefined,
           ativo: filtroAtivo === 'all' ? 'all' : filtroAtivo === 'ativo' ? 'true' : 'false',
+          contagens: 1,
         },
       });
       if (!res.data) return;
       setLista(res.data.dados ?? []);
+      setContagens(res.data.contagens ?? null);
     } catch {
       setErroInline('Erro ao carregar tratadores');
     } finally {
@@ -310,7 +315,7 @@ export default function CadastroTratador() {
               className={`px-4 py-2.5 font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
                 filtroAtivo === v ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
               }`}>
-              {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
+              {(v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos') + sufixoContagem(contagens, v)}
             </button>
           ))}
         </div>

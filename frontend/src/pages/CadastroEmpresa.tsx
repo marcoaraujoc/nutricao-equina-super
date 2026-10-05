@@ -9,7 +9,17 @@
 // aqui que o próprio gestor a completa — sob a MESMA obrigatoriedade de preenchimento
 // que antes travava só o expediente (ver ProtectedRoute + UserController.getMe).
 //
-// Ordem da tela (2026-08-19, para casar com o mockup): logotipo → Identificação
+// 🔴 ABAS (2026-10-03) — a tela foi quebrada em três abas, SÓ no layout:
+//   Configurações de Empresa → logomarca, Identificação, Endereço, Gestor/Plano,
+//                              Outros gestores (+ Incluir gestor)
+//   Funcionamento            → espécies, dias, Abre/Fecha, Tempo de Consulta
+//   Financeiro               → Dados para Recebimento, Dados para Fatura e o checkbox
+//                              "Não utilizar a etapa de Execução de Prescrição"
+// O Salvar fica FORA das abas e grava as duas partes como sempre. Erro em campo de
+// outra aba leva até ela (`ABA_DO_CAMPO`). Layout anterior preservado em
+// `CadastroEmpresaLegado.tsx` (fallback: trocar o import em App.tsx).
+//
+// Ordem da tela ANTES das abas (2026-08-19, para casar com o mockup): logotipo → Identificação
 // (com o WhatsApp de conexão na mesma linha de e-mail/telefone) → Endereço da empresa →
 // espécies/expediente → fechamento de fatura/tempo de consulta/validade do orçamento →
 // Gestor Responsável e Tipo de Plano (leitura) → Outros gestores. Os campos "operacionais"
@@ -26,7 +36,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Building2, Loader2, Users2, AlertTriangle, UserPlus,
-  Camera, MessageCircle, QrCode, Power,
+  Camera, MessageCircle, QrCode, Power, Clock, Wallet,
+  type LucideIcon,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
@@ -40,6 +51,7 @@ import { useEmpresa } from '../contexts/EmpresaContext';
 import { useSelectedAnimal } from '../contexts/SelectedAnimalContext';
 import { soDigitos, mascaraDocumento, mascaraTelefone, mascaraCep } from '../utils/mascaras';
 import Campo from '../components/CampoForm';
+import DispensaEvolucaoCombo from '../components/DispensaEvolucaoCombo';
 import UsuarioFormModal, {
   type UsuarioFormValues, HoraInput, TEMPOS_CONSULTA, TEMPO_CONSULTA_PADRAO_SISTEMA,
 } from '../components/UsuarioFormModal';
@@ -167,11 +179,34 @@ const INPUT_HORARIO =
   'focus:outline-none focus:ring-2 focus:ring-emerald-500 ' +
   'disabled:bg-gray-50 disabled:text-gray-500 disabled:cursor-not-allowed';
 
+// ── Abas (2026-10-03) ──────────────────────────────────────────────────────────
+// Só LAYOUT. Backup do layout anterior (tudo numa página só) em
+// `CadastroEmpresaLegado.tsx` — fallback = trocar o import em App.tsx.
+type Aba = 'empresa' | 'funcionamento' | 'financeiro';
+
+const ABAS: { key: Aba; label: string; icone: LucideIcon }[] = [
+  { key: 'empresa',       label: 'Configurações', icone: Building2 },
+  { key: 'funcionamento', label: 'Funcionamento',            icone: Clock     },
+  { key: 'financeiro',    label: 'Financeiro',               icone: Wallet    },
+];
+
+// Em que aba mora cada campo que as validações apontam (`campos` de ErroAcaoDados,
+// do `salvar` desta tela e do `useConfiguracaoOperacional`). ⚠️ Campo novo com
+// validação precisa entrar aqui — senão o Salvar recusa e a pessoa não vê o campo.
+const ABA_DO_CAMPO: Record<string, Aba> = {
+  nome: 'empresa', documento: 'empresa', telefone: 'empresa', razaoSocial: 'empresa',
+  cep: 'empresa', endereco: 'empresa', bairro: 'empresa', cidade: 'empresa',
+  estado: 'empresa', whatsapp: 'empresa',
+  especies: 'funcionamento', dias: 'funcionamento', horaInicio: 'funcionamento',
+  horaFim: 'funcionamento', tempoConsulta: 'funcionamento',
+  diaUtil: 'financeiro', validadeOrcamento: 'financeiro', percentualCobranca: 'financeiro',
+};
+
 export default function CadastroEmpresa() {
   const { user } = useAuth();
   const { isGestor, loading: loadingPerms } = usePermissoes();
   const { loading: empresaLoading, contextoAtivo } = useEmpresa();
-  const { empresaConfigurada, refreshSelectedAnimal } = useSelectedAnimal();
+  const { refreshSelectedAnimal } = useSelectedAnimal();
   const navigate = useNavigate();
   const op = useConfiguracaoOperacional();
 
@@ -189,12 +224,24 @@ export default function CadastroEmpresa() {
   const [semAcesso,  setSemAcesso]  = useState(false);
   const [erroInline, setErroInline] = useState<string | null>(null);
   const [erroSalvar, setErroSalvar] = useState<ErroAcaoDados | null>(null);
+  const [aba,        setAba]        = useState<Aba>('empresa');
 
-  // Capturado uma única vez, no primeiro render: se a empresa AINDA não estava
-  // completa quando a página abriu, este acesso é o gate de primeiro login do gestor
-  // (ProtectedRoute redirecionou para cá) — ao salvar, leva para dentro do app. Mesmo
-  // padrão que a antiga Configuracoes.tsx já usava.
-  const [completandoPrimeiroAcesso] = useState(() => !empresaConfigurada);
+  // Abas com campo apontado pelo erro atual (ponto vermelho na aba).
+  const abasComErro = new Set<Aba>(
+    [...(erroSalvar?.campos ?? []), ...(op.erroAcao?.campos ?? [])]
+      .map(c => ABA_DO_CAMPO[c])
+      .filter((a): a is Aba => Boolean(a)),
+  );
+  if (op.erroDia) abasComErro.add('financeiro');
+
+  // Erro de validação num campo de OUTRA aba leva para ela — o Salvar fica fora das
+  // abas e grava tudo, então a recusa pode ser por um campo que não está na tela.
+  useEffect(() => {
+    const campos = [...(erroSalvar?.campos ?? []), ...(op.erroAcao?.campos ?? [])];
+    const destino = campos.map(c => ABA_DO_CAMPO[c]).find(Boolean)
+      ?? (op.erroDia ? 'financeiro' : undefined);
+    if (destino) setAba(destino);
+  }, [erroSalvar, op.erroAcao, op.erroDia]);
 
   const [showIncluirGestor, setShowIncluirGestor] = useState(false);
   const [enviandoGestor,    setEnviandoGestor]    = useState(false);
@@ -214,15 +261,31 @@ export default function CadastroEmpresa() {
     if (nums.length !== 8) return;
     setBuscandoCep(true);
     try {
-      const res = await fetch(`https://viacep.com.br/ws/${nums}/json/`);
-      const data = await res.json();
-      if (!data.erro) {
+      // ViaCEP; se não responder, BrasilAPI (mesmo contrato de campos úteis).
+      let end: { logradouro: string; bairro: string; cidade: string; estado: string } | null = null;
+      try {
+        const res = await fetch(`https://viacep.com.br/ws/${nums}/json/`);
+        const data = await res.json();
+        if (!data.erro) end = { logradouro: data.logradouro, bairro: data.bairro, cidade: data.localidade, estado: data.uf };
+      } catch { /* tenta o plano B */ }
+      if (!end) {
+        try {
+          const res = await fetch(`https://brasilapi.com.br/api/cep/v1/${nums}`);
+          if (res.ok) {
+            const data = await res.json();
+            end = { logradouro: data.street, bairro: data.neighborhood, cidade: data.city, estado: data.state };
+          }
+        } catch { /* silencioso */ }
+      }
+      if (end) {
+        const e = end;
+        // `||`: campo vazio devolvido pela API (CEP geral de cidade) não apaga o que há.
         setForm(f => ({
           ...f,
-          endereco: data.logradouro ?? f.endereco,
-          bairro:   data.bairro     ?? f.bairro,
-          cidade:   data.localidade ?? f.cidade,
-          estado:   data.uf         ?? f.estado,
+          endereco: e.logradouro || f.endereco,
+          bairro:   e.bairro     || f.bairro,
+          cidade:   e.cidade     || f.cidade,
+          estado:   (e.estado    || f.estado).toUpperCase(),
         }));
       }
     } catch { /* silencioso */ }
@@ -290,8 +353,10 @@ export default function CadastroEmpresa() {
       const d = res.data.dados as CadastroEmpresaDados;
       setDados(d);
       setForm({
-        nome:              d.nome ?? '',
-        razaoSocial:       d.razaoSocial       ?? '',
+        // Empresa sem documento ainda não foi preenchida pelo gestor: o nome que ela traz é o
+        // provisório ("Empresa de X") gerado na criação do gestor — o campo abre vazio.
+        nome:              d.documento ? (d.nome ?? '') : '',
+        razaoSocial:      d.razaoSocial       ?? '',
         nomeFantasia:      d.nomeFantasia      ?? '',
         documento:         d.documento ? mascaraDocumento(d.documento) : '',
         inscricaoEstadual: d.inscricaoEstadual ?? '',
@@ -390,12 +455,8 @@ export default function CadastroEmpresa() {
       // Sidebar continua mostrando "Funcionalidades bloqueadas" e o ProtectedRoute
       // continua redirecionando para cá até um F5 manual.
       await refreshSelectedAnimal();
-      if (completandoPrimeiroAcesso) {
-        // MESMO destino do login (`Login.tsx`): o gestor que acaba de completar o
-        // cadastro está entrando no sistema pela primeira vez.
-        // 🔴 Era `/painel-principal` até 2026-09-19.
-        navigate('/mapa-atendimento');
-      }
+      // Permanece na tela de empresa após salvar (a pedido, 2026-10-03) — antes o
+      // primeiro acesso do gestor era levado a `/mapa-atendimento`.
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { mensagem?: string } } })?.response?.data?.mensagem;
       setErroSalvar({ mensagem: msg ?? 'Erro ao salvar o cadastro.' });
@@ -520,6 +581,26 @@ export default function CadastroEmpresa() {
           Carregando dados...
         </div>
       ) : (
+        <>
+          {/* ── Abas (2026-10-03) — só LAYOUT: o estado, as validações e os dois
+              endpoints (PUT /empresas/cadastro + PUT /equipes/configuracoes) são os
+              mesmos, e o Salvar fica FORA das abas, gravando tudo de uma vez.
+              ⚠️ Erro de validação num campo de outra aba LEVA para ela (ver
+              ABA_DO_CAMPO) — senão o Salvar recusaria por um campo invisível. */}
+          <div className="flex gap-1 mb-4 overflow-x-auto pb-1">
+            {ABAS.map(t => (
+              <button key={t.key} type="button" onClick={() => setAba(t.key)}
+                className={`relative flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold whitespace-nowrap transition-colors ${
+                  aba === t.key ? 'bg-emerald-700 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-emerald-300'
+                }`}>
+                <t.icone size={14} />{t.label}
+                {abasComErro.has(t.key) && (
+                  <span className="w-2 h-2 rounded-full bg-red-500" aria-label="Campo com erro nesta aba" />
+                )}
+              </button>
+            ))}
+          </div>
+
         <div className="bg-white shadow rounded-3xl p-5 sm:p-8">
           <div className="space-y-5">
 
@@ -535,521 +616,657 @@ export default function CadastroEmpresa() {
               </div>
             )}
 
-            {/* ── Logotipo ────────────────────────────────────────────────────── */}
-            <div className="flex flex-col items-center gap-3">
-              <label className={podeEditar ? 'cursor-pointer group' : ''}>
-                <div className="w-32 h-32 rounded-3xl border-4 border-emerald-600 overflow-hidden bg-gray-50 shadow-inner transition-all group-hover:scale-105 flex items-center justify-center">
-                  {op.logoPreview
-                    ? <img src={op.logoPreview} alt="Logotipo da empresa" className="w-full h-full object-contain" />
-                    : <div className="flex flex-col items-center gap-1 text-emerald-500 p-3">
-                        <Camera size={28} />
-                        <span className="text-xs font-medium text-gray-400 text-center leading-tight">Adicionar logotipo</span>
-                      </div>
-                  }
-                </div>
-                {podeEditar && <input type="file" accept="image/*" className="hidden" onChange={op.handleLogoChange} />}
-              </label>
-              {podeEditar && op.logoPreview && (
-                <button type="button" onClick={op.handleRemoverLogo}
-                  className="text-xs text-gray-400 hover:text-red-500 underline transition-colors">
-                  Remover logotipo
-                </button>
-              )}
-            </div>
-
-            {/* ── Identificação ──────────────────────────────────────────────── */}
-            <div className="pt-2 border-t border-gray-100">
-              <p className="text-sm font-semibold text-gray-600 mb-4">Identificação</p>
-              <div className="space-y-4 sm:space-y-6">
-                {/* CNPJ/CPF, Nome da Empresa e Nome Fantasia na MESMA linha. Sem CNPJ
-                    (documento é CPF), Nome Fantasia não se aplica e some — Nome da
-                    Empresa toma o espaço dela para a linha continuar cheia. */}
-                <div className="grid grid-cols-1 sm:grid-cols-6 gap-4 sm:gap-6">
-                  <Campo label="CNPJ / CPF *" className="sm:col-span-2">
-                    <div className="relative">
-                      <input className={classeErro(erroSalvar, 'documento', INPUT)} disabled={!podeEditar} value={form.documento} placeholder="00.000.000/0000-00"
-                        onChange={e => handleDocumentoChange(e.target.value)} />
-                      {buscandoCnpj && <Loader2 size={14} className="animate-spin text-emerald-600 absolute right-3 top-1/2 -translate-y-1/2" />}
+            {/* ══ ABA: Configurações de Empresa ══════════════════════════════ */}
+            {aba === 'empresa' && (
+              <>
+                {/* ── Logotipo ────────────────────────────────────────────────────── */}
+                <div className="flex flex-col items-center gap-3">
+                  <label className={podeEditar ? 'cursor-pointer group' : ''}>
+                    <div className="w-32 h-32 rounded-3xl border-4 border-emerald-600 overflow-hidden bg-gray-50 shadow-inner transition-all group-hover:scale-105 flex items-center justify-center">
+                      {op.logoPreview
+                        ? <img src={op.logoPreview} alt="Logotipo da empresa" className="w-full h-full object-contain" />
+                        : <div className="flex flex-col items-center gap-1 text-emerald-500 p-3">
+                            <Camera size={28} />
+                            <span className="text-xs font-medium text-gray-400 text-center leading-tight">Adicionar logotipo</span>
+                          </div>
+                      }
                     </div>
-                  </Campo>
-                  <Campo label="Nome da Empresa *" className={ehCnpj ? 'sm:col-span-2' : 'sm:col-span-4'}>
-                    <input className={classeErro(erroSalvar, 'nome', INPUT)} disabled={!podeEditar} value={form.nome} onChange={e => set('nome', e.target.value)} />
-                  </Campo>
-                  {ehCnpj && (
-                    <Campo label="Nome Fantasia" className="sm:col-span-2">
-                      <input className={INPUT} disabled={!podeEditar} value={form.nomeFantasia} onChange={e => set('nomeFantasia', e.target.value)} />
-                    </Campo>
+                    {podeEditar && <input type="file" accept="image/*" className="hidden" onChange={op.handleLogoChange} />}
+                  </label>
+                  {podeEditar && op.logoPreview && (
+                    <button type="button" onClick={op.handleRemoverLogo}
+                      className="text-xs text-gray-400 hover:text-red-500 underline transition-colors">
+                      Remover logotipo
+                    </button>
                   )}
                 </div>
 
-                {ehCnpj && (
-                  <div className="grid grid-cols-1 sm:grid-cols-6 gap-4 sm:gap-6">
-                    <Campo label="Razão Social *" className="sm:col-span-4">
-                      <input className={classeErro(erroSalvar, 'razaoSocial', INPUT)} disabled={!podeEditar} value={form.razaoSocial} onChange={e => set('razaoSocial', e.target.value)} />
-                    </Campo>
-                    <Campo label="Inscrição Estadual" className="sm:col-span-2">
-                      <input className={INPUT} disabled={!podeEditar} value={form.inscricaoEstadual} onChange={e => set('inscricaoEstadual', e.target.value)} />
-                    </Campo>
-                    {/* Registro do ESTABELECIMENTO no CRMV — vai para o timbre de todo
-                        documento da Central (2026-09-08). Não é o CRMV de quem assina,
-                        que é do profissional e fica no Cadastro Pessoal dele.
-                        Opcional: em branco, a linha simplesmente não é impressa. */}
-                    <Campo label="Registro no CRMV" className="sm:col-span-2">
-                      <input className={INPUT} disabled={!podeEditar} value={form.crmv}
-                        onChange={e => set('crmv', e.target.value)} placeholder="CRMV-SP PJ 1234" />
-                    </Campo>
-                  </div>
-                )}
-
-                {/* E-mail, Telefone, WhatsApp, Status e o botão único de conectar/
-                    desconectar — TUDO na mesma linha, SEMPRE (nunca quebra: `flex-nowrap`
-                    + `overflow-x-auto` — se a tela for estreita demais para os 5 itens,
-                    a linha rola na horizontal em vez do botão cair para baixo). Telefone
-                    e WhatsApp têm largura FIXA (16 caracteres + só o padding que o input
-                    já usa, sem folga extra); o E-mail é quem absorve o espaço sobrando. */}
-                <div className="flex flex-nowrap items-end gap-4 sm:gap-6 overflow-x-auto pb-1">
-                  <Campo label="E-mail de Contato" className="flex-1 min-w-[260px]">
-                    <input className={INPUT} disabled={!podeEditar} type="email" value={form.emailContato} onChange={e => set('emailContato', e.target.value)} />
-                  </Campo>
-
-                  <Campo label="Telefone *" className="w-[162px] flex-shrink-0">
-                    <input className={classeErro(erroSalvar, 'telefone', INPUT)} disabled={!podeEditar} value={form.telefone} placeholder="(11) 3333-4444"
-                      onChange={e => set('telefone', mascaraTelefone(e.target.value))} />
-                  </Campo>
-
-                  {/* WhatsApp + Status + Botão formam um GRUPO à parte, com espaçamento
-                      MENOR entre si (gap-2) do que o resto da linha (gap-4/6) — são
-                      peças de uma mesma ação, não campos independentes. */}
-                  <div className="flex items-end gap-2 flex-shrink-0">
-                    {/* WhatsApp da empresa — só o número aqui; status e botão são itens
-                        PRÓPRIOS do grupo, a seguir. */}
-                    <Campo label="WhatsApp da Empresa" className="w-[162px] flex-shrink-0">
-                      <div className="relative">
-                        <MessageCircle size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-emerald-500 pointer-events-none" />
-                        <input
-                          type="tel"
-                          inputMode="numeric"
-                          disabled={!podeEditar}
-                          value={op.whatsapp}
-                          onChange={e => op.setWhatsapp(maskWhatsapp(e.target.value))}
-                          placeholder="(11) 98765-4321"
-                          className={`${classeErro(op.erroAcao, 'whatsapp', INPUT)} pl-10 pr-2`}
-                        />
-                      </div>
-                    </Campo>
-
-                    {/* Status da conexão (Evolution API) — sem rótulo (a cor já diz
-                        tudo); a luz pisca "de dentro para fora, como uma onda" — anel
-                        que se expande e desaparece por cima do ponto sólido, repetindo. */}
-                    <div className="h-[42px] flex items-center justify-center flex-shrink-0">
-                      <span className="relative inline-flex w-2.5 h-2.5" role="status" title={waDotTitulo} aria-label={waDotTitulo}>
-                        {waPulsa && (
-                          <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping ${waCorCls}`} />
-                        )}
-                        <span className={`relative inline-flex w-2.5 h-2.5 rounded-full ${waCorCls}`} />
-                      </span>
+                {/* ── Identificação ──────────────────────────────────────────────── */}
+                <div className="pt-2 border-t border-gray-100">
+                  <p className="text-sm font-semibold text-gray-600 mb-4">Identificação</p>
+                  <div className="space-y-4 sm:space-y-6">
+                    {/* CNPJ/CPF, Nome da Empresa e Nome Fantasia na MESMA linha. Sem CNPJ
+                        (documento é CPF), Nome Fantasia não se aplica e some — Nome da
+                        Empresa toma o espaço dela para a linha continuar cheia. */}
+                    <div className="grid grid-cols-1 sm:grid-cols-6 gap-4 sm:gap-6">
+                      <Campo label="CNPJ / CPF *" className="sm:col-span-2">
+                        <div className="relative">
+                          <input className={classeErro(erroSalvar, 'documento', INPUT)} disabled={!podeEditar} value={form.documento} placeholder="00.000.000/0000-00"
+                            onChange={e => handleDocumentoChange(e.target.value)} />
+                          {buscandoCnpj && <Loader2 size={14} className="animate-spin text-emerald-600 absolute right-3 top-1/2 -translate-y-1/2" />}
+                        </div>
+                      </Campo>
+                      <Campo label="Nome da Empresa *" className={ehCnpj ? 'sm:col-span-2' : 'sm:col-span-4'}>
+                        <input className={classeErro(erroSalvar, 'nome', INPUT)} disabled={!podeEditar} value={form.nome} onChange={e => set('nome', e.target.value)} />
+                      </Campo>
+                      {ehCnpj && (
+                        <Campo label="Nome Fantasia" className="sm:col-span-2">
+                          <input className={INPUT} disabled={!podeEditar} value={form.nomeFantasia} onChange={e => set('nomeFantasia', e.target.value)} />
+                        </Campo>
+                      )}
                     </div>
 
-                    {/* Botão ÚNICO: conecta ou desconecta, conforme o estado atual. Largura
-                        FIXA (independente do rótulo mudar de "Conectar" para
-                        "Desconectar") e conteúdo CENTRALIZADO — vira uma caixa igual às
-                        demais da linha, não um botão "solto" do tamanho do texto. */}
-                    {podeEditar && (
-                      <div className="w-36 flex-shrink-0">
-                        <label className="block text-sm font-medium text-gray-700 mb-1 invisible">Ação</label>
-                        <button
-                          type="button"
-                          onClick={op.handleWaToggle}
-                          disabled={op.waAcao || !op.waDisponivel || waAguardando}
-                          title={waConectado ? 'Desconectar WhatsApp' : 'Conectar WhatsApp'}
-                          className={`w-full h-[42px] flex items-center justify-center gap-1.5 px-3 rounded-2xl text-xs font-semibold whitespace-nowrap transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                            waConectado
-                              ? 'border border-red-200 text-red-600 hover:bg-red-50'
-                              : 'bg-emerald-700 hover:bg-emerald-800 text-white'
-                          }`}
-                        >
-                          {op.waAcao || waAguardando
-                            ? <Loader2 size={12} className="animate-spin" />
-                            : waConectado ? <Power size={12} /> : <QrCode size={12} />}
-                          {waAguardando ? 'Aguardando leitura…' : waConectado ? 'Desconectar' : 'Conectar'}
-                        </button>
+                    {ehCnpj && (
+                      <div className="grid grid-cols-1 sm:grid-cols-6 gap-4 sm:gap-6">
+                        <Campo label="Razão Social *" className="sm:col-span-4">
+                          <input className={classeErro(erroSalvar, 'razaoSocial', INPUT)} disabled={!podeEditar} value={form.razaoSocial} onChange={e => set('razaoSocial', e.target.value)} />
+                        </Campo>
+                        <Campo label="Inscrição Estadual" className="sm:col-span-2">
+                          <input className={INPUT} disabled={!podeEditar} value={form.inscricaoEstadual} onChange={e => set('inscricaoEstadual', e.target.value)} />
+                        </Campo>
+                        {/* Registro do ESTABELECIMENTO no CRMV — vai para o timbre de todo
+                            documento da Central (2026-09-08). Não é o CRMV de quem assina,
+                            que é do profissional e fica no Cadastro Pessoal dele.
+                            Opcional: em branco, a linha simplesmente não é impressa. */}
+                        <Campo label="Registro no CRMV" className="sm:col-span-2">
+                          <input className={INPUT} disabled={!podeEditar} value={form.crmv}
+                            onChange={e => set('crmv', e.target.value)} placeholder="CRMV-SP PJ 1234" />
+                        </Campo>
+                      </div>
+                    )}
+
+                    {/* E-mail, Telefone, WhatsApp, Status e o botão único de conectar/
+                        desconectar — TUDO na mesma linha, SEMPRE (nunca quebra: `flex-nowrap`
+                        + `overflow-x-auto` — se a tela for estreita demais para os 5 itens,
+                        a linha rola na horizontal em vez do botão cair para baixo). Telefone
+                        e WhatsApp têm largura FIXA (16 caracteres + só o padding que o input
+                        já usa, sem folga extra); o E-mail é quem absorve o espaço sobrando. */}
+                    <div className="flex flex-nowrap items-end gap-4 sm:gap-6 overflow-x-auto pb-1">
+                      <Campo label="E-mail de Contato" className="flex-1 min-w-[260px]">
+                        <input className={INPUT} disabled={!podeEditar} type="email" value={form.emailContato} onChange={e => set('emailContato', e.target.value)} />
+                      </Campo>
+
+                      <Campo label="Telefone *" className="w-[162px] flex-shrink-0">
+                        <input className={classeErro(erroSalvar, 'telefone', INPUT)} disabled={!podeEditar} value={form.telefone} placeholder="(11) 3333-4444"
+                          onChange={e => set('telefone', mascaraTelefone(e.target.value))} />
+                      </Campo>
+
+                      {/* WhatsApp + Status + Botão formam um GRUPO à parte, com espaçamento
+                          MENOR entre si (gap-2) do que o resto da linha (gap-4/6) — são
+                          peças de uma mesma ação, não campos independentes. */}
+                      <div className="flex items-end gap-2 flex-shrink-0">
+                        {/* WhatsApp da empresa — só o número aqui; status e botão são itens
+                            PRÓPRIOS do grupo, a seguir. */}
+                        <Campo label="WhatsApp da Empresa" className="w-[162px] flex-shrink-0">
+                          <div className="relative">
+                            <MessageCircle size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-emerald-500 pointer-events-none" />
+                            <input
+                              type="tel"
+                              inputMode="numeric"
+                              disabled={!podeEditar}
+                              value={op.whatsapp}
+                              onChange={e => op.setWhatsapp(maskWhatsapp(e.target.value))}
+                              placeholder="(11) 98765-4321"
+                              className={`${classeErro(op.erroAcao, 'whatsapp', INPUT)} pl-10 pr-2`}
+                            />
+                          </div>
+                        </Campo>
+
+                        {/* Status da conexão (Evolution API) — sem rótulo (a cor já diz
+                            tudo); a luz pisca "de dentro para fora, como uma onda" — anel
+                            que se expande e desaparece por cima do ponto sólido, repetindo. */}
+                        <div className="h-[42px] flex items-center justify-center flex-shrink-0">
+                          <span className="relative inline-flex w-2.5 h-2.5" role="status" title={waDotTitulo} aria-label={waDotTitulo}>
+                            {waPulsa && (
+                              <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping ${waCorCls}`} />
+                            )}
+                            <span className={`relative inline-flex w-2.5 h-2.5 rounded-full ${waCorCls}`} />
+                          </span>
+                        </div>
+
+                        {/* Botão ÚNICO: conecta ou desconecta, conforme o estado atual. Largura
+                            FIXA (independente do rótulo mudar de "Conectar" para
+                            "Desconectar") e conteúdo CENTRALIZADO — vira uma caixa igual às
+                            demais da linha, não um botão "solto" do tamanho do texto. */}
+                        {podeEditar && (
+                          <div className="w-36 flex-shrink-0">
+                            <label className="block text-sm font-medium text-gray-700 mb-1 invisible">Ação</label>
+                            <button
+                              type="button"
+                              onClick={op.handleWaToggle}
+                              disabled={op.waAcao || !op.waDisponivel || waAguardando}
+                              title={waConectado ? 'Desconectar WhatsApp' : 'Conectar WhatsApp'}
+                              className={`w-full h-[42px] flex items-center justify-center gap-1.5 px-3 rounded-2xl text-xs font-semibold whitespace-nowrap transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                                waConectado
+                                  ? 'border border-red-200 text-red-600 hover:bg-red-50'
+                                  : 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                              }`}
+                            >
+                              {op.waAcao || waAguardando
+                                ? <Loader2 size={12} className="animate-spin" />
+                                : waConectado ? <Power size={12} /> : <QrCode size={12} />}
+                              {waAguardando ? 'Aguardando leitura…' : waConectado ? 'Desconectar' : 'Conectar'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Serviço fora do ar: a luz vermelha sozinha não diz POR QUE, e o
+                        título do ponto só aparece no hover (some no celular). Como o
+                        sintoma relatado foi exatamente "a tela diz que está conectado",
+                        o estado precisa estar ESCRITO. Só quando não há erro de ação —
+                        senão apareceriam duas mensagens dizendo a mesma coisa. */}
+                    {waForaDoAr && !op.erroAcao && (
+                      <p className="mt-2 text-xs text-red-600">Serviço de WhatsApp fora do ar</p>
+                    )}
+
+                    {/* Erro da AÇÃO (conectar/desconectar) logo abaixo da linha que a
+                        disparou (§6 do CLAUDE.md) — antes só aparecia lá embaixo, perto do
+                        Salvar, e uma falha aqui parecia "não fez nada". */}
+                    <ErroAcao erro={op.erroAcao} />
+
+                    {!op.waDisponivel && (
+                      <p className="text-[11px] text-amber-600">
+                        Integração de WhatsApp não configurada no servidor — contate o administrador do sistema.
+                      </p>
+                    )}
+                    {op.waQr && (
+                      <div className="flex flex-col items-center gap-2 border border-gray-200 rounded-2xl p-4">
+                        <img
+                          src={op.waQr.startsWith('data:') ? op.waQr : `data:image/png;base64,${op.waQr}`}
+                          alt="QR Code do WhatsApp"
+                          className="w-52 h-52 rounded-xl border border-gray-200"
+                        />
+                        <p className="text-xs text-gray-500 text-center">
+                          Abra o WhatsApp no celular da clínica → <b>Aparelhos conectados</b> → <b>Conectar aparelho</b> e leia o código.
+                        </p>
                       </div>
                     )}
                   </div>
                 </div>
 
-                {/* Serviço fora do ar: a luz vermelha sozinha não diz POR QUE, e o
-                    título do ponto só aparece no hover (some no celular). Como o
-                    sintoma relatado foi exatamente "a tela diz que está conectado",
-                    o estado precisa estar ESCRITO. Só quando não há erro de ação —
-                    senão apareceriam duas mensagens dizendo a mesma coisa. */}
-                {waForaDoAr && !op.erroAcao && (
-                  <p className="mt-2 text-xs text-red-600">Serviço de WhatsApp fora do ar</p>
-                )}
+                {/* ── Endereço da empresa ────────────────────────────────────────── */}
+                <div className="pt-2 border-t border-gray-100">
+                  <p className="text-sm font-semibold text-gray-600 mb-4">Endereço da Empresa</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-6 gap-4 sm:gap-6">
+                    <Campo label="CEP *" className="sm:col-span-2">
+                      <div className="relative">
+                        <input className={classeErro(erroSalvar, 'cep', INPUT)} disabled={!podeEditar} value={form.cep} placeholder="00000-000"
+                          onChange={e => handleCepChange(e.target.value)} />
+                        {buscandoCep && <Loader2 size={14} className="animate-spin text-emerald-600 absolute right-3 top-1/2 -translate-y-1/2" />}
+                      </div>
+                    </Campo>
+                    <Campo label="Logradouro *" className="sm:col-span-3">
+                      <input className={classeErro(erroSalvar, 'endereco', INPUT)} disabled={!podeEditar} value={form.endereco} onChange={e => set('endereco', e.target.value)} />
+                    </Campo>
+                    <Campo label="Número" className="sm:col-span-1">
+                      <input className={INPUT} disabled={!podeEditar} value={form.numero} onChange={e => set('numero', e.target.value)} />
+                    </Campo>
+                    <Campo label="Complemento" className="sm:col-span-2">
+                      <input className={INPUT} disabled={!podeEditar} value={form.complemento} onChange={e => set('complemento', e.target.value)} />
+                    </Campo>
+                    <Campo label="Bairro *" className="sm:col-span-2">
+                      <input className={classeErro(erroSalvar, 'bairro', INPUT)} disabled={!podeEditar} value={form.bairro} onChange={e => set('bairro', e.target.value)} />
+                    </Campo>
+                    <Campo label="Cidade *" className="sm:col-span-1">
+                      <input className={classeErro(erroSalvar, 'cidade', INPUT)} disabled={!podeEditar} value={form.cidade} onChange={e => set('cidade', e.target.value)} />
+                    </Campo>
+                    <Campo label="UF *" className="sm:col-span-1">
+                      <input className={classeErro(erroSalvar, 'estado', INPUT)} disabled={!podeEditar} maxLength={2} value={form.estado}
+                        onChange={e => set('estado', e.target.value.toUpperCase())} />
+                    </Campo>
+                  </div>
+                </div>
 
-                {/* Erro da AÇÃO (conectar/desconectar) logo abaixo da linha que a
-                    disparou (§6 do CLAUDE.md) — antes só aparecia lá embaixo, perto do
-                    Salvar, e uma falha aqui parecia "não fez nada". */}
-                <ErroAcao erro={op.erroAcao} />
-
-                {!op.waDisponivel && (
-                  <p className="text-[11px] text-amber-600">
-                    Integração de WhatsApp não configurada no servidor — contate o administrador do sistema.
+                {/* ── Gestor Responsável e Tipo de Plano — nome/telefone/e-mail do cadastro
+                    feito pelo Admin (leitura) + o plano contratado (leitura; trocar de
+                    plano é ato comercial, do ADMIN) ── */}
+                <div className="pt-2 border-t border-gray-100">
+                  <p className="text-sm font-semibold text-gray-600 mb-3 flex items-center gap-1.5">
+                    <Users2 size={14} className="text-gray-400" /> Gestor Responsável e Tipo de Plano
                   </p>
-                )}
-                {op.waQr && (
-                  <div className="flex flex-col items-center gap-2 border border-gray-200 rounded-2xl p-4">
-                    <img
-                      src={op.waQr.startsWith('data:') ? op.waQr : `data:image/png;base64,${op.waQr}`}
-                      alt="QR Code do WhatsApp"
-                      className="w-52 h-52 rounded-xl border border-gray-200"
-                    />
-                    <p className="text-xs text-gray-500 text-center">
-                      Abra o WhatsApp no celular da clínica → <b>Aparelhos conectados</b> → <b>Conectar aparelho</b> e leia o código.
-                    </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+                    <Leitura label="Nome" valor={dados?.gestorResponsavel?.fullName ?? '—'} />
+                    <Leitura label="Telefone" valor={dados?.gestorResponsavel?.phone ?? '—'} />
+                    <Leitura label="E-mail" valor={dados?.gestorResponsavel?.email ?? '—'} />
+                    {dados?.plano ? (
+                      <>
+                        <Leitura label="Plano" valor={dados.plano.nome} />
+                        <Leitura label="Valor" valor={<>{moedaBR(dados.plano.valor)}{dados.plano.valor != null && <span className="text-gray-400 font-normal"> /mês</span>}</>} />
+                        <Leitura label="Situação" valor={dados.plano.status} />
+                        <Leitura label="Usuários com acesso" valor={`${uso?.ocupados ?? 0}${uso?.ilimitado ? ' (sem limite)' : ` de ${uso?.limite}`}`} />
+                        {!uso?.ilimitado && (
+                          <Leitura label="Disponíveis" valor={uso?.disponiveis} tone={uso?.disponiveis === 0 ? 'text-red-600' : 'text-emerald-700'} />
+                        )}
+                      </>
+                    ) : (
+                      /* Empresa sem assinatura é ILIMITADA por decisão (lib/planoEmpresa.js) —
+                         e o gestor precisa ver isso, não um espaço em branco. */
+                      <Leitura
+                        label="Plano"
+                        tone="text-gray-500"
+                        valor={<>Nenhum plano atribuído — sem limite.<span className="text-gray-400 font-normal"> {uso?.ocupados ?? 0} com acesso hoje.</span></>}
+                      />
+                    )}
                   </div>
-                )}
-              </div>
-            </div>
+                </div>
 
-            {/* ── Dados de recebimento (a pedido, 2026-09-08) ─────────────────────
-                Impressos no rodapé da FATURA. Até aqui o cliente recebia o documento
-                e não tinha para onde pagar.
-                ⚠️ Todos OPCIONAIS: o que ficar em branco simplesmente não é impresso
-                (regra do campo vazio). Sem nenhum, a fatura não ganha faixa vazia. */}
-            <div className="pt-2 border-t border-gray-100">
-              <p className="text-sm font-semibold text-gray-600 mb-1">Dados para Recebimento</p>
-              <p className="text-xs text-gray-400 mb-4">Impressos na fatura enviada ao cliente.</p>
-              <div className="grid grid-cols-1 sm:grid-cols-6 gap-4 sm:gap-6">
-                <Campo label="Chave PIX" className="sm:col-span-3">
-                  {/* ⚠️ Sem máscara: a chave pode ser CPF, CNPJ, e-mail, telefone ou
-                      aleatória — normalizar quebraria as duas últimas. */}
-                  <input className={INPUT} disabled={!podeEditar} value={form.pixChave}
-                    onChange={e => set('pixChave', e.target.value)}
-                    placeholder="CPF/CNPJ, e-mail, telefone ou chave aleatória" />
-                </Campo>
-                <Campo label="Recebedor do PIX" className="sm:col-span-3">
-                  {/* Separado da razão social de propósito: a conta pode estar no nome
-                      do sócio, e imprimir outro nome faria o cliente desconfiar. */}
-                  <input className={INPUT} disabled={!podeEditar} value={form.pixRecebedor}
-                    onChange={e => set('pixRecebedor', e.target.value)} placeholder="Nome do titular da conta" />
-                </Campo>
-                <Campo label="Banco" className="sm:col-span-2">
-                  <input className={INPUT} disabled={!podeEditar} value={form.banco}
-                    onChange={e => set('banco', e.target.value)} placeholder="Ex.: 341 - Itaú" />
-                </Campo>
-                <Campo label="Agência" className="sm:col-span-2">
-                  <input className={INPUT} disabled={!podeEditar} value={form.agencia}
-                    onChange={e => set('agencia', e.target.value)} placeholder="0000" />
-                </Campo>
-                <Campo label="Conta Corrente" className="sm:col-span-2">
-                  <input className={INPUT} disabled={!podeEditar} value={form.contaCorrente}
-                    onChange={e => set('contaCorrente', e.target.value)} placeholder="00000-0" />
-                </Campo>
-              </div>
-            </div>
-
-            {/* ── Endereço da empresa ────────────────────────────────────────── */}
-            <div className="pt-2 border-t border-gray-100">
-              <p className="text-sm font-semibold text-gray-600 mb-4">Endereço da Empresa</p>
-              <div className="grid grid-cols-1 sm:grid-cols-6 gap-4 sm:gap-6">
-                <Campo label="CEP *" className="sm:col-span-2">
-                  <div className="relative">
-                    <input className={classeErro(erroSalvar, 'cep', INPUT)} disabled={!podeEditar} value={form.cep} placeholder="00000-000"
-                      onChange={e => handleCepChange(e.target.value)} />
-                    {buscandoCep && <Loader2 size={14} className="animate-spin text-emerald-600 absolute right-3 top-1/2 -translate-y-1/2" />}
+                {/* ── Outros gestores ────────────────────────────────────────────── */}
+                <div className="pt-2 border-t border-gray-100">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <p className="text-sm font-semibold text-gray-600">Outros Gestores</p>
+                    {podeEditar && (
+                      <button type="button" onClick={() => setShowIncluirGestor(true)}
+                        className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-800">
+                        <UserPlus size={14} /> Incluir gestor
+                      </button>
+                    )}
                   </div>
-                </Campo>
-                <Campo label="Logradouro *" className="sm:col-span-3">
-                  <input className={classeErro(erroSalvar, 'endereco', INPUT)} disabled={!podeEditar} value={form.endereco} onChange={e => set('endereco', e.target.value)} />
-                </Campo>
-                <Campo label="Número" className="sm:col-span-1">
-                  <input className={INPUT} disabled={!podeEditar} value={form.numero} onChange={e => set('numero', e.target.value)} />
-                </Campo>
-                <Campo label="Complemento" className="sm:col-span-2">
-                  <input className={INPUT} disabled={!podeEditar} value={form.complemento} onChange={e => set('complemento', e.target.value)} />
-                </Campo>
-                <Campo label="Bairro *" className="sm:col-span-2">
-                  <input className={classeErro(erroSalvar, 'bairro', INPUT)} disabled={!podeEditar} value={form.bairro} onChange={e => set('bairro', e.target.value)} />
-                </Campo>
-                <Campo label="Cidade *" className="sm:col-span-1">
-                  <input className={classeErro(erroSalvar, 'cidade', INPUT)} disabled={!podeEditar} value={form.cidade} onChange={e => set('cidade', e.target.value)} />
-                </Campo>
-                <Campo label="UF *" className="sm:col-span-1">
-                  <input className={classeErro(erroSalvar, 'estado', INPUT)} disabled={!podeEditar} maxLength={2} value={form.estado}
-                    onChange={e => set('estado', e.target.value.toUpperCase())} />
-                </Campo>
-              </div>
-            </div>
+                  {(dados?.gestores?.length ?? 0) === 0 ? (
+                    <p className="text-sm text-gray-500">Nenhum gestor cadastrado.</p>
+                  ) : (
+                    <>
+                      {/* Desktop — grid em 4 colunas */}
+                      <div className="hidden md:block overflow-x-auto">
+                        <table className="w-full">
+                          <thead>
+                            <tr className="border-b border-gray-100">
+                              <th className="py-2 pr-3 text-left text-xs font-semibold text-gray-500">Nome</th>
+                              <th className="py-2 px-3 text-left text-xs font-semibold text-gray-500">E-mail</th>
+                              <th className="py-2 px-3 text-left text-xs font-semibold text-gray-500">Telefone</th>
+                              <th className="py-2 pl-3 text-left text-xs font-semibold text-gray-500">Data Inclusão</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-50">
+                            {dados!.gestores.map(g => (
+                              <tr key={g.id}>
+                                <td className="py-2.5 pr-3">
+                                  <span className="text-sm text-gray-900">{g.fullName ?? '—'}</span>
+                                  {g.id === dados?.gestorResponsavel?.id && (
+                                    <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Responsável</span>
+                                  )}
+                                  {g.ativo === false && (
+                                    <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-600">Inativo</span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-3 text-sm text-gray-500">{g.email ?? '—'}</td>
+                                <td className="py-2.5 px-3 text-sm text-gray-500">{g.phone ?? '—'}</td>
+                                <td className="py-2.5 pl-3 text-sm text-gray-500">{formatarData(g.dataInclusao)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
 
-            {/* ── Espécies atendidas + Dias de atendimento + Horário de atendimento ──
-                Os três grupos SEMPRE na mesma linha (`flex-nowrap`, nunca quebra —
-                mesmo tratamento da linha de E-mail/Telefone/WhatsApp: se a tela for
-                estreita demais, rola na horizontal em vez de empilhar), separados só
-                por espaço (sem divisória). */}
-            <div className="pt-2 border-t border-gray-100">
-              <div className="flex flex-nowrap items-start gap-8 overflow-x-auto pb-1">
-                <div className="flex-shrink-0">
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      {/* Mobile — cards */}
+                      <div className="md:hidden space-y-2">
+                        {dados!.gestores.map(g => (
+                          <div key={g.id} className="px-3 py-2.5 rounded-xl bg-gray-50 border border-gray-100">
+                            <p className="text-sm font-semibold text-gray-800 truncate">
+                              {g.fullName ?? '—'}
+                              {g.id === dados?.gestorResponsavel?.id && (
+                                <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Responsável</span>
+                              )}
+                              {g.ativo === false && (
+                                <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-600">Inativo</span>
+                              )}
+                            </p>
+                            <p className="text-xs text-gray-500 truncate">{g.email}{g.phone ? ` · ${g.phone}` : ''}</p>
+                            <p className="text-[11px] text-gray-400 mt-0.5">Incluído em {formatarData(g.dataInclusao)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* ══ ABA: Funcionamento ══════════════════════════════════════════ */}
+            {aba === 'funcionamento' && (
+              <div className="space-y-6">
+                {/* Espécies Atendidas — card no padrão do "Como recebe a fatura *" do
+                    cadastro do proprietário (caixa com borda + opções em checkbox),
+                    com as opções CENTRALIZADAS. Mesmo estado/regra de antes. */}
+                <div className={`p-3 border rounded-xl text-center ${
+                  temErro(op.erroAcao, 'especies') ? 'border-red-300 ring-1 ring-red-300' : 'border-gray-200'
+                }`}>
+                  <p className="text-sm font-semibold text-gray-900">
                     Espécies Atendidas <span className="text-red-500">*</span>
-                  </label>
-                  <div className={`flex flex-wrap gap-2 ${temErro(op.erroAcao, 'especies') ? 'ring-1 ring-red-300 rounded-2xl p-1' : ''}`}>
+                  </p>
+                  <p className="text-xs text-gray-500 mb-2.5">
+                    Marque as espécies que a clínica atende.
+                  </p>
+                  <div className="flex flex-wrap justify-center gap-2">
                     {op.especies.map(e => {
                       const on = op.especiesAtendidas.includes(e.id);
                       return (
-                        <button key={e.id} type="button" disabled={!podeEditar}
-                          onClick={() => op.setEspeciesAtendidas(prev => on ? prev.filter(x => x !== e.id) : [...prev, e.id])}
-                          className={`px-3 py-2.5 rounded-2xl border text-sm font-medium transition-colors disabled:cursor-not-allowed ${
-                            on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'
-                          }`}>
-                          {e.nome}
-                        </button>
+                        <label key={e.id}
+                          className={`flex items-center gap-2 w-full sm:w-48 px-3 py-2 rounded-xl border transition-colors ${
+                            podeEditar ? 'cursor-pointer' : 'cursor-not-allowed'
+                          } ${on ? 'border-emerald-300 bg-emerald-50' : 'border-gray-200 hover:bg-gray-50'}`}>
+                          <input type="checkbox" checked={on} disabled={!podeEditar}
+                            onChange={() => op.setEspeciesAtendidas(prev => on ? prev.filter(x => x !== e.id) : [...prev, e.id])}
+                            className="h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 flex-shrink-0" />
+                          <span className={`text-sm font-medium ${on ? 'text-emerald-900' : 'text-gray-700'}`}>
+                            {e.nome}
+                          </span>
+                        </label>
                       );
                     })}
                   </div>
                 </div>
 
-                <div className="flex-shrink-0">
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Dias de Atendimento <span className="text-red-500">*</span>
-                  </label>
-                  <div className={`flex flex-wrap gap-1.5 ${temErro(op.erroAcao, 'dias') ? 'ring-1 ring-red-300 rounded-2xl p-1' : ''}`}>
-                    {DIAS_SEMANA.map(d => {
-                      const on = op.diasAtend.includes(d.v);
-                      return (
-                        <button key={d.v} type="button" disabled={!podeEditar}
-                          onClick={() => op.setDiasAtend(prev => on ? prev.filter(x => x !== d.v) : [...prev, d.v].sort((a, b) => a - b))}
-                          className={`px-2.5 py-2.5 rounded-2xl text-xs font-bold border transition-colors disabled:cursor-not-allowed ${
-                            on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
-                          }`}>
-                          {d.l}
-                        </button>
-                      );
-                    })}
+                {/* Dias · Abre · Fecha · Tempo de Consulta — MESMA linha no desktop (lg+);
+                    no celular e no tablet, um embaixo do outro. */}
+                <div className="flex flex-col lg:flex-row lg:items-start gap-4 lg:gap-6">
+                  <div className="flex-shrink-0">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Dias de Atendimento <span className="text-red-500">*</span>
+                    </label>
+                    <div className={`flex flex-wrap gap-1.5 ${temErro(op.erroAcao, 'dias') ? 'ring-1 ring-red-300 rounded-2xl p-1' : ''}`}>
+                      {DIAS_SEMANA.map(d => {
+                        const on = op.diasAtend.includes(d.v);
+                        return (
+                          <button key={d.v} type="button" disabled={!podeEditar}
+                            onClick={() => op.setDiasAtend(prev => on ? prev.filter(x => x !== d.v) : [...prev, d.v].sort((a, b) => a - b))}
+                            className={`px-2.5 py-2.5 rounded-2xl text-xs font-bold border transition-colors disabled:cursor-not-allowed ${
+                              on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                            }`}>
+                            {d.l}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
 
-                {/* Abre / Fecha — dois campos INDEPENDENTES, rótulo em cima da caixa
-                    (mesmo padrão de Espécies/Dias), sem o título "Horário de
-                    atendimento" agrupando os dois por cima. */}
-                <div className="flex items-start gap-2 flex-shrink-0">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-2">Abre</label>
+                  <div className="flex-shrink-0">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Abre <span className="text-red-500">*</span>
+                    </label>
                     <HoraInput value={op.horaInicio} onChange={op.setHoraInicio}
                       className={classeErro(op.erroAcao, 'horaInicio', INPUT_HORARIO)} />
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-2">Fecha</label>
+
+                  <div className="flex-shrink-0">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Fecha <span className="text-red-500">*</span>
+                    </label>
                     <HoraInput value={op.horaFim} onChange={op.setHoraFim}
                       className={classeErro(op.erroAcao, 'horaFim', INPUT_HORARIO)} />
                   </div>
-                </div>
-              </div>
-            </div>
 
-            {/* ── Operação da clínica, em DUAS linhas de três campos (2026-09-15) ──
-                Linha 1: Tempo de Consulta · Fechamento da Fatura · o campo da DATA de
-                fechamento (dia do mês ou nº do dia útil, conforme a forma escolhida).
-                Linha 2: Validade do Orçamento · Forma de Cobrança · o PERCENTUAL.
-                ⚠️ As duas colunas variáveis (data de fechamento e percentual) ocupam
-                lugar FIXO na grade em vez de nascerem embaixo do seletor: assim a linha
-                não se reorganiza quando a pessoa troca a forma, e o campo aparece onde
-                ela está olhando. */}
-            <div className="pt-2 border-t border-gray-100 space-y-4 sm:space-y-6">
-
-              {/* Linha 1 */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">
-                    Tempo de Consulta <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={op.tempoConsultaPadrao}
-                    disabled={!podeEditar}
-                    onChange={e => op.setTempoConsultaPadrao(e.target.value)}
-                    className={classeErro(op.erroAcao, 'tempoConsulta', `${INPUT} bg-white`)}
-                  >
-                    <option value="">Selecione…</option>
-                    {TEMPOS_CONSULTA.map(m => (
-                      <option key={m} value={m}>{m} min</option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-gray-400 mt-1">Padrão do sistema, se nenhum for escolhido: {TEMPO_CONSULTA_PADRAO_SISTEMA} min.</p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">
-                    Fechamento da Fatura
-                  </label>
-                  <select
-                    value={op.tipoSelecao}
-                    disabled={!podeEditar}
-                    onChange={e => { op.setTipoSelecao(e.target.value as TipoSelecao); op.setErroDia(null); }}
-                    className={`${INPUT} bg-white`}
-                  >
-                    <option value="ULTIMO_DIA_MES">Último dia do mês</option>
-                    <option value="PRIMEIRO_DIA_MES">Primeiro dia do mês</option>
-                    <option value="DIA_ESPECIFICO">Dia específico do mês</option>
-                    <option value="DIA_UTIL">Dia útil do mês</option>
-                  </select>
-                  <p className="text-xs text-gray-400 mt-1">
-                    {op.tipoSelecao === 'DIA_UTIL'
-                      ? 'Dia útil considera fins de semana e feriados nacionais.'
-                      : op.tipoSelecao === 'DIA_ESPECIFICO'
-                      ? 'O dia específico vai de 1 a 28 para existir em todos os meses do ano.'
-                      : 'Se o dia escolhido não existir no mês, a fatura fecha no último dia do mês.'}
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">
-                    Data de Fechamento
-                  </label>
-                  {op.tipoSelecao === 'DIA_ESPECIFICO' ? (
-                    <>
-                      <input
-                        type="number"
-                        min={1}
-                        max={28}
-                        disabled={!podeEditar}
-                        value={op.diaEspecifico}
-                        onChange={e => { op.setDiaEspecifico(e.target.value); op.setErroDia(null); }}
-                        placeholder="Ex: 5 (1 a 28)"
-                        className={`${INPUT} ${op.erroDia ? 'border-red-400 ring-1 ring-red-300' : ''}`}
-                      />
-                      {op.erroDia && <p className="text-xs text-red-600 mt-1">{op.erroDia}</p>}
-                    </>
-                  ) : op.tipoSelecao === 'DIA_UTIL' ? (
+                  <div className="w-full lg:w-56 lg:flex-shrink-0">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Tempo de Consulta <span className="text-red-500">*</span>
+                    </label>
                     <select
-                      value={op.nDiaUtil}
+                      value={op.tempoConsultaPadrao}
                       disabled={!podeEditar}
-                      onChange={e => op.setNDiaUtil(e.target.value)}
-                      className={`${INPUT} bg-white`}
+                      onChange={e => op.setTempoConsultaPadrao(e.target.value)}
+                      className={classeErro(op.erroAcao, 'tempoConsulta', `${INPUT} bg-white`)}
                     >
-                      {ORDINAIS.map((label, i) => (
-                        <option key={i} value={i + 1}>{label} dia útil</option>
+                      <option value="">Selecione…</option>
+                      {TEMPOS_CONSULTA.map(m => (
+                        <option key={m} value={m}>{m} min</option>
                       ))}
                     </select>
-                  ) : (
-                    /* Forma sem data a escolher: o campo fica desabilitado dizendo o que
-                       vale, em vez de sumir e reorganizar a linha inteira. */
-                    <input
-                      disabled
-                      value={op.tipoSelecao === 'PRIMEIRO_DIA_MES' ? 'Primeiro dia do mês' : 'Último dia do mês'}
-                      className={`${INPUT} bg-gray-50 text-gray-500`}
-                    />
-                  )}
-                </div>
-              </div>
-
-              {/* Linha 2 */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">
-                    Validade do Orçamento
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min={VALIDADE_ORC_MIN}
-                      max={VALIDADE_ORC_MAX}
-                      disabled={!podeEditar}
-                      value={op.validadeOrcamento}
-                      onChange={e => op.setValidadeOrcamento(e.target.value)}
-                      placeholder="Sem validade"
-                      className={classeErro(op.erroAcao, 'validadeOrcamento', inputEstreito('w-24'))}
-                    />
-                    <span className="text-sm text-gray-500">dias</span>
+                    <p className="text-xs text-gray-400 mt-1">Padrão do sistema, se nenhum for escolhido: {TEMPO_CONSULTA_PADRAO_SISTEMA} min.</p>
                   </div>
-                  <p className="text-xs text-gray-400 mt-1">
-                    Em branco, o orçamento não expira.
-                  </p>
                 </div>
 
-                {/* ── Forma de cobrança de medicamento/vacina ──────────────────
-                    Decide o preço do que SAI DO ESTOQUE na fatura do cliente. O
-                    percentual só é EDITÁVEL na forma PERCENTUAL — nas outras ele fica
-                    desabilitado, porque não seria usado (e um número parado ali,
-                    editável, passaria a impressão de que está valendo). Regra em
-                    `backend/src/lib/formaCobrancaEstoque.js`. */}
-                <div>
+                {/* ── Prescrever SEM evolução (2026-10-03) ─────────────────────────
+                    Padrão: TODA prescrição exige evolução (a vacina já não exige). O
+                    que for marcado aqui pode ser prescrito sem evolução aberta — a
+                    prescrição inteira precisa estar liberada. Regra no backend:
+                    `lib/dispensaEvolucaoPrescricao.js`. Vale só para a Prescrição. */}
+                <div className="pt-4 border-t border-gray-100">
                   <label className="block text-sm font-semibold text-gray-700 mb-1">
-                    Forma Cobrança Medicamentos/Vacina
+                    Prescrição sem Evolução
                   </label>
-                  <select
-                    value={op.formaCobranca}
+                  <p className="text-xs text-gray-500 mb-2">
+                    Selecione os procedimentos, as especialidades ou os tipos de medicamento que
+                    podem ser prescritos sem uma evolução aberta — como a vacina. O que não estiver
+                    marcado continua exigindo evolução.
+                  </p>
+                  <DispensaEvolucaoCombo
+                    value={op.dispensaEvolucao}
+                    onChange={op.setDispensaEvolucao}
                     disabled={!podeEditar}
-                    onChange={e => op.setFormaCobranca(e.target.value as FormaCobranca)}
-                    className={`${INPUT} bg-white`}
-                  >
-                    {FORMAS_COBRANCA.map(f => (
-                      <option key={f.v} value={f.v}>{f.l}</option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-gray-400 mt-1">
-                    {FORMAS_COBRANCA.find(f => f.v === op.formaCobranca)?.ajuda}
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">
-                    Percentual de Acréscimo
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min={PERC_COBRANCA_MIN}
-                      max={PERC_COBRANCA_MAX}
-                      step="0.01"
-                      disabled={!podeEditar || op.formaCobranca !== 'PERCENTUAL'}
-                      value={op.formaCobranca === 'PERCENTUAL' ? op.percentualCobranca : ''}
-                      onChange={e => op.setPercentualCobranca(e.target.value)}
-                      placeholder={op.formaCobranca === 'PERCENTUAL' ? 'Ex: 10' : '—'}
-                      className={classeErro(op.erroAcao, 'percentualCobranca',
-                        `${inputEstreito('w-24')} ${op.formaCobranca !== 'PERCENTUAL' ? 'bg-gray-50' : ''}`)}
-                    />
-                    <span className="text-sm text-gray-500">%</span>
-                  </div>
-                  <p className="text-xs text-gray-400 mt-1">
-                    {op.formaCobranca === 'PERCENTUAL'
-                      ? 'Acréscimo sobre o valor repassado do lote.'
-                      : 'Só vale na forma “Percentual”.'}
-                  </p>
+                  />
                 </div>
               </div>
+            )}
 
-              {/* ── Etapa de Execução de Prescrição (2026-09-24) ─────────────────
-                  NÃO nasce marcada. Marcada, a clínica deixa de usar o plantão: a
-                  fatura, a baixa de estoque e o pagamento do prestador saem na
-                  FINALIZAÇÃO da prescrição, da vacina e do procedimento, e o documento
-                  já nasce executado. Regra em
-                  `backend/src/lib/etapaExecucaoPrescricao.js`. */}
-              <label className={`flex items-start gap-3 rounded-xl border px-4 py-3 ${
-                op.dispensarExecucao ? 'border-emerald-200 bg-emerald-50/50' : 'border-gray-200'
-              } ${podeEditar ? 'cursor-pointer' : 'cursor-default'}`}>
-                <input
-                  type="checkbox"
-                  className="mt-0.5 h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
-                  checked={op.dispensarExecucao}
-                  disabled={!podeEditar}
-                  onChange={e => op.setDispensarExecucao(e.target.checked)}
-                />
-                <span className="min-w-0">
-                  <span className="block text-sm font-semibold text-gray-700">
-                    Não utilizar a etapa de Execução de Prescrição
-                  </span>
-                  <span className="block text-xs text-gray-500 mt-0.5">
-                    {op.dispensarExecucao
-                      ? 'O lançamento na fatura, a baixa de estoque e o pagamento do prestador são gerados ao finalizar a prescrição, a vacina ou o procedimento — sem passar pela Execução de Prescrição.'
-                      : 'Padrão: o lançamento na fatura, a baixa de estoque e o pagamento do prestador são gerados na Execução de Prescrição, a cada aplicação.'}
-                  </span>
-                  {op.dispensarExecucao && (
-                    <span className="block text-xs text-amber-700 mt-1">
-                      O que já foi finalizado antes desta opção continua aguardando a Execução de Prescrição.
+            {/* ══ ABA: Financeiro ═════════════════════════════════════════════ */}
+            {aba === 'financeiro' && (
+              <>
+                {/* ── Dados de recebimento (a pedido, 2026-09-08) ─────────────────────
+                    Impressos no rodapé da FATURA. Até aqui o cliente recebia o documento
+                    e não tinha para onde pagar.
+                    ⚠️ Todos OPCIONAIS: o que ficar em branco simplesmente não é impresso
+                    (regra do campo vazio). Sem nenhum, a fatura não ganha faixa vazia. */}
+                <div>
+                  <p className="text-sm font-semibold text-gray-600 mb-1">Dados para Recebimento</p>
+                  <p className="text-xs text-gray-400 mb-4">Impressos na fatura enviada ao cliente.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-6 gap-4 sm:gap-6">
+                    <Campo label="Chave PIX" className="sm:col-span-3">
+                      {/* ⚠️ Sem máscara: a chave pode ser CPF, CNPJ, e-mail, telefone ou
+                          aleatória — normalizar quebraria as duas últimas. */}
+                      <input className={INPUT} disabled={!podeEditar} value={form.pixChave}
+                        onChange={e => set('pixChave', e.target.value)}
+                        placeholder="CPF/CNPJ, e-mail, telefone ou chave aleatória" />
+                    </Campo>
+                    <Campo label="Recebedor do PIX" className="sm:col-span-3">
+                      {/* Separado da razão social de propósito: a conta pode estar no nome
+                          do sócio, e imprimir outro nome faria o cliente desconfiar. */}
+                      <input className={INPUT} disabled={!podeEditar} value={form.pixRecebedor}
+                        onChange={e => set('pixRecebedor', e.target.value)} placeholder="Nome do titular da conta" />
+                    </Campo>
+                    <Campo label="Banco" className="sm:col-span-2">
+                      <input className={INPUT} disabled={!podeEditar} value={form.banco}
+                        onChange={e => set('banco', e.target.value)} placeholder="Ex.: 341 - Itaú" />
+                    </Campo>
+                    <Campo label="Agência" className="sm:col-span-2">
+                      <input className={INPUT} disabled={!podeEditar} value={form.agencia}
+                        onChange={e => set('agencia', e.target.value)} placeholder="0000" />
+                    </Campo>
+                    <Campo label="Conta Corrente" className="sm:col-span-2">
+                      <input className={INPUT} disabled={!podeEditar} value={form.contaCorrente}
+                        onChange={e => set('contaCorrente', e.target.value)} placeholder="00000-0" />
+                    </Campo>
+                  </div>
+                </div>
+
+                {/* ── Dados para Fatura ── */}
+                <div className="pt-2 border-t border-gray-100 space-y-4 sm:space-y-6">
+                  <p className="text-sm font-semibold text-gray-600">Dados para Fatura</p>
+                  {/* Linha 1: Fechamento · Data de Fechamento · Validade do Orçamento */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">
+                        Fechamento da Fatura
+                      </label>
+                      <select
+                        value={op.tipoSelecao}
+                        disabled={!podeEditar}
+                        onChange={e => { op.setTipoSelecao(e.target.value as TipoSelecao); op.setErroDia(null); }}
+                        className={`${INPUT} bg-white`}
+                      >
+                        <option value="ULTIMO_DIA_MES">Último dia do mês</option>
+                        <option value="PRIMEIRO_DIA_MES">Primeiro dia do mês</option>
+                        <option value="DIA_ESPECIFICO">Dia específico do mês</option>
+                        <option value="DIA_UTIL">Dia útil do mês</option>
+                      </select>
+                      <p className="text-xs text-gray-400 mt-1">
+                        {op.tipoSelecao === 'DIA_UTIL'
+                          ? 'Dia útil considera fins de semana e feriados nacionais.'
+                          : op.tipoSelecao === 'DIA_ESPECIFICO'
+                          ? 'O dia específico vai de 1 a 28 para existir em todos os meses do ano.'
+                          : 'Se o dia escolhido não existir no mês, a fatura fecha no último dia do mês.'}
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">
+                        Data de Fechamento
+                      </label>
+                      {op.tipoSelecao === 'DIA_ESPECIFICO' ? (
+                        <>
+                          <input
+                            type="number"
+                            min={1}
+                            max={28}
+                            disabled={!podeEditar}
+                            value={op.diaEspecifico}
+                            onChange={e => { op.setDiaEspecifico(e.target.value); op.setErroDia(null); }}
+                            placeholder="Ex: 5 (1 a 28)"
+                            className={`${INPUT} ${op.erroDia ? 'border-red-400 ring-1 ring-red-300' : ''}`}
+                          />
+                          {op.erroDia && <p className="text-xs text-red-600 mt-1">{op.erroDia}</p>}
+                        </>
+                      ) : op.tipoSelecao === 'DIA_UTIL' ? (
+                        <select
+                          value={op.nDiaUtil}
+                          disabled={!podeEditar}
+                          onChange={e => op.setNDiaUtil(e.target.value)}
+                          className={`${INPUT} bg-white`}
+                        >
+                          {ORDINAIS.map((label, i) => (
+                            <option key={i} value={i + 1}>{label} dia útil</option>
+                          ))}
+                        </select>
+                      ) : (
+                        /* Forma sem data a escolher: o campo fica desabilitado dizendo o que
+                           vale, em vez de sumir e reorganizar a linha inteira. */
+                        <input
+                          disabled
+                          value={op.tipoSelecao === 'PRIMEIRO_DIA_MES' ? 'Primeiro dia do mês' : 'Último dia do mês'}
+                          className={`${INPUT} bg-gray-50 text-gray-500`}
+                        />
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">
+                        Validade do Orçamento
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min={VALIDADE_ORC_MIN}
+                          max={VALIDADE_ORC_MAX}
+                          disabled={!podeEditar}
+                          value={op.validadeOrcamento}
+                          onChange={e => op.setValidadeOrcamento(e.target.value)}
+                          placeholder="Sem validade"
+                          className={classeErro(op.erroAcao, 'validadeOrcamento', inputEstreito('w-24'))}
+                        />
+                        <span className="text-sm text-gray-500">dias</span>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Em branco, o orçamento não expira.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Linha 2: Forma de Cobrança · Percentual de Acréscimo */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
+                    {/* ── Forma de cobrança de medicamento/vacina ──────────────────
+                        Decide o preço do que SAI DO ESTOQUE na fatura do cliente. O
+                        percentual só é EDITÁVEL na forma PERCENTUAL — nas outras ele fica
+                        desabilitado, porque não seria usado (e um número parado ali,
+                        editável, passaria a impressão de que está valendo). Regra em
+                        `backend/src/lib/formaCobrancaEstoque.js`. */}
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">
+                        Forma Cobrança Medicamentos/Vacina
+                      </label>
+                      <select
+                        value={op.formaCobranca}
+                        disabled={!podeEditar}
+                        onChange={e => op.setFormaCobranca(e.target.value as FormaCobranca)}
+                        className={`${INPUT} bg-white`}
+                      >
+                        {FORMAS_COBRANCA.map(f => (
+                          <option key={f.v} value={f.v}>{f.l}</option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-gray-400 mt-1">
+                        {FORMAS_COBRANCA.find(f => f.v === op.formaCobranca)?.ajuda}
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">
+                        Percentual de Acréscimo
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min={PERC_COBRANCA_MIN}
+                          max={PERC_COBRANCA_MAX}
+                          step="0.01"
+                          disabled={!podeEditar || op.formaCobranca !== 'PERCENTUAL'}
+                          value={op.formaCobranca === 'PERCENTUAL' ? op.percentualCobranca : ''}
+                          onChange={e => op.setPercentualCobranca(e.target.value)}
+                          placeholder={op.formaCobranca === 'PERCENTUAL' ? 'Ex: 10' : '—'}
+                          className={classeErro(op.erroAcao, 'percentualCobranca',
+                            `${inputEstreito('w-24')} ${op.formaCobranca !== 'PERCENTUAL' ? 'bg-gray-50' : ''}`)}
+                        />
+                        <span className="text-sm text-gray-500">%</span>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-1">
+                        {op.formaCobranca === 'PERCENTUAL'
+                          ? 'Acréscimo sobre o valor repassado do lote.'
+                          : 'Só vale na forma “Percentual”.'}
+                      </p>
+                    </div>
+                  </div>
+
+                {/* ── Etapa de Execução de Prescrição (2026-09-24) ─────────────────
+                    NÃO nasce marcada. Marcada, a clínica deixa de usar o plantão: a
+                    fatura, a baixa de estoque e o pagamento do prestador saem na
+                    FINALIZAÇÃO da prescrição, da vacina e do procedimento, e o documento
+                    já nasce executado. Regra em
+                    `backend/src/lib/etapaExecucaoPrescricao.js`. */}
+                <label className={`flex items-start gap-3 rounded-xl border px-4 py-3 ${
+                  op.dispensarExecucao ? 'border-emerald-200 bg-emerald-50/50' : 'border-gray-200'
+                } ${podeEditar ? 'cursor-pointer' : 'cursor-default'}`}>
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                    checked={op.dispensarExecucao}
+                    disabled={!podeEditar}
+                    onChange={e => op.setDispensarExecucao(e.target.checked)}
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold text-gray-700">
+                      Não utilizar a etapa de Execução de Prescrição
                     </span>
-                  )}
-                </span>
-              </label>
+                    <span className="block text-xs text-gray-500 mt-0.5">
+                      {op.dispensarExecucao
+                        ? 'O lançamento na fatura, a baixa de estoque e o pagamento do prestador são gerados ao finalizar a prescrição, a vacina ou o procedimento — sem passar pela Execução de Prescrição.'
+                        : 'Padrão: o lançamento na fatura, a baixa de estoque e o pagamento do prestador são gerados na Execução de Prescrição, a cada aplicação.'}
+                    </span>
+                    {op.dispensarExecucao && (
+                      <span className="block text-xs text-amber-700 mt-1">
+                        O que já foi finalizado antes desta opção continua aguardando a Execução de Prescrição.
+                      </span>
+                    )}
+                  </span>
+                </label>
 
                 {/* ⚠️ O FUSO HORÁRIO NÃO APARECE MAIS AQUI (removido a pedido, 2026-08-24):
                     o campo era só leitura e não havia nada a fazer com ele nesta tela.
@@ -1063,109 +1280,9 @@ export default function CadastroEmpresa() {
                     seletor ter saído da tela em 2026-08-23. Para corrigir um caso que o
                     endereço não decide, o caminho é o override
                     `EmpresaConfiguracao.fusoHorario`, fora da UI do gestor. */}
-            </div>
-
-            {/* ── Gestor Responsável e Tipo de Plano — nome/telefone/e-mail do cadastro
-                feito pelo Admin (leitura) + o plano contratado (leitura; trocar de
-                plano é ato comercial, do ADMIN) ── */}
-            <div className="pt-2 border-t border-gray-100">
-              <p className="text-sm font-semibold text-gray-600 mb-3 flex items-center gap-1.5">
-                <Users2 size={14} className="text-gray-400" /> Gestor Responsável e Tipo de Plano
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-                <Leitura label="Nome" valor={dados?.gestorResponsavel?.fullName ?? '—'} />
-                <Leitura label="Telefone" valor={dados?.gestorResponsavel?.phone ?? '—'} />
-                <Leitura label="E-mail" valor={dados?.gestorResponsavel?.email ?? '—'} />
-                {dados?.plano ? (
-                  <>
-                    <Leitura label="Plano" valor={dados.plano.nome} />
-                    <Leitura label="Valor" valor={<>{moedaBR(dados.plano.valor)}{dados.plano.valor != null && <span className="text-gray-400 font-normal"> /mês</span>}</>} />
-                    <Leitura label="Situação" valor={dados.plano.status} />
-                    <Leitura label="Usuários com acesso" valor={`${uso?.ocupados ?? 0}${uso?.ilimitado ? ' (sem limite)' : ` de ${uso?.limite}`}`} />
-                    {!uso?.ilimitado && (
-                      <Leitura label="Disponíveis" valor={uso?.disponiveis} tone={uso?.disponiveis === 0 ? 'text-red-600' : 'text-emerald-700'} />
-                    )}
-                  </>
-                ) : (
-                  /* Empresa sem assinatura é ILIMITADA por decisão (lib/planoEmpresa.js) —
-                     e o gestor precisa ver isso, não um espaço em branco. */
-                  <Leitura
-                    label="Plano"
-                    tone="text-gray-500"
-                    valor={<>Nenhum plano atribuído — sem limite.<span className="text-gray-400 font-normal"> {uso?.ocupados ?? 0} com acesso hoje.</span></>}
-                  />
-                )}
-              </div>
-            </div>
-
-            {/* ── Outros gestores ────────────────────────────────────────────── */}
-            <div className="pt-2 border-t border-gray-100">
-              <div className="flex items-center justify-between gap-3 mb-3">
-                <p className="text-sm font-semibold text-gray-600">Outros Gestores</p>
-                {podeEditar && (
-                  <button type="button" onClick={() => setShowIncluirGestor(true)}
-                    className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-800">
-                    <UserPlus size={14} /> Incluir gestor
-                  </button>
-                )}
-              </div>
-              {(dados?.gestores?.length ?? 0) === 0 ? (
-                <p className="text-sm text-gray-500">Nenhum gestor cadastrado.</p>
-              ) : (
-                <>
-                  {/* Desktop — grid em 4 colunas */}
-                  <div className="hidden md:block overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b border-gray-100">
-                          <th className="py-2 pr-3 text-left text-xs font-semibold text-gray-500">Nome</th>
-                          <th className="py-2 px-3 text-left text-xs font-semibold text-gray-500">E-mail</th>
-                          <th className="py-2 px-3 text-left text-xs font-semibold text-gray-500">Telefone</th>
-                          <th className="py-2 pl-3 text-left text-xs font-semibold text-gray-500">Data Inclusão</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-50">
-                        {dados!.gestores.map(g => (
-                          <tr key={g.id}>
-                            <td className="py-2.5 pr-3">
-                              <span className="text-sm text-gray-900">{g.fullName ?? '—'}</span>
-                              {g.id === dados?.gestorResponsavel?.id && (
-                                <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Responsável</span>
-                              )}
-                              {g.ativo === false && (
-                                <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-600">Inativo</span>
-                              )}
-                            </td>
-                            <td className="py-2.5 px-3 text-sm text-gray-500">{g.email ?? '—'}</td>
-                            <td className="py-2.5 px-3 text-sm text-gray-500">{g.phone ?? '—'}</td>
-                            <td className="py-2.5 pl-3 text-sm text-gray-500">{formatarData(g.dataInclusao)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Mobile — cards */}
-                  <div className="md:hidden space-y-2">
-                    {dados!.gestores.map(g => (
-                      <div key={g.id} className="px-3 py-2.5 rounded-xl bg-gray-50 border border-gray-100">
-                        <p className="text-sm font-semibold text-gray-800 truncate">
-                          {g.fullName ?? '—'}
-                          {g.id === dados?.gestorResponsavel?.id && (
-                            <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Responsável</span>
-                          )}
-                          {g.ativo === false && (
-                            <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-600">Inativo</span>
-                          )}
-                        </p>
-                        <p className="text-xs text-gray-500 truncate">{g.email}{g.phone ? ` · ${g.phone}` : ''}</p>
-                        <p className="text-[11px] text-gray-400 mt-0.5">Incluído em {formatarData(g.dataInclusao)}</p>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
+                </div>
+              </>
+            )}
 
             {/* Somente quem edita salva — para quem só vê não há botão nenhum aqui (§6 do
                 CLAUDE.md: ação que a pessoa não pode executar não é renderizada). */}
@@ -1188,6 +1305,7 @@ export default function CadastroEmpresa() {
             )}
           </div>
         </div>
+        </>
       )}
 
       {showIncluirGestor && (

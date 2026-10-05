@@ -424,13 +424,35 @@ const emailService = {
   },
 
   // ── Acesso de Gestor criado diretamente pelo ADMIN (sem convite, acesso imediato) ──
-  async enviarAcessoGestor({ email, nomeGestor, empresaNome, equipeName, usuarioCriado = false, senhaInicial = null }) {
+  // `senhaInicial` preenchida = a conta está no PRIMEIRO ACESSO (nova, ou que nunca trocou
+  // a senha temporária) e o e-mail informa a senha. Nula = a pessoa já tem senha PRÓPRIA,
+  // que ninguém troca por ela (CLAUDE.md §14) — o e-mail só diz para usá-la.
+  // `equipeName` não é mais exibido (a equipe nasce com o mesmo nome da empresa e a
+  // repetição confundia); o parâmetro segue aceito para não quebrar quem o passa.
+  async enviarAcessoGestor({ email, nomeGestor, empresaNome, equipeName: _equipeName, senhaInicial = null }) {
     if (!podeEnviar()) return;
 
     const appUrl   = process.env.APP_URL || 'http://localhost:5173';
     const loginUrl = `${appUrl}/#/login`;
 
-    const blocoCredenciais = usuarioCriado ? `
+    const blocoContaExistente = `
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px 20px;margin:20px 0;">
+        <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#166534;">🔐 Seus dados de acesso</p>
+        <table style="border-collapse:collapse;width:100%;">
+          <tr>
+            <td style="padding:4px 0;font-size:12px;color:#166534;width:80px;">E-mail</td>
+            <td style="font-size:13px;font-weight:600;color:#111;">${email}</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 0;font-size:12px;color:#166534;">Senha</td>
+            <td style="font-size:13px;color:#111;">a mesma que você já utiliza no S2Vet</td>
+          </tr>
+        </table>
+        <p style="margin:10px 0 0;font-size:11px;color:#166534;">Não lembra a senha? Use "Esqueci minha senha" na tela de login.</p>
+      </div>
+    `;
+
+    const blocoCredenciais = senhaInicial ? `
       <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px 20px;margin:20px 0;">
         <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#92400e;">🔐 Seus dados de acesso</p>
         <table style="border-collapse:collapse;width:100%;">
@@ -445,7 +467,7 @@ const emailService = {
         </table>
         <p style="margin:10px 0 0;font-size:11px;color:#92400e;">⚠️ Você será obrigado a criar uma nova senha no primeiro acesso.</p>
       </div>
-    ` : '';
+    ` : blocoContaExistente;
 
     await getEmailProvider().enviar({
       from:    remetente(),
@@ -460,8 +482,8 @@ const emailService = {
           <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
             <h2 style="color:#111827;margin-top:0;">Olá, ${nomeGestor}!</h2>
             <p style="color:#374151;line-height:1.6;">
-              Seu acesso ao <strong>S2Vet</strong> foi configurado com o perfil de <strong>Gestor</strong>
-              na organização <strong>${empresaNome}</strong> (equipe: ${equipeName}).
+              Seu acesso ao <strong>S2Vet</strong> foi criado com o perfil de <strong>Gestor</strong>
+              na organização <strong>${empresaNome}</strong>.
               Você já pode fazer login e gerenciar sua equipe imediatamente.
             </p>
 
@@ -772,7 +794,7 @@ const emailService = {
     const dataFmt = d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: fuso });
     const horaFmt = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: fuso });
     const tipoLabel = atividade
-      ?? ({ CONSULTA: 'Consulta', VACINA: 'Vacina', RETORNO: 'Retorno', EXAME: 'Exame', PROCEDIMENTO: 'Procedimento' }[tipo] ?? tipo);
+      ?? ({ CONSULTA: 'Consulta', VACINA: 'Vacina', RETORNO: 'Retorno', EXAME: 'Exame', PROCEDIMENTO: 'Procedimento', VERMIFUGACAO: 'Vermifugação' }[tipo] ?? tipo);
 
     const waLink = proprietarioPhone
       ? `https://wa.me/55${proprietarioPhone.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá! Confirmo meu agendamento com você no dia ${dataFmt} às ${horaFmt} para ${animalNome}.`)}`
@@ -837,7 +859,7 @@ const emailService = {
     const appUrl = process.env.APP_URL || 'http://localhost:5173';
     const fmtData = (dh) => new Date(dh).toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: fuso });
     const fmtHora = (dh) => new Date(dh).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: fuso });
-    const rotulo  = (t) => ({ CONSULTA: 'Consulta', VACINA: 'Vacina', RETORNO: 'Retorno', EXAME: 'Exame', PROCEDIMENTO: 'Procedimento' }[t] ?? t ?? 'Atendimento');
+    const rotulo  = (t) => ({ CONSULTA: 'Consulta', VACINA: 'Vacina', RETORNO: 'Retorno', EXAME: 'Exame', PROCEDIMENTO: 'Procedimento', VERMIFUGACAO: 'Vermifugação' }[t] ?? t ?? 'Atendimento');
 
     const varios   = itens.length > 1;
     const assumido = modo === 'ASSUMIDO';

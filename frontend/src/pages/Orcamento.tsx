@@ -1622,6 +1622,8 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
   onEditar: (o: OrcamentoResumo) => void;
 }) {
   const [orcamentos, setOrcamentos] = useState<OrcamentoResumo[]>([]);
+  // Quantidade por status (do backend) — é o número entre parênteses de cada opção.
+  const [contagensOrc, setContagensOrc] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   // `?status=` na URL pré-seleciona o filtro — é assim que os números do Relatório de
   // Orçamentos trazem para cá exatamente o recorte que a pessoa clicou ("1 em
@@ -1647,8 +1649,11 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
     setLoading(true);
     try {
       const r = await api.get('/orcamentos', { params: filtroStatus ? { status: filtroStatus } : {} });
-      if (r.data) setOrcamentos(r.data.dados ?? []);
-    } catch { setOrcamentos([]); }
+      if (r.data) {
+        setOrcamentos(r.data.dados ?? []);
+        setContagensOrc(r.data.contagens ?? {});
+      }
+    } catch { setOrcamentos([]); setContagensOrc({}); }
     finally { setLoading(false); }
   }, [filtroStatus]);
 
@@ -1797,12 +1802,14 @@ function HistoricoOrcamentos({ podeAprovar, podeExcluir, podeEditar, onEditar }:
         <div className="flex items-center gap-2">
           <select value={filtroStatus} onChange={e => setFiltroStatus(e.target.value)}
             className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:border-emerald-500">
-            <option value="">Todos os status</option>
-            <option value="RASCUNHO">Aguardando decisão</option>
-            <option value="APROVADO">Aprovado</option>
-            <option value="APROVADO_PARCIALMENTE">Aprovado Parcialmente</option>
-            <option value="REJEITADO">Rejeitado</option>
-            <option value="CANCELADO">Cancelado</option>
+            {/* Quantidade em toda opção (a pedido) — vem do backend, que conta o
+                histórico inteiro e não só o recorte do status escolhido. */}
+            <option value="">Todos os status ({Object.values(contagensOrc).reduce((a, b) => a + b, 0)})</option>
+            <option value="RASCUNHO">Aguardando decisão ({contagensOrc.RASCUNHO ?? 0})</option>
+            <option value="APROVADO">Aprovado ({contagensOrc.APROVADO ?? 0})</option>
+            <option value="APROVADO_PARCIALMENTE">Aprovado Parcialmente ({contagensOrc.APROVADO_PARCIALMENTE ?? 0})</option>
+            <option value="REJEITADO">Rejeitado ({contagensOrc.REJEITADO ?? 0})</option>
+            <option value="CANCELADO">Cancelado ({contagensOrc.CANCELADO ?? 0})</option>
           </select>
           <span className="text-xs text-gray-400">{orcamentos.length} registro{orcamentos.length !== 1 ? 's' : ''}</span>
         </div>

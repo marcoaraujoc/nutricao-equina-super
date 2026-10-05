@@ -666,10 +666,10 @@ describe('receita em conteudo contra estoque em embalagens', () => {
     // dose. Sem esta perna, um item legado ja executado cai na conta com "nada
     // consumido" e volta a debitar/cobrar uma embalagem A CADA execucao.
     expect(fn.slice(0, 3200)).toMatch(/if \(item\.executadoEm && doses === 0\) \{ jaEntregues\.add\(item\.id\); continue; \}/);
-    expect(fn).toMatch(/return \{ precos, unidades, jaEntregues, porEmbalagem, entregas, unidadesFaturadas \};/);
+    expect(fn).toMatch(/return \{ precos, unidades, jaEntregues, porEmbalagem, entregas, unidadesFaturadas, unidadesDaLinha \};/);
     // E o `executar` PRECISA usar os conjuntos: recebe-los e ignora-los e o modo
     // silencioso de a regra deixar de existir.
-    expect(controller).toMatch(/const \{ precos, jaEntregues, porEmbalagem, entregas, unidadesFaturadas \} =/);
+    expect(controller).toMatch(/const \{ precos, jaEntregues, porEmbalagem, entregas, unidadesFaturadas, unidadesDaLinha \} =/);
     expect(controller).toMatch(/await debitarEstoqueDia\(tx, itensHoje, empresaIdEfetivo, grupoId, resolverQtdExecucao\)/);
     expect(controller).toMatch(/const entregaJaFeita = jaEntregues\.has\(item\.id\);/);
     expect(controller).toMatch(/if \(!item\.medicamentoCliente && !entregaJaFeita\)/);

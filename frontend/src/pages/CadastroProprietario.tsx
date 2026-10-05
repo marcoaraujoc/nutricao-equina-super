@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
+import { sufixoContagem, type ContagemAtivos } from '../utils/contagemAtivos';
 import toast from 'react-hot-toast';
 import {
   Pencil, Search, Loader2, X, Users,
@@ -14,7 +15,6 @@ import ProprietarioFormModal, {
   type Proprietario, type FormProp, type LocalidadeProp,
   FORM_INICIAL, resumoLocalidade, validarDiaVencimento, formDeProprietario,
   validarCPF, validarCNPJ, mascaraCPF, mascaraCNPJ, mascaraTelefone, mascaraCEP,
-  parseMoeda,
 } from '../components/ProprietarioFormModal';
 import {
   consultarCadastroPorEmail, preencherVazios, fraseCadastroEncontrado,
@@ -58,6 +58,8 @@ export default function CadastroProprietario() {
   const [confirmRemov,  setConfirmRemov]  = useState<Proprietario | null>(null);
   const [confirmReativ, setConfirmReativ] = useState<Proprietario | null>(null);
   const [filtroAtivo,   setFiltroAtivo]   = useState<'ativo' | 'inativo' | 'all'>('ativo');
+  // Quantidade de cada aba Todos/Ativos/Inativos — vem do backend junto da lista.
+  const [contagens,     setContagens]     = useState<ContagemAtivos | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -70,6 +72,7 @@ export default function CadastroProprietario() {
       });
       if (!res.data) return;
       setProprietarios(res.data.dados ?? []);
+      setContagens(res.data.contagens ?? null);
     } catch { setErroInline('Erro ao carregar proprietários'); }
     finally { setLoading(false); }
   }, [busca, filtroAtivo]);
@@ -179,16 +182,11 @@ export default function CadastroProprietario() {
     if (form.localidades.length === 0) {
       setErroAcao({ mensagem: 'Informe ao menos uma localidade com a frequência de visitas', campos: ['localidades'] }); return;
     }
-    // Só no MENSALISTA — fora dele o campo está desabilitado (2026-09-18) e validar o
-    // que não se pode editar trava o salvar sem dar como corrigir.
-    if (form.mensalista && validarDiaVencimento(form.diaVencimentoFatura)) return; // erro inline no campo
+    if (validarDiaVencimento(form.diaVencimentoFatura)) return; // erro inline no campo
 
     // Documento é opcional, mas se preenchido precisa ser válido
     if (form.tipoDoc === 'cpf'  && form.cpf.trim()  && !validarCPF(form.cpf))   { setErroAcao({ mensagem: 'CPF inválido', campos: ['cpf'] }); return; }
     if (form.tipoDoc === 'cnpj' && form.cnpj.trim() && !validarCNPJ(form.cnpj)) { setErroAcao({ mensagem: 'CNPJ inválido', campos: ['cnpj'] }); return; }
-    if (form.mensalista && !form.valorAssistencia) {
-      setErroAcao({ mensagem: 'Informe o valor da assistência veterinária', campos: ['valorAssistencia'] }); return;
-    }
     // Ao menos UMA forma de recebimento da fatura (2026-09-22) — nenhuma marcada
     // deixaria a fatura deste cliente sem nenhuma saída na tela de Faturamento.
     if (form.formasRecebimentoFatura.length === 0) {
@@ -205,8 +203,6 @@ export default function CadastroProprietario() {
       phone:             form.phone  || null,
       cpf:               form.tipoDoc === 'cpf'  && form.cpf.trim()  ? form.cpf  : null,
       cnpj:              form.tipoDoc === 'cnpj' && form.cnpj.trim() ? form.cnpj : null,
-      mensalista:        form.mensalista,
-      valorAssistencia:  form.mensalista && form.valorAssistencia ? parseMoeda(form.valorAssistencia) : null,
       // O campo único `frequenciaVisitas` é derivado no backend (a maior entre as
       // localidades) — a tela manda só o combinado por lugar.
       localidades:       form.localidades.map(l => ({
@@ -376,7 +372,7 @@ export default function CadastroProprietario() {
               className={`px-4 py-2.5 font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
                 filtroAtivo === v ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
               }`}>
-              {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
+              {(v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos') + sufixoContagem(contagens, v)}
             </button>
           ))}
         </div>
@@ -437,9 +433,6 @@ export default function CadastroProprietario() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-col gap-1">
-                        {p.mensalista && (
-                          <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium w-fit">Mensalista</span>
-                        )}
                         {/* Uma linha por localidade — a frequência é de cada lugar */}
                         {(p.localidades ?? []).map(loc => (
                           <span key={loc.localizacaoId}
@@ -454,7 +447,7 @@ export default function CadastroProprietario() {
                             {p.frequenciaVisitas}x/semana
                           </span>
                         )}
-                        {!p.mensalista && (p.localidades ?? []).length === 0 && !p.frequenciaVisitas && (
+                        {(p.localidades ?? []).length === 0 && !p.frequenciaVisitas && (
                           <span className="text-gray-400 text-xs">—</span>
                         )}
                       </div>
@@ -523,9 +516,6 @@ export default function CadastroProprietario() {
             )}
 
             <div className="flex flex-wrap gap-1 mb-3">
-              {p.mensalista && (
-                <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">Mensalista</span>
-              )}
               {/* Uma tag por localidade — a frequência é de cada lugar */}
               {(p.localidades ?? []).map(loc => (
                 <span key={loc.localizacaoId}

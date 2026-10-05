@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import { contarAtivos, sufixoContagem } from '../utils/contagemAtivos';
 import toast from 'react-hot-toast';
 import {
   Users2, Mail, ToggleLeft, ToggleRight,
@@ -554,19 +555,22 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
     );
   };
 
-  const membrosAtivos   = membros.filter(m => m.user.ativo !== false);
-  const membrosInativos = membros.filter(m => m.user.ativo === false);
-  const porStatus = filtroAtivo === 'all' ? membros
-    : filtroAtivo === 'ativo' ? membrosAtivos
-    : membrosInativos;
+  // Busca PRIMEIRO, status depois — assim a quantidade de cada aba é a que ela traria
+  // com a busca digitada (mesma regra das demais telas de cadastro).
   const q = busca.trim().toLowerCase();
-  const membrosVisiveis = q
-    ? porStatus.filter(m =>
+  const porBusca = q
+    ? membros.filter(m =>
         m.user.fullName.toLowerCase().includes(q) ||
         m.user.email.toLowerCase().includes(q) ||
         (m.user.fornecedorPerfil?.tipoServico ?? '').toLowerCase().includes(q)
       )
-    : porStatus;
+    : membros;
+  const membroInativo = (m: Membro) => m.user.ativo === false;
+  // O cabeçalho conta a equipe inteira (sem busca); as abas, o recorte da busca.
+  const membrosAtivos = membros.filter(m => !membroInativo(m));
+  const contagens = contarAtivos(porBusca, membroInativo);
+  const membrosVisiveis = filtroAtivo === 'all' ? porBusca
+    : porBusca.filter(m => membroInativo(m) === (filtroAtivo === 'inativo'));
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
@@ -667,7 +671,7 @@ const handleSalvarEdicao = async (values: UsuarioFormValues) => {
               className={`px-4 py-2.5 font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
                 filtroAtivo === v ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
               }`}>
-              {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
+              {(v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos') + sufixoContagem(contagens, v)}
             </button>
           ))}
         </div>

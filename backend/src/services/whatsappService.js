@@ -56,7 +56,50 @@ async function salvarStatus(configId, status) {
     status, configId);
 }
 
+// Grava o número SÓ se o campo ainda estiver vazio (o `IS NULL` no WHERE é a
+// guarda — nunca sobrescreve o que o gestor digitou e salvou). Devolve o número
+// que ficou gravado.
+async function salvarNumeroSeVazio(configId, numero) {
+  await prisma.$executeRawUnsafe(
+    `UPDATE schs2vet.tb_empresa_configuracoes
+        SET whatsapp = $1, "updatedAt" = CURRENT_TIMESTAMP
+      WHERE id = $2 AND (whatsapp IS NULL OR whatsapp = '')`,
+    numero, configId);
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT whatsapp FROM schs2vet.tb_empresa_configuracoes WHERE id = $1`, configId);
+  return rows[0]?.whatsapp ?? null;
+}
+
 // ═══════════════════════ Evolution — helpers ═════════════════════════════════
+
+// JID do WhatsApp vem com DDI (5521999998888). A configuração guarda o número
+// NACIONAL (DDD + número), que é o que a tela mascara — tira o 55 do Brasil.
+function numeroNacional(digitos) {
+  if (!digitos) return null;
+  if (digitos.startsWith('55') && (digitos.length === 12 || digitos.length === 13)) return digitos.slice(2);
+  return digitos.slice(0, 15);
+}
+
+/**
+ * 🔴 O número do WhatsApp SUMIA da tela de Configurações (2026-10-02): conectar
+ * (ler o QR) NÃO gravava o número — ele só ia ao banco no "Salvar" geral da tela.
+ * Quem conectava e mudava de tela voltava com o campo vazio, embora o WhatsApp
+ * seguisse conectado. Agora, conectado e sem número cadastrado, o número PAREADO
+ * na instância é gravado. Best-effort: falhar aqui nunca muda o status.
+ */
+async function preencherNumeroPareado(config) {
+  if (config.whatsapp) return config.whatsapp;
+  try {
+    const numero = numeroNacional(await EvolutionService.getNumeroConectado(config.waInstance));
+    if (!numero) return null;
+    const gravado = await salvarNumeroSeVazio(config.id, numero);
+    if (gravado) logger.info(`[WhatsappService] Número pareado gravado na configuração ${config.id}`);
+    return gravado;
+  } catch (err) {
+    logger.warn(`[WhatsappService] Não foi possível ler o número pareado (${config.waInstance}): ${err.message}`);
+    return null;
+  }
+}
 
 // Nome determinístico da instância da clínica (nunca exposto ao frontend)
 function nomeInstancia(empresaId, equipeId) {
@@ -195,7 +238,8 @@ async function obterStatus(empresaId, equipeId = null) {
     }
     const status = mapearEstado(estado);
     if (status !== config.waStatus) await salvarStatus(config.id, status);
-    return { status, temTelefone: Boolean(config.whatsapp), atualizadoEm: config.waStatusEm };
+    const numero = status === 'CONECTADO' ? await preencherNumeroPareado(config) : (config.whatsapp ?? null);
+    return { status, temTelefone: Boolean(numero), numero, atualizadoEm: config.waStatusEm };
   } catch (err) {
     logger.warn(`[WhatsappService] Evolution não respondeu (${config.waInstance}): ${err.message}`);
     return {

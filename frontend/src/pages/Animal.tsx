@@ -23,7 +23,7 @@ import DateInput from '../components/DateInput';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
 import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
-import ProprietarioFormModal from '../components/ProprietarioFormModal';
+import ProprietarioFormModal, { formatarMoeda, parseMoeda } from '../components/ProprietarioFormModal';
 import ModalJustificativa from '../components/ModalJustificativa';
 
 
@@ -60,10 +60,14 @@ interface FormData {
   altura:             string;
   /** Inscrito na FEI (Fédération Équestre Internationale) — SIM/NÃO. */
   registradoFei:      boolean;
+  /** Paciente AVULSO (atendimento pontual) — exige local e e-mail/telefone do dono. */
+  avulso:             boolean;
   registroPassaporte: string;
   numeroChip:         string;
   finalidades:        string[];
   seguradora:         string;
+  /** Assistência veterinária MENSAL deste animal, em R$ (texto mascarado). Vazio = sem assistência. */
+  valorAssistencia:   string;
 }
 
 interface Tratador {
@@ -121,11 +125,13 @@ interface AnimalEncontrado {
   tratador?:           { id: number; nome: string } | null;
   pelagem?:            string | null;
   registradoFei?:      boolean | null;
+  avulso?:             boolean | null;
   altura?:             string | null;
   registroPassaporte?: string | null;
   numeroChip?:         string | null;
   finalidade?:         string | null;
   seguradora?:         string | null;
+  valorAssistencia?:   number | null;
   // Fase 3 do multi-tenancy: uma pergunta só — este animal já é DESTA empresa?
   // Substituiu `temVet` + `vetDaMinhaEquipe`, que perguntavam pela PESSOA responsável.
   jaCadastradoAqui: boolean;
@@ -391,7 +397,9 @@ const Animal = () => {
     localizacaoId: null, tratadorId: null, baia: '',
     pelagem: '', altura: '', registroPassaporte: '', numeroChip: '', finalidades: [],
     registradoFei: false,
+    avulso: false,
     seguradora: '',
+    valorAssistencia: '',
   });
 
   // Checagem da baia enquanto o usuário digita (regra: única por local + empresa).
@@ -636,10 +644,14 @@ const Animal = () => {
             pelagem:           a.pelagem            ?? '',
             altura:            a.altura             ?? '',
             registradoFei:     a.registradoFei      ?? false,
+            avulso:            a.avulso             ?? false,
             registroPassaporte: a.registroPassaporte ?? '',
             numeroChip:        a.numeroChip          ?? '',
             finalidades:       a.finalidade ? a.finalidade.split('|') : [],
             seguradora:        a.seguradora ?? '',
+            valorAssistencia:  a.valorAssistencia
+              ? formatarMoeda(String(Math.round(a.valorAssistencia * 100)))
+              : '',
           });
           // Pré-preenche o texto da busca de localização
           if (a.localizacao?.nome) {
@@ -1097,6 +1109,9 @@ const Animal = () => {
         finalidade:         formData.finalidades.length > 0 ? formData.finalidades.join('|') : null,
         seguradora:         formData.seguradora.trim() || null,
         registradoFei:      formData.registradoFei,
+        avulso:             formData.avulso,
+        // Vazio vai como null: na EDIÇÃO isso REMOVE a assistência (o backend só ignora `undefined`).
+        valorAssistencia:   formData.valorAssistencia ? parseMoeda(formData.valorAssistencia) : null,
         // Animal já existente (sem vet ou com vet de outra equipe) → NOVO registro
         // duplicado para este veterinário; a origem é enviada apenas para o backend
         // reaproveitar a foto do animal original
@@ -1327,6 +1342,29 @@ const Animal = () => {
           </div>
 
           <form onSubmit={handleSubmit} noValidate className="space-y-5">
+
+            {/* ── Paciente AVULSO (2026-10-04, a pedido) ─────────────────────
+                Atendimento pontual, fora da carteira fixa. Gravado em coluna própria
+                (`avulso`, lib/animalAvulso.js) para poder ser filtrado. No avulso a
+                localização e o e-mail/telefone do proprietário são OBRIGATÓRIOS — a
+                validação do formulário já os exige, e o backend confere de novo
+                (400 PACIENTE_AVULSO_INCOMPLETO). */}
+            <div>
+              <label className="flex items-center gap-2.5 cursor-pointer select-none w-fit">
+                <input
+                  type="checkbox"
+                  checked={formData.avulso}
+                  onChange={e => setFormData(p => ({ ...p, avulso: e.target.checked }))}
+                  className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                />
+                <span className="text-sm font-semibold text-gray-700">Paciente avulso</span>
+              </label>
+              {formData.avulso && (
+                <p className="text-xs text-gray-500 mt-1">
+                  Localização, e-mail e telefone do proprietário são obrigatórios.
+                </p>
+              )}
+            </div>
 
             {/* ── 1. Nome do animal + Sexo ──────────────────────────────────── */}
             <div>
@@ -1736,6 +1774,24 @@ const Animal = () => {
                   onChange={e => setFormData(p => ({ ...p, seguradora: e.target.value }))}
                   className={inputClass}
                 />
+              </div>
+              {/* 🔴 A assistência mensal é do ANIMAL (saiu do cadastro do proprietário):
+                  cada cavalo tem o seu valor, e só quem tem entra na fatura. Vazio = sem
+                  assistência. */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Assistência Veterinária Mensal</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">R$</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="0,00"
+                    value={formData.valorAssistencia}
+                    onChange={e => setFormData(p => ({ ...p, valorAssistencia: formatarMoeda(e.target.value) }))}
+                    className={`${inputClass} pl-9`}
+                  />
+                </div>
+                <p className="text-xs text-gray-400 mt-1">Deixe em branco se o animal não tem assistência contratada.</p>
               </div>
             </div>
 

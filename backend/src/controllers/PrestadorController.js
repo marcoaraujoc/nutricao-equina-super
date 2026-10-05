@@ -3,6 +3,7 @@
 
 const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma').default;
+const { querContagens, contarAtivosInativos } = require('../lib/contagemAtivos');
 const { getEquipeScopeDoUsuario } = require('../lib/vetUtils');
 const { podeAlterarRegistroEscopado } = require('../lib/cadastroScopeAccess');
 const { normalizarPagamento } = require('../lib/usuarioEmpresa');
@@ -434,7 +435,9 @@ const PrestadorController = {
       // trouxe, e sem o campo o salvar o apagaria em silêncio.
       const comAcesso = await anexarEquipeDoAcesso(prisma, await anexarTempoConsulta(
         await anexarEspecialidadesPrestador(await anexarRestricaoPorLocal(await anexarTrilha(prestadores, 'prestador')))));
-      res.json({ sucesso: true, dados: await anexarVencimentoEmLista(prisma, 'PRESTADOR', comAcesso) });
+      // Quantidade de cada aba Todos/Ativos/Inativos — só quando a TELA pede.
+      const contagens = querContagens(req.query) ? await contarAtivosInativos(prisma.prestador, where) : undefined;
+      res.json({ sucesso: true, dados: await anexarVencimentoEmLista(prisma, 'PRESTADOR', comAcesso), contagens });
     } catch (err) {
       console.error('Erro ao listar prestadores:', err);
       res.status(500).json({ sucesso: false, mensagem: 'Erro ao listar prestadores' });

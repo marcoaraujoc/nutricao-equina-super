@@ -474,7 +474,12 @@ export function itemPrevistoParaDataFutura(
   data: string,
 ): boolean {
   const total = item.dosesTotaisEsperadas;
-  if (total == null) return false;
+  // Item LEGADO (sem rastreio por dose — ex.: "agora"): não há grade a projetar, vale
+  // a janela [dataInicio, dataInicio+duracaoDias) — o mesmo critério do backend
+  // (`janelaDoItem`). Antes devolvia `false` aqui, e a prescrição desse tipo agendada
+  // para outro dia nunca aparecia ao navegar até a data. `diaAtual` já vem do
+  // backend relativo ao dia consultado.
+  if (total == null) return item.diaAtual >= 1 && item.diaAtual <= item.duracaoDias;
   const jaFeitas = item.dosesExecutadas ?? 0;
   if (jaFeitas >= total) return false;
   // Sem âncora de horário ainda: não há o que projetar — vale a janela do curso
@@ -2495,7 +2500,20 @@ export default function ExecucaoPrescricao() {
   // Mesma regra dos medicamentos/procedimentos: a vacina de paciente INATIVO sai da
   // fila "a aplicar" e desce para a aba "Paciente inativo" do Histórico.
   const vacinasInativasBase = vacinas.filter(v => v.animalInativo);
-  const vacinasFiltradas = vacinas.filter(v => !v.animalInativo).filter(busca.trim()
+  // 🔴 DATA FUTURA: a vacina agendada para o dia selecionado aparece (só para ver —
+  // aplicar continua exclusivo de hoje). A rota devolve TODA vacina FINALIZADA sem
+  // olhar a data; antes a seção inteira exigia `isHoje`, então navegar para amanhã
+  // nunca mostrava a vacina que foi agendada para amanhã. `dataAplicacao` é DATA
+  // PURA (§6): compara por `split('T')`, nunca por `diaISO`.
+  const dataSelFutura = dataSel > hojeISO();
+  const vacinasFiltradas = vacinas.filter(v => !v.animalInativo)
+    // Dia futuro: só a agendada para ele. Hoje: a de hoje e as atrasadas — a agendada
+    // para amanhã não é trabalho de hoje (mesma regra da prescrição: "nunca antes").
+    .filter(v => {
+      const dia = v.dataAplicacao?.split('T')[0];
+      return dataSelFutura ? dia === dataSel : !dia || dia <= dataSel;
+    })
+    .filter(busca.trim()
     ? (v => {
         const q = busca.toLowerCase();
         return (
@@ -3118,7 +3136,7 @@ export default function ExecucaoPrescricao() {
                   )}
 
                   {/* ── Vacinas a aplicar (FINALIZADAS) — só no dia de hoje ─────── */}
-                  {isHoje && vacinasFiltradas.length > 0 && (
+                  {(isHoje || dataSelFutura) && vacinasFiltradas.length > 0 && (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between px-1 pb-1">
                         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
@@ -3170,7 +3188,7 @@ export default function ExecucaoPrescricao() {
                               <AcaoRegistro tom="ver" icone={Eye} rotulo="Ver" titulo="Ver vacina"
                                 onClick={() => { setVacModoVer(true); setVacModal(v); }} />
                               <AcaoRegistro tom="executar" icone={CheckCircle2} rotulo="Aplicar"
-                                titulo="Aplicar vacina" visivel={podeExecutarAcao && !v.animalInativo}
+                                titulo="Aplicar vacina" visivel={podeExecutarAcao && !v.animalInativo && isHoje}
                                 onClick={() => { setVacModoVer(false); setVacModal(v); }} />
                               <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
                                 titulo="Imprimir vacina" visivel={podeImprimir}

@@ -751,6 +751,11 @@ export default function SubModuloExames({
   // Filtro por status + paginação no cliente (mesmo padrão da tela de Vacina)
   const historicoFiltrado = historico.filter(ex =>
     filtroStatus === 'todos' ? true : getStatusExame(ex) === filtroStatus);
+  // Quantos pedidos há em cada status — é o número entre parênteses de cada pílula.
+  const contagemExames = historico.reduce(
+    (acc, ex) => { acc[getStatusExame(ex)]++; return acc; },
+    { SALVA: 0, REALIZADA: 0, CANCELADA: 0 } as Record<StatusExameUI, number>,
+  );
   // Ordena o TODO e só então pagina.
   const historicoOrdenado = ordenarLista(historicoFiltrado, ordenacao, (ex, campo) => {
     // `laboratorio`/`tipoAmostra` moram no JSON de `observacao` — a mesma leitura que
@@ -2270,10 +2275,12 @@ export default function SubModuloExames({
                   isActive ? activeClass : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
                 }`}>
                 {f.label}
-                {/* Quantidade SÓ no "Todos" (a pedido, 2026-09-30) — ativo ou não. */}
-                {f.key === 'todos' && (
-                  <span className={isActive ? 'text-white/80' : 'text-gray-400'}>({historico.length})</span>
-                )}
+                {/* Quantidade em TODA pílula (a pedido, 2026-10-02 — reverte o "só no
+                    Todos" de 2026-09-30). A conta usa `getStatusExame`, a MESMA regra
+                    que o filtro aplica: contar por outra divergiria do que a aba lista. */}
+                <span className={isActive ? 'text-white/80' : 'text-gray-400'}>
+                  ({f.key === 'todos' ? historico.length : contagemExames[f.key]})
+                </span>
               </button>
             );
           })}
@@ -2292,7 +2299,7 @@ export default function SubModuloExames({
       ) : historicoFiltrado.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-12 text-gray-300">
           <FlaskConical size={28} className="mb-2" />
-          <p className="text-sm text-gray-400">Nenhum exame com status "{filtroStatus}"</p>
+          <p className="text-sm text-gray-400">Nenhum exame com status "{FILTROS_EXAME.find(f => f.key === filtroStatus)?.label ?? filtroStatus}"</p>
         </div>
       ) : (
         <>

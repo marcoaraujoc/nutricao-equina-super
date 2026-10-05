@@ -190,6 +190,20 @@ const EvolutionService = {
     return chamar('get', `/instance/connectionState/${encodeURIComponent(instanceName)}`);
   },
 
+  /**
+   * Número do celular PAREADO na instância (dígitos, com DDI — ex.: 5521999998888),
+   * lido do `ownerJid` de `fetchInstances`. null quando a instância não está
+   * pareada ou a Evolution não informa o dono.
+   */
+  async getNumeroConectado(instanceName) {
+    const dados = await chamar('get', `/instance/fetchInstances?instanceName=${encodeURIComponent(instanceName)}`);
+    const lista = Array.isArray(dados) ? dados : [dados];
+    const inst  = lista.map(i => i?.instance ?? i).find(i => (i?.name ?? i?.instanceName) === instanceName);
+    const jid   = inst?.ownerJid ?? inst?.owner ?? null;
+    const digitos = jid ? String(jid).split('@')[0].replace(/\D/g, '') : '';
+    return digitos || null;
+  },
+
   /** QR Code atual (mesmo endpoint do connect — Evolution regenera se preciso). */
   async getQRCode(instanceName) {
     return this.connect(instanceName);

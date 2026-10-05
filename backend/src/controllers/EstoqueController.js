@@ -1,6 +1,7 @@
 // backend/src/controllers/EstoqueController.js
 'use strict';
 
+const { querContagens } = require('../lib/contagemAtivos');
 const prisma = require('../lib/prisma').default;
 const { registrarAuditoria } = require('../lib/auditoria');
 const { registrarAtivacao, registrarInativacao, anexarTrilha } = require('../lib/cadastroAtivacao');
@@ -292,7 +293,7 @@ function responderErroUnidade(res, err) {
 
 const listar = async (req, res) => {
   try {
-    const { busca, ativo, limit } = req.query;
+    const { busca, ativo, limit, controlado } = req.query;
     const empresaId = getEmpresaScope(req);
 
     // Não-ADMIN sem empresa ativa não vê nada
@@ -312,6 +313,18 @@ const listar = async (req, res) => {
           { vias: { some: { via: { contains: busca, mode: 'insensitive' } } } },
         ],
       };
+    }
+
+    // Recorte BASE das abas (empresa + busca), antes de ativo/controlado — é sobre ele
+    // que cada aba é contada.
+    const whereBase = { ...where };
+    delete whereBase.ativo;
+
+    // 🔴 A aba "Controlados" sempre mandou `controlado=true` e o parâmetro era IGNORADO:
+    // ela listava todos os ativos. Com a contagem na aba, isso viraria um número que a
+    // lista não confirma — passou a recortar de verdade.
+    if (controlado === 'true') {
+      where.medicamento = { ...(where.medicamento ?? {}), controlado: true };
     }
 
     const rawItens = await prisma.estoqueClinica.findMany({
@@ -340,9 +353,30 @@ const listar = async (req, res) => {
     const totalAbaixoMinimo    = itens.filter((i) => i.ativo && i.qtdEstoque <= i.estoqueMinimo).length;
     const totalAbaixoAlarmante = itens.filter((i) => i.ativo && i.qtdEstoque <= i.estoqueAlarmante && i.qtdEstoque > i.estoqueMinimo).length;
 
+    // Quantidade de CADA aba (Todos · Ativos · Inativos · Crítico · Alarmante ·
+    // Controlados) — só quando a TELA pede. Mesmas regras de recorte da tela:
+    // crítico/alarmante/controlados são sobre os ATIVOS.
+    let contagens;
+    if (querContagens(req.query)) {
+      const ativos = await prisma.estoqueClinica.findMany({
+        where:  { ...whereBase, ativo: true },
+        select: { qtdEstoque: true, estoqueMinimo: true, estoqueAlarmante: true, medicamento: { select: { controlado: true } } },
+      });
+      const inativos = await prisma.estoqueClinica.count({ where: { ...whereBase, ativo: false } });
+      contagens = {
+        todos:       ativos.length + inativos,
+        ativos:      ativos.length,
+        inativos,
+        critico:     ativos.filter(i => i.qtdEstoque <= i.estoqueMinimo).length,
+        alarmante:   ativos.filter(i => i.qtdEstoque <= i.estoqueAlarmante && i.qtdEstoque > i.estoqueMinimo).length,
+        controlados: ativos.filter(i => i.medicamento?.controlado === true).length,
+      };
+    }
+
     return res.json({
       dados: itens,
       meta: { total, totalControlados, totalAbaixoMinimo, totalAbaixoAlarmante },
+      contagens,
     });
   } catch (err) {
     console.error('EstoqueController.listar:', err);

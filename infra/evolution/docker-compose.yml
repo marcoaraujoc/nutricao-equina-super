@@ -9,10 +9,14 @@
 
 services:
   evolution-api:
+    # PRODUÇÃO: fixe a versão TESTADA em dev (ex.: evoapicloud/evolution-api:v2.x.y) no lugar de
+    # :latest — atualização silenciosa da Evolution pode quebrar o envio de WhatsApp de todas as clínicas.
     image: evoapicloud/evolution-api:latest
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      # Só loopback. "8080:8080" faz o Docker passar por cima do UFW e expõe na internet a API
+      # que controla o WhatsApp de todas as clínicas. O S2Vet fala com ela em 127.0.0.1:8080.
+      - "127.0.0.1:8080:8080"
     environment:
       SERVER_TYPE: http
       SERVER_PORT: 8080

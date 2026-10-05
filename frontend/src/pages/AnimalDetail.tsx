@@ -93,7 +93,7 @@ interface EventoHistorico {
   atendimentoNumero?: string | null;
 }
 
-type TipoAgendamento = 'CONSULTA' | 'VACINA' | 'RETORNO' | 'EXAME' | 'PROCEDIMENTO';
+type TipoAgendamento = 'CONSULTA' | 'VACINA' | 'RETORNO' | 'EXAME' | 'PROCEDIMENTO' | 'VERMIFUGACAO';
 
 interface Agendamento {
   id:          number;
@@ -241,7 +241,11 @@ const BADGE_TIPO_AG: Record<TipoAgendamento, string> = {
   RETORNO:      'bg-teal-100 text-teal-700',
   EXAME:        'bg-purple-100 text-purple-700',
   PROCEDIMENTO: 'bg-emerald-100 text-emerald-700',
+  VERMIFUGACAO: 'bg-lime-100 text-lime-700',
 };
+
+// O tipo gravado não tem acento (VERMIFUGACAO) — o selo mostra o rótulo, não a constante.
+const LABEL_TIPO_AG: Partial<Record<TipoAgendamento, string>> = { VERMIFUGACAO: 'Vermifugação' };
 
 const POSOLOGIAS: Record<string, string> = {
   '1xDia': '1x/dia', '12em12h': '12 em 12h', '8em8h': '8 em 8h',
@@ -909,7 +913,7 @@ function CardAgendamento({ ag, podeGerenciar, onConcluir, onCancelar }: {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className={`inline-block text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${BADGE_TIPO_AG[ag.tipo] ?? 'bg-gray-100 text-gray-500'}`}>
-              {ag.tipo}
+              {LABEL_TIPO_AG[ag.tipo] ?? ag.tipo}
             </span>
             {isCancelado && (
               <span className={`inline-block text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${

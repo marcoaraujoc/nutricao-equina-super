@@ -10,6 +10,8 @@ const { checkPermission }        = require('../middlewares/permissao.middleware'
 
 // ── Grupos (nova API de prescrição por documento) ─────────────────────────────
 // Literais ANTES de /:id para evitar conflito de parâmetro
+// O que a empresa liberou para ser prescrito SEM evolução (lib/dispensaEvolucaoPrescricao.js)
+router.get('/dispensa-evolucao',          authenticate, checkPermission('atendimento.prescricoes.ler',     'LEITURA'), PrescricaoGrupoController.regrasSemEvolucao);
 router.get('/grupos/execucao',            authenticate, checkPermission('atendimento.prescricoes.ler',     'LEITURA'), PrescricaoGrupoController.listarParaExecucao);
 router.get('/grupos/animal/:animalId',    authenticate, checkPermission('atendimento.prescricoes.ler',     'LEITURA'), PrescricaoGrupoController.listarPorAnimal);
 router.get('/grupos/:id',                 authenticate, checkPermission('atendimento.prescricoes.ler',     'LEITURA'), PrescricaoGrupoController.obterPorId);

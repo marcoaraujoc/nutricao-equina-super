@@ -26,6 +26,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Package, Pill, Syringe, Search, Loader2, Layers, Pencil, Globe, ToggleLeft, ToggleRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
+import { sufixoContagem, type ContagemAtivos } from '../utils/contagemAtivos';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import InlineError from '../components/InlineError';
@@ -82,6 +83,9 @@ export default function Produtos() {
   // Ativos / Inativos / Todos — mesmo trio das demais telas de cadastro. Sem ele o
   // produto inativado sumiria e não haveria de onde reativá-lo.
   const [filtroAtivo, setFiltroAtivo] = useState<'all' | 'ativo' | 'inativo'>('ativo');
+  // Quantidade de cada aba Todos/Ativos/Inativos — do backend (o catálogo inteiro do
+  // recorte, não a página).
+  const [contagens, setContagens] = useState<ContagemAtivos | null>(null);
   // Quantos existem de fato × quantos vieram nesta PÁGINA.
   const [total, setTotal] = useState(0);
   // ── Paginação (2026-09-23, a pedido) ──────────────────────────────────────
@@ -129,10 +133,12 @@ export default function Produtos() {
           ativo: filtroAtivo === 'all' ? 'all' : filtroAtivo === 'inativo' ? 'false' : undefined,
           pagina,
           porPagina: POR_PAGINA,
+          contagens: 1,
         },
       });
       if (!res.data) return;                       // GET 403 resolve com data null
       setItens(res.data.dados ?? []);
+      setContagens(res.data.contagens ?? null);
       setTotal(res.data.total ?? (res.data.dados?.length ?? 0));
       // ⚠️ A página exibida é a que o BACKEND devolveu, não a que a tela pediu — é
       // ele quem a clampa contra o total.
@@ -436,7 +442,7 @@ export default function Produtos() {
                 className={`px-4 py-2 font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
                   filtroAtivo === v ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
                 }`}>
-                {v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos'}
+                {(v === 'all' ? 'Todos' : v === 'ativo' ? 'Ativos' : 'Inativos') + sufixoContagem(contagens, v)}
               </button>
             ))}
           </div>

@@ -8,6 +8,7 @@ import { usePermissoes } from '../hooks/usePermissoes';
 import { useAuth } from '../contexts/AuthContext';
 import ComboBuscavel from '../components/ComboBuscavel';
 import type { OpcaoCombo } from '../components/ComboBuscavel';
+import SeletorPacientesLocalidade from '../components/SeletorPacientesLocalidade';
 import PageContainer from '../components/PageContainer';
 import BotaoVoltar from '../components/BotaoVoltar';
 import { isSubespecialidadeValida } from '../utils/subespecialidades';
@@ -26,7 +27,7 @@ import { useEventosTempoReal } from '../hooks/useEventosTempoReal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type TipoAgendamento   = 'CONSULTA' | 'VACINA' | 'RETORNO' | 'EXAME' | 'PROCEDIMENTO';
+type TipoAgendamento   = 'CONSULTA' | 'VACINA' | 'RETORNO' | 'EXAME' | 'PROCEDIMENTO' | 'VERMIFUGACAO';
 // REAGENDADO: o horário some da grade e a observação guarda para quando o atendimento
 // foi movido (diferente de CANCELADO, que é desistência).
 // TRANSFERIDO é o nome ANTIGO do mesmo estado — mantido só para os registros já
@@ -290,6 +291,7 @@ const TIPOS: { value: TipoAgendamento; label: string; cor: string }[] = [
   { value: 'RETORNO',      label: 'Retorno',      cor: 'bg-green-100 text-green-700'     },
   { value: 'EXAME',        label: 'Exame',        cor: 'bg-cyan-100 text-cyan-700'       },
   { value: 'PROCEDIMENTO', label: 'Procedimento', cor: 'bg-emerald-50 text-emerald-600'  },
+  { value: 'VERMIFUGACAO', label: 'Vermifugação', cor: 'bg-lime-100 text-lime-700'        },
 ];
 
 // Espelha STATUS_LIVRES do AgendamentoController: não ocupam mais a grade.
@@ -954,6 +956,12 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   const [comboOpen, setComboOpen]         = useState(false);
   const comboRef                          = useRef<HTMLDivElement>(null);
   const [bookingForm, setBookingForm]     = useState<BookingForm>({ animalId: '', proprietarioNome: '', telefone: '', cpf: '' });
+  // A que o agendamento se refere (consulta, vacina, vermifugação…) e o modo LOTE por
+  // localidade: escolhida uma localidade, os pacientes dela são marcados num checklist
+  // e TODOS ficam no mesmo horário (uma visita) — ver AgendamentoController.criar.
+  const [bookingTipo, setBookingTipo]     = useState<TipoAgendamento>('CONSULTA');
+  const [bookingLocal, setBookingLocal]   = useState('');
+  const [bookingLote, setBookingLote]     = useState<number[]>([]);
   const [salvando, setSalvando]           = useState(false);
   const [reagendando, setReagendando]     = useState<AgendamentoGlobal | null>(null);
   // Reagendamento: dia e horário escolhidos na MESMA agenda da tela principal
@@ -984,6 +992,9 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   // Confirmação de conflito: animal já possui agendamento — o vet precisa dar ciência antes de prosseguir
   const [conflitoConfirm, setConflitoConfirm] = useState<{
     animalNome: string; quando: string; hora: string; vetNome: string; onConfirm: () => void;
+    /** Lote com mais de um paciente já agendado no dia — o texto não cita hora/profissional
+     *  de um só, que não valeriam para os outros. */
+    multiplos?: boolean;
     // Fecha também o painel de origem (ex.: modal "Novo Agendamento") ao cancelar,
     // para o usuário voltar à tela de agendamentos em vez de ficar preso no formulário.
     onCancel?: () => void;
@@ -1580,6 +1591,25 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     );
   }), [agendamentos, filtroVetId, busca, filtroStatus, modoMinhaAgenda, isGestor, meuUserId]);
 
+  // Quantos agendamentos cada opção do seletor de status traria — o MESMO recorte da
+  // lista (dia, profissional, busca, Minha Agenda) MENOS o próprio status, contado pela
+  // MESMA `statusCasaFiltro`. Contar por outra regra faria a opção prometer um número
+  // e a lista mostrar outro.
+  const contagemStatus = useCallback((filtro: FiltroStatus): number => agendamentos.filter(ag => {
+    if (modoMinhaAgenda && !isGestor && ag.veterinario?.id !== meuUserId) return false;
+    if (filtroVetId && chaveResponsavel(ag) !== Number(filtroVetId)) return false;
+    if (!statusCasaFiltro(ag.status, filtro)) return false;
+    if (!busca.trim()) return true;
+    const q = busca.toLowerCase();
+    return (
+      ag.animal?.nome.toLowerCase().includes(q) ||
+      ag.titulo.toLowerCase().includes(q) ||
+      ag.veterinario?.fullName.toLowerCase().includes(q) ||
+      ag.prestadorCadastro?.nome.toLowerCase().includes(q) ||
+      ag.animal?.user?.fullName.toLowerCase().includes(q)
+    );
+  }).length, [agendamentos, filtroVetId, busca, modoMinhaAgenda, isGestor, meuUserId]);
+
   // Especialidades oferecidas pela equipe — união do catálogo de todos os profissionais
   const especialidadesDisponiveis = useMemo(() => {
     const m = new Map<number, string>();
@@ -1988,6 +2018,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
       setBooking({ vetId, vetName, hora });
       setBookingForm({ animalId: '', proprietarioNome: '', telefone: '', cpf: '' });
       setComboQuery(''); setComboOpen(false);
+      setBookingTipo('CONSULTA'); setBookingLocal(''); setBookingLote([]);
     }
   }
 
@@ -2110,19 +2141,33 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     finally { setSalvando(false); }
   }
 
+  /** Pacientes do agendamento: os marcados na localidade (lote) ou o avulso. */
+  const idsDoBooking = (): number[] =>
+    bookingLocal ? bookingLote : (bookingForm.animalId ? [Number(bookingForm.animalId)] : []);
+
   async function executarConfirmarBooking() {
     if (!booking) return;
-    const animal = animais.find(a => String(a.id) === bookingForm.animalId);
+    const ids = idsDoBooking();
+    const rotulo = labelTipo(bookingTipo);
     setSalvando(true);
     try {
-      const res = await api.post('/clinica/agendamentos', {
-        animalId: Number(bookingForm.animalId), tipo: 'CONSULTA',
-        titulo: `Consulta - ${animal?.nome ?? 'Paciente'}`,
+      const comum = {
+        tipo: bookingTipo,
         dataHora: new Date(`${selectedDate}T${booking.hora}`).toISOString(),
         ...responsavelPayload(booking.vetId),
         especialidadeId: espDoVet(booking.vetId)?.id ?? undefined,
-      });
-      toast.success(`Consulta agendada às ${booking.hora} com ${booking.vetName}`);
+      };
+      // Um paciente segue o contrato de sempre; dois ou mais vão em LOTE (mesmo
+      // horário, uma transaction só) — o backend acrescenta " - <paciente>" ao título.
+      const res = ids.length === 1
+        ? await api.post('/clinica/agendamentos', {
+            ...comum, animalId: ids[0],
+            titulo: `${rotulo} - ${animais.find(a => a.id === ids[0])?.nome ?? 'Paciente'}`,
+          })
+        : await api.post('/clinica/agendamentos', { ...comum, animalIds: ids, titulo: rotulo });
+      toast.success(ids.length === 1
+        ? `${rotulo} agendado(a) às ${booking.hora} com ${booking.vetName}`
+        : `${ids.length} pacientes agendados às ${booking.hora} com ${booking.vetName}`);
       avisarContatoProfissional(res);
       setBooking(null); fetchAgendamentos(selectedDate); setMesCarregado('');
     } catch (err) { setErroGrade(msgErroAgenda(err, 'Erro ao criar agendamento')); }
@@ -2133,16 +2178,25 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
     e.preventDefault();
     setErroGrade(null);
     if (!booking) return;
-    if (!bookingForm.animalId) { setErroGrade('Selecione um animal'); return; }
-    const conflito = findConflictAnimal(Number(bookingForm.animalId));
-    if (conflito) {
-      const nomeAnimal = animais.find(a => String(a.id) === bookingForm.animalId)?.nome ?? 'este animal';
-      // Não bloqueia, mas exige ciência do vet: abre modal de confirmação antes de agendar
+    const ids = idsDoBooking();
+    if (ids.length === 0) {
+      setErroGrade(bookingLocal ? 'Selecione ao menos um paciente da localidade' : 'Selecione um animal');
+      return;
+    }
+    // Não bloqueia, mas exige ciência do vet: abre modal de confirmação antes de agendar.
+    // No lote, lista TODOS os pacientes que já têm agendamento no dia.
+    const conflitos = ids
+      .map(id => ({ id, ag: findConflictAnimal(id) }))
+      .filter((c): c is { id: number; ag: AgendamentoGlobal } => !!c.ag);
+    if (conflitos.length > 0) {
+      const nomeDe = (id: number) => animais.find(a => a.id === id)?.nome ?? 'este animal';
+      const primeiro = conflitos[0].ag;
       setConflitoConfirm({
-        animalNome: nomeAnimal,
+        animalNome: conflitos.map(c => nomeDe(c.id)).join(', '),
         quando:     dataRelativa(selectedDate),
-        hora:       formatarHora(conflito.dataHora),
-        vetNome:    nomeResponsavel(conflito) ?? booking.vetName,
+        hora:       formatarHora(primeiro.dataHora),
+        vetNome:    nomeResponsavel(primeiro) ?? booking.vetName,
+        multiplos:  conflitos.length > 1,
         onConfirm:  () => executarConfirmarBooking(),
         onCancel:   () => setBooking(null),
       });
@@ -2961,19 +3015,20 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                   navegadores/mobile. Fixar `font-sans` garante a mesma tipografia. */}
               <select value={filtroStatus} onChange={e => setFiltroStatus(e.target.value as FiltroStatus)}
                 className="text-xs border border-gray-200 rounded-xl pl-3 pr-7 py-1.5 bg-gray-50 text-gray-700 font-semibold outline-none cursor-pointer appearance-none font-sans">
-                <option value="ABERTOS">Em aberto</option>
-                <option value="TODOS">Todos os status</option>
+                {/* Quantidade em toda opção (a pedido) — `contagemStatus`. */}
+                <option value="ABERTOS">Em aberto ({contagemStatus('ABERTOS')})</option>
+                <option value="TODOS">Todos os status ({contagemStatus('TODOS')})</option>
                 <optgroup label="Somente">
                   {/* Grupos — batem com os números dos Indicadores de Atendimento:
                       "realizadas" = concluído + finalizado; "canceladas" = cancelado
                       manual + cancelado pela rotina noturna. */}
-                  <option value="REALIZADOS">Realizados</option>
-                  <option value="CANCELADOS">Cancelados</option>
+                  <option value="REALIZADOS">Realizados ({contagemStatus('REALIZADOS')})</option>
+                  <option value="CANCELADOS">Cancelados ({contagemStatus('CANCELADOS')})</option>
                   {STATUS_FILTRAVEIS.map(s => (
                     // STATUS_LABEL é CAIXA ALTA (serve aos badges da lista); no seletor
                     // isso destoaria das outras opções, então cai para "Concluído".
                     <option key={s} value={s}>
-                      {STATUS_LABEL[s].charAt(0) + STATUS_LABEL[s].slice(1).toLowerCase()}
+                      {STATUS_LABEL[s].charAt(0) + STATUS_LABEL[s].slice(1).toLowerCase()} ({contagemStatus(s)})
                     </option>
                   ))}
                 </optgroup>
@@ -3280,14 +3335,15 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
       {/* ── Modal: Confirmar Horário ──────────────────────────────────────────── */}
       {booking && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
+          {/* Rola por dentro: com o checklist da localidade o modal passa da altura da tela. */}
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md max-h-[calc(100vh-2rem)] overflow-y-auto">
             <div className="bg-gradient-to-br from-emerald-600 to-emerald-700 px-6 pt-5 pb-6 relative">
               <button onClick={() => { setBooking(null); setErroGrade(null); }}
                 className="absolute top-4 right-4 p-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white transition-colors">
                 <X size={16} />
               </button>
               <p className="text-[10px] font-bold text-emerald-200 uppercase tracking-widest mb-1">Novo Agendamento Clínico</p>
-              <h3 className="text-lg font-bold text-white mb-4">Confirmar Horário de Consulta</h3>
+              <h3 className="text-lg font-bold text-white mb-4">Confirmar Horário — {labelTipo(bookingTipo)}</h3>
               <div className="bg-white/15 rounded-2xl px-4 py-3 flex items-center justify-between gap-4">
                 <div>
                   <p className="text-[10px] font-semibold text-emerald-200">
@@ -3312,6 +3368,31 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                   <span className="w-2 h-2 rounded-full bg-emerald-600 flex-shrink-0" />
                   <p className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">Identificação do Paciente</p>
                 </div>
+                <div className="mb-3">
+                  <label className="text-xs font-bold text-gray-600 mb-1.5 block">Refere-se a <span className="text-red-500">*</span></label>
+                  <ComboBuscavel
+                    value={bookingTipo}
+                    onChange={v => { if (v) setBookingTipo(v as TipoAgendamento); }}
+                    opcoes={TIPOS.map(t => ({ value: t.value, label: t.label }))}
+                    placeholder="Consulta, vacina, vermifugação…"
+                    className="w-full py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-800 font-semibold outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                  />
+                </div>
+                <div className="mb-3">
+                  <SeletorPacientesLocalidade
+                    pacientes={animaisAgendaveis}
+                    localidade={bookingLocal}
+                    onLocalidade={v => {
+                      setBookingLocal(v); setBookingLote([]); setErroGrade(null);
+                      // Trocar de modo descarta a escolha do outro: avulso e lote não convivem.
+                      setBookingForm({ animalId: '', proprietarioNome: '', telefone: '', cpf: '' });
+                      setComboQuery(''); setComboOpen(false);
+                    }}
+                    selecionados={bookingLote}
+                    onSelecionados={ids => { setBookingLote(ids); setErroGrade(null); }}
+                  />
+                </div>
+                {!bookingLocal && (<>
                 <label className="text-xs font-bold text-gray-600 mb-1.5 block">Selecione o Animal <span className="text-red-500">*</span></label>
                 <div ref={comboRef} className="relative">
                   <Search size={13} className="absolute left-3 top-3 text-gray-400 pointer-events-none z-10" />
@@ -3355,9 +3436,12 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                     <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-2xl shadow-xl z-20 px-4 py-3 text-sm text-gray-400 text-center">Nenhum animal encontrado</div>
                   )}
                 </div>
+                </>)}
               </div>
 
-              {/* Proprietário */}
+              {/* Proprietário — só no paciente avulso: no lote cada animal tem o seu
+                  dono, e o aviso por WhatsApp vai para cada um deles. */}
+              {!bookingLocal && (
               <div>
                 <div className="flex items-center gap-2 mb-3">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0" />
@@ -3392,6 +3476,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                   </div>
                 </div>
               </div>
+              )}
 
               <div className="flex items-center justify-between gap-3 pt-2 border-t border-gray-100">
                 <button type="button" onClick={() => { setBooking(null); setErroGrade(null); }}
@@ -3401,7 +3486,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                 <button type="submit" disabled={salvando}
                   className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-bold rounded-xl transition-colors">
                   {salvando ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-                  Confirmar Agendamento
+                  {bookingLocal && bookingLote.length > 1 ? `Agendar ${bookingLote.length} pacientes` : 'Confirmar Agendamento'}
                 </button>
               </div>
             </form>
@@ -3761,7 +3846,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                   <div className="flex gap-2 pt-1">
                     <button onClick={() => setVozEtapa('IDLE')}
                       className="flex-1 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-600 text-sm font-semibold rounded-xl transition-colors">Tentar novamente</button>
-                    <button onClick={() => { const ctx = vozContexto; resetVoz(); if (ctx) { setBooking({ ...ctx }); setBookingForm({ animalId: '', proprietarioNome: '', telefone: '', cpf: '' }); setComboQuery(''); setComboOpen(false); } }}
+                    <button onClick={() => { const ctx = vozContexto; resetVoz(); if (ctx) { setBooking({ ...ctx }); setBookingForm({ animalId: '', proprietarioNome: '', telefone: '', cpf: '' }); setComboQuery(''); setComboOpen(false); setBookingTipo('CONSULTA'); setBookingLocal(''); setBookingLote([]); } }}
                       className="flex-1 py-2.5 bg-gray-700 hover:bg-gray-800 text-white text-sm font-bold rounded-xl transition-colors">Agendar Manual</button>
                   </div>
                 </div>
@@ -3800,11 +3885,17 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
               <h3 className="font-bold text-amber-800">Agendamento já existente</h3>
             </div>
             <div className="px-5 py-4">
+              {conflitoConfirm.multiplos ? (
+                <p className="text-sm text-gray-700 leading-relaxed">
+                  <span className="font-bold">{conflitoConfirm.animalNome}</span> já têm agendamento {conflitoConfirm.quando}.
+                </p>
+              ) : (
               <p className="text-sm text-gray-700 leading-relaxed">
                 <span className="font-bold">{conflitoConfirm.animalNome}</span> já tem um agendamento {conflitoConfirm.quando} às{' '}
                 <span className="font-bold">{conflitoConfirm.hora}</span> com{' '}
                 <span className="font-bold">{conflitoConfirm.vetNome}</span>.
               </p>
+              )}
             </div>
             <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100">
               <button onClick={() => { const onCancel = conflitoConfirm.onCancel; setConflitoConfirm(null); onCancel?.(); }}
