@@ -275,7 +275,7 @@ gerenciador de senhas na hora.
 
 | Segredo | Etapa | Observação |
 |---|---|---|
-| Senha do usuário `marco` (uma por VPS, ou a mesma) | 3 | Só serve para o `sudo` — o login é por chave |
+| Senha do usuário `vetprof` (uma por VPS, ou a mesma) | 3 | Só serve para o `sudo` — o login é por chave |
 | Chave do WireGuard de cada VPS + chave pré-compartilhada | 9 | Geradas nas próprias VPS; a privada **nunca** sai de lá |
 | Senhas das roles `nutriadmin` e `zls2vetp1` | 10 | Sem `/`, `+`, `=`, `@` (quebram a `DATABASE_URL`) |
 | Chave do backup (`age`) | 11 | 🔴 A PRIVADA fica **fora** do servidor, em dois lugares seus |
@@ -340,7 +340,7 @@ tem dado), depois a 9 (as duas juntas), 10 a 14 no Backend, 15 e 16 no Frontend,
 |---|---|---|
 | 1 | AMBAS | Você sabe o que veio instalado e o que está exposto |
 | 2 | AMBAS | Sistema atualizado, fuso e nome configurados |
-| 3 | AMBAS | Usuário `marco` com `sudo`; o root deixa de ser usado |
+| 3 | AMBAS | Usuário `vetprof` com `sudo`; o root deixa de ser usado |
 | 4 | — | Você sabe como não se trancar para fora |
 | 5 | AMBAS | SSH só aceita chave (fim da força bruta de senha) |
 | 6 | AMBAS | SSH funcionando pelo Tailscale |
@@ -524,57 +524,57 @@ reboot
 ## Etapa 3 — Usuário administrativo `[AMBAS]`
 
 Trabalhar como `root` é perigoso: um comando errado não tem freio, e o root é o primeiro alvo
-de qualquer ataque. Vamos criar o usuário `marco`, que vira administrador só quando pede
+de qualquer ataque. Vamos criar o usuário `vetprof`, que vira administrador só quando pede
 (`sudo`), e depois **desligar o login do root**.
 
 ```bash
-adduser marco
+adduser vetprof
 ```
-> **Para que serve:** cria o usuário `marco` com a pasta `/home/marco`. Ele vai pedir uma
+> **Para que serve:** cria o usuário `vetprof` com a pasta `/home/vetprof`. Ele vai pedir uma
 > **senha**: gere uma forte no gerenciador de senhas e guarde lá. Essa senha **não** serve
 > para entrar por SSH (que será só por chave) — serve para o `sudo` e para um eventual
 > console de emergência. As perguntas seguintes (nome completo, telefone) podem ficar em
 > branco: só aperte Enter.
 
 ```bash
-usermod -aG sudo marco
+usermod -aG sudo vetprof
 ```
-> **Para que serve:** coloca o `marco` no grupo `sudo`, que permite executar comandos como
-> administrador digitando `sudo` na frente (e a senha do `marco`).
+> **Para que serve:** coloca o `vetprof` no grupo `sudo`, que permite executar comandos como
+> administrador digitando `sudo` na frente (e a senha do `vetprof`).
 
 ```bash
-install -d -m 700 -o marco -g marco /home/marco/.ssh
+install -d -m 700 -o vetprof -g vetprof /home/vetprof/.ssh
 ```
-> **Para que serve:** cria a pasta `.ssh` do `marco` com permissão `700` (só ele lê e
+> **Para que serve:** cria a pasta `.ssh` do `vetprof` com permissão `700` (só ele lê e
 > escreve). O SSH **recusa** a chave se essa pasta tiver permissão mais aberta.
 
 ```bash
-cp /root/.ssh/authorized_keys /home/marco/.ssh/authorized_keys
+cp /root/.ssh/authorized_keys /home/vetprof/.ssh/authorized_keys
 ```
-> **Para que serve:** copia a sua chave pública do root para o `marco`. Assim você entra como
-> `marco` com a mesma chave que já usa.
+> **Para que serve:** copia a sua chave pública do root para o `vetprof`. Assim você entra como
+> `vetprof` com a mesma chave que já usa.
 
 ```bash
-chown marco:marco /home/marco/.ssh/authorized_keys && chmod 600 /home/marco/.ssh/authorized_keys
+chown vetprof:vetprof /home/vetprof/.ssh/authorized_keys && chmod 600 /home/vetprof/.ssh/authorized_keys
 ```
-> **Para que serve:** faz o `marco` dono do arquivo e deixa só ele ler (`600`). De novo: o SSH
+> **Para que serve:** faz o `vetprof` dono do arquivo e deixa só ele ler (`600`). De novo: o SSH
 > ignora o arquivo se as permissões estiverem frouxas.
 
 ✅ **Sem fechar o terminal atual**, abra **outro** PowerShell e teste:
 
 ```powershell
-ssh marco@177.153.69.171
+ssh vetprof@177.153.69.171
 ```
 > **Para que serve:** prova que o novo usuário entra com a sua chave. Troque o IP no Frontend.
 
 ```bash
 sudo -v
 ```
-> **Para que serve:** (já dentro, como `marco`) pede a senha do `marco` e confirma que o
+> **Para que serve:** (já dentro, como `vetprof`) pede a senha do `vetprof` e confirma que o
 > `sudo` funciona. Se responder sem erro, está certo.
 
-🔴 Só siga para a Etapa 5 quando o `ssh marco@...` e o `sudo -v` funcionarem. A partir daqui,
-**todos os comandos usam `sudo`** e são executados como `marco`.
+🔴 Só siga para a Etapa 5 quando o `ssh vetprof@...` e o `sudo -v` funcionarem. A partir daqui,
+**todos os comandos usam `sudo`** e são executados como `vetprof`.
 
 ---
 
@@ -589,7 +589,7 @@ daqui a 10 minutos. Se tudo deu certo, cancela o agendamento. Se você ficou tra
 
 **Antes de mexer no firewall:**
 ```bash
-sudo systemd-run --unit=s2vet-desfaz-firewall --on-active=10min /usr/sbin/ufw disable
+sudo systemd-run --unit=s2vet-desfaz-firewall --on-active=10min --timer-property=RemainAfterElapse=no /usr/sbin/ufw disable
 ```
 > **Para que serve:** agenda, para daqui a 10 minutos, o comando que **desliga o firewall**.
 > Se a regra que você acabou de criar te trancar para fora, o firewall se desliga sozinho e
@@ -597,7 +597,7 @@ sudo systemd-run --unit=s2vet-desfaz-firewall --on-active=10min /usr/sbin/ufw di
 
 **Antes de mexer no SSH:**
 ```bash
-sudo systemd-run --unit=s2vet-desfaz-ssh --on-active=10min /bin/sh -c 'rm -f /etc/ssh/sshd_config.d/00-s2vet.conf; systemctl restart ssh'
+sudo systemd-run --unit=s2vet-desfaz-ssh --on-active=10min --timer-property=RemainAfterElapse=no /bin/sh -c 'rm -f /etc/ssh/sshd_config.d/00-s2vet.conf; systemctl restart ssh'
 ```
 > **Para que serve:** agenda, para daqui a 10 minutos, a remoção do arquivo de configuração
 > de segurança do SSH (o que a Etapa 5 cria) e o reinício do SSH. Se a configuração nova te
@@ -616,6 +616,13 @@ systemctl list-timers --all | grep s2vet
 ```
 > **Para que serve:** mostra os desfazeres agendados e quanto falta para cada um disparar.
 > Vazio = nada agendado.
+
+⚠️ **Erro `Unit s2vet-desfaz-....timer was already loaded`:** já existe um agendamento com esse
+nome (de uma tentativa anterior). Antes de agendar de novo, confira se ele **já disparou** — o
+`desfaz-ssh` apaga o `00-s2vet.conf`, e o `desfaz-firewall` desliga o UFW (`sudo ufw status`
+mostra) — e descarte-o com `sudo systemctl stop s2vet-desfaz-ssh.timer` (ou
+`s2vet-desfaz-firewall.timer`). O `--timer-property=RemainAfterElapse=no` dos comandos acima
+evita o erro daqui em diante: o agendamento é descartado sozinho depois de disparar.
 
 **As outras redes de segurança:**
 - Mantenha **sempre uma sessão SSH aberta** enquanto testa a mudança em **outra** janela.
@@ -638,7 +645,7 @@ começa com `00-`: ele é lido primeiro e vence.
 
 Primeiro, a rede de segurança:
 ```bash
-sudo systemd-run --unit=s2vet-desfaz-ssh --on-active=10min /bin/sh -c 'rm -f /etc/ssh/sshd_config.d/00-s2vet.conf; systemctl restart ssh'
+sudo systemd-run --unit=s2vet-desfaz-ssh --on-active=10min --timer-property=RemainAfterElapse=no /bin/sh -c 'rm -f /etc/ssh/sshd_config.d/00-s2vet.conf; systemctl restart ssh'
 ```
 > **Para que serve:** o desfazer automático da [Etapa 4](#etapa-4--rede-de-segurança-contra-se-trancar-fora).
 
@@ -660,12 +667,12 @@ AllowAgentForwarding no
 # "local" permite abrir um túnel até o banco (DBeaver) sem permitir abrir portas no servidor.
 AllowTcpForwarding local
 # Só estes usuários podem entrar por SSH.
-AllowUsers marco
+AllowUsers vetprof
 EOF
 ```
 > **Para que serve:** cria o arquivo de configuração de segurança do SSH. O `tee` grava o
 > texto entre `<<'EOF'` e `EOF` no arquivo; os comentários explicam cada linha.
-> ⚠️ **No Frontend**, troque a última linha por `AllowUsers marco deploy` (o usuário `deploy`
+> ⚠️ **No Frontend**, troque a última linha por `AllowUsers vetprof deploy` (o usuário `deploy`
 > é criado na Etapa 15 para receber o site).
 
 ```bash
@@ -683,12 +690,12 @@ sudo systemctl restart ssh
 sudo sshd -T | grep -Ei '^(passwordauthentication|permitrootlogin|allowusers|kbdinteractive)'
 ```
 > **Para que serve:** mostra a configuração **efetiva** (depois de juntar todos os arquivos).
-> Esperado: `passwordauthentication no`, `permitrootlogin no`, `allowusers marco`,
+> Esperado: `passwordauthentication no`, `permitrootlogin no`, `allowusers vetprof`,
 > `kbdinteractiveauthentication no`.
 
 ✅ Em **outra** janela do PowerShell:
 ```powershell
-ssh marco@177.153.69.171
+ssh vetprof@177.153.69.171
 ```
 > **Para que serve:** prova que você ainda entra. Deve funcionar normalmente.
 
@@ -707,7 +714,7 @@ sudo systemctl stop s2vet-desfaz-ssh.timer
 sudo passwd -l root
 ```
 > **Para que serve:** **trava a senha do root** (o `-l` é de *lock*). Mesmo num console de
-> emergência, ninguém entra como root com senha; você entra como `marco` (que tem senha) e
+> emergência, ninguém entra como root com senha; você entra como `vetprof` (que tem senha) e
 > usa `sudo`. Reversível com `sudo passwd -u root`.
 
 ```bash
@@ -725,7 +732,7 @@ sudo rm -f /root/.ssh/authorized_keys
 
 Em `https://login.tailscale.com/admin`:
 
-1. **DNS → ative o MagicDNS.** Permite usar `ssh marco@s2vet-be` pelo nome, em vez de
+1. **DNS → ative o MagicDNS.** Permite usar `ssh vetprof@s2vet-be` pelo nome, em vez de
    decorar o IP `100.x.y.z` que o Tailscale dá a cada máquina.
 2. **Access controls** → no arquivo de política, garanta este conteúdo (ajuste se já tiver
    outras regras suas):
@@ -782,18 +789,18 @@ tailscale status
 > **Para que serve:** lista os aparelhos da sua rede. `s2vet-be` e `s2vet-fe` devem aparecer.
 
 ```powershell
-ssh marco@s2vet-be
+ssh vetprof@s2vet-be
 ```
 > **Para que serve:** entra na VPS **pelo Tailscale**, usando o nome. ✅ Tem de funcionar
-> antes de seguir para a Etapa 7. (No Frontend: `ssh marco@s2vet-fe`.)
+> antes de seguir para a Etapa 7. (No Frontend: `ssh vetprof@s2vet-fe`.)
 
 **Opcional, mas confortável** — atalho no PC para não digitar usuário toda vez:
 
 ```powershell
-Add-Content $env:USERPROFILE\.ssh\config "`nHost s2vet-be s2vet-fe`n    User marco`n    IdentityFile ~/.ssh/id_ed25519`n"
+Add-Content $env:USERPROFILE\.ssh\config "`nHost s2vet-be s2vet-fe`n    User vetprof`n    IdentityFile ~/.ssh/id_ed25519`n"
 ```
 > **Para que serve:** grava no arquivo de configuração do SSH do Windows que, para as duas
-> máquinas, o usuário é `marco` e a chave é a sua. Depois disso basta `ssh s2vet-be`.
+> máquinas, o usuário é `vetprof` e a chave é a sua. Depois disso basta `ssh s2vet-be`.
 
 ⚠️ Instale o Tailscale também no **celular** e entre com a mesma conta: é o acesso reserva.
 
@@ -801,14 +808,14 @@ Add-Content $env:USERPROFILE\.ssh\config "`nHost s2vet-be s2vet-fe`n    User mar
 
 ## Etapa 7 — Firewall (UFW) e fechamento do SSH público `[AMBAS]`
 
-🔴 **Faça esta etapa conectado PELO TAILSCALE** (`ssh marco@s2vet-be`), não pelo IP público.
+🔴 **Faça esta etapa conectado PELO TAILSCALE** (`ssh vetprof@s2vet-be`), não pelo IP público.
 Assim, quando a porta 22 pública fechar, a sua sessão continua de pé.
 
 O UFW ("firewall descomplicado") é a interface amigável do firewall do Linux. A regra de
 ouro é: **bloqueia tudo que chega, libera só o que for nomeado**.
 
 ```bash
-sudo systemd-run --unit=s2vet-desfaz-firewall --on-active=10min /usr/sbin/ufw disable
+sudo systemd-run --unit=s2vet-desfaz-firewall --on-active=10min --timer-property=RemainAfterElapse=no /usr/sbin/ufw disable
 ```
 > **Para que serve:** o desfazer automático da [Etapa 4](#etapa-4--rede-de-segurança-contra-se-trancar-fora).
 
@@ -860,7 +867,7 @@ sudo ufw status verbose
 ✅ Em **outra** janela do PowerShell, teste as duas portas de entrada:
 
 ```powershell
-ssh marco@s2vet-be
+ssh vetprof@s2vet-be
 ```
 > **Para que serve:** pelo Tailscale **tem de entrar**.
 
@@ -1170,7 +1177,7 @@ sudo apt -y install wireguard
 ```bash
 sudo -i
 ```
-> **Para que serve:** abre um terminal de **root** (você digita a senha do `marco`). Os
+> **Para que serve:** abre um terminal de **root** (você digita a senha do `vetprof`). Os
 > próximos comandos mexem em arquivos que só o root lê; fazer tudo como root evita repetir
 > `sudo` e evita erros com o redirecionamento de arquivos. **Saia com `exit` no fim da 9.3.**
 
@@ -1266,7 +1273,7 @@ chmod 600 /etc/wireguard/*.key /etc/wireguard/wg0.conf && ls -l /etc/wireguard
 ```bash
 exit
 ```
-> **Para que serve:** sai do terminal de root e volta a ser `marco`.
+> **Para que serve:** sai do terminal de root e volta a ser `vetprof`.
 
 ### 9.4 Firewall do túnel
 
@@ -1350,7 +1357,7 @@ sudo journalctl -u wg-quick@wg0 -n 30 --no-pager
 
 ### 10.1 Usuário de serviço e pastas
 
-A aplicação roda com um usuário **próprio e sem poderes** (`s2vet`), nunca como `marco` ou
+A aplicação roda com um usuário **próprio e sem poderes** (`s2vet`), nunca como `vetprof` ou
 root. Se a aplicação for invadida, o invasor fica preso às permissões desse usuário.
 
 ```bash
@@ -1653,7 +1660,7 @@ pg_dump -U postgres -h localhost -Fc -d dbs2vet -f s2vet_golden.dump
 
 `[PC]` Enviar para o Backend **pelo Tailscale**:
 ```powershell
-scp s2vet_golden.dump marco@s2vet-be:/tmp/
+scp s2vet_golden.dump vetprof@s2vet-be:/tmp/
 ```
 > **Para que serve:** copia o arquivo para a pasta temporária do Backend, por dentro da conexão
 > cifrada do Tailscale.
@@ -1971,7 +1978,7 @@ sudo install -d -o root -g root -m 750 /opt/evolution
 
 `[PC]` Copiar o arquivo do repositório para o Backend:
 ```powershell
-scp infra\evolution\docker-compose.yml marco@s2vet-be:/tmp/
+scp infra\evolution\docker-compose.yml vetprof@s2vet-be:/tmp/
 ```
 > **Para que serve:** envia o arquivo de composição (o "projeto" com Evolution + Postgres +
 > Redis próprios) para o servidor.
@@ -2054,11 +2061,11 @@ sudo chown deploy:deploy /home/deploy/.ssh/authorized_keys && sudo chmod 600 /ho
 > `no-pty` — não abre terminal interativo; `no-*-forwarding` — não abre túneis nem
 > encaminhamentos. Mesmo que a chave vaze, ela não serve de outro lugar.
 
-Lembre: na Etapa 5, o `AllowUsers` do Frontend deve ser `marco deploy`. Confira:
+Lembre: na Etapa 5, o `AllowUsers` do Frontend deve ser `vetprof deploy`. Confira:
 ```bash
 sudo sshd -T | grep -i allowusers
 ```
-> **Para que serve:** ✅ esperado `allowusers marco` e `allowusers deploy` (ou os dois na mesma
+> **Para que serve:** ✅ esperado `allowusers vetprof` e `allowusers deploy` (ou os dois na mesma
 > linha). Se faltar o `deploy`, edite `/etc/ssh/sshd_config.d/00-s2vet.conf` e rode
 > `sudo sshd -t && sudo systemctl restart ssh`.
 
@@ -2502,7 +2509,7 @@ para o seu e-mail.
 |---|---|---|---|
 | S1 | Backend fechado | `Test-NetConnection 177.153.69.171 -Port 22` (repita com 80, 443, 3001, 5432, 8080) | `TcpTestSucceeded : False` em **todas** |
 | S2 | Frontend fechado | `Test-NetConnection 177.153.69.147 -Port 22` (repita com 80, 443, 8080) | `False` em todas |
-| S3 | SSH pelo Tailscale | `ssh marco@s2vet-be` e `ssh marco@s2vet-fe`, de casa **e** pelo 4G do celular (app Tailscale + Termius) | entra nos dois casos |
+| S3 | SSH pelo Tailscale | `ssh vetprof@s2vet-be` e `ssh vetprof@s2vet-fe`, de casa **e** pelo 4G do celular (app Tailscale + Termius) | entra nos dois casos |
 | S4 | WAF | `curl.exe -s -o NUL -w "%{http_code}" https://app.s2vet.com.br/.env` | `403` |
 | S5 | Webhook de fora | `curl.exe -s -o NUL -w "%{http_code}" -X POST https://app.s2vet.com.br/api/webhooks/evolution` | `403` |
 | S6 | TLS | `https://www.ssllabs.com/ssltest/` com `app.s2vet.com.br` | nota **A** ou **A+** |
@@ -2780,7 +2787,7 @@ echo '0 * * * * root [ "$(df --output=pcent / | tail -1 | tr -dc 0-9)" -gt 80 ] 
 
 `[PC]`:
 ```powershell
-ssh -N -L 5433:127.0.0.1:5432 marco@s2vet-be
+ssh -N -L 5433:127.0.0.1:5432 vetprof@s2vet-be
 ```
 > **Para que serve:** abre um túnel do seu PC até o banco, por dentro do Tailscale + SSH:
 > o que você conectar em `localhost:5433` no seu PC chega no `127.0.0.1:5432` do Backend. O
