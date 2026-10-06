@@ -362,10 +362,10 @@ tem dado), depois a 9 (as duas juntas), 10 a 14 no Backend, 15 e 16 no Frontend,
 | 1 Inventário | ✅ 2026-10-06 | ✅ 2026-10-06 |
 | 2 Atualização + nome | ✅ (nome `s2vet-be`) | ✅ (nome `s2vet-fe`) |
 | 3 Usuário administrativo | ✅ `vetprof` | ✅ `vetprof` |
-| 5 SSH só com chave | ⚠️ conferir com o bloco abaixo | ⚠️ conferir com o bloco abaixo (estava com a correção de emergência) |
-| 6 Tailscale | ⚠️ conferir a etiqueta (6.2) | ✅ entrou (`100.68.176.6`) · ⚠️ conferir a etiqueta (6.2) |
-| 7 Firewall + porta 22 fechada | ✅ 2026-10-06 (`TcpTestSucceeded : False`) | ⏳ **pendente** — conferir antes se há "desfazer" antigo agendado |
-| 8 Proteções do sistema | ⏳ | ⏳ |
+| 5 SSH só com chave | ✅ 2026-10-06 (`permitrootlogin no`, `passwordauthentication no`, `allowusers vetprof`) | ✅ 2026-10-06 (`permitrootlogin no`, `allowusers vetprof deploy`; root travado) |
+| 6 Tailscale | ✅ `tag:s2vet-server`, sem expiração | ✅ `100.68.176.6`, `tag:s2vet-server`, sem expiração |
+| 7 Firewall + porta 22 fechada | ✅ 2026-10-06 (`TcpTestSucceeded : False`) | ✅ 2026-10-06 (portas 22 e 80: `TcpTestSucceeded : False`) |
+| 8 Proteções do sistema | ⚠️ 8.1/8.2/8.4/8.5 ✅ · 8.3 ✅ swap 1+3 GB · 8.6 NTP **bloqueado pela KingHost** (UDP 123) — chamado a abrir; hora vem do Xen · 8.7 ✅ · 8.8 Lynis **65** · ✅ sessões antigas encerradas (só a do Tailscale) · ⏳ 8.9 rodada do Lynis | ⚠️ 8.1/8.2/8.4/8.5 ✅ · 8.3 ✅ swap 1 GB · 8.6 idem BE · 8.7 ✅ · 8.8 Lynis **65** · ⏳ 8.9 rodada do Lynis · ⏳ encerrar sessões antigas (pts/2, pts/3 do IP de casa) |
 | 9 VPC (WireGuard) | ⏳ | ⏳ |
 | 10–14 | ⏳ | — |
 | 15–16 | — | ⏳ |
@@ -698,6 +698,13 @@ X11Forwarding no
 AllowAgentForwarding no
 # "local" permite abrir um túnel até o banco (DBeaver) sem permitir abrir portas no servidor.
 AllowTcpForwarding local
+# Derruba sessão sem resposta (janela fechada, rede caída): pergunta a cada 5 min e
+# encerra depois de 2 perguntas sem resposta. Evita sessões "fantasmas" penduradas.
+ClientAliveInterval 300
+ClientAliveCountMax 2
+TCPKeepAlive no
+# Registra no log a impressão digital da chave usada em cada login (auditoria).
+LogLevel VERBOSE
 # Só estes usuários podem entrar por SSH.
 AllowUsers vetprof
 EOF
@@ -1218,6 +1225,30 @@ sudo journalctl -u systemd-timesyncd -n 20 --no-pager
 > pergunte ao suporte (acrescente à lista da B3): o firewall do UFW não bloqueia saída, então
 > o bloqueio não é seu.
 
+🔴 **Constatado em 2026-10-06:** é exatamente o caso. No Backend, `Timed out` para **seis**
+servidores diferentes (Ubuntu no exterior e NTP.br), inclusive às 17:52, quando o UFW ainda
+estava **desligado** — logo, o bloqueio é da rede da KingHost. Chamado a abrir: *"liberar
+saída UDP 123 (NTP) nas VPS s2vet01 e s2vet02, ou informar um servidor NTP interno"*.
+
+**Por que a hora está certa mesmo assim:** a VPS roda sobre Xen e o relógio do kernel vem do
+servidor físico da KingHost. Confira:
+```bash
+cat /sys/devices/system/clocksource/clocksource0/current_clocksource
+```
+> **Para que serve:** mostra de onde o kernel tira a hora. `xen` = vem do servidor físico.
+
+```bash
+date -u +%H:%M:%S; curl -sI https://www.google.com | grep -i '^date'
+```
+> **Para que serve:** compara a hora da VPS com a do Google, obtida por HTTPS (porta 443, que
+> não está bloqueada). Diferença de 0–2 s = hora correta.
+
+**Impacto no S2Vet: baixo.** O código do 2FA é gerado **e** conferido pelo mesmo servidor
+(guardado no banco por 10 min — não é um código de aplicativo autenticador, que exigiria
+relógio exato), e os tokens de sessão também. Segundos de diferença não afetam os jobs.
+**Plano B**, se a KingHost não liberar: `htpdate`, que acerta o relógio pela hora de sites
+HTTPS, com precisão de ~1 s.
+
 ### 8.7 Desligar serviços que um servidor não usa
 
 A imagem da KingHost veio com serviços de computador de mesa. Cada serviço rodando é código que
@@ -1265,6 +1296,40 @@ sudo apt -y purge open-vm-tools snapd && sudo apt -y autoremove --purge
 > **Para que serve:** remove as ferramentas de VMware (inúteis no Xen da KingHost) e o
 > gerenciador de pacotes Snap (nada deste roteiro usa), e depois as dependências que ficaram
 > órfãs — inclusive kernels antigos. Menos software instalado = menos falhas possíveis.
+> ⚠️ A saída mostra `Removing ubuntu-server-minimal`: é **esperado**. Ele é só um pacote-lista
+> ("o servidor mínimo deve ter estes pacotes") que incluía o `snapd`; nenhum pacote da lista é
+> desinstalado por isso (o `autoremove` removeu só 10 itens pequenos em 2026-10-06, ~245 MB no
+> total). **Não reinstale** o `ubuntu-server-minimal`: ele traria o `snapd` de volta.
+
+**Serviços de computador de mesa que sobem sob demanda** — `fwupd` (firmware de BIOS/placas;
+numa VPS é a KingHost quem cuida), `packagekit` (instalação de programas por tela gráfica; o
+`apt` não precisa dele) e `upower` (bateria de notebook). Como outro programa pode ligá-los a
+qualquer momento, `disable` não basta — o certo é **bloquear** (`mask`):
+
+```bash
+sudo systemctl disable --now fwupd-refresh.timer
+```
+> **Para que serve:** desliga o agendamento diário em que o `fwupd` busca firmware na internet.
+
+```bash
+sudo systemctl mask --now fwupd packagekit upower
+```
+> **Para que serve:** para os três agora e impede que voltem a subir, mesmo se outro programa
+> pedir. Reversível com `sudo systemctl unmask fwupd packagekit upower`. **Mantenha** o
+> `polkit`: o sistema o usa para autorizar ações administrativas.
+
+```bash
+who
+```
+> **Para que serve:** lista quem está conectado. Se aparecer `root` (e na lista de serviços
+> aparecer `user@0.service`), é uma janela antiga em que você entrou como root: feche-a com
+> `exit`. Depois da Etapa 5 o root não consegue mais entrar.
+> ⚠️ **Sessões abertas ANTES do firewall continuam vivas depois dele**: o UFW bloqueia conexão
+> **nova**, não a conversa já em andamento. Em 2026-10-06 havia, nas duas VPS, várias sessões de
+> `root` e `vetprof` vindas do IP de casa, abertas antes da Etapa 7. Encerre-as:
+> `tty` (mostra a SUA sessão — não derrube essa) → `sudo loginctl terminate-user root` (todas
+> as do root) → `sudo pkill -KILL -t pts/N` para cada sessão antiga do `vetprof`. Ao final,
+> `who` deve mostrar só a sua sessão, vinda de um IP `100.x.x.x` (Tailscale).
 
 ⚠️ **Não desligue** `xe-linux-distribution` (é a integração com o hipervisor Xen da KingHost:
 desligamento limpo, informações da VM no painel) nem `serial-getty@hvc0` (é o **terminal de
@@ -1273,8 +1338,11 @@ console** do hipervisor — provavelmente o que a KingHost usa como console de e
 ```bash
 systemctl list-units --type=service --state=running --no-pager
 ```
-> **Para que serve:** ✅ confere a lista final de serviços. No Frontend, além do sistema, só
-> devem sobrar `nginx` e `ssh` (e, depois, `tailscaled`, `cloudflared`, `fail2ban`).
+> **Para que serve:** ✅ confere a lista final de serviços. Esperado nas duas VPS: `cron`,
+> `dbus`, `fail2ban`, `getty@tty1`, `polkit`, `rsyslog`, `serial-getty@hvc0`, `ssh`,
+> `systemd-*` (journald, logind, networkd, resolved, timesyncd, udevd), `tailscaled`,
+> `unattended-upgrades`, `user@1000` (você) e `xe-linux-distribution`. No Frontend, também o
+> `nginx` (e, depois, o `cloudflared`).
 
 ### 8.8 Auditoria de segurança (Lynis)
 
@@ -1286,6 +1354,122 @@ sudo lynis audit system --quick 2>/dev/null | tail -n 40
 > roteiro. ⚠️ Não é para zerar as sugestões: várias não se aplicam a um servidor como este
 > (ex.: senha no GRUB, partição separada para `/tmp`). Use como lista para conferir, não
 > como meta.
+> **Linha de base registrada em 2026-10-06:** **65** nas duas VPS (Backend: 254 testes;
+> Frontend: 262), com `Firewall [V]` e `Malware scanner [X]`.
+
+```bash
+sudo grep -E '^(warning|suggestion)\[\]' /var/log/lynis-report.dat | cut -d'|' -f1-2
+```
+> **Para que serve:** extrai do relatório só os avisos (`warning`) e as sugestões
+> (`suggestion`), cada um com o seu código (ex.: `SSH-7408`), para decidir um a um o que vale
+> aplicar.
+
+### 8.9 Rodada de ajustes do Lynis `[AMBAS]`
+
+As duas VPS deram a **mesma** lista em 2026-10-06 (1 aviso + ~45 sugestões). Decisão item a item:
+
+| Código | Sugestão | Decisão | Por quê |
+|---|---|---|---|
+| **PKGS-7392** (⚠️ aviso) | Pacotes com falha conhecida | ✅ **Aplicar** | Atualização de segurança pendente — passo 1 abaixo |
+| SSH-7408 | Endurecer o SSH | ✅ **Aplicar** (parcial) | Derrubar sessão inativa e registrar a chave usada — passo 2. **Não** aplicados: trocar a porta 22 (ela já está fechada para a internet) e proibir túnel (`AllowTcpForwarding local` é o acesso do DBeaver ao banco) |
+| KRNL-5820 | Desligar *core dump* | ✅ **Aplicar** | Quando um programa trava, o sistema grava a memória dele em disco — no Backend isso pode conter prontuário e senhas — passo 3 |
+| NETW-3200 · USB-1000 | Protocolos `dccp`, `sctp`, `rds`, `tipc` e pendrive | ✅ **Aplicar** | Nenhum é usado; protocolos raros do kernel já tiveram falhas graves — passo 4 |
+| PKGS-7346 | Restos de pacotes removidos | ✅ **Aplicar** | Limpeza de configurações órfãs — passo 5 |
+| BANN-7126/7130 | Aviso legal no login | ✅ Aplicar (barato) | Deixa registrado que o acesso é restrito — ajuda juridicamente — passo 6 |
+| ACCT-9626 | Estatísticas de uso (`sysstat`) | ✅ Aplicar **no Backend** | Histórico de CPU/RAM/disco para saber quando a máquina começa a apertar — passo 7 |
+| HTTP-6710 | HTTPS no Nginx | ❌ Não se aplica | O HTTPS termina no Cloudflare e chega cifrado pelo túnel; o Nginx só escuta em `127.0.0.1` |
+| BOOT-5122 | Senha no GRUB | ❌ Não aplicar | Só protege contra quem tem o console da máquina — e poderia travar a **sua** recuperação de emergência |
+| FILE-6310 | Partições separadas para `/home`, `/tmp`, `/var` | ❌ Não aplicável | Exigiria reinstalar a VPS com outro particionamento; o alerta de disco (Parte E) cobre o risco |
+| AUTH-9230/9262/9282/9286 | Regras de senha (validade, força, rodadas) | ❌ Baixo valor | Ninguém entra com senha; a senha do `vetprof` só serve ao `sudo` e é gerada no gerenciador |
+| AUTH-9328 | `umask 027` | ⏸️ Adiar | Pode quebrar a leitura do site pelo Nginx no deploy; reavaliar depois da Etapa 17 |
+| ACCT-9628 · FINT-4350 · LOGG-2154 | `auditd`, verificação de integridade (AIDE), log externo | ⏸️ Fase 2 | Valem a pena, mas exigem rotina de leitura; listados na D9 |
+| HRDN-7230 | Antivírus | ⏸️ Fase 2 | Os anexos ficam no banco, não em arquivos — baixo ganho hoje |
+| DEB-0280/0810/0811 · PKGS-7370/7394 · NAME-4028/4404 · FIRE-4513 · TOOL-5002 · FILE-7524 · KRNL-6000 · ACCT-9622 · LYNIS | Ferramentas e ajustes menores | ❌ Não agora | Ganho pequeno ou informativos; o LYNIS só diz que a versão do Ubuntu dele é antiga |
+
+**1. Atualizações pendentes**
+```bash
+sudo apt update && sudo apt -y upgrade
+```
+> **Para que serve:** instala agora a atualização de segurança que motivou o aviso (o login
+> também mostra "1 update can be applied"). As atualizações automáticas fariam isso sozinhas
+> em até um dia — aqui só se adianta.
+> 🔴 **Nunca rode `do-release-upgrade`**, mesmo que o login anuncie "New release '26.04 LTS'
+> available". Isso troca o Ubuntu inteiro de versão — é um projeto à parte, com teste. O 24.04
+> tem suporte até 2029.
+
+**2. SSH: derrubar sessão inativa e registrar a chave usada**
+```bash
+sudo tee -a /etc/ssh/sshd_config.d/00-s2vet.conf >/dev/null <<'EOF'
+ClientAliveInterval 300
+ClientAliveCountMax 2
+TCPKeepAlive no
+LogLevel VERBOSE
+EOF
+sudo sshd -t && sudo systemctl restart ssh
+```
+> **Para que serve:** acrescenta ao arquivo da Etapa 5: o SSH pergunta à sua máquina a cada
+> 5 min se ela ainda está lá e encerra a sessão depois de 2 perguntas sem resposta (acaba com as
+> sessões "fantasmas" de janelas fechadas); e o log passa a registrar **qual chave** entrou.
+> O `sshd -t` recusa se houver erro de digitação; teste numa janela nova antes de fechar a
+> atual. (Quem montar uma VPS do zero já recebe essas linhas pela Etapa 5.)
+
+**3. Sem gravação de memória de programa que trava (*core dump*)**
+```bash
+echo '* hard core 0' | sudo tee /etc/security/limits.d/99-s2vet-sem-core.conf
+sudo sed -i 's/^enabled=1/enabled=0/' /etc/default/apport
+sudo systemctl disable --now apport
+```
+> **Para que serve:** a primeira linha proíbe todo usuário de gravar *core dump*; as duas
+> seguintes desligam o `apport`, o coletor de travamentos do Ubuntu que guarda essas cópias em
+> `/var/crash`. Uma cópia da memória da API pode conter dados de paciente e segredos.
+
+**4. Protocolos de rede raros e pendrive desligados**
+```bash
+sudo tee /etc/modprobe.d/s2vet-desligados.conf >/dev/null <<'EOF'
+install dccp /bin/false
+install sctp /bin/false
+install rds /bin/false
+install tipc /bin/false
+install usb-storage /bin/false
+EOF
+```
+> **Para que serve:** impede o kernel de carregar esses módulos (protocolos que ninguém usa
+> aqui e o suporte a pendrive, que uma VPS não tem). Se algo pedir um deles, o pedido falha.
+> Vale a partir de agora, sem reiniciar.
+
+**5. Restos de pacotes removidos**
+```bash
+dpkg -l | awk '/^rc/ {print $2}'
+```
+> **Para que serve:** lista os pacotes removidos que deixaram configuração para trás (`rc`).
+
+```bash
+dpkg -l | awk '/^rc/ {print $2}' | xargs -r sudo dpkg --purge
+```
+> **Para que serve:** apaga esses restos.
+
+**6. Aviso legal**
+```bash
+echo 'Acesso restrito a pessoas autorizadas. Toda atividade e registrada e monitorada. / Authorized access only. All activity is monitored and logged.' | sudo tee /etc/issue /etc/issue.net
+```
+> **Para que serve:** grava o aviso que aparece no console e nas telas de login. Não protege
+> tecnicamente; deixa claro que o acesso é restrito, o que conta numa ação judicial.
+
+**7. `[BE]` Histórico de uso de CPU, memória e disco**
+```bash
+sudo sed -i 's/^ENABLED="false"/ENABLED="true"/' /etc/default/sysstat
+sudo systemctl enable --now sysstat
+```
+> **Para que serve:** liga a coleta automática (a cada 10 min) do uso da máquina. Com ela,
+> `sar -r` mostra a memória de dias anteriores — é como se descobre se o Backend precisa de
+> mais RAM antes de ele começar a falhar.
+
+**8. Nova nota**
+```bash
+sudo lynis audit system --quick 2>/dev/null | grep 'Hardening index'
+```
+> **Para que serve:** mostra a nova nota (antes: 65). Espere algo em torno de 70–75: o que
+> ficou de fora foi decisão, não esquecimento.
 
 ✅ Fim da base. As duas VPS agora: atualizadas, sem root, sem senha no SSH, sem porta 22
 pública, com firewall e atualização automática. **Repita as Etapas 1 a 8 na outra VPS** antes
