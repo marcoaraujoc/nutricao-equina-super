@@ -734,24 +734,47 @@ Em `https://login.tailscale.com/admin`:
 
 1. **DNS → ative o MagicDNS.** Permite usar `ssh vetprof@s2vet-be` pelo nome, em vez de
    decorar o IP `100.x.y.z` que o Tailscale dá a cada máquina.
-2. **Access controls** → no arquivo de política, garanta este conteúdo (ajuste se já tiver
-   outras regras suas):
+2. **Access controls** → clique em **JSON editor** (o *Visual editor* mostra só as regras,
+   não o arquivo inteiro) e deixe o arquivo assim:
    ```jsonc
    {
-     // Quem pode marcar uma máquina com a etiqueta "s2vet-server": só você.
+     // Quem pode marcar uma máquina com a etiqueta "s2vet-server": os administradores
+     // da rede (você). "autogroup:admin" evita depender da grafia exata do e-mail.
      "tagOwners": {
-       "tag:s2vet-server": ["marcoaraujoc@gmail.com"]
+       "tag:s2vet-server": ["autogroup:admin"],
      },
-     "acls": [
-       // Os SEUS aparelhos podem falar com tudo (inclusive as VPS).
-       { "action": "accept", "src": ["marcoaraujoc@gmail.com"], "dst": ["*:*"] }
+     // SUBSTITUI a regra padrão "Allow all connections" (src "*" → dst "*"), que deixava
+     // TODO aparelho falar com TODO aparelho.
+     "grants": [
+       // Os SEUS aparelhos ("autogroup:member" = usuários da rede; máquinas com etiqueta
+       // NÃO entram) podem falar com tudo, inclusive com as VPS.
+       { "src": ["autogroup:member"], "dst": ["*"], "ip": ["*"] },
        // De propósito, NENHUMA regra tem "tag:s2vet-server" como ORIGEM:
        // uma VPS invadida não consegue abrir conexão para o seu PC nem para outro aparelho.
+     ],
+     // 🔴 MANTENHA este bloco: é o que libera o Funnel do DESENVOLVIMENTO
+     // (docs/TAILSCALE_FUNNEL.md §3). "autogroup:member" são os SEUS aparelhos; as VPS
+     // têm etiqueta (tag), não entram nesse grupo e por isso NÃO podem publicar nada
+     // na internet pelo Funnel — que é o que queremos.
+     "nodeAttrs": [
+       { "target": ["autogroup:member"], "attr": ["funnel"] }
      ]
    }
    ```
    ⚠️ Se a sua política hoje é a padrão ("todos falam com todos"), troque por esta. A padrão
    deixaria uma VPS comprometida alcançar o seu PC de desenvolvimento.
+   ⚠️ **Antes de salvar, compare com o arquivo atual.** Blocos que já existem lá e não
+   aparecem acima (`ssh`, `groups`, `tests`, `nodeAttrs`) devem ser **mantidos**; troque só a
+   regra `"src": ["*"]` do `grants` e acrescente o `tagOwners`. (Contas mais antigas usam
+   `"acls"` em vez de `"grants"`: aí a regra equivalente é
+   `{ "action": "accept", "src": ["autogroup:member"], "dst": ["*:*"] }`.) Apagar o `nodeAttrs` derruba o Funnel do
+   desenvolvimento sem erro claro.
+   💡 O painel tem **"Preview rules"**/validação: ele recusa salvar um arquivo com erro de
+   sintaxe, então não há risco de trancar a rede por vírgula fora do lugar.
+   ✅ **MagicDNS** e **HTTPS Certificates** ligados aparecem no painel como botões
+   **"Disable MagicDNS…"** e **"Disable HTTPS…"** — o texto do botão é a ação, não o estado.
+   Deixe os dois ligados: o HTTPS é o do Funnel do desenvolvimento e não afeta as VPS (elas só
+   usariam se alguém rodasse `tailscale cert`/`tailscale funnel` nelas — não rode).
 3. **Settings → Keys → Generate auth key**: gere **duas** chaves (uma por VPS) com:
    **Reusable: desligado** · **Expiration: 1 dia** · **Tags: `tag:s2vet-server`**.
    Máquina com etiqueta não tem a "validade de 180 dias" do Tailscale — que, se expirasse,
