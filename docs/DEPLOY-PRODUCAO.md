@@ -352,6 +352,38 @@ tem dado), depois a 9 (as duas juntas), 10 a 14 no Backend, 15 e 16 no Frontend,
 | 17 | BE | Primeiro deploy — a aplicação abre no navegador |
 | 18–19 | WEB / PC | WAF do Cloudflare e testes de aceite |
 
+### Estado da execução
+
+> Atualize esta tabela a cada etapa concluída — é ela que diz, numa sessão futura, onde parar e
+> onde retomar. ✅ concluído e conferido · ⚠️ feito, falta a conferência indicada · ⏳ pendente.
+
+| Etapa | Backend (s2vet-be · .171) | Frontend (s2vet-fe · .147) |
+|---|---|---|
+| 1 Inventário | ✅ 2026-10-06 | ✅ 2026-10-06 |
+| 2 Atualização + nome | ✅ (nome `s2vet-be`) | ✅ (nome `s2vet-fe`) |
+| 3 Usuário administrativo | ✅ `vetprof` | ✅ `vetprof` |
+| 5 SSH só com chave | ⚠️ conferir com o bloco abaixo | ⚠️ conferir com o bloco abaixo (estava com a correção de emergência) |
+| 6 Tailscale | ⚠️ conferir a etiqueta (6.2) | ✅ entrou (`100.68.176.6`) · ⚠️ conferir a etiqueta (6.2) |
+| 7 Firewall + porta 22 fechada | ✅ 2026-10-06 (`TcpTestSucceeded : False`) | ⏳ **pendente** — conferir antes se há "desfazer" antigo agendado |
+| 8 Proteções do sistema | ⏳ | ⏳ |
+| 9 VPC (WireGuard) | ⏳ | ⏳ |
+| 10–14 | ⏳ | — |
+| 15–16 | — | ⏳ |
+| 17–19 | ⏳ | ⏳ |
+
+**Conferência rápida do estado de uma VPS** (como `vetprof`, entrando pelo Tailscale):
+```bash
+systemctl list-timers --all | grep s2vet
+sudo sshd -T | grep -Ei '^(passwordauthentication|permitrootlogin|allowusers)'
+sudo ufw status verbose
+tailscale status --json | jq '.Self.Tags, .Self.KeyExpiry'
+```
+> **Para que serve:** numa só vez, mostra: se sobrou algum "desfazer" agendado (tem de vir
+> **vazio**); se a Etapa 5 está completa (`passwordauthentication no`, `permitrootlogin no`,
+> `allowusers vetprof` — no Frontend também `allowusers deploy`); se o firewall está ligado
+> (`Status: active`); e se a VPS tem a etiqueta do Tailscale (`["tag:s2vet-server"]`) com chave
+> que não expira (`null`).
+
 ---
 
 ## Etapa 1 — Inventário: o que veio instalado `[AMBAS]`
@@ -779,10 +811,28 @@ Em `https://login.tailscale.com/admin`:
    **"Disable MagicDNS…"** e **"Disable HTTPS…"** — o texto do botão é a ação, não o estado.
    Deixe os dois ligados: o HTTPS serve ao Funnel (se um dia o desenvolvimento usar) e não afeta as VPS (elas só
    usariam se alguém rodasse `tailscale cert`/`tailscale funnel` nelas — não rode).
-3. **Settings → Keys → Generate auth key**: gere **duas** chaves (uma por VPS) com:
-   **Reusable: desligado** · **Expiration: 1 dia** · **Tags: `tag:s2vet-server`**.
+3. **Settings → Keys → Generate auth key…** (`https://login.tailscale.com/admin/settings/keys`).
+   A *auth key* é uma "senha de entrada" de **uso único**: permite que a VPS entre na rede sem
+   login no navegador e já recebe a etiqueta. Gere **duas** (uma por VPS):
+
+   | Campo | Valor | Por quê |
+   |---|---|---|
+   | Description | `s2vet-be` / `s2vet-fe` | Saber depois qual chave foi de qual máquina |
+   | Reusable | ❌ desligado | Vale para uma máquina só; vazada depois de usada, não serve para nada |
+   | Expiration | 1 day | Se não for usada, morre sozinha |
+   | **Ephemeral** | ❌ **desligado** | 🔴 Ligado, o Tailscale **apaga a máquina da rede** quando ela fica offline (num reboot) e o SSH some |
+   | Pre-approved | ✅ se aparecer | Só existe se a rede exige aprovar aparelho novo |
+   | Tags | ✅ `tag:s2vet-server` | A etiqueta das regras de acesso. Só aparece se o `tagOwners` já foi salvo |
+
+   A chave (`tskey-auth-…`) é mostrada **uma única vez**: copie e use direto no comando da 6.2.
+   ⚠️ Não cole a chave em chat, e-mail ou documento. Se colar por engano, confira em
+   *Settings → Keys* que ela já aparece como usada/expirada — senão, **Revoke**.
    Máquina com etiqueta não tem a "validade de 180 dias" do Tailscale — que, se expirasse,
    derrubaria o seu acesso sem aviso.
+4. **Machines** → remova aparelhos que você não usa mais (na rede havia dois iPhones offline
+   havia mais de 60 dias). Todo aparelho da rede chega à porta de administração dos servidores;
+   ainda precisaria da sua chave SSH, mas aparelho esquecido não deve ter esse caminho. Mantenha
+   **um** celular ativo: é o acesso reserva.
 
 ### 6.2 Em cada VPS
 
@@ -792,6 +842,9 @@ curl -fsSL https://tailscale.com/install.sh | sh
 > **Para que serve:** baixa e roda o instalador oficial do Tailscale, que adiciona o
 > repositório deles ao `apt` e instala o programa. O `-fsSL` faz o `curl` falhar em caso de
 > erro, não mostrar barra de progresso e seguir redirecionamentos.
+> Execute como **`vetprof`, sem `sudo`**: o script percebe que não é root e chama o `sudo`
+> sozinho onde precisa (vai pedir a senha do `vetprof`). Para ler o script antes de rodar:
+> `curl -fsSL https://tailscale.com/install.sh -o /tmp/ts.sh && less /tmp/ts.sh && sh /tmp/ts.sh`.
 
 ```bash
 sudo tailscale up --auth-key=<AUTH_KEY_DESTA_VPS> --hostname=s2vet-be --ssh=false --accept-dns=false
@@ -803,10 +856,32 @@ sudo tailscale up --auth-key=<AUTH_KEY_DESTA_VPS> --hostname=s2vet-be --ssh=fals
 > `--accept-dns=false` — a VPS continua usando o DNS normal; ela não precisa resolver os nomes
 > da sua rede, e assim não passa a depender do Tailscale para acessar a internet.
 
+> O comando não mostra nada quando dá certo. (Rodar o instalador como `root` em vez de
+> `vetprof` também está certo: o resultado é idêntico — o `tailscaled` roda como root de
+> qualquer forma.)
+
 ```bash
 tailscale ip -4
 ```
 > **Para que serve:** mostra o IP da VPS dentro do Tailscale (`100.x.y.z`). Anote.
+> Registrados: `s2vet-fe` = `100.68.176.6` (nome completo `s2vet-fe.tail854f06.ts.net`).
+
+```bash
+tailscale status --json | jq '.Self.Tags, .Self.KeyExpiry'
+```
+> **Para que serve:** ✅ confere a etiqueta. Esperado: `["tag:s2vet-server"]` e, na linha
+> seguinte, `null` (a chave da máquina **não expira**). Uma data aqui = a etiqueta não foi
+> aplicada e o acesso cairia nessa data: gere outra *auth key* com o campo *Tags* e rode o
+> `tailscale up` de novo. No painel, *Machines* mostra a etiqueta e "Expiry disabled".
+
+**Depois que as duas VPS estiverem na rede** — teste do isolamento, no **Frontend**:
+```bash
+nc -vz -w 5 s2vet-be.tail854f06.ts.net 22
+```
+> **Para que serve:** a VPS Frontend tenta abrir o SSH do Backend **pela rede do Tailscale**.
+> Esperado: **falhar** (`timed out`). Pela regra salva na 6.1, máquina com etiqueta não abre
+> conexão com ninguém — é a prova de que um Frontend invadido não usa o Tailscale para chegar
+> ao Backend nem ao seu PC.
 
 ### 6.3 No seu PC
 
@@ -840,6 +915,19 @@ Assim, quando a porta 22 pública fechar, a sua sessão continua de pé.
 
 O UFW ("firewall descomplicado") é a interface amigável do firewall do Linux. A regra de
 ouro é: **bloqueia tudo que chega, libera só o que for nomeado**.
+
+**Antes de começar, confira o estado atual:**
+```bash
+systemctl list-timers --all | grep s2vet
+sudo ufw status verbose
+```
+> **Para que serve:** mostra se sobrou "desfazer" de tentativa anterior e se o firewall já está
+> ligado. Se aparecer `s2vet-desfaz-...` agendado, cancele antes
+> (`sudo systemctl stop s2vet-desfaz-firewall.timer s2vet-desfaz-ssh.timer`): senão ele dispara
+> no meio do seu trabalho. Se o UFW estiver `active` com uma regra `22` ou `OpenSSH` liberada
+> para `Anywhere` **sem** `on tailscale0`, apague-a (`sudo ufw status numbered` e
+> `sudo ufw delete <número>`). No Frontend havia "desfazer" antigos agendados — confira lá com
+> atenção.
 
 ```bash
 sudo systemd-run --unit=s2vet-desfaz-firewall --on-active=10min --timer-property=RemainAfterElapse=no /usr/sbin/ufw disable
@@ -888,8 +976,16 @@ sudo ufw --force enable
 ```bash
 sudo ufw status verbose
 ```
-> **Para que serve:** mostra o estado do firewall. Esperado: `Status: active`,
-> `Default: deny (incoming), allow (outgoing), deny (routed)` e a regra `22/tcp on tailscale0`.
+> **Para que serve:** mostra o estado do firewall. Esperado (saída real do Backend, 2026-10-06):
+> ```
+> Status: active
+> Default: deny (incoming), allow (outgoing), disabled (routed)
+> 22/tcp on tailscale0       ALLOW IN    Anywhere        # SSH so pelo Tailscale
+> 22/tcp (v6) on tailscale0  ALLOW IN    Anywhere (v6)   # SSH so pelo Tailscale
+> ```
+> ⚠️ `disabled (routed)` em vez de `deny` é **normal**: o UFW mostra assim quando o próprio
+> kernel já não repassa tráfego entre redes (`ip_forward` desligado) — não há repasse algum a
+> bloquear. É o estado desejado.
 
 ✅ Em **outra** janela do PowerShell, teste as duas portas de entrada:
 
@@ -902,8 +998,13 @@ ssh vetprof@s2vet-be
 Test-NetConnection 177.153.69.171 -Port 22
 ```
 > **Para que serve:** o PowerShell tenta abrir a porta 22 pelo IP público. Esperado:
-> **`TcpTestSucceeded : False`** — a porta fechou para a internet. (Demora uns 20 segundos.)
-> No Frontend, use `177.153.69.147`.
+> **`TcpTestSucceeded : False`** (com o aviso `TCP connect ... failed`) — a porta fechou para a
+> internet. Demora uns 20 segundos. No Frontend, use `177.153.69.147`.
+> `PingSucceeded : True` na mesma saída é só o `ping`, que o UFW responde por padrão — ver o
+> passo opcional abaixo.
+> Se der `TcpTestSucceeded : True`, o firewall não está bloqueando: confira
+> `sudo ufw status verbose` (o caso real de 2026-10-06 foi `Status: inactive` no Backend, porque
+> a etapa ainda não tinha sido aplicada ali).
 
 Tudo certo? Cancele o desfazer:
 ```bash
@@ -911,7 +1012,12 @@ sudo systemctl stop s2vet-desfaz-firewall.timer
 ```
 > **Para que serve:** mantém o firewall ligado (sem isso, ele se desligaria em 10 minutos).
 
-**Opcional (recomendado no Backend): não responder a ping.**
+```bash
+systemctl list-timers --all | grep s2vet
+```
+> **Para que serve:** ✅ tem de voltar **vazio**.
+
+**Opcional (recomendado no Backend; desnecessário no Frontend): não responder a ping.**
 
 ```bash
 sudo sed -i 's/-A ufw-before-input -p icmp --icmp-type echo-request -j ACCEPT/-A ufw-before-input -p icmp --icmp-type echo-request -j DROP/' /etc/ufw/before.rules
