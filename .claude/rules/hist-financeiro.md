@@ -34,6 +34,55 @@ paths:
 As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão em `CLAUDE.md`.
 
 ---
+# Atualizado em: 2026-10-05 (🔴 **FECHAR O PACIENTE GERA A FATURA DELE** — a pedido:
+#   "caso seja realizado o fechamento da fatura por animal, deverá ser removido da fatura
+#   principal a informação do animal fechado e será gerada uma nova fatura com as
+#   informações desse animal na aba de fechado".
+#   ⚠️ **REVERTE, para FECHAR e PAGAR o paciente, o modelo "marca no ITEM" de 2026-09-22/23**
+#   (os lançamentos ficavam na principal, marcados `fechado_em`/`pago_em`, em faixas
+#   "Fechado à parte"/"Já pago"). Agora eles SAEM da principal.
+#   1. **`faturaFechamentoAnimal.separarAnimal`**: cria `Fatura` NOVA do mesmo cliente,
+#      empresa e `mesReferencia`, com `animalId` = o paciente e status **FECHADA**
+#      (fechar) ou **PAGA** (pagar), e faz **UPDATE de `faturaId`** dos lançamentos NÃO
+#      PAGOS dele (as origens apontam para o ITEM, então o rastro viaja junto). Recalcula
+#      as duas. Tudo + auditoria nas DUAS faturas na MESMA transaction.
+#      ⚠️ Leva junto o "fechado à parte" do modelo anterior (limpando a marca — senão a
+#      linha nasceria na fatura nova FORA do total dela). O já PAGO no modelo anterior
+#      fica onde está.
+#   2. 🔴 **A MARCA da "fatura do paciente" é `Fatura.animalId` JUNTO de
+#      `proprietarioId`** (`ehFaturaDoPaciente`). A coluna existia sem uso (legado das
+#      faturas por animal, que têm `proprietarioId` NULO — conferido: 0 faturas com
+#      `animalId` na base). **SEM MIGRATION.**
+#   3. **O ciclo a ignora** (cada regra onde o ciclo é decidido — quebra em silêncio):
+#      `getOrCreateFatura` NÃO adota a REABERTA com `animalId` (a cobrança dos outros
+#      pacientes cairia nela); `abrirProximaFatura` não abre ciclo a partir dela nem a
+#      conta como "já em aberto"; a reabertura dela não esbarra em
+#      `FATURA_ABERTA_NO_MES`; `adicionarAssistenciaMensal` não lança nada nela e NÃO
+#      relança na principal a assistência do paciente que foi levada para a fatura dele
+#      no mesmo mês (cobraria em dobro ao abrir a tela).
+#   4. **Só fatura ABERTA/REABERTA se reparte** (400 `FATURA_NAO_EDITAVEL`) e a fatura do
+#      paciente não se reparte de novo (400 `FATURA_DO_PACIENTE`) — ela se fecha/paga/
+#      reabre pelas ações da PRÓPRIA fatura. Reabrir/Estornar do bloco seguem existindo
+#      só para o bloco marcado no modelo anterior (fatura #137 tinha 2 blocos assim).
+#   5. **Tela**: o bloco do paciente separado SOME da principal (quando não tem mais
+#      lançamento lá); a fatura do paciente mostra só ele, com faixa "Fatura do paciente
+#      X". 🔴 **O seletor de mês passou a escolher por ID da fatura**: a do paciente
+#      divide o mês com a principal, e por `?mes=` ela seria inalcançável. `meses`
+#      ganhou `animalId`/`animalNome` (rótulo "Out/2026 · Thor"); `?mes=` prefere a
+#      principal (`animalId: null`). `take` das faturas por cliente 10 → 30.
+#   ⚠️ CONSEQUÊNCIA: "Marcar como Pago" do bloco gera fatura **PAGA**, que não se reabre
+#   (regra de 2026-09-29) — o estorno do pagamento por paciente deixou de existir para
+#   o que for pago daqui em diante.
+#   ✅ Conferido AO VIVO com o código real, em transação REVERTIDA: fatura #137
+#   (R$ 825 + R$ 995,60 fechado) → paciente 110 com 6 lançamentos foi para a #140
+#   FECHADA (R$ 1.125,60), principal ficou R$ 425 + R$ 270 — soma igual, 0 marca antiga
+#   na nova, 0 faturas de paciente após o rollback.
+#   Gate novo `__tests__/faturaDoPaciente.test.js` (12; verificado que REPROVA). Gate de
+#   `faturaFechamentoPorAnimal` ajustado (a transaction do mapa legado vem DEPOIS do
+#   bloco novo). Suíte: 1843 + as 3 suítes vermelhas herdadas. `tsc --noEmit`
+#   (backend) e `vite build` limpos. ⚠️ NÃO verificado em navegador.)
+
+---
 # Atualizado em: 2026-10-02 (🔴 **A LINHA DO MEDICAMENTO MULTIDOSE EM mL SAI EM mL NA
 #   FATURA** — a pedido. ⚠️ **REVERTE** o item 6 de 2026-09-23 ("o multidose fica FORA
 #   de propósito: lá a linha conta DOSES").

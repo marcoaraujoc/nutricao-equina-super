@@ -34,9 +34,29 @@ import SeletorPrestadorExecutante, { type PrestadorExecutante } from '../compone
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
 
+/**
+ * 🔴 Pendência ANTERIOR da mesma medicação que impede antecipar uma prescrição/vacina
+ * de DATA FUTURA (2026-10-05). Vem do BACKEND (lib/antecipacaoExecucao.js), a mesma
+ * regra que o `executar` aplica — a tela só a exibe, nunca a recalcula.
+ */
+export interface BloqueioAntecipacao {
+  medicamento: string;
+  numero:      string | null;
+  /** 'YYYY-MM-DD' em que a pendência anterior está prevista. */
+  dia:         string;
+  mensagem:    string;
+}
+
 export interface ItemExecucao {
   id:              number;
   tipo:            'MEDICAMENTO' | 'PROCEDIMENTO';
+  /** Dia ('YYYY-MM-DD', fuso da clínica) da próxima dose AINDA pendente — `null` sem
+   *  pendência ou item fora do rastreio por dose. É ele que diz se o item pode ser
+   *  antecipado ao navegar o calendário para um dia futuro. */
+  diaProximaDose?: string | null;
+  /** Preenchido quando a próxima dose é de dia FUTURO e há pendência anterior da
+   *  mesma medicação: o Executar fica indisponível, com esta mensagem. */
+  antecipacaoBloqueadaPor?: BloqueioAntecipacao | null;
   /** ATIVA | CANCELADA — item cancelado por item fica visível marcado como cancelado. */
   status?:         string | null;
   medicamento:     string;
@@ -157,6 +177,9 @@ export interface VacinaExecucao {
   dataAplicacao:   string;
   dataReforco:     string | null;
   observacao:      string | null;
+  /** Vacina de DATA FUTURA com vacina anterior da mesma medicação ainda pendente —
+   *  não pode ser antecipada (ver `BloqueioAntecipacao`). */
+  antecipacaoBloqueadaPor?: BloqueioAntecipacao | null;
   animal:          GrupoExecucao['animal'];
   veterinario:     { id: number; fullName: string } | null;
   /**
@@ -689,11 +712,16 @@ export function ModalExecucaoVacina({
   const [cancelando,   setCancelando]   = useState(false);
   const [confirmarCan, setConfirmarCan] = useState(false);
   const [erroInline,   setErroInline]   = useState<string | null>(null);
+  // Vacina de DATA FUTURA: o backend devolve EXECUCAO_FUTURA com o dia prescrito, a
+  // tela pergunta, e o "sim" reenvia com `confirmarAntecipacao` (2026-10-05).
+  const [antecipar,    setAntecipar]    = useState<string | null>(null);
+  // Vacina anterior da mesma medicação pendente — antecipar está indisponível.
+  const bloqueio = v.antecipacaoBloqueadaPor?.mensagem ?? null;
 
   const vcNum       = formatNumeroClinico(v.numero);
   const especieInfo = [v.animal.especie?.nome, v.animal.raca?.nome].filter(Boolean).join(' • ');
 
-  const handleExecutar = async () => {
+  const handleExecutar = async (confirmarAntecipacao = false) => {
     if (salvando) return;
     if (!podeExecutarAcao) {
       setErroInline('Sem permissão para executar vacina. Verifique com o responsável da equipe.');
@@ -702,13 +730,20 @@ export function ModalExecucaoVacina({
     setSalvando(true);
     setErroInline(null);
     try {
-      await api.patch(`/clinica/vacinas/${v.id}/executar`);
+      await api.patch(`/clinica/vacinas/${v.id}/executar`,
+        confirmarAntecipacao ? { confirmarAntecipacao: true } : {});
       toast.success(`${v.nome} — aplicada e lançada na fatura`);
+      setAntecipar(null);
       onExecutada();
       onClose();
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErroInline(msg ?? 'Erro ao executar vacina');
+      const e = err as { response?: { status?: number; data?: { error?: string; erro?: string; previsto?: string } } };
+      if (e?.response?.status === 400 && e.response.data?.erro === 'EXECUCAO_FUTURA') {
+        setAntecipar(e.response.data.previsto ?? '');
+      } else {
+        setAntecipar(null);
+        setErroInline(e?.response?.data?.error ?? 'Erro ao executar vacina');
+      }
     } finally {
       setSalvando(false);
     }
@@ -794,6 +829,11 @@ export function ModalExecucaoVacina({
                 {v.observacao && (
                   <p className="text-[10px] text-gray-500 mt-1">Obs: {v.observacao}</p>
                 )}
+                {!soLeitura && bloqueio && (
+                  <p className="flex items-start gap-1 text-[11px] text-gray-500 leading-snug mt-1">
+                    <Lock size={11} className="mt-0.5 flex-shrink-0" /> {bloqueio}
+                  </p>
+                )}
               </div>
 
               {/* AS DUAS AÇÕES do item, como no medicamento: EXECUTAR e CANCELAR, ícones
@@ -808,11 +848,15 @@ export function ModalExecucaoVacina({
                 <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
                   {podeExecutarAcao && (
                     <button
-                      onClick={handleExecutar}
-                      disabled={salvando || cancelando}
-                      title="Aplicar vacina"
-                      aria-label="Aplicar vacina"
-                      className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
+                      onClick={() => handleExecutar()}
+                      disabled={salvando || cancelando || !!bloqueio}
+                      title={bloqueio ?? 'Aplicar vacina'}
+                      aria-label={bloqueio ? 'Aplicação indisponível' : 'Aplicar vacina'}
+                      className={`p-1.5 rounded-lg transition-colors ${
+                        bloqueio
+                          ? 'text-gray-300 cursor-not-allowed'
+                          : 'text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 disabled:opacity-50'
+                      }`}>
                       {salvando
                         ? <Loader2 size={16} className="animate-spin" />
                         : <CheckCircle2 size={16} />}
@@ -852,8 +896,10 @@ export function ModalExecucaoVacina({
                   Fechar
                 </button>
                 <button
-                  onClick={handleExecutar}
-                  disabled={salvando || !podeExecutarAcao}
+                  // Arrow: o 1º parâmetro é `confirmarAntecipacao`, e o MouseEvent no
+                  // lugar dele (truthy) antecipararia sem a pergunta.
+                  onClick={() => handleExecutar()}
+                  disabled={salvando || !podeExecutarAcao || !!bloqueio}
                   className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
                   {salvando ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
                   Executar Todos
@@ -867,6 +913,28 @@ export function ModalExecucaoVacina({
         </div>
       </div>
     </div>
+
+    {/* Vacina de DATA FUTURA — mesma pergunta da dose antecipada da prescrição. Só o
+        DIA é conhecido (`dataAplicacao` é data pura): nada de hora inventada. */}
+    <ConfirmModal
+      open={antecipar !== null}
+      variante="aviso"
+      titulo={`Antecipar vacina — ${v.nome}`}
+      mensagem={antecipar !== null && (
+        <>
+          A vacina estava prevista para{' '}
+          <strong>{antecipar ? (formatDiaMes(antecipar) ?? formatDateShort(antecipar)) : formatDate(v.dataAplicacao)}</strong>.
+          {' '}Aplicar agora antecipa a aplicação. Deseja continuar?
+          <span className="mt-2 block text-xs text-gray-500">
+            A data de aplicação passa a ser hoje — e o reforço, se houver, é calculado a partir dela.
+          </span>
+        </>
+      )}
+      labelConfirmar={salvando ? 'Aplicando…' : 'Antecipar e aplicar'}
+      labelCancelar="Cancelar"
+      onConfirmar={() => { if (!salvando) handleExecutar(true); }}
+      onCancelar={() => { if (!salvando) setAntecipar(null); }}
+    />
 
     {confirmarCan && (
       <ModalJustificativa
@@ -937,6 +1005,26 @@ export function ModalExecucao({
   const comLive = (i: ItemExecucao): ItemExecucao => ({ ...i, ...itensLive[i.id] });
 
   /**
+   * 🔴 ANTECIPAR PRESCRIÇÃO DE DATA FUTURA (2026-10-05).
+   *
+   * Aberto num dia FUTURO do calendário, o modal deixa executar AGORA (antecipar) a
+   * dose que está prescrita para aquele dia — e só ela: a dose de outro dia que
+   * apareça na prévia não é a próxima do curso, e executar ali aplicaria a próxima
+   * sem que ninguém a tivesse escolhido.
+   * E nenhuma antecipação passa com uma prescrição ANTERIOR da mesma medicação ainda
+   * pendente (`antecipacaoBloqueadaPor`, do backend). Nos dois casos o Executar fica
+   * CINZA com o motivo (§6), em vez de um botão que só falharia depois do clique.
+   */
+  const dataFutura = dataRef > hojeISO();
+  const bloqueioExecucao = (item: ItemExecucao): string | null => {
+    if (item.antecipacaoBloqueadaPor) return item.antecipacaoBloqueadaPor.mensagem;
+    if (dataFutura && item.diaProximaDose !== dataRef) {
+      return 'Para antecipar, abra o dia da PRÓXIMA dose pendente deste item.';
+    }
+    return null;
+  };
+
+  /**
    * 🔴 QUEM EXECUTOU O PROCEDIMENTO (2026-09-15).
    *
    * Só aparece em item PROCEDIMENTO, e é OPCIONAL: sem escolha nenhuma a execução
@@ -986,6 +1074,8 @@ export function ModalExecucao({
     modo: 'ITEM' | 'LOTE'; item?: ItemExecucao; slots: string[];
     medicamento: string; previsto: string;
     numeroDose?: number; totalDoses?: number;
+    /** Prescrição de dia futuro SEM hora prescrita: só o DIA é conhecido. */
+    semHorario?: boolean;
   } | null>(null);
   // Pergunta feita só logo após a 1ª execução, quando o horário real divergiu do
   // `horaInicio` prescrito: quer atualizar a referência para as próximas doses?
@@ -1202,15 +1292,20 @@ export function ModalExecucao({
           ? (item.dosesTotaisEsperadas != null ? dosesFeitas(item) + 1 >= item.dosesTotaisEsperadas : true)
           : x.activeDone,
       );
+      // Antecipação de DATA FUTURA é um ato único: feita, o modal fecha e a lista
+      // recarrega (a próxima dose do curso mudou de dia). Não marca "feito hoje" —
+      // a fila de hoje não é a que estava aberta.
       if (perguntarHorario) {
-        setAjusteHorario({ item, horaAnterior: item.horaInicio!, horaNova: horaNova!, fecharAoConcluir: todosExecutados });
+        setAjusteHorario({ item, horaAnterior: item.horaInicio!, horaNova: horaNova!, fecharAoConcluir: todosExecutados || dataFutura });
+      } else if (dataFutura) {
+        onClose();
       } else if (todosExecutados) {
         markDoneToday(grupo.id); onClose();
       }
     } catch (err: unknown) {
       const e = err as { response?: { status?: number; data?: {
         erro?: string; previsto?: string; agora?: string; classificacao?: string;
-        medicamento?: string; numeroDose?: number; totalDoses?: number;
+        medicamento?: string; numeroDose?: number; totalDoses?: number; semHorario?: boolean;
       } } };
       const dados = e?.response?.status === 400 ? e.response.data : undefined;
       if (dados?.erro === 'CONFIRMACAO_NECESSARIA') {
@@ -1229,6 +1324,7 @@ export function ModalExecucao({
           previsto:    dados.previsto ?? '',
           numeroDose:  dados.numeroDose,
           totalDoses:  dados.totalDoses,
+          semHorario:  dados.semHorario === true,
         });
       } else {
         tratarErroExec(err, 'Erro ao executar item');
@@ -1285,7 +1381,11 @@ export function ModalExecucao({
   const handleExecutarTodos = async (confirmarAntecipacao = false) => {
     setSalvando(true);
     try {
-      const itemIds = itensComInfo.filter(x => !x.activeDone).map(x => x.item.id);
+      // Item com antecipação BLOQUEADA (pendência anterior da mesma medicação) fica
+      // de fora do lote: o backend o recusaria e derrubaria o lote inteiro.
+      const itemIds = itensComInfo
+        .filter(x => !x.activeDone && !x.item.antecipacaoBloqueadaPor)
+        .map(x => x.item.id);
       await api.post(`/clinica/prescricoes/grupos/${grupo.id}/executar`, {
         itemIds,
         ...prestadoresDoPayload(itemIds),
@@ -1309,7 +1409,7 @@ export function ModalExecucao({
     } catch (err) {
       const e = err as { response?: { status?: number; data?: {
         erro?: string; medicamento?: string; previsto?: string;
-        numeroDose?: number; totalDoses?: number;
+        numeroDose?: number; totalDoses?: number; semHorario?: boolean;
       } } };
       const dados = e?.response?.status === 400 ? e.response.data : undefined;
       if (dados?.erro === 'EXECUCAO_FUTURA') {
@@ -1322,6 +1422,7 @@ export function ModalExecucao({
           previsto:    dados.previsto ?? '',
           numeroDose:  dados.numeroDose,
           totalDoses:  dados.totalDoses,
+          semHorario:  dados.semHorario === true,
         });
       } else {
         tratarErroExec(err, 'Erro ao finalizar');
@@ -1488,14 +1589,19 @@ export function ModalExecucao({
               ? `${POSOLOGIAS[item.frequencia] ?? item.frequencia} por ${duracaoTxt}${doseTxt ? ` - ${doseTxt}` : ''}`
               : `${POSOLOGIAS[item.frequencia] ?? item.frequencia}${doseTxt ? ` - ${doseTxt}` : ''}`;
 
+            const bloqueio = bloqueioExecucao(item);
             const botoesLinhaAtual = !soLeituraGrupo && (
               <div className="flex items-center gap-1 flex-shrink-0">
                 <button
                   onClick={() => handleExecutarItem(item, slots)}
-                  disabled={salvando}
-                  title="Executar"
-                  aria-label="Executar item"
-                  className="p-1 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
+                  disabled={salvando || !!bloqueio}
+                  title={bloqueio ?? (dataFutura ? 'Antecipar e executar agora' : 'Executar')}
+                  aria-label={bloqueio ? 'Execução indisponível' : 'Executar item'}
+                  className={`p-1 rounded-lg transition-colors ${
+                    bloqueio
+                      ? 'text-gray-300 cursor-not-allowed'
+                      : 'text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 disabled:opacity-50'
+                  }`}>
                   {execItemId === item.id
                     ? <Loader2 size={15} className="animate-spin" />
                     : <CheckCircle2 size={15} />}
@@ -1547,6 +1653,13 @@ export function ModalExecucao({
                   <p className="text-xs text-red-600 leading-snug mt-1">
                     {periodicidade}
                   </p>
+
+                  {/* Por que o Executar está cinza — só quando há o que executar. */}
+                  {!soLeituraGrupo && !cancelado && !activeDone && bloqueio && (
+                    <p className="flex items-start gap-1 text-[11px] text-gray-500 leading-snug mt-1">
+                      <Lock size={11} className="mt-0.5 flex-shrink-0" /> {bloqueio}
+                    </p>
+                  )}
 
                   {/* 🔴 QUEM EXECUTOU — só em PROCEDIMENTO e só enquanto há dose a
                       executar. OPCIONAL: em branco, a execução acontece do mesmo
@@ -1693,11 +1806,11 @@ export function ModalExecucao({
                   <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
                     <button
                       onClick={() => handleExecutarItem(item, slots)}
-                      disabled={activeDone || salvando}
-                      title={activeDone ? 'Item já executado' : 'Executar item'}
-                      aria-label={activeDone ? 'Item executado' : 'Executar item'}
+                      disabled={activeDone || salvando || !!bloqueio}
+                      title={activeDone ? 'Item já executado' : (bloqueio ?? 'Executar item')}
+                      aria-label={activeDone ? 'Item executado' : bloqueio ? 'Execução indisponível' : 'Executar item'}
                       className={`p-1.5 rounded-lg transition-colors ${
-                        activeDone
+                        activeDone || bloqueio
                           ? 'text-gray-300 cursor-not-allowed'
                           : 'text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 disabled:opacity-50'
                       }`}>
@@ -1753,6 +1866,9 @@ export function ModalExecucao({
                   className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors">
                   Fechar
                 </button>
+                {/* Antecipação de dia FUTURO é item a item: um lote aplicaria de uma vez
+                    o que ninguém escolheu dose por dose. */}
+                {!dataFutura && (
                 <button
                   // 🔴 Arrow OBRIGATÓRIA — e o risco AUMENTOU quando o 1º parâmetro
                   // virou `confirmarAntecipacao` (2026-09-18): com
@@ -1769,8 +1885,10 @@ export function ModalExecucao({
                     : <CheckCircle2 size={13} />}
                   Executar Todos
                 </button>
+                )}
               </div>
               <p className="text-center text-[10px] text-gray-400 mt-1">
+                {dataFutura && <span className="block">Antecipação: execute item a item — a dose sai agora.</span>}
                 {marcados}/{totalItens} itens executados
                 {!isUltimoDia && totalItens > 0 && (
                   <span className="ml-1 text-gray-300">
@@ -1838,8 +1956,12 @@ export function ModalExecucao({
               "(undefined/undefined)". A data vem SEMPRE (formatDiaMesHora), mesmo
               sendo hoje: a pergunta é justamente sobre QUANDO a dose era devida. */}
           A próxima dose{rotuloDose(execFutura.numeroDose, execFutura.totalDoses)}
+          {/* Sem hora prescrita só o DIA é conhecido — `formatDiaMesHora` imprimiria o
+              meio-dia UTC da data pura como "às 09:00", hora que ninguém prescreveu. */}
           {execFutura.previsto
-            ? <> estava prevista para <strong>{formatDiaMesHora(execFutura.previsto)}</strong>.</>
+            ? <> estava prevista para <strong>{execFutura.semHorario
+                ? formatDiaMes(execFutura.previsto)
+                : formatDiaMesHora(execFutura.previsto)}</strong>.</>
             : <> ainda não chegou.</>}
           {' '}Executar agora antecipa a aplicação. Deseja continuar?
           <span className="mt-2 block text-xs text-gray-500">
@@ -2102,8 +2224,8 @@ function LinhaExecucao({
   veterinarioNome, executorNome = null, children,
 }: {
   animal:          GrupoExecucao['animal'];
-  /** Linha extra sob o paciente — a vacina diz QUAL vacina é (a prescrição tem N itens,
-   *  então não há o que resumir aqui e ela não passa nada). */
+  /** Linha extra sob o paciente — diz O QUE é: a vacina, ou os itens da prescrição
+   *  do tipo do card (ver `LinhaGrupo`). Truncada; o texto inteiro vai no `title`. */
   detalhe?:        string | null;
   numeroLabel:     string;
   /** Já formatado, SEM o "#" (ver utils/numeroClinico). `null` = registro legado sem
@@ -2132,7 +2254,7 @@ function LinhaExecucao({
       <div className="flex-1 min-w-0">
         <p className="font-semibold text-gray-900 text-sm leading-tight">{animal.nome}</p>
         <p className="text-xs text-gray-500 truncate">{infoAnimal}</p>
-        {detalhe && <p className="text-xs text-gray-600 truncate">{detalhe}</p>}
+        {detalhe && <p className="text-xs text-gray-600 truncate" title={detalhe}>{detalhe}</p>}
         {animal.baia && lbaia && (
           <span className="inline-block mt-0.5 px-2 py-0.5 bg-cyan-50 border border-cyan-200 text-cyan-700 text-[10px] font-bold rounded-full">
             {lbaia} {animal.baia}
@@ -2203,8 +2325,16 @@ function LinhaGrupo({
   // sempre) — quem precisa do executor POR TIPO passa `executorDeTipo(g, tipo)`,
   // mesmo padrão de `horaExecucao`.
   executorNome = g.executadoPor?.fullName ?? null,
+  tipo,
+  bloqueioAntecipacao = null,
 }: {
   g: GrupoExecucao;
+  /** Dia futuro que NÃO pode ser antecipado: há prescrição anterior da mesma
+   *  medicação pendente. Vira um selo cinza com o motivo no `title`. */
+  bloqueioAntecipacao?: string | null;
+  /** Tipo do card em que a linha está — diz QUAIS itens nomear no `detalhe`.
+   *  Sem ele, nomeia todos os itens do documento. */
+  tipo?: 'MEDICAMENTO' | 'PROCEDIMENTO';
   onExecutar: () => void;
   onVer: () => void;
   onImprimir: () => void;
@@ -2224,9 +2354,23 @@ function LinhaGrupo({
 }) {
   const navigate = useNavigate();
 
+  // 🔴 A linha diz QUAL procedimento/medicamento é (2026-10-05, a pedido) — mesmo
+  // `detalhe` da linha da vacina, que sempre trouxe o nome da vacina. Sem ele o
+  // Histórico mostrava "Primavera · #222 · Executada" sem dizer o que foi realizado.
+  // Só os itens do TIPO do card: o medicamento do mesmo documento não entra na linha
+  // do card de Procedimentos.
+  const detalhe = g.itens
+    .filter(i => !tipo || i.tipo === tipo)
+    .map(i => (i.tipo === 'MEDICAMENTO' && i.dosagem
+      ? `${i.medicamento} ${i.dosagem}${i.unidade ? ` ${i.unidade}` : ''}`
+      : i.medicamento))
+    .filter(Boolean)
+    .join(' · ') || null;
+
   return (
     <LinhaExecucao
       animal={g.animal}
+      detalhe={detalhe}
       numeroLabel="Nº Prescrição"
       numeroFormatado={g.numeroFormatado}
       onNumero={() => navigate(`/clinica/prescricao/${g.animal.id}`)}
@@ -2256,6 +2400,12 @@ function LinhaGrupo({
           <span className="flex items-center gap-1 px-2.5 py-1 bg-red-50 border border-red-200 text-red-600 text-[10px] font-bold rounded-full whitespace-nowrap"
             title={`Dose não aplicada — era ${atraso}`}>
             <AlertTriangle size={11} /> Atrasada — era {atraso}
+          </span>
+        )}
+        {bloqueioAntecipacao && g.status !== 'CANCELADO' && !g.animalInativo && (
+          <span className="flex items-center gap-1 px-2.5 py-1 bg-gray-50 border border-gray-200 text-gray-500 text-[10px] font-bold rounded-full whitespace-nowrap"
+            title={bloqueioAntecipacao}>
+            <Lock size={11} /> Antecipação indisponível
           </span>
         )}
         {executada && (
@@ -2506,6 +2656,11 @@ export default function ExecucaoPrescricao() {
   // nunca mostrava a vacina que foi agendada para amanhã. `dataAplicacao` é DATA
   // PURA (§6): compara por `split('T')`, nunca por `diaISO`.
   const dataSelFutura = dataSel > hojeISO();
+  // 🔴 Vacina de DATA FUTURA pode ser ANTECIPADA (aplicada agora) a partir do dia dela
+  // no calendário — salvo vacina anterior da mesma medicação ainda pendente
+  // (`antecipacaoBloqueadaPor`, do backend). 2026-10-05.
+  const vacinaAntecipavel = (v: VacinaExecucao): boolean =>
+    dataSelFutura && v.dataAplicacao?.split('T')[0] === dataSel && !v.antecipacaoBloqueadaPor;
   const vacinasFiltradas = vacinas.filter(v => !v.animalInativo)
     // Dia futuro: só a agendada para ele. Hoje: a de hoje e as atrasadas — a agendada
     // para amanhã não é trabalho de hoje (mesma regra da prescrição: "nunca antes").
@@ -2636,6 +2791,35 @@ export default function ExecucaoPrescricao() {
   /** Mesma pergunta para o DOCUMENTO inteiro — usada quando não há tipo filtrado. */
   const grupoTemDosePorVir = (g: GrupoExecucao): boolean =>
     g.status !== 'CANCELADO' && !g.animalInativo && g.itens.some(itemTemDosePorVir);
+
+  /**
+   * 🔴 ANTECIPAR PRESCRIÇÃO DE DATA FUTURA (2026-10-05).
+   *
+   * Navegando o calendário para um dia FUTURO, o item cuja PRÓXIMA dose pendente cai
+   * naquele dia pode ser executado AGORA — desde que não haja prescrição anterior da
+   * mesma medicação pendente (`antecipacaoBloqueadaPor`, do backend). O que decide é
+   * o backend; a tela só não oferece o que ele recusaria (armadilha 28-d).
+   */
+  const itemAntecipavelEm = (i: ItemExecucao, data: string): boolean =>
+    data > hojeISO() && i.status !== 'CANCELADA'
+      && i.diaProximaDose === data && !i.antecipacaoBloqueadaPor;
+
+  const tipoAntecipavelEm = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO', data: string): boolean =>
+    g.status !== 'CANCELADO' && !g.animalInativo
+      && g.itens.some(i => i.tipo === tipo && itemAntecipavelEm(i, data));
+
+  const grupoAntecipavelEm = (g: GrupoExecucao, data: string): boolean =>
+    g.status !== 'CANCELADO' && !g.animalInativo && g.itens.some(i => itemAntecipavelEm(i, data));
+
+  /** Motivo de o card de um dia futuro NÃO poder ser antecipado — `null` quando pode
+   *  (ou quando não há bloqueio a explicar). */
+  const bloqueioAntecipacaoDoTipo = (
+    g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO', data: string,
+  ): string | null => {
+    if (data <= hojeISO() || tipoAntecipavelEm(g, tipo, data)) return null;
+    return g.itens.find(i => i.tipo === tipo && i.diaProximaDose === data && i.antecipacaoBloqueadaPor)
+      ?.antecipacaoBloqueadaPor?.mensagem ?? null;
+  };
 
   const tipoConcluidoEm = (g: GrupoExecucao, tipo: 'MEDICAMENTO' | 'PROCEDIMENTO'): boolean => {
     const itensDoTipo = g.itens.filter(i => i.tipo === tipo);
@@ -2860,6 +3044,7 @@ export default function ExecucaoPrescricao() {
     <LinhaGrupo
       key={g.id}
       g={g}
+      tipo={tipo}
       atraso={atrasoDoTipo(g, tipo)}
       onExecutar={() => { if (!podeExecutarAcao) { semPermissao('executar prescrição'); return; } setModalVer(false); setModalTipo(tipo); setModal(g); }}
       onVer={() => { setModalVer(true); setModalTipo(tipo); setModal(g); }}
@@ -2868,7 +3053,10 @@ export default function ExecucaoPrescricao() {
       podeExecutarAcao={podeExecutarAcao && g.status !== 'CANCELADO'}
       podeImprimir={podeImprimir}
       podeCancelar={podeCancelar && g.status !== 'CANCELADO'}
-      soVisualizacao={!isHoje || g.status === 'CANCELADO'}
+      // Fora de hoje só se executa ANTECIPANDO a dose prescrita para o dia exibido.
+      soVisualizacao={(!isHoje && !tipoAntecipavelEm(g, tipo, dataSel)) || g.status === 'CANCELADO'}
+      tituloExecutar={isHoje ? 'Executar prescrição' : 'Antecipar a execução para agora'}
+      bloqueioAntecipacao={bloqueioAntecipacaoDoTipo(g, tipo, dataSel)}
     />
   );
 
@@ -2882,6 +3070,7 @@ export default function ExecucaoPrescricao() {
       <LinhaGrupo
         key={g.id}
         g={g}
+        tipo={tipo}
         onExecutar={() => {
           if (!podeExecutarAcao) { semPermissao('executar prescrição'); return; }
           setModalVer(false); setModalTipo(tipo); setModal(g);
@@ -2953,6 +3142,7 @@ export default function ExecucaoPrescricao() {
     <LinhaGrupo
       key={g.id}
       g={g}
+      tipo={tipo}
       onExecutar={() => {}}
       onVer={() => { setModalVer(true); setModalTipo(tipo); setModal(g); }}
       onImprimir={() => podeImprimir ? handleImprimirGrupo(g) : semPermissao('imprimir prescrição')}
@@ -2971,6 +3161,7 @@ export default function ExecucaoPrescricao() {
     <LinhaGrupo
       key={g.id}
       g={g}
+      tipo={tipo}
       onExecutar={() => {}}
       onVer={() => { setModalVer(true); setModalTipo(tipo); setModal(g); }}
       onImprimir={() => podeImprimir ? handleImprimirGrupo(g) : semPermissao('imprimir prescrição')}
@@ -3185,10 +3376,17 @@ export default function ExecucaoPrescricao() {
                                   <AlertTriangle size={11} /> Atrasada — era {formatDateShort(v.dataAplicacao)}
                                 </span>
                               )}
+                              {dataSelFutura && v.antecipacaoBloqueadaPor && !v.animalInativo && (
+                                <span className="flex items-center gap-1 px-2.5 py-1 bg-gray-50 border border-gray-200 text-gray-500 text-[10px] font-bold rounded-full whitespace-nowrap"
+                                  title={v.antecipacaoBloqueadaPor.mensagem}>
+                                  <Lock size={11} /> Antecipação indisponível
+                                </span>
+                              )}
                               <AcaoRegistro tom="ver" icone={Eye} rotulo="Ver" titulo="Ver vacina"
                                 onClick={() => { setVacModoVer(true); setVacModal(v); }} />
                               <AcaoRegistro tom="executar" icone={CheckCircle2} rotulo="Aplicar"
-                                titulo="Aplicar vacina" visivel={podeExecutarAcao && !v.animalInativo && isHoje}
+                                titulo={isHoje ? 'Aplicar vacina' : 'Antecipar a vacina para agora'}
+                                visivel={podeExecutarAcao && !v.animalInativo && (isHoje || vacinaAntecipavel(v))}
                                 onClick={() => { setVacModoVer(false); setVacModal(v); }} />
                               <AcaoRegistro tom="imprimir" icone={Printer} rotulo="Imprimir"
                                 titulo="Imprimir vacina" visivel={podeImprimir}
@@ -3442,7 +3640,11 @@ export default function ExecucaoPrescricao() {
           // lista, com data e hora — não tinha como ser antecipada. Continuam
           // travando: o olho (`modalVer`), outro dia que não hoje, prescrição
           // cancelada e paciente inativo.
-          soVisualizacao={modalVer || !isHoje || modal.status === 'CANCELADO'
+          // Dia FUTURO: só abre em execução quando há dose prescrita para ele que pode
+          // ser antecipada (2026-10-05) — `bloqueioExecucao`, dentro do modal, decide
+          // item a item.
+          soVisualizacao={modalVer || modal.status === 'CANCELADO'
+            || (!isHoje && !(modalTipo ? tipoAntecipavelEm(modal, modalTipo, dataSel) : grupoAntecipavelEm(modal, dataSel)))
             || !(modalTipo ? tipoTemDosePorVir(modal, modalTipo) : grupoTemDosePorVir(modal))}
           podeCancelar={podeCancelar}
         />
@@ -3475,8 +3677,9 @@ export default function ExecucaoPrescricao() {
           v={vacModal}
           onClose={() => setVacModal(null)}
           onExecutada={carregar}
-          // Só o olho abre em leitura; fora de hoje a fila nem lista vacina.
-          soVisualizacao={vacModoVer || !isHoje}
+          // O olho abre em leitura; fora de hoje, só a vacina daquele dia que pode
+          // ser antecipada abre em execução.
+          soVisualizacao={vacModoVer || (!isHoje && !vacinaAntecipavel(vacModal))}
           podeExecutarAcao={podeExecutarAcao}
           podeCancelar={podeCancelar}
         />

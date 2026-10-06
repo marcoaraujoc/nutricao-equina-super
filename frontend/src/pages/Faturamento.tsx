@@ -126,6 +126,10 @@ interface Fatura {
   total: number; status: FaturaStatus; criadoEm: string;
   itens: FaturaItem[];
   proprietario?: { id: number; fullName: string; email: string; phone?: string; valorAssistencia?: number; mensalista?: boolean };
+  /** Preenchido só na FATURA DO PACIENTE — a que o fechamento por paciente gera com os
+   *  lançamentos de UM animal, tirados da fatura principal (2026-10-05). */
+  animalId?: number | null;
+  animal?: { id: number; nome: string } | null;
 }
 
 interface FaturaResumo {
@@ -1129,7 +1133,10 @@ function ModalNovoTipoItem({ faturaId, animalId, tipoInicial, onFechar, onLancad
 
 // ─── Painel direito — detalhe da fatura ──────────────────────────────────────
 
-type MesFatura = { id: number; mesReferencia?: string; status: string };
+/** Uma fatura do cliente para o seletor. `animalId`/`animalNome` = FATURA DO PACIENTE,
+ *  que divide o mês com a principal — por isso o seletor escolhe por ID, não por mês. */
+type MesFatura = { id: number; mesReferencia?: string; status: string; animalId?: number | null; animalNome?: string | null };
+type MetaFaturas = { meses: MesFatura[]; faturaAtualId?: number };
 
 // ─── Cores das ações (CLAUDE.md §6) ──────────────────────────────────────────
 // A barra de ações da fatura nascia TODA cinza — e cinza, na aplicação, é a cor do
@@ -1207,6 +1214,9 @@ interface PropsDoBloco {
   abertos: number; fechados: number; pagos: number; naoPagos: number;
   podeFechar: boolean; podePagar: boolean; isGestor: boolean;
   faturaEditavel: boolean; ocupado: boolean; envio: 'email' | null;
+  /** Fechar/Pagar o paciente GERAM a fatura dele — só valem em fatura em aberto que não
+   *  seja já a fatura do paciente. */
+  separavel: boolean;
   onAlterar: (animalId: number, acao: AcaoAnimal, nome: string) => void;
   bloqueioEmail: string | null; bloqueioWhatsApp: string | null; bloqueioImpresso: string | null;
   onEmail: (animalId: number, nome: string) => void;
@@ -1241,7 +1251,7 @@ function ResumoDoBloco({ subtotal, subtotalFechado, subtotalPago }: PropsDoBloco
 function AcoesDoBloco(props: PropsDoBloco) {
   const {
     animalId, nome, abertos, fechados, pagos, naoPagos,
-    podeFechar, podePagar, isGestor, faturaEditavel, ocupado, envio, onAlterar,
+    podeFechar, podePagar, isGestor, faturaEditavel, separavel, ocupado, envio, onAlterar,
     bloqueioEmail, bloqueioWhatsApp, bloqueioImpresso,
     onEmail, whatsapp, telefoneWhatsApp, onImprimir, onExportar,
   } = props;
@@ -1253,9 +1263,9 @@ function AcoesDoBloco(props: PropsDoBloco) {
 
   return (
     <div className="flex flex-wrap items-center justify-end gap-1.5 ml-auto">
-      {podeFecharAgir && abertos > 0 && (
+      {podeFecharAgir && separavel && (abertos > 0 || fechados > 0) && (
         <AcaoBloco tom="finalizar" icone={Check} rotulo="Fechar paciente" carregando={ocupado}
-          titulo="Fecha a cobrança deste paciente e tira o valor dele do total da fatura"
+          titulo="Gera uma fatura só deste paciente (aba Fechada) e tira os lançamentos dele desta fatura"
           onClick={() => onAlterar(animalId, 'fechar', nome)} />
       )}
       {podeFecharAgir && fechados > 0 && (
@@ -1265,9 +1275,9 @@ function AcoesDoBloco(props: PropsDoBloco) {
       )}
       {/* Dar baixa fecha o que ainda estiver aberto — por isso aparece com QUALQUER
           lançamento a receber, não só depois de fechar. */}
-      {podePagarAgir && naoPagos > 0 && (
+      {podePagarAgir && separavel && naoPagos > 0 && (
         <AcaoBloco tom="finalizar" icone={CheckCircle2} rotulo="Marcar como Pago" carregando={ocupado}
-          titulo="Registra o acerto deste paciente: fecha o que estiver aberto e tira o valor de contas a receber"
+          titulo="Gera uma fatura só deste paciente já paga (aba Paga) e tira os lançamentos dele desta fatura"
           onClick={() => onAlterar(animalId, 'pagar', nome)} />
       )}
       {/* Estornar é ato de GESTOR (o backend recusa os demais) — e é por isso que
@@ -1304,7 +1314,7 @@ function PainelFatura({
   onStatusChange: () => void;
   faturaId?: number;
   mes?: string | null;
-  onMeta?: (m: { meses: MesFatura[]; mesAtual?: string }) => void;
+  onMeta?: (m: MetaFaturas) => void;
 }) {
   const { podeExecutar, isGestor } = usePermissoes();
   const podeEditar  = isGestor || podeExecutar('financeiro.faturas.editar');
@@ -1314,6 +1324,9 @@ function PainelFatura({
     setErroInline(`Sem permissão para ${acao}. Verifique com o responsável da equipe.`);
 
   const [fatura,         setFatura]         = useState<Fatura | null>(null);
+  // As faturas do cliente (vêm junto do GET) — daqui sai quem já tem FATURA DO PACIENTE
+  // no mês, para o bloco dele sumir da principal.
+  const [mesesFatura,    setMesesFatura]    = useState<MesFatura[]>([]);
   const [loading,        setLoading]        = useState(true);
   const [salvando,       setSalvando]       = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -1488,7 +1501,9 @@ function PainelFatura({
         : faturaId ? `?faturaId=${faturaId}` : '';
       const r = await api.get(`/clinica/faturas/proprietario/${prop.id}${q}`);
       setFatura(r.data.dados);
-      onMeta?.({ meses: Array.isArray(r.data.meses) ? r.data.meses : [], mesAtual: r.data.dados?.mesReferencia });
+      const meses: MesFatura[] = Array.isArray(r.data.meses) ? r.data.meses : [];
+      setMesesFatura(meses);
+      onMeta?.({ meses, faturaAtualId: r.data.dados?.id });
     } catch {
       setErroInline('Erro ao carregar fatura');
     } finally {
@@ -1719,11 +1734,11 @@ function PainelFatura({
   // aberta cobrando os outros pacientes, que é o ponto inteiro do pagamento por animal.
   const ACAO_ANIMAL: Record<AcaoAnimal, { permissao: 'fechar' | 'pagar'; verbo: string; ok: (n: string) => string }> = {
     fechar:   { permissao: 'fechar', verbo: 'fechar a fatura do paciente',
-                ok: n => `Fatura de ${n} fechada — o valor saiu do total` },
+                ok: n => `Fatura de ${n} gerada — disponível na aba Fechada` },
     reabrir:  { permissao: 'fechar', verbo: 'reabrir a fatura do paciente',
                 ok: n => `Fatura de ${n} reaberta — o valor voltou ao total` },
     pagar:    { permissao: 'pagar',  verbo: 'marcar como pago a fatura do paciente',
-                ok: n => `Fatura de ${n} marcada como paga — saiu de contas a receber` },
+                ok: n => `Fatura de ${n} gerada e marcada como paga — disponível na aba Paga` },
     estornar: { permissao: 'pagar',  verbo: 'estornar o pagamento do paciente',
                 ok: n => `Pagamento de ${n} estornado — o valor voltou a ser devido` },
   };
@@ -1738,6 +1753,9 @@ function PainelFatura({
       const r = await api.patch(`/clinica/faturas/${fatura.id}/animais/${animalId}/${acao}`);
       setFatura(r.data.dados);
       toast.success(cfg.ok(nomeAnimal));
+      // Fechar/pagar GEROU a fatura do paciente: relê para o seletor e o bloco dele
+      // (que saiu desta fatura) refletirem a fatura nova.
+      if (r.data.faturaGerada) await carregar();
       // O total da fatura mudou: a lista de clientes ao lado mostra esse número.
       onStatusChange();
     } catch (err) {
@@ -1856,6 +1874,22 @@ function PainelFatura({
       itens: itens ?? [],
     }));
 
+  // 🔴 FATURA DO PACIENTE (2026-10-05): fechar o paciente gera uma fatura só dele e TIRA
+  // os lançamentos desta. Na principal, o bloco do paciente que já tem fatura própria no
+  // mês e não tem mais lançamento aqui SOME — "remover da fatura principal a informação
+  // do animal fechado". Na fatura do paciente, só o bloco dele aparece.
+  const ehFaturaDoPaciente = !!fatura?.animalId;
+  const animaisSeparados = new Set(
+    mesesFatura
+      .filter(m => m.animalId && m.id !== fatura?.id && m.status !== 'CANCELADA'
+                   && m.mesReferencia === fatura?.mesReferencia)
+      .map(m => Number(m.animalId)),
+  );
+  const animaisNaFatura = prop.animais.filter(a =>
+    ehFaturaDoPaciente
+      ? a.id === fatura?.animalId
+      : !(animaisSeparados.has(a.id) && !(itensPorAnimal[a.id]?.length)));
+
   // REABERTA também edita — é justamente para isso que se reabre uma fatura.
   const canEdit = fatura?.status === 'ABERTA' || fatura?.status === 'REABERTA';
 
@@ -1914,6 +1948,20 @@ function PainelFatura({
           <span className="font-mono">{invoiceRef}</span>
         </div>
       </div>
+
+      {/* FATURA DO PACIENTE — sem esta faixa ela pareceria a fatura do cliente inteiro,
+          com um paciente só e um total menor sem explicação. */}
+      {ehFaturaDoPaciente && (
+        <div className="mb-3 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 flex-shrink-0">
+          <p className="text-xs font-semibold text-indigo-800">
+            Fatura do paciente {fatura.animal?.nome ?? ''}
+          </p>
+          <p className="text-xs text-indigo-700 mt-0.5">
+            Gerada pelo fechamento por paciente: os lançamentos dele saíram da fatura principal
+            do mês e são cobrados aqui.
+          </p>
+        </div>
+      )}
 
       {/* 🔴 Sem esta faixa, a fatura paga só aparece SEM os botões de editar e a
           pessoa conclui que perdeu permissão — o mesmo motivo da faixa do paciente
@@ -2044,7 +2092,7 @@ function PainelFatura({
         )}
 
         {/* Seções por animal */}
-        {prop.animais.map(animal => {
+        {animaisNaFatura.map(animal => {
           const todosItens: FaturaItem[] = itensPorAnimal[animal.id] ?? [];
           // 🔴 O bloco fechado à parte sai do subtotal e do total da fatura, mas
           // CONTINUA no documento: ele foi cobrado, só é acertado separadamente.
@@ -2068,6 +2116,10 @@ function PainelFatura({
             pagos: itensPagos.length, naoPagos: itensAbertos.length + itensFechados.length,
             podeFechar, podePagar: podeEditar, isGestor,
             faturaEditavel: podeMexerNoFechamento,
+            // Fechar/pagar o paciente GERA a fatura dele: só de fatura em aberto, e nunca
+            // da própria fatura do paciente (ela se fecha/paga pelas ações da fatura —
+            // o backend recusa com FATURA_NAO_EDITAVEL / FATURA_DO_PACIENTE).
+            separavel: canEdit && !ehFaturaDoPaciente,
             ocupado: fechandoAnimalId === animal.id,
             envio: envioAnimal?.id === animal.id ? envioAnimal.canal : null,
             onAlterar: alterarFechamentoAnimal,
@@ -2205,6 +2257,10 @@ function PainelFatura({
             pagos: pagosG.length, naoPagos: abertos.length + fechados.length,
             podeFechar, podePagar: podeEditar, isGestor,
             faturaEditavel: podeMexerNoFechamento,
+            // Fechar/pagar o paciente GERA a fatura dele: só de fatura em aberto, e nunca
+            // da própria fatura do paciente (ela se fecha/paga pelas ações da fatura —
+            // o backend recusa com FATURA_NAO_EDITAVEL / FATURA_DO_PACIENTE).
+            separavel: canEdit && !ehFaturaDoPaciente,
             ocupado: fechandoAnimalId === grupo.id,
             envio: envioAnimal?.id === grupo.id ? envioAnimal.canal : null,
             onAlterar: alterarFechamentoAnimal,
@@ -2807,9 +2863,11 @@ export default function Faturamento() {
    *  status" de "o efeito rodou na montagem". Sem a distinção, a montagem limparia a
    *  seleção que `?proprietarioId=` acabou de fazer. */
   const filtroAnteriorRef = useRef<FiltroLista>(filtroLista);
-  // Seletor de mês/ano (só para fatura FECHADA/PAGA) — controla o mês visualizado.
-  const [mesView,       setMesView]       = useState<string | null>(null);
-  const [faturaMeta,    setFaturaMeta]    = useState<{ meses: MesFatura[]; mesAtual?: string }>({ meses: [] });
+  // Seletor de fatura (só para FECHADA/ATRASADA/PAGA). Escolhe por ID, não por mês: a
+  // FATURA DO PACIENTE (fechamento por paciente) divide o mês com a principal, e pelo
+  // mês as duas seriam indistinguíveis.
+  const [faturaView,    setFaturaView]    = useState<number | null>(null);
+  const [faturaMeta,    setFaturaMeta]    = useState<MetaFaturas>({ meses: [] });
   const [dropdownAberto, setDropdownAberto] = useState(false);
   const [showLote,       setShowLote]       = useState(false);
   // Erro de ação exibido inline (substitui o toast de erro)
@@ -2859,14 +2917,14 @@ export default function Faturamento() {
   // seleção que `?proprietarioId=` faz ao chegar do Relatório de Gestão.
   useEffect(() => {
     setFiltroStatus(filtroLista);
-    setMesView(null);
+    setFaturaView(null);
     if (filtroAnteriorRef.current !== filtroLista) {
       filtroAnteriorRef.current = filtroLista;
       setSelecionado(null);
     }
   }, [filtroLista]);
   // Trocar o tipo de fatura reseta o mês visualizado.
-  useEffect(() => { setMesView(null); }, [filtroStatus]);
+  useEffect(() => { setFaturaView(null); }, [filtroStatus]);
 
   // Fecha o dropdown do seletor ao clicar fora
   useEffect(() => {
@@ -3073,11 +3131,13 @@ export default function Faturamento() {
                   faturaMeta.meses.filter(m => m.status === filtroStatus).length > 0 && (
                   <div className="flex items-center gap-2 mb-3 bg-white rounded-2xl border border-gray-100 shadow-sm px-3 py-2.5">
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider self-center mr-1 flex-shrink-0">Mês:</p>
-                    <select value={mesView ?? faturaMeta.mesAtual ?? ''}
-                      onChange={e => setMesView(e.target.value)}
+                    <select value={faturaView ?? faturaMeta.faturaAtualId ?? ''}
+                      onChange={e => setFaturaView(Number(e.target.value) || null)}
                       className="ml-auto border border-gray-300 rounded-lg px-2.5 py-1 text-[11px] bg-white focus:outline-none focus:border-indigo-400">
                       {faturaMeta.meses.filter(m => m.status === filtroStatus).map(m => (
-                        <option key={m.id} value={m.mesReferencia ?? ''}>{formatMes(m.mesReferencia) || 'Mês atual'}</option>
+                        <option key={m.id} value={m.id}>
+                          {formatMes(m.mesReferencia) || 'Mês atual'}{m.animalNome ? ` · ${m.animalNome}` : ''}
+                        </option>
                       ))}
                     </select>
                   </div>
@@ -3087,14 +3147,15 @@ export default function Faturamento() {
                   key={`${selecionado.id}-${filtroStatus}`}
                   prop={selecionado}
                   onStatusChange={carregar}
-                  mes={mesView}
+                  mes={null}
                   onMeta={setFaturaMeta}
                   faturaId={
-                    filtroStatus === 'PAGA'     ? selecionado.faturaPaga?.id     :
+                    faturaView ??
+                    (filtroStatus === 'PAGA'     ? selecionado.faturaPaga?.id     :
                     filtroStatus === 'ATRASADA' ? selecionado.faturaAtrasada?.id :
                     filtroStatus === 'FECHADA'  ? selecionado.faturaFechada?.id  :
                     filtroStatus === 'REABERTA' ? selecionado.faturaReaberta?.id :
-                    undefined
+                    undefined)
                   }
                 />
               </>

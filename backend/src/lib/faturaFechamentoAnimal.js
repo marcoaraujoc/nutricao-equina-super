@@ -312,6 +312,73 @@ async function reabrirAnimal(client, { faturaId, animalId }) {
 }
 
 /**
+ * 🔴 FATURA DO PACIENTE (2026-10-05, a pedido): "caso seja realizado o fechamento da
+ * fatura por animal, deverá ser removido da fatura principal a informação do animal
+ * fechado e será gerada uma nova fatura com as informações desse animal".
+ *
+ * A fatura gerada é uma `Fatura` comum do MESMO cliente, empresa e mês — e é
+ * `Fatura.animalId` preenchido JUNTO de `proprietarioId` que a identifica como fatura
+ * de UM paciente. A coluna existia sem uso (legado das faturas por animal anteriores à
+ * fatura por proprietário, que tinham `proprietarioId` NULO), por isso o par não
+ * colide com nada e não exigiu migration.
+ *
+ * O que ela muda no resto do ciclo (cada regra mora onde o ciclo é decidido):
+ *  · `getOrCreateFatura` nunca adota a fatura do paciente reaberta como a corrente
+ *    do mês — senão a cobrança dos OUTROS pacientes cairia dentro dela;
+ *  · `abrirProximaFatura` não abre ciclo a partir dela;
+ *  · `adicionarAssistenciaMensal` não lança assistência nela, e não relança na
+ *    principal a assistência do paciente que já foi levada para ela;
+ *  · a reabertura dela não esbarra em `FATURA_ABERTA_NO_MES` (é outro documento).
+ */
+function ehFaturaDoPaciente(fatura) {
+  return Boolean(fatura?.animalId && fatura?.proprietarioId);
+}
+
+/**
+ * Leva os lançamentos AINDA NÃO PAGOS de um paciente para uma fatura NOVA só dele,
+ * com o `status` pedido (FECHADA no fechamento, PAGA no pagamento), e recalcula as
+ * duas. Precisa rodar dentro de uma transaction (`tx`).
+ *
+ * ⚠️ Vai junto o que estava "fechado à parte" no modelo ANTERIOR (marca por item):
+ * a marca é limpa, porque agora quem diz que a cobrança está encerrada é o status da
+ * fatura nova. Sem isso a linha nasceria na fatura nova fora do total dela.
+ * ⚠️ O que já foi PAGO no modelo anterior fica onde está — mexer nele mudaria um
+ * documento que o cliente já acertou.
+ * ⚠️ É um UPDATE de `faturaId`, não cópia: as origens (`tb_fatura_item_origens`)
+ * apontam para o ITEM, então o rastro clínico de cada linha viaja com ela.
+ *
+ * @returns {Promise<{ fatura: object, movidos: number }>}
+ */
+async function separarAnimal(tx, { origem, animalId, status, recalcular }) {
+  const aid = Number(animalId);
+  const [temFech, temPag] = await Promise.all([temColunas(), temColunasPagamento()]);
+  const filtroPago = temPag ? ' AND "pago_em" IS NULL' : '';
+
+  const nova = await tx.fatura.create({
+    data: {
+      proprietarioId: origem.proprietarioId,
+      empresaId:      origem.empresaId,
+      mesReferencia:  origem.mesReferencia ?? null,
+      animalId:       aid,
+      status,
+      total:          0,
+    },
+  });
+
+  const limpaFechamento = temFech ? ', "fechado_em" = NULL, "fechado_por_id" = NULL' : '';
+  const movidos = await tx.$executeRawUnsafe(
+    `UPDATE "schs2vet"."tb_fatura_itens"
+        SET "faturaId" = $3${limpaFechamento}
+      WHERE "faturaId" = $1 AND "animalId" = $2${filtroPago}`,
+    Number(origem.id), aid, nova.id,
+  );
+
+  await recalcular(tx, origem.id);
+  await recalcular(tx, nova.id);
+  return { fatura: await tx.fatura.findUnique({ where: { id: nova.id } }), movidos };
+}
+
+/**
  * Mapa `faturaId → totalFechado` em BLOCO.
  *
  * 🔴 EXISTE PARA OS INDICADORES DE DINHEIRO A RECEBER. `Fatura.total` passou a ser só
@@ -497,6 +564,8 @@ module.exports = {
   contarNaoPagosDoAnimal,
   fecharAnimal,
   reabrirAnimal,
+  ehFaturaDoPaciente,
+  separarAnimal,
   pagarAnimal,
   desfazerPagamentoAnimal,
   gravarTotais,

@@ -602,6 +602,14 @@ Fatura / FaturaItem → financeiro básico
                     caso que a regra de 2026-09-06 protege (reabrir agosto e receber a
                     cobrança de setembro). "Reaberta do mês corrente" só existe quando alguém
                     fechou o mês antes do fim e reabriu; ali ela É a fatura corrente.
+                    🔴 **FATURA DO PACIENTE** (2026-10-05): FECHAR/PAGAR o paciente agora
+                    MOVE os lançamentos dele para uma Fatura NOVA (mesmo cliente/empresa/
+                    mês, `animalId` preenchido, status FECHADA/PAGA) — saem da principal.
+                    `animalId` + `proprietarioId` = fatura do paciente
+                    (`ehFaturaDoPaciente`): `getOrCreateFatura`, `abrirProximaFatura`,
+                    `FATURA_ABERTA_NO_MES` e a assistência mensal a IGNORAM. O seletor de
+                    mês da tela escolhe por ID. Ver `hist-financeiro.md`, 2026-10-05.
+                    O texto abaixo (marca por item) segue valendo só para blocos legados.
                     🔴 **FECHAMENTO POR ANIMAL** (migration 20261018000000): `total` passou a
                     ser O QUE A FATURA AINDA COBRA — só os itens ABERTOS; o bloco de um
                     paciente fechado à parte (`FaturaItem.fechadoEm`) sai dele e vai para
@@ -3818,6 +3826,15 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
     acontece com erro na tela, então parece "o campo não aceita valor depois do erro"
     (foi a frequência da Prescrição). `onChange` sozinho cobre input, select e textarea.
     Gate: `__tests__/erroSemOnInput.test.js`.
+
+47. 🔴 **ANTECIPAR DATA FUTURA EXIGE A FILA ANTERIOR LIMPA (2026-10-05).** Prescrição
+    ou vacina de dia FUTURO pode ser executada hoje, salvo se houver, para o mesmo
+    paciente, uma ANTERIOR da MESMA medicação pendente → 400 `ANTECIPACAO_BLOQUEADA`,
+    que NÃO se libera com `confirmarAntecipacao` (não é pergunta). Regra única em
+    `lib/antecipacaoExecucao.js` — o `executar` (prescrição e vacina) e as duas filas
+    do plantão (`antecipacaoBloqueadaPor`) usam a mesma; tela nova que execute dose
+    consulta a lib, não reescreve a regra. Vacina antecipada grava `dataAplicacao` =
+    hoje. Gate: `__tests__/antecipacaoDataFutura.test.js`.
 ```
 
 ---

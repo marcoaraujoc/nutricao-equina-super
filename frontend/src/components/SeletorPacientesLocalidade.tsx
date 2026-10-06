@@ -10,7 +10,8 @@ import ComboBuscavel from './ComboBuscavel';
  * A localidade é a que a Agenda já exibe ao lado do paciente (catálogo → texto
  * legado), então o recorte bate com o que a pessoa vê nos outros seletores.
  * Paciente sem localidade não aparece aqui — ele continua sendo agendado pelo
- * seletor de paciente avulso (localidade "Todas").
+ * seletor de paciente avulso (localidade em branco — apagar o campo volta a ele;
+ * a frase "Todas (paciente avulso)" saiu da lista a pedido, 2026-10-05).
  *
  * Só COLETA a seleção: quem decide o que fazer com ela é a tela.
  */
@@ -84,7 +85,7 @@ export default function SeletorPacientesLocalidade({
           value={localidade}
           onChange={v => { setBusca(''); onLocalidade(v); }}
           opcoes={localidades}
-          rotuloVazio="Todas (paciente avulso)"
+          rotuloVazio=""
           placeholder="Digite a localidade"
           vazioTexto="Nenhuma localidade encontrada"
           icone={<MapPin size={13} />}

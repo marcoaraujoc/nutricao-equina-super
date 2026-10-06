@@ -33,13 +33,19 @@ export interface OpcaoCombo {
    * já entrega agrupado; o combo não reordena.
    */
   grupo?: string;
+  /** Ícone da opção — aparece na lista e, escolhida, à esquerda do campo. */
+  icone?: ReactNode;
 }
 
 interface Props {
   value: string;
   onChange: (v: string) => void;
   opcoes: OpcaoCombo[];
-  /** Rótulo da opção VAZIA ('' = "Todos"). Sem ele, não há opção vazia na lista. */
+  /**
+   * Rótulo da opção VAZIA ('' = "Todos"). Sem ele, não há opção vazia na lista.
+   * String vazia: o campo aceita ficar vazio (apagar e sair limpa), mas a opção não
+   * é listada e o campo vazio mostra só o `placeholder`.
+   */
   rotuloVazio?: string;
   placeholder?: string;
   disabled?: boolean;
@@ -82,7 +88,7 @@ export default function ComboBuscavel({
     const filtradas = termo
       ? opcoes.filter(o => semAcento(`${o.label} ${o.detalhe ?? ''}`).includes(termo))
       : opcoes;
-    return rotuloVazio !== undefined && !termo
+    return rotuloVazio && !termo
       ? [{ value: '', label: rotuloVazio }, ...filtradas]
       : filtradas;
   }, [opcoes, termo, rotuloVazio]);
@@ -133,9 +139,12 @@ export default function ComboBuscavel({
     setBusca(null);
   };
 
+  // Escolhida uma opção com ícone e sem busca em curso, o campo mostra o ícone DELA.
+  const iconeCampo = (busca === null ? selecionada?.icone : undefined) ?? icone;
+
   return (
     <div className="relative" ref={ref}>
-      {icone && <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">{icone}</span>}
+      {iconeCampo && <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none flex">{iconeCampo}</span>}
       <input
         type="text"
         disabled={disabled}
@@ -149,7 +158,7 @@ export default function ComboBuscavel({
         onBlur={aoSair}
         placeholder={placeholder ?? rotuloVazio ?? 'Digite para buscar'}
         autoComplete="off"
-        className={`${className} ${icone ? 'pl-8' : ''} pr-7 disabled:opacity-50 disabled:cursor-not-allowed`}
+        className={`${className} ${icone || opcoes.some(o => o.icone) ? 'pl-8' : ''} pr-7 disabled:opacity-50 disabled:cursor-not-allowed`}
       />
       <ChevronDown size={12}
         className={`absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none transition-transform ${aberto ? 'rotate-180' : ''}`} />
@@ -169,11 +178,12 @@ export default function ComboBuscavel({
             )}
             <button type="button" onClick={() => selecionar(o.value)}
               onMouseEnter={() => setDestaque(i)}
-              className={`w-full text-left px-3 py-2 text-xs transition-colors ${
+              className={`w-full text-left px-3 py-2 text-xs transition-colors ${o.icone ? 'flex items-center gap-2' : ''} ${
                 o.value === value ? 'bg-emerald-50 text-emerald-800 font-semibold'
                 : i === destaque ? 'bg-gray-100 text-gray-900'
                 : o.value === '' ? 'text-gray-500' : 'text-gray-700'
               }`}>
+              {o.icone && <span className="flex-shrink-0 flex">{o.icone}</span>}
               {o.label}
               {o.detalhe && <span className="ml-1.5 text-[10px] text-gray-400 font-normal">{o.detalhe}</span>}
             </button>

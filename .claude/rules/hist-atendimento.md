@@ -32,6 +32,111 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-05 (parte 4) (**AGENDA: "LOCALIDADE" SEM A FRASE "Todas
+#   (paciente avulso)" E "REFERE-SE A" COM ÍCONE** — a pedido.
+#   1. `SeletorPacientesLocalidade`: `rotuloVazio=""`. O campo vazio mostra só o
+#      placeholder "Digite a localidade" e a opção vazia não é listada; apagar o campo
+#      e sair continua voltando ao modo avulso. `ComboBuscavel` passou a tratar
+#      `rotuloVazio` STRING VAZIA assim (aceita limpar, não lista a opção).
+#   2. `ComboBuscavel` ganhou `OpcaoCombo.icone` (na lista e, escolhida, à esquerda do
+#      campo). `TIPOS` (Agendamentos) ganhou `Icone`, com o ícone do menu para o
+#      tópico: Consulta Stethoscope · Vacina Syringe · Exame Microscope · Procedimento
+#      Activity · Vermifugação Pill (Medicamentos). Retorno não tem módulo: RotateCcw.
+#   Só front. SEM MIGRATION. ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-10-05 (parte 3) (🔴 **AGENDA EM LOTE: OS PACIENTES FICAM EM
+#   SEQUÊNCIA, NÃO NO MESMO HORÁRIO** — a pedido. REVERTE o "LOTE = UMA VISITA, todos
+#   no MESMO horário" de 2026-10-04.
+#   O 1º paciente fica no horário escolhido e cada seguinte começa quando o anterior
+#   termina, pela MESMA duração do agendamento avulso: tempo de consulta do
+#   profissional no local/especialidade (`tempoConsultaDoProfissional`, o MENOR entre
+#   os locais), tempo do cadastro do prestador EXTERNO e, sem nada definido, o padrão
+#   da empresa (`tempoConsultaPadraoDaEmpresa` → 60). Conta pura em
+#   `lib/agendamentoLote.js#horarioDoLote`.
+#   ⚠️ A duração passou a ser resolvida ANTES das conferências por paciente: o
+#   `HORARIO_OCUPADO` de cada animal olha o horário DELE, não o do primeiro.
+#   ⚠️ Conflito do profissional/prestador e expediente são conferidos UMA vez, sobre o
+#   BLOCO `[início, início + N × duração)` — o último paciente também precisa caber.
+#   Mensagem própria quando a sequência ultrapassa o expediente.
+#   ⚠️ A ordem é a da seleção (`animalIds` na ordem recebida).
+#   Avisos: o nome de cada paciente vai com a hora dele ("Thor (08:00), Bela (08:30)");
+#   o proprietário recebe a hora do 1º animal dele. Tela: prévia "Horários em
+#   sequência — N min por paciente" sob o checklist (mesma conta, `passoDoVet`) e toast
+#   "em sequência a partir das HH:MM".
+#   Gate `__tests__/agendamentoLote.test.js` (16; verificado que reprova voltando
+#   `dataHora: quando`). SEM MIGRATION. ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-10-05 (parte 2) (🔴 **ANTECIPAR PRESCRIÇÃO/VACINA DE DATA FUTURA**
+#   — regra nova, a pedido: o plantão pode executar HOJE o que foi prescrito para um
+#   dia FUTURO, desde que NÃO haja, para o mesmo paciente, prescrição ANTERIOR da MESMA
+#   medicação ainda pendente. Ex.: hoje 05/10, vacina X para 06/10 → antecipa; com
+#   outra X de 05/10 (ou antes) pendente → a de 06/10 NÃO antecipa.
+#   Fonte única `lib/antecipacaoExecucao.js` (identificação da medicação, dia da
+#   próxima dose pendente, pendência anterior, mensagem). Mesma medicação = mesmo
+#   catálogo (`medicamentoCatId`; na vacina também `vacinaId`) e, sem catálogo dos dois
+#   lados, o NOME sem acento/caixa. Só compara registro do MESMO tipo (prescrição com
+#   prescrição, vacina com vacina). "Anterior" é ESTRITAMENTE antes do dia do alvo.
+#   "Data futura" é DIA: a dose das 14:00 executada às 10:00 do mesmo dia segue a
+#   antecipação de 2026-09-18, sem esta checagem.
+#   **Backend.** `PrescricaoGrupoController.executar`: antes da pergunta, item cuja
+#   próxima dose cai depois de hoje passa pela checagem → 400 `ANTECIPACAO_BLOQUEADA`
+#   (🔴 NÃO liberável por `confirmarAntecipacao` — é ordem de execução, não pergunta).
+#   O item SEM âncora de horário com curso no futuro, que passava CALADO (sem previsto,
+#   sem gate), agora também cai em `EXECUCAO_FUTURA` (`semHorario: true`). A auditoria
+#   da dose diz "prescrita para DD/MM, antecipada na execução".
+#   `VacinaClinicaController.executar` não tinha trava de data NENHUMA (só a tela
+#   impedia): agora pendência anterior → `ANTECIPACAO_BLOQUEADA`; sem pendência →
+#   `EXECUCAO_FUTURA` até `confirmarAntecipacao`. 🔴 Antecipada, a `dataAplicacao`
+#   passa a ser HOJE (carteira de vacinação, fatura e reforço saem da data real — o
+#   equivalente ao rolling schedule); a prescrita fica na auditoria.
+#   As duas filas do plantão anotam `antecipacaoBloqueadaPor` (+ `diaProximaDose` no
+#   item) com a MESMA lib. A tenancy da vacina virou `whereVacinaDaEmpresa`, usada pela
+#   fila E pela busca de pendências do `executar`.
+#   **Tela** (`ExecucaoPrescricao.tsx`): navegando o calendário para um dia FUTURO, o
+#   item cuja próxima dose pendente cai NAQUELE dia e a vacina daquele dia ganham o
+#   Executar/Aplicar ("Antecipar … para agora"); a pergunta é a de sempre. Bloqueado →
+#   selo cinza "Antecipação indisponível" com o motivo no `title`, e no modal o botão
+#   cinza com a linha do motivo (§6, 28-d). Dia futuro NÃO tem "Executar Todos"
+#   (antecipação é item a item) e o modal fecha após antecipar. Hoje, o "Executar
+#   Todos" deixa de fora o item bloqueado (senão o backend derrubaria o lote).
+#   ⚠️ Dose de OUTRO dia que aparece na prévia futura NÃO é executável — executar ali
+#   aplicaria a PRÓXIMA dose do curso, que ninguém escolheu.
+#   ⚠️ Item LEGADO ('agora'/'SOS'/'seNecessario') não é antecipável (sem grade).
+#   ⚠️ Resolve em parte o pendente de 2026-09-18 (curso de cadência longa fora da fila
+#   nos dias do meio): agora dá para antecipar abrindo o dia da próxima dose.
+#   Gate `__tests__/antecipacaoDataFutura.test.js` (24; executa a regra real com os
+#   exemplos do pedido; verificado que reprova — 5 falhas com a regra removida).
+#   SEM MIGRATION. `vite build` limpo; `tsc -b` só acusa `Animal.tsx` (já existente).
+#   ⚠️ NÃO verificado em navegador.)
+
+---
+
+# Atualizado em: 2026-10-05 (**HISTÓRICO DA EXECUÇÃO DE PRESCRIÇÃO: HORA DA VACINA E
+#   NOME DO PROCEDIMENTO** — a pedido.
+#   1. 🔴 **A hora da vacina saía 3h ATRASADA** ("Executada em 05/10 às 11:39" para uma
+#      aplicação às 14:39). O QUANDO da vacina vem do AuditLog, e os INSERTs de
+#      `lib/auditoria.js` deixavam `timestamp` no DEFAULT `CURRENT_TIMESTAMP` — hora
+#      LOCAL da sessão gravada numa coluna `timestamp` sem fuso e lida como UTC (§6, o
+#      mesmo defeito do `NOW()` puro). Os 5 INSERTs passaram a gravar
+#      `NOW() AT TIME ZONE 'UTC'`. ⚠️ Vale para TODA a auditoria (tela de Auditoria,
+#      relatórios de cadastro): ela também exibia 3h atrás.
+#      ⚠️ **Linhas antigas NÃO foram corrigidas** — continuam 3h atrás (dado no banco,
+#      sem autorização). Para corrigir: `+ interval '3 hours'` nas linhas gravadas por
+#      `lib/auditoria.js` (as com `categoria` preenchida e LOGIN/LOGOUT); as de
+#      `EvolucaoController.registrarAuditoria` (Prisma, já UTC) ficam fora.
+#   2. **A linha da prescrição passou a dizer O QUE foi realizado**, como a da vacina
+#      (que sempre trouxe o nome): `LinhaGrupo` monta o `detalhe` com os itens do TIPO
+#      do card (procedimento: nome; medicamento: nome + dose) e todo `<LinhaGrupo>`
+#      passa `tipo`. Vale na fila, no Histórico, em Cancelado e Paciente inativo.
+#   Gate `__tests__/historicoExecucaoPrescricao.test.js` (9; verificado que reprova).
+#   SEM MIGRATION. ⚠️ NÃO verificado em navegador.)
+
+---
+
 # Atualizado em: 2026-10-04 (**AGENDA: AGENDAR POR LOCALIDADE, EM LOTE, E "REFERE-SE A"**
 #   — a pedido. No modal "Confirmar Horário" (clique no slot da grade):
 #   1. **"Refere-se a *"** — combo com Consulta · Vacina · Retorno · Exame · Procedimento ·

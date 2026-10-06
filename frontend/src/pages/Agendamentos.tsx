@@ -19,7 +19,9 @@ import {
   ChevronDown, ChevronUp, AlertTriangle, Loader2, Calendar,
   Phone, Stethoscope, Filter, Users, Mic, MicOff, Wand2, Sparkles,
   CheckCircle2, AlertCircle, UserCheck, CalendarDays, MapPin, Ban,
+  Syringe, Microscope, Activity, Pill, RotateCcw,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import InlineError from '../components/InlineError';
 import ModalJustificativa from '../components/ModalJustificativa';
 import ResponsavelTrocado, { type EloResponsavel } from '../components/ResponsavelTrocado';
@@ -285,13 +287,16 @@ interface InterpretacaoResultado {
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
-const TIPOS: { value: TipoAgendamento; label: string; cor: string }[] = [
-  { value: 'CONSULTA',     label: 'Consulta',     cor: 'bg-emerald-100 text-emerald-700' },
-  { value: 'VACINA',       label: 'Vacina',       cor: 'bg-teal-100 text-teal-700'       },
-  { value: 'RETORNO',      label: 'Retorno',      cor: 'bg-green-100 text-green-700'     },
-  { value: 'EXAME',        label: 'Exame',        cor: 'bg-cyan-100 text-cyan-700'       },
-  { value: 'PROCEDIMENTO', label: 'Procedimento', cor: 'bg-emerald-50 text-emerald-600'  },
-  { value: 'VERMIFUGACAO', label: 'Vermifugação', cor: 'bg-lime-100 text-lime-700'        },
+// Ícone = o que o menu já usa para o tópico: Atendimento (Stethoscope), Vacina
+// (Syringe), Resultado de Exame (Microscope), Procedimentos (Activity) e
+// Medicamentos (Pill, para o vermífugo). Retorno não tem módulo próprio: RotateCcw.
+const TIPOS: { value: TipoAgendamento; label: string; cor: string; Icone: LucideIcon }[] = [
+  { value: 'CONSULTA',     label: 'Consulta',     cor: 'bg-emerald-100 text-emerald-700', Icone: Stethoscope },
+  { value: 'VACINA',       label: 'Vacina',       cor: 'bg-teal-100 text-teal-700',       Icone: Syringe     },
+  { value: 'RETORNO',      label: 'Retorno',      cor: 'bg-green-100 text-green-700',     Icone: RotateCcw   },
+  { value: 'EXAME',        label: 'Exame',        cor: 'bg-cyan-100 text-cyan-700',       Icone: Microscope  },
+  { value: 'PROCEDIMENTO', label: 'Procedimento', cor: 'bg-emerald-50 text-emerald-600',  Icone: Activity    },
+  { value: 'VERMIFUGACAO', label: 'Vermifugação', cor: 'bg-lime-100 text-lime-700',       Icone: Pill        },
 ];
 
 // Espelha STATUS_LIVRES do AgendamentoController: não ocupam mais a grade.
@@ -958,7 +963,9 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
   const [bookingForm, setBookingForm]     = useState<BookingForm>({ animalId: '', proprietarioNome: '', telefone: '', cpf: '' });
   // A que o agendamento se refere (consulta, vacina, vermifugação…) e o modo LOTE por
   // localidade: escolhida uma localidade, os pacientes dela são marcados num checklist
-  // e TODOS ficam no mesmo horário (uma visita) — ver AgendamentoController.criar.
+  // e ficam EM SEQUÊNCIA com o mesmo profissional (o 1º no horário escolhido, cada
+  // seguinte quando o anterior termina, pelo tempo de consulta) — ver
+  // AgendamentoController.criar.
   const [bookingTipo, setBookingTipo]     = useState<TipoAgendamento>('CONSULTA');
   const [bookingLocal, setBookingLocal]   = useState('');
   const [bookingLote, setBookingLote]     = useState<number[]>([]);
@@ -2167,7 +2174,7 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
         : await api.post('/clinica/agendamentos', { ...comum, animalIds: ids, titulo: rotulo });
       toast.success(ids.length === 1
         ? `${rotulo} agendado(a) às ${booking.hora} com ${booking.vetName}`
-        : `${ids.length} pacientes agendados às ${booking.hora} com ${booking.vetName}`);
+        : `${ids.length} pacientes agendados com ${booking.vetName}, em sequência a partir das ${booking.hora} (${passoDoVet(booking.vetId)} min cada)`);
       avisarContatoProfissional(res);
       setBooking(null); fetchAgendamentos(selectedDate); setMesCarregado('');
     } catch (err) { setErroGrade(msgErroAgenda(err, 'Erro ao criar agendamento')); }
@@ -3373,7 +3380,10 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                   <ComboBuscavel
                     value={bookingTipo}
                     onChange={v => { if (v) setBookingTipo(v as TipoAgendamento); }}
-                    opcoes={TIPOS.map(t => ({ value: t.value, label: t.label }))}
+                    opcoes={TIPOS.map(t => ({
+                      value: t.value, label: t.label,
+                      icone: <t.Icone size={14} className="text-emerald-600" />,
+                    }))}
                     placeholder="Consulta, vacina, vermifugação…"
                     className="w-full py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-800 font-semibold outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                   />
@@ -3391,6 +3401,25 @@ export default function Agendamentos({ modoMinhaAgenda = false, onSelecionarAnim
                     selecionados={bookingLote}
                     onSelecionados={ids => { setBookingLote(ids); setErroGrade(null); }}
                   />
+                  {/* Lote em SEQUÊNCIA: cada paciente começa quando o anterior termina,
+                      pelo tempo de consulta de quem atende (ou o padrão da empresa) —
+                      mesma conta do backend (lib/agendamentoLote.js). */}
+                  {bookingLocal && bookingLote.length > 1 && (() => {
+                    const passo = passoDoVet(booking.vetId);
+                    const ini   = hhmmParaMin(booking.hora);
+                    return (
+                      <div className="mt-2 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2">
+                        <p className="text-[11px] font-bold text-emerald-800">
+                          Horários em sequência — {passo} min por paciente
+                        </p>
+                        <p className="text-[11px] text-emerald-900 mt-0.5 leading-relaxed">
+                          {bookingLote.map((id, i) =>
+                            `${animais.find(a => a.id === id)?.nome ?? 'Paciente'} ${minParaHHMM(ini + i * passo)}`,
+                          ).join(' · ')}
+                        </p>
+                      </div>
+                    );
+                  })()}
                 </div>
                 {!bookingLocal && (<>
                 <label className="text-xs font-bold text-gray-600 mb-1.5 block">Selecione o Animal <span className="text-red-500">*</span></label>

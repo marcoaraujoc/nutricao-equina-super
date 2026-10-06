@@ -11,9 +11,11 @@ const createAnimalRules = [
     .notEmpty().withMessage('Nome do animal é obrigatório')
     .isLength({ min: 1, max: 255 }).withMessage('Nome deve ter até 255 caracteres'),
 
-  // especieId chega como number (JSON) ou string "1" (FormData) — toInt() normaliza
+  // especieId chega como number (JSON) ou string "1" (FormData) — toInt() normaliza.
+  // Opcional AQUI porque o paciente AVULSO pode não ter espécie; a obrigatoriedade
+  // do não avulso é conferida em AnimalController.criar/atualizar.
   body('especieId')
-    .notEmpty().withMessage('Espécie é obrigatória')
+    .optional(OPT)
     .toInt()
     .isInt({ min: 1 }).withMessage('Espécie inválida'),
 

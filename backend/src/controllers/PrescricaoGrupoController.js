@@ -49,6 +49,8 @@ const {
 // ser o dia da clínica: em Rio Branco (UTC−5) a dose das 22h cairia no dia seguinte
 // pela conta do servidor. Ver lib/fusoEmpresa.js.
 const { fusoDaEmpresa, hojeNaEmpresa, diaNaEmpresa, formatarNaEmpresa } = require('../lib/fusoEmpresa');
+// Antecipar prescrição de DATA FUTURA (2026-10-05) — regra única, ver a lib.
+const antecipacao = require('../lib/antecipacaoExecucao');
 
 // Frequências "conforme necessário" — sem agenda prevista, então não pertencem
 // à fila de execução do plantão (ninguém "deve" aplicar uma dose que só
@@ -2890,6 +2892,42 @@ const executar = async (req, res) => {
 
     const agora = new Date();
 
+    // ─── Prescrição de DATA FUTURA — antecipar exige a fila anterior limpa ────
+    //
+    // 🔴 (2026-10-05) Item cuja próxima dose cai num DIA depois de hoje pode ser
+    // executado agora (antecipado) SÓ se não houver, para o mesmo paciente, outra
+    // prescrição ANTERIOR da mesma medicação ainda pendente. Esta trava NÃO se libera
+    // com `confirmarAntecipacao`: não é pergunta, é ordem de execução — a anterior
+    // sai primeiro. Roda antes da pergunta de antecipação (não se pergunta o que
+    // seria recusado) e antes de tocar em estoque/fatura. Regra única em
+    // lib/antecipacaoExecucao.js.
+    // `diaFuturoDoItem` guarda o dia prescrito de quem está sendo antecipado: o item
+    // SEM âncora de horário não passa pela classificação abaixo (não há previsto) e
+    // é por este mapa que ele também cai na pergunta.
+    const diaFuturoDoItem = new Map();
+    {
+      let pendentesDoPaciente = null;
+      for (const item of itensHoje) {
+        if (!elegivelParaFluxoNovo(item)) continue;
+        const diaProx = antecipacao.diaDaProximaDose(item, hojeStr, fuso);
+        if (!diaProx || diaProx <= hojeStr) continue;
+        diaFuturoDoItem.set(item.id, diaProx);
+        pendentesDoPaciente ??= await antecipacao.carregarPrescricoesPendentes(
+          prisma, [grupo.animalId], grupo.empresaId ?? req.empresaId ?? null);
+        const anterior = antecipacao.prescricaoPendenteAnterior(
+          { ...item, animalId: grupo.animalId }, diaProx, pendentesDoPaciente, hojeStr, fuso);
+        if (anterior) {
+          return res.status(400).json({
+            erro:        'ANTECIPACAO_BLOQUEADA',
+            error:       antecipacao.mensagemBloqueio(anterior),
+            itemId:      item.id,
+            medicamento: item.medicamento,
+            pendente:    anterior,
+          });
+        }
+      }
+    }
+
     // ─── Gate de horário — ANTES de tocar em estoque/fatura/log ───────────────
     //
     // Roda para TODO item de `itensHoje`, venha a chamada do ícone "Executar"
@@ -2911,7 +2949,27 @@ const executar = async (req, res) => {
     for (const item of itensHoje) {
       if (!elegivelParaFluxoNovo(item)) continue;
       const previsto = horarioPrevistoDoItem(item);
-      if (!previsto) continue;                      // semAncoraDeHorario
+      if (!previsto) {                              // semAncoraDeHorario
+        // Sem âncora não há HORA prevista — mas, se a prescrição é de um DIA
+        // futuro, executar agora É antecipar, e a pergunta é a mesma (2026-10-05).
+        // Antes este item passava calado: nada comparava o dia.
+        const diaFuturo = diaFuturoDoItem.get(item.id);
+        if (diaFuturo && !confirmarAntecipacao) {
+          return res.status(400).json({
+            erro:  'EXECUCAO_FUTURA',
+            error: `"${item.medicamento}" está prescrito para ${antecipacao.diaMes(diaFuturo)}. Confirme a antecipação para executar agora.`,
+            itemId:      item.id,
+            medicamento: item.medicamento,
+            numeroDose:  (item.dosesExecutadas ?? 0) + 1,
+            totalDoses:  dosesTotaisEsperadas(item),
+            previsto:    `${diaFuturo}T12:00:00.000Z`,
+            // Só o DIA é conhecido: a tela não pode inventar hora para ele.
+            semHorario:  true,
+            agora,
+          });
+        }
+        continue;
+      }
       const classificacao = classificarExecucao(agora, previsto);
       if (classificacao === 'NO_HORARIO') continue;
 
@@ -3353,7 +3411,13 @@ const executar = async (req, res) => {
             detalhes:   `${grupo.animal?.nome ?? 'paciente'} — ${item.medicamento}: `
               + `previsto ${fmtDataHora(previsto, fuso)}, executado ${fmtDataHora(agora, fuso)} `
               + `(${CLASSIFICACAO_LABEL[classificacao]}${classificacao !== 'NO_HORARIO' ? ` ${Math.abs(diffMin)}min` : ''}`
-              + `${classificacao === 'ANTECIPADA' && confirmarAntecipacao ? ', confirmada na execução' : ''})`,
+              + `${classificacao === 'ANTECIPADA' && confirmarAntecipacao ? ', confirmada na execução' : ''})`
+              // Prescrição de DATA FUTURA executada hoje (2026-10-05). Sem âncora a
+              // classificação sai "no horário" (o previsto é o próprio `agora`), e só
+              // esta marca diz na trilha que a dose foi adiantada de outro dia.
+              + `${diaFuturoDoItem.has(item.id)
+                ? ` — prescrita para ${antecipacao.diaMes(diaFuturoDoItem.get(item.id))}, antecipada na execução`
+                : ''}`,
           });
         } else {
           await tx.prescricao.update({ where: { id: item.id }, data: { executadoEm: agora } });
@@ -3697,6 +3761,28 @@ const listarParaExecucao = async (req, res) => {
       );
     }
 
+    // 🔴 ANTECIPAÇÃO DE DATA FUTURA (2026-10-05). Cada item sai com o DIA da próxima
+    // dose pendente e, quando esse dia é depois de HOJE (o hoje REAL da clínica, não
+    // a data navegada), com a pendência ANTERIOR da mesma medicação que impede
+    // antecipá-lo. É a MESMA regra que o `executar` aplica (lib/antecipacaoExecucao):
+    // a tela usa a anotação para não oferecer um Executar que só falharia no clique.
+    const hojeReal      = hojeNaEmpresa(fuso);
+    const pendentesFila = resultado.length > 0
+      ? await antecipacao.carregarPrescricoesPendentes(
+          prisma, resultado.map(g => g.animalId), whereGrupo.empresaId ?? null)
+      : [];
+    const anotarAntecipacao = (g, item) => {
+      if (!elegivelParaFluxoNovo(item)) return { diaProximaDose: null, antecipacaoBloqueadaPor: null };
+      const diaProx = antecipacao.diaDaProximaDose(item, hojeReal, fuso);
+      if (!diaProx || diaProx <= hojeReal) return { diaProximaDose: diaProx, antecipacaoBloqueadaPor: null };
+      const anterior = antecipacao.prescricaoPendenteAnterior(
+        { ...item, animalId: g.animalId }, diaProx, pendentesFila, hojeReal, fuso);
+      return {
+        diaProximaDose:          diaProx,
+        antecipacaoBloqueadaPor: anterior ? { ...anterior, mensagem: antecipacao.mensagemBloqueio(anterior) } : null,
+      };
+    };
+
     // Adiciona diaAtual em cada item para exibição frontend (base UTC) + os campos
     // do fluxo por dose (elegível: doses dadas/esperadas + próximo horário — usados
     // pelo front para saber se ainda falta dose hoje e montar a tela de confirmação).
@@ -3712,6 +3798,7 @@ const listarParaExecucao = async (req, res) => {
         const doses = execucoesDose ?? [];
         return {
           ...itemSemDoses,
+          ...anotarAntecipacao(g, item),
           diaAtual,
           dosesExecutadas:      elegivel ? (item.dosesExecutadas ?? 0) : null,
           dosesTotaisEsperadas: elegivel ? dosesTotaisEsperadas(item) : null,

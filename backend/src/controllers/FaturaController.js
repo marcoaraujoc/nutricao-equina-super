@@ -212,6 +212,9 @@ const FATURA_INCLUDE = {
     orderBy: [{ animalId: 'asc' }, { criadoEm: 'asc' }],
   },
   proprietario: { select: { id: true, fullName: true, email: true, phone: true, valorAssistencia: true, mensalista: true } },
+  // Preenchido só na FATURA DO PACIENTE (gerada pelo fechamento por paciente) — é o
+  // que a tela usa para dizer de quem é aquela fatura.
+  animal:       { select: { id: true, nome: true } },
 };
 
 /**
@@ -370,6 +373,15 @@ const DESCRICAO_ASSISTENCIA = 'Assistência Veterinária Mensal';
 async function adicionarAssistenciaMensal(faturaId, proprietario, veterinarioId = null, empresaId = null, db = prisma) {
   const proprietarioId = typeof proprietario === 'object' ? proprietario?.id : proprietario;
 
+  // 🔴 FATURA DO PACIENTE (2026-10-05): a assistência dele chega MOVIDA junto com os
+  // outros lançamentos; lançar aqui cobraria os animais do cliente inteiro dentro da
+  // fatura de um só.
+  const alvo = await db.fatura.findUnique({
+    where:  { id: faturaId },
+    select: { animalId: true, proprietarioId: true, empresaId: true, mesReferencia: true },
+  });
+  if (alvo?.animalId) return false;
+
   const animais = await animaisComAssistencia(proprietarioId, empresaId, db);
 
   if (animais.length > 0) {
@@ -382,10 +394,25 @@ async function adicionarAssistenciaMensal(faturaId, proprietario, veterinarioId 
 
     let criou = false;
     for (const animal of animais) {
+      // ⚠️ Também vale a assistência que foi LEVADA para a fatura do paciente no mesmo
+      // mês (fechamento por paciente): sem isso, reabrir a tela da principal a lançaria
+      // de novo — o paciente fechado à parte seria cobrado duas vezes no mês.
       const existe = await db.faturaItem.findFirst({
         where: { faturaId, tipo: 'ASSISTENCIA', animalId: animal.id, descricao: DESCRICAO_ASSISTENCIA },
         select: { id: true },
-      });
+      }) ?? (alvo?.mesReferencia ? await db.faturaItem.findFirst({
+        where: {
+          tipo: 'ASSISTENCIA', animalId: animal.id, descricao: DESCRICAO_ASSISTENCIA,
+          fatura: {
+            animalId:       animal.id,
+            proprietarioId: alvo.proprietarioId,
+            empresaId:      alvo.empresaId,
+            mesReferencia:  alvo.mesReferencia,
+            status:         { not: 'CANCELADA' },
+          },
+        },
+        select: { id: true },
+      }) : null);
       if (existe) continue;
       await db.faturaItem.create({
         data: {
@@ -463,6 +490,9 @@ async function abrirProximaFatura(fechada, { veterinarioId = null, db = prisma, 
   const proprietarioId = fechada?.proprietarioId ?? null;
   const empresaId      = fechada?.empresaId ?? null;
   if (!proprietarioId || empresaId == null) return null;
+  // A FATURA DO PACIENTE (gerada pelo fechamento por paciente) é um recorte do ciclo
+  // da principal, não um ciclo: fechá-la não abre fatura nenhuma.
+  if (fechada?.animalId) return null;
 
   // 🔴 REABERTA fechada NÃO abre ciclo, e não se abre fatura de mês FUTURO — as duas
   // regras vivem em `faturaUtils.abreProximoCiclo`, para valerem por QUALQUER porta de
@@ -475,6 +505,9 @@ async function abrirProximaFatura(fechada, { veterinarioId = null, db = prisma, 
       empresaId,
       status: { in: STATUS_FATURA_ABERTOS },
       id:     { not: fechada.id },
+      // A fatura do paciente reaberta não é a corrente do cliente — não pode impedir o
+      // ciclo da principal de nascer.
+      animalId: null,
     },
     select: { id: true },
   });
@@ -578,7 +611,7 @@ async function alterarFechamentoDoAnimal(req, res, { acao }) {
   try {
     const alvo = await prisma.fatura.findUnique({
       where:  { id: faturaId },
-      select: { id: true, empresaId: true, status: true, mesReferencia: true },
+      select: { id: true, empresaId: true, status: true, mesReferencia: true, proprietarioId: true, animalId: true },
     });
     // Fatura de outra clínica responde 404 (e não 403): não se confirma que ela existe.
     if (!alvo || faturaForaDoEscopo(alvo, req)) {
@@ -618,6 +651,75 @@ async function alterarFechamentoDoAnimal(req, res, { acao }) {
       return res.status(403).json({
         error: 'Estornar o pagamento de um paciente é ação do gestor.',
         code:  'SOMENTE_GESTOR',
+      });
+    }
+
+    // 🔴 FECHAR e PAGAR o paciente GERAM A FATURA DELE (2026-10-05, a pedido): os
+    // lançamentos saem desta fatura e vão para uma fatura nova, só do paciente, que
+    // aparece na aba Fechada (ou Paga). Ver `faturaFechamentoAnimal.separarAnimal`.
+    // Reabrir/Estornar seguem valendo só para o bloco marcado no modelo ANTERIOR (a
+    // fatura do paciente se reabre/paga pelas ações da própria fatura).
+    const separando = acao === 'fechar' || acao === 'pagar';
+    if (separando) {
+      // ⚠️ Só fatura EM ABERTO se reparte: tirar linhas de um documento fechado mudaria
+      // o que o cliente já recebeu — mesma regra de `bloqueioDeEscritaNaFatura`.
+      if (!faturaEditavel(alvo.status)) {
+        return res.status(400).json({
+          error: 'Só é possível fechar o paciente de uma fatura em aberto. Reabra-a primeiro.',
+          code:  'FATURA_NAO_EDITAVEL',
+        });
+      }
+      // A fatura do paciente já É do paciente: separá-la de novo deixaria uma fatura
+      // vazia para trás. Ela se fecha/paga pelas ações da própria fatura.
+      if (fechamentoAnimal.ehFaturaDoPaciente(alvo)) {
+        return res.status(400).json({
+          error: 'Esta já é a fatura do paciente. Use Fechar Fatura / Marcar como Pago.',
+          code:  'FATURA_DO_PACIENTE',
+        });
+      }
+      if (!alvo.proprietarioId || alvo.empresaId == null) {
+        return res.status(400).json({ error: 'Fatura sem proprietário não pode ser repartida por paciente.' });
+      }
+      const aMover = await fechamentoAnimal.contarNaoPagosDoAnimal(prisma, faturaId, animalId)
+                  || await fechamentoAnimal.contarAbertosDoAnimal(prisma, faturaId, animalId);
+      if (aMover === 0) {
+        return res.status(400).json(acao === 'fechar'
+          ? { error: 'Não há lançamentos em aberto deste paciente nesta fatura.', code: 'NADA_A_FECHAR' }
+          : { error: 'Não há lançamentos a receber deste paciente nesta fatura.', code: 'NADA_A_PAGAR' });
+      }
+
+      const statusNova = acao === 'pagar' ? 'PAGA' : 'FECHADA';
+      const { gerada, movidos } = await prisma.$transaction(async (tx) => {
+        const r = await fechamentoAnimal.separarAnimal(tx, {
+          origem: alvo, animalId, status: statusNova, recalcular: recalcularTotalCompartilhado,
+        });
+        const ref = alvo.mesReferencia ? ` · ${alvo.mesReferencia}` : '';
+        const qtd = `${r.movidos} ${r.movidos === 1 ? 'lançamento' : 'lançamentos'}`;
+        await registrarAuditoria(tx, req, {
+          categoria:  'ALTERACAO',
+          entidade:   'FATURA',
+          entidadeId: faturaId,
+          animalId,
+          motivo:     motivo?.trim() || null,
+          detalhes:   `${acao === 'pagar' ? 'Pagamento' : 'Fechamento'} do paciente${ref}: ${qtd} `
+                      + `transferidos para a fatura #${r.fatura.id}`,
+        });
+        await registrarAuditoria(tx, req, {
+          categoria:  'ALTERACAO',
+          entidade:   'FATURA',
+          entidadeId: r.fatura.id,
+          animalId,
+          motivo:     motivo?.trim() || null,
+          detalhes:   `Fatura do paciente gerada (${statusNova}) a partir da fatura #${faturaId}${ref} (${qtd})`,
+        });
+        return { gerada: r.fatura, movidos: r.movidos };
+      });
+
+      const fatura = await prisma.fatura.findUnique({ where: { id: faturaId }, include: FATURA_INCLUDE });
+      return res.json({
+        dados:        await comPerfilDaEmpresa(fatura, req.empresaId),
+        afetados:     movidos,
+        faturaGerada: { id: gerada.id, status: gerada.status, mesReferencia: gerada.mesReferencia, total: gerada.total },
       });
     }
 
@@ -756,10 +858,11 @@ const FaturaController = {
             faturas: {
               where:   { status: { in: ['ABERTA', 'REABERTA', 'FECHADA', 'ATRASADA', 'PAGA'] } },
               orderBy: { criadoEm: 'desc' },
-              // 10, não 6: com REABERTA são CINCO estados possíveis, e um `take` curto
-              // podia devolver seis faturas fechadas e nenhuma das outras — a aba
-              // sumiria da tela por causa do corte, não por não existir.
-              take:    10,
+              // 30: são CINCO estados possíveis e, desde 2026-10-05, cada paciente fechado
+              // à parte gera uma FATURA DO PACIENTE — um `take` curto podia devolver só
+              // fechadas e nenhuma das outras, e a aba sumiria da tela por causa do
+              // corte, não por não existir.
+              take:    30,
               select:  { id: true, total: true, status: true, mesReferencia: true, criadoEm: true },
             },
           },
@@ -853,7 +956,7 @@ const FaturaController = {
             where: { status: { in: ['ABERTA', 'REABERTA', 'FECHADA', 'ATRASADA'] } },
             orderBy: { criadoEm: 'desc' },
             // Ver a nota do `take` no ramo do proprietário: são cinco estados agora.
-            take: 10,
+            take: 30,
             select: { id: true, total: true, status: true, mesReferencia: true, criadoEm: true },
           },
         },
@@ -941,14 +1044,24 @@ const FaturaController = {
       const doProprietario = { proprietarioId: Number(proprietarioId), empresaId };
 
       // Meses/faturas existentes do proprietário NESTA empresa — alimenta o seletor.
-      const meses = await prisma.fatura.findMany({
+      // `animal` vem junto: a FATURA DO PACIENTE divide o mês com a principal, e o
+      // seletor precisa dizer de quem é cada uma (duas linhas "Out/2026" iguais não
+      // deixariam escolher).
+      const meses = (await prisma.fatura.findMany({
         where:   doProprietario,
-        select:  { id: true, mesReferencia: true, status: true },
-        orderBy: { mesReferencia: 'desc' },
-      });
+        select:  { id: true, mesReferencia: true, status: true, animalId: true, animal: { select: { nome: true } } },
+        orderBy: [{ mesReferencia: 'desc' }, { criadoEm: 'desc' }],
+      })).map(m => ({ id: m.id, mesReferencia: m.mesReferencia, status: m.status,
+                      animalId: m.animalId ?? null, animalNome: m.animal?.nome ?? null }));
 
       if (mes) {
+        // A principal do mês vence a do paciente (que divide o mesmo `mesReferencia`);
+        // a tela escolhe a do paciente pelo `faturaId`.
         const fatura = await prisma.fatura.findFirst({
+          where:   { ...doProprietario, mesReferencia: String(mes), animalId: null },
+          include: FATURA_INCLUDE,
+          orderBy: { criadoEm: 'desc' },
+        }) ?? await prisma.fatura.findFirst({
           where:   { ...doProprietario, mesReferencia: String(mes) },
           include: FATURA_INCLUDE,
           orderBy: { criadoEm: 'desc' },
@@ -1185,7 +1298,7 @@ const FaturaController = {
         where:  { id: Number(faturaId) },
         // `mesReferencia` entra por causa de `abrirProximaFatura`: é dele que sai o
         // mês da fatura seguinte quando esta rota é o caminho do FECHAMENTO.
-        select: { id: true, empresaId: true, status: true, proprietarioId: true, mesReferencia: true },
+        select: { id: true, empresaId: true, status: true, proprietarioId: true, mesReferencia: true, animalId: true },
       });
       if (!alvo || faturaForaDoEscopo(alvo, req)) {
         return res.status(404).json({ error: 'Fatura não encontrada' });
@@ -1231,7 +1344,9 @@ const FaturaController = {
       // ⚠️ Na prática isto quase não dispara desde que `getOrCreateFatura` passou a
       // ADOTAR a reaberta do mês corrente em vez de criar outra ao lado dela. A guarda
       // fica para a base que já tenha o par formado antes desta regra.
-      if (statusFinal === 'REABERTA') {
+      // ⚠️ A FATURA DO PACIENTE fica de fora: ela é outro documento (só daquele
+      // paciente) e nunca recebe o lançamento corrente — `getOrCreateFatura` a ignora.
+      if (statusFinal === 'REABERTA' && !fechamentoAnimal.ehFaturaDoPaciente(alvo)) {
         const concorrente = await faturaAbertaNoMes(prisma, {
           proprietarioId: alvo.proprietarioId,
           empresaId:      alvo.empresaId,

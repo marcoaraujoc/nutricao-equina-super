@@ -74,9 +74,13 @@ async function anexarAvulso(animalOuLista) {
  * @returns {string|null} mensagem de erro, ou null quando está tudo certo
  */
 function erroPacienteAvulso({ avulso, localizacaoId, proprietario, exigirEmail }) {
-  if (valorDoBody(avulso) !== true) return null;
+  if (!ehAvulso(avulso)) return null;
   if (!localizacaoId) return 'Paciente avulso: a localização é obrigatória.';
   if (!proprietario) return null;
+  // Nome e e-mail só na CRIAÇÃO: na edição o dono já existe e a tela não os envia.
+  if (exigirEmail && !String(proprietario.fullName ?? '').trim()) {
+    return 'Paciente avulso: o nome do proprietário é obrigatório.';
+  }
   if (exigirEmail && !String(proprietario.email ?? '').trim()) {
     return 'Paciente avulso: o e-mail do proprietário é obrigatório.';
   }
@@ -85,4 +89,9 @@ function erroPacienteAvulso({ avulso, localizacaoId, proprietario, exigirEmail }
   return null;
 }
 
-module.exports = { temColuna, salvarAvulso, anexarAvulso, erroPacienteAvulso };
+/** O valor do body (boolean ou 'true'/'false' do multipart) marca o paciente como avulso? */
+function ehAvulso(valor) {
+  return valorDoBody(valor) === true;
+}
+
+module.exports = { temColuna, salvarAvulso, anexarAvulso, erroPacienteAvulso, ehAvulso };

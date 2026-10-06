@@ -165,9 +165,9 @@ model PasswordHistory {
 model Animal {
   id                 Int       @id @default(autoincrement())
   nome               String    @db.Text
-  peso               Float
+  peso               Float?
   dataNascimento     DateTime?
-  sexo               String    @db.Text
+  sexo               String?   @db.Text
   photoUrl           String?   @db.Text
   dataCadastro       DateTime  @default(now())
   ativo              Boolean   @default(true)
@@ -191,7 +191,8 @@ model Animal {
   /// ⚠️ NULO = legado (inativado antes desta migration, com só o texto livre) OU
   /// cascata do sistema (proprietário inativado). Não é "sem motivo".
   desativadoMotivoTipo String? @map("desativado_motivo_tipo") @db.VarChar(40)
-  especieId          Int
+  // Nullable desde 20261105000000: o paciente AVULSO pode não ter espécie/sexo/peso.
+  especieId          Int?
   racaId             Int?
   userId             Int
   empresaId          Int // multi-tenant: clínica principal que gerencia este animal
@@ -254,7 +255,7 @@ model Animal {
   inativoMotivo String?   @map("inativo_motivo") @db.Text
   inativoPorId  Int?      @map("inativo_por_id")
 
-  especie               Especie                       @relation(fields: [especieId], references: [id])
+  especie               Especie?                      @relation(fields: [especieId], references: [id], onDelete: Restrict)
   raca                  Raca?                         @relation(fields: [racaId], references: [id])
   user                  User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
   inativoPor            User?                         @relation("AnimalInativadoPor", fields: [inativoPorId], references: [id], onDelete: SetNull)

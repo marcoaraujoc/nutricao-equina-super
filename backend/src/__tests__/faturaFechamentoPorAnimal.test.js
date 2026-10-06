@@ -210,11 +210,17 @@ describe('gate: quem pode fechar o bloco, e quando', () => {
     // As quatro ações do bloco (fechar/reabrir/pagar/estornar) saem de UM mapa
     // `EXECUTAR[acao]`, chamado DENTRO da transaction — é ele que garante que nenhuma
     // delas escape do "ou muda com a auditoria junto, ou nada acontece".
-    const mapa = trecho.slice(trecho.indexOf('const EXECUTAR'), trecho.indexOf('prisma.$transaction'));
+    // ⚠️ Desde 2026-10-05 fechar/pagar GERAM a fatura do paciente (bloco `separando`,
+    // com a transaction PRÓPRIA dele — ver faturaDoPaciente.test.js); o mapa abaixo
+    // segue servindo reabrir/estornar do modelo anterior. Por isso a busca da
+    // transaction começa DEPOIS do mapa.
+    const inicioMapa = trecho.indexOf('const EXECUTAR');
+    const inicioTx   = trecho.indexOf('prisma.$transaction', inicioMapa);
+    const mapa = trecho.slice(inicioMapa, inicioTx);
     for (const fn of ['fecharAnimal', 'reabrirAnimal', 'pagarAnimal', 'desfazerPagamentoAnimal']) {
       expect(mapa).toMatch(new RegExp(`fechamentoAnimal\\.${fn}\\(tx`));
     }
-    const tx = trecho.slice(trecho.indexOf('prisma.$transaction'));
+    const tx = trecho.slice(inicioTx);
     expect(tx).toMatch(/EXECUTAR\[acao\]\(tx\)/);
     expect(tx).toMatch(/recalcularTotalCompartilhado\(tx, faturaId\)/);
     expect(tx).toMatch(/registrarAuditoria\(tx, req/);

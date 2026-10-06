@@ -49,6 +49,8 @@ const { lerTemposConsulta } = require('../lib/prestadorTempoConsulta');
 const {
   contatoDoResponsavel, avisosDeContato, localDoAnimal, descricaoAtividade, mensagemWhatsAppProfissional,
 } = require('../lib/notificacaoAgendamento');
+// Lote em SEQUÊNCIA: cada paciente começa quando o anterior termina (2026-10-05)
+const { horarioDoLote } = require('../lib/agendamentoLote');
 
 // VERMIFUGACAO (2026-10-04, a pedido) — cabe no VarChar(20) da coluna, sem migration.
 const TIPOS_VALIDOS  = ['CONSULTA', 'VACINA', 'RETORNO', 'EXAME', 'PROCEDIMENTO', 'VERMIFUGACAO'];
@@ -730,12 +732,18 @@ const AgendamentoController = {
   // body: { animalId, tipo, titulo, dataHora, observacao?, veterinarioId? }
   //   ou  { animalIds: number[], ... } — LOTE (2026-10-04)
   //
-  // 🔴 LOTE = UMA VISITA: os pacientes escolhidos (em geral os de uma LOCALIDADE —
-  // vacinar/vermifugar o haras inteiro) ficam TODOS no MESMO horário do MESMO
-  // profissional. É um agendamento por animal (cada um tem prontuário, evolução e
-  // fatura próprios), criados numa transaction só: ou nascem todos, ou nenhum.
-  // ⚠️ O conflito do profissional é conferido UMA vez contra o que JÁ está na agenda
-  // — os irmãos do lote não colidem entre si, é exatamente o que o lote pede.
+  // 🔴 LOTE = UMA VISITA EM SEQUÊNCIA (2026-10-05): os pacientes escolhidos (em geral
+  // os de uma LOCALIDADE — vacinar/vermifugar o haras inteiro) ficam com o MESMO
+  // profissional, um ATRÁS do outro: o 1º no horário escolhido e cada seguinte quando
+  // o anterior termina, pelo TEMPO DE CONSULTA de quem atende (o mesmo `duracaoMin`
+  // do avulso — local/especialidade do profissional, tempo do cadastro do prestador
+  // externo e, sem nada definido, o padrão da empresa). É um agendamento por animal
+  // (cada um tem prontuário, evolução e fatura próprios), criados numa transaction só:
+  // ou nascem todos, ou nenhum.
+  // ⚠️ REVERTE o "todos no MESMO horário" de 2026-10-04.
+  // ⚠️ O conflito do profissional é conferido UMA vez, sobre o BLOCO inteiro
+  // [início, início + N × duração) — os irmãos do lote não colidem entre si porque já
+  // nascem em sequência, e o bloco todo precisa caber no expediente.
   // ⚠️ No lote o `titulo` é o PREFIXO ("Vacina") e cada linha ganha " - <paciente>",
   // o mesmo formato que o agendamento avulso já grava.
   criar: async (req, res) => {
@@ -818,6 +826,33 @@ const AgendamentoController = {
         return res.status(403).json({ error: 'Só o gestor agenda para outro profissional. Você pode agendar na sua própria agenda.' });
       }
 
+      // Duração do atendimento: vem do tempo de consulta que o profissional pratica
+      // NAQUELA especialidade (card "Locais de trabalho"). Não configurado → padrão da
+      // empresa (Configurações). Sem especialidade informada (fluxos antigos), idem.
+      // ⚠️ Resolvida ANTES das conferências por paciente: no lote é ela que define o
+      // horário de cada um, e o `HORARIO_OCUPADO` precisa olhar o horário DELE.
+      const espIdNum = Number(especialidadeId);
+      let duracaoMin = await tempoConsultaPadraoDaEmpresa(req);
+      // Prestador não tem tempo de consulta por especialidade (não é membro): o
+      // EXTERNO usa o tempo do próprio cadastro e, sem ele, o padrão da empresa; a
+      // especialidade fica só como rótulo do atendimento.
+      if (prestadorExterno) {
+        const proprio = (await lerTemposConsulta([prestadorAg.id])).get(prestadorAg.id);
+        if (proprio > 0) duracaoMin = proprio;
+      }
+      if (Number.isInteger(espIdNum) && espIdNum > 0 && !prestadorAg) {
+        if (!veterinarioId) {
+          return res.status(400).json({ error: 'Selecione o profissional para agendar por especialidade.' });
+        }
+        duracaoMin = await tempoConsultaDoProfissional(veterinarioId, espIdNum, req);
+      }
+
+      // Horário de cada paciente: o 1º no escolhido, os seguintes encadeados pela
+      // duração. No avulso é só `quando`. `duracaoBloco` é o tempo que a visita ocupa
+      // na agenda de quem atende — é sobre ele que conflito e expediente são conferidos.
+      const horarioDe = new Map(ids.map((idAnimal, i) => [idAnimal, horarioDoLote(quando, i, duracaoMin)]));
+      const duracaoBloco = duracaoMin * ids.length;
+
       // Conferências POR PACIENTE — todas antes de gravar qualquer coisa: no lote, um
       // paciente recusado recusa o lote inteiro (tudo-ou-nada), e a mensagem nomeia
       // QUAL paciente travou, senão a pessoa fica sem saber o que tirar da seleção.
@@ -852,7 +887,7 @@ const AgendamentoController = {
         // Um animal pode ter vários agendamentos, mas NUNCA dois no mesmo horário
         // (independe de vet/equipe). Bloqueia duplicidade no mesmo dataHora.
         const mesmoHorario = await prisma.agendamentoClinico.findFirst({
-          where: { animalId: idAnimal, dataHora: quando, ativo: true, status: { notIn: STATUS_LIVRES } },
+          where: { animalId: idAnimal, dataHora: horarioDe.get(idAnimal), ativo: true, status: { notIn: STATUS_LIVRES } },
           select: { id: true },
         });
         if (mesmoHorario) {
@@ -863,38 +898,19 @@ const AgendamentoController = {
         }
       }
 
-      // Duração do atendimento: vem do tempo de consulta que o profissional pratica
-      // NAQUELA especialidade (card "Locais de trabalho"). Não configurado → padrão da
-      // empresa (Configurações). Sem especialidade informada (fluxos antigos), idem.
-      const espIdNum = Number(especialidadeId);
-      let duracaoMin = await tempoConsultaPadraoDaEmpresa(req);
-      // Prestador não tem tempo de consulta por especialidade (não é membro): o
-      // EXTERNO usa o tempo do próprio cadastro e, sem ele, o padrão da empresa; a
-      // especialidade fica só como rótulo do atendimento.
-      if (prestadorExterno) {
-        const proprio = (await lerTemposConsulta([prestadorAg.id])).get(prestadorAg.id);
-        if (proprio > 0) duracaoMin = proprio;
-      }
-      if (Number.isInteger(espIdNum) && espIdNum > 0 && !prestadorAg) {
-        if (!veterinarioId) {
-          return res.status(400).json({ error: 'Selecione o profissional para agendar por especialidade.' });
-        }
-        duracaoMin = await tempoConsultaDoProfissional(veterinarioId, espIdNum, req);
-      }
-
       // Disponibilidade do PRESTADOR: conflito na agenda dele (pelo cadastro) e — só
       // para o da EQUIPE — os locais de trabalho do cadastro como expediente. O
       // EXTERNO atende em qualquer dia e horário: o conflito é a única trava.
       if (prestadorAg) {
-        const conflitoPrest = await conflitoDoPrestador(prestadorAg.id, quando, duracaoMin)
-          ?? (prestadorAg.userId ? await conflitoDeAgenda(prestadorAg.userId, quando, duracaoMin) : null);
+        const conflitoPrest = await conflitoDoPrestador(prestadorAg.id, quando, duracaoBloco)
+          ?? (prestadorAg.userId ? await conflitoDeAgenda(prestadorAg.userId, quando, duracaoBloco) : null);
         if (conflitoPrest) {
           return res.status(409).json({
             error: `O prestador já tem um agendamento neste horário (${conflitoPrest.animal?.nome ?? 'outro paciente'}).`,
             code:  'PROFISSIONAL_OCUPADO',
           });
         }
-        const fimPrevisto = new Date(quando.getTime() + (duracaoMin - 1) * 60_000);
+        const fimPrevisto = new Date(quando.getTime() + (duracaoBloco - 1) * 60_000);
         if (!prestadorExterno && (!(await dentroDoExpedientePrestador(prestadorAg.id, quando, req))
           || !(await dentroDoExpedientePrestador(prestadorAg.id, fimPrevisto, req)))) {
           return res.status(409).json({ error: 'Horário fora dos dias/horários de trabalho do prestador.', code: 'FORA_EXPEDIENTE' });
@@ -905,8 +921,9 @@ const AgendamentoController = {
       // (próprio do vet ou herdado da empresa/equipe).
       if (veterinarioId && !prestadorAg) {
         const vetIdNum = Number(veterinarioId);
-        // Conflito por INTERVALO — considera a duração dos dois atendimentos
-        const conflitoVet = await conflitoDeAgenda(vetIdNum, quando, duracaoMin);
+        // Conflito por INTERVALO — considera a duração dos dois atendimentos (no lote,
+        // a do bloco inteiro: a sequência toda precisa estar livre)
+        const conflitoVet = await conflitoDeAgenda(vetIdNum, quando, duracaoBloco);
         if (conflitoVet) {
           return res.status(409).json({
             error: `O profissional já tem um agendamento neste horário (${conflitoVet.animal?.nome ?? 'outro paciente'}).`,
@@ -916,11 +933,14 @@ const AgendamentoController = {
         if (!(await dentroDoExpediente(vetIdNum, quando, req))) {
           return res.status(409).json({ error: 'Horário fora do expediente do profissional selecionado.', code: 'FORA_EXPEDIENTE' });
         }
-        // O atendimento inteiro precisa caber no expediente, não só o seu início
-        const fimPrevisto = new Date(quando.getTime() + (duracaoMin - 1) * 60_000);
+        // O atendimento inteiro precisa caber no expediente, não só o seu início (no
+        // lote, o último paciente da sequência também)
+        const fimPrevisto = new Date(quando.getTime() + (duracaoBloco - 1) * 60_000);
         if (!(await dentroDoExpediente(vetIdNum, fimPrevisto, req))) {
           return res.status(409).json({
-            error: `O atendimento de ${duracaoMin} min ultrapassa o fim do expediente do profissional.`,
+            error: emLote
+              ? `Os ${ids.length} atendimentos de ${duracaoMin} min em sequência (${duracaoBloco} min) ultrapassam o fim do expediente do profissional.`
+              : `O atendimento de ${duracaoMin} min ultrapassa o fim do expediente do profissional.`,
             code:  'FORA_EXPEDIENTE',
           });
         }
@@ -941,7 +961,7 @@ const AgendamentoController = {
             animalId:      idAnimal,
             tipo,
             titulo:        emLote ? `${titulo.trim()} - ${nomes.get(idAnimal)}`.slice(0, 255) : titulo.trim(),
-            dataHora:      quando,
+            dataHora:      horarioDe.get(idAnimal),
             observacao:    observacao?.trim() || null,
             numero:        proximoNumero,
             veterinarioId: prestadorAg
@@ -987,7 +1007,7 @@ const AgendamentoController = {
           entidade:   'AGENDAMENTO',
           entidadeId: criado.id,
           animalId:   criado.animalId,
-          detalhes:   `${criado.tipo} — ${criado.titulo ?? ''} | ${quando.toISOString()}`
+          detalhes:   `${criado.tipo} — ${criado.titulo ?? ''} | ${new Date(criado.dataHora).toISOString()}`
                     + ` | profissional: ${prestadorAg ? `${prestadorAg.nome} (prestador)` : (criado.veterinario?.fullName ?? '—')}`
                     + (emLote ? ` | lote de ${itens.length} pacientes` : ''),
         });
@@ -1031,7 +1051,14 @@ const AgendamentoController = {
           });
           const porId = new Map(animais.map(a => [a.id, a]));
           const linhas = itens.map(i => porId.get(i.animalId)).filter(Boolean);
-          const nomesAnimais = linhas.map(a => a.nome ?? 'Paciente');
+          // Fuso da CLÍNICA: a mensagem anuncia o horário para o profissional e para
+          // o proprietário, que estão na praça da clínica — não em Brasília.
+          const fusoAg   = await fusoDaEmpresa(req.empresaId).catch(() => FUSO_PADRAO);
+          const horaDe   = (dt) => new Date(dt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: fusoAg });
+          // No lote cada paciente tem o SEU horário (sequência) — o nome leva a hora junto.
+          const horaDoAnimal = new Map(itens.map(i => [i.animalId, horaDe(i.dataHora)]));
+          const rotuloAnimal = (a) => emLote ? `${a.nome ?? 'Paciente'} (${horaDoAnimal.get(a.id)})` : (a.nome ?? 'Paciente');
+          const nomesAnimais = linhas.map(rotuloAnimal);
           const unico = (vals) => { const u = [...new Set(vals.filter(Boolean))]; return u.length === 1 ? u[0] : null; };
 
           const animalNome = nomesAnimais.length === 0 ? 'Paciente'
@@ -1044,12 +1071,11 @@ const AgendamentoController = {
           const local             = unico(linhas.map(a => localDoAnimal(a)));
 
           const d        = new Date(item.dataHora);
-          // Fuso da CLÍNICA: a mensagem anuncia o horário para o profissional e para
-          // o proprietário, que estão na praça da clínica — não em Brasília. Formato
-          // longo ("segunda-feira, 24 de agosto") preservado; só o fuso mudou.
-          const fusoAg   = await fusoDaEmpresa(req.empresaId).catch(() => FUSO_PADRAO);
+          // Formato longo ("segunda-feira, 24 de agosto") preservado, no fuso da clínica.
           const dataFmt  = d.toLocaleDateString('pt-BR',  { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: fusoAg });
-          const horaFmt  = d.toLocaleTimeString('pt-BR',  { hour: '2-digit', minute: '2-digit', timeZone: fusoAg });
+          const horaFmt  = emLote && itens.length > 1
+            ? `${horaDe(item.dataHora)} (em sequência, um paciente a cada ${duracaoMin} min)`
+            : horaDe(item.dataHora);
           const atividade = descricaoAtividade({
             // No lote o título de cada linha leva o nome do paciente: o padrão
             // "<Tipo> - <paciente>" não se aplica ao conjunto, então vai o prefixo.
@@ -1084,15 +1110,17 @@ const AgendamentoController = {
             const fone = a.user?.phone;
             if (!fone) continue;
             if (!porTelefone.has(fone)) porTelefone.set(fone, []);
-            porTelefone.get(fone).push(a.nome ?? 'Paciente');
+            porTelefone.get(fone).push(a);
           }
           const vetNome = vet?.nome ?? 'Veterinário';
           const appUrl  = process.env.APP_URL || 'http://localhost:5173';
-          for (const [fone, seus] of porTelefone) {
+          for (const [fone, seusAnimais] of porTelefone) {
+            // Cada proprietário recebe o horário dos animais DELE (no lote, o do 1º)
+            const seus = seusAnimais.map(rotuloAnimal);
             const msgPropr = [
               item.tipo === 'CONSULTA' ? `🐴 *S2Vet — Consulta agendada!*` : `🐴 *S2Vet — Agendamento confirmado!*`,
               ...(item.tipo === 'CONSULTA' ? [] : [`📋 ${atividade}`]),
-              `📅 ${dataFmt} às *${horaFmt}*`,
+              `📅 ${dataFmt} às *${horaDoAnimal.get(seusAnimais[0].id) ?? horaDe(item.dataHora)}*`,
               seus.length > 1 ? `🐎 Pacientes: *${seus.join(', ')}*` : `🐎 Paciente: *${seus[0]}*`,
               prestadorAg ? `🩺 ${vetNome}` : `🩺 Dr(a). ${vetNome}`,
               ``,

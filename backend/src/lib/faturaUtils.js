@@ -52,7 +52,10 @@ async function getOrCreateFatura(tx, proprietarioId, empresaId = null) {
   // aquela é de mês ANTERIOR e continua fora daqui.
   if (!fatura) {
     fatura = await tx.fatura.findFirst({
-      where: { proprietarioId, status: 'REABERTA', empresaId: empresa, mesReferencia: mesAtual },
+      // ⚠️ `animalId: null`: a FATURA DO PACIENTE reaberta (fechamento por paciente,
+      // 2026-10-05) não é a corrente do cliente — adotá-la jogaria a cobrança dos
+      // OUTROS pacientes dentro da fatura de um só.
+      where: { proprietarioId, status: 'REABERTA', empresaId: empresa, mesReferencia: mesAtual, animalId: null },
     });
   }
   if (!fatura) {

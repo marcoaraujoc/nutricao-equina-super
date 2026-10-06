@@ -37,6 +37,34 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-05 (🔴 **PACIENTE AVULSO: SÓ 5 CAMPOS OBRIGATÓRIOS** — a pedido.
+#   Marcado "Paciente avulso", só **nome do animal, localização e nome, e-mail e telefone
+#   do proprietário** são obrigatórios (o NOME do dono entrou num 2º pedido, no mesmo dia).
+#   Espécie, raça, sexo, peso, idade/nascimento, pelagem e categoria/tipo (equino)
+#   passam a ser opcionais.
+#   1. Migration `20261105000000_animal_avulso_campos_opcionais` (✅ **APLICADA em
+#      2026-10-05**): `tb_animais."especieId"`, `"sexo"` e `"peso"` DROP NOT NULL (raça já
+#      era nullable). Schema: `Int?`/`String?`/`Float?` e `especie Especie?` com
+#      `onDelete: Restrict` EXPLÍCITO — sem ele a relação opcional passaria a SetNull e o
+#      schema divergiria da FK real. `prisma generate` escreveu o client JS e só falhou no
+#      rename da DLL (EPERM, backend rodando) — **reiniciar o backend** para carregar o
+#      client novo; com o antigo, `especieId: null` no `animal.create` é recusado.
+#   2. Tela (`Animal.tsx`): `OBRIGATORIOS_AVULSO` + `obrigatorio(campo)` no `erroDoCampo`;
+#      fora dele o vazio passa, mas peso/idade preenchidos seguem tendo de ser positivos.
+#      Asteriscos condicionados a `!formData.avulso`. Payload: espécie/raça 0 → null,
+#      sexo '' → null, peso vazio → **null (nunca 0)**.
+#   3. Backend (`AnimalController.criar`/`atualizar`): espécie/raça/idade e categoria/tipo
+#      de equino só exigidos com `!ehAvulso(avulso)`; `pesoParaGravar` grava null no avulso
+#      sem peso e mantém o `|| 0` legado fora dele. `createAnimalRules.especieId` virou
+#      opcional (a regra do não avulso vive no controller).
+#   ⚠️ Nome do proprietário: exigido no avulso na CRIAÇÃO pela tela (`propNome` em
+#      `OBRIGATORIOS_AVULSO`) e pelo backend (`erroPacienteAvulso`, junto com o e-mail —
+#      na edição o dono já existe e a tela não envia nome).
+#   ⚠️ Leitores de `animal.especie` precisam de `?.` — o avulso pode não ter espécie.
+#   Gate: `__tests__/pacienteAvulso.test.js` (16). ⚠️ NÃO verificado em navegador.)
+
+---
+
 # Atualizado em: 2026-10-04 (parte 2) (**PACIENTE AVULSO** — checkbox no topo do
 #   cadastro do paciente (`/animais`), a pedido.
 #   1. `tb_animais.avulso BOOLEAN NOT NULL DEFAULT false` (migration

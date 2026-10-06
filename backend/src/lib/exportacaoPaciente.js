@@ -368,8 +368,8 @@ function montarHtmlRelatorio(dados, fotoDataUri, nomeEmpresa) {
     ${fotoDataUri ? `<img class="foto" src="${fotoDataUri}" alt="${esc(a.nome)}">` : ''}
     <div class="grid">
       <div><div class="lbl">Espécie / Raça</div><div class="val">${esc(a.especie?.nome)} ${a.raca ? '· ' + esc(a.raca.nome) : ''}</div></div>
-      <div><div class="lbl">Sexo</div><div class="val">${esc(a.sexo)}</div></div>
-      <div><div class="lbl">Peso</div><div class="val">${a.peso} kg</div></div>
+      <div><div class="lbl">Sexo</div><div class="val">${esc(a.sexo) || '—'}</div></div>
+      <div><div class="lbl">Peso</div><div class="val">${a.peso ? `${a.peso} kg` : '—'}</div></div>
       <div><div class="lbl">Idade</div><div class="val">${idade}</div></div>
       <div><div class="lbl">Pelagem</div><div class="val">${esc(a.pelagem) || '—'}</div></div>
       <div><div class="lbl">Nº Chip / Passaporte</div><div class="val">${esc(a.numeroChip) || esc(a.registroPassaporte) || '—'}</div></div>

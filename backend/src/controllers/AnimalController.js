@@ -35,7 +35,17 @@ const { garantirDonoAtivo } = require('../lib/donoAtivoDoPaciente');
 // (§11: no Windows o `generate` falha com o backend rodando, e um campo desconhecido
 // no `animal.create` derrubaria o cadastro inteiro do paciente).
 const { salvarFei, anexarFei } = require('../lib/animalFei');
-const { salvarAvulso, anexarAvulso, erroPacienteAvulso } = require('../lib/animalAvulso');
+const { salvarAvulso, anexarAvulso, erroPacienteAvulso, ehAvulso } = require('../lib/animalAvulso');
+
+/**
+ * Peso a gravar. Vazio no paciente AVULSO vira NULL (não informado) — nunca 0, que a
+ * Nutrição leria como dado válido. Fora do avulso mantém o comportamento anterior.
+ */
+function pesoParaGravar(peso, avulso) {
+  const n = parseFloat(peso);
+  if (Number.isFinite(n) && n > 0) return n;
+  return avulso ? null : 0;
+}
 const { salvarAssistencia, anexarAssistencia } = require('../lib/animalAssistencia');
 
 const prisma = require('../lib/prisma').default;
@@ -537,10 +547,16 @@ class AnimalController {
       registradoFei, valorAssistencia, avulso,
     } = req.body;
 
+    // 🔴 PACIENTE AVULSO (2026-10-05): só nome, localização e e-mail/telefone do dono
+    // são obrigatórios — espécie, raça, sexo, peso e idade podem ficar em branco
+    // (colunas nullable desde a migration 20261105000000).
+    const ehAvulsoReq = ehAvulso(avulso);
     if (!nome?.trim())                    return res.status(400).json({ sucesso: false, mensagem: 'Nome do animal é obrigatório' });
-    if (!especieId)                       return res.status(400).json({ sucesso: false, mensagem: 'Espécie é obrigatória' });
-    if (!racaId || isNaN(Number(racaId))) return res.status(400).json({ sucesso: false, mensagem: 'Raça é obrigatória' });
-    if (!dataNascimento && !idadeAnos)    return res.status(400).json({ sucesso: false, mensagem: 'Informe a data de nascimento ou a idade' });
+    if (!ehAvulsoReq) {
+      if (!especieId)                       return res.status(400).json({ sucesso: false, mensagem: 'Espécie é obrigatória' });
+      if (!racaId || isNaN(Number(racaId))) return res.status(400).json({ sucesso: false, mensagem: 'Raça é obrigatória' });
+      if (!dataNascimento && !idadeAnos)    return res.status(400).json({ sucesso: false, mensagem: 'Informe a data de nascimento ou a idade' });
+    }
 
     // Paciente AVULSO: localização e e-mail/telefone do proprietário obrigatórios.
     {
@@ -586,12 +602,12 @@ class AnimalController {
 
       // ── Criação de novo animal ──────────────────────────────────────────
 
-      const especie  = await prisma.especie.findUnique({ where: { id: Number(especieId) } });
+      const especie  = especieId ? await prisma.especie.findUnique({ where: { id: Number(especieId) } }) : null;
       const isEquino = especie && (
         especie.nome.toLowerCase().includes('equino') ||
         especie.nome.toLowerCase().includes('cavalo')
       );
-      if (isEquino && (!categoriaAnimal || !tipoExercicio)) {
+      if (isEquino && !ehAvulsoReq && (!categoriaAnimal || !tipoExercicio)) {
         return res.status(400).json({
           sucesso:  false,
           mensagem: 'Categoria e tipo de exercício são obrigatórios para equinos',
@@ -901,10 +917,10 @@ class AnimalController {
       const animal = await prisma.animal.create({
         data: {
           nome:            nome.trim(),
-          peso:            parseFloat(peso) || 0,
+          peso:            pesoParaGravar(peso, ehAvulsoReq),
           dataNascimento:  dataNascimento ? new Date(dataNascimento) : null,
           idadeAnos:       dataNascimento ? null : (Number(idadeAnos) || null),
-          sexo,
+          sexo:            sexo || null,
           categoriaAnimal: isEquino ? (categoriaAnimal || null) : null,
           tipoExercicio:   isEquino ? (tipoExercicio   || null) : null,
           veterinarioNome:    veterinarioNome    || null,
@@ -920,8 +936,8 @@ class AnimalController {
           finalidade:         finalidade?.trim()         || null,
           seguradora:         seguradora?.trim()         || null,
           photoUrl,
-          especieId:  Number(especieId),
-          racaId:     Number(racaId),
+          especieId:  especieId ? Number(especieId) : null,
+          racaId:     racaId    ? Number(racaId)    : null,
           userId:     Number(targetUserId),
           empresaId:  vetEmpresaId ?? undefined,
           equipeId:   vetEquipeId  ?? undefined,
@@ -1071,10 +1087,16 @@ class AnimalController {
       registradoFei, removerFoto, valorAssistencia, avulso,
     } = req.body;
 
+    // 🔴 PACIENTE AVULSO (2026-10-05): só nome, localização e e-mail/telefone do dono
+    // são obrigatórios — espécie, raça, sexo, peso e idade podem ficar em branco
+    // (colunas nullable desde a migration 20261105000000).
+    const ehAvulsoReq = ehAvulso(avulso);
     if (!nome?.trim())                    return res.status(400).json({ sucesso: false, mensagem: 'Nome do animal é obrigatório' });
-    if (!especieId)                       return res.status(400).json({ sucesso: false, mensagem: 'Espécie é obrigatória' });
-    if (!racaId || isNaN(Number(racaId))) return res.status(400).json({ sucesso: false, mensagem: 'Raça é obrigatória' });
-    if (!dataNascimento && !idadeAnos)    return res.status(400).json({ sucesso: false, mensagem: 'Informe a data de nascimento ou a idade' });
+    if (!ehAvulsoReq) {
+      if (!especieId)                       return res.status(400).json({ sucesso: false, mensagem: 'Espécie é obrigatória' });
+      if (!racaId || isNaN(Number(racaId))) return res.status(400).json({ sucesso: false, mensagem: 'Raça é obrigatória' });
+      if (!dataNascimento && !idadeAnos)    return res.status(400).json({ sucesso: false, mensagem: 'Informe a data de nascimento ou a idade' });
+    }
 
     try {
       const acessoAtu = await verificarAcessoAnimal({ animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
@@ -1089,12 +1111,12 @@ class AnimalController {
         });
       }
 
-      const especie  = await prisma.especie.findUnique({ where: { id: Number(especieId) } });
+      const especie  = especieId ? await prisma.especie.findUnique({ where: { id: Number(especieId) } }) : null;
       const isEquino = especie && (
         especie.nome.toLowerCase().includes('equino') ||
         especie.nome.toLowerCase().includes('cavalo')
       );
-      if (isEquino && (!categoriaAnimal || !tipoExercicio)) {
+      if (isEquino && !ehAvulsoReq && (!categoriaAnimal || !tipoExercicio)) {
         return res.status(400).json({
           sucesso:  false,
           mensagem: 'Categoria e tipo de exercício são obrigatórios para equinos',
@@ -1212,10 +1234,10 @@ class AnimalController {
         where: { id: animalId },
         data: {
           nome:            nome.trim(),
-          peso:            parseFloat(peso) || 0,
+          peso:            pesoParaGravar(peso, ehAvulsoReq),
           dataNascimento:  dataNascimento ? new Date(dataNascimento) : null,
           idadeAnos:       dataNascimento ? null : (Number(idadeAnos) || null),
-          sexo,
+          sexo:            sexo || null,
           categoriaAnimal: isEquino ? (categoriaAnimal || null) : null,
           tipoExercicio:   isEquino ? (tipoExercicio   || null) : null,
           veterinarioNome:    veterinarioNome    || null,
@@ -1230,8 +1252,8 @@ class AnimalController {
           numeroChip:         numeroChip?.trim()         ?? null,
           finalidade:         finalidade?.trim()         ?? null,
           seguradora:         seguradora?.trim()         ?? null,
-          especieId: Number(especieId),
-          racaId:    Number(racaId),
+          especieId: especieId ? Number(especieId) : null,
+          racaId:    racaId    ? Number(racaId)    : null,
           ...(photoUrl !== undefined && { photoUrl }),
         },
       });

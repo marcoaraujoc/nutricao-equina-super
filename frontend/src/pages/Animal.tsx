@@ -956,8 +956,19 @@ const Animal = () => {
   ] as const;
   const CAMPOS_PROPRIETARIO = ['propNome', 'propEmail', 'propTelefone'] as const;
 
+  // 🔴 PACIENTE AVULSO (2026-10-05, a pedido): só NOME do animal, LOCALIZAÇÃO e
+  // NOME/E-MAIL/TELEFONE do proprietário são obrigatórios. Os demais campos seguem
+  // validados QUANDO preenchidos (peso/idade positivos), mas o vazio passa.
+  const OBRIGATORIOS_AVULSO = new Set(['nome', 'localizacaoId', 'propNome', 'propEmail', 'propTelefone']);
+  const obrigatorio = (campo: string) => !formData.avulso || OBRIGATORIOS_AVULSO.has(campo);
+
   const erroDoCampo = (campo: string): string | null => {
     const digitosTel = formProp.telefone.replace(/\D/g, '');
+    if (!obrigatorio(campo)) {
+      if (campo === 'peso' && formData.peso.trim() && Number(formData.peso) <= 0) return 'O peso deve ser positivo';
+      if (campo === 'idade' && formData.idadeAnos && Number(formData.idadeAnos) <= 0) return 'A idade deve ser positiva';
+      return null;
+    }
     switch (campo) {
       case 'nome':            return formData.nome?.trim() ? null : 'Informe o nome do animal';
       case 'sexo':            return formData.sexo ? null : 'Selecione o sexo';
@@ -1090,12 +1101,14 @@ const Animal = () => {
     try {
       const payload: Record<string, unknown> = {
         nome:               formData.nome.trim(),
-        especieId:          formData.especieId,
-        racaId:             formData.racaId,
-        peso:               parseFloat(formData.peso) || 0,
+        especieId:          formData.especieId || null,
+        racaId:             formData.racaId || null,
+        // Vazio só é possível no AVULSO — e vai como null, nunca 0 (peso 0 seria lido
+        // como dado válido pela Nutrição).
+        peso:               formData.peso.trim() ? (parseFloat(formData.peso) || null) : null,
         dataNascimento:     formData.dataNascimento || null,
         idadeAnos:          formData.dataNascimento ? null : (Number(formData.idadeAnos) || null),
-        sexo:               formData.sexo,
+        sexo:               formData.sexo || null,
         categoriaAnimal:    isEquino ? formData.categoriaAnimal : null,
         tipoExercicio:      isEquino ? formData.tipoExercicio   : null,
         localizacaoId:      formData.localizacaoId ?? null,
@@ -1361,7 +1374,7 @@ const Animal = () => {
               </label>
               {formData.avulso && (
                 <p className="text-xs text-gray-500 mt-1">
-                  Localização, e-mail e telefone do proprietário são obrigatórios.
+                  Somente nome do animal, localização e nome, e-mail e telefone do proprietário são obrigatórios.
                 </p>
               )}
             </div>
@@ -1400,7 +1413,7 @@ const Animal = () => {
                   <ErroCampo campo="nome" />
                 </div>
                 <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">Sexo <span className="text-red-500">*</span></label>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Sexo {!formData.avulso && <span className="text-red-500">*</span>}</label>
                   <div className="relative">
                     <select
                       value={formData.sexo}
@@ -1576,7 +1589,7 @@ const Animal = () => {
             {/* ── 3. Espécie + Raça ─────────────────────────────────────────── */}
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Espécie <span className="text-red-500">*</span></label>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Espécie {!formData.avulso && <span className="text-red-500">*</span>}</label>
                 <div className="relative">
                   <select
                     value={formData.especieId}
@@ -1595,7 +1608,7 @@ const Animal = () => {
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
-                  Raça <span className="text-red-500">*</span>
+                  Raça {!formData.avulso && <span className="text-red-500">*</span>}
                 </label>
                 <div data-campo="racaId">
                   {/* ⚠️ O dropdown trabalha com TEXTO; a raça é gravada por ID. A
@@ -1623,7 +1636,7 @@ const Animal = () => {
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
-                  Peso (kg) <span className="text-red-500">*</span>
+                  Peso (kg) {!formData.avulso && <span className="text-red-500">*</span>}
                 </label>
                 <input
                   type="number" step="0.1" min="0.1" placeholder="Ex: 450"
@@ -1637,7 +1650,7 @@ const Animal = () => {
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
-                  Idade (anos){!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
+                  Idade (anos){!temIdadeOuData && !formData.avulso && <span className="text-red-500 ml-1">*</span>}
                 </label>
                 <input
                   type="number" min="1" step="1" placeholder="Ex: 5"
@@ -1653,7 +1666,7 @@ const Animal = () => {
               </div>
               <div className="col-span-2 sm:col-span-1">
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
-                  Data de nascimento{!temIdadeOuData && <span className="text-red-500 ml-1">*</span>}
+                  Data de nascimento{!temIdadeOuData && !formData.avulso && <span className="text-red-500 ml-1">*</span>}
                 </label>
                 {/* `DateInput` no lugar da máscara feita à mão + calendário oculto.
                     Além de remover o código duplicado, corrige um defeito real: o
@@ -1696,7 +1709,7 @@ const Animal = () => {
                     classe de erro e mensagem embaixo. Faltando um, o submit acusa e o
                     usuário não descobre ONDE (ver a nota do tipoExercicio, abaixo). */}
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
-                  Pelagem <span className="text-red-500">*</span>
+                  Pelagem {!formData.avulso && <span className="text-red-500">*</span>}
                 </label>
                 <div data-campo="pelagem">
                   <DropdownSelect
@@ -1843,7 +1856,7 @@ const Animal = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-1">
-                      Categoria <span className="text-red-500">*</span>
+                      Categoria {!formData.avulso && <span className="text-red-500">*</span>}
                     </label>
                     <div className="relative">
                       <select
@@ -1863,7 +1876,7 @@ const Animal = () => {
                   </div>
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-1">
-                      Tipo / Estágio <span className="text-red-500">*</span>
+                      Tipo / Estágio {!formData.avulso && <span className="text-red-500">*</span>}
                     </label>
                     {/* ⚠️ Este campo era o único OBRIGATÓRIO sem `data-campo`, sem a
                         classe de erro, sem `ErroCampo` e sem `validarCampo` no blur.

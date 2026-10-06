@@ -21,6 +21,9 @@ const { animalFoiExcluido } = require('../lib/animalAtivacao');
 const { garantirMedicamentoDaEmpresa } = require('../lib/catalogoManual');
 const { corteDePropriedade } = require('../lib/animalPropriedadeCorte');
 const { qtdNoLoteDaVacina } = require('../lib/vacinaDosagemLote');
+// Antecipar vacina de DATA FUTURA (2026-10-05) — regra única, ver a lib.
+const antecipacao = require('../lib/antecipacaoExecucao');
+const { fusoDaEmpresa, hojeNaEmpresa } = require('../lib/fusoEmpresa');
 
 const INCLUDE_VACINA = {
   veterinario: { select: { id: true, fullName: true } },
@@ -940,6 +943,43 @@ async function finalizar(req, res) {
   }
 }
 
+// TENANCY da fila de aplicação: a vacina é da empresa pela EVOLUÇÃO do atendimento e,
+// no avulso (sem evolução), pela empresa do autor. Fonte única da fila do plantão e da
+// busca de pendências do `executar` — divergindo, a tela anotaria um bloqueio que o
+// `executar` não aplica (ou o contrário).
+function whereVacinaDaEmpresa(empresaIdBruto) {
+  const empresaId = Number(empresaIdBruto);
+  return {
+    OR: [
+      { evolucao: { empresaId } },
+      { evolucaoId: null, veterinario: { membrosEquipe: { some: { equipe: { empresaId } } } } },
+    ],
+  };
+}
+
+/**
+ * Vacinas PENDENTES de aplicação do paciente, na empresa ativa — os candidatos de
+ * `antecipacao.vacinaPendenteAnterior`. `status`, `medicamentoCatId` e
+ * `aplicadaPeloProprietario` vêm por SQL cru, como no resto deste controller.
+ */
+async function vacinasPendentesDoPaciente(animalId, empresaId) {
+  const where = { animalId: Number(animalId), ativo: true };
+  if (empresaId) where.AND = [whereVacinaDaEmpresa(empresaId)];
+  const vacinas = await prisma.vacinaClinica.findMany({
+    where,
+    select: { id: true, animalId: true, nome: true, vacinaId: true, dataAplicacao: true, ativo: true },
+  });
+  if (vacinas.length === 0) return [];
+  const extras = await prisma.$queryRawUnsafe(
+    `SELECT id, numero, status, medicamento_cat_id AS "medicamentoCatId",
+            aplicada_pelo_proprietario AS "aplicadaPeloProprietario"
+       FROM schs2vet.tb_vacinas_clinicas WHERE id = ANY($1::int[])`,
+    vacinas.map((v) => v.id),
+  );
+  const porId = new Map(extras.map((e) => [Number(e.id), e]));
+  return vacinas.map((v) => ({ ...v, ...(porId.get(v.id) ?? {}) }));
+}
+
 // GET /clinica/vacinas/para-execucao — vacinas FINALIZADAS aguardando aplicação, para
 // aparecer na tela de Execução de Prescrição (plantão). Escopo por empresa (multi-clínica).
 async function listarParaExecucao(req, res) {
@@ -964,15 +1004,7 @@ async function listarParaExecucao(req, res) {
     // é atravessar a fronteira da empresa. Vacina não tem `empresaId` próprio: a
     // tenancy vem da EVOLUÇÃO do atendimento e, no avulso, da empresa do autor
     // (mesmo critério do escopo clínico, sem a saída "é minha, então vejo").
-    if (req.empresaId) {
-      const empresaId = Number(req.empresaId);
-      where.AND.push({
-        OR: [
-          { evolucao: { empresaId } },
-          { evolucaoId: null, veterinario: { membrosEquipe: { some: { equipe: { empresaId } } } } },
-        ],
-      });
-    }
+    if (req.empresaId) where.AND.push(whereVacinaDaEmpresa(req.empresaId));
     if (animalId) where.animalId = Number(animalId);
 
     const vacinas = await prisma.vacinaClinica.findMany({
@@ -1000,7 +1032,8 @@ async function listarParaExecucao(req, res) {
     const extras = await prisma.$queryRawUnsafe(
       `SELECT id, numero, tipo_atendimento AS "tipoAtendimento", quantidade,
               valor::float AS valor, cliente, status, forma_calculo AS "formaCalculo",
-              aplicada_pelo_proprietario AS "aplicadaPeloProprietario"
+              aplicada_pelo_proprietario AS "aplicadaPeloProprietario",
+              medicamento_cat_id AS "medicamentoCatId"
        FROM schs2vet.tb_vacinas_clinicas WHERE id = ANY($1::int[])`,
       ids
     );
@@ -1025,10 +1058,23 @@ async function listarParaExecucao(req, res) {
     // não estar regenerado (CLAUDE.md §11), e `where` com campo desconhecido derruba a
     // fila inteira com "Unknown argument".
     const inativos = await lerInativosEmLote(dados.map((v) => v.animalId));
-    const fila = dados.map((v) => ({
-      ...v,
-      animalInativo: !!inativos.get(Number(v.animalId))?.inativo,
-    }));
+    // 🔴 ANTECIPAÇÃO DE DATA FUTURA (2026-10-05): a vacina prescrita para depois de
+    // HOJE (o hoje real da clínica) sai anotada com a vacina ANTERIOR, da mesma
+    // medicação e do mesmo paciente, que ainda está pendente e impede antecipá-la.
+    // Mesma regra do `executar` (lib/antecipacaoExecucao) — `dados` É a fila
+    // pendente da empresa, a mesma que `vacinasPendentesDoPaciente` relê lá.
+    const hojeReal = hojeNaEmpresa(await fusoDaEmpresa(req.empresaId));
+    const fila = dados.map((v) => {
+      const dia      = antecipacao.diaDaVacina(v);
+      const anterior = dia && dia > hojeReal ? antecipacao.vacinaPendenteAnterior(v, dados) : null;
+      return {
+        ...v,
+        animalInativo: !!inativos.get(Number(v.animalId))?.inativo,
+        antecipacaoBloqueadaPor: anterior
+          ? { ...anterior, mensagem: antecipacao.mensagemBloqueio(anterior, 'vacina') }
+          : null,
+      };
+    });
 
     res.json({ dados: fila });
   } catch (err) {
@@ -1236,6 +1282,47 @@ async function executar(req, res) {
     if (info.status === 'EXECUTADA') return res.status(400).json({ error: 'Vacina já executada.' });
     if (info.status !== 'FINALIZADA') return res.status(400).json({ error: 'Apenas vacinas FINALIZADAS podem ser executadas.' });
 
+    // 🔴 VACINA DE DATA FUTURA (2026-10-05) — pode ser aplicada HOJE (antecipada),
+    // desde que não haja vacina ANTERIOR da mesma medicação, do mesmo paciente,
+    // ainda pendente. Duas etapas, nesta ordem:
+    //   1. pendência anterior → 400 ANTECIPACAO_BLOQUEADA. NÃO é pergunta: a
+    //      anterior sai primeiro, e nenhuma flag do corpo libera isto.
+    //   2. sem pendência → 400 EXECUCAO_FUTURA até a tela confirmar
+    //      (`confirmarAntecipacao`), no mesmo molde da dose antecipada da prescrição.
+    // Antes não havia trava nenhuma aqui — quem impedia era só a TELA, que não
+    // oferecia o botão fora do dia.
+    // "Hoje" é o dia da CLÍNICA; `dataAplicacao` é DATA PURA (§6).
+    const confirmarAntecipacao = req.body?.confirmarAntecipacao === true;
+    const hojeStr      = hojeNaEmpresa(await fusoDaEmpresa(req.empresaId));
+    const diaPrescrito = antecipacao.diaDaVacina(vacina);
+    const antecipada   = !!diaPrescrito && diaPrescrito > hojeStr;
+    if (antecipada) {
+      const pendentes = await vacinasPendentesDoPaciente(vacina.animalId, req.empresaId);
+      const anterior  = antecipacao.vacinaPendenteAnterior(
+        { ...vacina, medicamentoCatId: info.medicamentoCatId ?? null }, pendentes);
+      if (anterior) {
+        return res.status(400).json({
+          erro:     'ANTECIPACAO_BLOQUEADA',
+          error:    antecipacao.mensagemBloqueio(anterior, 'vacina'),
+          pendente: anterior,
+        });
+      }
+      if (!confirmarAntecipacao) {
+        return res.status(400).json({
+          erro:        'EXECUCAO_FUTURA',
+          error:       `A vacina "${vacina.nome}" está prescrita para ${antecipacao.diaMes(diaPrescrito)}. Confirme a antecipação para aplicar agora.`,
+          medicamento: vacina.nome,
+          previsto:    `${diaPrescrito}T12:00:00.000Z`,
+          semHorario:  true,
+        });
+      }
+      // A carteira de vacinação diz QUANDO a dose foi dada: antecipada, a data de
+      // aplicação passa a ser HOJE — e é dela que saem a fatura e o próximo reforço
+      // (o equivalente ao rolling schedule da prescrição). A data prescrita fica na
+      // auditoria.
+      vacina.dataAplicacao = new Date(`${hojeStr}T00:00:00.000Z`);
+    }
+
     const qtd       = dosagemDaVacina(info.quantidade);
     const isCliente = info.cliente === true;
     const jaFaturada = await itemOrigens.origemJaFaturada(prisma, 'vacinaClinicaId', vacina.id);
@@ -1263,6 +1350,12 @@ async function executar(req, res) {
       await tx.$executeRawUnsafe(
         `UPDATE schs2vet.tb_vacinas_clinicas SET status = 'EXECUTADA' WHERE id = $1`, Number(id)
       );
+      if (antecipada) {
+        await tx.vacinaClinica.update({
+          where: { id: vacina.id },
+          data:  { dataAplicacao: vacina.dataAplicacao },
+        });
+      }
 
       // Marca QUANDO a vacina foi executada — é o que permite a tela de Execução de
       // Prescrição achar "executadas hoje" para o Histórico (VacinaClinica não tem
@@ -1272,7 +1365,8 @@ async function executar(req, res) {
         entidade:   'VACINA',
         entidadeId: vacina.id,
         animalId:   vacina.animalId,
-        detalhes:   `${vacina.nome}${vacina.dose ? ` — ${vacina.dose}` : ''}`,
+        detalhes:   `${vacina.nome}${vacina.dose ? ` — ${vacina.dose}` : ''}`
+          + `${antecipada ? ` — prescrita para ${antecipacao.diaMes(diaPrescrito)}, antecipada e confirmada na execução` : ''}`,
       });
 
       // Esquema de reforço (mensal/anual): agenda a PRÓXIMA dose. Ver `agendarReforcos`.

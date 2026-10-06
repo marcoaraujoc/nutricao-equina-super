@@ -71,10 +71,16 @@ async function registrarAuditoria(client, req, { categoria, entidade, entidadeId
   // tela de Auditoria não exibe referência numérica. Repeti-lo aqui só reintroduzia
   // o "#65" no rótulo da ação.
   const action = `${categoria} ${entidade}`;
+  // 🔴 `"timestamp"` EXPLÍCITO em UTC, em TODO insert deste arquivo (2026-10-05).
+  // Sem ele valia o DEFAULT da coluna, `CURRENT_TIMESTAMP` — `timestamptz` convertido
+  // para o fuso da SESSÃO (America/Sao_Paulo) ao cair numa coluna `timestamp` sem fuso.
+  // O Prisma lê a coluna como UTC naive, e toda hora de auditoria saía 3h ATRASADA:
+  // foi o "Executada em 05/10 às 11:39" de uma vacina aplicada às 14:39 no Histórico
+  // da Execução de Prescrição (que tira o QUANDO da vacina daqui). CLAUDE.md §6.
   await c.$executeRawUnsafe(
     `INSERT INTO schs2vet.tb_audit_logs
-       ("userId", "userName", "email", "action", "empresaId", "categoria", "entidade", "entidadeId", "animalId", "motivo", "detalhes", "ip")
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+       ("userId", "userName", "email", "action", "empresaId", "categoria", "entidade", "entidadeId", "animalId", "motivo", "detalhes", "ip", "timestamp")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW() AT TIME ZONE 'UTC')`,
     req.user?.id ?? null,
     req.user?.fullName ?? '',
     req.user?.email ?? '',
@@ -138,8 +144,8 @@ async function registrarAcesso(req, user, action) {
     // resolvida. Sem isso o `WITH CHECK` da policy recusaria a própria escrita da
     // auditoria — e a auditoria falharia calada (é fire-and-forget).
     await comEscopoPlataforma(() => prisma.$executeRawUnsafe(
-      `INSERT INTO schs2vet.tb_audit_logs ("userId", "userName", "email", "action", "empresaId", "ip")
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+      `INSERT INTO schs2vet.tb_audit_logs ("userId", "userName", "email", "action", "empresaId", "ip", "timestamp")
+       VALUES ($1, $2, $3, $4, $5, $6, NOW() AT TIME ZONE 'UTC')`,
       user.id,
       user.fullName ?? '',
       user.email ?? '',
@@ -177,8 +183,8 @@ async function registrarAcessoNegado(req, { motivo, entidade = 'ACESSO', entidad
 
     await comEscopoPlataforma(() => prisma.$executeRawUnsafe(
       `INSERT INTO schs2vet.tb_audit_logs
-         ("userId", "userName", "email", "action", "empresaId", "categoria", "entidade", "entidadeId", "animalId", "motivo", "detalhes", "ip")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+         ("userId", "userName", "email", "action", "empresaId", "categoria", "entidade", "entidadeId", "animalId", "motivo", "detalhes", "ip", "timestamp")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW() AT TIME ZONE 'UTC')`,
       req?.user?.id ?? null,
       req?.user?.fullName ?? '',
       req?.user?.email ?? emailTentativa ?? '',
@@ -211,8 +217,8 @@ async function registrarAcessoPublico({ entidade, entidadeId = null, empresaId =
   try {
     await comEscopoPlataforma(() => prisma.$executeRawUnsafe(
       `INSERT INTO schs2vet.tb_audit_logs
-         ("userId", "userName", "email", "action", "empresaId", "categoria", "entidade", "entidadeId", "animalId", "motivo", "detalhes", "ip")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+         ("userId", "userName", "email", "action", "empresaId", "categoria", "entidade", "entidadeId", "animalId", "motivo", "detalhes", "ip", "timestamp")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW() AT TIME ZONE 'UTC')`,
       null, '', '',
       `ACESSO_PUBLICO ${entidade}`,
       empresaId != null ? Number(empresaId) : null,
@@ -400,8 +406,8 @@ async function registrarConflitoEdicao(req, { entidade, entidadeId = null, anima
 
     await prisma.$executeRawUnsafe(
       `INSERT INTO schs2vet.tb_audit_logs
-         ("userId", "userName", "email", "action", "empresaId", "categoria", "entidade", "entidadeId", "animalId", "motivo", "detalhes", "ip")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+         ("userId", "userName", "email", "action", "empresaId", "categoria", "entidade", "entidadeId", "animalId", "motivo", "detalhes", "ip", "timestamp")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW() AT TIME ZONE 'UTC')`,
       req?.user?.id ?? null,
       req?.user?.fullName ?? '',
       req?.user?.email ?? '',

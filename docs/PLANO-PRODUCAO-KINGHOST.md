@@ -1,5 +1,10 @@
 # S2Vet — Plano de subida para produção na KingHost
 
+> 🔴 **SUBSTITUÍDO em 2026-10-06 por `docs/DEPLOY-PRODUCAO.md`.** As VPS foram criadas com
+> **Ubuntu 24.04** (não 20.04) e em **duas máquinas** (Frontend 177.153.69.147 e Backend
+> 177.153.69.171), com VPC por WireGuard. Este arquivo fica só como histórico da avaliação
+> do provedor — **não execute os passos daqui**.
+
 > **Data:** 2026-10-03 · **Branch:** `feature/mvp-v1.0`
 >
 > **Complementa** `docs/PLANO-PRODUCAO-HOSTINGER.md` (a base: Cloudflare, backup, Nginx,
