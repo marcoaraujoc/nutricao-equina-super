@@ -752,28 +752,32 @@ Em `https://login.tailscale.com/admin`:
        // De propósito, NENHUMA regra tem "tag:s2vet-server" como ORIGEM:
        // uma VPS invadida não consegue abrir conexão para o seu PC nem para outro aparelho.
      ],
-     // 🔴 MANTENHA este bloco: é o que libera o Funnel do DESENVOLVIMENTO
-     // (docs/TAILSCALE_FUNNEL.md §3). "autogroup:member" são os SEUS aparelhos; as VPS
-     // têm etiqueta (tag), não entram nesse grupo e por isso NÃO podem publicar nada
-     // na internet pelo Funnel — que é o que queremos.
-     "nodeAttrs": [
-       { "target": ["autogroup:member"], "attr": ["funnel"] }
+     // SSH próprio do Tailscale — veio no modelo padrão; não afeta as VPS (rodam com --ssh=false
+     // e "autogroup:self" não inclui máquinas com etiqueta).
+     "ssh": [
+       { "action": "check", "src": ["autogroup:member"], "dst": ["autogroup:self"],
+         "users": ["autogroup:nonroot", "root"] }
      ]
    }
    ```
+   Este foi o arquivo aplicado em 2026-10-06 (a conta estava no modelo padrão do Tailscale,
+   sem `nodeAttrs`). ⚠️ **Não acrescente `nodeAttrs` com `funnel`** sem precisar: ele libera os
+   seus aparelhos a publicar serviços na internet pelo Funnel. Se um dia o desenvolvimento usar
+   o Funnel (`docs/TAILSCALE_FUNNEL.md`), acrescente
+   `"nodeAttrs": [{ "target": ["autogroup:member"], "attr": ["funnel"] }]` — as VPS, por terem
+   etiqueta, continuam de fora.
    ⚠️ Se a sua política hoje é a padrão ("todos falam com todos"), troque por esta. A padrão
    deixaria uma VPS comprometida alcançar o seu PC de desenvolvimento.
    ⚠️ **Antes de salvar, compare com o arquivo atual.** Blocos que já existem lá e não
-   aparecem acima (`ssh`, `groups`, `tests`, `nodeAttrs`) devem ser **mantidos**; troque só a
+   aparecem acima (`groups`, `tests`, `nodeAttrs`) devem ser **mantidos**; troque só a
    regra `"src": ["*"]` do `grants` e acrescente o `tagOwners`. (Contas mais antigas usam
    `"acls"` em vez de `"grants"`: aí a regra equivalente é
-   `{ "action": "accept", "src": ["autogroup:member"], "dst": ["*:*"] }`.) Apagar o `nodeAttrs` derruba o Funnel do
-   desenvolvimento sem erro claro.
+   `{ "action": "accept", "src": ["autogroup:member"], "dst": ["*:*"] }`.)
    💡 O painel tem **"Preview rules"**/validação: ele recusa salvar um arquivo com erro de
    sintaxe, então não há risco de trancar a rede por vírgula fora do lugar.
    ✅ **MagicDNS** e **HTTPS Certificates** ligados aparecem no painel como botões
    **"Disable MagicDNS…"** e **"Disable HTTPS…"** — o texto do botão é a ação, não o estado.
-   Deixe os dois ligados: o HTTPS é o do Funnel do desenvolvimento e não afeta as VPS (elas só
+   Deixe os dois ligados: o HTTPS serve ao Funnel (se um dia o desenvolvimento usar) e não afeta as VPS (elas só
    usariam se alguém rodasse `tailscale cert`/`tailscale funnel` nelas — não rode).
 3. **Settings → Keys → Generate auth key**: gere **duas** chaves (uma por VPS) com:
    **Reusable: desligado** · **Expiration: 1 dia** · **Tags: `tag:s2vet-server`**.
