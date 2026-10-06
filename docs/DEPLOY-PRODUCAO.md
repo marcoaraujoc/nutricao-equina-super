@@ -119,6 +119,11 @@ precisa trocar pelo valor real antes de executar.
 | Frontend | `s2vet02.vps-kinghost.net` | **`s2vet-fe`** | `177.153.69.147` | Recebe o tráfego do Cloudflare, entrega a tela e repassa `/api` |
 | Backend | `s2vet01.vps-kinghost.net` | **`s2vet-be`** | `177.153.69.171` | API, banco, jobs, WhatsApp. **Invisível para a internet** |
 
+Conferido na Etapa 1 (2026-10-06): as duas com **Ubuntu 24.04.4**, placa de rede **`enX0`**
+(virtualização Xen), **sem IPv6 público**, 1 GB de swap em partição e o relógio **sem
+sincronizar** (tratado na Etapa 8.6). O SSH das duas aceitava **senha e root** e recebeu
+**~17 mil tentativas de invasão em 24 h** — por isso as Etapas 2 a 5 são urgentes.
+
 ⚠️ Os nomes da KingHost são "01 = backend" e "02 = frontend". Para não confundir no
 terminal, a Etapa 2 renomeia as máquinas para `s2vet-fe` e `s2vet-be`. O endereço
 `*.vps-kinghost.net` continua funcionando; só não vamos usá-lo.
@@ -238,7 +243,7 @@ antes de virar problema; o caminho previsto quando apertar é o `S3StorageProvid
 
 ⚠️ **Perguntas para o suporte da KingHost** — mande antes da Etapa 7 (ver a
 [Parte B](#parte-b--antes-de-começar)): existe **console de emergência** (acesso pelo
-navegador sem SSH)? Existe **snapshot**? As VPS têm **IPv6**? A **porta 587 de saída** está
+navegador sem SSH)? Existe **snapshot**? A **porta UDP 123 (hora)** sai? A **porta 587 de saída** está
 liberada? Existe **firewall de rede** no painel?
 
 ---
@@ -286,7 +291,9 @@ Mande antes da Etapa 7. As respostas mudam pouco o roteiro, mas **a primeira é 
 1. A VPS tem **console de emergência pelo navegador** (VNC/KVM) ou **modo de recuperação**,
    que funcione mesmo com o SSH bloqueado?
 2. É possível tirar **snapshot** da VPS? Quantos, por quanto tempo, com que custo?
-3. As VPS têm **IPv6**? Qual?
+3. A **porta UDP 123 de saída** (sincronização de hora, NTP) está liberada? *(A Etapa 1 mostrou
+   o relógio sem sincronizar — ver Etapa 8.6.)* *(IPv6: já respondido pela Etapa 1 — as VPS
+   **não têm** IPv6 público, só o `fe80::` local.)*
 4. A **porta 587 de saída** (SMTP autenticado, Brevo) está liberada? Há limite de envio?
 5. Existe **firewall de rede** no painel, ou filtro de tráfego antes da VPS?
 6. Existe **rede privada** entre duas VPS da mesma conta?
@@ -415,6 +422,14 @@ grep -rEi '^\s*(PasswordAuthentication|PermitRootLogin|KbdInteractiveAuthenticat
 > senha da internet inteira **agora** — a Etapa 5 fecha isso.
 
 ```bash
+grep -n '^Include' /etc/ssh/sshd_config
+```
+> **Para que serve:** confirma que o arquivo principal do SSH lê a pasta `sshd_config.d/` **logo
+> no início** (esperado: `Include /etc/ssh/sshd_config.d/*.conf` numa das primeiras linhas). É
+> isso que faz o arquivo `00-s2vet.conf` da Etapa 5 vencer o `PermitRootLogin yes` escrito
+> mais abaixo no arquivo principal — o SSH fica com o **primeiro** valor que lê.
+
+```bash
 journalctl -u ssh --since "24 hours ago" --no-pager | grep -ciE "invalid user|failed password"
 ```
 > **Para que serve:** conta quantas tentativas de invasão por senha o SSH recebeu nas últimas
@@ -427,6 +442,16 @@ last -n 20
 > **Para que serve:** mostra os últimos logins bem-sucedidos (quem, de onde, quando). Todos
 > devem ser seus. Login de IP desconhecido = a máquina pode ter sido comprometida; nesse
 > caso, **reinstale a VPS pelo painel** antes de colocar qualquer dado nela.
+> ⚠️ Se a última linha disser `wtmp begins` com a hora do **seu** login, o histórico só
+> começou ali — o `last` não enxerga nada antes. Use o comando seguinte, que lê outro registro.
+
+```bash
+journalctl -u ssh --no-pager | grep -E "Accepted (publickey|password)"
+```
+> **Para que serve:** lista **todos** os logins aceitos que o registro do sistema guardou desde a
+> criação da máquina, com a forma (`publickey` = chave, `password` = senha) e o IP de origem.
+> 🔴 Todos devem ser **`publickey`** e do **seu** IP. Uma linha `Accepted password` que não foi
+> você = alguém acertou a senha do root: **reinstale a VPS** antes de seguir.
 
 ```bash
 swapon --show; free -h; df -h /
@@ -927,13 +952,16 @@ cat /var/run/reboot-required 2>/dev/null || echo "nao precisa reiniciar"
 
 ### 8.3 Swap (memória de reserva)
 
-Se a Etapa 1 mostrou que já existe swap, **pule esta seção**.
+As VPS da KingHost já vêm com **1 GB de swap** numa partição (`/dev/xvda3`), conferido na
+Etapa 1. **No Frontend isso basta: pule esta seção.** No **Backend** (Chrome + banco + Evolution
+disputando memória num pico) vale somar mais 3 GB num arquivo, chegando a 4 GB:
 
 ```bash
-sudo fallocate -l 4G /swapfile
+sudo fallocate -l 3G /swapfile
 ```
-> **Para que serve:** reserva um arquivo de 4 GB no disco para servir de memória extra quando a
-> RAM encher (evita que o sistema mate a API num pico). **No Frontend use `2G`.**
+> **Para que serve:** `[BE]` reserva um arquivo de 3 GB no disco para servir de memória extra
+> quando a RAM encher (evita que o sistema mate a API num pico). Ele soma à partição de 1 GB
+> que já existe.
 
 ```bash
 sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
@@ -949,8 +977,14 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 ```bash
 echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-s2vet-swap.conf
 ```
-> **Para que serve:** diz ao Linux para usar a swap só em último caso (10 numa escala de 0 a
-> 100). Disco é muito mais lento que RAM.
+> **Para que serve:** `[AMBAS]` diz ao Linux para usar a swap só em último caso (10 numa escala
+> de 0 a 100). Disco é muito mais lento que RAM. Este comando vale **também no Frontend**.
+
+```bash
+swapon --show
+```
+> **Para que serve:** ✅ no Backend devem aparecer duas linhas: `/dev/xvda3` (1 GB) e
+> `/swapfile` (3 GB).
 
 ### 8.4 Limite dos logs do sistema
 
@@ -1008,7 +1042,101 @@ sudo sysctl --system
 > **Para que serve:** aplica agora todos os arquivos de `/etc/sysctl.d/` (inclusive o da swap).
 > A saída lista cada valor aplicado.
 
-### 8.6 Auditoria de segurança (Lynis)
+### 8.6 Relógio sincronizado (NTP)
+
+A Etapa 1 mostrou **`System clock synchronized: no`** nas duas VPS. O relógio ainda está certo
+(ele vem do hipervisor da KingHost), mas sem sincronização ele **deriva** com o tempo. Relógio
+errado quebra o código do 2FA (vale por minutos), a validade dos tokens de sessão, o horário dos
+jobs (fechamento de fatura) e a ordem dos logs numa investigação.
+
+```bash
+timedatectl timesync-status
+```
+> **Para que serve:** mostra com qual servidor de hora o sistema está tentando falar e se já
+> recebeu resposta (`Packet count`). `Server: (null)` ou contagem 0 = nunca conseguiu.
+
+```bash
+sudo mkdir -p /etc/systemd/timesyncd.conf.d
+printf '[Time]\nNTP=a.st1.ntp.br b.st1.ntp.br c.st1.ntp.br d.st1.ntp.br\nFallbackNTP=ntp.ubuntu.com pool.ntp.org\n' | sudo tee /etc/systemd/timesyncd.conf.d/s2vet.conf
+```
+> **Para que serve:** aponta a sincronização para os servidores de hora oficiais do Brasil
+> (NTP.br, mantidos pelo NIC.br — a hora legal brasileira), com os do Ubuntu como reserva.
+> Servidores no Brasil respondem mais rápido e com menos variação.
+
+```bash
+sudo systemctl restart systemd-timesyncd && sleep 15 && timedatectl
+```
+> **Para que serve:** reinicia o serviço de hora, espera 15 segundos e mostra o estado.
+> ✅ Esperado: **`System clock synchronized: yes`**.
+
+Se continuar `no`:
+```bash
+sudo journalctl -u systemd-timesyncd -n 20 --no-pager
+```
+> **Para que serve:** mostra as mensagens do serviço de hora. `Timed out waiting for reply`
+> repetido = a **porta UDP 123 de saída** está bloqueada pela rede da KingHost. Nesse caso,
+> pergunte ao suporte (acrescente à lista da B3): o firewall do UFW não bloqueia saída, então
+> o bloqueio não é seu.
+
+### 8.7 Desligar serviços que um servidor não usa
+
+A imagem da KingHost veio com serviços de computador de mesa. Cada serviço rodando é código que
+pode ter falha; o que não serve para nada deve ser desligado.
+
+```bash
+sudo systemctl disable --now ModemManager udisks2
+```
+> **Para que serve:** desliga agora (`--now`) e para sempre (`disable`) o **ModemManager**
+> (gerencia modem 3G/4G — uma VPS não tem) e o **udisks2** (monta pendrive e disco externo —
+> idem). Nada da aplicação depende deles.
+
+```bash
+sudo multipath -ll
+```
+> **Para que serve:** mostra se existe algum disco de rede com caminhos múltiplos (*multipath*),
+> que é para o que serve o `multipathd`. Numa VPS com disco `xvda` a resposta esperada é
+> **vazia**.
+
+```bash
+sudo systemctl disable --now multipathd multipathd.socket
+```
+> **Para que serve:** **só se o comando anterior respondeu vazio**: desliga o `multipathd`, que
+> fica vigiando discos que esta máquina não tem.
+
+**Opcional — remover dois pacotes da imagem padrão que estas VPS não usam.** Conferido no
+Frontend em 2026-10-06 (`apt-mark showmanual`): a imagem é um Ubuntu Server padrão + `nginx` +
+`xe-guest-utilities`, sem PHP, banco ou painel. Sobram dois itens genéricos do Ubuntu:
+
+```bash
+systemd-detect-virt
+```
+> **Para que serve:** diz em que tipo de virtualização a VPS roda. Esperado: **`xen`**. Só siga
+> com a remoção do `open-vm-tools` se for `xen` (se for `vmware`, ele é necessário).
+
+```bash
+snap list
+```
+> **Para que serve:** lista os programas instalados pelo Snap. Esperado:
+> `No snaps are installed yet`. Só remova o `snapd` se a resposta for essa.
+
+```bash
+sudo apt -y purge open-vm-tools snapd && sudo apt -y autoremove --purge
+```
+> **Para que serve:** remove as ferramentas de VMware (inúteis no Xen da KingHost) e o
+> gerenciador de pacotes Snap (nada deste roteiro usa), e depois as dependências que ficaram
+> órfãs — inclusive kernels antigos. Menos software instalado = menos falhas possíveis.
+
+⚠️ **Não desligue** `xe-linux-distribution` (é a integração com o hipervisor Xen da KingHost:
+desligamento limpo, informações da VM no painel) nem `serial-getty@hvc0` (é o **terminal de
+console** do hipervisor — provavelmente o que a KingHost usa como console de emergência; ver B3).
+
+```bash
+systemctl list-units --type=service --state=running --no-pager
+```
+> **Para que serve:** ✅ confere a lista final de serviços. No Frontend, além do sistema, só
+> devem sobrar `nginx` e `ssh` (e, depois, `tailscaled`, `cloudflared`, `fail2ban`).
+
+### 8.8 Auditoria de segurança (Lynis)
 
 ```bash
 sudo lynis audit system --quick 2>/dev/null | tail -n 40
