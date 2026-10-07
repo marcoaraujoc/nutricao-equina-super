@@ -105,7 +105,7 @@ precisa trocar pelo valor real antes de executar.
  ║   Node 22 (API) escutando SÓ em 10.50.0.2:3001                              ║
  ║     ├─ Chrome headless (PDF, CRMV) · LibreOffice (.doc)                     ║
  ║     └─ node-cron (fechamento de fatura, lembretes…)                         ║
- ║   PostgreSQL 16 em 127.0.0.1:5432 (schema schs2vet, RLS por empresa)        ║
+ ║   PostgreSQL 18 em 127.0.0.1:5432 (schema schs2vet, RLS por empresa)        ║
  ║   Docker: Evolution API em 127.0.0.1:8080 (+ Postgres e Redis próprios)     ║
  ╚══════════════════════════════════════╤══════════════════════════════════════╝
                                         │ só conexões de SAÍDA
@@ -365,8 +365,8 @@ tem dado), depois a 9 (as duas juntas), 10 a 14 no Backend, 15 e 16 no Frontend,
 | 5 SSH só com chave | ✅ 2026-10-06 (`permitrootlogin no`, `passwordauthentication no`, `allowusers vetprof`) | ✅ 2026-10-06 (`permitrootlogin no`, `allowusers vetprof deploy`; root travado) |
 | 6 Tailscale | ✅ `tag:s2vet-server`, sem expiração | ✅ `100.68.176.6`, `tag:s2vet-server`, sem expiração |
 | 7 Firewall + porta 22 fechada | ✅ 2026-10-06 (`TcpTestSucceeded : False`) | ✅ 2026-10-06 (portas 22 e 80: `TcpTestSucceeded : False`) |
-| 8 Proteções do sistema | ⚠️ 8.1/8.2/8.4/8.5 ✅ · 8.3 ✅ swap 1+3 GB · 8.6 NTP **bloqueado pela KingHost** (UDP 123) — chamado a abrir; hora vem do Xen · 8.7 ✅ · 8.8 Lynis **65** · ✅ sessões antigas encerradas (só a do Tailscale) · ⏳ 8.9 rodada do Lynis | ⚠️ 8.1/8.2/8.4/8.5 ✅ · 8.3 ✅ swap 1 GB · 8.6 idem BE · 8.7 ✅ · 8.8 Lynis **65** · ⏳ 8.9 rodada do Lynis · ⏳ encerrar sessões antigas (pts/2, pts/3 do IP de casa) |
-| 9 VPC (WireGuard) | ⏳ | ⏳ |
+| 8 Proteções do sistema | ✅ 2026-10-07 — Lynis **65 → 73** · swap 1+3 GB · sessões antigas encerradas · ⏳ chamado KingHost: NTP (UDP 123) bloqueado; hora vem do Xen | ✅ 2026-10-07 — Lynis **65 → 72** · swap 1 GB · ⚠️ confirmar `who` sem as sessões `pts/2`/`pts/3` · ⏳ chamado KingHost (NTP, idem BE) |
+| 9 VPC (WireGuard) | ✅ 2026-10-07 túnel no ar · chaves e PSK conferidas (bate cruzado com o FE) · "sem ping" só na `enX0` · `MTU = 1380` · 50 MB pela 3001 em 9 s · 3001 pelo IP público: *timeout* · ⚠️ confirmar `ip link show wg0` = `mtu 1380` e que a re-execução da Etapa 9 gerou chave privada e PSK NOVAS (as antigas foram expostas) | ✅ 2026-10-07 escutando 51820 só para o IP do BE · regra 22 via wg0 · `MTU = 1380` (conferido) · ping de 1380 bytes sem fragmentar ok |
 | 10–14 | ⏳ | — |
 | 15–16 | — | ⏳ |
 | 17–19 | ⏳ | ⏳ |
@@ -1027,14 +1027,21 @@ systemctl list-timers --all | grep s2vet
 **Opcional (recomendado no Backend; desnecessário no Frontend): não responder a ping.**
 
 ```bash
-sudo sed -i 's/-A ufw-before-input -p icmp --icmp-type echo-request -j ACCEPT/-A ufw-before-input -p icmp --icmp-type echo-request -j DROP/' /etc/ufw/before.rules
+sudo sed -i 's/^-A ufw-before-input -p icmp --icmp-type echo-request -j ACCEPT$/-A ufw-before-input -i enX0 -p icmp --icmp-type echo-request -j DROP\n-A ufw-before-input -p icmp --icmp-type echo-request -j ACCEPT/' /etc/ufw/before.rules
 sudo ufw reload
+grep -n 'ufw-before-input.*echo-request' /etc/ufw/before.rules
 ```
 > **Para que serve:** por padrão o UFW responde ao `ping`, o que avisa a um scanner que existe
-> uma máquina viva naquele IP. Esta troca faz o Backend ficar **mudo** (só para IPv4; o
-> IPv6 precisa do ping para funcionar e não é alterado). O `reload` aplica sem derrubar
-> conexões. Desvantagem: você não consegue mais usar `ping 177.153.69.171` para diagnóstico —
-> use `ping s2vet-be` pelo Tailscale.
+> uma máquina viva naquele IP. Esta troca faz o Backend ficar **mudo pela placa pública**
+> (`enX0`), continuando a responder pelo túnel WireGuard e pelo Tailscale — que é onde o ping
+> serve para diagnóstico. Só IPv4 (o IPv6 precisa do ping para funcionar e não é alterado). O
+> `reload` aplica sem derrubar conexões; o `grep` deve mostrar a linha `-i enX0 ... DROP`
+> **antes** da linha `ACCEPT`.
+> ⚠️ **Correção de 2026-10-07:** a versão anterior deste passo trocava a regra por um `DROP`
+> **sem** `-i enX0`, e o Backend parou de responder ping **também pelo túnel** — o teste da
+> Etapa 9 (`ping 10.50.0.2`) falhava sem haver problema algum no túnel. Se você aplicou a
+> versão antiga, corrija com:
+> `sudo sed -i 's/^-A ufw-before-input -p icmp --icmp-type echo-request -j DROP$/-A ufw-before-input -i enX0 -p icmp --icmp-type echo-request -j DROP\n-A ufw-before-input -p icmp --icmp-type echo-request -j ACCEPT/' /etc/ufw/before.rules && sudo ufw reload`
 
 ---
 
@@ -1355,7 +1362,8 @@ sudo lynis audit system --quick 2>/dev/null | tail -n 40
 > (ex.: senha no GRUB, partição separada para `/tmp`). Use como lista para conferir, não
 > como meta.
 > **Linha de base registrada em 2026-10-06:** **65** nas duas VPS (Backend: 254 testes;
-> Frontend: 262), com `Firewall [V]` e `Malware scanner [X]`.
+> Frontend: 262), com `Firewall [V]` e `Malware scanner [X]`. **Depois da 8.9 (2026-10-07):
+> Backend 73, Frontend 72** (a diferença é o `sysstat`, só no Backend).
 
 ```bash
 sudo grep -E '^(warning|suggestion)\[\]' /var/log/lynis-report.dat | cut -d'|' -f1-2
@@ -1539,6 +1547,8 @@ cat > /etc/wireguard/wg0.conf <<EOF
 [Interface]
 # IP desta VPS dentro da rede privada.
 Address    = 10.50.0.1/24
+# Tamanho máximo do pacote no túnel. O padrão (1420) não passa pela rede da KingHost.
+MTU        = 1380
 # Porta em que o Frontend espera o Backend chamar.
 ListenPort = 51820
 PrivateKey = $(cat /etc/wireguard/private.key)
@@ -1563,6 +1573,8 @@ cat > /etc/wireguard/wg0.conf <<EOF
 # IP desta VPS dentro da rede privada. Sem "ListenPort": o Backend não espera
 # ninguém — é ele que liga para o Frontend. Por isso não abre porta nenhuma.
 Address    = 10.50.0.2/24
+# Igual ao do Frontend: as duas pontas precisam do mesmo MTU.
+MTU        = 1380
 PrivateKey = $(cat /etc/wireguard/private.key)
 
 [Peer]
@@ -1643,7 +1655,64 @@ ping -c 3 10.50.0.2
 ```bash
 ping -c 3 10.50.0.1
 ```
-> **Para que serve:** `[BE]` o mesmo, no sentido contrário.
+> **Para que serve:** `[BE]` o mesmo, no sentido contrário. (⚠️ No Backend, o teste é para o
+> `10.50.0.1` — `ping 10.50.0.2` ali é a própria máquina e não prova nada.)
+
+```bash
+ping -c 3 -M do -s 1352 10.50.0.2
+```
+> **Para que serve:** `[FE]` testa o **MTU**: manda o maior pacote que cabe no túnel (1352 + 28
+> = 1380) proibindo que ele seja partido. Esperado: 3 respostas. Se o ping pequeno responde e
+> este não, transferências grandes (PDF, upload) vão travar. ⚠️ Com `-s 1392` o erro
+> `message too long, mtu=1380` é o esperado — o pacote é maior que o túnel.
+
+**Teste de tráfego real** (o ping só prova o ICMP). `[BE]`, numa janela que fica aberta:
+```bash
+cd "$(mktemp -d)" && echo 'ok-tunel' > index.html && head -c 50M /dev/urandom > grande.bin
+python3 -m http.server 3001 --bind 10.50.0.2
+```
+`[FE]`:
+```bash
+curl -sS -o /dev/null -w '%{size_download} bytes em %{time_total}s\n' http://10.50.0.2:3001/grande.bin
+```
+> **Para que serve:** simula a API: um arquivo de 50 MB atravessa o túnel e a regra do firewall
+> da porta 3001. Esperado: `52428800 bytes` em poucos segundos (medido em 2026-10-07: 9 s, numa
+> conexão só — não é a capacidade do túnel). Depois: `Ctrl+C` no BE e `cd ~ && rm -rf /tmp/tmp.*`.
+> ⚠️ O servidor roda no **Backend**; no Frontend ele falha com `Cannot assign requested address`.
+
+```bash
+nc -vz -w 5 10.50.0.2 3001
+```
+> **Para que serve:** `[FE]` testa a porta da API **pelo túnel e pelo firewall do Backend**.
+> Antes de a API existir (Etapa 17), o esperado é **`Connection refused`**: o pedido chegou à
+> máquina e só não há ninguém escutando. `timed out` = bloqueado no caminho.
+
+```bash
+nc -vz -w 5 10.50.0.1 22
+```
+> **Para que serve:** `[BE]` confirma que a porta usada pelo deploy (SSH do Frontend) está
+> liberada dentro do túnel. Esperado: `succeeded`.
+
+🔴 **Nunca exiba o `wg0.conf` inteiro** (`cat`): ele contém a chave privada. Para conferir, use
+`sudo grep -v -E 'PrivateKey|PresharedKey' /etc/wireguard/wg0.conf`. Se a chave privada ou a
+pré-compartilhada aparecerem fora da máquina (print, chat, e-mail), troque-as — ver
+"Trocar as chaves" logo abaixo.
+
+**Trocar as chaves do túnel** (se vazarem; leva 3 minutos). Em cada VPS, como root
+(`sudo -i`, `cd /etc/wireguard && umask 077`):
+1. `[FE]` `wg genpsk > psk.key && cat psk.key` — nova chave pré-compartilhada (copie pela tela).
+2. `[BE]` `wg genkey | tee private.key | wg pubkey > public.key` · `echo '<NOVO_PSK>' > psk.key` ·
+   `sed -i "s|^PrivateKey = .*|PrivateKey = $(cat private.key)|" wg0.conf` ·
+   `sed -i "s|^PresharedKey .*|PresharedKey        = $(cat psk.key)|" wg0.conf` · `cat public.key`.
+3. `[FE]` `sed -i "s|^PublicKey .*|PublicKey    = <NOVA_PUB_BE>|" wg0.conf` ·
+   `sed -i "s|^PresharedKey .*|PresharedKey = $(cat psk.key)|" wg0.conf`.
+4. `[FE]` e depois `[BE]`: `systemctl restart wg-quick@wg0 && sleep 30 && wg show` — *handshake*
+   recente nas duas. (Para trocar a do Frontend, o mesmo com os papéis invertidos.)
+O `|` como separador do `sed` é de propósito: as chaves contêm `/` e `+`, mas nunca `|`.
+
+⚠️ A mensagem `Error: GDBus.Error ... packagekit.service is masked` ao instalar pacotes é
+**inofensiva**: é um aviso automático que o `apt` tenta mandar ao `packagekit`, bloqueado na 8.7.
+A instalação acontece normalmente.
 
 ```powershell
 Test-NetConnection 177.153.69.171 -Port 3001
@@ -1661,6 +1730,9 @@ Test-NetConnection 177.153.69.171 -Port 3001
 | idem | Firewall do FE | `sudo ufw status` no FE deve ter `51820/udp ALLOW IN 177.153.69.171` |
 | idem | KingHost filtrando UDP | Pergunte ao suporte (B3, pergunta 5) |
 | Funcionou e parou depois de um tempo | Falta o `PersistentKeepalive` no Backend | Conferir o `wg0.conf` do BE |
+| BE pinga o FE, mas o FE não pinga o BE | O "sem ping" da Etapa 7 sem `-i enX0` | O túnel está bom. Corrigir a regra (ver a Etapa 7, correção de 2026-10-07) |
+| Ping pequeno ok, ping de 1352 bytes ou arquivo grande falham | MTU | `MTU = 1380` no `[Interface]` das duas VPS e `systemctl restart wg-quick@wg0` |
+| `wg show` mostra duas chaves diferentes | Normal: a desta VPS e a do outro lado | O que tem de bater é **cruzado**: `wg show wg0 public-key` de uma = `PublicKey` do `wg0.conf` da outra |
 
 ```bash
 sudo journalctl -u wg-quick@wg0 -n 30 --no-pager
@@ -1696,33 +1768,54 @@ sudo install -d -o root  -g root  -m 700 /var/backups/s2vet
 
 ### 10.2 Instalar o PostgreSQL
 
-🔴 **Antes, confira a versão do banco de desenvolvimento** `[PC]`: no DBeaver/psql, rode
-`SELECT version();`. O Ubuntu 24.04 traz o **PostgreSQL 16**. Se o desenvolvimento estiver no
-**17**, um backup dele **não restaura** no 16 — nesse caso instale o 17 pelo repositório
-oficial (bloco abaixo) e troque `16` por `17` em todos os caminhos desta etapa.
+🔴 **A produção usa o PostgreSQL 18 — a mesma versão do desenvolvimento** (conferido em
+2026-10-07: `18.6 on x86_64-windows`). O Ubuntu 24.04 só traz o **16**, e um backup do 18
+**não restaura** no 16 (a Etapa 12 falharia). Por isso o 18 vem do **repositório oficial do
+PostgreSQL** (PGDG), e não do Ubuntu.
 
 ```bash
-sudo apt -y install postgresql postgresql-contrib
+dpkg -l 'postgresql*' | grep ^ii || echo "nenhum PostgreSQL instalado"
 ```
-> **Para que serve:** instala o PostgreSQL 16 do repositório oficial do Ubuntu (recebe
-> atualizações de segurança automáticas pela Etapa 8).
-
-<details><summary>Só se o desenvolvimento estiver no PostgreSQL 17</summary>
+> **Para que serve:** confere que a VPS não veio com outro PostgreSQL. Esperado: `nenhum
+> PostgreSQL instalado`. Se aparecer `postgresql-16`, remova antes (`sudo apt -y purge
+> 'postgresql-16*'`) — senão os dois disputam a porta 5432 e o 18 sobe na **5433**, onde a
+> aplicação não procura.
 
 ```bash
 sudo install -d /usr/share/postgresql-common/pgdg
 sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
 echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
-sudo apt update && sudo apt -y install postgresql-17 postgresql-contrib
 ```
-> **Para que serve:** adiciona o repositório oficial do PostgreSQL (com a chave de assinatura
-> que prova que os pacotes são legítimos) e instala a versão 17. `noble` é o nome do Ubuntu 24.04.
-</details>
+> **Para que serve:** adiciona o repositório oficial do PostgreSQL, com a chave de assinatura
+> que prova que os pacotes são legítimos (o `signed-by` faz essa chave valer **só** para este
+> repositório). `noble` é o nome do Ubuntu 24.04.
+
+```bash
+sudo apt update && sudo apt -y install postgresql-18
+```
+> **Para que serve:** instala o PostgreSQL 18 e cria o banco inicial (o "cluster" `18/main`).
+> As extensões que vinham no antigo pacote `contrib` — entre elas a **`pg_trgm`**, usada pela
+> busca de medicamentos — já estão dentro dele.
+> ⚠️ **Instale `postgresql-18`, nunca `postgresql` nem `postgresql-contrib`:** com este
+> repositório, esses dois apontam para a versão **mais nova** que existir. Quando o 19 sair,
+> uma atualização instalaria um segundo PostgreSQL ao lado, vazio, na porta 5433.
+
+```bash
+pg_lsclusters
+```
+> **Para que serve:** ✅ esperado **uma linha só**: `18  main  5432  online  postgres
+> /var/lib/postgresql/18/main ...`. Versão 18, porta 5432, ligado.
+
+⚠️ **Atualizações do PostgreSQL são manuais.** As atualizações automáticas da Etapa 8 só
+cobrem os pacotes do Ubuntu; as do PGDG ficam de fora **de propósito**, porque instalar uma
+versão nova reinicia o banco no meio do dia (ele só escuta em `127.0.0.1`, então esperar a
+janela de manutenção não expõe nada). O procedimento mensal está na
+[E5](#e5-janelas-de-manutenção).
 
 ### 10.3 Configuração
 
 ```bash
-sudo tee /etc/postgresql/16/main/conf.d/s2vet.conf >/dev/null <<'EOF'
+sudo tee /etc/postgresql/18/main/conf.d/s2vet.conf >/dev/null <<'EOF'
 # 🔴 Só a própria máquina conecta. NUNCA '*': o banco não pode sair da VPS.
 listen_addresses = 'localhost'
 # Senhas guardadas com o algoritmo forte (SCRAM), não o antigo MD5.
@@ -1747,12 +1840,12 @@ EOF
 > linha.
 
 ```bash
-sudo cp /etc/postgresql/16/main/pg_hba.conf /etc/postgresql/16/main/pg_hba.conf.original
+sudo cp /etc/postgresql/18/main/pg_hba.conf /etc/postgresql/18/main/pg_hba.conf.original
 ```
 > **Para que serve:** guarda uma cópia do arquivo de regras de acesso antes de alterá-lo.
 
 ```bash
-sudo tee /etc/postgresql/16/main/pg_hba.conf >/dev/null <<'EOF'
+sudo tee /etc/postgresql/18/main/pg_hba.conf >/dev/null <<'EOF'
 # TIPO   BANCO     USUÁRIO      ENDEREÇO        MÉTODO
 # Acesso local (pela própria máquina, sem rede) só para o usuário do sistema de mesmo nome.
 local    all       postgres                     peer
@@ -1815,13 +1908,27 @@ CREATE ROLE zls2vetp1  LOGIN PASSWORD '<SENHA_ZLS2VETP1>'
 > isolamento por clínica vale para eles).
 
 ```sql
-CREATE DATABASE dbs2vet OWNER nutriadmin ENCODING 'UTF8' TEMPLATE template0;
+CREATE DATABASE dbs2vet OWNER nutriadmin ENCODING 'UTF8' TEMPLATE template0
+  LOCALE_PROVIDER icu ICU_LOCALE 'pt-BR' LOCALE 'C.UTF-8';
 REVOKE ALL ON DATABASE dbs2vet FROM PUBLIC;
 GRANT CONNECT ON DATABASE dbs2vet TO zls2vetp1;
 ```
 > **Para que serve:** cria o banco da aplicação, com o `nutriadmin` como dono; tira de
 > **qualquer** usuário o acesso padrão (`PUBLIC`) e dá ao `zls2vetp1` só o direito de
 > **conectar**. As permissões nas tabelas vêm das migrations.
+> A linha `LOCALE_PROVIDER icu ICU_LOCALE 'pt-BR'` define a **ordem alfabética** do banco.
+> O desenvolvimento (Windows, `English_United States.1252`) ordena como um dicionário:
+> "Álvaro" fica junto do "A" e maiúscula ao lado de minúscula. O padrão do Ubuntu (`C.UTF-8`)
+> ordena pelo código do caractere: **"Zeca" antes de "Álvaro" e "Bruno" antes de "ana"** —
+> toda lista de pacientes, clientes e medicamentos sairia em ordem diferente da que foi
+> testada. O ICU em português reproduz a ordem do desenvolvimento e, de quebra, não muda
+> quando o Ubuntu é atualizado (mudanças na ordenação do sistema já corromperam índices de
+> texto em outras instalações).
+
+```sql
+SELECT datlocprovider, datlocale, pg_encoding_to_char(encoding) FROM pg_database WHERE datname = 'dbs2vet';
+```
+> **Para que serve:** ✅ esperado `i | pt-BR | UTF8` (`i` = ICU).
 
 ```sql
 \q
@@ -1970,10 +2077,12 @@ teste**. ⚠️ O script de limpeza precisa ser escrito e testado **antes**, num
 
 `[PC]` Exportar o banco de desenvolvimento (PowerShell):
 ```powershell
-pg_dump -U postgres -h localhost -Fc -d dbs2vet -f s2vet_golden.dump
+& "C:\Program Files\PostgreSQL\18\bin\pg_dump.exe" -U postgres -h localhost -Fc -d dbs2vet -f s2vet_golden.dump
 ```
 > **Para que serve:** exporta o banco de desenvolvimento num arquivo compactado. 🔴 Tem de ser
-> com o superusuário `postgres`: com outro usuário o RLS faz o dump sair vazio.
+> com o superusuário `postgres`: com outro usuário o RLS faz o dump sair vazio. O caminho
+> completo é necessário porque a instalação do PostgreSQL no Windows não põe o `pg_dump` no
+> PATH (conferido em 2026-10-07).
 
 `[PC]` Enviar para o Backend **pelo Tailscale**:
 ```powershell
@@ -3059,10 +3168,11 @@ deploy**. Por isso as migrations são sempre **aditivas** (coluna nova opcional,
 > **Para que serve:** decifra o backup com a sua chave privada.
 
 ```powershell
-pg_restore -l db.dump | Select-Object -First 20
+& "C:\Program Files\PostgreSQL\18\bin\pg_restore.exe" -l db.dump | Select-Object -First 20
 ```
 > **Para que serve:** lista o conteúdo do dump — prova que ele está legível. Depois, restaure num
-> PostgreSQL de teste (`createdb teste && pg_restore -d teste db.dump`) e abra a aplicação
+> PostgreSQL de teste (`createdb teste` e `pg_restore -d teste db.dump`, os dois na pasta
+> `C:\Program Files\PostgreSQL\18\bin`) e abra a aplicação
 > apontando para ele. Apague o `db.dump` ao terminar: ele contém dados pessoais.
 
 ## E3. Monitoração
@@ -3099,6 +3209,17 @@ echo '0 * * * * root [ "$(df --output=pcent / | tail -1 | tr -dc 0-9)" -gt 80 ] 
 - 🔴 O `node-cron` **não recupera disparo perdido**: um reinício às 23:45 faz o fechamento de
   fatura daquele dia não acontecer.
 - Reinício após atualização de kernel: `cat /var/run/reboot-required` diz se precisa.
+- **PostgreSQL — uma vez por mês** `[BE]` (fica fora das atualizações automáticas, ver 10.2):
+  `apt list --upgradable 2>/dev/null | grep postgresql` mostra se há versão nova (ex.:
+  18.6 → 18.7). Havendo, **depois do backup do dia**: `sudo apt -y install --only-upgrade
+  'postgresql-18*' libpq5 postgresql-common postgresql-client-common` — o banco reinicia
+  sozinho em poucos segundos e a API reconecta. Confira com `pg_lsclusters` (`online`).
+  Atualize também o PostgreSQL do **desenvolvimento** quando puder, para os testes rodarem na
+  mesma versão da produção. Troca de versão principal (18 → 19) é
+  outro procedimento (`pg_upgradecluster`), nunca feito por este comando.
+- Se o PostgreSQL avisar `collation version mismatch` (acontece raramente, depois de uma
+  atualização grande do Ubuntu): `sudo -u postgres psql -d dbs2vet -c 'REINDEX DATABASE
+  dbs2vet' -c 'ALTER DATABASE dbs2vet REFRESH COLLATION VERSION'`, na janela de manutenção.
 
 ## E6. Acessar o banco pelo DBeaver
 
