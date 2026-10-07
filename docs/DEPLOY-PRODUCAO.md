@@ -327,7 +327,72 @@ tailscale status
 > "comando não encontrado", instale em `https://tailscale.com/download`.
 
 🔴 **Faça uma cópia da sua chave privada SSH** (`id_ed25519`) dentro do gerenciador de senhas.
-Se o PC quebrar, é ela que te deixa entrar nas VPS de outro computador.
+Se o PC quebrar, é ela que te deixa entrar nas VPS de outro computador. O passo a passo está
+logo abaixo.
+
+#### Backup da chave privada SSH `[PC]`
+
+Sem senha e sem root pela rede (Etapa 5), **só as chaves cadastradas entram nas VPS**. Perdeu o
+PC e o celular ao mesmo tempo, sem cópia, e o único caminho volta a ser o console da KingHost.
+
+**1. A chave tem frase-senha?**
+```powershell
+ssh-keygen -y -f $env:USERPROFILE\.ssh\id_ed25519
+```
+> **Para que serve:** mostra a chave pública a partir da privada. Se **pedir uma senha**, a
+> chave já está protegida: pule para o passo 3. Se mostrar a chave **direto**, ela não tem
+> frase-senha — e qualquer cópia dela (pendrive, backup do Windows) entra nas VPS sozinha.
+
+**2. Recomendado: pôr uma frase-senha na chave**
+```powershell
+ssh-keygen -p -f $env:USERPROFILE\.ssh\id_ed25519
+```
+> **Para que serve:** cifra a chave privada com uma frase-senha (crie e guarde no gerenciador
+> de senhas). A chave continua a **mesma** — nada muda nas VPS. Daí em diante o `ssh` pede a
+> frase a cada conexão; para digitar só uma vez por sessão do Windows, num PowerShell **como
+> administrador**:
+> `Get-Service ssh-agent | Set-Service -StartupType Automatic; Start-Service ssh-agent`
+> e depois, no PowerShell normal, `ssh-add $env:USERPROFILE\.ssh\id_ed25519`.
+
+**3. Guardar no gerenciador de senhas**
+```powershell
+Get-Content -Raw $env:USERPROFILE\.ssh\id_ed25519 | Set-Clipboard
+```
+> **Para que serve:** copia a chave privada para a área de transferência. Cole num item do
+> gerenciador do tipo **"Chave SSH"** (Bitwarden e 1Password têm) ou numa **nota segura**,
+> com o nome "SSH S2Vet — PC", junto da frase-senha e da chave pública (`id_ed25519.pub`).
+> Em seguida limpe a área de transferência: `Set-Clipboard -Value ' '`. ⚠️ Se o
+> **histórico da área de transferência** do Windows estiver ligado (`Win + V` mostra a lista),
+> apague a entrada da chave por ali também.
+> 🔴 **Nunca** guarde a chave em e-mail, chat, Google Drive/OneDrive sem cifra ou foto.
+
+**4. Segunda cópia, fora do computador (opcional, recomendado)**
+```powershell
+Copy-Item $env:USERPROFILE\.ssh\id_ed25519, $env:USERPROFILE\.ssh\id_ed25519.pub E:\
+```
+> **Para que serve:** copia o par para um pendrive (troque `E:` pela letra dele), guardado em
+> lugar seguro — o mesmo pendrive da chave do backup (Etapa 11). Só faça isso **com
+> frase-senha** (passo 2): sem ela, quem achar o pendrive entra nas VPS.
+
+**5. Provar que a cópia funciona**
+
+Cole o conteúdo guardado no gerenciador num arquivo de teste e confira:
+```powershell
+Get-Clipboard -Raw | Set-Content -NoNewline $env:USERPROFILE\.ssh\teste_restauracao
+ssh-keygen -y -f $env:USERPROFILE\.ssh\teste_restauracao
+Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub
+Remove-Item $env:USERPROFILE\.ssh\teste_restauracao
+```
+> **Para que serve:** (copie a chave **a partir do gerenciador** antes do primeiro comando)
+> recria a chave a partir da cópia e mostra a pública dela. ✅ As duas linhas que aparecem —
+> a da cópia e a do `id_ed25519.pub` — têm de começar com o **mesmo** `ssh-ed25519 AAAA…`. O
+> último comando apaga o arquivo de teste. Limpe a área de transferência de novo.
+
+**Restaurar num PC novo:** salve o conteúdo como `C:\Users\<você>\.ssh\id_ed25519` (pasta
+`.ssh` do seu usuário, sem extensão) e rode `ssh vetprof@s2vet-be` — com o Tailscale instalado
+e logado na mesma conta. Se o Windows reclamar de `UNPROTECTED PRIVATE KEY FILE`:
+`icacls $env:USERPROFILE\.ssh\id_ed25519 /inheritance:r /grant:r "$($env:USERNAME):R"`
+(deixa o arquivo legível só por você).
 
 ---
 
@@ -912,6 +977,40 @@ Add-Content $env:USERPROFILE\.ssh\config "`nHost s2vet-be s2vet-fe`n    User vet
 > máquinas, o usuário é `vetprof` e a chave é a sua. Depois disso basta `ssh s2vet-be`.
 
 ⚠️ Instale o Tailscale também no **celular** e entre com a mesma conta: é o acesso reserva.
+
+### 6.4 No celular (acesso reserva)
+
+1. App **Tailscale**, mesma conta, conexão ligada: `s2vet-be` e `s2vet-fe` aparecem na lista.
+2. App de SSH (Termius no iPhone/Android, ou Termux no Android) → **gere uma chave ED25519
+   no próprio celular**, com o nome `celular`. 🔴 Nunca copie a chave privada do PC para o
+   celular: cada aparelho tem a sua, e o celular perdido se resolve apagando só a linha dele.
+   Se o app oferecer sincronizar chaves na nuvem, recuse.
+3. Mande a chave **pública** (`ssh-ed25519 AAAA… celular`) para você mesmo e, **pelo PC**, em
+   cada VPS:
+   ```bash
+   echo 'ssh-ed25519 AAAA...COLE_AQUI... celular' >> ~/.ssh/authorized_keys
+   ```
+   > **Para que serve:** acrescenta a chave do celular às aceitas para o `vetprof`.
+   > 🔴 Dois sinais (`>>`): com um só (`>`) a chave do PC é **apagada**. Confira com
+   > `cat ~/.ssh/authorized_keys` — duas linhas, a do PC e a `celular`.
+4. No app: host `s2vet-be` (ou `s2vet-be.tail854f06.ts.net`), porta 22, usuário `vetprof`,
+   chave `celular`. ✅ `hostname` responde `s2vet-be`. Idem `s2vet-fe`.
+5. ✅ Contraprova: com o Tailscale **desligado** no celular, a conexão falha — pelo nome e pelo
+   IP público `177.153.69.171`, no 4G.
+
+⚠️ Errar a configuração 5 vezes em 10 min faz o fail2ban (Etapa 8) bloquear o IP do celular por
+1 h — só ele; o PC continua entrando. Para liberar antes, pelo PC:
+`sudo fail2ban-client set sshd unbanip <IP_100.x_DO_CELULAR>` (o IP aparece no app do Tailscale).
+Celular perdido: apague a linha `celular` do `authorized_keys` nas duas VPS e remova o aparelho
+em *Machines* no painel do Tailscale.
+
+💡 **Backup da chave do celular: não precisa.** O backup que importa é o da chave do **PC**
+([B4](#b4-ferramentas-no-seu-pc)). Celular novo (ou app reinstalado) = **chave nova**, gerada
+nele e cadastrada pelo PC com o passo 3 acima — e a linha antiga `celular` é apagada. Restaurar
+uma cópia da chave antiga num aparelho novo manteria válida uma chave que pode ter ficado no
+aparelho perdido. Se ainda assim quiser guardar, use a opção de copiar/exportar a chave
+privada do próprio app (no Termux: `cat ~/.ssh/id_ed25519`) e cole **direto no gerenciador de
+senhas**, nunca em e-mail, nota do celular ou nuvem.
 
 ---
 
@@ -1777,9 +1876,15 @@ PostgreSQL** (PGDG), e não do Ubuntu.
 dpkg -l 'postgresql*' | grep ^ii || echo "nenhum PostgreSQL instalado"
 ```
 > **Para que serve:** confere que a VPS não veio com outro PostgreSQL. Esperado: `nenhum
-> PostgreSQL instalado`. Se aparecer `postgresql-16`, remova antes (`sudo apt -y purge
-> 'postgresql-16*'`) — senão os dois disputam a porta 5432 e o 18 sobe na **5433**, onde a
-> aplicação não procura.
+> PostgreSQL instalado`, ou só os pacotes `postgresql-common` e `postgresql-client-common`
+> (peças compartilhadas, que o 18 também usa — ficam).
+> - Se aparecer o **servidor** `postgresql-16`, remova antes (`sudo apt -y purge
+>   'postgresql-16*'`): senão os dois disputam a porta 5432 e o 18 sobe na **5433**, onde a
+>   aplicação não procura.
+> - Se aparecer só o **cliente** `postgresql-client-16` (foi o caso da VPS da KingHost em
+>   2026-10-07), ele não atrapalha, mas remova para não haver dois `pg_dump` na máquina:
+>   `apt-cache rdepends --installed postgresql-client-16` (nada além dele mesmo) e
+>   `sudo apt -y purge postgresql-client-16 && sudo apt -y autoremove`.
 
 ```bash
 sudo install -d /usr/share/postgresql-common/pgdg
