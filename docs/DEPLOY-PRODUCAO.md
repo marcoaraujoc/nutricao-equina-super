@@ -439,8 +439,9 @@ tem dado), depois a 9 (as duas juntas), 10 a 14 no Backend, 15 e 16 no Frontend,
 | 14 Evolution | ✅ 2026-10-07/08 `v2.3.7`, só em `127.0.0.1:8080`, `200`, 3 volumes · `EVOLUTION_API_KEY` igual nos dois `.env` · backup com `evolution_*` · ⏳ conectar um WhatsApp de teste (depois do deploy) | — |
 | 15 Nginx | — | ✅ 2026-10-08 `deploy` com chave restrita a `from="10.50.0.2"` · Nginx só em `127.0.0.1:8080` · BE → FE como `deploy` ok |
 | 16 Tunnel | — | ✅ 2026-10-08 túnel `36f78afd-…` (conta `21fa7…`, criado pelo painel principal, sem Zero Trust) · domínio no Cloudflare (NS `rose`/`vicente`) · `app` → `http://127.0.0.1:8080` · ⏳ apagar `A`/`AAAA`/`www` da Hostinger · ⏳ autenticar o domínio no Brevo |
-| 17 Deploy | ✅ 2026-10-08 23:22 release `20261008T232107` · `/health` ok (banco 2 ms) · 3001 só em `10.50.0.2`, 5432/8080 só em loopback · e-mail de teste enviado pelo Brevo · ✅ conversão `.doc` confirmada com laudo real (1,3 s); o `doc:check` acusava falha por causa da amostra artificial — corrigido · ⏳ login no navegador, trocar a senha do Administrador, testar Entrar com Google | ✅ `/api/marca` → `200` pelo Nginx |
-| 18–19 | ⏳ | ⏳ |
+| 17 Deploy | ✅ 2026-10-08 23:22 release `20261008T232107` · `/health` ok (banco 2 ms) · 3001 só em `10.50.0.2`, 5432/8080 só em loopback · e-mail de teste enviado pelo Brevo · ✅ conversão `.doc` confirmada com laudo real (1,3 s); o `doc:check` acusava falha por causa da amostra artificial — corrigido · ✅ 2026-10-09 login no navegador · ⏳ trocar a senha do Administrador, testar Entrar com Google | ✅ `/api/marca` → `200` pelo Nginx |
+| 18 Cloudflare | ✅ 2026-10-09 **plano Pro** · IP visto do BE = `177.153.69.171` (sem saída IPv6) · SSL/TLS (HTTPS sempre, TLS ≥ 1.2, TLS 1.3) · cache *Bypass* em `/api/` · custom rules 1–5 (regra 1 pula: custom, rate limiting, managed, Super Bot Fight Mode, Browser Integrity Check, Security Level) · rate limiting Login + API · Super Bot Fight Mode · notificações · chave Gemini `apis2vet` restrita ao IP do BE · navegador: `/api/marca` e login ok · `curl.exe` recebe `403` em tudo (Super Bot Fight Mode — esperado) · Managed + OWASP (PL1) em **Log** · ⏳ **2026-10-16**: revisar *Security → Events*, criar exceções e mudar para **Block** · ⏳ conferir uma função de IA em produção (restrição da chave) · ⏳ HSTS só depois do go-live | — |
+| 19 Aceite | ⏳ | ⏳ |
 
 **Conferência rápida do estado de uma VPS** (como `vetprof`, entrando pelo Tailscale):
 ```bash
@@ -3127,12 +3128,16 @@ de uma clínica para outra.
 | 2 | Webhook de fora | `http.request.uri.path eq "/api/webhooks/evolution" and ip.src ne 177.153.69.171` | **Block** |
 | 3 | Varredura | `http.request.uri.path contains "/.env" or http.request.uri.path contains "/.git" or http.request.uri.path contains "wp-" or http.request.uri.path contains "phpmyadmin" or http.request.uri.path contains "/cgi-bin" or ends_with(http.request.uri.path, ".php")` | **Block** |
 | 4 | Métodos | `not http.request.method in {"GET" "POST" "PUT" "PATCH" "DELETE" "OPTIONS" "HEAD"}` | **Block** |
-| 5 | Fora do Brasil | `ip.src.country ne "BR" and not http.request.uri.path eq "/api/webhooks/evolution"` | **Managed Challenge** |
+| 5 | Fora do Brasil | `ip.src.country ne "BR" and not http.request.uri.path eq "/api/webhooks/evolution" and not cf.client.bot` | **Managed Challenge** |
 
 > As regras 1 e 2 existem porque o webhook da Evolution **sai** do Backend pela internet
 > (`177.153.69.171`), passa pelo Cloudflare e volta pelo túnel. Só ele pode chamar essa rota.
 > A regra 5 é decisão de produto: protege um SaaS brasileiro, e o veterinário viajando só
 > precisa resolver um desafio. Recomendação: ligar.
+> O `not cf.client.bot` deixa passar os **robôs verificados pelo Cloudflare** — entre eles os
+> monitores de disponibilidade (UptimeRobot/Better Stack, Parte E3), que acessam de fora do
+> Brasil e não resolvem desafio: sem a exceção, o monitor acusaria "site fora do ar" o tempo
+> todo. A marca é atribuída pelo Cloudflare e não pode ser forjada (o `User-Agent` pode).
 
 **Security → WAF → Rate limiting rules**
 - Plano Free (1 regra): `URI Path` *starts with* `/api/auth/` → 10 requisições em 10 s por IP
@@ -3173,6 +3178,13 @@ para o seu e-mail.
 | S9 | Força bruta | 15 senhas erradas seguidas | bloqueio da conta e/ou `429` |
 | S10 | Isolamento | usuário da clínica A tenta abrir paciente da clínica B pela URL | negado |
 | S11 | Origem oculta | `curl.exe -sI https://app.s2vet.com.br` | `server: cloudflare`; nenhuma versão de Nginx/Express |
+
+> ⚠️ **Com o Super Bot Fight Mode ligado (plano Pro), o `curl.exe` recebe `403` em QUALQUER
+> endereço** — inclusive `/api/marca`, que no navegador abre normalmente: o Cloudflare o classifica
+> como *Definitely automated*. Por isso, em S4, S5 e S11 o `403` sozinho não prova qual regra
+> agiu: confira em **Security → Events** se `/.env` caiu na custom rule *Varredura* e o webhook
+> em *Webhook de fora* (cair no Super Bot Fight Mode também bloqueia, só que por outra camada).
+> O que vale para o usuário é o **navegador**.
 
 > `Test-NetConnection` é do PowerShell (já vem no Windows). `curl.exe` (com `.exe`) chama o
 > `curl` de verdade, que também vem no Windows 10/11 — sem o `.exe`, o PowerShell usa um
