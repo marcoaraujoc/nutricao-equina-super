@@ -3163,56 +3163,207 @@ para o seu e-mail.
 
 ## Etapa 19 — Testes de aceite
 
-### 19.1 Segurança (de FORA, do seu PC)
-
-| # | Teste | Comando `[PC]` | Esperado |
-|---|---|---|---|
-| S1 | Backend fechado | `Test-NetConnection 177.153.69.171 -Port 22` (repita com 80, 443, 3001, 5432, 8080) | `TcpTestSucceeded : False` em **todas** |
-| S2 | Frontend fechado | `Test-NetConnection 177.153.69.147 -Port 22` (repita com 80, 443, 8080) | `False` em todas |
-| S3 | SSH pelo Tailscale | `ssh vetprof@s2vet-be` e `ssh vetprof@s2vet-fe`, de casa **e** pelo 4G do celular (app Tailscale + Termius) | entra nos dois casos |
-| S4 | WAF | `curl.exe -s -o NUL -w "%{http_code}" https://app.s2vet.com.br/.env` | `403` |
-| S5 | Webhook de fora | `curl.exe -s -o NUL -w "%{http_code}" -X POST https://app.s2vet.com.br/api/webhooks/evolution` | `403` |
-| S6 | TLS | `https://www.ssllabs.com/ssltest/` com `app.s2vet.com.br` | nota **A** ou **A+** |
-| S7 | Cabeçalhos | `https://securityheaders.com/` | **A** (a CSP em Report-Only pode baixar até ser ativada) |
-| S8 | Cookie | DevTools → Application → Cookies | `s2vet_at`/`s2vet_rt` com **Secure**, **HttpOnly**, `SameSite=Lax` |
-| S9 | Força bruta | 15 senhas erradas seguidas | bloqueio da conta e/ou `429` |
-| S10 | Isolamento | usuário da clínica A tenta abrir paciente da clínica B pela URL | negado |
-| S11 | Origem oculta | `curl.exe -sI https://app.s2vet.com.br` | `server: cloudflare`; nenhuma versão de Nginx/Express |
-
-> ⚠️ **Com o Super Bot Fight Mode ligado (plano Pro), o `curl.exe` recebe `403` em QUALQUER
-> endereço** — inclusive `/api/marca`, que no navegador abre normalmente: o Cloudflare o classifica
-> como *Definitely automated*. Por isso, em S4, S5 e S11 o `403` sozinho não prova qual regra
-> agiu: confira em **Security → Events** se `/.env` caiu na custom rule *Varredura* e o webhook
-> em *Webhook de fora* (cair no Super Bot Fight Mode também bloqueia, só que por outra camada).
-> O que vale para o usuário é o **navegador**.
+Um teste por passo, na ordem em que devem ser feitos. Os códigos entre parênteses (**S** =
+segurança, **F** = funcional) são os que o *go / no-go* do Passo 28 cobra. Os passos que
+bloqueiam o seu próprio acesso, exigem decisão ou são trabalho grande ficam no fim (Parte 6).
 
 > `Test-NetConnection` é do PowerShell (já vem no Windows). `curl.exe` (com `.exe`) chama o
 > `curl` de verdade, que também vem no Windows 10/11 — sem o `.exe`, o PowerShell usa um
 > apelido diferente.
 
-### 19.2 Funcionais
+> ⚠️ **No plano Pro, o `curl.exe` recebe `403` em QUALQUER endereço** — inclusive `/api/marca`,
+> que no navegador abre normalmente: o Cloudflare barra ferramentas automatizadas (em 2026-10-09
+> o *Security → Events* registrou esse bloqueio como **Managed rules**). Por isso o `403` do
+> `curl.exe` sozinho não prova qual regra agiu: quem diz é o **Security → Events**. O que vale
+> para o usuário é o **navegador**.
 
-| # | Teste | Esperado |
-|---|---|---|
-| F1 | `curl -s http://10.50.0.2:3001/health` no BE | `200`, banco `ok` |
-| F2 | Login e-mail/senha (+2FA, se ligado) | entra; o código chega por e-mail |
-| F3 | Login Google | entra |
-| F4 | Foto de paciente | carrega (prova que `/api/midia` está na mesma origem e autorizado) |
-| F5 | Upload de laudo de 90 MB | salva; 98 MB → mensagem amigável da aplicação |
-| F6 | Vídeo de prontuário | toca e permite avançar |
-| F7 | PDF de prescrição por e-mail e WhatsApp | chega com o anexo |
-| F8 | IP real | `/auditoria-geral` mostra o IP do seu provedor — **não** `10.50.0.1` nem `127.0.0.1` |
-| F9 | Tempo real | dois navegadores na mesma evolução: o segundo recebe o aviso de edição concorrente |
-| F10 | Cron | `/monitoracao` mostra execuções (não use jobs que mandam mensagem como teste) |
-| F11 | `.doc` | laudo `.doc` pré-visualiza |
-| F12 | Backup | restauração de teste do primeiro backup funciona ([Parte E](#e2-restaurar-um-backup-teste-mensal)) |
-| F13 | Celular | fluxo completo no 4G |
+### Parte 1 — Segurança, de fora `[PC]`
 
-### 19.3 Go / no-go
+#### Passo 1 — Portas do Backend fechadas (S1)
+```powershell
+22,80,443,3001,5432,8080 | % { "$_ -> " + (Test-NetConnection 177.153.69.171 -Port $_ -WarningAction SilentlyContinue).TcpTestSucceeded }
+```
+> **Para que serve:** tenta abrir cada porta do Backend pela internet. ✅ As 6 linhas terminam
+> em `False`. Qualquer `True` é porta exposta: pare e investigue antes de seguir.
 
-**Go** somente com: S1–S11 e F1–F13 OK · backup restaurado com sucesso · monitores ativos e
-testados (derrube a API de propósito e confira que o alerta chega) · todos os segredos novos e
-guardados · limpeza de dados de teste conferida · Lynis rodado de novo e sem alerta grave novo.
+#### Passo 2 — Portas do Frontend fechadas (S2)
+```powershell
+22,80,443,8080 | % { "$_ -> " + (Test-NetConnection 177.153.69.147 -Port $_ -WarningAction SilentlyContinue).TcpTestSucceeded }
+```
+> **Para que serve:** o mesmo para o Frontend. ✅ As 4 linhas terminam em `False`.
+
+#### Passo 3 — Servidor escondido atrás do Cloudflare (S11)
+```powershell
+curl.exe -sI https://app.s2vet.com.br
+```
+> **Para que serve:** mostra os cabeçalhos da resposta. ✅ `server: cloudflare` e nenhuma
+> menção a `nginx` ou `express`. A primeira linha vem `403` (aviso acima) — normal.
+
+#### Passo 4 — Qual regra bloqueou (S4/S5) `[WEB]`
+Primeiro, provoque os bloqueios:
+```powershell
+curl.exe -s -o NUL -w "%{http_code}`n" https://app.s2vet.com.br/.env
+curl.exe -s -o NUL -w "%{http_code}`n" -X POST https://app.s2vet.com.br/api/webhooks/evolution
+```
+Depois, no Cloudflare → `s2vet.com.br` → **Security → Events**, abra cada evento do seu IP.
+> **Para que serve:** ✅ os dois `403`, e no Events o `/.env` na custom rule **Varredura** e o
+> webhook em **Webhook de fora**.
+> ⚠️ Confira também se algum evento aparece como **Managed rules** com ação **Block**: durante
+> a semana de observação (até a revisão da Etapa 18) os dois conjuntos gerenciados deveriam
+> estar em **Log**. Block ali significa que um deles ficou bloqueando — abra o evento e anote o
+> conjunto (*Ruleset*), a regra (*Rule*/ID) e a ação.
+
+#### Passo 5 — Certificado e TLS (S6) `[WEB]`
+Navegador → `https://www.ssllabs.com/ssltest/` → `app.s2vet.com.br` → **Submit** (2 a 3 min).
+> **Para que serve:** ✅ nota **A** em todos os IPs. **A+** só com HSTS de **6 meses** ou mais.
+> Nota **B** com *"supports TLS 1.0 and TLS 1.1"*: o **Minimum TLS Version** ficou no padrão
+> (`TLS 1.0 (default)`) — corrija em **SSL/TLS → Edge Certificates** (atalho:
+> `https://dash.cloudflare.com/?to=/:account/:zone/ssl-tls/edge-certificates`) e repita com
+> **Clear cache**. Foi o que aconteceu em 2026-10-09. As cifras CBC marcadas *WEAK* são o
+> padrão do Cloudflare e não rebaixam a nota.
+
+#### Passo 6 — Cabeçalhos de segurança (S7) `[WEB]`
+Navegador → `https://securityheaders.com/` → `https://app.s2vet.com.br` → **Scan**.
+> **Para que serve:** ✅ **A**, ou um pouco abaixo enquanto a CSP estiver em Report-Only.
+> Anote os itens em vermelho/amarelo. Se o resultado vier vazio ou com erro, o site de teste
+> (que também é um robô) pode ter sido barrado pelo Cloudflare.
+
+### Parte 2 — Acesso e sessão (navegador, no PC)
+
+#### Passo 7 — Trocar a senha do Administrador
+`https://app.s2vet.com.br`, como Administrador → menu do usuário → **Cadastro Pessoal** → troca
+de senha.
+> **Para que serve:** a conta mais poderosa não pode seguir com a senha da carga inicial.
+> ✅ A senha nova é aceita e o login seguinte funciona com ela. Guarde no gerenciador de senhas.
+
+#### Passo 8 — Login com e-mail e senha (F2)
+Saia e entre de novo com e-mail e senha.
+> **Para que serve:** ✅ entra; com o 2FA ligado, o código chega por e-mail e é aceito.
+
+#### Passo 9 — Login com Google (F3)
+Saia e use **Entrar com Google** com uma conta cadastrada no sistema.
+> **Para que serve:** ✅ entra. Se falhar, os suspeitos são o `GOOGLE_CLIENT_ID` do
+> `backend.env` e as origens autorizadas do cliente OAuth "S2Vet Produção" no Google Cloud.
+
+Depois, **Entrar com Google** com uma conta Google que **não** está cadastrada no sistema.
+> **Para que serve:** ✅ aparece **"Acesso não Autorizado"** e não entra. Só acessa quem o
+> ADMIN ou o gestor de uma empresa cadastrou — o Google não cria conta, e não existe mais
+> autocadastro (a tela `/register` e o `POST /api/auth/register` foram removidos em
+> 2026-10-09). Se entrar, a versão publicada é anterior a essa correção.
+
+#### Passo 10 — Cookies protegidos (S8)
+**F12** → aba **Application** → **Cookies** → `https://app.s2vet.com.br`.
+> **Para que serve:** ✅ `s2vet_at` e `s2vet_rt` com **Secure** e **HttpOnly** marcados e
+> **SameSite** = `Lax`.
+
+#### Passo 11 — IP real na auditoria (F8)
+Abra **/auditoria-geral** e localize o login de agora há pouco.
+> **Para que serve:** ✅ o IP do seu provedor (pode ser IPv6, ex.: `2804:…`). **Não** pode ser
+> `10.50.0.1`, `127.0.0.1` nem endereço do Cloudflare — se for, a cadeia de `real_ip` do Nginx
+> (Etapa 15) ou o `TRUST_PROXY_HOPS` (Etapa 13) está errada.
+
+### Parte 3 — Funções da aplicação (navegador, no PC)
+
+#### Passo 12 — Foto de paciente (F4)
+Abra um paciente com foto (se nenhum tiver, cadastre uma e reabra).
+> **Para que serve:** prova que `/api/midia` está na mesma origem e autorizado. ✅ A foto aparece.
+
+#### Passo 13 — Inteligência artificial
+Na tela do paciente, **Atualizar** na Memória Clínica (o paciente precisa ter ao menos um registro).
+> **Para que serve:** prova que a chave do Gemini restrita ao IP do Backend (Etapa 18) continua
+> funcionando a partir dele. ✅ O resumo é gerado.
+
+#### Passo 14 — Edição simultânea (F9)
+Abra a **mesma evolução** em dois navegadores (ex.: Chrome e Edge) e altere o texto em um deles.
+> **Para que serve:** prova que o canal de tempo real (SSE) atravessa Cloudflare e Nginx.
+> ✅ O outro navegador recebe o aviso de edição concorrente.
+
+#### Passo 15 — Tarefas automáticas (F10)
+Abra **/monitoracao**.
+> **Para que serve:** ✅ execuções das tarefas com data de hoje ou de ontem. Não dispare como
+> teste tarefas que mandam mensagem a clientes.
+
+#### Passo 16 — Laudo `.doc` (F11)
+Anexe um laudo `.doc` e abra a pré-visualização.
+> **Para que serve:** prova a conversão pelo LibreOffice (Etapa 13). ✅ O conteúdo aparece.
+
+#### Passo 17 — Arquivo grande (F5)
+Numa evolução, anexe um vídeo de **~90 MB**; depois tente um de **~98 MB**.
+> **Para que serve:** ✅ o de 90 MB salva; o de 98 MB mostra a mensagem **da aplicação**
+> (arquivo grande demais), e não uma página de erro do Cloudflare (ver D5 e `UPLOAD_MAX_BYTES`).
+
+#### Passo 18 — Reprodução de vídeo (F6)
+Abra o vídeo de 90 MB e arraste a barra de tempo para o meio.
+> **Para que serve:** prova o `Range` servido do banco. ✅ Toca e avança.
+
+### Parte 4 — Envios
+
+#### Passo 19 — PDF por e-mail (F7, e-mail)
+Numa prescrição, envie o PDF por **e-mail** para você mesmo.
+> **Para que serve:** ✅ o e-mail chega, com o PDF anexado e legível.
+
+#### Passo 20 — Conectar um WhatsApp de teste (pendência da Etapa 14)
+Na configuração do WhatsApp da empresa, gere o QR Code e escaneie com um número de teste.
+> **Para que serve:** prova que o webhook da Evolution passa pelo Cloudflare (regra 1 da Etapa
+> 18). ✅ O status muda sozinho para **conectado** em alguns segundos. Se não mudar, procure em
+> **Security → Events** bloqueios em `/api/webhooks/evolution` vindos de `177.153.69.171`.
+
+#### Passo 21 — PDF por WhatsApp (F7, WhatsApp)
+Envie o PDF da mesma prescrição pelo **WhatsApp**.
+> **Para que serve:** ✅ a mensagem chega com o PDF anexado.
+
+### Parte 5 — Servidores
+
+#### Passo 22 — Saúde da API (F1) `[BE]`
+```bash
+curl -s http://10.50.0.2:3001/health
+```
+> **Para que serve:** ✅ status ok e banco `ok`.
+
+#### Passo 23 — Acesso administrativo pelo celular (S3)
+Com o Wi-Fi do celular **desligado** (só 4G): app do Tailscale ligado e, no Termius,
+`ssh vetprof@s2vet-be` e `ssh vetprof@s2vet-fe`. Repita do PC de casa.
+> **Para que serve:** garante o acesso de emergência se a internet de casa cair. ✅ Entra nos dois.
+
+#### Passo 24 — Uso completo pelo celular (F13)
+Ainda só no 4G: `https://app.s2vet.com.br`, login, abrir um paciente, registrar uma evolução.
+> **Para que serve:** ✅ tudo funciona e a tela se ajusta ao celular.
+
+### Parte 6 — Por último
+
+#### Passo 25 — Força bruta (S9)
+⚠️ **Bloqueia o seu IP por 10 a 15 minutos** — faça quando não precisar do sistema.
+Na tela de login, digite uma senha errada **25 vezes seguidas**, o mais rápido que conseguir.
+> **Para que serve:** ✅ até a ~21ª tentativa aparece o bloqueio (excesso de tentativas, `429`
+> ou página do Cloudflare). Com 15 tentativas (o número antigo deste teste) nenhum dos limites
+> — aplicação 20/15 min, Cloudflare 20/min — chega a disparar.
+
+#### Passo 26 — Isolamento entre clínicas (S10)
+Usuário da clínica A tenta abrir, pela URL, um paciente da clínica B. ✅ Negado.
+> ⚠️ **Exige duas clínicas**, e a produção começou só com a empresa 69. Decida: **(a)** testar
+> quando entrar o segundo cliente; ou **(b)** criar uma clínica temporária e apagá-la depois —
+> grava no banco de produção, então só com autorização explícita. O isolamento já está garantido
+> na base (83 tabelas com RLS forçado, Etapa 12); o teste confirma pela tela.
+
+#### Passo 27 — Restaurar um backup (F12)
+Sessão à parte, pela [Parte E2](#e2-restaurar-um-backup-teste-mensal): baixar do B2, decifrar com
+`age` no PC e restaurar num PostgreSQL de teste.
+> **Para que serve:** backup que nunca foi restaurado é suposição. Fecha também a pendência
+> "teste de decifrar no PC" da Etapa 11.
+
+#### Passo 28 — Go / no-go
+**Go** somente com:
+- S1–S11 e F1–F13 OK (passos 1 a 27);
+- backup restaurado com sucesso (Passo 27);
+- **monitores externos** ativos e testados ([Parte E3](#e3-monitoração)) — derrube a API de
+  propósito e confira que o alerta chega;
+- todos os segredos novos e guardados;
+- limpeza de dados de teste conferida;
+- **Lynis** rodado de novo nas duas VPS, sem alerta grave novo (referência: 73 no Backend, 72
+  no Frontend):
+  ```bash
+  sudo lynis audit system --quick | tail -20
+  ```
 
 ---
 
