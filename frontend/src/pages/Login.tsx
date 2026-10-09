@@ -381,13 +381,10 @@ export default function Login() {
 
         <div className="mt-8 text-sm leading-relaxed text-gray-700">
           <p className="font-medium">Deseja conhecer o S2Vet?</p>
-          <Link to="/register" className="text-emerald-600 hover:underline">
-            Crie sua conta e experimente grátis
-          </Link>
-          <br />
-          {/* "nosso site" e' a propria pagina institucional publica ("/"),
+          {/* Sem autocadastro: o acesso é criado pelo ADMIN ou pelo gestor da clínica.
+              "nosso site" e' a propria pagina institucional publica ("/"),
               servida pelo RootGate a quem nao tem sessao. */}
-          ou <Link to="/" className="text-emerald-600 hover:underline">visite nosso site</Link>
+          <Link to="/" className="text-emerald-600 hover:underline">Visite nosso site</Link>
         </div>
         </>
         )}

@@ -78,35 +78,10 @@ async function emitirSessao(req, res, user) {
 
 class UserController {
 
-  async register(req, res) {
-    console.log('📥 [Register] Recebido:', req.body);
-    const { fullName, email: emailRaw, password, phone, userType } = req.body;
-    const email = normalizeEmail(emailRaw);
-    if (!email) return res.status(400).json({ error: 'E-mail inválido' });
-
-    // Cadastro direto nunca pode auto-atribuir papel privilegiado. Apenas PROPRIETARIO
-    // ou VETERINARIO são aceitos; qualquer outro valor cai no padrão PROPRIETARIO.
-    const TIPOS_PERMITIDOS = ['PROPRIETARIO', 'VETERINARIO'];
-    const userTypeSeguro = TIPOS_PERMITIDOS.includes(userType) ? userType : 'PROPRIETARIO';
-
-    try {
-      // Duplicidade case-insensitive (bloqueia "Karina@" se já existir "karina@")
-      const existing = await findUserByEmail(prisma, email, { select: { id: true } });
-      if (existing) return res.status(400).json({ error: 'E-mail já cadastrado' });
-
-      const passwordHash = await bcrypt.hash(password, 10);
-
-      const user = await prisma.user.create({
-        data: { fullName, email, passwordHash, phone, role: 'USER', userType: userTypeSeguro },
-      });
-
-      console.log('✅ Usuário cadastrado! ID:', user.id);
-      res.status(201).json({ message: 'Usuário cadastrado com sucesso!', userId: user.id });
-    } catch (err) {
-      console.error('❌ Erro register:', err);
-      res.status(500).json({ error: 'Erro interno' });
-    }
-  }
+  // 🔴 SEM AUTOCADASTRO (2026-10-09): o antigo `register` (POST /auth/register) foi
+  // REMOVIDO. Só acessa o sistema quem foi cadastrado pelo ADMIN ou pelo gestor de uma
+  // empresa — a conta criada por conta própria nascia sem vínculo e `podeAcessarSistema`
+  // a deixava entrar. Não reintroduzir. Gate: __tests__/googleSemAutoCadastro.test.js
 
   async login(req, res) {
     const { email: emailRaw, password } = req.body;

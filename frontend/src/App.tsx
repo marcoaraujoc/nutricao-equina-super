@@ -22,7 +22,6 @@ const AceitarConviteEquipe = lazy(() => import('./pages/AceitarConviteEquipe'));
 
 // Pages — Gerais
 import Login                from './pages/Login';
-const Register = lazy(() => import('./pages/Register'));
 const Home = lazy(() => import('./pages/Home'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const CadastroPessoal = lazy(() => import('./pages/CadastroPessoal'));
@@ -391,7 +390,6 @@ function App() {
                 resultado, mas mantém as duas rotas públicas "especiais" juntas. */}
             <Route path="/"                element={<RootGate />} />
             <Route path="/login"          element={<Login />} />
-            <Route path="/register"       element={<Register />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/fatura/:token"  element={<FaturaPublica />} />
 

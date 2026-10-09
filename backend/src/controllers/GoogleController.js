@@ -2,7 +2,7 @@ const prisma = require('../lib/prisma').default;
 const { setAuthCookies } = require('../lib/authCookies');
 const { podeAcessarSistema } = require('../lib/usuarioEmpresa');
 const { normalizeEmail, findUserByEmail } = require('../lib/email');
-const { registrarAcesso } = require('../lib/auditoria');
+const { registrarAcesso, registrarAcessoNegado } = require('../lib/auditoria');
 // Duração da sessão e assinatura dos tokens: fonte única em lib/sessionTokens.js
 const { assinarAccessToken, gerarRefreshToken: generateRefreshToken } = require('../lib/sessionTokens');
 // 🔴 O token é conferido CONTRA O CLIENT ID DO S2VET — ver lib/googleToken.js. NUNCA
@@ -40,24 +40,23 @@ const GoogleController = {
         return res.status(400).json({ error: 'E-mail não encontrado no token Google' });
       }
 
-      // Busca case-insensitive antes de criar — evita duplicar conta existente em
-      // maiúsculas (ex: "Karina@gmail.com"). Grava e-mail sempre normalizado.
-      const existente = await findUserByEmail(prisma, email, { select: { id: true } });
-      const user = existente
-        ? await prisma.user.update({
-            where: { id: existente.id },
-            data:  { fullName: fullName || undefined },
-          })
-        : await prisma.user.create({
-            data: {
-              fullName: fullName || 'Usuário Google',
-              email,
-              passwordHash: '',
-              userType: 'PROPRIETARIO',
-              role: 'USER',
-              ativo: true,
-            },
-          });
+      // 🔴 O GOOGLE NÃO CRIA CONTA (2026-10-09). Só entra quem foi CADASTRADO pelo
+      // ADMIN ou pelo gestor de uma empresa. Até aqui, e-mail desconhecido virava um
+      // `users` novo (PROPRIETARIO, sem vínculo) — e `podeAcessarSistema` libera quem
+      // não tem vínculo nenhum, então qualquer conta Google abria sessão no sistema.
+      // O Google autentica QUEM é a pessoa; quem a autoriza é o cadastro.
+      // ⚠️ Não reintroduzir `user.create` aqui. Gate: __tests__/googleSemAutoCadastro.test.js
+      const user = await findUserByEmail(prisma, email);
+      if (!user) {
+        await registrarAcessoNegado(req, {
+          motivo: 'Login Google: e-mail não cadastrado', entidade: 'LOGIN', emailTentativa: email,
+        });
+        return res.status(403).json({
+          error: 'Acesso não Autorizado',
+          code: 'USUARIO_NAO_CADASTRADO',
+        });
+      }
+      // ⚠️ O nome do Google NÃO sobrescreve o cadastro: o nome é o que quem cadastrou informou.
 
       if (user.ativo === false) {
       // 🔴 MENSAGEM GENÉRICA PARA CONTA DESATIVADA (2026-09-04, a pedido).

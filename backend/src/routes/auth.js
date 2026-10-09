@@ -6,7 +6,6 @@ const AuthController  = require('../controllers/AuthController');
 const validate        = require('../middlewares/validate');
 const {
   loginRules,
-  registerRules,
   forgotPasswordRules,
   resetPasswordRules,
   refreshTokenRules,
@@ -35,7 +34,7 @@ const reenvioLimiter = rateLimit({
   message: { error: 'Muitos reenvios solicitados. Aguarde alguns minutos.' },
 });
 
-router.post('/register',        registerRules,        validate, UserController.register);
+// Sem autocadastro: POST /register foi REMOVIDO (2026-10-09) — ver UserController.
 router.post('/login',           loginRules,           validate, UserController.login);
 router.post('/forgot-password', forgotPasswordRules,  validate, AuthController.forgotPassword);
 router.post('/reset-password',  resetPasswordRules,   validate, AuthController.resetPassword);

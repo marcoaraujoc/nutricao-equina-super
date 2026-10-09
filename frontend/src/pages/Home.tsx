@@ -8,7 +8,7 @@
 // da decisão.
 //
 // É uma página "solta", sem Sidebar/AppHeader do sistema interno — mesmo
-// padrão de Login.tsx/Register.tsx.
+// padrão de Login.tsx.
 import Nav from '../components/home/Nav';
 import Hero from '../components/home/Hero';
 import Marquee from '../components/home/Marquee';

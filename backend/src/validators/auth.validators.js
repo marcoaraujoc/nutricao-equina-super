@@ -14,30 +14,6 @@ const loginRules = [
     .isLength({ min: 6, max: 128 }).withMessage('Senha deve ter entre 6 e 128 caracteres'),
 ];
 
-const registerRules = [
-  body('fullName')
-    .trim()
-    .notEmpty().withMessage('Nome completo é obrigatório')
-    .isLength({ min: 2, max: 255 }).withMessage('Nome deve ter entre 2 e 255 caracteres'),
-  body('email')
-    .trim()
-    .notEmpty().withMessage('E-mail é obrigatório')
-    .isEmail().withMessage('E-mail inválido')
-    .isLength({ max: 255 }).withMessage('E-mail muito longo')
-    .customSanitizer(v => v.toLowerCase()),
-  body('password')
-    .notEmpty().withMessage('Senha é obrigatória')
-    .isLength({ min: 8, max: 128 }).withMessage('Senha deve ter entre 8 e 128 caracteres'),
-  body('phone')
-    .optional({ values: 'falsy' })
-    .isMobilePhone('pt-BR').withMessage('Telefone inválido'),
-  // Cadastro direto só permite PROPRIETARIO ou VETERINARIO. ESTAGIARIO/FORNECEDOR/ADMIN
-  // são atribuídos exclusivamente pela equipe (convite) ou pelo ADMIN — nunca auto-atribuídos.
-  body('userType')
-    .optional()
-    .isIn(['PROPRIETARIO', 'VETERINARIO']).withMessage('Tipo de usuário inválido'),
-];
-
 const forgotPasswordRules = [
   body('email')
     .trim()
@@ -81,7 +57,6 @@ const reenviar2faRules = [
 
 module.exports = {
   loginRules,
-  registerRules,
   forgotPasswordRules,
   resetPasswordRules,
   refreshTokenRules,

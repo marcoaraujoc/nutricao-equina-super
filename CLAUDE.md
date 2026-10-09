@@ -3860,6 +3860,7 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
 | API keys | `GEMINI_API_KEY` apenas no backend `.env` | Nunca expor no bundle JS do frontend |
 | Google Client ID | `VITE_GOOGLE_CLIENT_ID` no frontend — intencional | Client ID é público por design do OAuth |
 | Login Google | Token conferido CONTRA o Client ID (`lib/googleToken.js`, `/tokeninfo` → `aud`), fail-closed sem `GOOGLE_CLIENT_ID` | Validar só pelo `/userinfo` aceitava token de QUALQUER app: o dono de outro app abria sessão como o usuário, sem senha e sem 2FA (2026-10-08). Gate: `__tests__/googleTokenAudiencia.test.js` |
+| Login Google NÃO cria conta | E-mail não cadastrado → 403 `USUARIO_NAO_CADASTRADO` + `registrarAcessoNegado`; o nome do Google não sobrescreve o cadastro | Só acessa quem o ADMIN ou o gestor cadastrou. O controller criava um `users` para todo e-mail desconhecido e, sem vínculo, `podeAcessarSistema` liberava: qualquer conta Google entrava (2026-10-09). Gate: `__tests__/googleSemAutoCadastro.test.js` |
 | Console output | Suprimido em produção via main.tsx (`console.*` → noop quando `!import.meta.env.DEV`) | Não expor stack traces e erros internos ao usuário final |
 | 403 silenciosos | GET 403 resolve como `{ data: null }` (não rejeita, não loga) | Evitar ruído de erro para operações bloqueadas por permissão normal |
 
