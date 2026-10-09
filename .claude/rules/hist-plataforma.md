@@ -63,6 +63,14 @@ Antes: backend 22 (1 crítica), frontend 27. **Depois, só o que vai para produ�
   `bin/mammoth` usa o `argparse`, a biblioteca não — a "correção" sugerida é rebaixar o
   mammoth para 0.3.29); `jest`/`ts-node-dev`/`braces`/`chokidar` (só desenvolvimento e
   teste, não rodam na API); `tailwindcss` 3 (só build — a correção é migrar para a 4).
+- **`ts-node-dev` REMOVIDO** (era a origem das 3 ALTAS restantes do backend, via
+  `chokidar → braces`): `npm run dev` passou a ser
+  `node --watch -r ts-node/register/transpile-only src/server.ts` — o Node 22 reinicia
+  sozinho ao salvar. ⚠️ Quem citar `ts-node-dev` (ex.: o lock do `query_engine` no
+  Windows ao rodar `prisma generate`) agora lê `node --watch`: a regra é a mesma — PARE o
+  `npm run dev` antes do `generate`.
+- Deploy: `npm ci --no-audit --no-fund` + uma linha com `npm audit --omit=dev` (o número
+  que importa), e o laço do `/health` sem o falso `curl: (7)` da primeira tentativa.
 - Suíte: 1893 passando, as 3 vermelhas herdadas de sempre. `tsc` e `vite build` limpos.
 - ⚠️ **`faturaDoPaciente.test.js` é INSTÁVEL e JÁ ERA antes desta mudança** (medido com as
   dependências antigas: falhou 1 em 4 rodadas junto das outras suítes de fatura; sozinho,

@@ -32,6 +32,31 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-09 (🔴 **TELAS CARREGADAS SOB DEMANDA** — a pedido, depois do
+#   primeiro deploy em produção. O sistema inteiro ia num arquivo só: **3.322 KB
+#   (887 KB comprimido)** baixados na primeira visita, inclusive no celular.
+#   `App.tsx`: as 70 telas viraram `lazy(() => import('./pages/…'))`; ficam EAGER só a
+#   moldura (contexts, ProtectedRoute, Sidebar, AppHeader/AppFooter, ErrorBoundary) e o
+#   **Login** (porta de entrada). Arquivo principal: **384 KB (123 KB comprimido)** —
+#   ~7× menor; 186 arquivos de tela.
+#   ⚠️ `<Suspense>` FICA DENTRO do `<main>` nas rotas internas: header, menu e rodapé
+#   continuam na tela e só a área de conteúdo mostra o `CarregandoTela`. Um Suspense
+#   acima do shell faria a moldura inteira piscar a cada troca de tela. As rotas públicas
+#   (Home, Register, ResetPassword, FaturaPublica) têm o seu, no Routes de fora.
+#   🔴 **DEPOIS DE UM DEPLOY a aba aberta pede o arquivo de tela da versão ANTERIOR**, que
+#   não existe mais (cada release do Frontend é uma pasta nova). `main.tsx` escuta
+#   `vite:preloadError` e RECARREGA — no máximo uma vez por minuto (sessionStorage), para
+#   um deploy realmente quebrado não virar laço de reload; passado o freio, o erro segue
+#   para o ErrorBoundary.
+#   ⚠️ `vite.config.ts`: `chunkSizeWarningLimit: 650` — o único pedaço acima de 500 KB é o
+#   motor de transcrição offline (`transformers.web`, ~580 KB), já sob demanda. O limite
+#   NÃO esconde regressão do arquivo principal.
+#   ⚠️ **Tela nova entra como `lazy`**, nunca `import` estático — um único import estático
+#   devolve a tela (e o que ela importa) ao arquivo principal, sem nada quebrar. Gate:
+#   `backend/src/__tests__/telasSobDemanda.test.js` (verificado que reprova).
+#   `tsc` + `vite build` limpos (os 3 erros do `tsc -b` em `Animal.tsx` são anteriores).
+#   ⚠️ NÃO verificado em navegador — sem ferramenta de browser nesta sessão.)
+
 # Atualizado em: 2026-09-30 (🔴 **A JANELA DA LISTA PRENDIA A PÁGINA NO CELULAR** —
 #   relato: "em Produtos, pelo mobile, ao alterar um medicamento a tela só rola para
 #   baixo". A `JanelaLista` tinha `overscroll-contain` em todo tamanho, e a de Produtos

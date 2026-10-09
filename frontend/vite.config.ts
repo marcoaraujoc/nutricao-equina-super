@@ -7,6 +7,16 @@ export default defineConfig({
     exclude: ['@xenova/transformers'],
   },
 
+  build: {
+    // As telas são carregadas sob demanda (App.tsx, 2026-10-09) e o arquivo principal
+    // caiu de 3,3 MB para ~380 KB. O único pedaço acima de 500 KB passou a ser o motor
+    // de transcrição de áudio offline (`transformers.web`, ~580 KB), que já é baixado
+    // só quando alguém usa a transcrição. 650 KB cala o aviso para ele SEM esconder
+    // regressão: se o arquivo principal voltar a crescer (um `import` estático de tela
+    // no App.tsx), o aviso volta.
+    chunkSizeWarningLimit: 650,
+  },
+
   server: {
     host: true,
     port: 5173,

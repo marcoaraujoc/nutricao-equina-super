@@ -3001,7 +3001,10 @@ cp    /opt/s2vet/shared/frontend.env "$REL/frontend/.env.production"
 
 echo "▶ 2/9 dependências do backend"
 cd "$REL/backend"
-npm ci                     # 🔴 NÃO usar --omit=dev: @prisma/client está em devDependencies
+npm ci --no-audit --no-fund   # 🔴 NÃO usar --omit=dev: @prisma/client está em devDependencies
+# O relatório do `npm ci` soma as ferramentas de TESTE e BUILD (jest, tailwind), que não
+# rodam na API e fazem o número parecer pior do que é. O que vai para produção é este:
+echo "   vulnerabilidades em produção (backend): $(npm audit --omit=dev 2>/dev/null | grep -E 'vulnerabilit' | tail -1)"
 npx prisma generate
 
 echo "▶ 3/9 build do backend (tsc + cópia das imagens dos laudos)"
@@ -3021,7 +3024,8 @@ echo "▶ 5/9 migrations (usuário DONO)"
 
 echo "▶ 6/9 build do frontend"
 cd "$REL/frontend"
-npm ci --include=dev       # tsc e vite são devDependencies — sem elas não há build
+npm ci --include=dev --no-audit --no-fund   # tsc e vite são devDependencies — sem elas não há build
+echo "   vulnerabilidades em produção (frontend): $(npm audit --omit=dev 2>/dev/null | grep -E 'vulnerabilit' | tail -1)"
 npm run build
 
 echo "▶ 7/9 publica a tela no Frontend (pelo túnel)"
@@ -3031,7 +3035,9 @@ ssh 10.50.0.1 "ln -sfn /var/www/s2vet/releases/$TS /var/www/s2vet/current"
 echo "▶ 8/9 troca a versão do backend e reinicia"
 ln -sfn "$REL" /opt/s2vet/current
 sudo -n /usr/bin/systemctl restart s2vet-api
-for i in $(seq 1 30); do curl -fsS "$HEALTH" >/dev/null && break; sleep 2; done
+# Espera a API subir (até 60 s). Sem mensagem a cada tentativa: a primeira SEMPRE falha,
+# porque a API ainda está iniciando — quem acusa de verdade é a linha seguinte.
+for i in $(seq 1 30); do curl -fsS "$HEALTH" >/dev/null 2>&1 && break; sleep 2; done
 curl -fsS "$HEALTH" >/dev/null || { echo "🔴 /health não respondeu — faça o rollback (Parte E)"; exit 1; }
 
 echo "▶ 9/9 limpeza (mantém as 5 últimas versões)"

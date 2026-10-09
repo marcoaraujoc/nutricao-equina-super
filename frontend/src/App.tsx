@@ -1,112 +1,121 @@
 ﻿// src/App.tsx
 
+import { lazy, Suspense } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Sidebar from './components/Sidebar';
 import ErrorBoundary from './components/ErrorBoundary';
-import Usuarios from './pages/Usuarios';
-import AnimaisVet from './pages/AnimaisVet';
-import AlterarSenhaObrigatoria from './pages/AlterarSenhaObrigatoria';
-import AceitarConviteEquipe   from './pages/AceitarConviteEquipe';
+// 🔴 TELAS CARREGADAS SOB DEMANDA (2026-10-09). Cada tela vira um arquivo próprio,
+// baixado só quando é aberta — antes o sistema inteiro ia num arquivo de 3,3 MB na
+// primeira visita. Ficam EAGER só o que monta a moldura (contexts, ProtectedRoute,
+// Sidebar, AppHeader/AppFooter, ErrorBoundary) e o Login, que é a porta de entrada.
+// ⚠️ Tela nova entra aqui como `lazy(() => import(...))`, nunca como `import` estático:
+// um único import estático de uma tela traz ela de volta para o arquivo principal.
+// ⚠️ Depois de um deploy, a aba aberta pode pedir um arquivo de tela que não existe
+// mais — quem trata é o `vite:preloadError` em main.tsx (recarrega uma vez).
+const Usuarios = lazy(() => import('./pages/Usuarios'));
+const AnimaisVet = lazy(() => import('./pages/AnimaisVet'));
+const AlterarSenhaObrigatoria = lazy(() => import('./pages/AlterarSenhaObrigatoria'));
+const AceitarConviteEquipe = lazy(() => import('./pages/AceitarConviteEquipe'));
 
 // Pages — Gerais
 import Login                from './pages/Login';
-import Register             from './pages/Register';
-import Home                 from './pages/Home';
-import Dashboard            from './pages/Dashboard';
-import CadastroPessoal      from './pages/CadastroPessoal';
-import ResetPassword        from './pages/ResetPassword';
-import FaturaPublica        from './pages/FaturaPublica';
-import CadastroProprietario from './pages/CadastroProprietario';
-import CadastroTratador     from './pages/CadastroTratador';
-import CadastroProcedimento from './pages/CadastroProcedimento';
-import CadastroFornecedor   from './pages/CadastroFornecedor';
-import Produtos            from './pages/Produtos';
-import CadastroPrestador    from './pages/CadastroPrestador';
-import CadastroLocalizacao  from './pages/CadastroLocalizacao';
-import CadastroVacina       from './pages/CadastroVacina';
+const Register = lazy(() => import('./pages/Register'));
+const Home = lazy(() => import('./pages/Home'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const CadastroPessoal = lazy(() => import('./pages/CadastroPessoal'));
+const ResetPassword = lazy(() => import('./pages/ResetPassword'));
+const FaturaPublica = lazy(() => import('./pages/FaturaPublica'));
+const CadastroProprietario = lazy(() => import('./pages/CadastroProprietario'));
+const CadastroTratador = lazy(() => import('./pages/CadastroTratador'));
+const CadastroProcedimento = lazy(() => import('./pages/CadastroProcedimento'));
+const CadastroFornecedor = lazy(() => import('./pages/CadastroFornecedor'));
+const Produtos = lazy(() => import('./pages/Produtos'));
+const CadastroPrestador = lazy(() => import('./pages/CadastroPrestador'));
+const CadastroLocalizacao = lazy(() => import('./pages/CadastroLocalizacao'));
+const CadastroVacina = lazy(() => import('./pages/CadastroVacina'));
 
 // Pages — Animais
-import Animal      from './pages/Animal';
-import MeusAnimais from './pages/MeusAnimais';
-import AnimalDetail from './pages/AnimalDetail';
+const Animal = lazy(() => import('./pages/Animal'));
+const MeusAnimais = lazy(() => import('./pages/MeusAnimais'));
+const AnimalDetail = lazy(() => import('./pages/AnimalDetail'));
 
 // Pages — Alimentos
-import Alimentos     from './pages/Alimentos';
-import CriaAlimentos from './pages/criaAlimentos';
+const Alimentos = lazy(() => import('./pages/Alimentos'));
+const CriaAlimentos = lazy(() => import('./pages/criaAlimentos'));
 
 // Pages — Nutrientes
-import Nutrientes     from './pages/Nutrientes';
-import CriaNutrientes from './pages/CriaNutrientes';
+const Nutrientes = lazy(() => import('./pages/Nutrientes'));
+const CriaNutrientes = lazy(() => import('./pages/CriaNutrientes'));
 
 // Pages — Composição Alimentar
-import ComposicaoAlimentar     from './pages/ComposicaoAlimentar';
-import CriaComposicaoAlimentar from './pages/CriaComposicaoAlimentar';
-import NovoNutrienteComposicao from './pages/Novonutrientecomposicao';
+const ComposicaoAlimentar = lazy(() => import('./pages/ComposicaoAlimentar'));
+const CriaComposicaoAlimentar = lazy(() => import('./pages/CriaComposicaoAlimentar'));
+const NovoNutrienteComposicao = lazy(() => import('./pages/Novonutrientecomposicao'));
 
 // Pages — Dieta
-import Dieta     from './pages/Dieta';
-import CriaDieta from './pages/CriaDieta';
+const Dieta = lazy(() => import('./pages/Dieta'));
+const CriaDieta = lazy(() => import('./pages/CriaDieta'));
 
 // Pages — Exames
-import Exames               from './pages/Exames';
-import CriaExameNutricional from './pages/CriaExameNutricional';
+const Exames = lazy(() => import('./pages/Exames'));
+const CriaExameNutricional = lazy(() => import('./pages/CriaExameNutricional'));
 
-import Equipe         from './pages/Equipe';
-import ControleAcesso from './pages/ControleAcesso';
-import CadastroEmpresa from './pages/CadastroEmpresa';
-import CriacaoGestor  from './pages/CriacaoGestor';
-import EquipeManager  from './pages/EquipeManager';
-import AuditoriaGeral from './pages/AuditoriaGeral';
-import ExportacaoDados from './pages/ExportacaoDados';
+const Equipe = lazy(() => import('./pages/Equipe'));
+const ControleAcesso = lazy(() => import('./pages/ControleAcesso'));
+const CadastroEmpresa = lazy(() => import('./pages/CadastroEmpresa'));
+const CriacaoGestor = lazy(() => import('./pages/CriacaoGestor'));
+const EquipeManager = lazy(() => import('./pages/EquipeManager'));
+const AuditoriaGeral = lazy(() => import('./pages/AuditoriaGeral'));
+const ExportacaoDados = lazy(() => import('./pages/ExportacaoDados'));
 
 // Pages — Relatório
-import RelatorioNutricional from './pages/RelatorioNutricional';
-import Relatorios           from './pages/Relatorios';
-import RelatoriosFinanceiro  from './pages/RelatoriosFinanceiro';
-import RelatoriosAtendimento from './pages/RelatoriosAtendimento';
-import RelatoriosCadastro    from './pages/RelatoriosCadastro';
-import RelatoriosFarmacia    from './pages/RelatoriosFarmacia';
+const RelatorioNutricional = lazy(() => import('./pages/RelatorioNutricional'));
+const Relatorios = lazy(() => import('./pages/Relatorios'));
+const RelatoriosFinanceiro = lazy(() => import('./pages/RelatoriosFinanceiro'));
+const RelatoriosAtendimento = lazy(() => import('./pages/RelatoriosAtendimento'));
+const RelatoriosCadastro = lazy(() => import('./pages/RelatoriosCadastro'));
+const RelatoriosFarmacia = lazy(() => import('./pages/RelatoriosFarmacia'));
 
 // Pages — Agenda / Agendamentos
-import Agendamentos    from './pages/Agendamentos';
+const Agendamentos = lazy(() => import('./pages/Agendamentos'));
 // Pages — Orçamento
-import Orcamento           from './pages/Orcamento';
-import RelatoriosOrcamentos from './pages/RelatoriosOrcamentos';
-import MapaAtendimento from './pages/MapaAtendimento';
-import PainelPrincipal from './pages/PainelPrincipal';
-import ConfiguracaoAlerta from './pages/ConfiguracaoAlerta';
-import Monitoracao from './pages/Monitoracao';
+const Orcamento = lazy(() => import('./pages/Orcamento'));
+const RelatoriosOrcamentos = lazy(() => import('./pages/RelatoriosOrcamentos'));
+const MapaAtendimento = lazy(() => import('./pages/MapaAtendimento'));
+const PainelPrincipal = lazy(() => import('./pages/PainelPrincipal'));
+const ConfiguracaoAlerta = lazy(() => import('./pages/ConfiguracaoAlerta'));
+const Monitoracao = lazy(() => import('./pages/Monitoracao'));
 
 // Pages — Módulo Clínico
-import Atendimento  from './pages/Atendimento';
-import Vacina       from './pages/Vacina';
-import Documentos from './pages/Documentos';
-import CentralDocumentos from './pages/CentralDocumentos';
-import ExameCompra  from './pages/ExameCompra';
-import Resenha      from './pages/Resenha';
+const Atendimento = lazy(() => import('./pages/Atendimento'));
+const Vacina = lazy(() => import('./pages/Vacina'));
+const Documentos = lazy(() => import('./pages/Documentos'));
+const CentralDocumentos = lazy(() => import('./pages/CentralDocumentos'));
+const ExameCompra = lazy(() => import('./pages/ExameCompra'));
+const Resenha = lazy(() => import('./pages/Resenha'));
 
 // Pages — Análise / Debug
-import Analise    from './pages/Analise';
-import QueryAdHoc from './pages/query-adhoc';
+const Analise = lazy(() => import('./pages/Analise'));
+const QueryAdHoc = lazy(() => import('./pages/query-adhoc'));
 
 // Pages — Monitoração Custo IA
-import AiUsageDashboard from './pages/AiUsageDashboard';
-import PlanosAdmin from './pages/PlanosAdmin';
+const AiUsageDashboard = lazy(() => import('./pages/AiUsageDashboard'));
+const PlanosAdmin = lazy(() => import('./pages/PlanosAdmin'));
 
 // Pages — Farmácia / Medicamentos / Procedimentos
-import Farmacia            from './pages/Farmacia';
-import EstoqueVacina       from './pages/EstoqueVacina';
-import Medicamentos        from './pages/Medicamentos';
-import Procedimentos       from './pages/Procedimentos';
-import ExecucaoPrescricao  from './pages/ExecucaoPrescricao';
+const Farmacia = lazy(() => import('./pages/Farmacia'));
+const EstoqueVacina = lazy(() => import('./pages/EstoqueVacina'));
+const Medicamentos = lazy(() => import('./pages/Medicamentos'));
+const Procedimentos = lazy(() => import('./pages/Procedimentos'));
+const ExecucaoPrescricao = lazy(() => import('./pages/ExecucaoPrescricao'));
 
 // Pages — Financeiro
-import Faturamento from './pages/Faturamento';
-import RecibosPrestador from './pages/RecibosPrestador';
-import Pagamentos       from './pages/Pagamentos';
+const Faturamento = lazy(() => import('./pages/Faturamento'));
+const RecibosPrestador = lazy(() => import('./pages/RecibosPrestador'));
+const Pagamentos = lazy(() => import('./pages/Pagamentos'));
 
 import { SelectedAnimalProvider } from './contexts/SelectedAnimalContext';
 import { EmpresaProvider } from './contexts/EmpresaContext';
@@ -115,6 +124,18 @@ import { MobileMenuProvider } from './contexts/MobileMenuContext';
 import { useDraggableModals } from './hooks/useDraggableModals';
 import AppHeader from './components/AppHeader';
 import AppFooter from './components/AppFooter';
+
+// O que aparece no lugar da tela enquanto o arquivo dela é baixado (normalmente
+// uma fração de segundo). Fica DENTRO do <main>: header, menu e rodapé continuam na
+// tela — só a área de conteúdo espera.
+function CarregandoTela() {
+  return (
+    <div className="flex items-center justify-center py-24" role="status" aria-live="polite">
+      <div className="w-8 h-8 rounded-full border-2 border-emerald-200 border-t-emerald-600 animate-spin" />
+      <span className="sr-only">Carregando…</span>
+    </div>
+  );
+}
 
 // ── Shell protegido — o sistema de sempre (header + sidebar + conteúdo + rodapé) ──
 // Extraído para ser reaproveitado tanto por "/*" (qualquer rota interna) quanto
@@ -159,6 +180,7 @@ function ProtectedApp() {
                         As páginas usam <PageContainer> para centralizar e adicionar padding interno.
                       */}
                       <main className="flex-1 min-w-0 overflow-y-scroll overflow-x-hidden [scrollbar-gutter:stable] bg-gray-50">
+                        <Suspense fallback={<CarregandoTela />}>
                         <Routes>
                           <Route path="/" element={<Dashboard />} />
                           <Route path="/mapa-atendimento" element={<MapaAtendimento />} />
@@ -312,6 +334,7 @@ function ProtectedApp() {
                           <Route path="/analise"     element={<Analise />} />
 
                         </Routes>
+                        </Suspense>
                       </main>
 
                       </div>
@@ -359,6 +382,7 @@ function App() {
               error:   { style: { background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' } },
             }}
           />
+          <Suspense fallback={<CarregandoTela />}>
           <Routes>
 
             {/* ── Rotas públicas — scroll livre, sem sidebar ──────────────── */}
@@ -374,6 +398,7 @@ function App() {
             {/* ── Rotas protegidas — layout travado na viewport ────────────── */}
             <Route path="/*" element={<ProtectedApp />} />
           </Routes>
+          </Suspense>
         </Router>
       </SelectedAnimalProvider>
       </PeriodoProvider>
