@@ -432,9 +432,13 @@ tem dado), depois a 9 (as duas juntas), 10 a 14 no Backend, 15 e 16 no Frontend,
 | 7 Firewall + porta 22 fechada | ✅ 2026-10-06 (`TcpTestSucceeded : False`) | ✅ 2026-10-06 (portas 22 e 80: `TcpTestSucceeded : False`) |
 | 8 Proteções do sistema | ✅ 2026-10-07 — Lynis **65 → 73** · swap 1+3 GB · sessões antigas encerradas · ⏳ chamado KingHost: NTP (UDP 123) bloqueado; hora vem do Xen | ✅ 2026-10-07 — Lynis **65 → 72** · swap 1 GB · ⚠️ confirmar `who` sem as sessões `pts/2`/`pts/3` · ⏳ chamado KingHost (NTP, idem BE) |
 | 9 VPC (WireGuard) | ✅ 2026-10-07 túnel no ar · chaves e PSK conferidas (bate cruzado com o FE) · "sem ping" só na `enX0` · `MTU = 1380` · 50 MB pela 3001 em 9 s · 3001 pelo IP público: *timeout* · ⚠️ confirmar `ip link show wg0` = `mtu 1380` e que a re-execução da Etapa 9 gerou chave privada e PSK NOVAS (as antigas foram expostas) | ✅ 2026-10-07 escutando 51820 só para o IP do BE · regra 22 via wg0 · `MTU = 1380` (conferido) · ping de 1380 bytes sem fragmentar ok |
-| 10–13 | ⏳ | — |
-| 14 Evolution | ⚠️ 2026-10-07 no ar: `v2.3.7`, só em `127.0.0.1:8080`, `200`, 3 volumes · ⏳ mesma `EVOLUTION_API_KEY` no `backend.env` · ⏳ conectar um WhatsApp de teste (depende das Etapas 15–18) · ⏳ backup com os arquivos `evolution_*` | — |
-| 15–16 | — | ⏳ |
+| 10 Banco | ✅ 2026-10-08 `dbs2vet` + `/var/backups/s2vet` conferidos | — |
+| 11 Backup | ✅ 2026-10-08 B2 `s2vet-backups` (Object Lock 30 d, lifecycle 91 d) · 5 arquivos por execução · cron 02:30 · ⏳ conferir o `/var/log/s2vet-backup.log` após a 1ª execução agendada · ⏳ teste de decifrar no PC (`age -d`) | — |
+| 12 Dados | ✅ 2026-10-08 4 empresas · 24 usuários · 17 pacientes · roles sem superusuário/BYPASSRLS · 0 tabelas da app · **83** tabelas com RLS forçado (= dev) · ❓ limpeza dos dados de teste | — |
+| 13 Node/serviço | ✅ 2026-10-08 Node 22 · Chrome · LibreOffice · deploy keys (GitHub ok) · `backend.env`/`frontend.env` 640 root:s2vet · `GOOGLE_CLIENT_ID` = `VITE_GOOGLE_CLIENT_ID` (cliente OAuth "S2Vet Produção") · `s2vet-api.service` sem linhas ignoradas | — |
+| 14 Evolution | ✅ 2026-10-07/08 `v2.3.7`, só em `127.0.0.1:8080`, `200`, 3 volumes · `EVOLUTION_API_KEY` igual nos dois `.env` · backup com `evolution_*` · ⏳ conectar um WhatsApp de teste (depois do deploy) | — |
+| 15 Nginx | — | ✅ 2026-10-08 `deploy` com chave restrita a `from="10.50.0.2"` · Nginx só em `127.0.0.1:8080` · BE → FE como `deploy` ok |
+| 16 Tunnel | — | ✅ 2026-10-08 túnel `36f78afd-…` (conta `21fa7…`, criado pelo painel principal, sem Zero Trust) · domínio no Cloudflare (NS `rose`/`vicente`) · `app` → `http://127.0.0.1:8080` · ⏳ apagar `A`/`AAAA`/`www` da Hostinger · ⏳ autenticar o domínio no Brevo |
 | 17–19 | ⏳ | ⏳ |
 
 **Conferência rápida do estado de uma VPS** (como `vetprof`, entrando pelo Tailscale):
@@ -2287,6 +2291,11 @@ Em seguida:
 1. 🔴 **Rode o script de limpeza de dados de teste** revisado no ensaio (empresas, usuários,
    faturas e pacientes de teste; tokens de sessão, de reset de senha e de 2FA; instâncias de
    WhatsApp que apontam para a Evolution de desenvolvimento).
+   Script: `backend/scripts/producao/limparOutrasEmpresas.sql` (2026-10-08) — mantém **só** a
+   empresa 69 "Equipe Veterinária" e confere o nome antes de tudo. Roda como `postgres`;
+   **sem `-v aplicar=1` é SIMULAÇÃO** (faz tudo, mostra o relatório e desfaz). Aborta sem
+   alterar nada se qualquer registro da empresa mantida seria apagado ou teria campo zerado.
+   As instruções de uso estão no cabeçalho do arquivo.
 2. 🔴 **Rode o backup de novo**: `sudo /usr/local/sbin/s2vet-backup.sh`. Agora há dado real.
 
 ---
@@ -2913,8 +2922,13 @@ sudo apt update && sudo apt -y install cloudflared
 > **Para que serve:** cadastra o repositório oficial e instala o `cloudflared` (recebe
 > atualizações junto com o resto do sistema).
 
-`[WEB]` **Cloudflare Zero Trust → Networks → Tunnels → Create a tunnel** → *Cloudflared* →
-nome `s2vet-fe` → o painel mostra um comando com um **token**. Copie só o token.
+`[WEB]` **Painel principal** (`dash.cloudflare.com`) → **Networking → Tunnels** (ou digite
+"Tunnels" na busca do topo) → **Create a tunnel** → *Cloudflared* → nome `s2vet-fe` → o painel
+mostra um comando com um **token**. Copie só o token.
+> 💡 **Não precisa do Zero Trust** (2026-10-08). O mesmo túnel existe dentro de *Zero Trust →
+> Networks → Tunnels*, mas a primeira entrada ali cria uma "organização" e pede cartão de
+> crédito, mesmo no plano Free. O túnel é gratuito e funciona inteiro pelo painel principal.
+> O túnel tem de ficar na **mesma conta** do domínio `s2vet.com.br`.
 
 ```bash
 sudo cloudflared service install <TOKEN>
@@ -2927,15 +2941,30 @@ sudo cloudflared service install <TOKEN>
 sudo systemctl status cloudflared --no-pager
 ```
 > **Para que serve:** ✅ deve estar `active (running)`. No painel, o túnel aparece `HEALTHY`.
+> O `cloudflared` atual guarda o token em `/etc/cloudflared/token` (só o root lê) e o serviço o
+> lê com `--token-file` — ele **não** aparece na linha de comando do processo.
 
-`[WEB]` No túnel, aba **Public Hostname → Add**:
+`[WEB]` No túnel, aba **Published application routes** (antes "Public Hostname") → **Add**:
 
-| Subdomain | Domain | Type | URL |
-|---|---|---|---|
-| `app` | `s2vet.com.br` | `HTTP` | `127.0.0.1:8080` |
+| Campo | Valor |
+|---|---|
+| Subdomain | `app` |
+| Domain | `s2vet.com.br` |
+| Path | **vazio** (o `^/blog` é só exemplo) |
+| Service URL | **`http://127.0.0.1:8080`** |
+| Additional application settings | todos nos padrões; **Access desligado** |
 
-O Cloudflare cria sozinho o registro DNS `app`. ✅ Abra `https://app.s2vet.com.br` no navegador:
-deve aparecer "Em implantação".
+⚠️ O `https://localhost:8080` que aparece no campo é **exemplo** — escreva por cima.
+**`http`**, não `https`: o Nginx fala só HTTP na conversa interna da máquina (o trecho
+visitante → Cloudflare é HTTPS e o túnel é cifrado); com `https` o site dá **502**.
+**`127.0.0.1`**, não `localhost`: no Ubuntu `localhost` pode virar `::1` (IPv6), onde o Nginx
+não escuta.
+
+O Cloudflare cria sozinho o registro DNS `app`. ✅ `Resolve-DnsName app.s2vet.com.br -Server
+1.1.1.1` mostra só IPs do Cloudflare (`104.x`/`172.6x.x`/`2606:4700:…`) e `https://app.s2vet.com.br`
+abre "Em implantação".
+⚠️ Os registros `A`/`AAAA`/`CNAME www` que o Cloudflare importou da Hostinger apontam para a
+página de domínio estacionado — apague-os se não houver site ali.
 
 🔴 **Não crie registro DNS do tipo A apontando para `177.153.69.147` nem para
 `177.153.69.171`.** Os IPs das VPS não devem aparecer no DNS: o acesso é só pelo túnel.
