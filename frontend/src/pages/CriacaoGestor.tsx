@@ -184,7 +184,7 @@ export default function CriacaoGestor() {
           </Campo>
 
           <Campo label="ESPECIALIDADES" className="sm:col-span-6">
-            <EspecialidadeSelector variant="dropdown" value={especialidadeIds} onChange={setEspecialidadeIds} />
+            <EspecialidadeSelector variant="multi" value={especialidadeIds} onChange={setEspecialidadeIds} />
           </Campo>
         </div>
 

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Loader2, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ChevronDown, Loader2, Search, X } from 'lucide-react';
 import api from '../services/api';
 
 export interface Especialidade {
@@ -21,8 +21,12 @@ interface Props {
   disabled?: boolean;
   /** Mensagem quando o filtro de espécies não retorna nenhuma especialidade. */
   emptyText?: string;
-  /** 'checkbox' (grade, padrão) ou 'dropdown' (select + chips, ideal para modais). */
-  variant?: 'checkbox' | 'dropdown';
+  /**
+   * 'checkbox' (grade, padrão), 'dropdown' (select que acrescenta UMA por vez + chips)
+   * ou 'multi' (lista com busca e caixas de marcação que FICA ABERTA — marca várias de
+   * uma só vez + chips).
+   */
+  variant?: 'checkbox' | 'dropdown' | 'multi';
   /**
    * Dropdown: troca a faixa de chips por UMA LINHA por especialidade selecionada,
    * deixando o chamador acrescentar colunas ao lado do chip (ex.: tempo de consulta).
@@ -46,6 +50,26 @@ export default function EspecialidadeSelector({
   const [todas,   setTodas]   = useState<Especialidade[]>([]);
   const [loading, setLoading] = useState(true);
   const [erro,    setErro]    = useState(false);
+  // variant 'multi': lista aberta + busca
+  const [aberto,  setAberto]  = useState(false);
+  const [busca,   setBusca]   = useState('');
+  const raizRef = useRef<HTMLDivElement | null>(null);
+
+  // Fecha ao clicar fora ou com Esc — a lista NÃO fecha a cada marcação, é o que
+  // permite escolher várias de uma vez.
+  useEffect(() => {
+    if (!aberto) return;
+    const fora = (e: MouseEvent) => {
+      if (raizRef.current && !raizRef.current.contains(e.target as Node)) setAberto(false);
+    };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setAberto(false); };
+    document.addEventListener('mousedown', fora);
+    document.addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('mousedown', fora);
+      document.removeEventListener('keydown', esc);
+    };
+  }, [aberto]);
 
   const carregar = () => {
     setErro(false);
@@ -109,6 +133,106 @@ export default function EspecialidadeSelector({
       <p className="text-xs text-amber-600">
         {emptyText ?? 'Nenhuma especialidade disponível para as espécies atendidas.'}
       </p>
+    );
+  }
+
+  if (variant === 'multi') {
+    const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    const termo = norm(busca.trim());
+    const visiveis = grupos
+      .map(g => ({ ...g, itens: termo ? g.itens.filter(e => norm(e.nome).includes(termo)) : g.itens }))
+      .filter(g => g.itens.length > 0);
+    const idsVisiveis = visiveis.flatMap(g => g.itens.map(e => e.id));
+    const todosVisiveisMarcados = idsVisiveis.length > 0 && idsVisiveis.every(id => value.includes(id));
+    const alternarVisiveis = () => {
+      if (disabled) return;
+      onChange(todosVisiveisMarcados
+        ? value.filter(id => !idsVisiveis.includes(id))
+        : [...value, ...idsVisiveis.filter(id => !value.includes(id))]);
+    };
+    const resumo = value.length === 0
+      ? 'Selecionar especialidades…'
+      : `${value.length} especialidade${value.length > 1 ? 's' : ''} selecionada${value.length > 1 ? 's' : ''}`;
+
+    return (
+      <div className="space-y-2" ref={raizRef}>
+        <div className="relative">
+          <button type="button" disabled={disabled} onClick={() => setAberto(a => !a)}
+            className="w-full flex items-center justify-between gap-2 border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-left bg-white focus:outline-none focus:border-emerald-500 transition-colors disabled:bg-gray-50">
+            <span className={value.length ? 'text-gray-900' : 'text-gray-400'}>{resumo}</span>
+            <ChevronDown size={16} className={`text-gray-400 transition-transform ${aberto ? 'rotate-180' : ''}`} />
+          </button>
+
+          {/* Abre SEMPRE para baixo (§6) */}
+          {aberto && (
+            <div className="absolute left-0 right-0 top-full mt-1 z-30 bg-white border border-gray-200 rounded-xl shadow-lg">
+              <div className="p-2 border-b border-gray-100">
+                <div className="flex items-center gap-2 px-2 py-1.5 border border-gray-200 rounded-lg focus-within:border-emerald-500">
+                  <Search size={14} className="text-gray-400 flex-shrink-0" />
+                  <input autoFocus value={busca} onChange={e => setBusca(e.target.value)}
+                    placeholder="Buscar especialidade…"
+                    className="flex-1 text-sm outline-none bg-transparent" />
+                </div>
+              </div>
+
+              {idsVisiveis.length > 0 && (
+                <label className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-emerald-700 border-b border-gray-100 cursor-pointer hover:bg-emerald-50">
+                  <input type="checkbox" className="accent-emerald-600"
+                    checked={todosVisiveisMarcados} onChange={alternarVisiveis} />
+                  {termo ? 'Marcar todas as encontradas' : 'Marcar todas'} ({idsVisiveis.length})
+                </label>
+              )}
+
+              <div className="max-h-64 overflow-y-auto py-1">
+                {visiveis.length === 0 && (
+                  <p className="px-3 py-3 text-xs text-gray-400">Nenhuma especialidade encontrada.</p>
+                )}
+                {visiveis.map(grupo => (
+                  <div key={grupo.especieId}>
+                    {grupos.length > 1 && (
+                      <p className="px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                        {grupo.nome}
+                      </p>
+                    )}
+                    {grupo.itens.map(esp => (
+                      <label key={esp.id}
+                        className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 cursor-pointer hover:bg-gray-50">
+                        <input type="checkbox" className="accent-emerald-600 flex-shrink-0"
+                          checked={value.includes(esp.id)} onChange={() => toggle(esp.id)} />
+                        {esp.nome}
+                      </label>
+                    ))}
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex justify-end p-2 border-t border-gray-100">
+                <button type="button" onClick={() => setAberto(false)}
+                  className="px-3 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors">
+                  Concluir
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {value.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {value.map(id => (
+              <span key={id} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
+                {nomeById.get(id) ?? `#${id}`}
+                {!disabled && (
+                  <button type="button" onClick={() => onChange(value.filter(v => v !== id))}
+                    aria-label={`Remover ${nomeById.get(id) ?? id}`}
+                    className="ml-0.5 hover:text-emerald-900 transition-colors">
+                    <X size={11} />
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
     );
   }
 

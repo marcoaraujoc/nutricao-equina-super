@@ -32,6 +32,15 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-09 (parte 2) (**ESPECIALIDADES: VÁRIAS DE UMA SÓ VEZ** em
+#   `/admin/criacao-gestor`, a pedido. `EspecialidadeSelector` ganhou `variant="multi"`:
+#   botão que abre (para BAIXO, §6) uma lista com busca e caixas de marcação que FICA
+#   ABERTA enquanto se marca — fecha em "Concluir", clique fora ou Esc —, "Marcar todas"
+#   (ou "todas as encontradas", com busca) e os chips com X abaixo.
+#   ⚠️ O `variant="dropdown"` (acrescenta UMA por vez) NÃO mudou e segue nas outras
+#   telas; trocá-las é só passar `variant="multi"`. Backend intocado (`criarGestor` já
+#   recebia a lista). ⚠️ NÃO verificado em navegador.)
+
 # Atualizado em: 2026-10-09 (🔴 **TELAS CARREGADAS SOB DEMANDA** — a pedido, depois do
 #   primeiro deploy em produção. O sistema inteiro ia num arquivo só: **3.322 KB
 #   (887 KB comprimido)** baixados na primeira visita, inclusive no celular.
