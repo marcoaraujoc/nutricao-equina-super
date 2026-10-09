@@ -3252,9 +3252,21 @@ Depois, **Entrar com Google** com uma conta Google que **não** está cadastrada
 > 2026-10-09). Se entrar, a versão publicada é anterior a essa correção.
 
 #### Passo 10 — Cookies protegidos (S8)
-**F12** → aba **Application** → **Cookies** → `https://app.s2vet.com.br`.
-> **Para que serve:** ✅ `s2vet_at` e `s2vet_rt` com **Secure** e **HttpOnly** marcados e
-> **SameSite** = `Lax`.
+Com o sistema **logado** (sem login os cookies não existem):
+1. **F12** → aba **Application** (no Edge em português, **Aplicativo**; se não aparecer, está
+   no **»**).
+2. À esquerda, em *Storage*, abra **Cookies** → clique em `https://app.s2vet.com.br`.
+3. Na tabela, olhe as linhas **`s2vet_at`** e **`s2vet_rt`** (a sessão) nas colunas
+   **HttpOnly**, **Secure** e **SameSite** (alargue o painel se estiverem cortadas).
+
+> **Para que serve:** os dois cookies SÃO a sessão — quem os copia entra como você. ✅ nos dois:
+> **HttpOnly** ✓ (script da página não lê → XSS não rouba a sessão) · **Secure** ✓ (só viaja
+> por HTTPS) · **SameSite** = `Lax` (outro site não usa a sua sessão).
+> Também aparecem, e estão certos: `s2vet_auth` **sem** HttpOnly de propósito (vale só `1` e
+> avisa a tela que há sessão — não dá acesso a nada); `s2vet_ctx_empresa`/`s2vet_ctx_equipe`
+> (empresa ativa, com HttpOnly e Secure); e `__cf…`/`cf_…`, que são do Cloudflare.
+> **Secure sem ✓** → falta `COOKIE_SECURE=true` no `/opt/s2vet/shared/backend.env`; corrija,
+> `sudo systemctl restart s2vet-api`, saia e entre de novo.
 
 #### Passo 11 — IP real na auditoria (F8)
 Abra **/auditoria-geral** e localize o login de agora há pouco.
