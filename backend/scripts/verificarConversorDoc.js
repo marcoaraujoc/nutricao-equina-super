@@ -39,23 +39,45 @@ const {
 const out = (linha = '') => process.stdout.write(`${linha}\n`);
 
 /**
- * `.doc` MÍNIMO de verdade (contêiner OLE2/CFB do Word 97-2003) para o teste não
- * depender de o operador ter um laudo à mão. É só o cabeçalho + a estrutura que o
- * LibreOffice precisa para reconhecer o formato: o conteúdo é irrelevante — o que se
- * mede é se o binário existe, roda e escreve a saída.
- * ⚠️ Se o LibreOffice recusar este arquivo por ser mínimo demais, passe um `.doc` real
- * como argumento: o diagnóstico continua válido, só muda a amostra.
+ * `.doc` de VERDADE para a amostra, gerado pelo próprio LibreOffice a partir de um texto.
+ *
+ * 🔴 (2026-10-08) Até aqui a amostra era um cabeçalho OLE2 sem conteúdo, montado à mão.
+ * O LibreOffice do Linux RECUSA esse arquivo e sai com código 0 sem gerar nada — e o
+ * diagnóstico acusava "CONVERSÃO INDISPONÍVEL" num servidor em que a conversão funciona
+ * (medido na VPS de produção: o mesmo ambiente converteu um `.doc` real em 1,3 s). Um
+ * diagnóstico que acusa falha falsa ensina a ignorá-lo.
+ * Gerar a amostra com o LibreOffice não esconde problema nenhum: se o binário não roda,
+ * a geração falha e o diagnóstico diz ISSO, com a saída dele.
  */
-function docMinimo() {
-  const buf = Buffer.alloc(1536, 0);
-  // Assinatura OLE2 (D0 CF 11 E0 A1 B1 1A E1) — é por ela que o LibreOffice
-  // identifica o contêiner do Word 97-2003.
-  Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).copy(buf, 0);
-  buf.writeUInt16LE(0x003e, 24);   // versão menor
-  buf.writeUInt16LE(0x0003, 26);   // versão maior
-  buf.writeUInt16LE(0xfffe, 28);   // byte order (little endian)
-  buf.writeUInt16LE(9, 30);        // tamanho do setor: 2^9 = 512
-  return buf;
+async function docDeAmostra() {
+  const os = require('os');
+  const { execFile } = require('child_process');
+  const { promisify } = require('util');
+  const { pathToFileURL } = require('url');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 's2vet-amostra-'));
+  try {
+    const txt = path.join(dir, 'amostra.txt');
+    fs.writeFileSync(txt, 'Laudo de teste do conversor de documentos do S2Vet.\n');
+    let saidaSoffice = '';
+    try {
+      const r = await promisify(execFile)(
+        process.env.LIBREOFFICE_BIN || 'soffice',
+        [`-env:UserInstallation=${pathToFileURL(path.join(dir, 'profile')).href}`,
+         '--headless', '--norestore', '--convert-to', 'doc', '--outdir', dir, txt],
+        { timeout: Number(process.env.LIBREOFFICE_TIMEOUT_MS) || 30000, windowsHide: true },
+      );
+      saidaSoffice = `${r.stdout}${r.stderr}`.trim();
+    } catch (err) {
+      saidaSoffice = `${err.message}\n${err.stdout ?? ''}${err.stderr ?? ''}`.trim();
+    }
+    const doc = path.join(dir, 'amostra.doc');
+    if (!fs.existsSync(doc)) {
+      throw new Error(`o LibreOffice não gerou a amostra .doc.${saidaSoffice ? `\n    Saída: ${saidaSoffice}` : ''}`);
+    }
+    return fs.readFileSync(doc);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 async function main() {
@@ -81,9 +103,18 @@ async function main() {
     nome   = path.basename(caminho);
     out(`  Amostra: ${nome} (${buffer.length} bytes)`);
   } else {
-    buffer = docMinimo();
-    nome   = 'amostra.doc';
-    out('  Amostra: .doc mínimo embutido (passe um laudo real como argumento para testar com ele)');
+    try {
+      buffer = await docDeAmostra();
+    } catch (err) {
+      out(`  ✗ CONVERSÃO INDISPONÍVEL — ${err.message}`);
+      out('');
+      out('  Confira: `soffice --version` responde? O diagnóstico roda com um HOME e uma');
+      out('  pasta atual que o usuário consegue acessar? (ex.: `export HOME=/opt/s2vet/home`)');
+      out('');
+      process.exit(1);
+    }
+    nome = 'amostra.doc';
+    out(`  Amostra: .doc gerado pelo LibreOffice (${buffer.length} bytes) — ou passe um laudo real como argumento`);
   }
   out('');
 

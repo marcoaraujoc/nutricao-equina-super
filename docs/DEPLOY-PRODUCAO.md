@@ -439,7 +439,7 @@ tem dado), depois a 9 (as duas juntas), 10 a 14 no Backend, 15 e 16 no Frontend,
 | 14 Evolution | ✅ 2026-10-07/08 `v2.3.7`, só em `127.0.0.1:8080`, `200`, 3 volumes · `EVOLUTION_API_KEY` igual nos dois `.env` · backup com `evolution_*` · ⏳ conectar um WhatsApp de teste (depois do deploy) | — |
 | 15 Nginx | — | ✅ 2026-10-08 `deploy` com chave restrita a `from="10.50.0.2"` · Nginx só em `127.0.0.1:8080` · BE → FE como `deploy` ok |
 | 16 Tunnel | — | ✅ 2026-10-08 túnel `36f78afd-…` (conta `21fa7…`, criado pelo painel principal, sem Zero Trust) · domínio no Cloudflare (NS `rose`/`vicente`) · `app` → `http://127.0.0.1:8080` · ⏳ apagar `A`/`AAAA`/`www` da Hostinger · ⏳ autenticar o domínio no Brevo |
-| 17 Deploy | ✅ 2026-10-08 23:22 release `20261008T232107` · `/health` ok (banco 2 ms) · 3001 só em `10.50.0.2`, 5432/8080 só em loopback · e-mail de teste enviado pelo Brevo · ⚠️ `doc:check` falhou (URL do perfil do LibreOffice com 4 barras no Linux — corrigido no código, entra no próximo deploy) · ⏳ login no navegador, trocar a senha do Administrador, testar Entrar com Google | ✅ `/api/marca` → `200` pelo Nginx |
+| 17 Deploy | ✅ 2026-10-08 23:22 release `20261008T232107` · `/health` ok (banco 2 ms) · 3001 só em `10.50.0.2`, 5432/8080 só em loopback · e-mail de teste enviado pelo Brevo · ✅ conversão `.doc` confirmada com laudo real (1,3 s); o `doc:check` acusava falha por causa da amostra artificial — corrigido · ⏳ login no navegador, trocar a senha do Administrador, testar Entrar com Google | ✅ `/api/marca` → `200` pelo Nginx |
 | 18–19 | ⏳ | ⏳ |
 
 **Conferência rápida do estado de uma VPS** (como `vetprof`, entrando pelo Tailscale):
@@ -3070,9 +3070,14 @@ sudo ss -tlpn | grep -E ':(3001|5432|8080)\b'
 > Nenhuma em `0.0.0.0`. Esta é a prova de que nada da aplicação existe na placa pública.
 
 ```bash
-sudo -u s2vet bash -c 'cd /opt/s2vet/current/backend && npm run doc:check'
+sudo -u s2vet bash -c 'export HOME=/opt/s2vet/home; cd /opt/s2vet/current/backend && npm run doc:check'
 ```
 > **Para que serve:** ✅ testa a conversão de `.doc` (LibreOffice). Esperado `✓ CONVERSÃO OK`.
+> ⚠️ O `export HOME` é obrigatório: o `sudo -u s2vet` herda o HOME do `vetprof`, que o `s2vet` não
+> acessa, e o `soffice` falha ao voltar para ele. O serviço da API já sobe com esse HOME.
+> ⚠️ Antes de 2026-10-08 o teste usava uma amostra `.doc` artificial que o LibreOffice do Linux
+> recusa, e acusava falha num servidor que converte normalmente. Agora a amostra é gerada pelo
+> próprio LibreOffice. Para testar com um laudo seu: `npm run doc:check -- /caminho/laudo.doc`.
 
 ```bash
 sudo -u s2vet bash -c 'cd /opt/s2vet/current/backend && npm run email:testar -- marcoaraujoc@gmail.com'
