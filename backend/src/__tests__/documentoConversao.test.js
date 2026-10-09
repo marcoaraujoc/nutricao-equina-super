@@ -154,6 +154,20 @@ describe('normalizarDocLegado — conversão bem-sucedida', () => {
     expect(args).toContain('--headless');
   });
 
+  it('o perfil é uma URL file:// válida no SO em que roda (nunca 4 barras no Linux)', async () => {
+    // `'file:///' + '/tmp/...'` dava `file:////tmp/...`: o LibreOffice não criava o perfil,
+    // saía sem erro e sem `.docx` — falha que só aparecia na VPS Linux (2026-10-08).
+    const { normalizarDocLegado } = carregarLib();
+    comLibreOffice();
+    await normalizarDocLegado(arquivoDoc());
+
+    const arg = execFile.mock.calls[0][1].find(a => String(a).startsWith('-env:UserInstallation='));
+    const url = arg.slice('-env:UserInstallation='.length);
+    expect(url).not.toMatch(/^file:\/{4}/);
+    const { fileURLToPath } = require('url');
+    expect(require('path').basename(fileURLToPath(url))).toBe('profile');
+  });
+
   it('nunca escreve em disco o nome vindo do cliente (path traversal)', async () => {
     const { normalizarDocLegado } = carregarLib();
     comLibreOffice();

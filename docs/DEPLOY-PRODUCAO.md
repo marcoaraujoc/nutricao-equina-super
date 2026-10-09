@@ -434,12 +434,13 @@ tem dado), depois a 9 (as duas juntas), 10 a 14 no Backend, 15 e 16 no Frontend,
 | 9 VPC (WireGuard) | ✅ 2026-10-07 túnel no ar · chaves e PSK conferidas (bate cruzado com o FE) · "sem ping" só na `enX0` · `MTU = 1380` · 50 MB pela 3001 em 9 s · 3001 pelo IP público: *timeout* · ⚠️ confirmar `ip link show wg0` = `mtu 1380` e que a re-execução da Etapa 9 gerou chave privada e PSK NOVAS (as antigas foram expostas) | ✅ 2026-10-07 escutando 51820 só para o IP do BE · regra 22 via wg0 · `MTU = 1380` (conferido) · ping de 1380 bytes sem fragmentar ok |
 | 10 Banco | ✅ 2026-10-08 `dbs2vet` + `/var/backups/s2vet` conferidos | — |
 | 11 Backup | ✅ 2026-10-08 B2 `s2vet-backups` (Object Lock 30 d, lifecycle 91 d) · 5 arquivos por execução · cron 02:30 · ⏳ conferir o `/var/log/s2vet-backup.log` após a 1ª execução agendada · ⏳ teste de decifrar no PC (`age -d`) | — |
-| 12 Dados | ✅ 2026-10-08 4 empresas · 24 usuários · 17 pacientes · roles sem superusuário/BYPASSRLS · 0 tabelas da app · **83** tabelas com RLS forçado (= dev) · ❓ limpeza dos dados de teste | — |
+| 12 Dados | ✅ 2026-10-08 roles sem superusuário/BYPASSRLS · 0 tabelas da app · **83** tabelas com RLS forçado (= dev) · ✅ limpeza aplicada (`limparOutrasEmpresas.sql`): só a empresa **69 Equipe Veterinária** — 1 empresa · 4 usuários (ADMIN 1, 233, 234, 235) · 2 pacientes · tokens e WhatsApp de dev zerados · backup antes e depois | — |
 | 13 Node/serviço | ✅ 2026-10-08 Node 22 · Chrome · LibreOffice · deploy keys (GitHub ok) · `backend.env`/`frontend.env` 640 root:s2vet · `GOOGLE_CLIENT_ID` = `VITE_GOOGLE_CLIENT_ID` (cliente OAuth "S2Vet Produção") · `s2vet-api.service` sem linhas ignoradas | — |
 | 14 Evolution | ✅ 2026-10-07/08 `v2.3.7`, só em `127.0.0.1:8080`, `200`, 3 volumes · `EVOLUTION_API_KEY` igual nos dois `.env` · backup com `evolution_*` · ⏳ conectar um WhatsApp de teste (depois do deploy) | — |
 | 15 Nginx | — | ✅ 2026-10-08 `deploy` com chave restrita a `from="10.50.0.2"` · Nginx só em `127.0.0.1:8080` · BE → FE como `deploy` ok |
 | 16 Tunnel | — | ✅ 2026-10-08 túnel `36f78afd-…` (conta `21fa7…`, criado pelo painel principal, sem Zero Trust) · domínio no Cloudflare (NS `rose`/`vicente`) · `app` → `http://127.0.0.1:8080` · ⏳ apagar `A`/`AAAA`/`www` da Hostinger · ⏳ autenticar o domínio no Brevo |
-| 17–19 | ⏳ | ⏳ |
+| 17 Deploy | ✅ 2026-10-08 23:22 release `20261008T232107` · `/health` ok (banco 2 ms) · 3001 só em `10.50.0.2`, 5432/8080 só em loopback · e-mail de teste enviado pelo Brevo · ⚠️ `doc:check` falhou (URL do perfil do LibreOffice com 4 barras no Linux — corrigido no código, entra no próximo deploy) · ⏳ login no navegador, trocar a senha do Administrador, testar Entrar com Google | ✅ `/api/marca` → `200` pelo Nginx |
+| 18–19 | ⏳ | ⏳ |
 
 **Conferência rápida do estado de uma VPS** (como `vetprof`, entrando pelo Tailscale):
 ```bash
@@ -2333,7 +2334,7 @@ O backend usa um Chrome sem tela (Puppeteer) para gerar os PDFs enviados por Wha
 consultar o CRMV.
 
 ```bash
-sudo apt -y install \
+sudo apt -y install unzip rsync jq \
   fonts-liberation fonts-dejavu-core fonts-noto-color-emoji \
   libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libcairo2 libcups2t64 \
   libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 libgtk-3-0t64 libnspr4 libnss3 \
@@ -2341,7 +2342,11 @@ sudo apt -y install \
   libxfixes3 libxkbcommon0 libxrandr2 libxshmfence1 xdg-utils
 ```
 > **Para que serve:** instala as bibliotecas de que o Chrome precisa e as fontes (sem fontes,
-> o PDF sai com quadradinhos no lugar das letras). ⚠️ No Ubuntu 24.04 vários nomes ganharam o
+> o PDF sai com quadradinhos no lugar das letras).
+> 🔴 **`unzip` é obrigatório** (2026-10-08): o `npm ci` do Puppeteer baixa o Chrome compactado
+> e, sem `unzip` (o Ubuntu da KingHost não traz), o deploy morre no passo 2/9 com
+> `Required native binary ('tar.exe' or 'unzip') was not found`. `rsync` publica a tela no
+> Frontend (instale também **no FE**) e `jq` formata a conferência do `/health`. ⚠️ No Ubuntu 24.04 vários nomes ganharam o
 > sufixo `t64`: listas antigas da internet falham com "pacote não encontrado".
 > ⚠️ O AppArmor do 24.04 bloqueia o *sandbox* do Chrome. O código já o inicia com
 > `--no-sandbox` no Linux — **não remova** essa opção do código.
@@ -3006,14 +3011,17 @@ echo "▶ 4/9 backup antes de migrar"
 sudo -n /usr/local/sbin/s2vet-backup.sh || { echo "🔴 backup falhou — abortando"; exit 1; }
 
 echo "▶ 5/9 migrations (usuário DONO)"
-set -a; . /opt/s2vet/shared/backend.env; set +a
-DATABASE_URL="$DATABASE_URL_MIGRATIONS" npx prisma migrate deploy
+# 🔴 Entre parênteses (subshell): o `set -a` EXPORTA tudo do backend.env. Fora do
+#    subshell, o NODE_ENV=production faria o `npm ci` do frontend pular as devDependencies
+#    (tsc/vite → "tsc: not found") e as senhas do banco vazariam para o build da tela.
+( set -a; . /opt/s2vet/shared/backend.env; set +a
+  DATABASE_URL="$DATABASE_URL_MIGRATIONS" npx prisma migrate deploy )
 # Só quando a versão alterou o catálogo de permissões ou os modelos CFMV:
-# DATABASE_URL="$DATABASE_URL_MIGRATIONS" node seed.js
+# ( set -a; . /opt/s2vet/shared/backend.env; set +a; DATABASE_URL="$DATABASE_URL_MIGRATIONS" node seed.js )
 
 echo "▶ 6/9 build do frontend"
 cd "$REL/frontend"
-npm ci
+npm ci --include=dev       # tsc e vite são devDependencies — sem elas não há build
 npm run build
 
 echo "▶ 7/9 publica a tela no Frontend (pelo túnel)"

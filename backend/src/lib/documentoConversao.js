@@ -37,6 +37,7 @@ const fs     = require('fs/promises');
 const path   = require('path');
 const os     = require('os');
 const crypto = require('crypto');
+const { pathToFileURL } = require('url');
 
 const execFileAsync = promisify(execFile);
 
@@ -117,7 +118,11 @@ async function converterComLibreOffice(buffer) {
         // Perfil de usuário PRÓPRIO desta conversão. Sem isto, duas conversões
         // simultâneas disputam o perfil padrão e a segunda falha em silêncio (ou
         // reaproveita um processo já aberto e nunca chega a escrever a saída).
-        `-env:UserInstallation=file:///${perfil.replace(/\\/g, '/')}`,
+        // 🔴 `pathToFileURL`, NUNCA `'file:///' + caminho` (2026-10-08): no Linux o caminho
+        // já começa com '/', e a concatenação dava `file:////tmp/...` — o LibreOffice não
+        // cria o perfil, sai sem erro e sem `.docx` (ENOENT na leitura da saída). No
+        // Windows (`C:\...`) a concatenação acertava, e por isso só quebrou na VPS.
+        `-env:UserInstallation=${pathToFileURL(perfil).href}`,
         '--headless', '--norestore', '--nolockcheck', '--nodefault',
         '--convert-to', 'docx:MS Word 2007 XML',
         '--outdir', raiz,
