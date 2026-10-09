@@ -432,7 +432,8 @@ tem dado), depois a 9 (as duas juntas), 10 a 14 no Backend, 15 e 16 no Frontend,
 | 7 Firewall + porta 22 fechada | ✅ 2026-10-06 (`TcpTestSucceeded : False`) | ✅ 2026-10-06 (portas 22 e 80: `TcpTestSucceeded : False`) |
 | 8 Proteções do sistema | ✅ 2026-10-07 — Lynis **65 → 73** · swap 1+3 GB · sessões antigas encerradas · ⏳ chamado KingHost: NTP (UDP 123) bloqueado; hora vem do Xen | ✅ 2026-10-07 — Lynis **65 → 72** · swap 1 GB · ⚠️ confirmar `who` sem as sessões `pts/2`/`pts/3` · ⏳ chamado KingHost (NTP, idem BE) |
 | 9 VPC (WireGuard) | ✅ 2026-10-07 túnel no ar · chaves e PSK conferidas (bate cruzado com o FE) · "sem ping" só na `enX0` · `MTU = 1380` · 50 MB pela 3001 em 9 s · 3001 pelo IP público: *timeout* · ⚠️ confirmar `ip link show wg0` = `mtu 1380` e que a re-execução da Etapa 9 gerou chave privada e PSK NOVAS (as antigas foram expostas) | ✅ 2026-10-07 escutando 51820 só para o IP do BE · regra 22 via wg0 · `MTU = 1380` (conferido) · ping de 1380 bytes sem fragmentar ok |
-| 10–14 | ⏳ | — |
+| 10–13 | ⏳ | — |
+| 14 Evolution | ⚠️ 2026-10-07 no ar: `v2.3.7`, só em `127.0.0.1:8080`, `200`, 3 volumes · ⏳ mesma `EVOLUTION_API_KEY` no `backend.env` · ⏳ conectar um WhatsApp de teste (depende das Etapas 15–18) · ⏳ backup com os arquivos `evolution_*` | — |
 | 15–16 | — | ⏳ |
 | 17–19 | ⏳ | ⏳ |
 
@@ -993,8 +994,14 @@ Add-Content $env:USERPROFILE\.ssh\config "`nHost s2vet-be s2vet-fe`n    User vet
    > **Para que serve:** acrescenta a chave do celular às aceitas para o `vetprof`.
    > 🔴 Dois sinais (`>>`): com um só (`>`) a chave do PC é **apagada**. Confira com
    > `cat ~/.ssh/authorized_keys` — duas linhas, a do PC e a `celular`.
-4. No app: host `s2vet-be` (ou `s2vet-be.tail854f06.ts.net`), porta 22, usuário `vetprof`,
-   chave `celular`. ✅ `hostname` responde `s2vet-be`. Idem `s2vet-fe`.
+4. No app: host `s2vet-be.tail854f06.ts.net`, porta 22, usuário `vetprof`, chave `celular`,
+   **senha em branco** — o servidor não aceita senha para entrar (Etapa 5). A senha do
+   `vetprof` só é pedida pelo `sudo`: digite na hora e **nunca deixe o app salvar**; assim, quem
+   pegar o celular entra como `vetprof` mas não vira administrador. Ative também o PIN/biometria
+   do próprio app e, se ele oferecer sincronizar chaves na nuvem, deixe desligado. Na primeira
+   conexão, confira a impressão digital que o app mostra com
+   `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` (rodado na VPS pelo PC).
+   ✅ `hostname` responde `s2vet-be`. Idem `s2vet-fe`.
 5. ✅ Contraprova: com o Tailscale **desligado** no celular, a conexão falha — pelo nome e pelo
    IP público `177.153.69.171`, no 4G.
 
@@ -2086,19 +2093,58 @@ echo 'age1<SUA_CHAVE_PUBLICA>' | sudo tee /etc/s2vet-backup.pub
 
 ### 11.3 O bucket
 
-`[WEB]` No Backblaze B2 (ou Cloudflare R2): crie o bucket `s2vet-backups` **privado**, com
-**versionamento** (ou *Object Lock*) e regra de ciclo de vida "apagar versões com mais de 90
-dias". Crie uma **chave de aplicação restrita a esse bucket**, com permissão de **escrita** e,
-se o provedor permitir, **sem permissão de apagar** — o ataque clássico de ransomware é apagar
-o backup antes de cifrar o servidor.
+Provedor escolhido: **Backblaze B2** (2026-10-07). `[WEB]` em `https://secure.backblaze.com`
+→ **B2 Cloud Storage**:
+
+**1. Bucket** — *Buckets* → **Create a Bucket**:
+
+| Campo | Valor | Por quê |
+|---|---|---|
+| Bucket Unique Name | `s2vet-backups` | O nome é único no B2 inteiro. Se já existir, use `s2vet-backups-<algo>` e troque o nome no script (11.4) e nos testes |
+| Files in Bucket are | **Private** | Nada acessível por link |
+| Default Encryption | **Enable** | Cifra também do lado do B2 (os arquivos já vão cifrados pelo `age`; é uma camada a mais) |
+| Object Lock | **Enable** | É o que impede um invasor de **apagar** o backup (abaixo) |
+
+Depois de criado, no bucket:
+- **Object Lock → Default Retention:** modo **Governance**, **30 dias**. Cada arquivo enviado fica
+  impossível de apagar ou sobrescrever por 30 dias — inclusive com a chave que está no servidor.
+  O ataque clássico de ransomware é apagar o backup antes de cifrar o servidor; com o bloqueio,
+  um invasor com root no Backend não consegue. (*Governance*, e não *Compliance*: a sua conta
+  principal ainda consegue liberar em caso de engano; a chave do servidor não tem esse poder.)
+- **Lifecycle Settings → Use custom lifecycle rules:** `fileNamePrefix` vazio,
+  `daysFromUploadingToHiding` = **90**, `daysFromHidingToDeleting` = **1**. Apaga cada backup 91
+  dias depois do envio. ⚠️ Não use "Keep prior versions for N days": cada backup tem nome
+  próprio (data e hora), então nunca vira "versão anterior" e **nada seria apagado** — a conta
+  cresceria para sempre.
+
+**2. Chave de aplicação** — *Application Keys* → **Add a New Application Key**:
+
+| Campo | Valor |
+|---|---|
+| Name of Key | `s2vet-be-backup` |
+| Allow access to Bucket(s) | **`s2vet-backups`** (só ele — nunca "All") |
+| Type of Access | **Read and Write** |
+| Allow List All Bucket Names | ❌ desmarcado |
+| File name prefix | em branco |
+| Duration (seconds) | em branco (não expira — chave que expira faz o backup parar) |
+
+Ao clicar em **Create New Key**, o B2 mostra **uma única vez** dois valores: **`keyID`** (começa
+com `00…`) e **`applicationKey`** (começa com `K00…`). Copie os dois **na hora** para o
+gerenciador de senhas ("B2 s2vet-be-backup") — fechou a tela, a `applicationKey` não aparece
+mais e é preciso criar outra chave.
+⚠️ **Nunca** use a *Master Application Key* da conta: ela alcança todos os buckets e consegue
+desligar o Object Lock.
+💡 *Read and Write* (e não *Write Only*) porque o `rclone` precisa **listar** o bucket para
+enviar os arquivos. Quem impede apagar é o Object Lock, não o tipo da chave.
 
 ```bash
 sudo rclone config
 ```
 > **Para que serve:** assistente interativo que cadastra o destino do backup. Responda:
-> `n` (novo) → nome **`offsite`** → tipo `b2` (Backblaze) ou `s3` com provedor `Cloudflare`
-> (R2) → cole o *key ID* e a *application key* → aceite o resto como padrão. A configuração
-> fica em `/root/.config/rclone/rclone.conf`, legível só pelo root.
+> `n` (novo) → nome **`offsite`** → tipo **`b2`** → em `account>` cole o **`keyID`** → em
+> `key>` cole a **`applicationKey`** → `hard_delete>` deixe em branco (padrão `false`) →
+> `Edit advanced config?` **n** → `y` para confirmar → `q` para sair. A configuração fica em
+> `/root/.config/rclone/rclone.conf`, legível só pelo root.
 
 ```bash
 sudo rclone lsd offsite:
@@ -2396,6 +2442,11 @@ EMAIL_PASS=<chave SMTP do Brevo>
 EMAIL_FROM=noreply@s2vet.com.br
 EMAIL_FROM_NAME=S2Vet
 
+# ── Login com Google: o MESMO ID do VITE_GOOGLE_CLIENT_ID (frontend.env) ──
+# 🔴 Sem ele o "Entrar com Google" é RECUSADO: é o que impede um token emitido para
+#    OUTRO aplicativo de abrir sessão aqui (lib/googleToken.js). Ver Parte D2.
+GOOGLE_CLIENT_ID=<client id de PRODUÇÃO>.apps.googleusercontent.com
+
 # ── IA: chave de PRODUÇÃO, restrita ao IP 177.153.69.171 no Google Cloud ──
 GEMINI_API_KEY=<chave>
 GEMINI_MODEL=gemini-3.1-flash-lite
@@ -2419,6 +2470,12 @@ echo 'VITE_GOOGLE_CLIENT_ID=<client id de PRODUÇÃO>.apps.googleusercontent.com
 ```
 > **Para que serve:** a única configuração do build do frontend: o identificador do login com
 > Google (é público por natureza — vai no JavaScript do navegador).
+> ⚠️ É um **ID do cliente OAuth** (Google Cloud → Credenciais → *Aplicativo da Web*), não a
+> chave do Gemini. Use um cliente **só de produção**, com a origem
+> `https://app.s2vet.com.br` e nenhuma URI de redirecionamento; a *chave secreta do cliente*
+> não é usada em lugar nenhum. A tela de consentimento precisa estar **"Em produção"** (em
+> "Teste", só os testadores cadastrados entram). O **mesmo** ID vai no `GOOGLE_CLIENT_ID` do
+> `backend.env` — diferente, todo login com Google é recusado.
 
 ### 13.6 O serviço da API (systemd)
 
@@ -2449,11 +2506,17 @@ RestartSec=5
 KillSignal=SIGTERM
 TimeoutStopSec=30
 LimitNOFILE=65536
-# Endurecimento compatível com Chrome e LibreOffice:
-NoNewPrivileges=true          # nada que ela rode ganha mais privilégio
-PrivateTmp=true               # /tmp próprio, invisível para os outros processos
-ProtectSystem=full            # /usr, /boot e /etc ficam somente leitura para ela
-ProtectHome=true              # não enxerga /home nem /root
+# Endurecimento compatível com Chrome e LibreOffice.
+# 🔴 Comentário SÓ em linha própria: o systemd não aceita "# ..." depois do valor — lê o
+#    comentário como parte dele e IGNORA a linha inteira (o serviço sobe sem a proteção).
+# Nada que ela rode ganha mais privilégio:
+NoNewPrivileges=true
+# /tmp próprio, invisível para os outros processos:
+PrivateTmp=true
+# /usr, /boot e /etc ficam somente leitura para ela:
+ProtectSystem=full
+# Não enxerga /home nem /root:
+ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
@@ -2473,6 +2536,13 @@ sudo systemctl daemon-reload && sudo systemctl enable s2vet-api
 ```
 > **Para que serve:** faz o systemd ler o arquivo novo e marca o serviço para subir no boot.
 > Ele **ainda não é iniciado**: sobe de verdade no primeiro deploy (Etapa 17).
+
+```bash
+sudo systemd-analyze verify /etc/systemd/system/s2vet-api.service
+```
+> **Para que serve:** ✅ confere o arquivo do serviço. Esperado: **nenhuma linha** com
+> `Failed to parse` ou `ignoring`. Se aparecer, a linha citada está sendo ignorada — e o
+> serviço sobe sem ela, sem erro nenhum no `status`.
 
 ```bash
 sudo tee /etc/sudoers.d/s2vet >/dev/null <<'EOF'
@@ -2515,14 +2585,16 @@ scp infra\evolution\docker-compose.yml vetprof@s2vet-be:/tmp/
 > Redis próprios) para o servidor.
 
 ```bash
-sudo mv /tmp/docker-compose.yml /opt/evolution/ && sudo nano /opt/evolution/docker-compose.yml
+sudo mv /tmp/docker-compose.yml /opt/evolution/ && sudo grep -E '^name:|image:|127.0.0.1:8080' /opt/evolution/docker-compose.yml
 ```
-> **Para que serve:** move para a pasta certa e abre para editar. 🔴 Troque
-> `image: evoapicloud/evolution-api:latest` pela **versão testada no desenvolvimento**
-> (ex.: `evoapicloud/evolution-api:v2.x.y`) — `:latest` atualiza sozinha e pode quebrar o
-> WhatsApp de todas as clínicas. Confira que a porta está `"127.0.0.1:8080:8080"` (já está no
-> repositório). 🔴 Ignore o comentário do topo que manda publicar a Evolution num domínio: em
-> produção ela não tem nome público.
+> **Para que serve:** move para a pasta certa e confere três linhas que **não podem** estar
+> diferentes (o arquivo já sai certo do repositório desde 2026-10-07):
+> `name: evolution` (dá nome aos volumes que o backup procura), `image:
+> evoapicloud/evolution-api:v2.3.7` (a versão testada no desenvolvimento — **nunca**
+> `:latest`, que atualiza sozinha e pode quebrar o WhatsApp de todas as clínicas) e
+> `"127.0.0.1:8080:8080"`. Ele também limita o tamanho dos logs de cada contêiner.
+> Para atualizar a Evolution depois: testar a versão nova no desenvolvimento, trocar a
+> etiqueta no repositório, copiar o arquivo de novo e rodar o `docker compose up -d` abaixo.
 
 ```bash
 sudo install -o root -g root -m 600 /dev/null /opt/evolution/.env && sudo nano /opt/evolution/.env
@@ -2536,10 +2608,14 @@ sudo install -o root -g root -m 600 /dev/null /opt/evolution/.env && sudo nano /
 > ```
 
 ```bash
-cd /opt/evolution && sudo docker compose up -d && sudo docker compose ps
+sudo docker compose -f /opt/evolution/docker-compose.yml up -d && sudo docker compose -f /opt/evolution/docker-compose.yml ps
 ```
 > **Para que serve:** baixa as imagens e sobe os três contêineres em segundo plano (`-d`);
 > `ps` mostra se estão `running`.
+> ⚠️ Sempre com `-f /opt/evolution/docker-compose.yml`, nunca `cd /opt/evolution`: a pasta é
+> só do root (guarda o `.env` com senhas) e o `cd` do `vetprof` dá `Permission denied` — o
+> `sudo` vale para o comando, não para o `cd`. O `.env` é lido da pasta do arquivo, então o
+> resultado é o mesmo. Vale para todo comando da Evolution (`ps`, `logs`, `down`…).
 
 ```bash
 sudo ss -tlpn | grep 8080
@@ -3129,6 +3205,7 @@ Todas documentadas em `backend/.env.example`. As que importam aqui:
 | `UPLOAD_MAX_BYTES` | `99614720` (95 MB) | O Cloudflare corta acima de 100 MB com erro próprio, sem a mensagem da aplicação |
 | `STORAGE_DRIVER` | `db` | Ver D6 |
 | `MFA_EMAIL_ENABLED` | ausente | Interruptor de emergência do 2FA; o seletor global do ADMIN é que decide |
+| `GOOGLE_CLIENT_ID` | o ID de produção (igual ao `VITE_GOOGLE_CLIENT_ID`) | Ausente: login com Google recusado (o boot avisa). Diferente do frontend: idem. É ele que impede um token emitido para **outro** app de abrir sessão aqui |
 
 **Segredos de sessão.** O `JWT_SECRET` é a chave que assina os tokens (`lib/sessionTokens.js`).
 Quem o descobre **fabrica** um token com qualquer usuário — entra como ADMIN de qualquer
@@ -3346,3 +3423,38 @@ Ele descreve o **estado verificado** da produção, não a intenção. Ao mudar 
 de ambiente ou passo de subida, atualize aqui **junto** com o código: um roteiro que descreve um
 servidor que não existe mais é pior que nenhum, porque é seguido com confiança. Registre sempre
 o **porquê** — é ele que diz a quem vier depois se o passo ainda vale.
+
+---
+
+## Pendências
+
+### P-1. Brevo: restringir as chaves SMTP aos IPs autorizados
+
+> **Situação (2026-10-08):** chave SMTP de produção criada (`apis2vet`), login
+> `b80165001@smtp-brevo.com`. O Brevo avisa *"Endereços IP não autorizados não são bloqueados
+> para suas chaves SMTP"* — o bloqueio **ainda não foi ativado**.
+
+**Por que fazer:** a chave SMTP mora no `backend.env`. Se ela vazar (backup, print, commit por
+engano), qualquer um envia e-mail em nome da S2Vet, de qualquer máquina — e queima a reputação
+do domínio. Com o bloqueio, a chave só funciona a partir dos IPs cadastrados.
+
+🔴 **Ativar antes de cadastrar o IP PARA o envio de e-mail** — 2FA, "esqueci minha senha" e
+convites param de sair. Siga a ordem:
+
+1. `[BE]` Confirme o IP público de **saída** do Backend (é quem envia, não o Frontend):
+   ```bash
+   curl -4 ifconfig.me
+   ```
+   > **Para que serve:** mostra com que IP o Backend aparece na internet. Deve ser o
+   > `177.153.69.171` (o mesmo restrito no Google Cloud para a chave do Gemini). O
+   > WireGuard/Tailscale não muda esse IP, salvo se houver *exit node* configurado.
+2. No Brevo: **Segurança → IPs autorizados** → cadastre esse IP.
+3. **Desenvolvimento:** se o backend local também envia com a mesma chave, ele passa a ser
+   bloqueado. Ou cadastre o IP de casa (residencial muda — o Brevo pede aprovação por e-mail
+   quando um IP novo tenta enviar), ou deixe o e-mail desligado no dev (sem
+   `EMAIL_USER`/`EMAIL_PASS` no `.env` local).
+4. Só então: **Ativar para chaves SMTP**.
+5. Teste em produção pelo "Esqueci minha senha" e confira que chegou.
+
+⚠️ Se o envio falhar depois de ativar, o primeiro suspeito é o **IP de saída não cadastrado**
+— antes da chave ou do remetente. Trocou de VPS ou de IP: cadastre o novo **antes** da troca.

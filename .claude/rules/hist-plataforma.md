@@ -40,6 +40,29 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-08 (🔴 **O LOGIN COM GOOGLE ACEITAVA TOKEN DE QUALQUER APLICATIVO.**)
+
+`GoogleController.login` validava o `access_token` só pelo `/oauth2/v3/userinfo`, que
+responde "de quem é" o token — e responde para token emitido a QUALQUER app com "Entrar
+com Google". O dono de um app qualquer reaproveitava o token de quem entrou nele e abria
+sessão no S2Vet como aquela pessoa, sem senha e sem 2FA (token substitution / confused
+deputy). Achado ao conferir o Client ID de produção durante o deploy (KingHost).
+- `lib/googleToken.js` (fonte única): `/tokeninfo` → exige `aud` (ou `azp`) ∈
+  `GOOGLE_CLIENT_ID`, `email_verified` e não expirado; o `/userinfo` só fornece o nome
+  (e confere o mesmo `sub`). Regra pura em `validarTokenInfo`, testável sem rede.
+- 🔴 **FAIL-CLOSED**: sem `GOOGLE_CLIENT_ID`, login com Google → 503. "Sem variável =
+  aceita qualquer audiência" reabriria o furo em silêncio. O boot avisa (`server.ts`).
+- ⚠️ `GOOGLE_CLIENT_ID` tem de ser o MESMO do `VITE_GOOGLE_CLIENT_ID` do build da tela.
+  Aceita lista por vírgula só para a troca de cliente OAuth.
+- Token de outra audiência responde **401** (genérico) e loga `warn`. A tela usa `fetch`
+  cru, então o 401 não aciona o refresh do axios.
+- Produção ganhou cliente OAuth PRÓPRIO ("S2Vet Produção", origem só
+  `https://app.s2vet.com.br`); o de desenvolvimento segue com as origens locais.
+Gate: `__tests__/googleTokenAudiencia.test.js` (13) — ✅ verificado que REPROVA (sem a
+checagem de audiência, 2 falham). Suíte: 1892 passando; as 3 suítes vermelhas são as
+herdadas registradas em 2026-09-30 (`pacienteInativo`, `produtoPorNome`, `tenancyRls`
+por `tb_medicamentos_bkp2709`). **NENHUMA MIGRATION.**
+
 # Atualizado em: 2026-10-02 (🔴 **O NÚMERO DO WHATSAPP SUMIA DE CONFIGURAÇÕES AO TROCAR
 #   DE TELA.**)
 

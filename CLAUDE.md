@@ -3856,6 +3856,7 @@ IDENTIFICAÇÃO: sol.solicitanteId !== sol.vetUserId → iniciado pelo PROPRIET�
 | Rate limiting | 200 req/min geral · 20 req/15min em /auth | Defesa contra brute force e scraping |
 | API keys | `GEMINI_API_KEY` apenas no backend `.env` | Nunca expor no bundle JS do frontend |
 | Google Client ID | `VITE_GOOGLE_CLIENT_ID` no frontend — intencional | Client ID é público por design do OAuth |
+| Login Google | Token conferido CONTRA o Client ID (`lib/googleToken.js`, `/tokeninfo` → `aud`), fail-closed sem `GOOGLE_CLIENT_ID` | Validar só pelo `/userinfo` aceitava token de QUALQUER app: o dono de outro app abria sessão como o usuário, sem senha e sem 2FA (2026-10-08). Gate: `__tests__/googleTokenAudiencia.test.js` |
 | Console output | Suprimido em produção via main.tsx (`console.*` → noop quando `!import.meta.env.DEV`) | Não expor stack traces e erros internos ao usuário final |
 | 403 silenciosos | GET 403 resolve como `{ data: null }` (não rejeita, não loga) | Evitar ruído de erro para operações bloqueadas por permissão normal |
 

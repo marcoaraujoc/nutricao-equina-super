@@ -1,5 +1,3 @@
-const https  = require('https');
-
 const prisma = require('../lib/prisma').default;
 const { setAuthCookies } = require('../lib/authCookies');
 const { podeAcessarSistema } = require('../lib/usuarioEmpresa');
@@ -7,30 +5,9 @@ const { normalizeEmail, findUserByEmail } = require('../lib/email');
 const { registrarAcesso } = require('../lib/auditoria');
 // Duração da sessão e assinatura dos tokens: fonte única em lib/sessionTokens.js
 const { assinarAccessToken, gerarRefreshToken: generateRefreshToken } = require('../lib/sessionTokens');
-
-function fetchGoogleUserInfo(accessToken) {
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: 'www.googleapis.com',
-      path:     '/oauth2/v3/userinfo',
-      method:   'GET',
-      headers:  { Authorization: `Bearer ${accessToken}` },
-    };
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.error) reject(new Error(parsed.error.message || 'Google userinfo error'));
-          else resolve(parsed);
-        } catch (e) { reject(e); }
-      });
-    });
-    req.on('error', reject);
-    req.end();
-  });
-}
+// 🔴 O token é conferido CONTRA O CLIENT ID DO S2VET — ver lib/googleToken.js. NUNCA
+// voltar a validar só pelo /userinfo: ele aceita token emitido para QUALQUER app.
+const { verificarAccessTokenGoogle } = require('../lib/googleToken');
 
 const GoogleController = {
   login: async (req, res) => {
@@ -40,16 +17,24 @@ const GoogleController = {
         return res.status(400).json({ error: 'access_token do Google não fornecido' });
       }
 
-      // Busca dados do usuário na API do Google
+      // Confere no Google para QUEM o token foi emitido, e só então de quem ele é.
       let googleUser;
       try {
-        googleUser = await fetchGoogleUserInfo(access_token);
+        googleUser = await verificarAccessTokenGoogle(access_token);
       } catch (e) {
-        return res.status(400).json({ error: 'Token Google inválido ou expirado' });
+        if (e.code === 'CONFIG') {
+          console.error('Login Google recusado:', e.message);
+          return res.status(503).json({ error: 'Login com Google indisponível no momento.' });
+        }
+        if (e.code === 'AUDIENCIA') {
+          // Token válido de OUTRO aplicativo: é a tentativa que esta checagem existe para barrar.
+          console.warn('Login Google recusado: token emitido para outro aplicativo.');
+        }
+        return res.status(401).json({ error: 'Token Google inválido ou expirado' });
       }
 
       const email    = normalizeEmail(googleUser.email);
-      const fullName = googleUser.name;
+      const fullName = googleUser.nome;
 
       if (!email) {
         return res.status(400).json({ error: 'E-mail não encontrado no token Google' });

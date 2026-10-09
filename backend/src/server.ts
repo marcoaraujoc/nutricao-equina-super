@@ -90,6 +90,17 @@ if (!process.env.JWT_REFRESH_SECRET) {
   }
 }
 
+// Sem GOOGLE_CLIENT_ID o "Entrar com Google" é RECUSADO (fail-closed, lib/googleToken.js):
+// é o Client ID que impede um token emitido para OUTRO app de abrir sessão aqui. Não
+// bloqueia o boot — o login por senha segue funcionando —, mas avisa alto.
+if (!String(process.env.GOOGLE_CLIENT_ID || '').trim()) {
+  // eslint-disable-next-line no-console
+  process.stderr.write(
+    '[AVISO] GOOGLE_CLIENT_ID não definido — o login com Google será RECUSADO.\n' +
+    '        Use o MESMO valor do VITE_GOOGLE_CLIENT_ID do frontend.\n'
+  );
+}
+
 // Extend Express Request with runtime-injected fields
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
