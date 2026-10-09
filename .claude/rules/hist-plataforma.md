@@ -40,6 +40,35 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-08 (parte 2) (**VULNERABILIDADES DE DEPENDÊNCIAS** — auditoria
+#   do `npm audit` antes de abrir a produção.)
+
+Antes: backend 22 (1 crítica), frontend 27. **Depois, só o que vai para produção
+(`npm audit --omit=dev`): backend 3 moderadas, frontend ZERO.**
+- `npm audit fix` (sem troca de major) nos dois lados — inclui a **crítica**
+  `proxy-addr` (spoofing de IP via IPv6 mapeado; é o que o Express usa com `trust proxy`
+  para achar o IP real do rate limit e da auditoria), `multer`, `axios`, `form-data`,
+  `body-parser`, `vite`, `react-router`, `postcss`.
+- **`qs` forçado para 6.16 por `overrides`** (backend/package.json): o Express 4 fixa a
+  6.14, que tem DoS no parse da query string — dado de qualquer visitante. Mesma major.
+- **`nodemailer` 8 → 10.** As quebras (Node ≥ 20, TLS validado ao buscar anexo por URL,
+  reescrita em TS) não atingem o uso: anexos vão como `content`, transporte por `host`.
+  ⚠️ Conferir o envio real em produção (`npm run email:testar`) depois do deploy.
+- **`sharp` e `nodemon` REMOVIDOS** do backend: nenhum código os usava (o `npm run dev`
+  é `ts-node-dev`).
+- **`xlsx` (frontend) pelo tarball OFICIAL da SheetJS** (`cdn.sheetjs.com/xlsx-0.20.3`):
+  a SheetJS parou de publicar no npm, e a 0.18.5 do npm não tem correção. Mesma API.
+  ⚠️ O `npm ci` passa a baixar de `cdn.sheetjs.com` — a VPS libera saída (§ Etapa 7).
+- **ACEITAS, de propósito:** `mammoth → argparse → sprintf-js` (3 moderadas; só o CLI
+  `bin/mammoth` usa o `argparse`, a biblioteca não — a "correção" sugerida é rebaixar o
+  mammoth para 0.3.29); `jest`/`ts-node-dev`/`braces`/`chokidar` (só desenvolvimento e
+  teste, não rodam na API); `tailwindcss` 3 (só build — a correção é migrar para a 4).
+- Suíte: 1893 passando, as 3 vermelhas herdadas de sempre. `tsc` e `vite build` limpos.
+- ⚠️ **`faturaDoPaciente.test.js` é INSTÁVEL e JÁ ERA antes desta mudança** (medido com as
+  dependências antigas: falhou 1 em 4 rodadas junto das outras suítes de fatura; sozinho,
+  8 em 8 passam). O SQL sai sem `"fechado_em" = NULL` quando a guarda `temColunas()` não
+  usa o mock de `../lib/prisma` e cai no `catch`. Causa raiz não investigada.
+
 # Atualizado em: 2026-10-08 (🔴 **O LOGIN COM GOOGLE ACEITAVA TOKEN DE QUALQUER APLICATIVO.**)
 
 `GoogleController.login` validava o `access_token` só pelo `/oauth2/v3/userinfo`, que
