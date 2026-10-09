@@ -53,7 +53,10 @@ const comprimirImagem = (file: File, maxWidth = 1200, qualidade = 0.82): Promise
     img.src = url;
   });
 
-export type TipoSelecao = 'DIA_ESPECIFICO' | 'PRIMEIRO_DIA_MES' | 'ULTIMO_DIA_MES' | 'DIA_UTIL';
+// PRIMEIRO_DIA_MES e PRIMEIRO_DIA_UTIL são atalhos de TELA: gravam DIA_FIXO 1 e DIA_UTIL 1.
+export type TipoSelecao =
+  | 'DIA_ESPECIFICO' | 'PRIMEIRO_DIA_MES' | 'ULTIMO_DIA_MES'
+  | 'PRIMEIRO_DIA_UTIL' | 'ULTIMO_DIA_UTIL' | 'DIA_UTIL';
 
 export const ORDINAIS = ['1º', '2º', '3º', '4º', '5º', '6º', '7º', '8º', '9º', '10º'];
 
@@ -320,7 +323,11 @@ export function useConfiguracaoOperacional() {
         setDispensarExecucao(dados.dispensarExecucaoPrescricao === true);
         setDispensaEvolucao({ ...DISPENSA_EVOLUCAO_VAZIA, ...(dados.dispensaEvolucaoPrescricao ?? {}) });
 
-        if (dados.tipoFechamento === 'DIA_UTIL') {
+        if (dados.tipoFechamento === 'ULTIMO_DIA_UTIL') {
+          setTipoSelecao('ULTIMO_DIA_UTIL');
+        } else if (dados.tipoFechamento === 'DIA_UTIL' && dados.diaFechamentoFatura === 1) {
+          setTipoSelecao('PRIMEIRO_DIA_UTIL');
+        } else if (dados.tipoFechamento === 'DIA_UTIL') {
           setTipoSelecao('DIA_UTIL');
           setNDiaUtil(String(dados.diaFechamentoFatura ?? 5));
         } else if (dados.tipoFechamento === 'DIA_FIXO' && dados.diaFechamentoFatura === 1) {
@@ -379,7 +386,7 @@ export function useConfiguracaoOperacional() {
   const salvar = useCallback(async (): Promise<boolean> => {
     setErroAcao(null);
 
-    let tipoFechamento: 'DIA_FIXO' | 'DIA_UTIL' | 'ULTIMO_DIA_MES';
+    let tipoFechamento: 'DIA_FIXO' | 'DIA_UTIL' | 'ULTIMO_DIA_MES' | 'ULTIMO_DIA_UTIL';
     let diaFechamentoFatura: number | null;
 
     if (tipoSelecao === 'ULTIMO_DIA_MES') {
@@ -387,6 +394,12 @@ export function useConfiguracaoOperacional() {
       diaFechamentoFatura = null;
     } else if (tipoSelecao === 'PRIMEIRO_DIA_MES') {
       tipoFechamento = 'DIA_FIXO';
+      diaFechamentoFatura = 1;
+    } else if (tipoSelecao === 'ULTIMO_DIA_UTIL') {
+      tipoFechamento = 'ULTIMO_DIA_UTIL';
+      diaFechamentoFatura = null;
+    } else if (tipoSelecao === 'PRIMEIRO_DIA_UTIL') {
+      tipoFechamento = 'DIA_UTIL';
       diaFechamentoFatura = 1;
     } else if (tipoSelecao === 'DIA_UTIL') {
       const n = Number(nDiaUtil);

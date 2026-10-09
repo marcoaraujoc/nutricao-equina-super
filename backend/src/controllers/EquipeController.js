@@ -14,7 +14,7 @@ const { cadastroDaPessoaNaEmpresa, montarResposta } = require('../lib/cadastroPo
 const { resolverComoCliente } = require('../lib/tipoContexto');
 const { responderErro } = require('../lib/erroResposta');
 const { storage }      = require('../storage');
-const { TIPOS_FECHAMENTO_VALIDOS } = require('../lib/faturaUtils');
+const { TIPOS_FECHAMENTO_VALIDOS, TIPOS_FECHAMENTO_SEM_DIA } = require('../lib/faturaUtils');
 const { normalizarValidade, lerValidade, salvarValidade } = require('../lib/validadeOrcamento');
 const formaCobranca = require('../lib/formaCobrancaEstoque');
 // Etapa de Execução de Prescrição OPCIONAL por empresa (2026-09-24).
@@ -219,7 +219,7 @@ function configuracaoCompleta(config, empresa) {
     && config.especiesAtendidas
     && config.tempoConsultaPadraoMin
     && config.tipoFechamento
-    && (config.tipoFechamento === 'ULTIMO_DIA_MES' || config.diaFechamentoFatura)
+    && (TIPOS_FECHAMENTO_SEM_DIA.includes(config.tipoFechamento) || config.diaFechamentoFatura)
   );
   if (!operacionalOk) return false;
 
@@ -1585,7 +1585,7 @@ const EquipeController = {
         }
         tipoFinal = tipoFechamento;
 
-        if (tipoFechamento === 'ULTIMO_DIA_MES') {
+        if (TIPOS_FECHAMENTO_SEM_DIA.includes(tipoFechamento)) {
           diaFinal = null; // ignora qualquer valor enviado
         } else {
           const n = Number(diaFechamentoFatura);

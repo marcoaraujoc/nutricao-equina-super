@@ -570,9 +570,14 @@ async function reprecificarExameNaFatura(tx, exameId, { valor, quantidade }) {
   return true;
 }
 
-// ─── Regras de fechamento de fatura (dia fixo | dia útil | último dia do mês) ─────────────
+// ─── Regras de fechamento de fatura (dia fixo | dia útil | último dia do mês | último dia útil) ─
 
-const TIPOS_FECHAMENTO_VALIDOS = ['DIA_FIXO', 'DIA_UTIL', 'ULTIMO_DIA_MES'];
+// ULTIMO_DIA_UTIL (2026-10-09): o último dia útil do mês, sem número — como o
+// ULTIMO_DIA_MES. O "primeiro dia útil" NÃO é tipo próprio: é DIA_UTIL com dia 1, mesmo
+// atalho de tela que o "primeiro dia do mês" faz com DIA_FIXO dia 1.
+const TIPOS_FECHAMENTO_VALIDOS = ['DIA_FIXO', 'DIA_UTIL', 'ULTIMO_DIA_MES', 'ULTIMO_DIA_UTIL'];
+/** Tipos que não usam `diaFechamentoFatura` (gravado como null). */
+const TIPOS_FECHAMENTO_SEM_DIA = ['ULTIMO_DIA_MES', 'ULTIMO_DIA_UTIL'];
 
 /** Chave "AAAA-MM-DD" em horário local — evita bug de fuso ao comparar com .toISOString() (UTC). */
 function chaveData(d) {
@@ -646,6 +651,13 @@ function nEsimoDiaUtil(n, referencia) {
   return null;
 }
 
+/** Retorna a Date do ÚLTIMO dia útil do mês de `referencia` (fim de semana e feriado nacional pulados). */
+function ultimoDiaUtil(referencia) {
+  const d = new Date(referencia.getFullYear(), referencia.getMonth() + 1, 0);
+  while (!ehDiaUtil(d)) d.setDate(d.getDate() - 1);
+  return d;
+}
+
 function ehUltimoDiaDoMes(hoje) {
   const amanha = new Date(hoje);
   amanha.setDate(amanha.getDate() + 1);
@@ -667,7 +679,7 @@ function diaFixoBateHoje(dia, hoje) {
  * Decide se uma fatura deve fechar hoje, dada a configuração de fechamento da empresa/equipe.
  *
  * @param {object} config
- * @param {string|null} config.tipoFechamento      - 'DIA_FIXO' | 'DIA_UTIL' | 'ULTIMO_DIA_MES' | null
+ * @param {string|null} config.tipoFechamento      - 'DIA_FIXO' | 'DIA_UTIL' | 'ULTIMO_DIA_MES' | 'ULTIMO_DIA_UTIL' | null
  * @param {number|null} config.diaFechamentoFatura - dia do mês (DIA_FIXO) ou Nº dia útil (DIA_UTIL)
  * @param {Date} hoje
  */
@@ -684,6 +696,9 @@ function deveFecharHoje(config, hoje) {
     if (config.diaFechamentoFatura == null) return ehUltimoDiaDoMes(hoje);
     const data = nEsimoDiaUtil(config.diaFechamentoFatura, hoje);
     return data != null && chaveData(data) === chaveData(hoje);
+  }
+  if (tipo === 'ULTIMO_DIA_UTIL') {
+    return chaveData(ultimoDiaUtil(hoje)) === chaveData(hoje);
   }
   return ehUltimoDiaDoMes(hoje);
 }
@@ -835,7 +850,9 @@ module.exports = {
   reprecificarExameNaFatura,
   FaturaPagaError,
   TIPOS_FECHAMENTO_VALIDOS,
+  TIPOS_FECHAMENTO_SEM_DIA,
   deveFecharHoje,
+  ultimoDiaUtil,
   ehDiaUtil,
   // Exportados para `lib/vencimentoCredor.js` (2026-09-22): o vencimento da CONTA A
   // PAGAR usa a MESMA forma do fechamento da fatura, e uma segunda conta de dia útil

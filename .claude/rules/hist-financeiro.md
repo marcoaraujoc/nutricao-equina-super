@@ -34,6 +34,24 @@ paths:
 As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão em `CLAUDE.md`.
 
 ---
+# Atualizado em: 2026-10-09 (**FECHAMENTO DA FATURA: ÚLTIMO E PRIMEIRO DIA ÚTIL DO MÊS** —
+#   opções novas no campo "Fechamento da Fatura" de `/cadastro/empresa`, a pedido.
+#   · **Último dia útil do mês** = tipo NOVO `ULTIMO_DIA_UTIL` (`diaFechamentoFatura`
+#     null). `deveFecharHoje` compara com `ultimoDiaUtil(hoje)` — recua do último dia do
+#     mês pulando fim de semana e feriado nacional (mesmo `ehDiaUtil` do DIA_UTIL).
+#   · **Primeiro dia útil do mês** NÃO é tipo novo: grava `DIA_UTIL` com dia 1 (atalho de
+#     TELA, como "Primeiro dia do mês" = DIA_FIXO 1). Quem já tinha "1º dia útil" passa a
+#     ver esta opção ao abrir a tela — é o mesmo valor.
+#   ⚠️ `TIPOS_FECHAMENTO_SEM_DIA` (faturaUtils) é a fonte única de "tipo sem número":
+#   usada no `salvarConfiguracao` (grava null) e no gate de configuração completa
+#   (`configuracaoCompleta`, EquipeController) — sem ela, a empresa com ULTIMO_DIA_UTIL
+#   seria tida como NÃO configurada e o Sidebar bloquearia os módulos.
+#   SEM MIGRATION (`tipoFechamento` é `String?`). ⚠️ `CadastroEmpresaLegado.tsx` (backup)
+#   não ganhou as opções. Gate: `__tests__/fechamentoDiaUtil.test.js`.
+#   ⚠️ NÃO verificado em navegador.)
+
+---
+
 # Atualizado em: 2026-10-05 (🔴 **FECHAR O PACIENTE GERA A FATURA DELE** — a pedido:
 #   "caso seja realizado o fechamento da fatura por animal, deverá ser removido da fatura
 #   principal a informação do animal fechado e será gerada uma nova fatura com as

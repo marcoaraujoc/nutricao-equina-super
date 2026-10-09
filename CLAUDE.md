@@ -866,8 +866,9 @@ ProprietarioLocalidade → localidades atendidas do CLIENTE, cada uma com a SUA 
                     há como saber a divisão, e chutar produziria um combinado que ninguém acordou.
 EmpresaConfiguracao → configuração única por empresa (CNPJ) ou por equipe (empresa pessoal/CPF) —
                     mesmo critério de escopo do EmpresaContext. Campos: logoUrl, tipoFechamento
-                    (DIA_FIXO|DIA_UTIL|ULTIMO_DIA_MES|null=compat), diaFechamentoFatura (dia do mês
-                    1-31 p/ DIA_FIXO, Nº dia útil 1-10 p/ DIA_UTIL), whatsapp (migration
+                    (DIA_FIXO|DIA_UTIL|ULTIMO_DIA_MES|ULTIMO_DIA_UTIL|null=compat), diaFechamentoFatura (dia do mês
+                    1-31 p/ DIA_FIXO, Nº dia útil 1-10 p/ DIA_UTIL; null nos dois ÚLTIMO_*). "Primeiro dia útil"
+                    da tela = DIA_UTIL 1 (atalho, como "Primeiro dia do mês" = DIA_FIXO 1), whatsapp (migration
                     20260710000002 — somente dígitos DDD+número, 10-15, p/ envio/recebimento de
                     mensagens; integração de mensageria ainda não existe). unique(empresaId, equipeId).
                     Gerenciada só por GESTOR/dono via GET/PUT /api/equipes/configuracoes.

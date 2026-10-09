@@ -1106,11 +1106,13 @@ export default function CadastroEmpresa() {
                       >
                         <option value="ULTIMO_DIA_MES">Último dia do mês</option>
                         <option value="PRIMEIRO_DIA_MES">Primeiro dia do mês</option>
+                        <option value="ULTIMO_DIA_UTIL">Último dia útil do mês</option>
+                        <option value="PRIMEIRO_DIA_UTIL">Primeiro dia útil do mês</option>
                         <option value="DIA_ESPECIFICO">Dia específico do mês</option>
                         <option value="DIA_UTIL">Dia útil do mês</option>
                       </select>
                       <p className="text-xs text-gray-400 mt-1">
-                        {op.tipoSelecao === 'DIA_UTIL'
+                        {op.tipoSelecao === 'DIA_UTIL' || op.tipoSelecao === 'ULTIMO_DIA_UTIL' || op.tipoSelecao === 'PRIMEIRO_DIA_UTIL'
                           ? 'Dia útil considera fins de semana e feriados nacionais.'
                           : op.tipoSelecao === 'DIA_ESPECIFICO'
                           ? 'O dia específico vai de 1 a 28 para existir em todos os meses do ano.'
@@ -1152,7 +1154,11 @@ export default function CadastroEmpresa() {
                            vale, em vez de sumir e reorganizar a linha inteira. */
                         <input
                           disabled
-                          value={op.tipoSelecao === 'PRIMEIRO_DIA_MES' ? 'Primeiro dia do mês' : 'Último dia do mês'}
+                          value={{
+                            PRIMEIRO_DIA_MES:  'Primeiro dia do mês',
+                            ULTIMO_DIA_UTIL:   'Último dia útil do mês',
+                            PRIMEIRO_DIA_UTIL: 'Primeiro dia útil do mês',
+                          }[op.tipoSelecao as string] ?? 'Último dia do mês'}
                           className={`${INPUT} bg-gray-50 text-gray-500`}
                         />
                       )}
