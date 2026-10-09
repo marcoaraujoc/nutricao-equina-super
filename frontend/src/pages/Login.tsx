@@ -377,7 +377,6 @@ export default function Login() {
           Entrar com Google
         </button>
 
-        <InlineError message={googleError} className="mt-3" />
 
         <div className="mt-8 text-sm leading-relaxed text-gray-700">
           <p className="font-medium">Deseja conhecer o S2Vet?</p>
@@ -408,6 +407,41 @@ export default function Login() {
       {!desafio2fa && <VitrineLogin className="lg:min-w-0 lg:flex-1" />}
 
       </div>
+
+      {/* MODAL — Erro do "Entrar com Google" (2026-10-09, a pedido). Em JANELA, e não
+          em linha sob o botão: a recusa ("Acesso não Autorizado") é o fim do caminho
+          para quem tentou, e a linha discreta passava despercebida. */}
+      {googleError && (
+        <div
+          className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="erro-google-titulo"
+          aria-describedby="erro-google-mensagem"
+          onKeyDown={e => { if (e.key === 'Escape') setGoogleError(''); }}
+        >
+          <div className="bg-white rounded-3xl px-6 py-8 sm:p-8 w-full max-w-md text-gray-900 text-center">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
+              <AlertCircle size={24} className="text-red-600" />
+            </div>
+            <h2 id="erro-google-titulo" className="text-xl sm:text-2xl font-bold mb-2">
+              Entrar com Google
+            </h2>
+            <p id="erro-google-mensagem" className="text-gray-600 text-sm">
+              {googleError}
+            </p>
+            <button
+              type="button"
+              autoFocus
+              onClick={() => setGoogleError('')}
+              className="w-full mt-6 bg-emerald-600 hover:bg-emerald-700
+                         text-white py-3 rounded-3xl text-base font-semibold"
+            >
+              Fechar
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* MODAL — Esqueci minha senha */}
       {showForgotModal && (

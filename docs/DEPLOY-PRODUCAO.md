@@ -3246,7 +3246,7 @@ Saia e use **Entrar com Google** com uma conta cadastrada no sistema.
 > `backend.env` e as origens autorizadas do cliente OAuth "S2Vet Produção" no Google Cloud.
 
 Depois, **Entrar com Google** com uma conta Google que **não** está cadastrada no sistema.
-> **Para que serve:** ✅ aparece **"Acesso não Autorizado"** e não entra. Só acessa quem o
+> **Para que serve:** ✅ abre uma janela com **"Acesso não Autorizado"** e não entra. Só acessa quem o
 > ADMIN ou o gestor de uma empresa cadastrou — o Google não cria conta, e não existe mais
 > autocadastro (a tela `/register` e o `POST /api/auth/register` foram removidos em
 > 2026-10-09). Se entrar, a versão publicada é anterior a essa correção.
