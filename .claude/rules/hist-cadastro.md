@@ -37,6 +37,18 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-09 (**FOTO DO PACIENTE AJUSTÁVEL MANUALMENTE** — a pedido.
+#   Em `/animais`, escolher a foto NÃO grava mais direto: abre o `FotoEditorModal` (o
+#   MESMO do Cadastro Pessoal — zoom + arrastar, mouse e toque) e o que sobe é o
+#   recorte. Botão **"Ajustar foto"** reabre o editor sobre a foto já salva.
+#   ⚠️ O editor ganhou a prop opcional `saida` (lado do arquivo em px, padrão 512 —
+#   o avatar do profissional não muda); o paciente usa **1024**, porque a foto dele é
+#   exibida maior que um avatar. ⚠️ O recorte é QUADRADO, que é como a foto aparece em
+#   todo o sistema (`object-cover`). SEM MIGRATION, backend intocado.
+#   ⚠️ NÃO verificado em navegador.)
+
+---
+
 # Atualizado em: 2026-10-05 (🔴 **PACIENTE AVULSO: SÓ 5 CAMPOS OBRIGATÓRIOS** — a pedido.
 #   Marcado "Paciente avulso", só **nome do animal, localização e nome, e-mail e telefone
 #   do proprietário** são obrigatórios (o NOME do dono entrou num 2º pedido, no mesmo dia).

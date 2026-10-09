@@ -11,18 +11,21 @@ import { useEffect, useRef, useState } from 'react';
 import { X, ZoomIn, Loader2, Move } from 'lucide-react';
 
 const QUADRO_MAX = 288; // lado máximo do quadro de recorte na tela (px)
-const SAIDA      = 512; // lado do arquivo final (px) — avatar de 48px com folga para retina
+const SAIDA_PADRAO = 512; // lado do arquivo final (px) — avatar de 48px com folga para retina
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 4;
 
 interface Props {
-  /** Arquivo escolhido OU URL de uma foto já salva (mesma origem — /uploads). */
+  /** Arquivo escolhido OU URL de uma foto já salva (mesma origem — /api/midia). */
   origem: File | string;
   onConfirmar: (arquivo: File) => void;
   onCancelar: () => void;
+  /** Lado do arquivo final em px. A foto do paciente é exibida maior que o avatar. */
+  saida?: number;
 }
 
-export default function FotoEditorModal({ origem, onConfirmar, onCancelar }: Props) {
+export default function FotoEditorModal({ origem, onConfirmar, onCancelar, saida = SAIDA_PADRAO }: Props) {
+  const SAIDA = saida;
   const [src, setSrc]         = useState<string | null>(null);
   const [zoom, setZoom]       = useState(1);
   const [offset, setOffset]   = useState({ x: 0, y: 0 });

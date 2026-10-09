@@ -25,6 +25,7 @@ import InlineError from '../components/InlineError';
 import ErroAcao, { type ErroAcaoDados } from '../components/ErroAcao';
 import ProprietarioFormModal, { formatarMoeda, parseMoeda } from '../components/ProprietarioFormModal';
 import ModalJustificativa from '../components/ModalJustificativa';
+import FotoEditorModal from '../components/FotoEditorModal';
 
 
 // ─── NRC ─────────────────────────────────────────────────────────────────────
@@ -311,6 +312,8 @@ const Animal = () => {
   // Marca que a foto JÁ SALVA deve ser removida no próximo salvar — "Remover foto"
   // só troca o preview local; sem isso o backend nunca soube que devia apagar.
   const [photoRemovida,  setPhotoRemovida]  = useState(false);
+  // Arquivo (recém-escolhido) ou URL (foto já salva) em edição no FotoEditorModal
+  const [editandoFoto,   setEditandoFoto]   = useState<File | string | null>(null);
   const [especies,       setEspecies]       = useState<{ id: number; nome: string }[]>([]);
   const [todasRacas,     setTodasRacas]     = useState<{ id: number; nome: string; especieId: number }[]>([]);
   const [racasFiltradas, setRacasFiltradas] = useState<{ id: number; nome: string }[]>([]);
@@ -804,24 +807,24 @@ const Animal = () => {
   };
 
   // ── Handlers ───────────────────────────────────────────────────────────────
-  const handlePhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Escolher o arquivo NÃO grava: abre o editor (zoom + arrastar), e o que sobe é o
+  // recorte — mesmo editor do Cadastro Pessoal. A foto é exibida em quadro
+  // `object-cover`, que cortava pelo centro sem a pessoa poder escolher o enquadramento.
+  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setEditandoFoto(file);
+    e.target.value = ''; // permite reescolher o MESMO arquivo depois de remover
+  };
 
-    // Preview imediato antes de comprimir
-    const reader = new FileReader();
-    reader.onloadend = () => setPhotoPreview(reader.result as string);
-    reader.readAsDataURL(file);
-
-    // Comprime em background
-    const comprimido = await comprimirImagem(file);
+  const handleFotoAjustada = async (arquivo: File) => {
+    setEditandoFoto(null);
+    const comprimido = await comprimirImagem(arquivo);
     setPhotoFile(comprimido);
     setPhotoRemovida(false);
-
-    // Atualiza preview com versão comprimida
-    const reader2 = new FileReader();
-    reader2.onloadend = () => setPhotoPreview(reader2.result as string);
-    reader2.readAsDataURL(comprimido);
+    const reader = new FileReader();
+    reader.onloadend = () => setPhotoPreview(reader.result as string);
+    reader.readAsDataURL(comprimido);
   };
 
   // ── Criar tratador inline ──────────────────────────────────────────────────
@@ -1347,12 +1350,28 @@ const Animal = () => {
               <input type="file" accept="image/*" className="hidden" onChange={handlePhotoChange} />
             </label>
             {photoPreview && (
-              <button type="button" onClick={() => { setPhotoPreview(null); setPhotoFile(null); setPhotoRemovida(true); }}
-                className="text-xs text-gray-400 hover:text-red-500 underline transition-colors">
-                Remover foto
-              </button>
+              <div className="flex items-center gap-3">
+                <button type="button" onClick={() => setEditandoFoto(photoPreview)}
+                  className="text-xs text-emerald-700 hover:text-emerald-800 underline transition-colors">
+                  Ajustar foto
+                </button>
+                <button type="button" onClick={() => { setPhotoPreview(null); setPhotoFile(null); setPhotoRemovida(true); }}
+                  className="text-xs text-gray-400 hover:text-red-500 underline transition-colors">
+                  Remover foto
+                </button>
+              </div>
             )}
           </div>
+
+          {/* Zoom + reposicionamento. Devolve o arquivo já recortado. */}
+          {editandoFoto && (
+            <FotoEditorModal
+              origem={editandoFoto}
+              saida={1024}
+              onConfirmar={handleFotoAjustada}
+              onCancelar={() => setEditandoFoto(null)}
+            />
+          )}
 
           <form onSubmit={handleSubmit} noValidate className="space-y-5">
 
