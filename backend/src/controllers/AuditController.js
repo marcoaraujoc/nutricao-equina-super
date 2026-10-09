@@ -1,5 +1,6 @@
 const prisma = require('../lib/prisma').default;
 const { aplicarVinculoEmLista } = require('../lib/usuarioEmpresa');
+const { whereSomenteEventosDaEmpresa } = require('../lib/auditoria');
 
 // De qual cadastro sai o NOME do registro que a ação atingiu. `AuditLog.entidadeId`
 // é solto (sem FK — o log sobrevive à exclusão do registro), então não há include a
@@ -24,7 +25,8 @@ class AuditController {
 
   // GET /api/audit/logs — tela de Auditoria (módulo Geral)
   // ADMIN: todos os logs (filtro ?empresaId= opcional).
-  // GESTOR/dono de empresa: apenas os logs da empresa ativa (req.empresaId).
+  // GESTOR/dono de empresa: apenas os logs da empresa ativa (req.empresaId), SEM os
+  // eventos de acesso (login/logout/acesso negado/link público) — esses são só do ADMIN.
   // Demais perfis: 403.
   // Filtros: ?categoria=EXCLUSAO|CANCELAMENTO|INATIVACAO|ATIVACAO|AJUSTE|CONFIGURACAO|TRANSFERENCIA|ALTERACAO|CRIACAO|EXECUCAO|ACESSO_NEGADO,
   //          ?entidade=, ?busca=, ?dataInicio=, ?dataFim=, ?page=, ?limit=
@@ -72,7 +74,11 @@ class AuditController {
         animalIdsBusca = animaisEncontrados.map(a => a.id);
       }
 
+      // 🔴 Gestor NÃO vê eventos de ACESSO (login, logout, acesso negado, link público):
+      // são da plataforma, só o ADMIN vê. Ver `whereSomenteEventosDaEmpresa`.
+      const ehAdmin = user.userType === 'ADMIN';
       const where = {
+        ...(!ehAdmin && whereSomenteEventosDaEmpresa()),
         ...(empresaScope !== undefined && { empresaId: empresaScope }),
         ...(categoria && { categoria: String(categoria) }),
         ...(entidade  && { entidade:  String(entidade)  }),

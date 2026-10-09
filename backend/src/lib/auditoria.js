@@ -48,6 +48,31 @@ const { comEscopoPlataforma } = require('./prismaTenant');
 // A ação exibida na tela é `${categoria} ${entidade}`, ou seja, a categoria É o rótulo.
 const CATEGORIAS = ['EXCLUSAO', 'CANCELAMENTO', 'INATIVACAO', 'ATIVACAO', 'AJUSTE', 'CONFIGURACAO', 'TRANSFERENCIA', 'ALTERACAO', 'CRIACAO', 'EXECUCAO', 'ACESSO_NEGADO', 'EXPORTACAO', 'ACESSO_PUBLICO', 'CONFLITO_EDICAO'];
 
+// 🔴 EVENTOS DE ACESSO SÃO DA PLATAFORMA, NUNCA DA EMPRESA (2026-10-09, a pedido).
+// Login, logout, tentativa de acesso negado e abertura de link público vão SÓ para a
+// Auditoria do ADMIN. A auditoria da empresa mostra o que aconteceu COM OS DADOS dela
+// (cadastro, alteração, inativação, exclusão, execução...). Gravar a `empresaId` nesses
+// eventos continua certo — é DADO, e o ADMIN filtra por ela; quem decide quem vê é a
+// LEITURA, por `whereSomenteEventosDaEmpresa`.
+// ⚠️ LOGIN/LOGOUT não têm `categoria` (é NULL) — por isso o par categoria + action.
+const CATEGORIAS_DE_ACESSO = ['ACESSO_NEGADO', 'ACESSO_PUBLICO'];
+const ACOES_DE_ACESSO      = ['LOGIN', 'LOGOUT'];
+
+/**
+ * `where` (Prisma) que tira os eventos de acesso de uma listagem de auditoria.
+ * ⚠️ NULL-safe de propósito: registros ANTIGOS da empresa também têm `categoria` NULL
+ * (EVOLUCAO_CRIADA/EDITADA/ASSUMIDA). Um `categoria: { notIn }` sozinho os esconderia,
+ * porque `NULL NOT IN (...)` não é verdadeiro no SQL.
+ */
+function whereSomenteEventosDaEmpresa() {
+  return {
+    AND: [
+      { OR: [{ categoria: null }, { categoria: { notIn: CATEGORIAS_DE_ACESSO } }] },
+      { action: { notIn: ACOES_DE_ACESSO } },
+    ],
+  };
+}
+
 /**
  * Extrai o IP de origem do request de forma consistente com o `trust proxy`
  * configurado no server (req.ip já respeita X-Forwarded-For nos hops confiáveis).
@@ -432,6 +457,9 @@ module.exports = {
   registrarAcesso,
   registrarAcessoNegado,
   registrarAcessoPublico,
+  CATEGORIAS_DE_ACESSO,
+  ACOES_DE_ACESSO,
+  whereSomenteEventosDaEmpresa,
   registrarTransferencia,
   registrarTransferenciaPropriedade,
   registrarAlteracao,

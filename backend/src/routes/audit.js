@@ -1,6 +1,7 @@
 const express = require('express');
 const controller = require('../controllers/AuditController');
 const { authenticate } = require('../middlewares/auth');
+const escopoPlataformaSeAdmin = require('../middlewares/escopoPlataforma');
 
 const router = express.Router();
 
@@ -16,6 +17,11 @@ const router = express.Router();
 // e no `logout`. NÃO reabrir esta rota: escrita de auditoria não se aceita do cliente.
 //
 // Tela de Auditoria (módulo Geral) — ADMIN: global; GESTOR/dono: empresa ativa
-router.get('/logs', authenticate, controller.listar);
+// 🔴 `escopoPlataformaSeAdmin` (2026-10-09): `tb_audit_logs` tem RLS forçado, e o ADMIN
+// sem empresa no contexto via ZERO registros — a tela dizia "todas as empresas" e vinha
+// vazia. Pior: LOGIN/LOGOUT nasce SEM empresa (a rota de login não passa pelo
+// `authenticate`), e linha sem empresa só aparece em escopo de plataforma. O middleware
+// confere o papel em runtime: para o gestor é passagem direta e o tenant continua valendo.
+router.get('/logs', authenticate, escopoPlataformaSeAdmin, controller.listar);
 
 module.exports = router;

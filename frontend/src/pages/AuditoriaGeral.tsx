@@ -387,14 +387,18 @@ export default function AuditoriaGeral() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Auditoria</h1>
-            <p className="text-sm text-gray-500">Exclusões, cancelamentos e tentativas de acesso negado{isAdmin ? ' — todas as empresas' : ' da empresa ativa'}.</p>
+            {/* Acessos (login, logout, acesso negado) são SÓ do ADMIN — a empresa vê o que
+                aconteceu com os dados dela. O backend é quem filtra; aqui é só o texto. */}
+            <p className="text-sm text-gray-500">{isAdmin
+              ? 'Acessos, tentativas de acesso negado e alterações — todas as empresas.'
+              : 'Cadastros, alterações, inativações, exclusões e cancelamentos da empresa ativa.'}</p>
           </div>
         </div>
 
         {/* Filtros */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-3">
           <div className="flex flex-wrap gap-2">
-            {([['', 'Todas'], ['ACESSO_NEGADO', 'Acesso negado'], ['EXCLUSAO', 'Exclusões'], ['CANCELAMENTO', 'Cancelamentos'], ['INATIVACAO', 'Inativações'], ['ATIVACAO', 'Ativações'], ['TRANSFERENCIA', 'Transferências'], ['ALTERACAO', 'Alterações'], ['CRIACAO', 'Criações'], ['EXECUCAO', 'Execuções'], ['EXPORTACAO', 'Exportações'], ['CONFLITO_EDICAO', 'Conflitos de edição'], ['CONFIGURACAO', 'Configuração']] as [FiltroCategoria, string][]).map(([key, label]) => (
+            {([['', 'Todas'], ...(isAdmin ? [['ACESSO_NEGADO', 'Acesso negado']] : []), ['EXCLUSAO', 'Exclusões'], ['CANCELAMENTO', 'Cancelamentos'], ['INATIVACAO', 'Inativações'], ['ATIVACAO', 'Ativações'], ['TRANSFERENCIA', 'Transferências'], ['ALTERACAO', 'Alterações'], ['CRIACAO', 'Criações'], ['EXECUCAO', 'Execuções'], ['EXPORTACAO', 'Exportações'], ['CONFLITO_EDICAO', 'Conflitos de edição'], ['CONFIGURACAO', 'Configuração']] as [FiltroCategoria, string][]).map(([key, label]) => (
               <button key={key} onClick={() => setCategoria(key)}
                 className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
                   categoria === key
