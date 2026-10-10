@@ -10,8 +10,10 @@ const { tenantRls }       = require('../middlewares/tenantRls');
 const { checkPermission } = require('../middlewares/permissao.middleware');
 const { exigirAcessoAnimal } = require('../middlewares/animalAcesso.middleware');
 
-// memoryStorage para upload persistente — StorageProvider decide o destino
-const upload = multer({ storage: multer.memoryStorage() });
+// memoryStorage para upload persistente — StorageProvider decide o destino.
+// Teto explícito: memoryStorage carrega o arquivo INTEIRO na RAM — sem limite, um
+// upload grande (ou repetido) exaure a memória do processo.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 1 } });
 
 // diskStorage apenas para análise LLM (exameParserService precisa do path)
 const uploadTemp = multer({
@@ -24,6 +26,7 @@ const uploadTemp = multer({
       cb(null, `${Date.now()}-${crypto.randomBytes(12).toString('hex')}${ext}`);
     },
   }),
+  limits: { fileSize: 25 * 1024 * 1024, files: 1 },
 });
 
 // Rotas existentes

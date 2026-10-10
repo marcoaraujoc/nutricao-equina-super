@@ -54,11 +54,12 @@ const uploadResultado = multer({
       cb(null, `${Date.now()}-${crypto.randomBytes(12).toString('hex')}${ext}`);
     },
   }),
+  limits: { fileSize: 25 * 1024 * 1024, files: 1 },
 });
 
 // memoryStorage: a ANÁLISE do exame "não pedido" não grava nada — só lê o arquivo
 // para a IA e devolve sugestões. Nada é persistido em disco antes da confirmação.
-const uploadAnalise = multer({ fileFilter, storage: multer.memoryStorage() });
+const uploadAnalise = multer({ fileFilter, storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 1 } });
 
 router.get('/animal/:animalId',   authenticate, checkPermission('atendimento.exames.ler',       'LEITURA'), ExameClinicoController.listarPorAnimal);
 router.get('/:id',                authenticate, checkPermission('atendimento.exames.ler',       'LEITURA'), ExameClinicoController.obterPorId);

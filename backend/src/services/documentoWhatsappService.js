@@ -18,6 +18,25 @@
 const logger = require('../lib/logger');
 const { getWhatsAppProvider } = require('../messaging/whatsappProvider');
 
+// ── Trava de CONCORRÊNCIA do Puppeteer ───────────────────────────────────────
+// Cada htmlParaPdf lança um Chromium NOVO (~150-250 MB). Sem limite, N requisições
+// de PDF em paralelo sobem N processos e estouram a RAM/CPU da VPS — um atacante
+// autenticado derruba o backend com algumas dezenas de cliques. Aqui as chamadas
+// EXCEDENTES esperam numa fila em vez de lançar mais navegadores. 2 é conservador;
+// ajustável por env sem tocar no código.
+const PDF_MAX = Math.max(1, Number(process.env.PDF_MAX_CONCORRENCIA || 2));
+let _pdfEmUso = 0;
+const _pdfFila = [];
+function _adquirirPdf() {
+  if (_pdfEmUso < PDF_MAX) { _pdfEmUso++; return Promise.resolve(); }
+  return new Promise((resolve) => _pdfFila.push(resolve));
+}
+function _liberarPdf() {
+  const proximo = _pdfFila.shift();
+  if (proximo) proximo();               // passa o slot adiante, sem decrementar
+  else _pdfEmUso = Math.max(0, _pdfEmUso - 1);
+}
+
 /** Normaliza para o formato internacional do Brasil (55 + DDD + número). */
 function foneIntl(telefone) {
   const d = String(telefone ?? '').replace(/\D/g, '');
@@ -59,15 +78,17 @@ function foneIntl(telefone) {
  * @returns {Promise<Buffer>}
  */
 async function htmlParaPdf(html) {
+  await _adquirirPdf();
   const puppeteer = require('puppeteer');
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    // --no-sandbox só é necessário rodando como root (container). Se o processo
-    // roda como usuário sem privilégio, REMOVA: o sandbox é a principal barreira
-    // caso o renderer seja comprometido.
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-  });
+  let browser;
   try {
+    browser = await puppeteer.launch({
+      headless: 'new',
+      // --no-sandbox só é necessário rodando como root (container). Se o processo
+      // roda como usuário sem privilégio, REMOVA: o sandbox é a principal barreira
+      // caso o renderer seja comprometido.
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    });
     const page = await browser.newPage();
     await page.setJavaScriptEnabled(false);
 
@@ -80,8 +101,9 @@ async function htmlParaPdf(html) {
       return req.abort();
     });
 
-    // Sem rede não há o que aguardar além do parse do documento
-    await page.setContent(html, { waitUntil: 'domcontentloaded' });
+    // Sem rede não há o que aguardar além do parse do documento. Timeout explícito:
+    // um HTML patológico não pode segurar o Chromium (e o slot da fila) para sempre.
+    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 20000 });
     const pdf = await page.pdf({
       format: 'A4',
       // `printBackground: false` (o padrão do próprio Puppeteer) — de propósito
@@ -94,10 +116,12 @@ async function htmlParaPdf(html) {
       // "é o mesmo componente" ser verdade no resultado, não só no código.
       printBackground: false,
       margin: { top: '12mm', right: '10mm', bottom: '12mm', left: '10mm' },
+      timeout: 30000,
     });
     return Buffer.isBuffer(pdf) ? pdf : Buffer.from(pdf);
   } finally {
-    await browser.close();
+    if (browser) { try { await browser.close(); } catch { /* navegador já caiu */ } }
+    _liberarPdf();                        // libera o slot mesmo se o launch falhou
   }
 }
 

@@ -39,19 +39,46 @@ const DocumentoEmitidoController      = require('../controllers/DocumentoEmitido
 const DocumentoChatController         = require('../controllers/DocumentoChatController');
 const { MAX_PAGINAS }                 = require('../services/documentoConversaoService');
 
+// ── Limites dedicados por CUSTO (defesa em profundidade) ─────────────────────
+// O rate-limit geral (300/min) é alto demais para rotas caras: gerar PDF sobe um
+// Chromium e a IA segura a conexão por segundos e consome quota. A trava de
+// concorrência do Puppeteer já impede o estouro de memória; isto limita o VOLUME
+// por usuário. Chave = usuário autenticado (as rotas rodam após `authenticate`),
+// com fallback no IP.
+const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
+const chaveUsuarioOuIp = (req) =>
+  (req.user?.id ? `u:${req.user.id}` : `ip:${req.ip ? ipKeyGenerator(req.ip) : 'desconhecido'}`);
+const limitePdf = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.PDF_RATE_MAX || 15),
+  keyGenerator: chaveUsuarioOuIp,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { sucesso: false, mensagem: 'Muitos documentos gerados em seguida. Aguarde um instante.' },
+});
+const limiteIa = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.IA_RATE_MAX || 12),
+  keyGenerator: chaveUsuarioOuIp,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { sucesso: false, mensagem: 'Muitas solicitações à IA em seguida. Aguarde um instante.' },
+});
+
 // ── Envio genérico (HTML → PDF) por WhatsApp/e-mail ──────────────────────────
 // Só `authenticate`, mesmo padrão de POST /dietas/compartilhar e de
 // /orcamentos/:id/enviar-whatsapp: quem chama já teve acesso ao dado que virou o
 // HTML lá na tela de origem.
 router.get('/destinatarios', authenticate, DocumentoCompartilharController.destinatarios);
-router.post('/whatsapp', authenticate, DocumentoCompartilharController.whatsapp);
-router.post('/email',    authenticate, DocumentoCompartilharController.email);
-router.post('/pdf',      authenticate, DocumentoCompartilharController.pdf);
+router.post('/whatsapp', authenticate, limitePdf, DocumentoCompartilharController.whatsapp);
+router.post('/email',    authenticate, limitePdf, DocumentoCompartilharController.email);
+router.post('/pdf',      authenticate, limitePdf, DocumentoCompartilharController.pdf);
 
 // ── Chat da IA ───────────────────────────────────────────────────────────────
 // Gate de CRIAR MODELO: o chat existe para montar/ajustar modelo, e é isso que ele
 // devolve. Quem só emite não precisa dele.
-router.post('/chat', authenticate, checkPermission('documentos.templates.criar', 'PROPRIO'), DocumentoChatController.conversar);
+router.post('/chat', authenticate, checkPermission('documentos.templates.criar', 'PROPRIO'), limiteIa, DocumentoChatController.conversar);
 
 // ── Contexto do paciente (variáveis já resolvidas) ───────────────────────────
 // Gate de LER MODELO: é o que a tela precisa para pré-visualizar a folha com dado
@@ -85,7 +112,7 @@ router.delete('/emitidos/:id', authenticate, checkPermission('documentos.emitido
 // com `{{variáveis}}` e `[[lacunas]]` identificadas. NÃO grava nada — quem cria o
 // modelo é o `POST /templates` logo abaixo. Gate de CRIAR MODELO, como o upload: é um
 // modelo da clínica que vai nascer disto — e valem para ela as DUAS ordens acima.
-router.post('/templates/converter',       authenticate, checkPermission('documentos.templates.criar',   'PROPRIO'), upload.array('paginas', MAX_PAGINAS), tenantRls, DocumentoTemplateController.converter);
+router.post('/templates/converter',       authenticate, checkPermission('documentos.templates.criar',   'PROPRIO'), limiteIa, upload.array('paginas', MAX_PAGINAS), tenantRls, DocumentoTemplateController.converter);
 router.post('/templates/upload',          authenticate, checkPermission('documentos.templates.criar',   'PROPRIO'), upload.single('arquivo'), tenantRls, DocumentoTemplateController.enviarArquivo);
 router.get('/templates',                  authenticate, checkPermission('documentos.templates.ler',     'LEITURA'), DocumentoTemplateController.listar);
 router.post('/templates',                 authenticate, checkPermission('documentos.templates.criar',   'PROPRIO'), DocumentoTemplateController.criar);
