@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
+import { toastClicavel } from '../utils/toastClicavel';
 import { Pencil, Trash2, Printer, Mic, MicOff, Check, X, ChevronLeft, ChevronRight, AlertTriangle, Share2, FileText, CheckCircle2, Loader2, User, Eye, Ban, Paperclip, Image, Film, Volume2, Lock, UserCheck, CircleDot, Save } from 'lucide-react';
 import CompartilharPdfBotoes from '../components/CompartilharPdfBotoes';
 import {
@@ -657,7 +658,7 @@ function NovaEvolucaoModal({
   agendamentos, agendamentoId, onAgendamentoChange,
   onFormChange, onSalvar, onFinalizar, onClose,
   onArquivosChange, onRemoverMidia, somenteLeitura = false, avisoTopo,
-  podeSalvar, podeFinalizar,
+  podeSalvar, podeFinalizar, onAlterar,
 }: {
   form:              FormEvolucao;
   editingId:         number | null;
@@ -684,6 +685,8 @@ function NovaEvolucaoModal({
   // Ter "alterar" não dá direito a finalizar, e vice-versa.
   podeSalvar:        boolean;
   podeFinalizar:     boolean;
+  /** Em somente leitura: destrava a edição. Ausente = sem botão Alterar. */
+  onAlterar?:        () => void;
 }) {
   const [gravacaoAtiva,        setGravacaoAtiva]        = useState(false);
   const [transcrevendo,        setTranscrevendo]        = useState(false);
@@ -1182,10 +1185,20 @@ function NovaEvolucaoModal({
 
       <div className="flex items-center justify-end gap-2 px-5 pb-5 pt-4 border-t border-gray-100">
         {somenteLeitura ? (
-          <button onClick={onClose}
-            className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
-            Fechar
-          </button>
+          <>
+            <button onClick={onClose}
+              className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+              Fechar
+            </button>
+            {/* Só aparece quando a evolução pode ser editada por quem está na tela
+                (em andamento, autoria e permissão) — quem decide é o chamador. */}
+            {onAlterar && (
+              <button onClick={onAlterar}
+                className="px-5 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
+                <Pencil size={13} /> Alterar
+              </button>
+            )}
+          </>
         ) : (
           <>
             <button onClick={onClose} disabled={desativado}
@@ -1959,7 +1972,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           versao:        editingEv.versao ?? undefined,
         });
         evolucaoId = editingEv.id;
-        mensagemOk = 'Evolução salva';
+        mensagemOk = 'Evolução alterada';
       } else {
         const res = await api.post('/clinica/evolucoes', {
           animalId,
@@ -1986,7 +1999,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         });
         localStorage.removeItem(`s2vet_ag_${animalId}`);
         localStorage.removeItem(rascunhoKey);
-        mensagemOk = 'Evolução registrada';
+        mensagemOk = 'Evolução salva';
       }
       // O backend já gera e grava o título via IA na mesma escrita (quando ainda
       // não existe um) — não precisa de uma segunda chamada/PATCH aqui.
@@ -2000,10 +2013,20 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           setErroInline(`A evolução foi salva, mas o anexo não subiu — ${errosEnvio.join(' · ')}. Abra-a em "Alterar" e anexe de novo.`);
         }
       }
-      if (!anexoFalhou) toast.success(arquivosModal.length > 0 ? `${mensagemOk} com o anexo` : mensagemOk);
-      fecharModal();
+      if (!anexoFalhou) toastClicavel(arquivosModal.length > 0 ? `${mensagemOk} com o anexo` : mensagemOk);
       carregarEvolucoes();
       onSalvo?.();
+      // Salva/alterada, a evolução CONTINUA na tela, em somente leitura (a pedido,
+      // 2026-10-10): editar de novo só pelo "Alterar". Relida do servidor para vir
+      // com a versão nova (a trava otimista) e os anexos que acabaram de subir.
+      try {
+        const res = await api.get(`/clinica/evolucoes/${evolucaoId}`);
+        if (res.data?.dados) {
+          setArquivosModal([]);
+          setCriandoConcorrente(false);
+          abrirVisualizacao(res.data.dados as EvolucaoItem);
+        } else fecharModal();
+      } catch { fecharModal(); }
     } catch (err: unknown) {
       if (tratarConflitoConcorrencia(err)) return;
       if (tratarConflitoEvolucaoAberta(err)) return;
@@ -2104,7 +2127,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         // banner é o `carregarEvolucoes()` logo abaixo.
       }
 
-      toast.success('Evolução finalizada!');
+      toastClicavel('Evolução finalizada');
       fecharModal();
       carregarEvolucoes();
       onSalvo?.(); // atualiza o Histórico do Paciente no shell
@@ -2407,6 +2430,12 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           // leitura nesse caso; isto fecha o rodapé por conta própria). Evolução NOVA
           // nasce da própria pessoa — aí basta a permissão.
           podeFinalizar={podeFinalizar && (!editingEv || ehMinhaEvolucao(editingEv))}
+          // Mesma regra do "Alterar" da lista: em andamento, própria (ou gestor) e
+          // com permissão. Com o registro assumido por outro (`conflito`), nada destrava.
+          onAlterar={editingEv && !conflito && editingEv.status === 'EM_ANDAMENTO'
+            && podeEditar && ehMinhaEvolucao(editingEv)
+            ? () => abrirEdicao(editingEv)
+            : undefined}
         />
       )}
 

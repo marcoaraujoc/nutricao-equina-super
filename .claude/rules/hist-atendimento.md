@@ -32,6 +32,24 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-10 (parte 2) (**EVOLUÇÃO: AVISO DE 3 s E A EVOLUÇÃO SALVA FICA
+#   NA TELA EM LEITURA** — a pedido.
+#   1. Aviso `utils/toastClicavel.tsx` (some em 3 s ou ao clicar): **"Evolução salva"**
+#      (nova), **"Evolução alterada"** (edição), **"Evolução finalizada"** (Finalizar da
+#      aba E o "Finalizar Atendimento" do banner do shell, que dizia "Atendimento
+#      finalizado!"). Vale para Salvar e "Finalizar Gravação" (mesmo `onSalvar`).
+#   2. 🔴 **Salvar não fecha mais o formulário**: a evolução é RELIDA do servidor
+#      (versão nova + anexos) e aberta em `abrirVisualizacao` (somente leitura). Editar
+#      de novo só pelo **Alterar** — da lista ou do botão NOVO no rodapé do formulário
+#      em leitura (`onAlterar`, mesma regra do Alterar da lista: em andamento, própria
+#      ou gestor, permissão, sem registro assumido por outro). Falha na releitura →
+#      fecha como antes. Finalizar segue fechando o formulário.
+#   ⚠️ "Encerrar Gravação" (o vermelho, durante o ditado) NÃO grava — só para o
+#   microfone; quem grava é "Finalizar Gravação".
+#   SEM MIGRATION, só front. ⚠️ NÃO verificado em navegador.)
+
+---
+
 # Atualizado em: 2026-10-10 (**EVOLUÇÃO: BOTÃO "FINALIZAR GRAVAÇÃO" AO LADO DE
 #   "CONTINUAR GRAVANDO"** — a pedido. Encerrado o ditado, o formulário mostra os dois
 #   botões; "Finalizar Gravação" chama o MESMO `onSalvar` do rodapé (grava o texto

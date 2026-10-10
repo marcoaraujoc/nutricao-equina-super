@@ -8,7 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissoes } from '../hooks/usePermissoes';
 import { useEmpresa } from '../contexts/EmpresaContext';
 import api from '../services/api';
-import toast from 'react-hot-toast';
+import { toastClicavel } from '../utils/toastClicavel';
 import {
   X, Loader2,
   FileText, Pill, Syringe, FlaskConical, Share2,
@@ -727,7 +727,7 @@ const Atendimento = () => {
         texto:         ev.texto,
         status:        'FINALIZADA',
       });
-      toast.success('Atendimento finalizado!');
+      toastClicavel('Evolução finalizada');
       // Só o atendimento finalizado sai da lista — os outros em paralelo continuam
       // abertos, e a escolha cai no automático quando era ELE o selecionado.
       setEvolucoesAbertas(prev => prev.filter(e => e.id !== evolucaoId));
