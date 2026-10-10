@@ -2727,7 +2727,7 @@ const EquipeController = {
 
       const liberado = await bloqueioLogin.desbloquear(alvoId);
 
-      await registrarAuditoria(prisma, req, {
+      const auditar = () => registrarAuditoria(prisma, req, {
         categoria:  'ALTERACAO',
         entidade:   'USUARIO',
         entidadeId: alvoId,
@@ -2735,6 +2735,12 @@ const EquipeController = {
         detalhes:   `Conta desbloqueada (${alvo.tentativasLogin} tentativa(s) de senha inválida, bloqueada em `
                     + `${alvo.bloqueadoEm.toISOString()})`,
       });
+      // 🔴 ADMIN sem empresa no contexto (2026-10-10): a linha nasce com `empresaId`
+      // NULO e o `WITH CHECK` de `tb_audit_logs` a recusava (42501) — a conta JÁ estava
+      // desbloqueada e a tela recebia 500. Sem empresa é evento de PLATAFORMA, gravado
+      // nesse escopo (o ADMIN o vê na auditoria de plataforma).
+      if (req.empresaId) await auditar();
+      else await comEscopoPlataforma(auditar);
 
       return res.json({ dados: liberado, mensagem: 'Conta desbloqueada.' });
     } catch (err) {

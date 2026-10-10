@@ -32,6 +32,20 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-10 (🔴 **DESBLOQUEIO DE CONTA PELO ADMIN DEVOLVIA 500** — log de
+#   produção: `EquipeController.desbloquearMembro` → `42501 new row violates row-level
+#   security policy for table "tb_audit_logs"`. O ADMIN sem empresa no contexto grava a
+#   auditoria com `empresaId` NULO, e o `WITH CHECK` da tabela só aceita a empresa
+#   carimbada ou escopo de plataforma. ⚠️ A conta JÁ estava desbloqueada (o UPDATE em
+#   `users` vem antes) — só a resposta dizia que falhou.
+#   Correção: sem `req.empresaId`, a auditoria vai em `comEscopoPlataforma` (mesmo padrão
+#   de `registrarAcesso`/`registrarAcessoNegado`). Gate:
+#   `__tests__/desbloqueioAuditoriaPlataforma.test.js`.
+#   ⚠️ Outros `registrarAuditoria(prisma, req, …)` chamados pelo ADMIN sem empresa têm o
+#   mesmo risco — não foram varridos.)
+
+---
+
 # Atualizado em: 2026-09-09 (**CARGO PRESTADOR** — agora de verdade — e o cron que
 #   RECUPERA o dia perdido. Duas frentes:
 #   1. 🔴 **`PRESTADOR` VIROU CARGO PRÓPRIO, ao lado de `FORNECEDOR`.** Em 08/09 o
