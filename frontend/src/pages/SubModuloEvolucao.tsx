@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { Pencil, Trash2, Printer, Mic, MicOff, Check, X, ChevronLeft, ChevronRight, AlertTriangle, Share2, FileText, CheckCircle2, Loader2, User, Eye, Ban, Paperclip, Image, Film, Volume2, Lock, UserCheck, CircleDot } from 'lucide-react';
+import { Pencil, Trash2, Printer, Mic, MicOff, Check, X, ChevronLeft, ChevronRight, AlertTriangle, Share2, FileText, CheckCircle2, Loader2, User, Eye, Ban, Paperclip, Image, Film, Volume2, Lock, UserCheck, CircleDot, Save } from 'lucide-react';
 import CompartilharPdfBotoes from '../components/CompartilharPdfBotoes';
 import {
   gerarHtmlEvolucao, prepararEvolucao,
@@ -1055,10 +1055,19 @@ function NovaEvolucaoModal({
             )}
 
             {podeEscrever && showRecordAgain && !gravacaoAtiva && !transcrevendo && (
-              <div className="flex items-center justify-end mt-2">
+              <div className="flex items-center justify-end gap-2 mt-2">
                 <button onClick={() => { setShowRecordAgain(false); iniciarGravacao(); }}
-                  className="flex items-center justify-center gap-1 px-3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold">
+                  disabled={desativado}
+                  className="flex items-center justify-center gap-1 px-3 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-lg text-xs font-semibold">
                   <Mic size={12} /> Continuar Gravando
+                </button>
+                {/* Encerra o ditado e grava a evolução com o texto como está — o
+                    mesmo Salvar do rodapé (não finaliza o atendimento). */}
+                <button onClick={onSalvar}
+                  disabled={desativado || !form.texto.trim()}
+                  className="flex items-center justify-center gap-1 px-3 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 disabled:opacity-40 rounded-lg text-xs font-semibold">
+                  {saving && !interpretando ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                  Finalizar Gravação
                 </button>
               </div>
             )}

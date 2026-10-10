@@ -32,6 +32,16 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-10 (**EVOLUÇÃO: BOTÃO "FINALIZAR GRAVAÇÃO" AO LADO DE
+#   "CONTINUAR GRAVANDO"** — a pedido. Encerrado o ditado, o formulário mostra os dois
+#   botões; "Finalizar Gravação" chama o MESMO `onSalvar` do rodapé (grava o texto
+#   ditado/alterado e fecha o formulário). ⚠️ É SALVAR, não Finalizar o atendimento:
+#   a evolução segue EM ANDAMENTO. Desabilitado com texto vazio ou durante gravação.
+#   Só front (`SubModuloEvolucao`, `NovaEvolucaoModal`). SEM MIGRATION.
+#   ⚠️ NÃO verificado em navegador.)
+
+---
+
 # Atualizado em: 2026-10-09 (parte 2) (**DITADO DA EVOLUÇÃO: GRAVAÇÃO NO FORMATO DO
 #   NAVEGADOR E FALLBACK DO DITADO AO VIVO** — relato: "a transcrição de voz não funciona
 #   nem no celular nem no notebook".
