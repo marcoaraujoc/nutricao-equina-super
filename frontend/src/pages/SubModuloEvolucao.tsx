@@ -32,6 +32,9 @@ import AvisoRegistroAssumido from '../components/AvisoRegistroAssumido';
 import { useEventosTempoReal } from '../hooks/useEventosTempoReal';
 import { enviarEmPartes, mensagemErroEnvio, type RitmoEnvio } from '../utils/uploadEmPartes';
 import { useTranscricaoPorTrechos } from '../hooks/useTranscricaoPorTrechos';
+import {
+  aplicarResultadosDitado, editadoDuranteDitado, novaSessaoDitado, type EstadoDitado,
+} from '../utils/ditadoAoVivo';
 import { descartarTrechos } from '../services/trechosTranscricaoStore';
 import ConfirmModal from '../components/ConfirmModal';
 
@@ -692,6 +695,8 @@ function NovaEvolucaoModal({
   const recognitionRef   = useRef<ISpeechRecognition | null>(null);
   const shouldRestartRef = useRef(false);
   const textoRef         = useRef(form.texto);
+  // Texto do ditado ao vivo: o que já fechou + o que ainda está sendo ouvido.
+  const ditadoRef        = useRef<EstadoDitado>(novaSessaoDitado(''));
 
   useEffect(() => { textoRef.current = form.texto; }, [form.texto]);
 
@@ -806,23 +811,39 @@ function NovaEvolucaoModal({
     await transcreverBlob(arquivo, arquivo.name);
   };
 
+  // O texto aparece ENQUANTO a pessoa fala (`interimResults`): o pedaço ainda em
+  // reconhecimento é exibido e trocado pelo definitivo quando a frase fecha. Ver
+  // utils/ditadoAoVivo.ts. ⚠️ O `ref` é atualizado aqui, não só pelo efeito: dois
+  // eventos no mesmo tick leriam o texto de antes.
+  const exibirDitado = (texto: string) => {
+    textoRef.current = texto;
+    onFormChange('texto', texto);
+  };
+
   const iniciarSpeechAPI = () => {
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRec) { setDitadoAoVivo(false); setModoOffline(true); void iniciarTrechos(); return; }
 
     const rec          = new SpeechRec();
     rec.lang           = 'pt-BR';
-    rec.continuous     = true;
-    rec.interimResults = false;
+    // ⚠️ No celular, `continuous` repete e embaralha o texto (Chrome do Android); lá
+    // cada frase é uma sessão, e o `onend` reabre na hora.
+    rec.continuous     = !mobile;
+    rec.interimResults = true;
+    ditadoRef.current  = novaSessaoDitado(textoRef.current);
 
     rec.onresult = (e: ISpeechRecognitionEvent) => {
-      const transcript = Array.from(e.results)
-        .slice(e.resultIndex).map(r => r[0].transcript).join('');
-      onFormChange('texto', textoRef.current + (textoRef.current.trim() ? ' ' : '') + transcript);
+      const lista = Array.from(e.results, r => ({ transcript: r[0]?.transcript ?? '', isFinal: r.isFinal }));
+      const { estado, exibido } = aplicarResultadosDitado(ditadoRef.current, lista);
+      ditadoRef.current = estado;
+      exibirDitado(exibido);
     };
 
     rec.onend = () => {
-      if (shouldRestartRef.current) { try { rec.start(); } catch {} }
+      // Sessão nova sobre o que está no campo: o provisório que a sessão não chegou a
+      // fechar FICA (já estava na tela, e quem falou o viu escrito).
+      ditadoRef.current = novaSessaoDitado(textoRef.current);
+      if (shouldRestartRef.current) { try { rec.start(); } catch { /* reaberto pelo navegador */ } }
       else { setDitadoAoVivo(false); setShowRecordAgain(true); }
     };
 
@@ -874,7 +895,10 @@ function NovaEvolucaoModal({
 
   const iniciarGravacao = () => {
     setShowRecordAgain(false);
-    if (mobile || !estaOnline()) { setModoOffline(!estaOnline()); void iniciarTrechos(); }
+    // Ditado AO VIVO sempre que o navegador o oferece e há internet — no celular
+    // também. Sem um dos dois, gravação por trechos (o áudio fica no aparelho).
+    const temDitadoAoVivo = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+    if (!temDitadoAoVivo || !estaOnline()) { setModoOffline(!estaOnline()); void iniciarTrechos(); }
     else { shouldRestartRef.current = true; setDitadoAoVivo(true); iniciarSpeechAPI(); }
   };
 
@@ -995,10 +1019,17 @@ function NovaEvolucaoModal({
               </div>
             </div>
 
-            <textarea value={form.texto} onChange={e => onFormChange('texto', e.target.value)}
+            <textarea value={form.texto}
+              onChange={e => {
+                // Digitou durante o ditado: o que está escrito passa a valer, e o que
+                // já foi reconhecido não é somado de novo.
+                if (ditadoAoVivo) ditadoRef.current = editadoDuranteDitado(ditadoRef.current, e.target.value);
+                textoRef.current = e.target.value;
+                onFormChange('texto', e.target.value);
+              }}
               placeholder={
-                gravacaoAtiva && !mobile  ? '🎤 Ouvindo… fale normalmente'
-                : gravacaoAtiva && mobile ? '🔴 Gravando… o texto aparece aqui a cada pausa da fala'
+                ditadoAoVivo     ? '🎤 Ouvindo… o texto aparece enquanto você fala'
+                : trechos.gravando ? '🔴 Gravando… o texto aparece aqui a cada pausa da fala'
                 : aguardandoTexto         ? '⏳ Transcrevendo…'
                 : 'Descreva a evolução clínica do paciente…'
               }
@@ -1013,7 +1044,7 @@ function NovaEvolucaoModal({
                 <span className="text-xs text-red-700 font-medium flex-1">
                   {trechos.gravando
                     ? 'Gravando… o texto aparece a cada pausa da fala. O áudio fica guardado neste aparelho até ser transcrito.'
-                    : 'Gravando… clique novamente para encerrar.'}
+                    : 'Ouvindo… o texto aparece enquanto você fala.'}
                 </span>
                 {!mobile && (
                   <button onClick={pararGravacao}

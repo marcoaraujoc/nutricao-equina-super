@@ -34,6 +34,32 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-10 (parte 4) (🔴 **DITADO DA EVOLUÇÃO AO VIVO — O TEXTO APARECE
+#   ENQUANTO A PESSOA FALA, NO CELULAR TAMBÉM** — a pedido ("quando a pessoa falar, a
+#   transcrição ser automática e simultânea").
+#   CAUSA: (1) o ditado do navegador rodava com `interimResults = false` — o texto só
+#   entrava quando a frase FECHAVA; (2) o celular NUNCA usava o ditado ao vivo: ia direto
+#   para a gravação por trechos (parte 3), em que o texto só aparece a cada 12–35 s.
+#   1. `rec.interimResults = true`: o pedaço ainda em reconhecimento aparece no campo e é
+#      TROCADO pelo definitivo quando a frase fecha. Regra em **`utils/ditadoAoVivo.ts`**
+#      (função pura): `base` (já fechado) + provisório; resultado fechado entra na base e
+#      não é relido; fecha só na ORDEM.
+#   2. 🔴 **Celular com internet e navegador com Web Speech usa o ditado AO VIVO.** Os
+#      trechos ficam para: sem internet, navegador sem a API (Firefox), ou ditado que
+#      falha no meio (`passarParaGravacao`, inalterado). ⚠️ Troca consciente: no ao vivo
+#      a fala não fica guardada no aparelho; se a rede cair, o erro `network` passa para
+#      os trechos e perde-se só o que estava sendo ouvido naquele instante.
+#   3. ⚠️ No celular `continuous = false` (cada frase é uma sessão, o `onend` reabre): no
+#      Chrome do Android o modo contínuo REPETE no resultado novo o texto dos anteriores.
+#      Mesmo assim `aplicarResultadosDitado` corta o prefixo repetido.
+#   4. Digitar no campo durante o ditado vale (`editadoDuranteDitado`): o escrito vira a
+#      base e o já reconhecido não é somado de novo. Antes, o `onresult` lia
+#      `textoRef` (atualizado só pelo efeito) e podia apagar o que foi digitado.
+#   Gate: 5 casos novos em `__tests__/ditadoPorTrechos.test.js` (executa a função pura).
+#   SEM MIGRATION, só front. ⚠️ NÃO verificado em navegador nem em celular.)
+
+---
+
 # Atualizado em: 2026-10-10 (parte 3) (🔴 **DITADO DA EVOLUÇÃO POR TRECHOS — A FALA
 #   NÃO SE PERDE QUANDO A INTERNET CAI** — a pedido ("o problema de conexão pode fazer a
 #   pessoa perder tudo o que já foi dito").

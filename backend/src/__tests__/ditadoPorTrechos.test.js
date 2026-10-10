@@ -264,3 +264,64 @@ describe('Formulário da evolução', () => {
     expect(fn).toMatch(/\(d\.versao \?\? null\) !== \(ev\.versao \?\? null\)\)\s*\{\s*localStorage\.removeItem\(chave\);/);
   });
 });
+
+// ─── 5. Ditado AO VIVO: o texto aparece enquanto a pessoa fala ──────────────────
+//
+// 🔴 (2026-10-10, parte 4) Com `interimResults = false` o texto só entrava quando a
+// frase fechava, e o celular NUNCA usava o ditado ao vivo (só trechos de 12–35 s).
+// Para quem dita, parecia que nada estava sendo ouvido.
+
+const DITADO = fs.readFileSync(path.join(FRONT, 'utils', 'ditadoAoVivo.ts'), 'utf8');
+
+function carregarDitado() {
+  const mod = {};
+  new Function('exports', transpilar(DITADO))(mod);
+  return mod;
+}
+
+describe('Ditado ao vivo', () => {
+  const d = carregarDitado();
+  const r = (transcript, isFinal) => ({ transcript, isFinal });
+
+  it('o pedaço ainda em reconhecimento já aparece no campo', () => {
+    const s0 = d.novaSessaoDitado('Paciente alerta.');
+    const { exibido } = d.aplicarResultadosDitado(s0, [r('mucosas rosadas', false)]);
+    expect(exibido).toBe('Paciente alerta. mucosas rosadas');
+  });
+
+  it('o provisório é TROCADO pelo definitivo, nunca somado a ele', () => {
+    let s = d.novaSessaoDitado('');
+    s = d.aplicarResultadosDitado(s, [r('mucosa', false)]).estado;
+    const { estado, exibido } = d.aplicarResultadosDitado(s, [r('mucosas rosadas', true)]);
+    expect(exibido).toBe('mucosas rosadas');
+    expect(estado.base).toBe('mucosas rosadas');
+    // Evento seguinte da mesma sessão não relê o resultado já fechado.
+    expect(d.aplicarResultadosDitado(estado, [r('mucosas rosadas', true), r('TPC dois', false)]).exibido)
+      .toBe('mucosas rosadas TPC dois');
+  });
+
+  it('🔴 a repetição do Chrome do Android não duplica a frase', () => {
+    let s = d.novaSessaoDitado('');
+    s = d.aplicarResultadosDitado(s, [r('olá', true)]).estado;
+    const { exibido } = d.aplicarResultadosDitado(s, [r('olá', true), r('olá tudo bem', true)]);
+    expect(exibido).toBe('olá tudo bem');
+  });
+
+  it('o que a pessoa digita durante o ditado vale, e o já reconhecido não volta', () => {
+    let s = d.novaSessaoDitado('');
+    s = d.aplicarResultadosDitado(s, [r('febre', false)]).estado;
+    s = d.editadoDuranteDitado(s, 'Sem febre.');
+    const { exibido } = d.aplicarResultadosDitado(s, [r('febre', true), r('apetite normal', false)]);
+    expect(exibido).toBe('Sem febre. apetite normal');
+  });
+
+  it('a tela pede o texto provisório e não manda o celular direto para os trechos', () => {
+    const tela = semComentarios(TELA.replace(/accept="[^"]*"/g, 'accept=""'));
+    expect(tela).toMatch(/rec\.interimResults = true;/);
+    expect(tela).not.toMatch(/rec\.interimResults = false/);
+    const ini = tela.indexOf('const iniciarGravacao = () =>');
+    const fn  = tela.slice(ini, tela.indexOf('const pararGravacao', ini));
+    expect(fn).not.toMatch(/mobile/);
+    expect(fn).toMatch(/!temDitadoAoVivo \|\| !estaOnline\(\)/);
+  });
+});
