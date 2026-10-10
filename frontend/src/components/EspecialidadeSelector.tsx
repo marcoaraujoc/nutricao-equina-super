@@ -53,22 +53,34 @@ export default function EspecialidadeSelector({
   // variant 'multi': lista aberta + busca
   const [aberto,  setAberto]  = useState(false);
   const [busca,   setBusca]   = useState('');
-  const raizRef = useRef<HTMLDivElement | null>(null);
+  const raizRef  = useRef<HTMLDivElement | null>(null);
+  const listaRef = useRef<HTMLDivElement | null>(null);
 
   // Fecha ao clicar fora ou com Esc — a lista NÃO fecha a cada marcação, é o que
   // permite escolher várias de uma vez.
+  // ⚠️ `click`, NUNCA `mousedown`: arrastar a barra de rolagem da página dispara
+  // mousedown (fechava a lista no meio da rolagem); a barra não gera `click`.
   useEffect(() => {
     if (!aberto) return;
     const fora = (e: MouseEvent) => {
       if (raizRef.current && !raizRef.current.contains(e.target as Node)) setAberto(false);
     };
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setAberto(false); };
-    document.addEventListener('mousedown', fora);
+    document.addEventListener('click', fora);
     document.addEventListener('keydown', esc);
     return () => {
-      document.removeEventListener('mousedown', fora);
+      document.removeEventListener('click', fora);
       document.removeEventListener('keydown', esc);
     };
+  }, [aberto]);
+
+  // Aberta, a página rola sozinha até a lista inteira ficar visível — ela abre
+  // para baixo (§6) e, no fim do formulário, nascia fora da tela.
+  useEffect(() => {
+    if (!aberto) return;
+    const id = requestAnimationFrame(() =>
+      listaRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+    return () => cancelAnimationFrame(id);
   }, [aberto]);
 
   const carregar = () => {
@@ -165,7 +177,7 @@ export default function EspecialidadeSelector({
 
           {/* Abre SEMPRE para baixo (§6) */}
           {aberto && (
-            <div className="absolute left-0 right-0 top-full mt-1 z-30 bg-white border border-gray-200 rounded-xl shadow-lg">
+            <div ref={listaRef} className="absolute left-0 right-0 top-full mt-1 z-30 bg-white border border-gray-200 rounded-xl shadow-lg scroll-mb-4">
               <div className="p-2 border-b border-gray-100">
                 <div className="flex items-center gap-2 px-2 py-1.5 border border-gray-200 rounded-lg focus-within:border-emerald-500">
                   <Search size={14} className="text-gray-400 flex-shrink-0" />

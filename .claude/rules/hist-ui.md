@@ -39,7 +39,12 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 #   (ou "todas as encontradas", com busca) e os chips com X abaixo.
 #   ⚠️ O `variant="dropdown"` (acrescenta UMA por vez) NÃO mudou e segue nas outras
 #   telas; trocá-las é só passar `variant="multi"`. Backend intocado (`criarGestor` já
-#   recebia a lista). ⚠️ NÃO verificado em navegador.)
+#   recebia a lista). ⚠️ NÃO verificado em navegador.
+#   Ajuste 2026-10-10 (relato: a lista abria fora da tela e FECHAVA ao rolar a página):
+#   ao abrir, a página rola sozinha até a lista (`scrollIntoView` nearest); e o "clique
+#   fora" passou a ouvir `click`, NUNCA `mousedown` — arrastar a barra de rolagem da
+#   página dispara mousedown e a barra não gera click (mesma lição do combo de
+#   dispensa de evolução, `hist-atendimento.md` 2026-10-03).)
 
 # Atualizado em: 2026-10-09 (🔴 **TELAS CARREGADAS SOB DEMANDA** — a pedido, depois do
 #   primeiro deploy em produção. O sistema inteiro ia num arquivo só: **3.322 KB
