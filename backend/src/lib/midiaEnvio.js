@@ -26,6 +26,8 @@ const MIME_INLINE = new Set([
 ]);
 
 // Range: "bytes=INICIO-FIM" (só a primeira faixa; é o que os players usam na prática)
+const FATIA_MAXIMA = 4 * 1024 * 1024;
+
 function parseRange(header, total) {
   const m = /^bytes=(\d*)-(\d*)$/.exec(String(header ?? '').trim());
   if (!m) return null;
@@ -46,7 +48,12 @@ function parseRange(header, total) {
   }
   if (!Number.isFinite(inicio) || !Number.isFinite(fim)) return null;
   if (inicio < 0 || fim < inicio || inicio >= total) return null;
-  return { inicio, fim: Math.min(fim, total - 1) };
+  // 🔴 FATIA MÁXIMA POR RESPOSTA (2026-10-09). O player pede `bytes=0-` (o arquivo
+  // INTEIRO) na primeira requisição; servir 90 MB numa consulta só estourava a
+  // transação de 5 s do carimbo de tenant e prendia a memória do processo. O HTTP
+  // permite responder MENOS do que foi pedido (o Content-Range diz o quê) e o
+  // navegador pede o resto sozinho — é assim que o seek continua funcionando.
+  return { inicio, fim: Math.min(fim, total - 1, inicio + FATIA_MAXIMA - 1) };
 }
 
 /**
@@ -97,10 +104,13 @@ async function enviarArquivo(req, res, midia) {
     return res.end(pedaco);
   }
 
-  const completo = await prisma.midiaArquivo.findUnique({
+  // Sem Range: download do arquivo INTEIRO. Transação própria com prazo longo — no
+  // padrão de 5 s do carimbo de tenant um vídeo grande nunca terminaria de ser lido
+  // (mesma causa do upload; ver DbStorageProvider).
+  const completo = await prisma.$transaction((tx) => tx.midiaArquivo.findUnique({
     where:  { id: midia.id },
     select: { conteudo: true },
-  });
+  }), { timeout: 90_000, maxWait: 10_000 });
   if (!completo) return res.status(404).json({ error: 'Arquivo não encontrado' });
 
   comuns(midia.publico);
@@ -108,4 +118,4 @@ async function enviarArquivo(req, res, midia) {
   return res.end(completo.conteudo);
 }
 
-module.exports = { enviarArquivo, parseRange, MIME_INLINE };
+module.exports = { enviarArquivo, parseRange, MIME_INLINE, FATIA_MAXIMA };

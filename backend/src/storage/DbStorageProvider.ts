@@ -69,7 +69,14 @@ export class DbStorageProvider implements StorageProvider {
 
     const chave = crypto.randomBytes(24).toString('hex');
 
-    await prisma.midiaArquivo.create({
+    // 🔴 TRANSAÇÃO PRÓPRIA COM PRAZO LONGO (2026-10-09). Toda escrita avulsa passa pelo
+    // carimbo de tenant (lib/prismaTenant.js), que a embrulha numa transação com o
+    // timeout PADRÃO do Prisma: 5 s. Gravar um vídeo de 89 MB leva ~7 s, a transação
+    // expirava ("Transaction already closed ... timeout 5000 ms") e o anexo morria com
+    // "Erro interno" — arquivo grande NUNCA entrava. Aberta aqui, o interceptador do
+    // tenant reaproveita a transação (carimba no início) e repassa estas opções.
+    // ⚠️ 90 s: abaixo dos 100 s do Cloudflare, que cortaria a requisição de qualquer forma.
+    await prisma.$transaction((tx) => tx.midiaArquivo.create({
       data: {
         chave,
         conteudo,
@@ -83,7 +90,7 @@ export class DbStorageProvider implements StorageProvider {
         publico:      contexto.publico === true,
       },
       select: { id: true },
-    });
+    }), { timeout: 90_000, maxWait: 10_000 });
 
     return `${PREFIXO_MIDIA}${chave}`;
   }

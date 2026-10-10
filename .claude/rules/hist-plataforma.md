@@ -40,6 +40,25 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-09 (🔴 **ARQUIVO GRANDE NUNCA ENTRAVA NO BANCO — A TRANSAÇÃO DO
+#   CARIMBO DE TENANT TEM 5 s.** Relato: anexo MP4 de 89 MB na evolução → "Erro interno".
+#   `lib/prismaTenant.js` embrulha TODA operação avulsa num `base.$transaction` com o
+#   timeout PADRÃO do Prisma (5 s) para carimbar o tenant. Reproduzido com o client da
+#   app: gravar 89 MB em `tb_midia_arquivos` levou 6,7 s e morreu com "Transaction
+#   already closed ... timeout 5000 ms". (Uma medição anterior, feita com transação
+#   própria de prazo longo, NÃO via o problema — por isso parecia que o banco era rápido.)
+#   1. `DbStorageProvider.upload` grava numa transação PRÓPRIA (`timeout: 90_000`); o
+#      interceptador de `$transaction` carimba no início e REPASSA as opções. 89 MB → 8,6 s.
+#   2. `midiaEnvio.enviarArquivo`: o download sem Range ganhou a mesma transação longa, e
+#      🔴 `parseRange` passou a limitar cada resposta a 4 MB (`FATIA_MAXIMA`) — o player
+#      pede `bytes=0-` (o arquivo inteiro) e o HTTP permite servir menos; o navegador pede
+#      o resto. Sem isso o primeiro GET do vídeo leria 90 MB numa consulta só.
+#   ⚠️ REGRA: toda operação Prisma que possa passar de 5 s (bytea grande, lote pesado)
+#   precisa de `$transaction` explícito com `timeout` — senão o carimbo de tenant a mata.
+#   Gate `__tests__/midiaGrande.test.js` (7). SEM MIGRATION.)
+
+---
+
 # Atualizado em: 2026-10-08 (parte 2) (**VULNERABILIDADES DE DEPENDÊNCIAS** — auditoria
 #   do `npm audit` antes de abrir a produção.)
 

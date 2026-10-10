@@ -57,6 +57,10 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 #      SALVAR saía ANTES do anexo subir — a pessoa fechava a tela com o vídeo no meio.
 #      Agora sai depois do envio ("… com o anexo"); com falha, só o aviso de erro. E
 #      fechar/recarregar a aba durante o envio pede confirmação (`beforeunload`).
+#   5. (mesma data, depois do deploy) As partes chegavam e a ÚLTIMA dava 500 "Erro
+#      interno": a gravação de 89 MB estourava a transação de 5 s do carimbo de tenant.
+#      Ver `hist-plataforma.md`, 2026-10-09 — era a causa de o anexo grande nunca entrar,
+#      inclusive pelo envio único.
 #   ⚠️ A rota antiga `POST /:id/midias` (envio único) segue montada e funcional.
 #   Gate `__tests__/uploadEmPartes.test.js` (11). SEM MIGRATION.
 #   ⚠️ NÃO verificado em navegador nem atrás do Cloudflare.)
