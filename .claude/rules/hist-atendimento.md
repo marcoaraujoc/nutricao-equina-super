@@ -53,6 +53,10 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 #      arquivo ficava impossível de incluir. Agora devolve os erros: na edição o
 #      Finalizar para; na nova, a evolução fica EM ANDAMENTO com aviso para anexar e
 #      finalizar. No Salvar, avisa que a evolução foi salva sem o anexo.
+#   4. (mesma data, relatado depois do deploy) O toast "Evolução salva/registrada" do
+#      SALVAR saía ANTES do anexo subir — a pessoa fechava a tela com o vídeo no meio.
+#      Agora sai depois do envio ("… com o anexo"); com falha, só o aviso de erro. E
+#      fechar/recarregar a aba durante o envio pede confirmação (`beforeunload`).
 #   ⚠️ A rota antiga `POST /:id/midias` (envio único) segue montada e funcional.
 #   Gate `__tests__/uploadEmPartes.test.js` (11). SEM MIGRATION.
 #   ⚠️ NÃO verificado em navegador nem atrás do Cloudflare.)

@@ -1279,6 +1279,13 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [savingEv,       setSavingEv]       = useState(false);
   // Envio de anexo em curso — nome do arquivo e % do arquivo inteiro.
   const [progressoEnvio, setProgressoEnvio] = useState<{ nome: string; pct: number } | null>(null);
+  // Fechar/recarregar a aba no meio do envio perde o arquivo: o navegador pergunta antes.
+  useEffect(() => {
+    if (!progressoEnvio) return;
+    const avisar = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', avisar);
+    return () => window.removeEventListener('beforeunload', avisar);
+  }, [progressoEnvio !== null]); // eslint-disable-line react-hooks/exhaustive-deps
   const [savingCancelamento, setSavingCancelamento] = useState(false);
   const [interpretando]                     = useState(false);
   const [acoesLLM,       setAcoesLLM]       = useState<AcaoSelecionavel[]>([]);
@@ -1838,6 +1845,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     setSavingEv(true);
     try {
       let evolucaoId: number;
+      let mensagemOk: string;
       if (editingEv) {
         await api.put(`/clinica/evolucoes/${editingEv.id}`, {
           especialidade: form.especialidade,
@@ -1852,7 +1860,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           versao:        editingEv.versao ?? undefined,
         });
         evolucaoId = editingEv.id;
-        toast.success('Evolução salva');
+        mensagemOk = 'Evolução salva';
       } else {
         const res = await api.post('/clinica/evolucoes', {
           animalId,
@@ -1879,16 +1887,21 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         });
         localStorage.removeItem(`s2vet_ag_${animalId}`);
         localStorage.removeItem(rascunhoKey);
-        toast.success('Evolução registrada');
+        mensagemOk = 'Evolução registrada';
       }
       // O backend já gera e grava o título via IA na mesma escrita (quando ainda
       // não existe um) — não precisa de uma segunda chamada/PATCH aqui.
+      // A confirmação só sai DEPOIS do anexo: com um vídeo grande, "Evolução salva"
+      // aparecia antes do envio e a pessoa fechava a tela com o arquivo ainda subindo.
+      let anexoFalhou = false;
       if (arquivosModal.length > 0) {
         const errosEnvio = await uploadMidias(evolucaoId, arquivosModal);
         if (errosEnvio.length > 0) {
+          anexoFalhou = true;
           setErroInline(`A evolução foi salva, mas o anexo não subiu — ${errosEnvio.join(' · ')}. Abra-a em "Alterar" e anexe de novo.`);
         }
       }
+      if (!anexoFalhou) toast.success(arquivosModal.length > 0 ? `${mensagemOk} com o anexo` : mensagemOk);
       fecharModal();
       carregarEvolucoes();
       onSalvo?.();
