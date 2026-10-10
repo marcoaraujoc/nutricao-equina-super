@@ -14,6 +14,8 @@ const path = require('path');
 const raiz = path.join(__dirname, '..', '..', '..', 'frontend', 'src');
 const app  = fs.readFileSync(path.join(raiz, 'App.tsx'), 'utf8');
 const main = fs.readFileSync(path.join(raiz, 'main.tsx'), 'utf8');
+const lazyRecarga = fs.readFileSync(path.join(raiz, 'utils', 'lazyComRecarga.ts'), 'utf8');
+const semComentarios = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
 // Só o Login fica no arquivo principal: é a porta de entrada.
 const EAGER_PERMITIDAS = ['Login'];
@@ -26,14 +28,21 @@ describe('telas carregadas sob demanda', () => {
     expect(estaticas).toEqual([]);
   });
 
-  test('as telas usam React.lazy e as rotas ficam dentro de <Suspense>', () => {
-    expect((app.match(/lazy\(\(\) => import\('\.\/pages\//g) || []).length).toBeGreaterThan(50);
+  test('as telas usam lazyComRecarga e as rotas ficam dentro de <Suspense>', () => {
+    expect((app.match(/lazyComRecarga\(\(\) => import\('\.\/pages\//g) || []).length).toBeGreaterThan(50);
+    // React.lazy cru não recarrega quando o arquivo da tela sumiu depois de um deploy.
+    expect(semComentarios(app)).not.toMatch(/(^|[^\w])lazy\(\(\) => import\(/m);
     expect(app).toMatch(/<Suspense fallback=/);
   });
 
-  test('main.tsx recarrega quando um arquivo de tela sumiu depois de um deploy', () => {
-    expect(main).toMatch(/addEventListener\('vite:preloadError'/);
-    // e com freio contra laço de reload
-    expect(main).toMatch(/60_000/);
+  test('arquivo de tela que sumiu depois de um deploy recarrega a página (2026-10-10)', () => {
+    // A falha do import recarrega e fica PENDENTE, com freio contra laço de reload.
+    expect(lazyRecarga).toMatch(/window\.location\.reload\(\)/);
+    expect(lazyRecarga).toMatch(/60_000/);
+    expect(lazyRecarga).toMatch(/new Promise<.+>\(\(\) =>/);
+  });
+
+  test('main.tsx NÃO usa preventDefault no vite:preloadError (devolveria undefined ao React.lazy)', () => {
+    expect(semComentarios(main)).not.toMatch(/vite:preloadError/);
   });
 });

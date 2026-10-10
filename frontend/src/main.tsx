@@ -22,22 +22,10 @@ if (!import.meta.env.DEV || import.meta.env.VITE_SUPPRESS_CONSOLE === 'true') {
   console.debug = noop;
 }
 
-// 🔴 ARQUIVO DE TELA QUE SUMIU DEPOIS DE UM DEPLOY (2026-10-09). As telas são
-// carregadas sob demanda (App.tsx), e cada deploy publica arquivos com nomes NOVOS.
-// Quem estava com a aba aberta antes do deploy pede, ao abrir uma tela, o arquivo da
-// versão ANTERIOR — que não existe mais no servidor — e a tela não abriria.
-// O Vite avisa com `vite:preloadError`: recarregar busca a versão nova inteira.
-// ⚠️ UMA vez por minuto, no máximo: se o arquivo faltar de verdade (deploy quebrado), o
-// reload em laço travaria a aba. Passado esse limite, o erro segue para o ErrorBoundary.
-window.addEventListener('vite:preloadError', (evento) => {
-  const CHAVE = 's2vet_reload_versao';
-  let ultimo = 0;
-  try { ultimo = Number(sessionStorage.getItem(CHAVE)) || 0; } catch { /* sem storage */ }
-  if (Date.now() - ultimo < 60_000) return;
-  try { sessionStorage.setItem(CHAVE, String(Date.now())); } catch { /* sem storage */ }
-  evento.preventDefault();
-  window.location.reload();
-});
+// ⚠️ NÃO tratar `vite:preloadError` com `preventDefault()` aqui (2026-10-10): o import
+// passa a resolver com `undefined` e o `React.lazy` quebra com "Cannot read properties
+// of undefined (reading 'default')". Arquivo de tela que sumiu depois de um deploy é
+// tratado em `utils/lazyComRecarga.ts`, que recarrega a página uma vez.
 
 const queryClient = new QueryClient({
   defaultOptions: {

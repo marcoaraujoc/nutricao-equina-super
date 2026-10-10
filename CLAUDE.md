@@ -2014,9 +2014,12 @@ e `UsuarioEmpresa.foto_url`. Não apaga nada do disco.
 - Inativar sem `motivo` e sem `registrarAuditoria` — ver §13, armadilha 33
 - Abrir seletor para CIMA (flip por espaço disponível) — ver §6
 - Auto-selecionar paciente numa tela clínica/nutricional — ela abre em modo BUSCA, ver §6
-- Importar tela de forma ESTÁTICA no `App.tsx` — tela nova entra como `lazy(() => import(...))`
-  (só o `Login` é eager). Um import estático devolve a tela ao arquivo principal. Gate:
-  `__tests__/telasSobDemanda.test.js`; histórico em `hist-ui.md`, 2026-10-09
+- Importar tela de forma ESTÁTICA no `App.tsx` — tela nova entra como
+  `lazyComRecarga(() => import(...))` (`utils/lazyComRecarga.ts`; só o `Login` é eager). Um
+  import estático devolve a tela ao arquivo principal; `lazy` cru não recarrega quando o
+  arquivo da tela sumiu num deploy. NUNCA `preventDefault()` no `vite:preloadError` (o import
+  resolve `undefined` e o React quebra lendo `.default`). Gate:
+  `__tests__/telasSobDemanda.test.js`; histórico em `hist-ui.md`, 2026-10-09 e 2026-10-10
 - Deixar arquivos residuais (App copy.tsx, test-*.js, etc)
 - Hardcodar URLs, portas ou credenciais (sempre env vars)
 

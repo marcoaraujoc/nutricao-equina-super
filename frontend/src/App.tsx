@@ -1,6 +1,7 @@
 ﻿// src/App.tsx
 
-import { lazy, Suspense } from 'react';
+import { Suspense } from 'react';
+import { lazyComRecarga } from './utils/lazyComRecarga';
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -11,110 +12,110 @@ import ErrorBoundary from './components/ErrorBoundary';
 // baixado só quando é aberta — antes o sistema inteiro ia num arquivo de 3,3 MB na
 // primeira visita. Ficam EAGER só o que monta a moldura (contexts, ProtectedRoute,
 // Sidebar, AppHeader/AppFooter, ErrorBoundary) e o Login, que é a porta de entrada.
-// ⚠️ Tela nova entra aqui como `lazy(() => import(...))`, nunca como `import` estático:
+// ⚠️ Tela nova entra aqui como `lazyComRecarga(() => import(...))`, nunca como `import` estático:
 // um único import estático de uma tela traz ela de volta para o arquivo principal.
 // ⚠️ Depois de um deploy, a aba aberta pode pedir um arquivo de tela que não existe
-// mais — quem trata é o `vite:preloadError` em main.tsx (recarrega uma vez).
-const Usuarios = lazy(() => import('./pages/Usuarios'));
-const AnimaisVet = lazy(() => import('./pages/AnimaisVet'));
-const AlterarSenhaObrigatoria = lazy(() => import('./pages/AlterarSenhaObrigatoria'));
-const AceitarConviteEquipe = lazy(() => import('./pages/AceitarConviteEquipe'));
+// mais — quem trata é o `lazyComRecarga` (utils/lazyComRecarga.ts: recarrega uma vez).
+const Usuarios = lazyComRecarga(() => import('./pages/Usuarios'));
+const AnimaisVet = lazyComRecarga(() => import('./pages/AnimaisVet'));
+const AlterarSenhaObrigatoria = lazyComRecarga(() => import('./pages/AlterarSenhaObrigatoria'));
+const AceitarConviteEquipe = lazyComRecarga(() => import('./pages/AceitarConviteEquipe'));
 
 // Pages — Gerais
 import Login                from './pages/Login';
-const Home = lazy(() => import('./pages/Home'));
-const Dashboard = lazy(() => import('./pages/Dashboard'));
-const CadastroPessoal = lazy(() => import('./pages/CadastroPessoal'));
-const ResetPassword = lazy(() => import('./pages/ResetPassword'));
-const FaturaPublica = lazy(() => import('./pages/FaturaPublica'));
-const CadastroProprietario = lazy(() => import('./pages/CadastroProprietario'));
-const CadastroTratador = lazy(() => import('./pages/CadastroTratador'));
-const CadastroProcedimento = lazy(() => import('./pages/CadastroProcedimento'));
-const CadastroFornecedor = lazy(() => import('./pages/CadastroFornecedor'));
-const Produtos = lazy(() => import('./pages/Produtos'));
-const CadastroPrestador = lazy(() => import('./pages/CadastroPrestador'));
-const CadastroLocalizacao = lazy(() => import('./pages/CadastroLocalizacao'));
-const CadastroVacina = lazy(() => import('./pages/CadastroVacina'));
+const Home = lazyComRecarga(() => import('./pages/Home'));
+const Dashboard = lazyComRecarga(() => import('./pages/Dashboard'));
+const CadastroPessoal = lazyComRecarga(() => import('./pages/CadastroPessoal'));
+const ResetPassword = lazyComRecarga(() => import('./pages/ResetPassword'));
+const FaturaPublica = lazyComRecarga(() => import('./pages/FaturaPublica'));
+const CadastroProprietario = lazyComRecarga(() => import('./pages/CadastroProprietario'));
+const CadastroTratador = lazyComRecarga(() => import('./pages/CadastroTratador'));
+const CadastroProcedimento = lazyComRecarga(() => import('./pages/CadastroProcedimento'));
+const CadastroFornecedor = lazyComRecarga(() => import('./pages/CadastroFornecedor'));
+const Produtos = lazyComRecarga(() => import('./pages/Produtos'));
+const CadastroPrestador = lazyComRecarga(() => import('./pages/CadastroPrestador'));
+const CadastroLocalizacao = lazyComRecarga(() => import('./pages/CadastroLocalizacao'));
+const CadastroVacina = lazyComRecarga(() => import('./pages/CadastroVacina'));
 
 // Pages — Animais
-const Animal = lazy(() => import('./pages/Animal'));
-const MeusAnimais = lazy(() => import('./pages/MeusAnimais'));
-const AnimalDetail = lazy(() => import('./pages/AnimalDetail'));
+const Animal = lazyComRecarga(() => import('./pages/Animal'));
+const MeusAnimais = lazyComRecarga(() => import('./pages/MeusAnimais'));
+const AnimalDetail = lazyComRecarga(() => import('./pages/AnimalDetail'));
 
 // Pages — Alimentos
-const Alimentos = lazy(() => import('./pages/Alimentos'));
-const CriaAlimentos = lazy(() => import('./pages/criaAlimentos'));
+const Alimentos = lazyComRecarga(() => import('./pages/Alimentos'));
+const CriaAlimentos = lazyComRecarga(() => import('./pages/criaAlimentos'));
 
 // Pages — Nutrientes
-const Nutrientes = lazy(() => import('./pages/Nutrientes'));
-const CriaNutrientes = lazy(() => import('./pages/CriaNutrientes'));
+const Nutrientes = lazyComRecarga(() => import('./pages/Nutrientes'));
+const CriaNutrientes = lazyComRecarga(() => import('./pages/CriaNutrientes'));
 
 // Pages — Composição Alimentar
-const ComposicaoAlimentar = lazy(() => import('./pages/ComposicaoAlimentar'));
-const CriaComposicaoAlimentar = lazy(() => import('./pages/CriaComposicaoAlimentar'));
-const NovoNutrienteComposicao = lazy(() => import('./pages/Novonutrientecomposicao'));
+const ComposicaoAlimentar = lazyComRecarga(() => import('./pages/ComposicaoAlimentar'));
+const CriaComposicaoAlimentar = lazyComRecarga(() => import('./pages/CriaComposicaoAlimentar'));
+const NovoNutrienteComposicao = lazyComRecarga(() => import('./pages/Novonutrientecomposicao'));
 
 // Pages — Dieta
-const Dieta = lazy(() => import('./pages/Dieta'));
-const CriaDieta = lazy(() => import('./pages/CriaDieta'));
+const Dieta = lazyComRecarga(() => import('./pages/Dieta'));
+const CriaDieta = lazyComRecarga(() => import('./pages/CriaDieta'));
 
 // Pages — Exames
-const Exames = lazy(() => import('./pages/Exames'));
-const CriaExameNutricional = lazy(() => import('./pages/CriaExameNutricional'));
+const Exames = lazyComRecarga(() => import('./pages/Exames'));
+const CriaExameNutricional = lazyComRecarga(() => import('./pages/CriaExameNutricional'));
 
-const Equipe = lazy(() => import('./pages/Equipe'));
-const ControleAcesso = lazy(() => import('./pages/ControleAcesso'));
-const CadastroEmpresa = lazy(() => import('./pages/CadastroEmpresa'));
-const CriacaoGestor = lazy(() => import('./pages/CriacaoGestor'));
-const EquipeManager = lazy(() => import('./pages/EquipeManager'));
-const AuditoriaGeral = lazy(() => import('./pages/AuditoriaGeral'));
-const ExportacaoDados = lazy(() => import('./pages/ExportacaoDados'));
+const Equipe = lazyComRecarga(() => import('./pages/Equipe'));
+const ControleAcesso = lazyComRecarga(() => import('./pages/ControleAcesso'));
+const CadastroEmpresa = lazyComRecarga(() => import('./pages/CadastroEmpresa'));
+const CriacaoGestor = lazyComRecarga(() => import('./pages/CriacaoGestor'));
+const EquipeManager = lazyComRecarga(() => import('./pages/EquipeManager'));
+const AuditoriaGeral = lazyComRecarga(() => import('./pages/AuditoriaGeral'));
+const ExportacaoDados = lazyComRecarga(() => import('./pages/ExportacaoDados'));
 
 // Pages — Relatório
-const RelatorioNutricional = lazy(() => import('./pages/RelatorioNutricional'));
-const Relatorios = lazy(() => import('./pages/Relatorios'));
-const RelatoriosFinanceiro = lazy(() => import('./pages/RelatoriosFinanceiro'));
-const RelatoriosAtendimento = lazy(() => import('./pages/RelatoriosAtendimento'));
-const RelatoriosCadastro = lazy(() => import('./pages/RelatoriosCadastro'));
-const RelatoriosFarmacia = lazy(() => import('./pages/RelatoriosFarmacia'));
+const RelatorioNutricional = lazyComRecarga(() => import('./pages/RelatorioNutricional'));
+const Relatorios = lazyComRecarga(() => import('./pages/Relatorios'));
+const RelatoriosFinanceiro = lazyComRecarga(() => import('./pages/RelatoriosFinanceiro'));
+const RelatoriosAtendimento = lazyComRecarga(() => import('./pages/RelatoriosAtendimento'));
+const RelatoriosCadastro = lazyComRecarga(() => import('./pages/RelatoriosCadastro'));
+const RelatoriosFarmacia = lazyComRecarga(() => import('./pages/RelatoriosFarmacia'));
 
 // Pages — Agenda / Agendamentos
-const Agendamentos = lazy(() => import('./pages/Agendamentos'));
+const Agendamentos = lazyComRecarga(() => import('./pages/Agendamentos'));
 // Pages — Orçamento
-const Orcamento = lazy(() => import('./pages/Orcamento'));
-const RelatoriosOrcamentos = lazy(() => import('./pages/RelatoriosOrcamentos'));
-const MapaAtendimento = lazy(() => import('./pages/MapaAtendimento'));
-const PainelPrincipal = lazy(() => import('./pages/PainelPrincipal'));
-const ConfiguracaoAlerta = lazy(() => import('./pages/ConfiguracaoAlerta'));
-const Monitoracao = lazy(() => import('./pages/Monitoracao'));
+const Orcamento = lazyComRecarga(() => import('./pages/Orcamento'));
+const RelatoriosOrcamentos = lazyComRecarga(() => import('./pages/RelatoriosOrcamentos'));
+const MapaAtendimento = lazyComRecarga(() => import('./pages/MapaAtendimento'));
+const PainelPrincipal = lazyComRecarga(() => import('./pages/PainelPrincipal'));
+const ConfiguracaoAlerta = lazyComRecarga(() => import('./pages/ConfiguracaoAlerta'));
+const Monitoracao = lazyComRecarga(() => import('./pages/Monitoracao'));
 
 // Pages — Módulo Clínico
-const Atendimento = lazy(() => import('./pages/Atendimento'));
-const Vacina = lazy(() => import('./pages/Vacina'));
-const Documentos = lazy(() => import('./pages/Documentos'));
-const CentralDocumentos = lazy(() => import('./pages/CentralDocumentos'));
-const ExameCompra = lazy(() => import('./pages/ExameCompra'));
-const Resenha = lazy(() => import('./pages/Resenha'));
+const Atendimento = lazyComRecarga(() => import('./pages/Atendimento'));
+const Vacina = lazyComRecarga(() => import('./pages/Vacina'));
+const Documentos = lazyComRecarga(() => import('./pages/Documentos'));
+const CentralDocumentos = lazyComRecarga(() => import('./pages/CentralDocumentos'));
+const ExameCompra = lazyComRecarga(() => import('./pages/ExameCompra'));
+const Resenha = lazyComRecarga(() => import('./pages/Resenha'));
 
 // Pages — Análise / Debug
-const Analise = lazy(() => import('./pages/Analise'));
-const QueryAdHoc = lazy(() => import('./pages/query-adhoc'));
+const Analise = lazyComRecarga(() => import('./pages/Analise'));
+const QueryAdHoc = lazyComRecarga(() => import('./pages/query-adhoc'));
 
 // Pages — Monitoração Custo IA
-const AiUsageDashboard = lazy(() => import('./pages/AiUsageDashboard'));
-const PlanosAdmin = lazy(() => import('./pages/PlanosAdmin'));
+const AiUsageDashboard = lazyComRecarga(() => import('./pages/AiUsageDashboard'));
+const PlanosAdmin = lazyComRecarga(() => import('./pages/PlanosAdmin'));
 
 // Pages — Farmácia / Medicamentos / Procedimentos
-const Farmacia = lazy(() => import('./pages/Farmacia'));
-const EstoqueVacina = lazy(() => import('./pages/EstoqueVacina'));
-const Medicamentos = lazy(() => import('./pages/Medicamentos'));
-const Procedimentos = lazy(() => import('./pages/Procedimentos'));
-const ExecucaoPrescricao = lazy(() => import('./pages/ExecucaoPrescricao'));
+const Farmacia = lazyComRecarga(() => import('./pages/Farmacia'));
+const EstoqueVacina = lazyComRecarga(() => import('./pages/EstoqueVacina'));
+const Medicamentos = lazyComRecarga(() => import('./pages/Medicamentos'));
+const Procedimentos = lazyComRecarga(() => import('./pages/Procedimentos'));
+const ExecucaoPrescricao = lazyComRecarga(() => import('./pages/ExecucaoPrescricao'));
 
 // Pages — Financeiro
-const Faturamento = lazy(() => import('./pages/Faturamento'));
-const RecibosPrestador = lazy(() => import('./pages/RecibosPrestador'));
-const Pagamentos = lazy(() => import('./pages/Pagamentos'));
+const Faturamento = lazyComRecarga(() => import('./pages/Faturamento'));
+const RecibosPrestador = lazyComRecarga(() => import('./pages/RecibosPrestador'));
+const Pagamentos = lazyComRecarga(() => import('./pages/Pagamentos'));
 
 import { SelectedAnimalProvider } from './contexts/SelectedAnimalContext';
 import { EmpresaProvider } from './contexts/EmpresaContext';

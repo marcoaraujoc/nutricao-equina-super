@@ -32,6 +32,23 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-10 (🔴 **"Cannot read properties of undefined (reading
+#   'default')" AO ENTRAR DEPOIS DE UM DEPLOY** — relato: novo gestor entrando com a
+#   senha enviada caiu em "Algo deu errado". Causa: a aba era da versão anterior ao
+#   deploy, o arquivo da tela (ex.: `AlterarSenhaObrigatoria`) não existia mais (404 no
+#   Nginx, correto) e o tratamento de 2026-10-09 em `main.tsx` chamava `preventDefault()`
+#   no `vite:preloadError` — com isso o Vite faz o import RESOLVER `undefined`, e o
+#   `React.lazy` lê `.default` de `undefined` antes de o reload acontecer.
+#   Correção: `utils/lazyComRecarga.ts` envolve o `lazy`; se o import falhar (ou vier sem
+#   `default`), recarrega a página uma vez (freio de 60 s em sessionStorage, mesma chave)
+#   e devolve uma promessa PENDENTE — a tela fica no "Carregando…" até recarregar. Passado
+#   o freio, o erro real vai ao ErrorBoundary. O listener de `main.tsx` saiu. As 69 telas
+#   do `App.tsx` usam o wrapper. Gate `telasSobDemanda.test.js` atualizado (exige o
+#   wrapper, proíbe `lazy` cru e o `vite:preloadError` em `main.tsx`).
+#   ⚠️ NÃO verificado em navegador nem em produção — exige deploy.)
+
+---
+
 # Atualizado em: 2026-10-09 (parte 2) (**ESPECIALIDADES: VÁRIAS DE UMA SÓ VEZ** em
 #   `/admin/criacao-gestor`, a pedido. `EspecialidadeSelector` ganhou `variant="multi"`:
 #   botão que abre (para BAIXO, §6) uma lista com busca e caixas de marcação que FICA
