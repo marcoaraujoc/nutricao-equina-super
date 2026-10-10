@@ -27,7 +27,7 @@
 // canal foi o destinatário (formas de recebimento da fatura).
 import { useState } from 'react';
 import { Loader2, MessageCircle } from 'lucide-react';
-import { enviarPdfWhatsAppComAviso, type CompartilharPdfOpcoes } from '../utils/compartilharPdf';
+import { enviarPdfWhatsAppComAviso, type CompartilharPdfOpcoes, type DestinoEnvio } from '../utils/compartilharPdf';
 import AcaoRegistro from './AcaoRegistro';
 import { BTN_ACAO, TOM_ACAO } from '../utils/tomAcao';
 
@@ -66,12 +66,18 @@ export interface EnviarWhatsAppProps extends Omit<CompartilharPdfOpcoes, 'docume
   onEnviandoChange?: (enviando: boolean) => void;
   /** `true` quando saiu ANEXADO de verdade; `false` no plano B ou no cancelamento. */
   onConcluido?: (enviado: boolean) => void;
+  /**
+   * Pergunta PARA QUEM enviar antes (ver EscolherDestinatario). Devolve o destino
+   * escolhido — um número ou vários — ou `null` se a pessoa desistiu. Ausente, o
+   * envio vai para `telefone`, como sempre.
+   */
+  resolverDestino?: () => Promise<DestinoEnvio | null>;
 }
 
 export default function EnviarWhatsApp({
   tipo, telefone, aoPreparar, indisponivel = null, desabilitado = false,
   aparencia = 'registro', rotulo = 'WhatsApp', titulo, className = '',
-  onEnviandoChange, onConcluido, ...opcoes
+  onEnviandoChange, onConcluido, resolverDestino, ...opcoes
 }: EnviarWhatsAppProps) {
   const [enviando, setEnviando] = useState(false);
 
@@ -79,12 +85,18 @@ export default function EnviarWhatsApp({
     // A trava também mora aqui, não só no `disabled`: teclado e leitor de tela
     // passam por cima de atributo.
     if (enviando || desabilitado || indisponivel) return;
+    let destino: DestinoEnvio = telefone;
+    if (resolverDestino) {
+      const escolhido = await resolverDestino();
+      if (escolhido == null) return;          // desistiu na escolha
+      destino = escolhido;
+    }
     setEnviando(true);
     onEnviandoChange?.(true);
     try {
       await aoPreparar?.();
       // Nunca lança: o resultado (e o motivo do plano B) vai no card central.
-      const enviado = await enviarPdfWhatsAppComAviso({ ...opcoes, documento: tipo }, telefone);
+      const enviado = await enviarPdfWhatsAppComAviso({ ...opcoes, documento: tipo }, destino);
       onConcluido?.(enviado);
     } finally {
       setEnviando(false);

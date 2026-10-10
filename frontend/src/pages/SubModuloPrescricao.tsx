@@ -17,6 +17,7 @@ import {
   type PrintAnimalPrescricao, type PrintGrupoPrescricao,
 } from '../utils/PrescricaoPrint';
 import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
+import { useEscolhaDestinatario } from '../components/EscolherDestinatario';
 import ModalJustificativa from '../components/ModalJustificativa';
 import ConfirmModal from '../components/ConfirmModal';
 import ImportarOrcamentoModal, { type OrcamentoItemImport, marcarOrcamentoImportado } from '../components/ImportarOrcamentoModal';
@@ -2710,6 +2711,8 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   // Envio do PDF em curso — o spinner tem de ser do BOTÃO clicado, não de todos:
   // é preciso saber a linha E o canal. Mesma lição do `execItemId` do plantão.
   const [enviandoPdf, setEnviandoPdf] = useState<{ id: number; canal: 'whatsapp' | 'email' } | null>(null);
+  // Para QUEM vai o documento (proprietário, equipe, um veterinário, um prestador).
+  const { escolher: escolherDestinatario, modalDestinatario } = useEscolhaDestinatario();
   const erroDaLinha = (id: number) => (erroLinha?.id === id ? erroLinha.mensagem : null);
   const semPermissao = (acao: string, grupoId?: number) => {
     const msg = `Sem permissão para ${acao}. Verifique com o responsável da equipe.`;
@@ -2907,11 +2910,13 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
   };
 
   const compartilharPrescricao = async (gr: PrescricaoGrupo, canal: 'whatsapp' | 'email') => {
+    const dest = await escolherDestinatario({ canal, animalId });
+    if (!dest) return;
     setEnviandoPdf({ id: gr.id, canal });
     try {
       const opts = await opcoesPdfPrescricao(gr);
-      if (canal === 'whatsapp') await enviarPdfWhatsAppComAviso(opts, animal?.user?.phone);
-      else                      await enviarPdfEmailComAviso(opts, animal?.user?.email);
+      if (canal === 'whatsapp') await enviarPdfWhatsAppComAviso(opts, dest.contatos);
+      else                      await enviarPdfEmailComAviso(opts, dest.contatos);
     } finally {
       setEnviandoPdf(null);
     }
@@ -3381,6 +3386,7 @@ export default function SubModuloPrescricao({ animalId, animal, onFaturaAtualiza
           onCancelar={() => setAlertaDireto(null)}
         />
       )}
+      {modalDestinatario}
       <ConfirmModal
         open={reabrindo !== null}
         variante="aviso"

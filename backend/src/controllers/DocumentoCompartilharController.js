@@ -88,7 +88,54 @@ function abrirStream(res) {
   };
 }
 
+/**
+ * Frase legível para a falha de SMTP. Cobre o que responde por quase todo caso em
+ * VPS: credencial, remetente não verificado no provedor, porta/rede e anexo grande.
+ */
+function motivoErroEmail(err) {
+  if (!err) return 'houve um erro no servidor ao enviar o e-mail.';
+  const code = err.code;
+  const resp = String(err.response ?? err.message ?? '').replace(/\s+/g, ' ').slice(0, 200);
+  if (code === 'EAUTH') return 'o servidor de e-mail recusou o usuário/senha (EMAIL_USER/EMAIL_PASS).';
+  if (['ECONNECTION', 'ETIMEDOUT', 'ESOCKET', 'ECONNREFUSED'].includes(code)) {
+    return 'não foi possível conectar ao servidor de e-mail (porta bloqueada ou EMAIL_HOST errado).';
+  }
+  if (/sender|from|remetente|not (been )?verified|unauthori[sz]ed/i.test(resp)) {
+    return `o provedor recusou o remetente (EMAIL_FROM precisa estar verificado no provedor) — ${resp}`;
+  }
+  if (/size|too large|exceed/i.test(resp)) return `o anexo ficou grande demais para o provedor — ${resp}`;
+  return `o servidor de e-mail recusou o envio — ${resp}`;
+}
+
 const DocumentoCompartilharController = {
+
+  /**
+   * GET /api/documentos/destinatarios?animalId=
+   * Para quem o documento clínico pode ir: proprietário do paciente, veterinários da
+   * equipe e prestadores — com o contato DESTA empresa. Ver lib/destinatariosEnvio.js.
+   * O acesso ao paciente é conferido: sem ele, não se revela o contato do dono.
+   */
+  async destinatarios(req, res) {
+    if (!req.empresaId) return res.status(400).json({ error: 'Sem empresa no contexto.', code: 'SEM_EMPRESA' });
+    const animalId = req.query.animalId ? Number(req.query.animalId) : null;
+    // Carregados aqui, e não no topo: puxam o Prisma, e o resto deste controller (o
+    // envio) não precisa dele — nem os testes que o exercitam sem banco.
+    const { destinatariosDoEnvio } = require('../lib/destinatariosEnvio');
+    const { verificarAcessoAnimal } = require('../lib/animalAccess');
+    try {
+      if (animalId) {
+        const acesso = await verificarAcessoAnimal({
+          animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType,
+        });
+        if (!acesso) return res.status(acesso === null ? 404 : 403).json({ error: 'Acesso não autorizado a este animal' });
+      }
+      const dados = await destinatariosDoEnvio({ empresaId: req.empresaId, animalId });
+      return res.json({ dados });
+    } catch (err) {
+      logger.error(`[DocumentoCompartilhar] Falha ao listar destinatários: ${err.message}`);
+      return res.status(500).json({ error: 'Erro ao carregar os destinatários.' });
+    }
+  },
 
   /**
    * POST /api/documentos/compartilhar/whatsapp
@@ -97,8 +144,9 @@ const DocumentoCompartilharController = {
    * provisionado/conectado: o front cai no fallback manual (baixar + abrir o app).
    */
   async whatsapp(req, res) {
-    const { telefone, html, nomeArquivo, legenda } = req.body;
-    if (!telefone) return res.status(400).json({ sucesso: false, error: 'Informe o telefone.' });
+    const { telefone, telefones, html, nomeArquivo, legenda } = req.body;
+    const listaTelefones = Array.isArray(telefones) ? telefones.filter(Boolean).slice(0, 50) : null;
+    if (!telefone && !listaTelefones?.length) return res.status(400).json({ sucesso: false, error: 'Informe o telefone.' });
     if (!html || !nomeArquivo) {
       return res.status(400).json({ sucesso: false, error: 'html e nomeArquivo são obrigatórios.' });
     }
@@ -115,6 +163,7 @@ const DocumentoCompartilharController = {
         empresaId: req.empresaId,
         equipeId:  req.equipeId ?? null,
         telefone,
+        telefones: listaTelefones,
         html,
         nomeArquivo,
         legenda: legenda ?? '',
@@ -140,8 +189,10 @@ const DocumentoCompartilharController = {
         if (stream) return stream.fim(corpo);
         return res.status(status).json(corpo);
       }
-      if (stream) return stream.fim({ sucesso: true, simulado: !!r.simulado });
-      return res.json({ sucesso: true, simulado: !!r.simulado });
+      // Contagens só no envio a VÁRIOS — o contrato do envio único não muda.
+      const ok = { sucesso: true, simulado: !!r.simulado, ...(r.total > 1 ? { enviados: r.enviados, total: r.total } : {}) };
+      if (stream) return stream.fim(ok);
+      return res.json(ok);
     } catch (err) {
       logger.error(`[DocumentoCompartilhar] Falha ao enviar WhatsApp: ${err.message}`);
       const corpo = { sucesso: false, error: 'Erro ao enviar pelo WhatsApp.', motivo: 'houve um erro no servidor ao enviar.' };
@@ -157,8 +208,12 @@ const DocumentoCompartilharController = {
    * o front cai no fallback manual (baixar + abrir o cliente de e-mail).
    */
   async email(req, res) {
-    const { email, assunto, corpo, html, nomeArquivo } = req.body;
-    if (!email)    return res.status(400).json({ sucesso: false, error: 'Informe o e-mail de destino.' });
+    const { email, emails, assunto, corpo, html, nomeArquivo } = req.body;
+    // Vários destinos ("equipe veterinária"): PDF gerado uma vez, um e-mail POR pessoa —
+    // nunca todos no "Para" de um só, que exporia o endereço de cada um aos outros.
+    const destinos = [...new Set((Array.isArray(emails) ? emails : [email])
+      .map(e => String(e ?? '').trim().toLowerCase()).filter(e => /^\S+@\S+\.\S+$/.test(e)))].slice(0, 50);
+    if (destinos.length === 0) return res.status(400).json({ sucesso: false, error: 'Informe o e-mail de destino.' });
     if (!html || !nomeArquivo) {
       return res.status(400).json({ sucesso: false, error: 'html e nomeArquivo são obrigatórios.' });
     }
@@ -189,28 +244,41 @@ const DocumentoCompartilharController = {
       return res.status(500).json(falhaPdf);
     }
 
-    try {
-      stream?.progresso(85, 'Enviando o e-mail');
-      await emailService.enviarDocumento({
-        emailDestinatario: email,
-        assunto: assunto || nomeArquivo,
-        corpo:   corpo || '',
-        nomeArquivo,
-        pdfBase64,
-      });
-      stream?.progresso(100, 'Enviado');
-      if (stream) return stream.fim({ sucesso: true });
-      return res.json({ sucesso: true });
-    } catch (err) {
-      if (err.code === 'EMAIL_NAO_CONFIGURADO') {
-        if (stream) return stream.fim(semSmtp);
-        return res.status(200).json(semSmtp);
+    stream?.progresso(85, destinos.length > 1 ? `Enviando a ${destinos.length} destinatários` : 'Enviando o e-mail');
+    let enviados = 0;
+    let primeiroErro = null;
+    for (const destino of destinos) {
+      try {
+        await emailService.enviarDocumento({
+          emailDestinatario: destino,
+          assunto: assunto || nomeArquivo,
+          corpo:   corpo || '',
+          nomeArquivo,
+          pdfBase64,
+        });
+        enviados += 1;
+      } catch (err) {
+        if (err.code === 'EMAIL_NAO_CONFIGURADO') {
+          if (stream) return stream.fim(semSmtp);
+          return res.status(200).json(semSmtp);
+        }
+        logger.error(`[DocumentoCompartilhar] Falha ao enviar e-mail para ${destino}: ${err.message}`);
+        primeiroErro = primeiroErro ?? err;
       }
-      logger.error(`[DocumentoCompartilhar] Falha ao enviar e-mail: ${err.message}`);
-      const falha = { sucesso: false, error: 'Erro ao enviar o e-mail.', motivo: 'houve um erro no servidor ao enviar o e-mail.' };
-      if (stream) return stream.fim(falha);
-      return res.status(500).json(falha);
     }
+    if (enviados > 0) {
+      stream?.progresso(100, destinos.length > 1 ? `Enviado a ${enviados} de ${destinos.length}` : 'Enviado');
+      const ok = { sucesso: true, ...(destinos.length > 1 ? { enviados, total: destinos.length } : {}) };
+      if (stream) return stream.fim(ok);
+      return res.json(ok);
+    }
+    // 🔴 O MOTIVO REAL vai para a tela (2026-10-09). "Houve um erro no servidor" não
+    // dizia se era senha do SMTP, remetente não verificado ou porta bloqueada — e sem
+    // acesso ao log de produção ninguém descobria. Só a frase do provedor, nunca
+    // credencial: o nodemailer não põe senha na mensagem.
+    const falha = { sucesso: false, error: 'Erro ao enviar o e-mail.', motivo: motivoErroEmail(primeiroErro) };
+    if (stream) return stream.fim(falha);
+    return res.status(500).json(falha);
   },
 
   /**
@@ -239,3 +307,4 @@ const DocumentoCompartilharController = {
 };
 
 module.exports = DocumentoCompartilharController;
+module.exports.motivoErroEmail = motivoErroEmail;

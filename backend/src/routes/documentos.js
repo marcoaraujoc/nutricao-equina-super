@@ -43,6 +43,7 @@ const { MAX_PAGINAS }                 = require('../services/documentoConversaoS
 // Só `authenticate`, mesmo padrão de POST /dietas/compartilhar e de
 // /orcamentos/:id/enviar-whatsapp: quem chama já teve acesso ao dado que virou o
 // HTML lá na tela de origem.
+router.get('/destinatarios', authenticate, DocumentoCompartilharController.destinatarios);
 router.post('/whatsapp', authenticate, DocumentoCompartilharController.whatsapp);
 router.post('/email',    authenticate, DocumentoCompartilharController.email);
 router.post('/pdf',      authenticate, DocumentoCompartilharController.pdf);

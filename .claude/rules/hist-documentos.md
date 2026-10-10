@@ -25,6 +25,33 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-09 (🔴 **PARA QUEM VAI O DOCUMENTO** — a pedido: Evolução,
+#   Prescrição, Exames e Encaminhamento perguntam, no WhatsApp e no e-mail, o
+#   destinatário: **Proprietário · Equipe veterinária (todos) · Veterinário da equipe ·
+#   Prestador**. `components/EscolherDestinatario.tsx` (`useEscolhaDestinatario`, promessa
+#   que devolve o destino ou `null`); `CompartilharPdfBotoes` ganhou
+#   `escolherDestinatario={{ animalId, prestadorId? }}`, e o `EnviarWhatsApp` (fonte única
+#   do WhatsApp) ganhou `resolverDestino`. No Encaminhamento o prestador do registro já
+#   nasce escolhido.
+#   Backend: `GET /documentos/destinatarios?animalId=` (`lib/destinatariosEnvio.js`) — o
+#   contato vem do cadastro DESTA empresa (`ProprietarioPerfil` / `tb_usuario_empresa`),
+#   nunca do `users`; acesso ao paciente conferido. "Equipe veterinária" = cargos
+#   VETERINARIO e GESTOR da empresa. `POST /documentos/whatsapp` aceita `telefones[]` e
+#   `/email` aceita `emails[]`: o PDF é gerado UMA vez e vai a cada um (e-mail um por
+#   pessoa, nunca todos no "Para"). Vários destinos NÃO têm fallback manual. Envio a um
+#   destino mantém o contrato antigo (sem contagens).
+#   ⚠️ Pessoa sem contato naquele canal aparece DESABILITADA com o motivo, não some.
+#   **E-mail que falha diz o MOTIVO** (`motivoErroEmail`: senha, porta/host, remetente
+#   não verificado, tamanho) — antes "houve um erro no servidor".
+#   🔴 **A evolução enviada não embute as imagens dos anexos** (`gerarHtmlEvolucao(…,
+#   { semImagensDosAnexos: true })`): cada foto virava `data:` no HTML e o pedido passava
+#   do limite — suspeita principal do e-mail que não saiu. Os anexos vão pelo NOME; a
+#   impressão segue com as imagens.
+#   Gate `__tests__/envioDestinatario.test.js` (14). SEM MIGRATION.
+#   ⚠️ NÃO verificado em navegador nem com envio real.)
+
+---
+
 # Atualizado em: 2026-10-01 (parte 2) (**OBSERVAÇÃO QUE CRESCE ENQUANTO SE DIGITA** —
 #   a pedido, no Atestado de Vacinação. Novo `CamposForm.tsx#TextoExpansivel`: em
 #   EDIÇÃO (focado) a altura acompanha o texto inteiro (`scrollHeight` + borda, em

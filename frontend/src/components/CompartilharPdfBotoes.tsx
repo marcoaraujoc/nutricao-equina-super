@@ -11,6 +11,7 @@ import { Mail } from 'lucide-react';
 import { enviarPdfEmailComAviso, type CompartilharPdfOpcoes } from '../utils/compartilharPdf';
 import AcaoRegistro from './AcaoRegistro';
 import EnviarWhatsApp from './EnviarWhatsApp';
+import { useEscolhaDestinatario, type CanalDestino } from './EscolherDestinatario';
 
 export interface CompartilharPdfBotoesProps extends CompartilharPdfOpcoes {
   /** Telefone do destinatário (WhatsApp) — dígitos com DDI, ex: 5511987654321. */
@@ -44,22 +45,40 @@ export interface CompartilharPdfBotoesProps extends CompartilharPdfOpcoes {
   emailIndisponivel?:    string | null;
   size?:       number;
   className?:  string;
+  /**
+   * Pergunta PARA QUEM enviar antes de mandar (proprietário, equipe veterinária, um
+   * veterinário ou um prestador) — Evolução, Prescrição, Exames e Encaminhamento,
+   * 2026-10-09. Sem esta prop o envio vai direto ao `telefone`/`emailPara`, como sempre.
+   */
+  escolherDestinatario?: { animalId?: number | null; prestadorId?: number | null };
 }
 
 export default function CompartilharPdfBotoes({
   telefone, emailPara, disabled, aoPreparar, size = 14, className = '',
-  whatsappIndisponivel = null, emailIndisponivel = null, ...opts
+  whatsappIndisponivel = null, emailIndisponivel = null, escolherDestinatario, ...opts
 }: CompartilharPdfBotoesProps) {
   const [enviando, setEnviando] = useState<'whatsapp' | 'email' | null>(null);
+  const { escolher, modalDestinatario } = useEscolhaDestinatario();
 
   // O WhatsApp é o componente único de envio (`EnviarWhatsApp`) — o MESMO que a
   // fatura usa no painel e no bloco do paciente. Aqui fica só o e-mail, e o estado
   // compartilhado impede os dois envios ao mesmo tempo.
+  // Com `escolherDestinatario`, os dois canais perguntam PARA QUEM antes de enviar.
+  const perguntar = (canal: CanalDestino) => async () => {
+    const dest = await escolher({ canal, ...escolherDestinatario });
+    return dest ? dest.contatos : null;
+  };
+
   const handleEmail = async () => {
+    let para: string | string[] | null | undefined = emailPara;
+    if (escolherDestinatario) {
+      para = await perguntar('email')();
+      if (para == null) return;
+    }
     setEnviando('email');
     try {
       await aoPreparar?.();
-      await enviarPdfEmailComAviso(opts, emailPara);
+      await enviarPdfEmailComAviso(opts, para);
     } finally { setEnviando(null); }
   };
 
@@ -72,12 +91,14 @@ export default function CompartilharPdfBotoes({
         aoPreparar={aoPreparar} indisponivel={whatsappIndisponivel}
         titulo="Enviar por WhatsApp" className={className}
         desabilitado={disabled || enviando === 'email'}
+        resolverDestino={escolherDestinatario ? perguntar('whatsapp') : undefined}
         onEnviandoChange={(on) => setEnviando(on ? 'whatsapp' : null)} />
       <AcaoRegistro tom="email" icone={Mail} rotulo="E-mail"
         titulo={emailIndisponivel || 'Enviar por e-mail'} className={className}
         desabilitado={disabled || enviando !== null || !!emailIndisponivel}
         carregando={enviando === 'email'}
         onClick={handleEmail} />
+      {modalDestinatario}
     </>
   );
 }

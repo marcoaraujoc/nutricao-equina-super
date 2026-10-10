@@ -1111,7 +1111,7 @@ const Atendimento = () => {
             key={`encaminhamento-${effectiveAnimalId ?? 0}`}
             animalId={animalIdNum}
             animal={animal ? {
-              nome: animal.nome, raca: animal.raca ?? null,
+              id: animal.id, nome: animal.nome, raca: animal.raca ?? null,
               user: animal.user ?? null, idadeAnos: animal.idadeAnos ?? null,
               logoUrl: animal.logoUrl ?? null,
             } : null}

@@ -54,6 +54,8 @@ function resFake() {
 beforeEach(() => {
   jest.clearAllMocks();
   prisma.midiaArquivo = { findUnique: jest.fn() };
+  // O download completo roda numa transação própria com prazo longo (midiaEnvio.js).
+  prisma.$transaction = (fn) => fn(prisma);
 });
 
 describe('MidiaController.baixar — autorização e auditoria (TC-013)', () => {

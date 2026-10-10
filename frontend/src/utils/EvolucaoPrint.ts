@@ -101,6 +101,14 @@ function animalFolha(animal: PrintAnimal | null): AnimalFolha | null {
 export function gerarHtmlEvolucao(
   ev:     PrintEvolucao,
   animal: PrintAnimal | null,
+  /**
+   * `semImagensDosAnexos`: o PDF que vai por WhatsApp/e-mail NÃO embute as fotos
+   * anexadas (2026-10-09). Cada imagem entra como `data:` dentro do HTML, e fotos de
+   * celular de alguns MB faziam o pedido passar do limite e o e-mail não sair. Os
+   * anexos aparecem pelo NOME; o arquivo continua no prontuário. A impressão segue
+   * com as imagens.
+   */
+  opcoes: { semImagensDosAnexos?: boolean } = {},
 ): string {
   const statusLabel = STATUS_LABEL[ev.status] ?? ev.status;
   const statusColor = STATUS_COLOR[ev.status] ?? '#6b7280';
@@ -111,7 +119,15 @@ export function gerarHtmlEvolucao(
   const videos  = midias.filter(m => m.tipo === 'VIDEO');
   const audios  = midias.filter(m => m.tipo === 'AUDIO');
 
-  const imagensHtml = imagens.length > 0 ? `
+  const imagensHtml = imagens.length > 0 && opcoes.semImagensDosAnexos ? `
+    <div class="card">
+      <div class="section-title">Imagens</div>
+      ${imagens.map(m => `
+        <p class="media-nome">🖼️ ${escaparHtml(m.nome)}</p>
+      `).join('')}
+      <p class="obs">As imagens anexadas ficam disponíveis no prontuário.</p>
+    </div>
+  ` : imagens.length > 0 ? `
     <div class="card">
       <div class="section-title">Imagens</div>
       <div class="media-grid">
@@ -228,13 +244,15 @@ export function gerarHtmlEvolucao(
 export async function prepararEvolucao(
   ev:     PrintEvolucao,
   animal: PrintAnimal | null,
+  opcoes: { semImagensDosAnexos?: boolean } = {},
 ): Promise<void> {
   await prepararFolhaClinica({
     profissionalId: ev.veterinario.id ?? null,
     logoUrl:        animal?.logoUrl,
     imagens: [
       animal?.photoUrl,
-      ...(ev.midias ?? []).filter(m => m.tipo === 'IMAGEM').map(m => m.url),
+      // Sem as imagens no PDF, não há por que baixá-las e convertê-las aqui.
+      ...(opcoes.semImagensDosAnexos ? [] : (ev.midias ?? []).filter(m => m.tipo === 'IMAGEM').map(m => m.url)),
     ],
   });
 }

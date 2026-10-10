@@ -61,6 +61,11 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 #      interno": a gravação de 89 MB estourava a transação de 5 s do carimbo de tenant.
 #      Ver `hist-plataforma.md`, 2026-10-09 — era a causa de o anexo grande nunca entrar,
 #      inclusive pelo envio único.
+#   6. (mesma data) **Partes em PARALELO (3)** e barra com **velocidade medida (MB/s) e
+#      tempo restante**. A parte 0 vai sozinha primeiro (guards + zera envio anterior),
+#      as do meio em paralelo, a última sozinha depois de todas (é ela que remonta).
+#      Ao chegar a 99% a barra diz "Gravando…" (a gravação no banco leva ~8 s / 90 MB).
+#      ⚠️ O tempo total segue preso à velocidade de UPLOAD de quem envia.
 #   ⚠️ A rota antiga `POST /:id/midias` (envio único) segue montada e funcional.
 #   Gate `__tests__/uploadEmPartes.test.js` (11). SEM MIGRATION.
 #   ⚠️ NÃO verificado em navegador nem atrás do Cloudflare.)

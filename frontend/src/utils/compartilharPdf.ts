@@ -94,6 +94,24 @@ export interface ResultadoCompartilhar {
    * só informa que é preciso ativar o serviço (frase pronta em `motivo`).
    */
   servicoInativo?: boolean;
+  /** Envio para VÁRIOS destinos (equipe veterinária): quantos receberam, de quantos. */
+  enviados?: number;
+  total?:    number;
+}
+
+/**
+ * Destino do envio: UM contato (o de sempre — proprietário, um veterinário, um
+ * prestador) ou VÁRIOS (a equipe veterinária inteira). Com vários, o backend gera o
+ * PDF uma vez e manda a cada um; e NÃO existe fallback manual — baixar o PDF e abrir
+ * o app só alcançaria uma pessoa, e diria que "foi" para as outras.
+ */
+export type DestinoEnvio = string | null | undefined | string[];
+
+function normalizarDestino(d: DestinoEnvio): { um?: string | null; varios?: string[] } {
+  if (!Array.isArray(d)) return { um: d ?? null };
+  const lista = [...new Set(d.map(x => String(x ?? '').trim()).filter(Boolean))];
+  if (lista.length <= 1) return { um: lista[0] ?? null };
+  return { varios: lista };
 }
 
 // ─── Serviço de WhatsApp: ativo? ──────────────────────────────────────────────
@@ -299,12 +317,26 @@ async function baixarPdfNoNavegador(opts: CompartilharPdfOpcoes): Promise<void> 
  */
 export async function compartilharPdfWhatsApp(
   opts: CompartilharPdfOpcoes,
-  telefone?: string | null,
+  destino?: DestinoEnvio,
 ): Promise<ResultadoCompartilhar> {
   // Primeiro o SERVIÇO: inativo → informa e para aqui, sem PDF e sem plano B.
   const servico = await verificarServicoWhatsApp();
   if (!servico.pronto) {
     return { enviado: false, servicoInativo: true, motivo: mensagemServicoInativo(servico) };
+  }
+
+  const { um: telefone, varios } = normalizarDestino(destino);
+  if (varios) {
+    try {
+      const r = await postComProgresso('/documentos/whatsapp', {
+        telefones: varios, html: opts.gerarHtml(), nomeArquivo: opts.nomeArquivo, legenda: opts.texto,
+      }, 'whatsapp');
+      if (r.sucesso) return { enviado: true, simulado: !!r.simulado, enviados: Number(r.enviados), total: Number(r.total) };
+      return { enviado: false, motivo: (r.motivo ?? r.error) as string | undefined, total: varios.length };
+    } catch (err) {
+      if (err instanceof EnvioCancelado) return { enviado: false, cancelado: true };
+      return { enviado: false, motivo: motivoDaFalha(err), total: varios.length };
+    }
   }
 
   let motivo = telefone ? undefined : 'o cliente está sem telefone cadastrado.';
@@ -334,8 +366,22 @@ export async function compartilharPdfWhatsApp(
  */
 export async function compartilharPdfEmail(
   opts: CompartilharPdfOpcoes,
-  para?: string | null,
+  destino?: DestinoEnvio,
 ): Promise<ResultadoCompartilhar> {
+  const { um: para, varios } = normalizarDestino(destino);
+  if (varios) {
+    try {
+      const r = await postComProgresso('/documentos/email', {
+        emails: varios, assunto: opts.titulo ?? opts.nomeArquivo, corpo: opts.texto,
+        html: opts.gerarHtml(), nomeArquivo: opts.nomeArquivo,
+      }, 'email');
+      if (r.sucesso) return { enviado: true, enviados: Number(r.enviados), total: Number(r.total) };
+      return { enviado: false, motivo: (r.motivo ?? r.error) as string | undefined, total: varios.length };
+    } catch (err) {
+      if (err instanceof EnvioCancelado) return { enviado: false, cancelado: true };
+      return { enviado: false, motivo: motivoDaFalha(err), total: varios.length };
+    }
+  }
   let motivo = para ? undefined : 'o cliente está sem e-mail cadastrado.';
   if (para) {
     try {
@@ -369,7 +415,7 @@ export async function compartilharPdfEmail(
 /** Devolve `true` quando o PDF foi realmente enviado pelo backend. */
 export async function enviarPdfWhatsAppComAviso(
   opts: CompartilharPdfOpcoes,
-  telefone?: string | null,
+  telefone?: DestinoEnvio,
 ): Promise<boolean> {
   return avisar('whatsapp', opts, () => compartilharPdfWhatsApp(opts, telefone),
     'anexe-o na conversa do WhatsApp.');
@@ -378,7 +424,7 @@ export async function enviarPdfWhatsAppComAviso(
 /** Devolve `true` quando o PDF foi realmente enviado pelo backend. */
 export async function enviarPdfEmailComAviso(
   opts: CompartilharPdfOpcoes,
-  para?: string | null,
+  para?: DestinoEnvio,
 ): Promise<boolean> {
   return avisar('email', opts, () => compartilharPdfEmail(opts, para),
     'anexe-o no e-mail antes de enviar.');
@@ -408,9 +454,17 @@ async function avisar(
       return false;
     }
     if (r.enviado) {
+      const parcial = r.total && r.total > 1
+        ? `Recebido por ${r.enviados ?? r.total} de ${r.total} destinatários.`
+        : undefined;
       mostrarResultado(canal, 'sucesso', fraseEnvio(opts.documento, canal),
-        r.simulado ? 'Modo de teste: nada foi entregue de verdade.' : undefined);
+        r.simulado ? 'Modo de teste: nada foi entregue de verdade.' : parcial);
       return true;
+    }
+    // Vários destinos não têm fallback manual (ver DestinoEnvio): só o motivo.
+    if (r.total && r.total > 1) {
+      mostrarResultado(canal, 'aviso', 'O envio não foi possível', r.motivo);
+      return false;
     }
     // Fallback manual: o PDF foi baixado e o app abriu com o texto pronto. O motivo
     // vem junto — sem ele, "a clínica nunca conectou", "a sessão caiu" e "o cliente

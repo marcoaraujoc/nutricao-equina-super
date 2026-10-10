@@ -18,6 +18,7 @@ import DateInput from '../components/DateInput';
 import type { AnimalInfo } from './SubModuloEvolucao';
 import { imprimirExame as imprimirExameUtil, gerarHtmlExame, prepararExame } from '../utils/ExamePrint';
 import { enviarPdfWhatsAppComAviso, enviarPdfEmailComAviso } from '../utils/compartilharPdf';
+import { useEscolhaDestinatario } from '../components/EscolherDestinatario';
 import InlineError from '../components/InlineError';
 import JustificativaCancelamento from '../components/JustificativaCancelamento';
 import AcaoRegistro, { AcoesRegistro } from '../components/AcaoRegistro';
@@ -676,6 +677,8 @@ export default function SubModuloExames({
   const [erroInline, setErroInline] = useState<string | null>(null);
   // Envio do PDF em curso — o spinner e do BOTAO clicado (linha + canal), nunca de todos.
   const [enviandoPdf, setEnviandoPdf] = useState<{ id: number; canal: 'whatsapp' | 'email' } | null>(null);
+  // Para QUEM vai o documento (proprietário, equipe, um veterinário, um prestador).
+  const { escolher: escolherDestinatario, modalDestinatario } = useEscolhaDestinatario();
   const [procSearch,   setProcSearch]   = useState('');
 
   // ── Catálogo dinâmico de laboratórios ─────────────────────────────────────
@@ -1458,6 +1461,8 @@ export default function SubModuloExames({
 
   const compartilharExame = async (ex: ExameClinico, canal: 'whatsapp' | 'email') => {
     if (!podeImprimir) { semPermissao('compartilhar exame'); return; }
+    const dest = await escolherDestinatario({ canal, animalId });
+    if (!dest) return;
     setEnviandoPdf({ id: ex.id, canal });
     try {
       // ANTES de montar o HTML: o PDF e gerado no SERVIDOR e o Puppeteer bloqueia
@@ -1472,8 +1477,8 @@ export default function SubModuloExames({
         texto:       legendaExame(ex),
         titulo:      `Requisição de Exame - ${ex.tipo} - ${formatDate(ex.dataSolicitacao)}`,
       };
-      if (canal === 'whatsapp') await enviarPdfWhatsAppComAviso(opts, animal?.user?.phone);
-      else                      await enviarPdfEmailComAviso(opts, animal?.user?.email);
+      if (canal === 'whatsapp') await enviarPdfWhatsAppComAviso(opts, dest.contatos);
+      else                      await enviarPdfEmailComAviso(opts, dest.contatos);
     } finally {
       setEnviandoPdf(null);
     }
@@ -2462,6 +2467,7 @@ export default function SubModuloExames({
         />
       )}
 
+      {modalDestinatario}
       <ModalJustificativa
         aberto={confirmId != null}
         titulo="Cancelar exame"

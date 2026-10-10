@@ -83,6 +83,7 @@ const servicosDoPrestador = (p: Prestador): string[] =>
 
 /** O que a folha e o envio precisam do paciente — ver EncaminhamentoPrint. */
 export interface AnimalEncaminhamento extends PrintAnimalEncaminhamento {
+  id?:   number;
   user?: { fullName: string; email?: string | null; phone?: string | null } | null;
 }
 
@@ -263,6 +264,11 @@ function AcoesEncaminhamento({ enc, animal, podeEditar, podeFinalizar, podeCompa
           titulo={`Encaminhamento - ${enc.especialidade}`}
           telefone={telefoneDoDestino(enc)}
           emailPara={animal?.user?.email}
+          escolherDestinatario={{
+            animalId:    animal?.id ?? null,
+            // O prestador do encaminhamento já nasce escolhido — é o destino natural.
+            prestadorId: enc.prestadorCadastroOrigem === 'PRESTADOR' ? enc.prestadorCadastroId ?? null : null,
+          }}
         />
       )}
       <AcaoRegistro tom="cancelar" icone={Ban} rotulo="Cancelar"

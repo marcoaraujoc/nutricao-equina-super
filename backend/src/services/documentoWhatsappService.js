@@ -126,7 +126,7 @@ async function htmlParaPdf(html) {
  * @returns {Promise<{sucesso:boolean, erro?:string, simulado?:boolean, id?:string}>}
  */
 async function enviarDocumentoWhatsApp({
-  empresaId, equipeId = null, telefone, html, nomeArquivo, legenda = '', contexto = {},
+  empresaId, equipeId = null, telefone, telefones = null, html, nomeArquivo, legenda = '', contexto = {},
   onProgresso = null, cancelado = null,
 }) {
   const marco = (pct, etapa) => { try { onProgresso?.(pct, etapa); } catch { /* nunca derruba o envio */ } };
@@ -134,8 +134,11 @@ async function enviarDocumentoWhatsApp({
   if (!empresaId)  return { sucesso: false, erro: 'SEM_EMPRESA' };
   if (!html)       return { sucesso: false, erro: 'SEM_CONTEUDO' };
 
-  const para = foneIntl(telefone);
-  if (!para) return { sucesso: false, erro: 'TELEFONE_AUSENTE' };
+  // VÁRIOS destinos (ex.: "equipe veterinária", 2026-10-09): o PDF é gerado UMA vez e
+  // vai para cada número — um PDF por pessoa custaria segundos de Chromium cada.
+  // Duplicados (mesmo número em dois cadastros) saem uma vez só.
+  const destinos = [...new Set((Array.isArray(telefones) ? telefones : [telefone]).map(foneIntl).filter(Boolean))];
+  if (destinos.length === 0) return { sucesso: false, erro: 'TELEFONE_AUSENTE' };
 
   const provider = getWhatsAppProvider();
 
@@ -170,15 +173,33 @@ async function enviarDocumentoWhatsApp({
   // ÚLTIMA janela: daqui para a frente a mensagem sai e não volta.
   if (desistiu()) return { sucesso: false, erro: 'CANCELADO' };
 
-  marco(85, 'Enviando ao WhatsApp');
-  const envio = await provider.enviarDocumento({
-    para,
-    arquivo: { base64, nome: nomeArquivo },
-    legenda,
-    contexto: { ...contexto, empresaId, equipeId },
-  });
-  if (envio.sucesso) marco(100, 'Enviado');
-  return envio;
+  marco(85, destinos.length > 1 ? `Enviando a ${destinos.length} destinatários` : 'Enviando ao WhatsApp');
+  // Sequencial: a instância é UMA por clínica, e disparos simultâneos para a mesma
+  // sessão do WhatsApp são o que faz a Meta marcar o número como spam.
+  let ultimo = null;
+  const falhas = [];
+  let enviados = 0;
+  for (const para of destinos) {
+    const envio = await provider.enviarDocumento({
+      para,
+      arquivo: { base64, nome: nomeArquivo },
+      legenda,
+      contexto: { ...contexto, empresaId, equipeId },
+    });
+    ultimo = envio;
+    if (envio.sucesso) enviados += 1;
+    else falhas.push({ para, erro: envio.erro });
+  }
+  if (destinos.length === 1) {
+    if (ultimo.sucesso) marco(100, 'Enviado');
+    return ultimo;
+  }
+  if (enviados > 0) marco(100, `Enviado a ${enviados} de ${destinos.length}`);
+  // Vários: basta UM ter recebido para não cair no fallback manual (que baixaria o
+  // PDF como se ninguém tivesse recebido). As falhas viajam para a tela dizer quantos.
+  return enviados > 0
+    ? { sucesso: true, simulado: !!ultimo?.simulado, enviados, total: destinos.length, falhas }
+    : { sucesso: false, erro: falhas[0]?.erro ?? 'PROVIDER_INDISPONIVEL', enviados: 0, total: destinos.length };
 }
 
 module.exports = { enviarDocumentoWhatsApp, htmlParaPdf, foneIntl };

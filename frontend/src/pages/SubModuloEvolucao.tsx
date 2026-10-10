@@ -29,7 +29,7 @@ import { useOrdenacao, ThOrdenavel } from '../components/OrdenacaoLista';
 import ResponsavelTrocado, { type EloResponsavel } from '../components/ResponsavelTrocado';
 import AvisoRegistroAssumido from '../components/AvisoRegistroAssumido';
 import { useEventosTempoReal } from '../hooks/useEventosTempoReal';
-import { enviarEmPartes, mensagemErroEnvio } from '../utils/uploadEmPartes';
+import { enviarEmPartes, mensagemErroEnvio, type RitmoEnvio } from '../utils/uploadEmPartes';
 
 
 // ─── Speech Recognition types ────────────────────────────────────────────────
@@ -636,7 +636,7 @@ function NovaEvolucaoModal({
   midias:            EvolucaoMidia[];
   saving:            boolean;
   /** Anexo sendo enviado agora (nome + %), ou null. */
-  progressoEnvio?:   { nome: string; pct: number } | null;
+  progressoEnvio?:   { nome: string; pct: number; ritmo?: RitmoEnvio } | null;
   interpretando:     boolean;
   agendamentos:      AgendamentoItem[];
   agendamentoId:     number | null;
@@ -1073,7 +1073,17 @@ function NovaEvolucaoModal({
         <div className="px-5 pt-3" role="status" aria-live="polite">
           <div className="flex items-center justify-between gap-3 text-xs text-gray-600 mb-1">
             <span className="truncate">Enviando {progressoEnvio.nome}…</span>
-            <span className="font-semibold text-emerald-700 flex-shrink-0">{progressoEnvio.pct}%</span>
+            <span className="font-semibold text-emerald-700 flex-shrink-0">
+              {progressoEnvio.pct >= 99 ? 'Gravando…' : `${progressoEnvio.pct}%`}
+              {progressoEnvio.ritmo && progressoEnvio.pct < 99 && (
+                <span className="font-normal text-gray-500">
+                  {' · '}{progressoEnvio.ritmo.mbPorSeg.toFixed(1).replace('.', ',')} MB/s
+                  {' · '}~{progressoEnvio.ritmo.restanteSeg < 60
+                    ? `${Math.ceil(progressoEnvio.ritmo.restanteSeg)} s`
+                    : `${Math.ceil(progressoEnvio.ritmo.restanteSeg / 60)} min`} restantes
+                </span>
+              )}
+            </span>
           </div>
           <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
             <div className="h-full bg-emerald-600 transition-all" style={{ width: `${progressoEnvio.pct}%` }} />
@@ -1278,7 +1288,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [form,           setForm]           = useState<FormEvolucao>(FORM_INICIAL);
   const [savingEv,       setSavingEv]       = useState(false);
   // Envio de anexo em curso — nome do arquivo e % do arquivo inteiro.
-  const [progressoEnvio, setProgressoEnvio] = useState<{ nome: string; pct: number } | null>(null);
+  const [progressoEnvio, setProgressoEnvio] = useState<{ nome: string; pct: number; ritmo?: RitmoEnvio } | null>(null);
   // Fechar/recarregar a aba no meio do envio perde o arquivo: o navegador pergunta antes.
   useEffect(() => {
     if (!progressoEnvio) return;
@@ -1790,7 +1800,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         setProgressoEnvio({ nome: arquivo.name, pct: 0 });
         await enviarEmPartes(`/clinica/evolucoes/${evolucaoId}/midias/partes`, arquivo, {
           campos:      { tipo: getTipoMidia(arquivo.type) },
-          onProgresso: (pct) => setProgressoEnvio({ nome: arquivo.name, pct }),
+          onProgresso: (pct, ritmo) => setProgressoEnvio({ nome: arquivo.name, pct, ritmo }),
         });
       } catch (err) {
         erros.push(mensagemErroEnvio(err, arquivo.name));
@@ -2194,8 +2204,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
             nascem quebradas no PDF do servidor (ver EvolucaoPrint). */}
         {podeImprimir && (
           <CompartilharPdfBotoes
-            gerarHtml={() => gerarHtmlEvolucao(paraImpressao(ev), animal as PrintAnimalEvolucao | null)}
-            aoPreparar={() => prepararEvolucao(paraImpressao(ev), animal as PrintAnimalEvolucao | null)}
+            gerarHtml={() => gerarHtmlEvolucao(paraImpressao(ev), animal as PrintAnimalEvolucao | null, { semImagensDosAnexos: true })}
+            aoPreparar={() => prepararEvolucao(paraImpressao(ev), animal as PrintAnimalEvolucao | null, { semImagensDosAnexos: true })}
+            escolherDestinatario={{ animalId }}
             nomeArquivo={nomeArquivoEvolucao(ev)}
             texto={montarTextoEvolucao(ev)}
             documento="Evolução"
