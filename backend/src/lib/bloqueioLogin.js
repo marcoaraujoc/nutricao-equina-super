@@ -13,7 +13,7 @@
  * ONDE O CONTADOR VIVE: em `users`, porque a credencial é GLOBAL — e-mail e senha são a
  * identidade da pessoa em todas as empresas (o que é POR EMPRESA é o cadastro:
  * `ProprietarioPerfil` / `ProfissionalPerfil` / `UsuarioEmpresa`, CLAUDE.md §5).
- * Contar por empresa daria 6 tentativas em CADA uma.
+ * Contar por empresa daria 5 tentativas em CADA uma.
  *
  * 🔴 QUEM DESBLOQUEIA — a regra que este arquivo existe para guardar:
  *
@@ -35,7 +35,7 @@ const prisma = require('./prisma').default;
 
 /** Tentativas antes de travar. Env só para ambiente de teste — não expor na UI: mudar
  *  isso é decisão de segurança, não configuração de clínica. */
-const MAX_TENTATIVAS = Math.max(1, Number(process.env.LOGIN_MAX_TENTATIVAS || 6));
+const MAX_TENTATIVAS = Math.max(1, Number(process.env.LOGIN_MAX_TENTATIVAS || 5));
 
 const MSG_BLOQUEADO =
   'Conta bloqueada por tentativas de senha inválidas. Procure o gestor da sua equipe para desbloquear.';

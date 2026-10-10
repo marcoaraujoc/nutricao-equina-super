@@ -40,6 +40,16 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-09 (parte 2) (**BLOQUEIO DE CONTA: 6 → 5 TENTATIVAS** — a pedido.
+#   `lib/bloqueioLogin.js#MAX_TENTATIVAS` (o env `LOGIN_MAX_TENTATIVAS` continua sendo só
+#   para teste). A conta trava na 5ª senha errada; desbloqueio segue manual.
+#   ⚠️ O limite por IP (`authLimiter`, 20 falhas / 15 min) NÃO mudou: atrás do Cloudflare
+#   e do NAT de clínica, vários usuários dividem o mesmo IP, e 5 por IP travaria o login de
+#   todos por causa de um. A proteção por CONTA é a que vale para senha errada.
+#   Gate `__tests__/bloqueioLogin.test.js` (14). SEM MIGRATION.)
+
+---
+
 # Atualizado em: 2026-10-09 (🔴 **ARQUIVO GRANDE NUNCA ENTRAVA NO BANCO — A TRANSAÇÃO DO
 #   CARIMBO DE TENANT TEM 5 s.** Relato: anexo MP4 de 89 MB na evolução → "Erro interno".
 #   `lib/prismaTenant.js` embrulha TODA operação avulsa num `base.$transaction` com o

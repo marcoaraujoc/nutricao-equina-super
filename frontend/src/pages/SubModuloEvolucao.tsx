@@ -59,6 +59,34 @@ declare global {
   }
 }
 
+// ─── Gravação de áudio (transcrição no servidor) ─────────────────────────────
+
+// Em ordem de preferência. Chrome/Android/Firefox gravam WebM; Safari (iPhone e Mac)
+// só MP4. `undefined` = deixa o navegador escolher o padrão dele.
+const FORMATOS_GRAVACAO = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+
+function formatoDeGravacao(): string | undefined {
+  if (typeof MediaRecorder.isTypeSupported !== 'function') return undefined;
+  return FORMATOS_GRAVACAO.find(f => MediaRecorder.isTypeSupported(f));
+}
+
+function extensaoDoAudio(mime: string): string {
+  if (mime.includes('mp4') || mime.includes('aac')) return 'm4a';
+  if (mime.includes('ogg')) return 'ogg';
+  return 'webm';
+}
+
+function mensagemErroMicrofone(err: unknown): string {
+  const nome = (err as { name?: string })?.name;
+  if (nome === 'NotAllowedError' || nome === 'SecurityError')
+    return 'Permissão de microfone negada. Libere o microfone para este site nas configurações do navegador.';
+  if (nome === 'NotFoundError' || nome === 'OverconstrainedError')
+    return 'Nenhum microfone encontrado. Conecte um microfone e tente de novo.';
+  if (nome === 'NotReadableError')
+    return 'O microfone está em uso por outro aplicativo. Feche-o e tente de novo.';
+  return 'Não foi possível acessar o microfone.';
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type EvolucaoStatus = 'EM_ANDAMENTO' | 'FINALIZADA' | 'CANCELADA';
@@ -734,21 +762,48 @@ function NovaEvolucaoModal({
   };
 
   const iniciarMediaRecorder = async () => {
+    // Sem HTTPS (ex.: celular abrindo http://192.168.x.x) o navegador nem expõe o
+    // microfone — `mediaDevices` vem undefined.
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setGravacaoAtiva(false);
+      setErroInline('Este navegador não permite gravar áudio nesta página. Use o endereço com https://.');
+      return;
+    }
+    let stream: MediaStream;
     try {
-      const stream   = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      setGravacaoAtiva(false);
+      setErroInline(mensagemErroMicrofone(err));
+      return;
+    }
+    try {
       audioChunksRef.current = [];
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus' : 'audio/webm';
-      const recorder = new MediaRecorder(stream, { mimeType });
+      // ⚠️ O formato é ESCOLHIDO entre os que o navegador grava: o Safari (iPhone e
+      // Mac) não grava WebM, e pedir 'audio/webm' fazia o construtor falhar — a tela
+      // dizia "não foi possível acessar o microfone" com o microfone liberado.
+      const mimeType = formatoDeGravacao();
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       recorder.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
       recorder.onstop = async () => {
         stream.getTracks().forEach(t => t.stop());
-        await transcreverBlob(new Blob(audioChunksRef.current, { type: 'audio/webm' }));
+        const tipo = recorder.mimeType || mimeType || 'audio/webm';
+        const blob = new Blob(audioChunksRef.current, { type: tipo });
+        if (blob.size === 0) {
+          setTranscrevendo(false);
+          setErroInline('Nenhum áudio foi captado. Verifique o microfone e grave de novo.');
+          return;
+        }
+        await transcreverBlob(blob, `gravacao.${extensaoDoAudio(tipo)}`);
       };
       recorder.start(250);
       mediaRecorderRef.current = recorder;
       setGravacaoAtiva(true);
-    } catch { setErroInline('Não foi possível acessar o microfone'); }
+    } catch {
+      stream.getTracks().forEach(t => t.stop());
+      setGravacaoAtiva(false);
+      setErroInline('Este navegador não conseguiu iniciar a gravação de áudio.');
+    }
   };
 
   const pararMediaRecorder = () => {
@@ -775,7 +830,13 @@ function NovaEvolucaoModal({
         onFormChange('texto', (textoRef.current + ' ' + texto).trim());
       }
       if (mostrarContinuar) setShowRecordAgain(true);
-    } catch { setErroInline(estaOnline() ? 'Erro ao transcrever' : 'Erro no Whisper offline'); }
+    } catch (err) {
+      // O motivo do servidor (formato, serviço fora) vale mais que um "erro" genérico.
+      const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem;
+      setErroInline(estaOnline()
+        ? `Não foi possível transcrever o áudio${msg ? `: ${msg}` : '.'}`
+        : 'Erro no Whisper offline');
+    }
     finally { setTranscrevendo(false); }
   };
 
@@ -809,28 +870,47 @@ function NovaEvolucaoModal({
       else { setGravacaoAtiva(false); setShowRecordAgain(true); }
     };
 
+    // Ditado do navegador indisponível → grava o áudio e transcreve no servidor.
+    // ⚠️ Os handlers são desligados ANTES: o `onend` que vem depois do erro
+    // reiniciaria o reconhecimento por cima da gravação.
+    const passarParaGravacao = () => {
+      shouldRestartRef.current = false;
+      rec.onend = () => {};
+      rec.onerror = () => {};
+      recognitionRef.current = null;
+      setModoOffline(!estaOnline());
+      iniciarMediaRecorder();
+    };
+
     rec.onerror = (e: ISpeechRecognitionErrorEvent) => {
-      if (e.error === 'no-speech') return;
-      if (e.error === 'network') {
-        shouldRestartRef.current = false;
-        recognitionRef.current   = null;
-        setModoOffline(true);
-        toast('Sem internet — alternando para Whisper offline', { icon: '🔌', duration: 3000 });
-        iniciarMediaRecorder();
+      if (e.error === 'no-speech' || e.error === 'aborted') return;
+      // 'network': o serviço de voz do navegador não respondeu. 'service-not-allowed'
+      // e 'language-not-supported': o navegador tem a API mas não faz o ditado (Safari
+      // sem o Ditado do sistema, Brave, Opera…). Antes só 'network' caía na gravação;
+      // os outros ficavam reiniciando o reconhecimento em silêncio, sem texto nenhum.
+      if (e.error === 'network' || e.error === 'service-not-allowed' || e.error === 'language-not-supported') {
+        passarParaGravacao();
         return;
       }
-      if (e.error === 'not-allowed') {
+      if (e.error === 'not-allowed' || e.error === 'audio-capture') {
         shouldRestartRef.current = false;
+        recognitionRef.current   = null;
         setGravacaoAtiva(false);
-        setErroInline('Permissão de microfone negada');
+        setErroInline(e.error === 'audio-capture'
+          ? 'Nenhum microfone encontrado. Conecte um microfone e tente de novo.'
+          : 'Permissão de microfone negada. Libere o microfone para este site nas configurações do navegador.');
         return;
       }
       if (shouldRestartRef.current) { try { rec.start(); } catch { setGravacaoAtiva(false); } }
       else { setGravacaoAtiva(false); }
     };
 
-    rec.start();
-    recognitionRef.current = rec;
+    try {
+      rec.start();
+      recognitionRef.current = rec;
+    } catch {
+      passarParaGravacao();
+    }
   };
 
   const iniciarGravacao = () => {

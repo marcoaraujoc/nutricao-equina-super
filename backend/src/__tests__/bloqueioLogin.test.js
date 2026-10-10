@@ -81,13 +81,13 @@ describe('contagem de tentativas', () => {
     expect(r1.restantes).toBe(bloqueio.MAX_TENTATIVAS - 1);
   });
 
-  it('bloqueia EXATAMENTE na 6ª tentativa — nem antes, nem depois', async () => {
+  it('bloqueia EXATAMENTE na 5ª tentativa — nem antes, nem depois', async () => {
     const alvo = { id: 1, tentativasLogin: 0, bloqueadoEm: null };
     const db = bancoFalso({ usuarios: [alvo] });
 
     for (let i = 1; i < bloqueio.MAX_TENTATIVAS; i++) {
       const r = await bloqueio.registrarFalha(1, db);
-      expect(r.bloqueado).toBe(false);   // 1ª a 5ª ainda passam
+      expect(r.bloqueado).toBe(false);   // 1ª a 4ª ainda passam
     }
     const ultima = await bloqueio.registrarFalha(1, db);
     expect(ultima.bloqueado).toBe(true);
@@ -98,7 +98,7 @@ describe('contagem de tentativas', () => {
     // O instante em que a conta travou é o dado que a auditoria usa. Reescrevê-lo a
     // cada nova tentativa apagaria justamente essa informação.
     const travadoEm = new Date('2026-08-20T10:00:00Z');
-    const alvo = { id: 1, tentativasLogin: 6, bloqueadoEm: travadoEm };
+    const alvo = { id: 1, tentativasLogin: 5, bloqueadoEm: travadoEm };
     const db = bancoFalso({ usuarios: [alvo] });
 
     await bloqueio.registrarFalha(1, db);

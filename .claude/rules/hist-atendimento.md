@@ -32,6 +32,35 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-09 (parte 2) (**DITADO DA EVOLUÇÃO: GRAVAÇÃO NO FORMATO DO
+#   NAVEGADOR E FALLBACK DO DITADO AO VIVO** — relato: "a transcrição de voz não funciona
+#   nem no celular nem no notebook".
+#   Conferido antes: o backend transcreve (rota real `POST /clinica/evolucoes/transcrever`
+#   com multer + permissão + tenant, WebM e MP4, texto correto do Gemini). O log de IA
+#   local não tinha NENHUMA chamada de transcrição — a falha era antes do servidor.
+#   1. 🔴 **O gravador pedia sempre `audio/webm`**, que o Safari (iPhone e Mac) não grava:
+#      o construtor do `MediaRecorder` falhava e a tela dizia "Não foi possível acessar o
+#      microfone" com o microfone liberado. Agora o formato é ESCOLHIDO entre os que o
+#      navegador grava (`formatoDeGravacao`: webm/opus → webm → mp4 → ogg → padrão) e o
+#      Blob/nome do arquivo seguem o `recorder.mimeType` (antes: `audio/webm` fixo).
+#   2. 🔴 **Ditado ao vivo (Web Speech API, desktop)**: só o erro `network` passava para a
+#      gravação. `service-not-allowed` e `language-not-supported` (Safari sem o Ditado do
+#      sistema, Brave, Opera) caíam no "reinicia" e o ditado ficava girando em silêncio,
+#      sem texto. Agora os três passam para a gravação + transcrição no servidor
+#      (`passarParaGravacao`, que desliga `onend`/`onerror` antes, senão o `onend`
+#      reiniciava o reconhecimento por cima). `rec.start()` que lança também cai nela.
+#      `audio-capture` virou "Nenhum microfone encontrado".
+#   3. Mensagens específicas: sem HTTPS (`mediaDevices` undefined), permissão negada,
+#      sem microfone, microfone em uso, gravação vazia, e o motivo do servidor no lugar
+#      do "Erro ao transcrever" genérico.
+#   4. Backend: só MP3/WAV vão direto ao Gemini; o resto (inclusive o M4A do iPhone e o
+#      áudio anexado do gravador de voz) é convertido para MP3 antes.
+#   ⚠️ NÃO verificado em navegador nem em produção (sem ferramenta de browser e o
+#   Cloudflare barra o `curl`). Se ainda falhar, a mensagem na tela agora diz o motivo.
+#   SEM MIGRATION.)
+
+---
+
 # Atualizado em: 2026-10-09 (🔴 **ANEXO DA EVOLUÇÃO SOBE EM PARTES** — relato: MP4 de
 #   89 MB levou mais de 4 min e terminou em `524` em `POST /clinica/evolucoes/158/midias`.
 #   CAUSA: o 524 é do Cloudflare, que corta a requisição cujo servidor não responde em

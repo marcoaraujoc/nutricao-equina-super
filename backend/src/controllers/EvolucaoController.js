@@ -20,7 +20,9 @@ const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
 const emailService              = require('../services/emailService');
 const whatsappService           = require('../services/whatsappService');
 const { transcodeParaMp3, EXTS_INCOMPATIVEIS_SAFARI } = require('../lib/audioTranscode');
-const { PROMPTS }               = require('../ai/prompts');
+// Formatos que vão ao Gemini sem conversão na transcrição — o resto vira MP3.
+const EXTS_DIRETAS_GEMINI = { '.mp3': 'audio/mp3', '.wav': 'audio/wav' };
+const { PROMPTS }             = require('../ai/prompts');
 const { MODULOS_IA }            = require('../ai');
 const { transcreverAudio }      = require('../ai/geminiClient');
 const { logAiUsage }            = require('../services/aiLogger.service');
@@ -1653,11 +1655,14 @@ const EvolucaoController = {
     }
 
     const extOrig = path.extname(req.file.originalname || '').toLowerCase();
-    // O Gemini não aceita WebM/Opus (formato das gravações do app e das notas de
-    // voz do WhatsApp) — transcodifica para MP3 antes de enviar.
-    const precisaConverter = EXTS_INCOMPATIVEIS_SAFARI.has(extOrig) || !extOrig;
+    // Só MP3 e WAV seguem direto. Todo o resto vira MP3 antes do Gemini: WebM/Opus
+    // (Chrome/Android e notas de voz do WhatsApp) ele não aceita, e o MP4/M4A que o
+    // Safari grava (iPhone, Mac) e que o gravador de voz do iPhone exporta não está
+    // na lista de formatos dele. O ffmpeg lê o CONTEÚDO, então a extensão errada não
+    // atrapalha a conversão.
+    const precisaConverter = !EXTS_DIRETAS_GEMINI[extOrig];
     const audioPath        = `${req.file.path}${precisaConverter ? '.mp3' : extOrig}`;
-    const mimeType         = precisaConverter ? 'audio/mp3' : (req.file.mimetype || 'audio/mp3');
+    const mimeType         = precisaConverter ? 'audio/mp3' : EXTS_DIRETAS_GEMINI[extOrig];
 
     try {
       if (precisaConverter) await transcodeParaMp3(req.file.path, audioPath);
@@ -1708,7 +1713,7 @@ const EvolucaoController = {
         sucesso:       false,
         erroMensagem:  error.message,
       }).catch(() => {});
-      res.status(500).json({ sucesso: false, mensagem: 'Erro na transcrição do áudio' });
+      res.status(500).json({ sucesso: false, mensagem: 'O serviço de transcrição não respondeu. Tente de novo em instantes.' });
     }
   },
 
