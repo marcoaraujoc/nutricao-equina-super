@@ -7,7 +7,8 @@ const path   = require('path');
 const { verificarAcessoAnimal } = require('../lib/animalAccess');
 const { animalEstaInativo, bloquearSeAnimalInativo } = require('../lib/animalInativo');
 const { animalFoiExcluido } = require('../lib/animalAtivacao');
-const { storage } = require('../storage');
+const { storage, TETO_ARQUIVO_BYTES } = require('../storage');
+const { receberParte, validarParte, MIDIA_EXT_PERMITIDAS, MIDIA_MIME_PERMITIDOS } = require('../lib/uploadEmPartes');
 const { escopoEvolucaoWhere }   = require('../lib/clinicalScope');
 const { corteDePropriedade }    = require('../lib/animalPropriedadeCorte');
 // Rastro de "assumido de quem" no agendamento arrastado junto (SQL cru)
@@ -1519,6 +1520,65 @@ const EvolucaoController = {
       fs.unlink(file.path, () => {});
       console.error('Erro ao adicionar mídia:', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+    }
+  },
+
+  // ── Mídia em PARTES ───────────────────────────────────────────────────────
+  // POST /clinica/evolucoes/:id/midias/partes   (multipart: parte + campos)
+  //
+  // Arquivo grande chega em pedaços de 4 MB — o envio único morria em 524 no
+  // Cloudflare (100 s) quando o upload em si já passava disso. Ver lib/uploadEmPartes.js.
+  // A ÚLTIMA parte remonta o arquivo e DELEGA ao `adicionarMidia` de sempre: guards,
+  // transcode de áudio, gravação no banco e o registro da mídia são os mesmos —
+  // duas cópias divergiriam na primeira correção.
+  // ⚠️ Os guards (acesso, paciente inativo, evolução finalizada, tipo do arquivo) rodam
+  // na parte 0, antes de qualquer byte ir para o disco, e de novo no `adicionarMidia`.
+  adicionarMidiaEmPartes: async (req, res) => {
+    const { id } = req.params;
+    const { uploadId, indice, total, tamanhoTotal, nome, mime, tipo } = req.body;
+    if (!req.file?.buffer?.length) {
+      return res.status(400).json({ sucesso: false, mensagem: 'Parte do arquivo ausente.' });
+    }
+    const erroCampos = validarParte({ uploadId, indice, total, tamanhoTotal }, TETO_ARQUIVO_BYTES);
+    if (erroCampos) return res.status(400).json({ sucesso: false, mensagem: erroCampos });
+
+    const extensao = path.extname(String(nome || '')).toLowerCase();
+    if (!MIDIA_MIME_PERMITIDOS.test(String(mime || '')) || !MIDIA_EXT_PERMITIDAS.test(extensao)) {
+      return res.status(415).json({ sucesso: false, mensagem: `Tipo de arquivo não suportado: ${mime || extensao || 'desconhecido'}`, code: 'FORMATO_ARQUIVO_NAO_SUPORTADO' });
+    }
+
+    try {
+      if (Number(indice) === 0) {
+        const evolucao = await prisma.evolucaoClinica.findUnique({
+          where:  { id: Number(id) },
+          select: { id: true, ativo: true, animalId: true, status: true },
+        });
+        if (!evolucao || !evolucao.ativo) return res.status(404).json({ sucesso: false, mensagem: 'Evolução não encontrada' });
+        const acesso = await verificarAcessoAnimal({ animalId: evolucao.animalId, userId: req.user.id, empresaId: req.empresaId, equipeId: req.equipeId, userType: req.user.userType });
+        if (acesso === null) return res.status(404).json({ sucesso: false, mensagem: 'Animal não encontrado' });
+        if (!acesso)         return res.status(403).json({ sucesso: false, mensagem: 'Acesso não autorizado a este animal' });
+        if (await bloquearSeAnimalInativo(res, evolucao.animalId, { sucessoMensagem: true })) return;
+        if (bloquearSeFinalizada(res, evolucao)) return;
+      }
+
+      const r = await receberParte({
+        userId: req.user.id, evolucaoId: Number(id), uploadId, indice, total, tamanhoTotal,
+        buffer: req.file.buffer, extensao, destinoDir: path.join('uploads', 'evolucoes'),
+        tetoBytes: TETO_ARQUIVO_BYTES,
+      });
+      if (!r.completo) return res.json({ sucesso: true, dados: { recebidas: r.recebidas, total: Number(total) } });
+
+      // Arquivo inteiro em disco — mesmo formato que o multer de disco entrega.
+      req.file = {
+        fieldname: 'midia', originalname: String(nome), mimetype: String(mime),
+        size: r.tamanho, path: r.caminho, filename: r.nomeFinal,
+      };
+      req.body.tipo = tipo;
+      return EvolucaoController.adicionarMidia(req, res);
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ sucesso: false, mensagem: error.message, code: error.code });
+      console.error('Erro ao receber parte de mídia:', error);
+      res.status(500).json({ sucesso: false, mensagem: 'Erro ao receber o arquivo. Tente novamente.' });
     }
   },
 

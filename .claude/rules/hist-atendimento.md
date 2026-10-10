@@ -32,6 +32,33 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-09 (🔴 **ANEXO DA EVOLUÇÃO SOBE EM PARTES** — relato: MP4 de
+#   89 MB levou mais de 4 min e terminou em `524` em `POST /clinica/evolucoes/158/midias`.
+#   CAUSA: o 524 é do Cloudflare, que corta a requisição cujo servidor não responde em
+#   100 s. Num envio único a resposta só sai depois do último byte, então o limite real
+#   de tamanho era a velocidade de UPLOAD de quem envia (~3 Mbps → ~35 MB). O banco NÃO
+#   é o gargalo: medido, 90 MB gravados em `tb_midia_arquivos` em ~7 s. Nada foi gravado.
+#   1. `lib/uploadEmPartes.js` + rota `POST /:id/midias/partes` (mesmo slug e
+#      `tenantRls` da rota de sempre): partes de 4 MB em memória, gravadas numa pasta
+#      amarrada a (usuário, evolução, uploadId hex); a ÚLTIMA remonta por stream e
+#      DELEGA ao `adicionarMidia` de sempre (guards, transcode, banco). Guards e tipo do
+#      arquivo também na parte 0. Teto de 150 MB vale para a SOMA. Envio abandonado é
+#      apagado após 2 h na varredura do próximo envio. Whitelist de mídia virou fonte
+#      única (exportada da lib, usada pelo multer da rota antiga também).
+#   2. Front `utils/uploadEmPartes.ts`: repete parte que falhar por rede/5xx (3x), exceto
+#      a ÚLTIMA (ela grava — repetir às cegas duplicaria o anexo). Barra de progresso no
+#      formulário da evolução. Mensagem de erro real (antes: "Erro ao enviar X").
+#   3. 🔴 **FINALIZAR NÃO FECHA A EVOLUÇÃO COM ANEXO FALTANDO.** `uploadMidias` engolia o
+#      erro e o PUT FINALIZADA seguia — e evolução finalizada não aceita mais anexo, o
+#      arquivo ficava impossível de incluir. Agora devolve os erros: na edição o
+#      Finalizar para; na nova, a evolução fica EM ANDAMENTO com aviso para anexar e
+#      finalizar. No Salvar, avisa que a evolução foi salva sem o anexo.
+#   ⚠️ A rota antiga `POST /:id/midias` (envio único) segue montada e funcional.
+#   Gate `__tests__/uploadEmPartes.test.js` (11). SEM MIGRATION.
+#   ⚠️ NÃO verificado em navegador nem atrás do Cloudflare.)
+
+---
+
 # Atualizado em: 2026-10-05 (parte 4) (**AGENDA: "LOCALIDADE" SEM A FRASE "Todas
 #   (paciente avulso)" E "REFERE-SE A" COM ÍCONE** — a pedido.
 #   1. `SeletorPacientesLocalidade`: `rotuloVazio=""`. O campo vazio mostra só o

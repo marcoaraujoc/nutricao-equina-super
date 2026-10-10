@@ -40,8 +40,12 @@ if (!fs.existsSync(MIDIA_DIR)) fs.mkdirSync(MIDIA_DIR, { recursive: true });
 
 // Extensões permitidas para mídia clínica. SVG/HTML são deliberadamente excluídos
 // (vetor de XSS armazenado quando servidos via /uploads).
-const MIDIA_EXT_PERMITIDAS = /\.(jpe?g|png|gif|webp|mp4|webm|ogg|mov|m4v|mp3|wav|m4a|aac)$/i;
-const MIDIA_MIME_PERMITIDOS = /^(image\/(jpeg|png|gif|webp)|video\/(mp4|webm|ogg|quicktime|x-m4v)|audio\/(mpeg|mp3|webm|ogg|wav|mp4|x-m4a|aac))$/i;
+const { MIDIA_EXT_PERMITIDAS, MIDIA_MIME_PERMITIDOS, MAX_BYTES_PARTE } = require('../lib/uploadEmPartes');
+
+// Envio EM PARTES (ver lib/uploadEmPartes.js): cada parte é pequena e fica em MEMÓRIA;
+// a remontagem é em disco. Sem fileFilter — a parte é um pedaço binário sem tipo; o
+// tipo do arquivo é validado pelo controller na parte 0.
+const uploadParte = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_BYTES_PARTE } });
 
 const uploadMidia = multer({
   storage: multer.diskStorage({
@@ -124,6 +128,9 @@ router.post('/:id/titulo-ia', authenticate, checkPermission('atendimento.evoluco
 // ⚠️ `tenantRls` REENTRA no contexto do tenant logo APÓS o multer — ver comentário em
 // routes/animais.js. Sem isto, gravar a mídia cai em "new row violates row-level
 // security policy" mesmo com `req.empresaId` correto.
+// Arquivo grande em partes — o envio único de 89 MB morria em 524 no Cloudflare (100 s).
+// ⚠️ ANTES de `/:id/midias` não é necessário (caminho mais longo), mas fica junto dela.
+router.post('/:id/midias/partes',       authenticate, checkPermission('atendimento.evolucoes.criar',   'PROPRIO'), evolucaoIdParam, validate, uploadParte.single('parte'), tenantRls, EvolucaoController.adicionarMidiaEmPartes);
 router.post('/:id/midias',              authenticate, checkPermission('atendimento.evolucoes.criar',   'PROPRIO'), evolucaoIdParam, validate, uploadMidia.single('midia'), tenantRls, EvolucaoController.adicionarMidia);
 router.delete('/:id/midias/:midiaId',   authenticate, checkPermission('atendimento.evolucoes.deletar', 'PROPRIO'), evolucaoIdParam, validate, EvolucaoController.removerMidia);
 

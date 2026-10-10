@@ -29,6 +29,7 @@ import { useOrdenacao, ThOrdenavel } from '../components/OrdenacaoLista';
 import ResponsavelTrocado, { type EloResponsavel } from '../components/ResponsavelTrocado';
 import AvisoRegistroAssumido from '../components/AvisoRegistroAssumido';
 import { useEventosTempoReal } from '../hooks/useEventosTempoReal';
+import { enviarEmPartes, mensagemErroEnvio } from '../utils/uploadEmPartes';
 
 
 // ─── Speech Recognition types ────────────────────────────────────────────────
@@ -624,7 +625,7 @@ function EvolucaoAbertaModal({ info, animalNome, onAssumir, onCriarNova, onCance
 // ─── NovaEvolucaoModal ────────────────────────────────────────────────────────
 
 function NovaEvolucaoModal({
-  form, editingId, midias, saving, interpretando,
+  form, editingId, midias, saving, progressoEnvio = null, interpretando,
   agendamentos, agendamentoId, onAgendamentoChange,
   onFormChange, onSalvar, onFinalizar, onClose,
   onArquivosChange, onRemoverMidia, somenteLeitura = false, avisoTopo,
@@ -634,6 +635,8 @@ function NovaEvolucaoModal({
   editingId:         number | null;
   midias:            EvolucaoMidia[];
   saving:            boolean;
+  /** Anexo sendo enviado agora (nome + %), ou null. */
+  progressoEnvio?:   { nome: string; pct: number } | null;
   interpretando:     boolean;
   agendamentos:      AgendamentoItem[];
   agendamentoId:     number | null;
@@ -1066,6 +1069,18 @@ function NovaEvolucaoModal({
 
         </fieldset>
 
+      {progressoEnvio && (
+        <div className="px-5 pt-3" role="status" aria-live="polite">
+          <div className="flex items-center justify-between gap-3 text-xs text-gray-600 mb-1">
+            <span className="truncate">Enviando {progressoEnvio.nome}…</span>
+            <span className="font-semibold text-emerald-700 flex-shrink-0">{progressoEnvio.pct}%</span>
+          </div>
+          <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+            <div className="h-full bg-emerald-600 transition-all" style={{ width: `${progressoEnvio.pct}%` }} />
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-end gap-2 px-5 pb-5 pt-4 border-t border-gray-100">
         {somenteLeitura ? (
           <button onClick={onClose}
@@ -1262,6 +1277,8 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   const [cancelandoEv,   setCancelandoEv]   = useState<EvolucaoItem | null>(null);
   const [form,           setForm]           = useState<FormEvolucao>(FORM_INICIAL);
   const [savingEv,       setSavingEv]       = useState(false);
+  // Envio de anexo em curso — nome do arquivo e % do arquivo inteiro.
+  const [progressoEnvio, setProgressoEnvio] = useState<{ nome: string; pct: number } | null>(null);
   const [savingCancelamento, setSavingCancelamento] = useState(false);
   const [interpretando]                     = useState(false);
   const [acoesLLM,       setAcoesLLM]       = useState<AcaoSelecionavel[]>([]);
@@ -1754,17 +1771,27 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     onSalvo?.();
   };
 
-  const uploadMidias = async (evolucaoId: number, arquivos: File[]) => {
+  // 🔴 EM PARTES (2026-10-09): o envio único de um MP4 de 89 MB levava mais de 4 min e
+  // morria em 524 no Cloudflare (100 s por requisição), sem gravar nada. Ver
+  // utils/uploadEmPartes.ts. Devolve as mensagens de erro (vazio = tudo enviado):
+  // quem chama decide — o Finalizar NÃO pode fechar a evolução com anexo faltando,
+  // porque evolução finalizada não aceita mais anexo.
+  const uploadMidias = async (evolucaoId: number, arquivos: File[]): Promise<string[]> => {
+    const erros: string[] = [];
     for (const arquivo of arquivos) {
       try {
-        const fd = new FormData();
-        fd.append('midia', arquivo);
-        fd.append('tipo', getTipoMidia(arquivo.type));
-        await api.post(`/clinica/evolucoes/${evolucaoId}/midias`, fd, {
-          headers: { 'Content-Type': 'multipart/form-data' },
+        setProgressoEnvio({ nome: arquivo.name, pct: 0 });
+        await enviarEmPartes(`/clinica/evolucoes/${evolucaoId}/midias/partes`, arquivo, {
+          campos:      { tipo: getTipoMidia(arquivo.type) },
+          onProgresso: (pct) => setProgressoEnvio({ nome: arquivo.name, pct }),
         });
-      } catch { setErroInline(`Erro ao enviar ${arquivo.name}`); }
+      } catch (err) {
+        erros.push(mensagemErroEnvio(err, arquivo.name));
+      }
     }
+    setProgressoEnvio(null);
+    if (erros.length) setErroInline(erros.join(' · '));
+    return erros;
   };
 
   // 409 EVOLUCAO_EM_ANDAMENTO: outra evolução foi aberta enquanto este texto era
@@ -1856,7 +1883,12 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       }
       // O backend já gera e grava o título via IA na mesma escrita (quando ainda
       // não existe um) — não precisa de uma segunda chamada/PATCH aqui.
-      if (arquivosModal.length > 0) await uploadMidias(evolucaoId, arquivosModal);
+      if (arquivosModal.length > 0) {
+        const errosEnvio = await uploadMidias(evolucaoId, arquivosModal);
+        if (errosEnvio.length > 0) {
+          setErroInline(`A evolução foi salva, mas o anexo não subiu — ${errosEnvio.join(' · ')}. Abra-a em "Alterar" e anexe de novo.`);
+        }
+      }
       fecharModal();
       carregarEvolucoes();
       onSalvo?.();
@@ -1894,7 +1926,9 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       // aceita mais nada — o backend recusa mídia com 403 `EVOLUCAO_FINALIZADA` —,
       // então o upload tem de acontecer enquanto ela ainda está EM_ANDAMENTO.
       if (editingEv) {
-        if (arquivosModal.length > 0) await uploadMidias(editingEv.id, arquivosModal);
+        // Anexo que não subiu IMPEDE a finalização: finalizada, a evolução não
+        // aceita mais anexo, e o arquivo ficaria impossível de incluir.
+        if (arquivosModal.length > 0 && (await uploadMidias(editingEv.id, arquivosModal)).length > 0) return;
         await api.put(`/clinica/evolucoes/${editingEv.id}`, {
           especialidade: form.especialidade,
           texto:         form.texto,
@@ -1924,7 +1958,17 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         localStorage.removeItem(`s2vet_ag_${animalId}`);
         localStorage.removeItem(rascunhoKey);
         if (evolucaoId) {
-          await uploadMidias(evolucaoId, arquivosModal);
+          const errosEnvio = await uploadMidias(evolucaoId, arquivosModal);
+          if (errosEnvio.length > 0) {
+            // A evolução já existe, EM ANDAMENTO: fica salva, sem finalizar, para o
+            // anexo ser reenviado. Fechar o formulário evita criar uma segunda no
+            // próximo clique.
+            setErroInline(`A evolução foi salva em andamento, mas não foi finalizada porque o anexo não subiu — ${errosEnvio.join(' · ')}. Abra-a em "Alterar", anexe de novo e finalize.`);
+            fecharModal();
+            carregarEvolucoes();
+            onSalvo?.();
+            return;
+          }
           await api.put(`/clinica/evolucoes/${evolucaoId}`, {
             especialidade: form.especialidade,
             texto:         form.texto,
@@ -2222,6 +2266,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           editingId={editingEv?.id ?? null}
           midias={editingEv?.midias ?? []}
           saving={savingEv}
+          progressoEnvio={progressoEnvio}
           interpretando={interpretando}
           agendamentos={agendamentosDisponiveis}
           agendamentoId={agendamentoSelecionadoId}
