@@ -523,6 +523,10 @@ async function consolidar(req, animalId, animalNome) {
     // consolidacao inteira se perderia.
     maxTokens:   2600,
     temperature: 0.2,
+    // A consolidação leva ~3-4 s; passou de 8 s, a chamada está presa na FILA do
+    // provedor (medido: o mesmo prompt em 2,6 s e em 23 s). Uma 2ª chamada idêntica
+    // costuma responder antes que a presa — ver gerarComReforco (geminiClient.ts).
+    reforcoAposMs: 8000,
     userId:      req.user?.id ?? null,
     animalId,
     empresaId,

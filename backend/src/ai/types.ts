@@ -7,6 +7,8 @@ export interface AICompletionOptions {
   modelo?:      string;
   maxTokens?:   number;
   temperature?: number;
+  /** Dispara uma 2ª chamada idêntica se a 1ª passar disso (ms). Ver gerarComReforco. */
+  reforcoAposMs?: number;
 }
 
 export interface AICompletionResult {

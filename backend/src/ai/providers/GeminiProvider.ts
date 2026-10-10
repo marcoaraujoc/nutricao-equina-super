@@ -14,6 +14,7 @@ export class GeminiProvider implements AIProvider {
       modelo:      opts.modelo,
       maxTokens:   opts.maxTokens,
       temperature: opts.temperature,
+      reforcoAposMs: opts.reforcoAposMs,
     });
 
     return {

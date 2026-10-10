@@ -30,6 +30,29 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-09 (**MEMÓRIA CLÍNICA LENTA = FILA DO PROVEDOR, NÃO TAMANHO DO
+#   TRABALHO.** Relato: "achei lenta a geração". MEDIDO, não suposto:
+#   1. Log de IA: as consolidações levavam de 3,5 s a 18 s com 800-1.400 tokens de saída.
+#   2. Bancada contra o Gemini real, MESMO prompt (8 eventos, 3.647 tokens de entrada):
+#      2,6 s · 3,6 s · 2,6 s · **23,0 s**. A geração custa ~3 s; o resto é cauda do
+#      provedor. ⚠️ O raciocínio (thinking) JÁ vem desligado no `gemini-3.1-flash-lite`
+#      (`thoughtsTokenCount` 0 no padrão) — `thinkingLevel: 'minimal'` não muda nada, e
+#      `'low'` PIORA (até 2.000 tokens de raciocínio e JSON truncado). Não é por aí.
+#   🔴 **REFORÇO (hedged request)** — `geminiClient.gerarComReforco`: passou de
+#   `reforcoAposMs` sem resposta, dispara uma 2ª chamada idêntica e fica com a primeira
+#   que responder; a outra é abortada (`signal` novo em `GeminiOpcoes`, combinado com o
+#   timeout por `AbortSignal.any`). Opt-in por chamada (`callAI({ reforcoAposMs })` →
+#   `GeminiProvider` → `gerarTexto`); a Memória Clínica usa **8000 ms**.
+#   ⚠️ Falha da 1ª ANTES do reforço é devolvida como sempre — não vira retentativa
+#   disfarçada (erro de conteúdo repetido só repete o erro). As duas falhando, vale o
+#   erro da ORIGINAL. ⚠️ CUSTO: só a cauda paga a 2ª chamada, e o AiUsageLog registra só
+#   a VENCEDORA — o custo real da cauda fica um pouco acima do medido. ⚠️ A abortada sai
+#   como `CanceladaError`, não como timeout do provedor.
+#   Gate `__tests__/iaReforco.test.js` (8; transpila o `.ts` real e roda com `fetch`
+#   falso). SEM MIGRATION. ⚠️ NÃO verificado em navegador.)
+
+---
+
 # Atualizado em: 2026-09-22 (parte 3) (🔴 **O PRÓPRIO `ehNotaFiscal` MENTIA — O
 #   MODELO LIA O CUPOM CERTO E RECUSAVA MESMO ASSIM.** Relatado como "não foi
 #   possível identificar uma compra" num cupom de balcão real (o MESMO documento já

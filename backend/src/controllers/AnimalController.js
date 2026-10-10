@@ -11,7 +11,7 @@ const { gerarSenhaInicial } = require('../lib/senhaInicial');
 const { animalVisivelNaEmpresa, ANIMAL_VISIVEL } = require('../lib/visibilidade');
 const { resolverLogoPorAnimal } = require('../lib/logoEmpresaUtils');
 const { garantirFaturaAberta } = require('../services/FaturaService');
-const { registrarAuditoria } = require('../lib/auditoria');
+const { registrarAuditoria, registrarAlteracao, nomeLocalizacao } = require('../lib/auditoria');
 // Inativar o paciente FECHA o atendimento aberto — mesma cascata do Finalizar.
 const { cascataDaFinalizacao, lancarExamesDaEvolucao } = require('../lib/finalizacaoEvolucao');
 const { invalidarVersoes } = require('../lib/concorrenciaRegistro');
@@ -195,6 +195,52 @@ async function acharAnimalComMesmoPassaporte({ empresaId, registroPassaporte, ig
     },
     select: { id: true, nome: true },
   });
+}
+
+/**
+ * Retrato LEGÍVEL do cadastro do paciente, para o antes → depois da auditoria.
+ * Recebe o animal lido com ANIMAL_INCLUDE + anexarFei/Assistencia/Avulso — o mesmo
+ * formato que a tela recebe —, então espécie, raça, local e tratador saem pelo NOME,
+ * nunca pelo id (um "localizacaoId: 12 → 15" não diz nada a quem lê a trilha).
+ */
+function retratoAuditavelDoAnimal(a) {
+  if (!a) return {};
+  const data = (d) => (d ? new Date(d).toISOString().slice(0, 10).split('-').reverse().join('/') : null);
+  const sn   = (v) => (v == null ? null : (v ? 'sim' : 'não'));
+  return {
+    'Nome':                   a.nome,
+    'Espécie':                a.especie?.nome ?? null,
+    'Raça':                   a.raca?.nome ?? null,
+    'Sexo':                   a.sexo,
+    'Peso':                   a.peso,
+    'Nascimento':             data(a.dataNascimento),
+    'Idade (anos)':           a.idadeAnos,
+    'Categoria':              a.categoriaAnimal,
+    'Tipo de exercício':      a.tipoExercicio,
+    'Local':                  a.localizacao?.nome ?? a.local ?? null,
+    'Baia':                   a.baia,
+    'Tratador':               a.tratador?.nome ?? null,
+    'Pelagem':                a.pelagem,
+    'Altura':                 a.altura,
+    'Registro/Passaporte':    a.registroPassaporte,
+    'Chip':                   a.numeroChip,
+    'Finalidade':             a.finalidade,
+    'Seguradora':             a.seguradora,
+    'Veterinário':            a.veterinarioNome,
+    'Clínica do veterinário': a.veterinarioClinica,
+    'Cadastrado na FEI':      sn(a.registradoFei),
+    'Paciente avulso':        sn(a.avulso),
+    'Assistência mensal':     a.valorAssistencia ?? null,
+  };
+}
+
+/** { campo: { de, para } } entre dois retratos — `registrarAlteracao` descarta o igual. */
+function camposAlteradosDoAnimal(antes, depois) {
+  const a = retratoAuditavelDoAnimal(antes);
+  const d = retratoAuditavelDoAnimal(depois);
+  const campos = {};
+  for (const k of Object.keys(d)) campos[k] = { de: a[k] ?? null, para: d[k] ?? null };
+  return campos;
 }
 
 class AnimalController {
@@ -968,6 +1014,26 @@ class AnimalController {
         });
       }
 
+      // 🔴 O NASCIMENTO DO PACIENTE vai para a auditoria da empresa (2026-10-09). Até
+      // aqui só inativar/ativar/excluir deixavam rastro: a trilha mostrava o paciente
+      // sendo inativado sem nunca ter mostrado quem o cadastrou. Mesmo padrão dos
+      // outros cadastros (Proprietário, Tratador, Fornecedor, Prestador, Localização).
+      // ⚠️ Fora de transaction, como o `create` acima: o paciente já existe, e falhar
+      // em REGISTRAR não pode virar um 500 para um cadastro que deu certo.
+      await registrarAuditoria(prisma, req, {
+        categoria:  'CRIACAO',
+        entidade:   'ANIMAL',
+        entidadeId: animal.id,
+        animalId:   animal.id,
+        detalhes:   [
+          animal.nome,
+          `proprietário: ${proprietarioNomeParaEmail}`,
+          `local: ${animal.localizacaoId ? await nomeLocalizacao(prisma, animal.localizacaoId) : (animal.local || '—')}`,
+          animal.baia ? `baia: ${animal.baia}` : null,
+          ehAvulsoReq ? 'paciente avulso' : null,
+        ].filter(Boolean).join(' — '),
+      }).catch(err => console.error('[AnimalController.criar] auditoria da criação falhou:', err?.message ?? err));
+
       // Ponto de partida do histórico de peso/local/baia (gráfico em AnimalDetail).
       await registrarHistoricoAnimal(prisma, {
         animalId: animal.id,
@@ -1230,6 +1296,12 @@ class AnimalController {
         photoUrl = null;
       }
 
+      // Retrato ANTES, no mesmo formato do que a resposta devolve — é dele que sai o
+      // antes → depois da auditoria (ver retratoAuditavelDoAnimal).
+      const animalAntes = await anexarAvulso(await anexarAssistencia(await anexarFei(
+        await prisma.animal.findUnique({ where: { id: animalId }, include: ANIMAL_INCLUDE }),
+      )));
+
       const animal = await prisma.animal.update({
         where: { id: animalId },
         data: {
@@ -1273,11 +1345,24 @@ class AnimalController {
       await salvarAvulso(prisma, animalId, avulso);
       await salvarAssistencia(prisma, animalId, valorAssistencia);
 
-      const animalAtualizado = await prisma.animal.findUnique({
-        where:   { id: animalId },
-        include: ANIMAL_INCLUDE,
-      });
-      res.json({ sucesso: true, dados: await anexarAvulso(await anexarAssistencia(await anexarFei(animalAtualizado))) });
+      const animalAtualizado = await anexarAvulso(await anexarAssistencia(await anexarFei(
+        await prisma.animal.findUnique({ where: { id: animalId }, include: ANIMAL_INCLUDE }),
+      )));
+
+      // 🔴 A ALTERAÇÃO DO CADASTRO vai para a auditoria da empresa (2026-10-09), com o
+      // antes → depois de cada campo que mudou — mesmo padrão de Proprietário/Tratador/
+      // Fornecedor. Salvar sem mudar nada não grava linha (registrarAlteracao descarta).
+      // ⚠️ Fire-and-forget: a alteração já foi gravada; falhar no rastro não vira 500.
+      {
+        const campos = camposAlteradosDoAnimal(animalAntes, animalAtualizado);
+        if (req.file) campos['Foto'] = { de: animalAntes?.photoUrl ? 'foto anterior' : '—', para: 'nova foto' };
+        else if (photoUrl === null && animalAntes?.photoUrl) campos['Foto'] = { de: 'foto anterior', para: 'removida' };
+        await registrarAlteracao(prisma, req, {
+          entidade: 'ANIMAL', entidadeId: animalId, animalId, campos,
+        }).catch(err => console.error('[AnimalController.atualizar] auditoria da alteração falhou:', err?.message ?? err));
+      }
+
+      res.json({ sucesso: true, dados: animalAtualizado });
     } catch (error) {
       console.error('[AnimalController.atualizar]', error);
       res.status(500).json({ sucesso: false, mensagem: 'Erro interno ao atualizar animal' });
@@ -1673,3 +1758,5 @@ class AnimalController {
 }
 
 module.exports = new AnimalController();
+module.exports.retratoAuditavelDoAnimal = retratoAuditavelDoAnimal;
+module.exports.camposAlteradosDoAnimal = camposAlteradosDoAnimal;

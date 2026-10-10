@@ -37,6 +37,27 @@ As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão
 
 ---
 
+# Atualizado em: 2026-10-09 (parte 2) (🔴 **O PACIENTE ENTROU NA AUDITORIA DA EMPRESA** —
+#   relato: "a auditoria não mostrou a criação dos pacientes e provavelmente não deve
+#   mostrar qualquer alteração nele". Confirmado: `AnimalController.criar`/`atualizar`
+#   não gravavam NADA — a trilha mostrava o paciente sendo inativado sem nunca ter
+#   mostrado quem o cadastrou. Os outros cadastros já gravavam.
+#   1. `criar` → `CRIACAO ANIMAL` (nome, proprietário, local, baia, avulso).
+#   2. `atualizar` → `registrarAlteracao` com o antes → depois de cada campo que mudou
+#      (`retratoAuditavelDoAnimal` / `camposAlteradosDoAnimal`): espécie, raça, local e
+#      tratador pelo NOME, booleanos como sim/não, foto nova/removida. Salvar sem mudar
+#      nada não grava linha. ⚠️ O ANTES é lido ANTES do `update` (depois, o diff sairia
+#      vazio), com `ANIMAL_INCLUDE` + anexarFei/Assistencia/Avulso — o mesmo formato da
+#      resposta.
+#   ⚠️ Os dois são fire-and-forget (`.catch` com log): o cadastro já foi gravado, e
+#   falhar no rastro não pode virar 500. ⚠️ NÃO entra o telefone do proprietário editado
+#   na tela do paciente — ele grava no cadastro do CLIENTE (§36).
+#   A tela de Auditoria já tinha CRIACAO/ALTERACAO e o rótulo "Paciente" — nada no front.
+#   Linhas anteriores a hoje NÃO são reconstruídas. Gate `__tests__/auditoriaPaciente.test.js`
+#   (5). SEM MIGRATION.)
+
+---
+
 # Atualizado em: 2026-10-09 (**FOTO DO PACIENTE AJUSTÁVEL MANUALMENTE** — a pedido.
 #   Em `/animais`, escolher a foto NÃO grava mais direto: abre o `FotoEditorModal` (o
 #   MESMO do Cadastro Pessoal — zoom + arrastar, mouse e toque) e o que sobe é o

@@ -29,6 +29,8 @@ export interface GeminiOpcoes {
   temperature?: number;
   /** Teto por chamada, em ms. Ver TIMEOUT_MS. */
   timeoutMs?:   number;
+  /** Cancela a chamada por fora (usado pelo reforço — ver gerarComReforco). */
+  signal?:      AbortSignal;
 }
 
 /**
@@ -78,7 +80,9 @@ export async function gerarConteudo(
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       // Provedor travado não pode prender a requisição da pessoa para sempre.
-      signal: AbortSignal.timeout(opts.timeoutMs ?? TIMEOUT_MS),
+      signal: opts.signal
+        ? AbortSignal.any([AbortSignal.timeout(opts.timeoutMs ?? TIMEOUT_MS), opts.signal])
+        : AbortSignal.timeout(opts.timeoutMs ?? TIMEOUT_MS),
       body: JSON.stringify({
         contents: [{ parts }],
         generationConfig: {
@@ -91,6 +95,12 @@ export async function gerarConteudo(
     // A mensagem do abort ("The operation was aborted due to timeout") não diz quem
     // demorou nem quanto. Quem investiga o log precisa dos dois.
     const e = err as { name?: string };
+    // Cancelada por quem chamou (o reforço venceu): não é timeout do provedor.
+    if (opts.signal?.aborted) {
+      const c = new Error('Gemini API: chamada cancelada (outra tentativa respondeu antes)');
+      c.name = 'CanceladaError';
+      throw c;
+    }
     if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
       const t = new Error(`Gemini API timeout: o provedor demorou demais para responder (${opts.timeoutMs ?? TIMEOUT_MS}ms, modelo ${modelo})`);
       t.name = 'TimeoutError';
@@ -115,9 +125,73 @@ export async function gerarConteudo(
   };
 }
 
+/**
+ * REFORÇO (hedged request) — se a chamada não respondeu em `reforcoAposMs`, dispara
+ * uma SEGUNDA idêntica e fica com a que responder primeiro; a outra é cancelada.
+ *
+ * POR QUÊ (2026-10-09): a lentidão da Memória Clínica não é o tamanho do trabalho.
+ * Medido com o MESMO prompt, em sequência: 2,6 s · 3,6 s · 2,6 s · **23,0 s**. A
+ * geração leva ~3 s; o resto é FILA do provedor, que pega uma chamada e não as
+ * outras. Esperar a chamada presa é o que a pessoa via como "lento"; uma segunda,
+ * disparada depois do tempo normal, quase sempre cai fora da fila e responde em ~3 s.
+ *
+ * ⚠️ CUSTO: o reforço só nasce na cauda (a chamada já passou do tempo normal), e a
+ * perdedora é abortada. Mas o Google pode cobrar o que ela já processou, e o
+ * AiUsageLog registra só a VENCEDORA — o custo real da cauda fica um pouco acima do
+ * medido. Por isso é opt-in por chamada, não padrão do cliente.
+ * ⚠️ Falha da PRIMEIRA antes do reforço é devolvida como sempre (não vira
+ * retentativa: erro de CONTEÚDO repetido só repete o erro — ver ai/retentativa.js).
+ * Com as duas no ar, a falha de uma espera a outra; as duas falhando, vale a 1ª.
+ */
+export function gerarComReforco(
+  parts: GeminiPart[],
+  opts:  GeminiOpcoes & { reforcoAposMs: number },
+): Promise<GeminiResultado> {
+  const { reforcoAposMs, ...base } = opts;
+  return new Promise((resolve, reject) => {
+    const controles: AbortController[] = [];
+    const erros: unknown[] = [];
+    let encerrado = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const encerrar = () => {
+      encerrado = true;
+      if (timer) clearTimeout(timer);
+      controles.forEach(c => c.abort());
+    };
+
+    let falhas = 0;
+    const disparar = () => {
+      const c = new AbortController();
+      const ordem = controles.push(c) - 1;
+      gerarConteudo(parts, { ...base, signal: c.signal }).then(
+        (r) => { if (encerrado) return; encerrar(); resolve(r); },
+        (err) => {
+          if (encerrado) return;
+          erros[ordem] = err;
+          falhas += 1;
+          // Falhou antes do reforço nascer → não há outra a esperar.
+          if (controles.length === 1 && timer) { encerrar(); reject(err); return; }
+          // As duas falharam: vale o erro da ORIGINAL (o do reforço é o mesmo evento).
+          if (falhas === controles.length) { encerrar(); reject(erros[0]); }
+        },
+      );
+    };
+
+    disparar();
+    timer = setTimeout(() => { timer = null; if (!encerrado) disparar(); }, reforcoAposMs);
+  });
+}
+
 /** Atalho para completions de texto puro. */
-export function gerarTexto(prompt: string, opts: GeminiOpcoes = {}): Promise<GeminiResultado> {
-  return gerarConteudo([{ text: prompt }], opts);
+export function gerarTexto(
+  prompt: string,
+  opts:   GeminiOpcoes & { reforcoAposMs?: number } = {},
+): Promise<GeminiResultado> {
+  const { reforcoAposMs, ...base } = opts;
+  return reforcoAposMs
+    ? gerarComReforco([{ text: prompt }], { ...base, reforcoAposMs })
+    : gerarConteudo([{ text: prompt }], base);
 }
 
 /** Transcrição de áudio (substitui o Whisper). `buffer` é o arquivo já em memória. */
