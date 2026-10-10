@@ -59,6 +59,11 @@ export async function transcreverOffline(audioBlob: Blob): Promise<string> {
   }
 }
 
+/** O modelo já está carregado — dá para transcrever sem internet AGORA, sem baixar nada. */
+export function modeloPronto(): boolean {
+  return transcriber !== null;
+}
+
 /** Retorna true se o navegador está online */
 export function estaOnline(): boolean {
   return navigator.onLine;

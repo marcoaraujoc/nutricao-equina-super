@@ -31,6 +31,9 @@ import ResponsavelTrocado, { type EloResponsavel } from '../components/Responsav
 import AvisoRegistroAssumido from '../components/AvisoRegistroAssumido';
 import { useEventosTempoReal } from '../hooks/useEventosTempoReal';
 import { enviarEmPartes, mensagemErroEnvio, type RitmoEnvio } from '../utils/uploadEmPartes';
+import { useTranscricaoPorTrechos } from '../hooks/useTranscricaoPorTrechos';
+import { descartarTrechos } from '../services/trechosTranscricaoStore';
+import ConfirmModal from '../components/ConfirmModal';
 
 
 // ─── Speech Recognition types ────────────────────────────────────────────────
@@ -58,34 +61,6 @@ declare global {
     SpeechRecognition:       new () => ISpeechRecognition;
     webkitSpeechRecognition: new () => ISpeechRecognition;
   }
-}
-
-// ─── Gravação de áudio (transcrição no servidor) ─────────────────────────────
-
-// Em ordem de preferência. Chrome/Android/Firefox gravam WebM; Safari (iPhone e Mac)
-// só MP4. `undefined` = deixa o navegador escolher o padrão dele.
-const FORMATOS_GRAVACAO = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
-
-function formatoDeGravacao(): string | undefined {
-  if (typeof MediaRecorder.isTypeSupported !== 'function') return undefined;
-  return FORMATOS_GRAVACAO.find(f => MediaRecorder.isTypeSupported(f));
-}
-
-function extensaoDoAudio(mime: string): string {
-  if (mime.includes('mp4') || mime.includes('aac')) return 'm4a';
-  if (mime.includes('ogg')) return 'ogg';
-  return 'webm';
-}
-
-function mensagemErroMicrofone(err: unknown): string {
-  const nome = (err as { name?: string })?.name;
-  if (nome === 'NotAllowedError' || nome === 'SecurityError')
-    return 'Permissão de microfone negada. Libere o microfone para este site nas configurações do navegador.';
-  if (nome === 'NotFoundError' || nome === 'OverconstrainedError')
-    return 'Nenhum microfone encontrado. Conecte um microfone e tente de novo.';
-  if (nome === 'NotReadableError')
-    return 'O microfone está em uso por outro aplicativo. Feche-o e tente de novo.';
-  return 'Não foi possível acessar o microfone.';
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -300,6 +275,8 @@ const STATUS_CONFIG: Record<EvolucaoStatus, { label: string; cls: string }> = {
 type ColunaEvolucao = 'numero' | 'dataInicio' | 'dataFim' | 'titulo' | 'responsavel' | 'status' | 'justificativa';
 
 const FORM_INICIAL: FormEvolucao = { especialidade: 'Clínico', texto: '', status: 'EM_ANDAMENTO' };
+
+const rascunhoEdicaoKey = (evolucaoId: number) => `s2vet_ev_draft_edit_${evolucaoId}`;
 // Tamanho da página do histórico. Era um seletor "N por página" na barra de filtros
 // e saiu com ela (a pedido): a janela do histórico já mostra 3 linhas e o resto se
 // alcança rolando ou pelas setas — escolher o tamanho da página ali não mudava nada
@@ -658,10 +635,13 @@ function NovaEvolucaoModal({
   agendamentos, agendamentoId, onAgendamentoChange,
   onFormChange, onSalvar, onFinalizar, onClose,
   onArquivosChange, onRemoverMidia, somenteLeitura = false, avisoTopo,
-  podeSalvar, podeFinalizar, onAlterar,
+  podeSalvar, podeFinalizar, onAlterar, chaveTranscricao,
 }: {
   form:              FormEvolucao;
   editingId:         number | null;
+  /** Dono do áudio do ditado guardado no aparelho (ver useTranscricaoPorTrechos).
+   *  `null` = o formulário ainda não pode receber texto recuperado. */
+  chaveTranscricao:  string | null;
   midias:            EvolucaoMidia[];
   saving:            boolean;
   /** Anexo sendo enviado agora (nome + %), ou null. */
@@ -688,8 +668,13 @@ function NovaEvolucaoModal({
   /** Em somente leitura: destrava a edição. Ausente = sem botão Alterar. */
   onAlterar?:        () => void;
 }) {
-  const [gravacaoAtiva,        setGravacaoAtiva]        = useState(false);
+  // Ditado AO VIVO do navegador (notebook com internet). A gravação por trechos
+  // (celular, sem internet, ou quando o ditado ao vivo falha) tem estado próprio no hook.
+  const [ditadoAoVivo,         setDitadoAoVivo]         = useState(false);
+  // Transcrição de um áudio ANEXADO (arquivo inteiro, um envio só).
   const [transcrevendo,        setTranscrevendo]        = useState(false);
+  const [confirmarCancelar,    setConfirmarCancelar]    = useState(false);
+  const [confirmarDescarte,    setConfirmarDescarte]    = useState(false);
   const [, setModoOffline]                               = useState(false);
   const [, setProgressModelo]                            = useState(0);
   const [showRecordAgain,      setShowRecordAgain]      = useState(false);
@@ -705,12 +690,26 @@ function NovaEvolucaoModal({
   const podeEscrever = !somenteLeitura && podeSalvar;
 
   const recognitionRef   = useRef<ISpeechRecognition | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef   = useRef<Blob[]>([]);
   const shouldRestartRef = useRef(false);
   const textoRef         = useRef(form.texto);
 
   useEffect(() => { textoRef.current = form.texto; }, [form.texto]);
+
+  // Soma o texto de um trecho ao fim do campo. ⚠️ O `ref` é atualizado AQUI, não só
+  // pelo efeito acima: dois trechos recuperados de uma vez chegam no mesmo tick, e o
+  // segundo leria o texto de antes do primeiro — apagando-o.
+  const anexarTexto = useCallback((texto: string) => {
+    const atual = textoRef.current;
+    const novo  = `${atual}${atual.trim() ? ' ' : ''}${texto}`.trim();
+    textoRef.current = novo;
+    onFormChange('texto', novo);
+  }, [onFormChange]);
+
+  const trechos = useTranscricaoPorTrechos(podeEscrever ? chaveTranscricao : null, anexarTexto);
+  const gravacaoAtiva   = ditadoAoVivo || trechos.gravando;
+  // Fala que ainda não virou texto: Salvar/Finalizar esperam por ela, senão a
+  // evolução seria gravada sem o fim do que foi dito.
+  const aguardandoTexto = transcrevendo || trechos.pendentes > 0;
 
   useEffect(() => {
     setMobile(detectarMobile());
@@ -720,8 +719,10 @@ function NovaEvolucaoModal({
   }, []);
 
   // O formulário é REMONTADO para zerar (troca de pílula de status, fechar,
-  // abrir outro registro). Ditado em curso nessa hora é DESCARTADO: sem isto o
-  // microfone seguia aberto e a transcrição escrevia no formulário já zerado.
+  // abrir outro registro). Ditado ao vivo em curso nessa hora é DESCARTADO: sem isto
+  // o microfone seguia aberto e a transcrição escrevia no formulário já zerado.
+  // A gravação por trechos se encerra sozinha no hook; o áudio dela que já estava no
+  // aparelho só é apagado por quem ZEROU o formulário (`descartarTrechos` no pai).
   useEffect(() => () => {
     shouldRestartRef.current = false;
     const rec = recognitionRef.current;
@@ -731,12 +732,6 @@ function NovaEvolucaoModal({
       rec.onerror  = () => {};
       try { rec.stop(); } catch { /* já parado */ }
       recognitionRef.current = null;
-    }
-    const recorder = mediaRecorderRef.current;
-    if (recorder && recorder.state === 'recording') {
-      recorder.onstop = () => { recorder.stream.getTracks().forEach(t => t.stop()); };
-      recorder.stop();
-      mediaRecorderRef.current = null;
     }
   }, []);
 
@@ -764,75 +759,33 @@ function NovaEvolucaoModal({
     });
   };
 
-  const iniciarMediaRecorder = async () => {
-    // Sem HTTPS (ex.: celular abrindo http://192.168.x.x) o navegador nem expõe o
-    // microfone — `mediaDevices` vem undefined.
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-      setGravacaoAtiva(false);
-      setErroInline('Este navegador não permite gravar áudio nesta página. Use o endereço com https://.');
-      return;
-    }
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (err) {
-      setGravacaoAtiva(false);
-      setErroInline(mensagemErroMicrofone(err));
-      return;
-    }
-    try {
-      audioChunksRef.current = [];
-      // ⚠️ O formato é ESCOLHIDO entre os que o navegador grava: o Safari (iPhone e
-      // Mac) não grava WebM, e pedir 'audio/webm' fazia o construtor falhar — a tela
-      // dizia "não foi possível acessar o microfone" com o microfone liberado.
-      const mimeType = formatoDeGravacao();
-      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-      recorder.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
-      recorder.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        const tipo = recorder.mimeType || mimeType || 'audio/webm';
-        const blob = new Blob(audioChunksRef.current, { type: tipo });
-        if (blob.size === 0) {
-          setTranscrevendo(false);
-          setErroInline('Nenhum áudio foi captado. Verifique o microfone e grave de novo.');
-          return;
-        }
-        await transcreverBlob(blob, `gravacao.${extensaoDoAudio(tipo)}`);
-      };
-      recorder.start(250);
-      mediaRecorderRef.current = recorder;
-      setGravacaoAtiva(true);
-    } catch {
-      stream.getTracks().forEach(t => t.stop());
-      setGravacaoAtiva(false);
-      setErroInline('Este navegador não conseguiu iniciar a gravação de áudio.');
-    }
+  // Gravação POR TRECHOS: o áudio fica no aparelho até virar texto, e o texto entra
+  // no campo a cada trecho falado (~12–35 s). Ver hooks/useTranscricaoPorTrechos.ts.
+  const iniciarTrechos = async () => {
+    const erro = await trechos.iniciar();
+    if (erro) setErroInline(erro);
   };
 
-  const pararMediaRecorder = () => {
-    if (mediaRecorderRef.current?.state === 'recording') {
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current = null;
-    }
-    setGravacaoAtiva(false);
-    setTranscrevendo(true);
+  const pararTrechos = () => {
+    trechos.parar();
+    setShowRecordAgain(true);
   };
 
-  const transcreverBlob = async (blob: Blob, nomeArquivo = 'recording.webm', mostrarContinuar = true) => {
+  // Áudio ANEXADO: o arquivo inteiro vai num envio só (ele já está guardado como anexo).
+  const transcreverBlob = async (blob: Blob, nomeArquivo: string) => {
     try {
+      let texto: string;
       if (estaOnline()) {
         const fd = new FormData();
         fd.append('audio', blob, nomeArquivo);
         const res = await api.post('/clinica/evolucoes/transcrever', fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
-        const texto = res.data.dados.texto as string;
-        onFormChange('texto', (textoRef.current + ' ' + texto).trim());
+        texto = res.data.dados.texto as string;
       } else {
-        const texto = await transcreverOffline(blob);
-        onFormChange('texto', (textoRef.current + ' ' + texto).trim());
+        texto = await transcreverOffline(blob);
       }
-      if (mostrarContinuar) setShowRecordAgain(true);
+      if (texto?.trim()) anexarTexto(texto.trim());
     } catch (err) {
       // O motivo do servidor (formato, serviço fora) vale mais que um "erro" genérico.
       const msg = (err as { response?: { data?: { mensagem?: string } } }).response?.data?.mensagem;
@@ -850,12 +803,12 @@ function NovaEvolucaoModal({
     if (!arquivo) return;
     setAudiosPendentes(prev => prev.slice(1));
     setTranscrevendo(true);
-    await transcreverBlob(arquivo, arquivo.name, false);
+    await transcreverBlob(arquivo, arquivo.name);
   };
 
   const iniciarSpeechAPI = () => {
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRec) { setModoOffline(true); iniciarMediaRecorder(); return; }
+    if (!SpeechRec) { setDitadoAoVivo(false); setModoOffline(true); void iniciarTrechos(); return; }
 
     const rec          = new SpeechRec();
     rec.lang           = 'pt-BR';
@@ -870,10 +823,12 @@ function NovaEvolucaoModal({
 
     rec.onend = () => {
       if (shouldRestartRef.current) { try { rec.start(); } catch {} }
-      else { setGravacaoAtiva(false); setShowRecordAgain(true); }
+      else { setDitadoAoVivo(false); setShowRecordAgain(true); }
     };
 
-    // Ditado do navegador indisponível → grava o áudio e transcreve no servidor.
+    // Ditado do navegador indisponível (inclusive a internet que caiu no meio) →
+    // passa para a gravação POR TRECHOS, que guarda o áudio no aparelho. O texto que
+    // o ditado ao vivo já escreveu fica no campo.
     // ⚠️ Os handlers são desligados ANTES: o `onend` que vem depois do erro
     // reiniciaria o reconhecimento por cima da gravação.
     const passarParaGravacao = () => {
@@ -881,8 +836,9 @@ function NovaEvolucaoModal({
       rec.onend = () => {};
       rec.onerror = () => {};
       recognitionRef.current = null;
+      setDitadoAoVivo(false);
       setModoOffline(!estaOnline());
-      iniciarMediaRecorder();
+      void iniciarTrechos();
     };
 
     rec.onerror = (e: ISpeechRecognitionErrorEvent) => {
@@ -898,14 +854,14 @@ function NovaEvolucaoModal({
       if (e.error === 'not-allowed' || e.error === 'audio-capture') {
         shouldRestartRef.current = false;
         recognitionRef.current   = null;
-        setGravacaoAtiva(false);
+        setDitadoAoVivo(false);
         setErroInline(e.error === 'audio-capture'
           ? 'Nenhum microfone encontrado. Conecte um microfone e tente de novo.'
           : 'Permissão de microfone negada. Libere o microfone para este site nas configurações do navegador.');
         return;
       }
-      if (shouldRestartRef.current) { try { rec.start(); } catch { setGravacaoAtiva(false); } }
-      else { setGravacaoAtiva(false); }
+      if (shouldRestartRef.current) { try { rec.start(); } catch { setDitadoAoVivo(false); } }
+      else { setDitadoAoVivo(false); }
     };
 
     try {
@@ -918,8 +874,8 @@ function NovaEvolucaoModal({
 
   const iniciarGravacao = () => {
     setShowRecordAgain(false);
-    if (mobile || !estaOnline()) { setModoOffline(!estaOnline()); iniciarMediaRecorder(); }
-    else { shouldRestartRef.current = true; setGravacaoAtiva(true); iniciarSpeechAPI(); }
+    if (mobile || !estaOnline()) { setModoOffline(!estaOnline()); void iniciarTrechos(); }
+    else { shouldRestartRef.current = true; setDitadoAoVivo(true); iniciarSpeechAPI(); }
   };
 
   const pararGravacao = () => {
@@ -927,13 +883,21 @@ function NovaEvolucaoModal({
     if (recognitionRef.current) {
       recognitionRef.current.stop();
       recognitionRef.current = null;
-      setGravacaoAtiva(false);
+      setDitadoAoVivo(false);
       setShowRecordAgain(true);
-    } else { pararMediaRecorder(); }
+    } else { pararTrechos(); }
   };
 
   const desativado    = saving || interpretando;
   const todasMidias   = [...midias];
+
+  // Cancelar zera o formulário — e, com ele, o áudio ainda não transcrito. Com fala
+  // gravada esperando, pergunta antes: é exatamente o que a pessoa não vê na tela.
+  const temAudioGuardado = trechos.gravando || trechos.pendentes > 0 || trechos.erros > 0;
+  const cancelar = () => {
+    if (temAudioGuardado) { setConfirmarCancelar(true); return; }
+    onClose();
+  };
 
   return (
     // Mexeu no formulário, o erro anterior perdeu a validade: some. React normaliza
@@ -996,7 +960,7 @@ function NovaEvolucaoModal({
             <div className="flex items-center justify-between mb-1">
               <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Evolução clínica *</label>
               <div className="flex items-center gap-2">
-                {podeEscrever && form.texto && !gravacaoAtiva && !transcrevendo && (
+                {podeEscrever && form.texto && !gravacaoAtiva && !aguardandoTexto && (
                   <button onClick={() => onFormChange('texto', '')}
                     className="text-xs text-gray-400 hover:text-gray-600">Limpar</button>
                 )}
@@ -1022,9 +986,10 @@ function NovaEvolucaoModal({
                     )
                   )
                 )}
-                {transcrevendo && (
+                {(transcrevendo || (trechos.pendentes > 0 && !trechos.aguardandoConexao)) && (
                   <div className="flex items-center gap-1.5 text-xs text-emerald-600 font-medium">
-                    <Loader2 size={12} className="animate-spin" /> Transcrevendo…
+                    <Loader2 size={12} className="animate-spin" />
+                    {!transcrevendo && trechos.pendentes > 1 ? `Transcrevendo ${trechos.pendentes} trechos…` : 'Transcrevendo…'}
                   </div>
                 )}
               </div>
@@ -1033,8 +998,8 @@ function NovaEvolucaoModal({
             <textarea value={form.texto} onChange={e => onFormChange('texto', e.target.value)}
               placeholder={
                 gravacaoAtiva && !mobile  ? '🎤 Ouvindo… fale normalmente'
-                : gravacaoAtiva && mobile ? '🔴 Gravando… toque em "Encerrar Evolução" para finalizar'
-                : transcrevendo           ? '⏳ Transcrevendo…'
+                : gravacaoAtiva && mobile ? '🔴 Gravando… o texto aparece aqui a cada pausa da fala'
+                : aguardandoTexto         ? '⏳ Transcrevendo…'
                 : 'Descreva a evolução clínica do paciente…'
               }
               rows={8}
@@ -1046,7 +1011,9 @@ function NovaEvolucaoModal({
               <div className="flex items-center gap-2 mt-2 px-3 py-2 bg-red-50 border border-red-200 rounded-xl">
                 <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse flex-shrink-0" />
                 <span className="text-xs text-red-700 font-medium flex-1">
-                  {mobile ? 'Gravando… toque em "Encerrar Evolução" para finalizar.' : 'Gravando… clique novamente para encerrar.'}
+                  {trechos.gravando
+                    ? 'Gravando… o texto aparece a cada pausa da fala. O áudio fica guardado neste aparelho até ser transcrito.'
+                    : 'Gravando… clique novamente para encerrar.'}
                 </span>
                 {!mobile && (
                   <button onClick={pararGravacao}
@@ -1067,11 +1034,60 @@ function NovaEvolucaoModal({
                 {/* Encerra o ditado e grava a evolução com o texto como está — o
                     mesmo Salvar do rodapé (não finaliza o atendimento). */}
                 <button onClick={onSalvar}
-                  disabled={desativado || !form.texto.trim()}
+                  disabled={desativado || aguardandoTexto || !form.texto.trim()}
+                  title={trechos.pendentes > 0 ? 'Aguardando a transcrição da fala gravada' : undefined}
                   className="flex items-center justify-center gap-1 px-3 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 disabled:opacity-40 rounded-lg text-xs font-semibold">
                   {saving && !interpretando ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
                   Finalizar Gravação
                 </button>
+              </div>
+            )}
+
+            {podeEscrever && trechos.aguardandoConexao && trechos.pendentes > 0 && (
+              <div role="status" className="mt-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
+                <p className="text-xs text-amber-800 font-medium flex items-start gap-1.5">
+                  <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" />
+                  <span>
+                    Sem conexão — {trechos.pendentes === 1 ? '1 trecho de fala guardado' : `${trechos.pendentes} trechos de fala guardados`} neste
+                    aparelho. O texto entra aqui sozinho assim que a internet voltar; pode continuar gravando.
+                  </span>
+                </p>
+                {!gravacaoAtiva && (
+                  <div className="flex justify-end gap-2 mt-2">
+                    <button type="button" onClick={() => setConfirmarDescarte(true)}
+                      className="px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-lg">
+                      Descartar áudio
+                    </button>
+                    <button type="button" onClick={() => { void trechos.tentarNovamente(); }}
+                      className="px-3 py-1.5 text-xs font-semibold text-amber-800 border border-amber-300 hover:bg-amber-100 rounded-lg">
+                      Tentar agora
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {podeEscrever && trechos.erros > 0 && (
+              <div role="alert" className="mt-2 px-3 py-2.5 bg-red-50 border border-red-200 rounded-xl">
+                <p className="text-xs text-red-700 font-medium flex items-start gap-1.5">
+                  <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" />
+                  <span>
+                    {trechos.erros === 1 ? '1 trecho de fala não pôde ser transcrito' : `${trechos.erros} trechos de fala não puderam ser transcritos`}
+                    {trechos.mensagemErro ? ` (${trechos.mensagemErro})` : ''}. O áudio continua guardado neste aparelho.
+                  </span>
+                </p>
+                {!gravacaoAtiva && (
+                  <div className="flex justify-end gap-2 mt-2">
+                    <button type="button" onClick={() => setConfirmarDescarte(true)}
+                      className="px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-100 rounded-lg">
+                      Descartar
+                    </button>
+                    <button type="button" onClick={() => { void trechos.tentarNovamente(); }}
+                      className="px-3 py-1.5 text-xs font-semibold text-red-700 border border-red-300 hover:bg-red-100 rounded-lg">
+                      Tentar de novo
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1201,19 +1217,19 @@ function NovaEvolucaoModal({
           </>
         ) : (
           <>
-            <button onClick={onClose} disabled={desativado}
+            <button onClick={cancelar} disabled={desativado}
               className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50">
               Cancelar
             </button>
             {podeSalvar && (
-              <button onClick={onSalvar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
+              <button onClick={onSalvar} disabled={desativado || gravacaoAtiva || aguardandoTexto || !form.texto.trim()}
                 className="px-5 py-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 flex items-center gap-1.5">
                 {saving && !interpretando && <Loader2 size={13} className="animate-spin" />}
                 Salvar
               </button>
             )}
             {podeFinalizar && (
-              <button onClick={onFinalizar} disabled={desativado || gravacaoAtiva || transcrevendo || !form.texto.trim()}
+              <button onClick={onFinalizar} disabled={desativado || gravacaoAtiva || aguardandoTexto || !form.texto.trim()}
                 className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5">
                 {interpretando && <Loader2 size={13} className="animate-spin" />}
                 {interpretando ? 'Analisando…' : saving ? 'Finalizando…' : 'Finalizar'}
@@ -1222,6 +1238,32 @@ function NovaEvolucaoModal({
           </>
         )}
       </div>
+
+      <ConfirmModal
+        open={confirmarCancelar}
+        titulo="Descartar a fala gravada?"
+        mensagem={trechos.gravando
+          ? 'A gravação está em andamento. Cancelar descarta o texto desta evolução e o áudio ainda não transcrito.'
+          : 'Há fala gravada que ainda não virou texto. Cancelar descarta o texto desta evolução e esse áudio, sem volta.'}
+        labelConfirmar="Descartar e cancelar"
+        labelCancelar="Voltar"
+        variante="perigo"
+        // ⚠️ SEM `trechos.parar()` antes: parar fecha o trecho em curso e o grava no
+        // aparelho DEPOIS de o pai já ter descartado o áudio — ele voltaria na próxima
+        // abertura. Fechar o formulário desmonta o hook, que encerra o trecho sem gravá-lo.
+        onConfirmar={() => { setConfirmarCancelar(false); onClose(); }}
+        onCancelar={() => setConfirmarCancelar(false)}
+      />
+      <ConfirmModal
+        open={confirmarDescarte}
+        titulo="Descartar o áudio guardado?"
+        mensagem="A fala gravada que ainda não virou texto será apagada deste aparelho, sem volta. O texto que já está no campo não é afetado."
+        labelConfirmar="Descartar áudio"
+        labelCancelar="Voltar"
+        variante="perigo"
+        onConfirmar={() => { setConfirmarDescarte(false); void trechos.descartarPendentes(); }}
+        onCancelar={() => setConfirmarDescarte(false)}
+      />
     </div>
   );
 }
@@ -1608,6 +1650,10 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   // só se perde no logout. Escopo: modo de criação (não edição/visualização).
   const rascunhoKey = `s2vet_ev_draft_${animalId}`;
   const rascunhoRestauradoAnimal = useRef<number | null>(null);
+  // Espelho do `ref` acima em ESTADO: a chave do ditado guardado no aparelho só
+  // nasce depois do rascunho restaurado, senão o texto recuperado do áudio entraria
+  // num campo vazio e seria sobrescrito pelo rascunho logo em seguida.
+  const [rascunhoProntoPara, setRascunhoProntoPara] = useState<number | null>(null);
 
   // Restaura o rascunho ao montar / trocar de animal (antes de liberar o autosave).
   useEffect(() => {
@@ -1636,6 +1682,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       }
     }
     rascunhoRestauradoAnimal.current = animalId;
+    setRascunhoProntoPara(animalId);
   }, [loadingPerms, podeCriar, animalId, editItemId, openItemId, rascunhoKey]);
 
   // Persiste o rascunho a cada alteração — só após a restauração ter rodado.
@@ -1652,6 +1699,59 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
       localStorage.removeItem(rascunhoKey);
     }
   }, [form, editingEv, formLeitura, agendamentoSelecionadoId, animalId, rascunhoKey]);
+
+  // ── Rascunho da EDIÇÃO (2026-10-10) ──────────────────────────────────────────
+  // A evolução EM ANDAMENTO aberta em "Alterar" também guarda o texto não salvo —
+  // antes só a nova guardava, e recarregar a página no meio de um ditado longo
+  // levava tudo o que tinha entrado desde o último Salvar.
+  // ⚠️ Guardado com a `versao` lida: se a evolução foi gravada depois (outra aba,
+  // outro aparelho), o rascunho é DESCARTADO em vez de restaurado — restaurá-lo e
+  // salvar apagaria o que foi gravado nesse meio-tempo, sem conflito nenhum, porque
+  // o Salvar mandaria a versão nova.
+  useEffect(() => {
+    if (!editingEv || formLeitura) return;
+    const chave = rascunhoEdicaoKey(editingEv.id);
+    if (form.texto.trim() && form.texto !== editingEv.texto) {
+      localStorage.setItem(chave, JSON.stringify({ texto: form.texto, versao: editingEv.versao ?? null }));
+    } else {
+      localStorage.removeItem(chave);
+    }
+  }, [form.texto, editingEv, formLeitura]);
+
+  /** Texto a exibir ao abrir a evolução para editar: o rascunho, se ainda valer. */
+  const textoComRascunhoEdicao = (ev: EvolucaoItem): string => {
+    const chave = rascunhoEdicaoKey(ev.id);
+    const raw   = localStorage.getItem(chave);
+    if (!raw) return ev.texto;
+    try {
+      const d = JSON.parse(raw) as { texto?: string; versao?: number | null };
+      if (!d.texto?.trim() || d.texto === ev.texto) { localStorage.removeItem(chave); return ev.texto; }
+      if ((d.versao ?? null) !== (ev.versao ?? null)) {
+        localStorage.removeItem(chave);
+        toast('Havia texto não salvo desta evolução, mas ela foi gravada depois — o rascunho foi descartado.', { icon: '⚠️' });
+        return ev.texto;
+      }
+      toast('Texto não salvo desta evolução restaurado.', { icon: '📝' });
+      return d.texto;
+    } catch {
+      localStorage.removeItem(chave);
+      return ev.texto;
+    }
+  };
+
+  // Dono do áudio do ditado guardado no aparelho (useTranscricaoPorTrechos). Inclui
+  // o usuário: no aparelho compartilhado, a fala de um não pode cair no formulário
+  // do outro. `null` em somente leitura e antes do rascunho da nova ser restaurado.
+  const chaveTranscricao: string | null = !user?.id || formLeitura ? null
+    : editingEv ? `ev:${user.id}:${animalId}:${editingEv.id}`
+    : rascunhoProntoPara === animalId ? `ev:${user.id}:${animalId}:novo`
+    : null;
+
+  /** O formulário foi ZERADO de propósito: o texto e o áudio dele vão juntos. */
+  const descartarAudioERascunhoEdicao = () => {
+    if (chaveTranscricao) void descartarTrechos(chaveTranscricao);
+    if (editingEv) localStorage.removeItem(rascunhoEdicaoKey(editingEv.id));
+  };
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
@@ -1773,6 +1873,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   };
 
   const fecharModal = () => {
+    descartarAudioERascunhoEdicao();
     setConflito(null);
     const wasEditing = !!editingEv;
     setShowModal(!wasEditing); // Keep form open for new; close when done editing
@@ -1794,6 +1895,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
   // ⚠️ Mantém o agendamento vinculado e a decisão "em paralelo": não são valores dos
   // cards, e perdê-los desvincularia a evolução do "Iniciar" da agenda.
   const trocarFiltroStatus = (status: string) => {
+    descartarAudioERascunhoEdicao();
     setFilterStatus(status);
     setPage(1);
     setConflito(null);
@@ -1821,6 +1923,11 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
     // FINALIZADA/CANCELADA é documento fechado: abre sempre em somente leitura,
     // inclusive quando chega por `editItemId` do shell (a URL não é porta dos fundos).
     setFormLeitura(!podeEditar || !meuRegistro || ev.status !== 'EM_ANDAMENTO');
+    // Editável: o texto não salvo desta evolução (rascunho da edição) volta ao campo.
+    if (podeEditar && meuRegistro && ev.status === 'EM_ANDAMENTO') {
+      const texto = textoComRascunhoEdicao(ev);
+      if (texto !== ev.texto) setForm({ especialidade: ev.especialidade, texto, status: ev.status });
+    }
     setShowModal(true);
     rolarParaFormulario();
   };
@@ -1882,6 +1989,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
 
   /** Recarrega do servidor e devolve a tela ao estado gravado. */
   const atualizarAposConflito = async () => {
+    descartarAudioERascunhoEdicao();
     setConflito(null);
     setEditingEv(null);
     setFormLeitura(false);
@@ -2014,6 +2122,11 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
         }
       }
       if (!anexoFalhou) toastClicavel(arquivosModal.length > 0 ? `${mensagemOk} com o anexo` : mensagemOk);
+      // Gravada: o rascunho e o áudio deste formulário perderam a razão de existir.
+      // (Salvar fica travado enquanto há fala por transcrever — o que sobra aqui é só
+      // trecho que o servidor recusou e a pessoa optou por não reenviar.)
+      descartarAudioERascunhoEdicao();
+      localStorage.removeItem(rascunhoEdicaoKey(evolucaoId));
       carregarEvolucoes();
       onSalvo?.();
       // Salva/alterada, a evolução CONTINUA na tela, em somente leitura (a pedido,
@@ -2400,6 +2513,7 @@ export default function SubModuloEvolucao({ animalId, animal, faturaId, onFatura
           key={formKey}
           form={form}
           editingId={editingEv?.id ?? null}
+          chaveTranscricao={chaveTranscricao}
           midias={editingEv?.midias ?? []}
           saving={savingEv}
           progressoEnvio={progressoEnvio}

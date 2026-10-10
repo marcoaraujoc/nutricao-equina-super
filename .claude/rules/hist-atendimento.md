@@ -16,6 +16,8 @@ paths:
   - "**/SubModulo*"
   - "**/posologia.ts"
   - "**/*Consulta*"
+  - "**/useTranscricaoPorTrechos.ts"
+  - "**/trechosTranscricaoStore.ts"
 ---
 
 # Histórico de decisões — Atendimento clinico
@@ -29,6 +31,66 @@ paths:
 > Antes de reverter algo que este arquivo marca com ⚠️/🔴, leia o motivo registrado.
 
 As regras permanentes (arquitetura, RBAC, padrões, armadilhas numeradas) estão em `CLAUDE.md`.
+
+---
+
+# Atualizado em: 2026-10-10 (parte 3) (🔴 **DITADO DA EVOLUÇÃO POR TRECHOS — A FALA
+#   NÃO SE PERDE QUANDO A INTERNET CAI** — a pedido ("o problema de conexão pode fazer a
+#   pessoa perder tudo o que já foi dito").
+#   CAUSA: no celular (sempre) e no notebook sem internet, a gravação inteira ficava na
+#   MEMÓRIA e só ia ao servidor quando a pessoa parava. Falha no envio → o `catch`
+#   mostrava erro e o áudio sumia; aba fechada pelo sistema/página recarregada → idem.
+#   O "plano B" do Whisper local também falhava: ele só baixa o modelo (~80 MB) se a tela
+#   abrir JÁ sem internet.
+#   1. **`hooks/useTranscricaoPorTrechos.ts`**: a fala é cortada em trechos de 12–35 s,
+#      de preferência numa PAUSA (medidor de volume; sem ele, corte fixo de 25 s). Cada
+#      trecho é gravado no aparelho (**`services/trechosTranscricaoStore.ts`**, IndexedDB,
+#      com fallback em memória) A CADA SEGUNDO, enviado à MESMA rota
+#      `/clinica/evolucoes/transcrever` ao fechar, e só APAGADO depois que o texto entrou
+#      no campo. O texto aparece a cada pausa (quase ao vivo).
+#      ⚠️ Um MediaRecorder POR TRECHO (o novo abre antes de o antigo parar): pedaço do
+#      meio de um WebM não tem cabeçalho e o servidor não o lê.
+#      ⚠️ ORDEM DA FALA: a fila para no primeiro trecho sem rede em vez de pular. Só o
+#      trecho que o servidor RECUSA (4xx) fica de lado, com aviso "Tentar de novo/Descartar".
+#      ⚠️ Rede caída/sem resposta e 401 = ESPERAR (evento `online` + espera 3→30 s);
+#      5xx/429/408/524 = falha que repete até 5 vezes e então vira "erro". Nunca o
+#      contrário: tratar queda de rede como erro pararia de tentar.
+#      ⚠️ "Concluído" é gravado ANTES de entregar o texto: se o formulário fechou durante
+#      o envio, o texto espera no aparelho e entra quando ele reabrir. E o trecho
+#      descartado nesse meio-tempo não ressuscita (`atualizarTrechoSeExistir`).
+#      ⚠️ Trecho cujo PICO de volume fica abaixo de 0,003 (microfone mudo) não é enviado;
+#      o limiar é bem menor que o de "alguém falando" de propósito — descartar fala baixa
+#      é a perda que isto existe para evitar.
+#      ⚠️ Página recarregada no meio: o trecho em gravação vira ÓRFÃO (outra `sessao`) e é
+#      recuperado ao reabrir o formulário; perde-se no máximo o último segundo.
+#   2. **Chave do áudio** = `ev:<userId>:<animalId>:<novo|evolucaoId>` — o usuário entra
+#      para o aparelho compartilhado não misturar a fala de um no formulário do outro.
+#      `null` em somente leitura e, na evolução NOVA, até o rascunho ser restaurado
+#      (`rascunhoProntoPara`) — senão o texto recuperado cairia num campo vazio e seria
+#      sobrescrito pelo rascunho logo depois.
+#   3. **Formulário ZERADO leva o áudio junto** (`descartarAudioERascunhoEdicao`):
+#      fecharModal (Cancelar), troca de pílula, "Atualizar/Descartar" do registro
+#      assumido e Salvar/Finalizar bem-sucedidos. Sair da aba NÃO descarta.
+#      🔴 O Cancelar com fala gravada PERGUNTA antes (ConfirmModal) e NÃO chama
+#      `trechos.parar()` antes de fechar: parar gravaria o último trecho DEPOIS do
+#      descarte, e ele voltaria na próxima abertura. Quem encerra é o desmonte do hook.
+#   4. **Salvar/Finalizar/"Finalizar Gravação" esperam a fala pendente** virar texto
+#      (`aguardandoTexto`). Sem internet: faixa âmbar "Sem conexão — N trechos guardados
+#      neste aparelho", com Tentar agora / Descartar áudio. Pode continuar gravando.
+#   5. **Notebook com internet segue no ditado AO VIVO** do navegador (Web Speech), sem
+#      mudança; se ele falhar no meio (internet caiu), passa para os trechos.
+#   6. **Rascunho também na EDIÇÃO** (`s2vet_ev_draft_edit_<id>`): antes só a evolução
+#      nova guardava texto não salvo. Guardado com a `versao`; se a evolução foi gravada
+#      depois, o rascunho é DESCARTADO com aviso (restaurá-lo e salvar apagaria o que foi
+#      gravado nesse meio-tempo, sem 409, porque o Salvar manda a versão nova).
+#   ⚠️ Consumo de IA: cada trecho é UMA chamada de transcrição (o custo em tokens segue
+#   a duração do áudio, mas o `limiteChamadasMes` do plano conta cada trecho).
+#   ⚠️ Áudio anexado (arquivo) continua indo inteiro, num envio só — ele já está
+#   guardado como anexo.
+#   Gate `__tests__/ditadoPorTrechos.test.js` (30; executa a classificação do envio e o
+#   store reais; verificado que reprova — 3 falhas com rede virando erro, sem a
+#   reconferência do descarte e com o `parar()` no Cancelar). SEM MIGRATION, só front.
+#   ⚠️ NÃO verificado em navegador nem em celular.)
 
 ---
 
