@@ -459,6 +459,17 @@ Nginx 14 dias; CSP em Report-Only; cron do backup às 02:30. **Divergências e p
 - ⏳ Celulares no Tailscale **offline há ~68 dias** — o acesso de emergência (Passo 23) não
   foi exercitado.
 
+**Incidente 2026-10-10 (KingHost)** — das ~09:45 em diante, instabilidade de rede na
+infraestrutura de VPS da KingHost (status oficial: "Investigating", aberto às 10:00, previsão
+até 12:00). Medido: s2vet-fe com 35–70% de perda e ~1,1 s de latência; s2vet-be de 47 ms para
+~500 ms pelo Tailscale; destinos externos sem perda a partir da mesma origem. O túnel do
+Cloudflare caiu e o site respondeu **530 / Error 1033** (túnel desconectado). Reiniciar a
+s2vet-fe não resolveu. CPU, memória, serviços e configuração estavam normais nas duas VPS.
+⚠️ Lição: hoje TODA a entrada do site depende de uma VPS, e as duas estão no mesmo provedor e
+segmento. Ver D9 (segundo conector do túnel / alta disponibilidade).
+⏳ Depois da normalização: conferir site, `/health`, a Monitoração (jobs que rodaram durante o
+incidente podem ter falhado ao enviar e-mail/WhatsApp) e o backup das 02:30 seguinte.
+
 **Conferência rápida do estado de uma VPS** (como `vetprof`, entrando pelo Tailscale):
 ```bash
 systemctl list-timers --all | grep s2vet
@@ -3548,6 +3559,10 @@ O que falta e é obrigação do negócio:
 - [ ] Rever `RATE_LIMIT_MAX` (300/min por usuário) com uso real de clínica.
 - [ ] CSP: passar de Report-Only para valendo, depois de 2 semanas sem avisos.
 - [ ] HSTS no Cloudflare, depois do go-live validado.
+- [ ] **Alta disponibilidade da entrada** (motivada pelo incidente da KingHost de
+      2026-10-10): segundo conector do Cloudflare Tunnel em outra máquina — de preferência
+      em OUTRO provedor/região —, para o site não depender de uma VPS só. Decidir arquitetura
+      (o Nginx e o caminho até a API precisam existir no segundo ponto).
 - [ ] Fase 2 de segurança: filtro de **saída** no Backend (liberar só os destinos conhecidos),
       `auditd`, e backup contínuo (pgBackRest + WAL) para perda máxima de minutos em vez de 24 h.
 
